@@ -141,7 +141,7 @@ func waitUntil(t *testing.T, timeout time.Duration, what string, cond func() boo
 // The launcher reads the session's IMMUTABLE owner — meta.AgentID, set once at
 // creation (session-core U1/DEL-11 deleted the mutable handover owner it used
 // to read via ActiveAgentID) — and launchSteered's fail-closed parent-identity
-// guard (config.DelegateToolConfig.RequireParentAgentID, TRUE when unset) reads
+// guard (a launch with no identified delegating agent is refused) reads
 // that same non-empty id. Owning the session by testDefaultAgentID directly is
 // therefore both the caller the graph gate sees and the identity that satisfies
 // the guard; a decoy-owner-then-SwitchAgent fixture no longer moves either.

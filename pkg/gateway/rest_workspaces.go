@@ -1296,6 +1296,22 @@ func (rw *restAPIHandleWorkspacePut) prepareDelegation(team []string) bool {
 			jsonErr(rw.w, http.StatusBadRequest, message)
 			return true
 		}
+		// session-core FR-014/015/016 (founder ruling 2026-10-10): every agent
+		// added to a workspace gets its ordinary self-edge, whichever client
+		// sent the request. An explicit complete graph (the Team tab's "Add
+		// agent" save) replaces the stored graph verbatim, so the server adds
+		// the self-edge of each member THIS request introduces. A continuing
+		// member's self-line the graph omits is NOT restored (deletion is
+		// authoritative), and the operator exclusion data still applies.
+		cfg := rw.a.agentLoop.GetConfig()
+		introduced := make([]string, 0, len(team))
+		existingMembers := workspace.TeamSet(rw.state.Workspace.CoreTeam, nil)
+		for _, id := range team {
+			if !existingMembers[id] {
+				introduced = append(introduced, id)
+			}
+		}
+		edges = append(edges, workspace.SelfEdgeSeedRows(introduced, edges, cfg.SelfEdgeExcludeAgentIDSet(), delegationDepthCeiling(cfg))...)
 		rw.delegation = edges
 	} else {
 		for _, edge := range rw.state.Delegation {

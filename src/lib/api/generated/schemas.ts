@@ -1246,7 +1246,6 @@ type Agent = {
   figure: AgentFigure;
   role: AgentRole;
   color?: AgentColor | undefined;
-  icon?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
   description?: string | undefined;
@@ -1399,7 +1398,6 @@ type AgentCreateRequestMain = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
@@ -1432,7 +1430,6 @@ type AgentCreateRequestSubagent = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
@@ -1454,7 +1451,6 @@ type AgentCreateRequestSubagent3p = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  icon?: string | undefined;
   rate_limits?:
     | Partial<{
         use_global_defaults: boolean;
@@ -1482,7 +1478,6 @@ type AgentUpdateRequest = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  icon?: string | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
     | Partial<{
@@ -3877,7 +3872,6 @@ export const Agent: z.ZodType<Agent> = z
     figure: AgentFigure,
     role: AgentRole,
     color: AgentColor.optional(),
-    icon: z.string().max(50).optional(),
     model: z.string().max(256).optional(),
     provider: z.string().max(64).optional(),
     description: z.string().optional(),
@@ -3930,7 +3924,6 @@ export const AgentCreateRequestMain =
     figure: AgentFigure.optional(),
     role: AgentRole.optional(),
     color: AgentColor.optional(),
-    icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
@@ -3955,7 +3948,6 @@ export const AgentCreateRequestSubagent =
     figure: AgentFigure.optional(),
     role: AgentRole.optional(),
     color: AgentColor.optional(),
-    icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
@@ -3977,7 +3969,6 @@ export const AgentCreateRequestSubagent3p =
     figure: AgentFigure.optional(),
     role: AgentRole.optional(),
     color: AgentColor.optional(),
-    icon: z.string().max(50).optional(),
     rate_limits: z
       .object({
         use_global_defaults: z.boolean(),
@@ -4013,7 +4004,6 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   figure: AgentFigure.optional(),
   role: AgentRole.optional(),
   color: AgentColor.optional(),
-  icon: z.string().max(50).optional(),
   fallback_models: z.array(FallbackModel).max(2).optional(),
   model_params: z
     .object({ temperature: z.number(), max_tokens: z.number().int() })

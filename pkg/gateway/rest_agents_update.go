@@ -73,7 +73,6 @@ func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
 	add(req.Name != nil, "name")
 	add(req.Description != nil, "description")
 	add(req.Color != nil, "color")
-	add(req.Icon != nil, "icon")
 	add(req.Soul != nil, "soul")
 	add(req.Skills != nil, "skills")
 	add(req.McpServers != nil, "mcp_servers")
@@ -1114,9 +1113,6 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 	if rp.ru.req.Color != nil {
 		agentRec.Color = string(*rp.ru.req.Color)
 	}
-	if rp.ru.req.Icon != nil {
-		agentRec.Icon = *rp.ru.req.Icon
-	}
 	// voice: ADR-090 FR-002 supported editable persona field. Persisted
 	// even though TTS playback is inactive. Worker non-empty values are
 	// rejected before this persist step. Empty string clears.
@@ -1127,7 +1123,7 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 	// AgentUpdateRequest.yaml — including locked/system agents (the
 	// Judge), which is why this is not gated behind the
 	// foundAgent.Locked identity-mutation check above (that block
-	// only forbids name/description/soul/color/icon/skills).
+	// only forbids name/description/soul/color/skills).
 	if rp.ru.req.MemoryEnabled != nil {
 		agentRec.MemoryEnabled = rp.ru.req.MemoryEnabled
 	}

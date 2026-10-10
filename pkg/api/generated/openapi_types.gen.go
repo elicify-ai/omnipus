@@ -14186,9 +14186,6 @@ type Agent struct {
 	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys.
 	Figure AgentFigure `json:"figure"`
 
-	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-	Icon *string `json:"icon,omitempty"`
-
 	// Id Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
 	Id string `json:"id"`
 
@@ -14253,7 +14250,7 @@ type Agent struct {
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
 
-	// Role Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire.
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire.
 	Role AgentRole `json:"role"`
 
 	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
@@ -14358,9 +14355,6 @@ type AgentCreateRequestMain struct {
 	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys.
 	Figure *AgentFigure `json:"figure,omitempty"`
 
-	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-	Icon *string `json:"icon,omitempty"`
-
 	// MaxToolIterations The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
@@ -14390,7 +14384,7 @@ type AgentCreateRequestMain struct {
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
-	// Role Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire.
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire.
 	Role *AgentRole `json:"role,omitempty"`
 
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
@@ -14451,9 +14445,6 @@ type AgentCreateRequestSubagent struct {
 	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys.
 	Figure *AgentFigure `json:"figure,omitempty"`
 
-	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-	Icon *string `json:"icon,omitempty"`
-
 	// MaxToolIterations The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
@@ -14483,7 +14474,7 @@ type AgentCreateRequestSubagent struct {
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
-	// Role Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire.
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire.
 	Role *AgentRole `json:"role,omitempty"`
 
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
@@ -14561,9 +14552,6 @@ type AgentCreateRequestSubagent3p struct {
 	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys.
 	Figure *AgentFigure `json:"figure,omitempty"`
 
-	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-	Icon *string `json:"icon,omitempty"`
-
 	// MaxToolIterations The new worker's own tool-iteration limit (issue #904, D14), passed to the external CLI as its turn cap. Omitted = the worker rides the global limit. Refused (400) if above the current global limit.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
@@ -14591,7 +14579,7 @@ type AgentCreateRequestSubagent3p struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
-	// Role Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire.
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire.
 	Role *AgentRole `json:"role,omitempty"`
 
 	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
@@ -14654,7 +14642,7 @@ type AgentRateLimits struct {
 	UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 }
 
-// AgentRole Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire.
+// AgentRole Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire.
 type AgentRole string
 
 // AgentSession Minimal session summary as returned by GET /agents/{id}/sessions. Maps to the AgentSession interface in src/lib/api.ts. This is the same underlying session.UnifiedMeta object, but the SPA consumes it through the AgentSession interface which reads id, title, created_at, and updated_at directly.
@@ -14934,9 +14922,6 @@ type AgentUpdateRequest struct {
 	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys.
 	Figure *AgentFigure `json:"figure,omitempty"`
 
-	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-	Icon *string `json:"icon,omitempty"`
-
 	// MaxToolIterations The agent's own tool-iteration limit (issue #904, tool-iteration-limit spec D9/D10/D14). Omitted = unchanged; null = clear the own value (the agent rides the global limit — "Use global limit"); a number = set the own value, refused (400) if above the current global limit. Allowed on every agent type, including subagent_3p.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
@@ -14972,7 +14957,7 @@ type AgentUpdateRequest struct {
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
 
-	// Role Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire.
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire.
 	Role *AgentRole `json:"role,omitempty"`
 
 	// Skills Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills. Rejected 400 on subagent_3p agents (CLI doesn't see Omnipus skills).
@@ -20905,7 +20890,7 @@ type Message struct {
 		// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
 		Result *map[string]interface{} `json:"result,omitempty"`
 
-		// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+		// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 		Status MessageToolCallsStatus `json:"status"`
 
 		// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -21057,7 +21042,7 @@ type MessageSystemSubtype string
 // MessageToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type MessageToolCallsContentState string
 
-// MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+// MessageToolCallsStatus Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type MessageToolCallsStatus string
 
 // MessageTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
@@ -24492,7 +24477,7 @@ type SessionDetail struct {
 			// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
 			Result *map[string]interface{} `json:"result,omitempty"`
 
-			// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+			// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 			Status SessionDetailMessagesToolCallsStatus `json:"status"`
 
 			// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -24780,7 +24765,7 @@ type SessionDetailMessagesSystemSubtype string
 // SessionDetailMessagesToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type SessionDetailMessagesToolCallsContentState string
 
-// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type SessionDetailMessagesToolCallsStatus string
 
 // SessionDetailMessagesTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
@@ -25356,12 +25341,12 @@ type SessionMessageSteerDirection string
 // SessionMessageSteerKind defines model for SessionMessageSteer.Kind.
 type SessionMessageSteerKind string
 
-// SessionPage Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
+// SessionPage Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page in which one agent's sessions could not be read still returns its healthy rows, still returns next_cursor, and populates partial_errors — an unreadable source contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
 type SessionPage struct {
 	// NextCursor Opaque pagination cursor for the next page. Absent when this is the last page.
 	NextCursor *string `json:"next_cursor,omitempty"`
 
-	// PartialErrors Opaque error tokens (agent ID + sanitized reason) from any store that failed during this page's merge. Present only when at least one store failed.
+	// PartialErrors Opaque error tokens (agent ID + sanitized reason) from any source that could not be read during this page's merge. Present only when at least one source failed.
 	PartialErrors *[]string `json:"partial_errors,omitempty"`
 	Sessions      []Session `json:"sessions"`
 }
@@ -25698,7 +25683,7 @@ type SlashCommand struct {
 	// AvailableWhileStreaming Whether the command can be invoked mid-turn (e.g. /cancel).
 	AvailableWhileStreaming *bool `json:"available_while_streaming,omitempty"`
 
-	// Delivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+	// Delivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /model, /skills) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame, where the server executes it (e.g. /status, /channels). Only meaningful for web-surfaced commands; defaults to "agent".
 	Delivery SlashCommandDelivery `json:"delivery"`
 
 	// Description One-line description shown in the palette and help.
@@ -25714,7 +25699,7 @@ type SlashCommand struct {
 	Usage *string `json:"usage,omitempty"`
 }
 
-// SlashCommandDelivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+// SlashCommandDelivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /model, /skills) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame, where the server executes it (e.g. /status, /channels). Only meaningful for web-surfaced commands; defaults to "agent".
 type SlashCommandDelivery string
 
 // StorageStats Storage statistics returned by GET /api/v1/storage/stats. Reports session count, workspace disk usage, memory entry count, and any non-fatal warnings encountered while collecting the stats.
@@ -26983,7 +26968,7 @@ type ToolCall struct {
 	// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
 	Result *map[string]interface{} `json:"result,omitempty"`
 
-	// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+	// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 	Status ToolCallStatus `json:"status"`
 
 	// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -26993,7 +26978,7 @@ type ToolCall struct {
 // ToolCallContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type ToolCallContentState string
 
-// ToolCallStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+// ToolCallStatus Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type ToolCallStatus string
 
 // ToolPolicy A policy value governing whether a tool call is allowed, requires approval, or is denied.

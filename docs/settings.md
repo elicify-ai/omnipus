@@ -219,7 +219,7 @@ Leave the field blank and live available memory governs each new turn, reported 
 
 ### Which new agents get a self-line
 
-When an agent joins a workspace team, Omnipus seeds it a **self-line** — a trust line from the agent to itself, which is what allows handing a fresh piece of work back to the same agent. It seeds one for every agent except the ids on an exclusion list. That list is a private, file-only key:
+When an agent joins a workspace team — by any route, including a save that carries a complete list of lines — Omnipus seeds it a **self-line** — a trust line from the agent to itself, which is what allows handing a fresh piece of work back to the same agent. It seeds one for every agent except the ids on an exclusion list. That list is a private, file-only key:
 
 - `workspace_seed_defaults.self_edge.exclude_agent_ids` in `config.json`.
 

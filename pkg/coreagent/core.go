@@ -9,7 +9,7 @@
 //
 //   - Prompts are compiled into the binary (not stored as SOUL.md on disk)
 //   - Agents are seeded into config.json on first boot via SeedConfig
-//   - Identity fields are locked (name, description, color, icon, prompt)
+//   - Identity fields are locked (name, description, color, prompt)
 //   - Users CAN change model, remove tools, and set heartbeat
 package coreagent
 
@@ -120,7 +120,6 @@ type CoreAgent struct {
 	Subtitle    string // Role subtitle (e.g., "General Purpose")
 	Description string // One-line description
 	Color       string // Hex color for avatar (e.g., "#22C55E")
-	Icon        string // Phosphor icon name (e.g., "chat-circle")
 }
 
 // All returns every seeded agent in display order: the 4 base agents (Mia first,
@@ -283,7 +282,6 @@ func Jim() *CoreAgent {
 		Description: "Your planning hub — decomposes complex goals into a task DAG, " +
 			"delegates to the right specialists, tracks progress, and drives work to completion.",
 		Color: "#22C55E",
-		Icon:  "graph",
 	}
 }
 
@@ -296,7 +294,6 @@ func Ava() *CoreAgent {
 		Description: "Configures agents, teams and skills, including models, tool permissions and connector assignments. " +
 			"Reviews one combined proposal with you before applying changes and checking the result.",
 		Color: "#D4AF37",
-		Icon:  "wrench",
 	}
 }
 
@@ -309,7 +306,6 @@ func Mia() *CoreAgent {
 		Description: "Your friendly everyday assistant — guides you through Omnipus, " +
 			"answers questions, and connects you with the right specialist when needed.",
 		Color: "#3B82F6",
-		Icon:  "lightbulb",
 	}
 }
 
@@ -319,7 +315,7 @@ func Admin() *CoreAgent {
 	return &CoreAgent{
 		ID: IDAdmin, Name: "Admin", Subtitle: "Operator",
 		Description: "Configures connectors, providers, channels, diagnostics, and document dependencies.",
-		Color:       "#F97316", Icon: "shield",
+		Color:       "#F97316",
 	}
 }
 
@@ -337,7 +333,6 @@ func Worker() *CoreAgent {
 		Description: "General-purpose sub-agent worker — executes one delegated task at a time, " +
 			"does the work, and returns a concise result. Not a chat persona; invoked via delegation.",
 		Color: "#6B7280",
-		Icon:  "robot",
 	}
 }
 
@@ -353,7 +348,6 @@ func Planner() *CoreAgent {
 		Description: "Builds a structured plan from the goal and available context. " +
 			"Uses permitted delegation to gather additional evidence when needed. Invoked via delegation; not a chat persona.",
 		Color: "#0EA5E9",
-		Icon:  "tree-structure",
 	}
 }
 
@@ -367,6 +361,5 @@ func Researcher() *CoreAgent {
 		Description: "Researches external sources — the web and fetched documents — and " +
 			"synthesizes findings with citations. Invoked via delegation; not a chat persona.",
 		Color: "#8B5CF6",
-		Icon:  "books",
 	}
 }

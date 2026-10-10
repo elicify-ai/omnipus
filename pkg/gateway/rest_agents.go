@@ -690,9 +690,6 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 			c := gen.AgentColor(ac.Color)
 			ag.Color = &c
 		}
-		if ac.Icon != "" {
-			ag.Icon = &ac.Icon
-		}
 		ag.Type = coreagent.ToWireType(ac)
 		ag.Locked = ac.Locked
 		applyAgentEditableFields(&ag, ac)
@@ -770,9 +767,6 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			if ac.Color != "" {
 				c := gen.AgentColor(ac.Color)
 				ag.Color = &c
-			}
-			if ac.Icon != "" {
-				ag.Icon = &ac.Icon
 			}
 			ag.Type = coreagent.ToWireType(ac)
 			ag.Locked = ac.Locked

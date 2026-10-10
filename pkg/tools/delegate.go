@@ -287,21 +287,6 @@ type DelegateTool struct {
 	sessionMessagingEnabled func() bool
 	sessionMessagingWired   atomic.Bool
 
-	// requireParentAgentID is WRITE-ONLY on this type: SetRequireParentAgentID
-	// assigns it and nothing reads it. It used to back the FR-015 fail-closed
-	// parent-agent-id guard in this tool's own lifecycle-mint block; ADR-091
-	// moved that mint onto the launcher, and the guard now lives — and reads
-	// the same key directly — at
-	// pkg/agent/steer_launcher.go::SteerLauncher.Launch, which calls
-	// config.DelegateToolConfig.EffectiveRequireParentAgentID() itself. The
-	// resolver that was this field's only consumer has been deleted.
-	//
-	// The field and SetRequireParentAgentID survive ONLY because
-	// pkg/agent/loop_wire.go still calls the setter; all three must be
-	// deleted in one change by whoever owns loop_wire.go. Do not build
-	// anything new on this field — read the config key directly instead.
-	requireParentAgentID func() bool
-
 	// steerRateMu/steerRateWindows back the steer/respond rate cap (ADR-053
 	// §Contract Surface "Caps": 6/min, 16 KiB — session_messaging.steer_rate/
 	// steer_body), keyed by target session_id. Mirrors
@@ -407,16 +392,6 @@ func (t *DelegateTool) sessionMessagingPlaneEnabled() bool {
 		return false
 	}
 	return t.sessionMessagingEnabled()
-}
-
-// SetRequireParentAgentID stores a reader for
-// tools.delegate.require_parent_agent_id (R2-MAJ-015) that this tool no
-// longer consults — see the requireParentAgentID field doc. The FR-015
-// guard it used to feed now reads the key itself at
-// pkg/agent/steer_launcher.go::SteerLauncher.Launch. Retained only so
-// pkg/agent/loop_wire.go keeps compiling; delete both together.
-func (t *DelegateTool) SetRequireParentAgentID(fn func() bool) {
-	t.requireParentAgentID = fn
 }
 
 // isSessionMessagingAction reports whether a delegate action touches the
