@@ -119,6 +119,15 @@ func mustNewAgentLoop(
 	if err != nil {
 		t.Fatalf("NewAgentLoop: %v", err)
 	}
+	// The U5a launch gate (steer_launcher.go::startingRemainingDepth) consults
+	// the resolved (default) workspace's delegation graph for the caller→target
+	// edge of every launch whose steering session has an identified owner. These
+	// fixtures predate that gate and declare no graph, so seed the default
+	// workspace's mesh here — the single choke point every shared loop harness
+	// (newTestAgentLoop, newSteerAL, newGoalLoopTestLoop, newDelegateDispatchLoop,
+	// …) passes through. Idempotent and non-clobbering: a test that seeded its
+	// own graph first (seedWorkspaceGraph) is left untouched.
+	seedDefaultDelegationGraphForLoop(t, al)
 	return al
 }
 

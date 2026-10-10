@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -116,4 +117,122 @@ func ctxWS(wsID string, depth int) context.Context {
 // edge is a terse constructor for a graphEdge.
 func edge(from, to string, modes []string, depth *int) graphEdge {
 	return graphEdge{FromAgent: from, ToAgent: to, Modes: modes, Depth: depth}
+}
+
+// testHarnessDelegationDefaultID is the id of the is_default workspace the
+// shared loop harness (mustNewAgentLoop, via seedDefaultDelegationGraphForLoop)
+// seeds when the effective home carries none of its own.
+//
+// Deliberately DISTINCT from testHarnessWorkspaceMembershipID: that workspace
+// carries core_team membership only — never is_default, never a delegation
+// edge — while THIS one is the workspace every UNBOUND delegation/launch gate
+// resolves (workspace.ResolveDefaultID). Keeping them apart is what lets
+// TestDelegationDistinction_RealWiringThroughCreateTask (delegation_enforce_test.go)
+// keep asserting a denial: it binds testHarnessWorkspaceMembershipID on the
+// turn, which has no delegation edges, while this default workspace is never
+// consulted for a bound turn.
+const testHarnessDelegationDefaultID = "test-harness-delegation-default"
+
+// seedDefaultDelegationGraph writes an is_default workspace under home that
+// carries a directed delegation edge for EVERY ordered pair of agentIDs — self
+// edges (a→a) included.
+//
+// Why it is needed: the U5a launch gate
+// (steer_launcher.go::startingRemainingDepth, landed 7b069b66d) consults the
+// resolved (for an unbound turn, the is_default) workspace's delegation graph
+// for the caller→target edge of every launch whose steering session has an
+// identified owner. The launcher/steer fixtures predate that gate and declare
+// no graph at all, so a launch with an identified owner now refuses
+// (steer.ErrInvalidEdge) where it used to run. Seeding the mesh restores the
+// graph-free latitude those fixtures were written against, WITHOUT asserting
+// any specific edge a test did not ask for.
+//
+// Never clobbers a test's own graph: a home that already carries an is_default
+// workspace whose id is NOT testHarnessDelegationDefaultID (i.e. the test
+// seeded its own with seedWorkspaceGraph) is left byte-for-byte untouched, so
+// every graph-refusal test keeps its controlled edge set and its refusal
+// reason. The mesh is a UNION across calls, because the shared TestMain home
+// is reused by the whole test binary — a later test's agents must be able to
+// delegate to each other too.
+//
+// The workspace record carries NO core_team, so it is invisible to
+// workspace.FindForAgent's membership scan and can never make an ordinary
+// agent ambiguous across workspaces.
+//
+// Same discipline as seedTestWorkspaceMembershipForIDs: guarded by the
+// package-level testHarnessWorkspaceMu (so it is safe under t.Parallel) and
+// written atomically.
+func seedDefaultDelegationGraph(t *testing.T, home string, agentIDs []string) {
+	t.Helper()
+	testHarnessWorkspaceMu.Lock()
+	defer testHarnessWorkspaceMu.Unlock()
+
+	if def, err := workspace.ResolveDefaultID(home); err == nil && def != "" && def != testHarnessDelegationDefaultID {
+		// The test seeded its own default graph — never touch it.
+		return
+	}
+
+	// Union the existing mesh (if this default already exists) with the new
+	// ordered pairs, so the shared home only ever GROWS coverage.
+	type pair struct{ from, to string }
+	seen := map[pair]bool{}
+	if existing, ok := workspace.LoadDelegation(home, testHarnessDelegationDefaultID); ok {
+		for _, e := range existing {
+			seen[pair{e.FromAgent, e.ToAgent}] = true
+		}
+	}
+	for _, from := range agentIDs {
+		for _, to := range agentIDs {
+			seen[pair{from, to}] = true
+		}
+	}
+	edges := make([]graphEdge, 0, len(seen))
+	for p := range seen {
+		edges = append(edges, edge(p.from, p.to, nil, nil))
+	}
+
+	wsDir := filepath.Join(home, "workspaces")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatalf("seedDefaultDelegationGraph: mkdir %s: %v", wsDir, err)
+	}
+	wsData, err := json.Marshal(testWorkspaceRecord{ID: testHarnessDelegationDefaultID, IsDefault: true})
+	if err != nil {
+		t.Fatalf("seedDefaultDelegationGraph: marshal workspace record: %v", err)
+	}
+	if err := fileutil.WriteFileAtomic(filepath.Join(wsDir, testHarnessDelegationDefaultID+".json"), wsData, 0o644); err != nil {
+		t.Fatalf("seedDefaultDelegationGraph: write workspace record: %v", err)
+	}
+
+	if len(edges) == 0 {
+		return
+	}
+	storePath, pathErr := workspace.DelegationStorePath(home, testHarnessDelegationDefaultID)
+	if pathErr != nil {
+		t.Fatalf("seedDefaultDelegationGraph: delegation store path: %v", pathErr)
+	}
+	if mkErr := os.MkdirAll(filepath.Dir(storePath), 0o700); mkErr != nil {
+		t.Fatalf("seedDefaultDelegationGraph: mkdir delegation store: %v", mkErr)
+	}
+	storeData, marshalErr := json.Marshal(testDelegationStoreRecord{
+		WorkspaceID: testHarnessDelegationDefaultID,
+		Delegation:  edges,
+	})
+	if marshalErr != nil {
+		t.Fatalf("seedDefaultDelegationGraph: marshal delegation store: %v", marshalErr)
+	}
+	if wErr := fileutil.WriteFileAtomic(storePath, storeData, 0o600); wErr != nil {
+		t.Fatalf("seedDefaultDelegationGraph: write delegation store: %v", wErr)
+	}
+}
+
+// seedDefaultDelegationGraphForLoop seeds the default delegation mesh under the
+// CURRENT effective home for every agent the loop's registry knows. It is the
+// single call site every shared loop harness uses.
+func seedDefaultDelegationGraphForLoop(t *testing.T, al *AgentLoop) {
+	t.Helper()
+	ids := al.GetRegistry().ListAgentIDs()
+	if len(ids) == 0 {
+		ids = testHarnessAgentIDs(al.GetConfig())
+	}
+	seedDefaultDelegationGraph(t, omnipusHome(), ids)
 }
