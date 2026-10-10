@@ -319,6 +319,15 @@ describe('validateConnection', () => {
     expect(validateConnection('mia', 'mia', s, WORKER_IDS)).toBeNull()
     expect(validateConnection('jim', 'jim', s, WORKER_IDS)).toBeNull()
     expect(validateConnection('planner', 'planner', s, WORKER_IDS)).toBeNull()
+
+    // General Purpose ('worker') is not special-cased either — its self row is
+    // an ordinary edge like any other member's (the base positive that was
+    // dropped in the U5a rewrite). A deliberately arbitrary, non-built-in id
+    // ('custom-agent') is asserted too, so the "no identity whitelist"
+    // contract stays guarded rather than merely re-tested for the built-ins.
+    const eligible = { ...s, members: [...s.members, 'worker', 'custom-agent'] }
+    expect(validateConnection('worker', 'worker', eligible, WORKER_IDS)).toBeNull()
+    expect(validateConnection('custom-agent', 'custom-agent', eligible, WORKER_IDS)).toBeNull()
   })
   it('does NOT misreport a new self-edge as a cycle (a node trivially reaches itself)', () => {
     // hasPath(s, s) is trivially true, so the cycle check must skip a
