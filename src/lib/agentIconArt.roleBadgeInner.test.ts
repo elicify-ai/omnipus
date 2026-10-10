@@ -37,13 +37,16 @@ describe('roleBadgeInner — the badge glyph alone, for all 31 roles', () => {
   it.each(SPEC_ROLES)(
     'returns the same path markup as the badge on the mark without the corner transform (%s)',
     (role) => {
-      // The mark composes figure + badge; the badge group on the mark is
-      // the one carrying this role (agent-icon.tsx stamps it data-role).
+      // The mark composes figure art first and the badge group LAST (the
+      // spec'd composition: figure + corner badge). The badge on the mark is
+      // therefore the svg's last direct <g> child.
       const markSvg = new DOMParser().parseFromString(
         `<svg xmlns="http://www.w3.org/2000/svg">${agentIconInner('man', role, 'badge-check-mask')}</svg>`,
         'image/svg+xml',
       ).documentElement
-      const badgeOnMark = markSvg.querySelector(`g[data-role="${role}"]`)
+      const topGroups = Array.from(markSvg.children).filter((el) => el.tagName === 'g')
+      expect(topGroups.length).toBeGreaterThanOrEqual(2)
+      const badgeOnMark = topGroups[topGroups.length - 1]
       expect(badgeOnMark, `mark badge group for ${role}`).not.toBeNull()
 
       // The badge on the mark sits in the corner via the shrink transform.

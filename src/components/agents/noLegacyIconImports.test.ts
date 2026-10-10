@@ -52,10 +52,17 @@ describe('static guard — the legacy per-agent icon system stays deleted', () =
   })
 
   it('the search is live: it finds a known real import (AgentMark in AgentCard.tsx)', () => {
-    const hits = filesImporting(files, '@/components/agents/AgentMark')
-    const agentCard = hits.find((file) => file.endsWith(join('src', 'components', 'agents', 'AgentCard.tsx')))
-    expect(agentCard, 'AgentCard.tsx must appear among AgentMark importers').toBeDefined()
-    expect(hits.length).toBeGreaterThan(5)
+    // AgentCard.tsx imports the mark RELATIVELY ("./AgentMark"); the alias
+    // form is used by other surfaces (e.g. SidebarAgentIcon.tsx). Both forms
+    // must be found, or the walker/matcher is not believable below.
+    const agentCardSource = readFileSync(join(SRC_ROOT, 'components', 'agents', 'AgentCard.tsx'), 'utf8')
+    expect(agentCardSource).toContain("from './AgentMark'")
+    const aliasHits = filesImporting(files, '@/components/agents/AgentMark')
+    expect(
+      aliasHits.find((file) => file.endsWith(join('src', 'components', 'layout', 'sidebar', 'SidebarAgentIcon.tsx'))),
+      'SidebarAgentIcon.tsx must appear among AgentMark importers',
+    ).toBeDefined()
+    expect(aliasHits.length).toBeGreaterThan(5)
   })
 
   it('the search is live: it finds imports of a module that exists (@/lib/utils)', () => {

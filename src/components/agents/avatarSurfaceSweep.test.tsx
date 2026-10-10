@@ -13,7 +13,7 @@
  */
 import * as React from 'react'
 import { describe, expect, it, vi, beforeAll } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Agent, Workspace } from '@/lib/api'
@@ -179,6 +179,11 @@ describe('surface sweep — chat MessageItem', () => {
       </QueryClientProvider>,
     )
     await screen.findByText('On it.')
+    // The mark draws the Omnipus fallback until the ['agents'] query
+    // resolves; the agent's own mark is the settled state.
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="agent-icon"]')?.getAttribute('data-figure')).toBe('Robot')
+    })
     expectAgentMarkFigure(container, 'Robot', 1)
     expectNoInitialCircle(container, 'R')
   })

@@ -69,7 +69,9 @@ describe('SmartSelect item icon — searchable branch (more than 5 items)', () =
     fireEvent.click(screen.getByRole('combobox', { name: 'Pick' }))
     const option = screen.getByRole('option', { name: 'Gamma' })
     expect(option).toHaveTextContent('Gamma')
-    expect(option.querySelector('svg')).toBeNull()
+    // No GLYPH where none was configured (the selection check svg is
+    // legitimate chrome and renders regardless of icons).
+    expect(option.querySelector('[data-testid^="glyph-"]')).toBeNull()
     // Selecting it must not put any glyph on the trigger either.
     fireEvent.click(option)
     expect(within(screen.getByRole('combobox', { name: 'Pick' })).queryByTestId(/^glyph-/)).toBeNull()
@@ -98,6 +100,6 @@ describe('SmartSelect item icon — plain branch (5 items or fewer)', () => {
     fireEvent.click(trigger)
     const option = screen.getByRole('option', { name: 'Delta' })
     expect(option).toHaveTextContent('Delta')
-    expect(option.querySelector('svg')).toBeNull()
+    expect(option.querySelector('[data-testid^="glyph-"]')).toBeNull()
   })
 })
