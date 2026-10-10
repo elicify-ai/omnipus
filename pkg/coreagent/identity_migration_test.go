@@ -133,158 +133,27 @@ func TestRoleFromLegacyIcon_I14CaseFoldHyphenAndSlug(t *testing.T) {
 	}
 }
 
-func TestMigrateUnenforcedAgentIdentity_CustomOnceAndStable(t *testing.T) {
-	cfg := &config.Config{Agents: config.AgentsConfig{List: []config.AgentConfig{
-		{
-			ID:    "custom-code",
-			Name:  "Legacy code",
-			Type:  config.AgentTypeCustom,
-			Icon:  "Code",
-			Color: "#D4AF37",
-		},
-		{
-			ID:     "custom-hyphen",
-			Name:   "Hyphen icon",
-			Type:   config.AgentTypeCustom,
-			Icon:   "magnifying-glass",
-			Color:  "",
-			Figure: "",
-			Role:   "",
-		},
-		{
-			ID:    "custom-slug-icon",
-			Name:  "Slug icon",
-			Type:  config.AgentTypeCustom,
-			Icon:  "security",
-			Color: "#E2E8F0",
-		},
-		{
-			ID:     "custom-already",
-			Name:   "Already canonical",
-			Type:   config.AgentTypeCustom,
-			Icon:   "robot",
-			Color:  "#9CA3AF",
-			Figure: "Omnipus",
-			Role:   "general",
-		},
-	}}}
-
-	require.True(t, migrateUnenforcedAgentIdentity(cfg), "first pass must persist the custom migration")
-
-	code := agentByID(cfg, "custom-code")
-	require.NotNil(t, code)
-	assert.Equal(t, "developer", code.Role, "I14 Code → Developer slug")
-	assert.Equal(t, "#FB923C", code.Color, "I03 #D4AF37 → Orange")
-	assert.Equal(t, "Omnipus", code.Figure, "missing figure becomes Omnipus")
-	assert.Equal(t, "Code", code.Icon, "icon is never written")
-
-	hyphen := agentByID(cfg, "custom-hyphen")
-	require.NotNil(t, hyphen)
-	assert.Equal(t, "general", hyphen.Role, "magnifying-glass keeps the hyphen and is not researcher")
-	assert.Equal(t, "#9CA3AF", hyphen.Color, "I10 missing colour → Grey")
-	assert.Equal(t, "Omnipus", hyphen.Figure)
-	assert.Equal(t, "magnifying-glass", hyphen.Icon)
-
-	slug := agentByID(cfg, "custom-slug-icon")
-	require.NotNil(t, slug)
-	assert.Equal(t, "security", slug.Role, "an icon that is already a role slug is kept")
-	assert.Equal(t, "#9CA3AF", slug.Color, "I09 #E2E8F0 → Grey")
-	assert.Equal(t, "security", slug.Icon)
-
-	already := agentByID(cfg, "custom-already")
-	require.NotNil(t, already)
-	assert.Equal(t, "general", already.Role)
-	assert.Equal(t, "Omnipus", already.Figure)
-	assert.Equal(t, "#9CA3AF", already.Color)
-	assert.Equal(t, "robot", already.Icon)
-
-	require.False(t, migrateUnenforcedAgentIdentity(cfg), "second pass is a no-op")
-	assert.Equal(t, "developer", agentByID(cfg, "custom-code").Role)
-	assert.Equal(t, "#FB923C", agentByID(cfg, "custom-code").Color)
-	assert.Equal(t, "Code", agentByID(cfg, "custom-code").Icon)
-}
-
-func TestMigrateUnenforcedAgentIdentity_KeepsValidRoleAndFigure(t *testing.T) {
-	// An editor change must survive the next boot (ARCH 2.5).
-	cfg := &config.Config{Agents: config.AgentsConfig{List: []config.AgentConfig{
-		{
-			ID:     "custom-edited",
-			Name:   "Edited",
-			Type:   config.AgentTypeCustom,
-			Icon:   "Code",
-			Role:   "writer",
-			Figure: "Woman",
-			Color:  "#fb923c",
-		},
-		{
-			ID:     "custom-glass",
-			Name:   "Glass",
-			Type:   config.AgentTypeCustom,
-			Icon:   "MagnifyingGlass",
-			Role:   "general",
-			Figure: "Robot",
-			Color:  "#3B82F6",
-		},
-	}}}
-
-	require.True(t, migrateUnenforcedAgentIdentity(cfg), "letter-case of a palette hex is a real write")
-
-	edited := agentByID(cfg, "custom-edited")
-	require.NotNil(t, edited)
-	assert.Equal(t, "writer", edited.Role, "valid slug is not replaced by the icon map")
-	assert.Equal(t, "Woman", edited.Figure, "valid figure is not replaced")
-	assert.Equal(t, "#FB923C", edited.Color, "only letter-case changes")
-	assert.Equal(t, "Code", edited.Icon)
-
-	glass := agentByID(cfg, "custom-glass")
-	require.NotNil(t, glass)
-	assert.Equal(t, "general", glass.Role, "stored role wins over MagnifyingGlass → researcher")
-	assert.Equal(t, "Robot", glass.Figure)
-	assert.Equal(t, "#3B82F6", glass.Color)
-	assert.Equal(t, "MagnifyingGlass", glass.Icon)
-
-	require.False(t, migrateUnenforcedAgentIdentity(cfg))
-}
-
-func TestMigrateUnenforcedAgentIdentity_DoesNotTouchBuiltInsOrIcon(t *testing.T) {
-	cfg := &config.Config{}
-	require.True(t, SeedConfig(cfg))
-
-	jim := agentByID(cfg, string(IDJim))
-	require.NotNil(t, jim)
-	jim.Color = "#FFFFFF"
-	jim.Icon = "skull"
-	jim.Role = "researcher"
-	jim.Figure = "Woman"
-
-	require.False(t, migrateUnenforcedAgentIdentity(cfg), "built-ins are not the custom path")
-	assert.Equal(t, "#FFFFFF", jim.Color)
-	assert.Equal(t, "skull", jim.Icon)
-	assert.Equal(t, "researcher", jim.Role)
-	assert.Equal(t, "Woman", jim.Figure)
-}
-
 func TestSeedConfig_BuiltInsEnforceCanonicalTriplesAndSecondCallIsStable(t *testing.T) {
 	// ARCH-DECISIONS 2.4. Figure is Omnipus for every row. Role is the icon
-	// map, not the agent's name (Researcher stays general). Icon strings stay
-	// the compiled phosphor names.
+	// map, not the agent's name (Researcher stays general). The agent `icon`
+	// field was removed (agent-icon ruling), so only figure/role/color are
+	// enforced here.
 	want := []struct {
 		id    string
 		role  string
 		color string
-		icon  string
 	}{
-		{id: string(IDMia), role: "general", color: "#3B82F6", icon: "lightbulb"},
-		{id: string(IDJim), role: "general", color: "#22D3EE", icon: "graph"},
-		{id: string(IDAva), role: "general", color: "#FB923C", icon: "wrench"},
+		{id: string(IDMia), role: "general", color: "#3B82F6"},
+		{id: string(IDJim), role: "general", color: "#22D3EE"},
+		{id: string(IDAva), role: "general", color: "#FB923C"},
 		// Admin is Pink, not Orange, so the visible roster stays distinct.
 		// Squad decision 2026-10-08. Ava stays Orange.
-		{id: string(IDAdmin), role: "security", color: "#F472B6", icon: "shield"},
-		{id: string(IDPlanner), role: "general", color: "#38BDF8", icon: "tree-structure"},
-		{id: string(IDResearcher), role: "general", color: "#A78BFA", icon: "books"},
-		{id: string(IDWorker), role: "general", color: "#9CA3AF", icon: "robot"},
-		{id: string(IDJudge), role: "general", color: "#3B82F6", icon: "gavel"},
-		{id: string(IDPlanSupervisor), role: "general", color: "#22D3EE", icon: "compass-tool"},
+		{id: string(IDAdmin), role: "security", color: "#F472B6"},
+		{id: string(IDPlanner), role: "general", color: "#38BDF8"},
+		{id: string(IDResearcher), role: "general", color: "#A78BFA"},
+		{id: string(IDWorker), role: "general", color: "#9CA3AF"},
+		{id: string(IDJudge), role: "general", color: "#3B82F6"},
+		{id: string(IDPlanSupervisor), role: "general", color: "#22D3EE"},
 	}
 
 	cfg := &config.Config{Agents: config.AgentsConfig{List: []config.AgentConfig{
@@ -292,7 +161,6 @@ func TestSeedConfig_BuiltInsEnforceCanonicalTriplesAndSecondCallIsStable(t *test
 			ID:    "custom-once",
 			Name:  "Once",
 			Type:  config.AgentTypeCustom,
-			Icon:  "PencilSimple",
 			Color: "#7B1FA2",
 		},
 	}}}
@@ -305,16 +173,14 @@ func TestSeedConfig_BuiltInsEnforceCanonicalTriplesAndSecondCallIsStable(t *test
 			assert.Equal(t, "Omnipus", got.Figure)
 			assert.Equal(t, row.role, got.Role)
 			assert.Equal(t, row.color, got.Color)
-			assert.Equal(t, row.icon, got.Icon, "enforcement restores the compiled icon; it does not write a role slug into icon")
 		})
 	}
 
 	custom := agentByID(cfg, "custom-once")
 	require.NotNil(t, custom)
-	assert.Equal(t, "writer", custom.Role, "I14 PencilSimple → Writer, via SeedConfig")
+	assert.Equal(t, "general", custom.Role, "the icon-derived role migration was deleted (greenfield: no migrations), so the default role stands")
 	assert.Equal(t, "#E879F9", custom.Color, "I04 #7B1FA2 → Fuchsia")
 	assert.Equal(t, "Omnipus", custom.Figure)
-	assert.Equal(t, "PencilSimple", custom.Icon)
 
 	// A valid custom slug on a built-in must NOT stick. Custom migration would
 	// keep role "researcher"; enforcement puts the canonical triple back.
@@ -322,17 +188,14 @@ func TestSeedConfig_BuiltInsEnforceCanonicalTriplesAndSecondCallIsStable(t *test
 	require.NotNil(t, researcher)
 	researcher.Role = "researcher"
 	researcher.Figure = "Woman"
-	researcher.Icon = "Code"
 	researcher.Color = "#FFFFFF"
 	require.True(t, SeedConfig(cfg), "tampered built-in identity is rewritten")
 	assert.Equal(t, "general", researcher.Role, "books is not a mapped icon; do not correct Researcher by name")
 	assert.Equal(t, "Omnipus", researcher.Figure)
-	assert.Equal(t, "books", researcher.Icon)
 	assert.Equal(t, "#A78BFA", researcher.Color)
-	assert.Equal(t, "PencilSimple", agentByID(cfg, "custom-once").Icon, "enforcement must not rewrite the custom icon while repairing a built-in")
 
 	require.False(t, SeedConfig(cfg), "second SeedConfig call performs no identity write")
-	assert.Equal(t, "writer", agentByID(cfg, "custom-once").Role)
+	assert.Equal(t, "general", agentByID(cfg, "custom-once").Role)
 	assert.Equal(t, "#E879F9", agentByID(cfg, "custom-once").Color)
 	assert.Equal(t, "general", agentByID(cfg, string(IDResearcher)).Role)
 }

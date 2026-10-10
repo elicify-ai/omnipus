@@ -52,7 +52,7 @@ pkg/plan/store_test.go	TestPlan_RestartTransition_ViaStoreUpdate	49
 pkg/app/internal/doctor/command_libs_linux.go	missingChromeLibsELF	48
 pkg/records/formula_eval_test.go	TestFormula_AbsencePropagatesAndArithmeticIsExact	48
 pkg/gateway/browser_capture_answer_test.go	TestCaptureAnswerRetainsOriginalIdentityThroughWriterWait	46
-pkg/gateway/rest_task_wire.go	restAPI.toWireTask	46
+pkg/gateway/rest_task_wire.go	restAPI.toWireTask	42
 pkg/knowledge/rename.go	Renamer.Plan	46
 pkg/records/invalidate_test.go	TestSchemaChange_InvalidatesAffectedRecords	46
 pkg/sysagent/tools/agent.go	AgentUpdateTool.Execute	46
@@ -64,16 +64,16 @@ pkg/tools/message_parent.go	messageParentToolExecute.encodeMessage	44
 pkg/agent/loop.go	AgentLoop.processMessage	43
 pkg/gateway/browser_webrtc_e2e_test.go	startE2EFakeEncoder	43
 pkg/records/filter_test.go	TestFilter_AbsentIsDistinctAndIncludedByNegation	43
-pkg/task/store.go	storeUpdateLocked.applyRemainingFields	43
+pkg/task/store.go	storeUpdateLocked.applyRemainingFields	40
 pkg/tools/browser/webrtc/input_binary.go	DecodeInputPacket	43
 pkg/tools/set_goal_test.go	TestSetGoalTool_ValidatesAndWrites	43
 pkg/agent/tool_result_admit_test.go	scanChokePointBypasses	42
-pkg/gateway/rest_agents.go	restAPI.HandleAgents	42
+pkg/gateway/rest_agents.go	restAPI.HandleAgents	37
 pkg/gateway/rest_knowledge.go	restAPI.handleKnowledgeGraph	42
 pkg/plan/plan_test.go	TestPlan_StateTransitions	42
 pkg/records/formula_set_test.go	TestFormula_CyclesAndTypesRefusedAtWrite	42
 pkg/tools/browser/webrtc/input_context_integration_test.go	TestInputContextRetainsOriginalAttachmentAndCancelsWithSource	42
-pkg/gateway/rest_tasks.go	restAPI.handleTaskCreate	41
+pkg/gateway/rest_tasks.go	restAPI.handleTaskCreate	39
 pkg/records/schema_test.go	TestSchema_LoadAndReject	41
 pkg/tools/browser/live_document_frame.go	liveDocumentWatch.onEvent	41
 pkg/tools/browser/webrtc/dedicated_input_queue.go	dedicatedInputQueue.enqueueLocked	41
@@ -113,7 +113,7 @@ pkg/records/formula_type.go	inferCall	35
 pkg/sandbox/seatbelt_profile.go	renderSeatbeltProfile	35
 pkg/tools/browser/capture_recapture_frame_adapter.go	CaptureSession.RecaptureFrameContext	35
 pkg/tools/browser/webrtc/viewer_request_test.go	TestViewerRequestNativeSaturationPreservesHealthyPeerAndReusesReleasedSlot	35
-pkg/tools/task.go	taskUpdateToolExecute.buildPatchFields	35
+pkg/tools/task.go	taskUpdateToolExecute.buildPatchFields	31
 pkg/tools/web.go	WebFetchTool.Execute	35
 pkg/app/internal/onboard/onboard_test.go	TestRun_FreshInstall_WritesUsableConfig	34
 pkg/config/context_settings_test.go	TestConfig_NoContextWindowDefaultKey	34
@@ -131,7 +131,7 @@ pkg/gateway/rest_agents_create.go	restAPICreateAgent.prepareAgent	33
 pkg/gateway/rest_providers_delete.go	restAPI.runProviderDelete	33
 pkg/gateway/rest_workspaces.go	restAPIHandleWorkspacePut.applyUpdate	33
 pkg/knowledge/links_test.go	TestKnowledge_NoLanguageModelInTheGraphPath	33
-pkg/plan/store.go	storeUpdateLocked.loadAndApplyFields	33
+pkg/plan/store.go	storeUpdateLocked.loadAndApplyFields	30
 pkg/providers/catalog/parse.go	parseProvider	33
 pkg/records/compare_truthtable_test.go	TestComparisonTruthTable	33
 pkg/task/rrule_test.go	TestRruleExpansion_WallClockDST	33
@@ -141,7 +141,7 @@ pkg/agent/steering_test.go	TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCal
 pkg/channels/telegram/telegram.go	TelegramChannel.handleMessage	32
 pkg/filegrep/filegrep.go	state.walkDir	32
 pkg/gateway/browser_capture_health.go	captureHealthTracker.observe	32
-pkg/gateway/rest_tasks.go	taskPatch.buildPatch	32
+pkg/gateway/rest_tasks.go	taskPatch.buildPatch	30
 pkg/gateway/websocket.go	wsHandlerReadLoop.dispatchFrame	28
 pkg/tools/browser/live_input_dispatch.go	buildInputAction	32
 pkg/tools/browser/webrtc/dedicated_input_peer.go	DedicatedInputPeer.bindChannel	32

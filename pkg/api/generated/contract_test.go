@@ -3303,8 +3303,6 @@ func TestContract_TaskTrigger_AllKinds_Validate(t *testing.T) {
 	}{
 		{"manual", "manual", map[string]any{}},
 		{"once", "once", map[string]any{"at_ms": int64(1781000000000)}},
-		{"every", "every", map[string]any{"every_ms": int64(3600000)}},
-		{"recurring_cron_expr", "recurring", map[string]any{"cron_expr": "0 9 * * MON"}},
 		{"recurring_rrule", "recurring", map[string]any{
 			"rrule":      "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10",
 			"dtstart_ms": int64(1784624400000),

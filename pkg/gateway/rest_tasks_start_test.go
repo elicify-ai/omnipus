@@ -357,13 +357,13 @@ func TestHandleTaskPatch_InProgress_WithKnownAgent(t *testing.T) {
 // trigger does not repeat (manual/once) — that must stay a 400 exactly as
 // before.
 func TestTransition_DoneRepeatingTaskRunNow(t *testing.T) {
-	t.Run("done every task: PATCH status=in_progress is rejected (400, use POST /runs)", func(t *testing.T) {
+	t.Run("done recurring task: PATCH status=in_progress is rejected (400, use POST /runs)", func(t *testing.T) {
 		api := newTestRestAPIAlignedStores(t)
 		wsID := ensureTestWorkspace(t, api)
 		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 		body := fmt.Sprintf(
-			`{"title":"RerunMe","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
+			`{"title":"RerunMe","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"recurring","config":{"rrule":"FREQ=DAILY","dtstart_ms":1781000000000,"tz":"UTC"}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -447,7 +447,7 @@ func TestHandleTaskPatch_RepeatingRunNow_RejectedLeavesDataUnchanged(t *testing.
 	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 	body := fmt.Sprintf(
-		`{"title":"RerunFailPreserve","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"every","config":{"every_ms":60000}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
+		`{"title":"RerunFailPreserve","action":"llm","workspace_id":%q,"agent_id":"mia","trigger":{"type":"recurring","config":{"rrule":"FREQ=DAILY","dtstart_ms":1781000000000,"tz":"UTC"}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
 		wsID,
 	)
 	w := httptest.NewRecorder()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -131,8 +132,12 @@ func TestCaptureAnswerRetainsOriginalIdentityThroughWriterWait(t *testing.T) {
 				if body["type"] != "browser_capture_answer" || body["sdp"] != "expected-answer" || body["capture_generation"] != float64(1) || body["target_id"] != "page-a" || body["offer_id"] != float64(9) {
 					t.Fatalf("current answer lost immutable identity: %s", raw)
 				}
-			} else if body["type"] != "error" || body["message"] != "capture ingest offer failed: encoder negotiation failed" {
-				t.Fatalf("current error was lost: %s", raw)
+			} else if body["type"] != "error" || body["message"] != "capture ingest offer failed; details are in the server log" {
+				// Leak round 6 (REVIEW-mainfix-r6-e14ac89eb T1): the frame now
+				// carries fixed text, never the interpolated cause.
+				t.Fatalf("current error was lost or leaked the cause: %s", raw)
+			} else if strings.Contains(body["message"].(string), "encoder negotiation failed") {
+				t.Fatalf("the error frame leaked the raw encoder cause: %s", raw)
 			}
 		})
 	}

@@ -58,8 +58,13 @@ func TestHandleTaskPatch_SessionBindingFailureRemainsFailed(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &rejected); err != nil {
 		t.Fatalf("decode real PATCH error response: %v; body=%s", err, response.Body.String())
 	}
-	if !strings.Contains(rejected.Error, fault.cause.Error()) {
-		t.Errorf("PATCH error = %q, want complete binding-write cause %q", rejected.Error, fault.cause.Error())
+	// Leak round 6 (T1-3): the visible error is FIXED text; the raw
+	// binding-write cause must never reach the client.
+	if !strings.Contains(rejected.Error, "the task could not be started. Check the agent and try again; details are in the server log.") {
+		t.Errorf("PATCH error = %q, want the fixed start-failure text", rejected.Error)
+	}
+	if strings.Contains(rejected.Error, fault.cause.Error()) {
+		t.Errorf("PATCH error = %q, must not surface the raw binding-write cause %q", rejected.Error, fault.cause.Error())
 	}
 
 	bindings, persistedFails := fault.snapshot()

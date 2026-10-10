@@ -106,6 +106,14 @@ type RequestAdmission struct {
 	// AskApproved is true when the receiver's send_message policy was Ask at
 	// preflight and that Ask was approved for this request.
 	AskApproved bool
+	// BeforeCommit, when set, runs after the FINAL authorization decision
+	// (including any approval wait and its re-read) and before anything of the
+	// receiver exists. A caller whose own source-side effects must follow the
+	// decision (the WebSocket path saves and echoes the user's message) commits
+	// them here, so a refusal - including a late denied Ask - can never leave
+	// them behind (U8 r4 F12). An error aborts the admission with no receiver
+	// write; it is returned unchanged.
+	BeforeCommit func() error
 }
 
 // AdmitRequest records the capture, appends the request to the receiver's main
@@ -126,6 +134,11 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	// with nothing written.
 	if err := al.recheckReceiverAdmission(ctx, a.Receiver, a.Source.SessionID, a.AskApproved); err != nil {
 		return "", "", err
+	}
+	if a.BeforeCommit != nil {
+		if err := a.BeforeCommit(); err != nil {
+			return "", "", err
+		}
 	}
 	meta, err := store.GetOrCreateMainSession(a.Receiver.WorkspaceID, a.Receiver.AgentID)
 	if err != nil {
@@ -310,23 +323,6 @@ func (al *AgentLoop) recheckReceiverAdmission(ctx context.Context, receiver addr
 	}
 }
 
-// SettleRecipientAdmission is the last authorization decision a caller makes
-// BEFORE it commits anything of its own (the WebSocket path saves and echoes the
-// source message only after this returns nil - U8 F12). It re-reads eligibility
-// and policy now, puts a newly required Ask to the person and re-reads after the
-// approval (F11). The returned flag says the receiver's policy is Ask and is
-// approved for this request, which AdmitRequest then honours without asking again.
-func (al *AgentLoop) SettleRecipientAdmission(ctx context.Context, receiver addressing.Pair, senderSessionID string, askApproved bool) (bool, error) {
-	if err := al.recheckReceiverAdmission(ctx, receiver, senderSessionID, askApproved); err != nil {
-		return false, err
-	}
-	policy, err := al.receiverSendPolicy(receiver)
-	if err != nil {
-		return false, err
-	}
-	return policy == string(config.ToolPolicyAsk), nil
-}
-
 // receiverSendPolicy resolves the receiver's effective send_message policy
 // through the existing two-layer resolver.
 func (al *AgentLoop) receiverSendPolicy(receiver addressing.Pair) (string, error) {
@@ -342,7 +338,11 @@ func (al *AgentLoop) receiverSendPolicy(receiver addressing.Pair) (string, error
 	if cfg == nil {
 		return "", fmt.Errorf("%w: the receiver's tool policy is unreadable", ErrPeerRefused)
 	}
-	return tools.ResolveEffectivePolicy(cfg, "send_message"), nil
+	policy := tools.ResolveEffectivePolicy(cfg, "send_message")
+	if al.policyReadHook != nil {
+		al.policyReadHook(policy)
+	}
+	return policy, nil
 }
 
 // requestReceiverApproval runs the existing approval path for a receiver whose
@@ -628,3 +628,7 @@ func (al *AgentLoop) mirrorConnectorReply(c addressing.Capture, responder addres
 		deps.PublishGuestReply(c.Source.SessionID, entry)
 	}
 }
+
+// SetPolicyReadHookForTest installs a seam run with every receiver policy read.
+// Tests only.
+func (al *AgentLoop) SetPolicyReadHookForTest(h func(policy string)) { al.policyReadHook = h }
