@@ -58,6 +58,12 @@ type LaunchRequest struct {
 	// after Task. Both empty means no snapshot.
 	ContextReferences []string
 	ContextNotes      string
+	// Initiator, when non-nil, is the already-authorized agent initiator of a
+	// task run (run_task, execute_plan); Launch copies it onto the child's
+	// LifecycleRecord.InitiatedBy and caps the child's budget by its
+	// Authorization.RemainingDepth. Nil means a person or the scheduler
+	// started the run.
+	Initiator *session.InitiatedBy
 }
 
 // LaunchResult is SessionLauncher.Launch's output (I-2).

@@ -1803,31 +1803,35 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	}
 	planExecute := tools.NewPlanExecuteTool(planStore, al.taskStore)
 	planExecute.SetIsAgentIDChecker(al.isRegisteredAgentID)
+	planExecute.SetInitiatorFn(func(ctx context.Context) *task.Initiator { return al.initiatorFor(ctx, agent.ID) })
+	planExecute.SetExecutionAuthorizer(func(ctx context.Context, assigneeAgentID, workspaceID string) *tools.DelegationDenial {
+		_, denial := al.authorizeInitiatedRun(ctx, *al.initiatorFor(ctx, agent.ID), assigneeAgentID, workspaceID)
+		return denial
+	})
 	agent.Tools.RegisterReplacing(planExecute)
 
 	// run_task (FR-019, US-10): dispatches via the real
 	// TaskExecutor.StartTaskNow — the standalone-task full attempt loop.
 	taskRun := tools.NewTaskRunTool(al.taskStore)
 	if al.taskExecutor != nil {
-		taskRun.SetStartTaskNow(al.taskExecutor.StartTaskNow)
+		taskRun.SetStartTaskNow(func(ctx context.Context, taskID string) (string, error) {
+			return al.taskExecutor.StartTaskNowAs(ctx, taskID, al.initiatorFor(ctx, agent.ID))
+		})
 	} else {
 		logger.ErrorCF("agent", "wirePlanToolsForAgent: task executor unavailable — "+
 			"run_task registered but will fail closed (no dispatcher installed)",
 			map[string]any{"agent_id": agent.ID})
 	}
-	// Founder ruling 2026-10-10: the delegation policy always applies. Starting
-	// a task runs its assignee, so an agent-initiated run_task is gated like
-	// any other delegation: caller (this agent) -> assignee needs an edge in
-	// the governing workspace graph, or the agent runs its own task. The
-	// self-target exemption is the task-tool one (no new delegation principal);
-	// the scheduler and the UI do not use this tool and are not gated here.
-	taskRun.SetDelegationDenyChecker(func(ctx context.Context, assigneeAgentID string) *tools.DelegationDenial {
-		return buildDelegationDenyCheckerForTaskReassignment(
-			agent.ID,
-			al.GetConfig().Performance,
-			config.DelegationModeTask,
-			delegationGateDeps{AgentExists: agentExistsChecker(al.GetRegistry())},
-		)(ctx, assigneeAgentID)
+	// Founder ruling 2026-10-10: the delegation policy always applies. An
+	// agent-initiated run_task is authorized by the one decision function
+	// (authorizeInitiatedRun): caller (this agent, taken from this wiring, not
+	// from ctx) -> assignee needs an edge in the task's workspace graph, a self
+	// run included. This pre-check lets a refusal leave the task untouched; the
+	// executor repeats the decision inside StartTaskNowAs. The scheduler and the
+	// UI do not use this tool and are not gated here.
+	taskRun.SetDelegationDenyChecker(func(ctx context.Context, assigneeAgentID, workspaceID string) *tools.DelegationDenial {
+		_, denial := al.authorizeInitiatedRun(ctx, *al.initiatorFor(ctx, agent.ID), assigneeAgentID, workspaceID)
+		return denial
 	})
 	agent.Tools.RegisterReplacing(taskRun)
 

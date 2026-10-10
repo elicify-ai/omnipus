@@ -136,7 +136,7 @@ func (te *TaskExecutor) runTask(
 	// is what bounds an A→B→A task-mode delegation chain — without it every task
 	// run starts at depth 0 and the gate never trips (see taskCreate's
 	// SetMaxDelegationDepth bound, resolved from performance.max_delegation_depth).
-	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
+	taskCtx = tools.WithDelegationDepth(taskCtx, te.runDelegationDepth(t, taskSessionID))
 	// review r2 Chunk 1: mark this turn as THIS task's own executor run so
 	// TaskUpdateTool refuses any status write on it and goal_claim accepts
 	// this turn's claim at any delegation depth — completion is claimed with
@@ -547,7 +547,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	// No-op (ctx unchanged) for an ordinary attempt. Both dispatch entry points
 	// set this — runTaskFromInProgress is the one Play itself re-enters through.
 	taskCtx = WithResumeWorkDirOverride(taskCtx, te.resumeWorkDirFor(t))
-	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
+	taskCtx = tools.WithDelegationDepth(taskCtx, te.runDelegationDepth(t, taskSessionID))
 	// review r2 Chunk 1: same in-run marker as runTask above — see
 	// tools.WithRunningTaskID's doc comment.
 	taskCtx = tools.WithRunningTaskID(taskCtx, t.ID)
@@ -810,4 +810,19 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 		return result.ForUser, nil
 	}
 	return result.ForLLM, nil
+}
+
+// runDelegationDepth is the chain depth the run's root turn is seeded with: the
+// larger of the task's stored generation counter and the depth its lifecycle
+// record's InitiatedBy recorded when an agent started it. The graph gate inside
+// the run then sees the run's real position in the chain, so an A->B run cannot
+// delegate onward as if it started at depth 0.
+func (te *TaskExecutor) runDelegationDepth(t *task.Task, sessionID string) int {
+	depth := t.DelegationDepth
+	if ls := te.getLifecycleStore(); ls != nil && sessionID != "" {
+		if rec, err := ls.Load(sessionID); err == nil && rec.InitiatedBy != nil && rec.InitiatedBy.Depth > depth {
+			depth = rec.InitiatedBy.Depth
+		}
+	}
+	return depth
 }

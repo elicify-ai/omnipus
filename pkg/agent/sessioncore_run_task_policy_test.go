@@ -21,12 +21,14 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 const (
 	rtCaller   = "rt-caller"
 	rtAssignee = "rt-assignee"
+	rtThird    = "rt-third"
 )
 
 // newRunTaskPolicyLoop builds a loop with two ordinary agents over a workspace
@@ -48,12 +50,25 @@ func newRunTaskPolicyLoopAt(t *testing.T, home string) (*AgentLoop, *AgentInstan
 			List: []config.AgentConfig{
 				{ID: rtCaller, Name: "Caller", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", rtCaller)},
 				{ID: rtAssignee, Name: "Assignee", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", rtAssignee)},
+				{ID: rtThird, Name: "Third", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", rtThird)},
 			},
 		},
 	}
 	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	t.Cleanup(func() { al.Close() })
+	// Wire the durable lifecycle store the way newSteerAL does, so launched
+	// runs persist their records and the authorizer can read an initiating
+	// session's record.
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	al.SetSessionMessagingStores(session.NewMessageInboxStore(filepath.Join(home, "session_messages")), lifecycle)
+	// The executor's lifecycle store is installed at gateway boot in production;
+	// install it so a started run's record (and its InitiatedBy) is persisted.
+	// Install the launcher too, so StartTaskNow takes the production path.
+	al.taskExecutor.SetLifecycleStore(lifecycle)
+	// Admission refuses an unminted boot epoch; the gateway mints one at boot.
+	mintGenuineBootEpochForLoop(t, al)
+	al.taskExecutor.SetSessionLauncher(NewSteerLauncher(al))
 	inst, ok := al.GetRegistry().GetAgent(rtCaller)
 	if !ok {
 		t.Fatal("caller agent not registered")
@@ -123,14 +138,27 @@ func TestRunTask_AgentWithEdge_Allowed(t *testing.T) {
 	}
 }
 
-// An agent runs its own task without any edge.
-func TestRunTask_OwnTask_Allowed(t *testing.T) {
+// R1b: an agent running its OWN task needs the self-edge like any other pair.
+// (Creating a task for itself is a different action and stays ungated — see
+// TestInitiatorAuth_TaskCreateToSelfStaysUngated.)
+func TestRunTask_OwnTask_WithoutSelfEdge_Refused(t *testing.T) {
 	al, caller := newRunTaskPolicyLoop(t, []graphEdge{edge(rtAssignee, rtCaller, nil, nil)})
-	tk := createRunnableTask(t, al, "t-rt-own", rtCaller)
+	tk := createRunnableTask(t, al, "t-rt-own-noself", rtCaller)
+
+	isErr, out := runTaskAs(caller, tk.ID)
+	if !isErr || !strings.Contains(out, "trust_set") {
+		t.Fatalf("run_task of the agent's own task without a self-edge = (err=%v) %q; want a delegation denial", isErr, out)
+	}
+	assertNotStarted(t, al, tk.ID)
+}
+
+func TestRunTask_OwnTask_WithSelfEdge_Allowed(t *testing.T) {
+	al, caller := newRunTaskPolicyLoop(t, []graphEdge{edge(rtCaller, rtCaller, nil, nil)})
+	tk := createRunnableTask(t, al, "t-rt-own-self", rtCaller)
 
 	isErr, out := runTaskAs(caller, tk.ID)
 	if isErr {
-		t.Fatalf("an agent's own task must run without an edge: %s", out)
+		t.Fatalf("an agent's own task must run with the self-edge: %s", out)
 	}
 }
 

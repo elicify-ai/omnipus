@@ -46,16 +46,17 @@ type TaskRunTool struct {
 	// is a configuration error, never a silent success — mirrors every other
 	// unwired-checker discipline in this package.
 	startTaskNow TaskStartNowFunc
-	// delegationDeny is the delegation-policy gate for an AGENT-initiated
-	// start (founder ruling 2026-10-10: the delegation policy always
-	// applies). Starting a task runs its assignee, so a calling agent needs a
-	// caller->assignee edge in the governing workspace graph, or must be the
-	// assignee itself (its own task). FAIL CLOSED when unwired, exactly like
-	// create_task: an unwired gate is a configuration error, never a grant.
+	// delegationDeny is the delegation-policy pre-check for an AGENT-initiated
+	// start (founder ruling 2026-10-10: the delegation policy always applies).
+	// Starting a task runs its assignee, so the calling agent needs a
+	// caller->assignee edge in the task's workspace graph — including for its
+	// OWN task (the self-edge; there is no self-exemption on a run). The
+	// executor re-runs the same decision (AgentLoop.authorizeInitiatedRun)
+	// inside StartTaskNowAs; this earlier call lets a refused run leave the
+	// task byte-identical. FAIL CLOSED when unwired, exactly like create_task.
 	// This tool is the agent origin; the scheduler and a person's UI start
-	// reach the executor through other entry points (ExecuteTask,
-	// REST StartTaskNow) and are not delegation, so they never pass here.
-	delegationDeny func(ctx context.Context, assigneeAgentID string) *DelegationDenial
+	// reach the executor through other entry points and are not gated here.
+	delegationDeny func(ctx context.Context, assigneeAgentID, workspaceID string) *DelegationDenial
 }
 
 // NewTaskRunTool constructs a TaskRunTool. store may be nil for
@@ -70,11 +71,12 @@ func (t *TaskRunTool) SetStartTaskNow(fn TaskStartNowFunc) {
 	t.startTaskNow = fn
 }
 
-// SetDelegationDenyChecker installs the delegation-policy gate applied to the
-// task's assignee before any status write or dispatch. The wiring layer builds
-// it for the owning agent as the calling identity.
+// SetDelegationDenyChecker installs the delegation-policy pre-check applied to
+// the task's assignee, in the task's workspace, before any status write or
+// dispatch. The wiring layer builds it for the owning agent as the calling
+// identity.
 func (t *TaskRunTool) SetDelegationDenyChecker(
-	fn func(ctx context.Context, assigneeAgentID string) *DelegationDenial,
+	fn func(ctx context.Context, assigneeAgentID, workspaceID string) *DelegationDenial,
 ) {
 	t.delegationDeny = fn
 }
@@ -183,7 +185,7 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 			TargetAgentID: existing.AgentID,
 		})
 	}
-	if denial := t.delegationDeny(ctx, existing.AgentID); denial != nil {
+	if denial := t.delegationDeny(ctx, existing.AgentID, existing.WorkspaceID); denial != nil {
 		return DelegationDeniedResult("run_task", denial)
 	}
 

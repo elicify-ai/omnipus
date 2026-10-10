@@ -96,6 +96,16 @@ type planTaskDispatcher interface {
 	executeTaskPlanVerified(ctx context.Context, taskID string) error
 }
 
+// planInitiatedDispatcher is the dispatcher capability a plan an AGENT approved
+// (Plan.InitiatedBy) needs: dispatching a member with the initiating agent so
+// the member is authorized against the live delegation graph at dispatch time.
+// It is a separate interface so a dispatcher without it can only ever dispatch
+// person-approved plans; for an agent-approved plan the engine refuses to
+// dispatch rather than run a member unauthorized.
+type planInitiatedDispatcher interface {
+	executeTaskPlanInitiated(ctx context.Context, taskID string, initiator *task.Initiator) error
+}
+
 // sessionCanceller is the narrow interface *AgentLoop.RequestCancelForSession
 // (cancel.go) satisfies (mirrors planJudge/planTaskDispatcher's own
 // narrow-interface test-seam pattern, ADR-052 §6.4/§6.9 "Stop = the existing

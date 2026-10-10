@@ -455,6 +455,22 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	DelegationDepth int `json:"delegation_depth,omitempty"`
 }
 
+// Initiator is the agent whose own action (run_task, execute_plan) started a
+// run. A nil *Initiator everywhere means a person or the scheduler started it,
+// which is not delegation. It is DISK-ONLY and never on the wire, like
+// Task.DelegationDepth: the REST mappers do not copy it and it must not be
+// added to any contracts/ schema.
+type Initiator struct {
+	// AgentID is the initiating agent, taken from the tool wiring (never from
+	// ctx, which a task run re-stamps with the assignee).
+	AgentID string `json:"agent_id"`
+	// SessionID is the acting turn's transcript session, when known; the
+	// authorizer reads that session's record for an inherited onward budget.
+	SessionID string `json:"session_id,omitempty"`
+	// Depth is the acting turn's delegation-chain depth.
+	Depth int `json:"depth"`
+}
+
 // CreatedByAgent reports whether this task was created by the agent agentID.
 // It is THE comparison to use for the "dispatched" authorization predicate
 // (list-jobs FR-037/FR-010) — never a bare `t.CreatedByAgentID == agentID`,

@@ -62,6 +62,8 @@ Use a plan when several tasks depend on each other and you can state a checkable
 
 After Execute, nothing further needs your approval: tasks run, are checked, and are retried on their own.
 
+When an **agent** runs a plan with `execute_plan`, Omnipus checks the workspace's trust lines from that agent to the assignee of every step before the plan starts; if any is missing the plan stays a draft and the reply names each assignee that was refused. Each step is checked again, against the current lines, when it is about to start, so removing a line while the plan runs makes the affected step fail with a clear reason. A plan you approve or play yourself in the web app needs no such lines.
+
 ## Definition of Done
 
 The DoD uses the task criteria editor. Each item is a plain statement judged by reading the evidence, a technical check (a command and the exit code that counts as pass), or an action-count check (a tool that must be called a set number of times).

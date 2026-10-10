@@ -219,6 +219,10 @@ type LifecycleRecord struct {
 	// nil for a session nobody steers (an ordinary_root). See Origin's own
 	// doc comment for how the two combine under I-8's classifier.
 	SteeredBy *SteeredBy `json:"steered_by,omitempty"`
+	// InitiatedBy is set when an agent's own run_task / execute_plan started
+	// this run: who, at what chain depth, and the onward budget the delegation
+	// edge left it. Nil for a run a person or the scheduler started.
+	InitiatedBy *InitiatedBy `json:"initiated_by,omitempty"`
 	// Stop is the durable Stop marker on THIS session's own record (D8);
 	// nil means no Stop has been stamped for the record's current
 	// generation. Written by the cascade (I-6 Canceller.CancelSubtree) on

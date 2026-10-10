@@ -406,6 +406,15 @@ func (te *TaskExecutor) getLifecycleStore() *session.LifecycleStore {
 // dispatch proceeds exactly as before this wave
 // (TestMintTaskLifecycleRecord_NilStore_NoOp pins that).
 func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) error {
+	return te.mintTaskLifecycleRecordFor(sessionID, t, nil)
+}
+
+// mintTaskLifecycleRecordFor is mintTaskLifecycleRecord for a run an agent
+// started: initiatedBy (already authorized by authorizeInitiatedRun) is
+// stamped on the record so the run's later delegations and run_task /
+// execute_plan calls inherit the onward budget. nil means a person or the
+// scheduler started it.
+func (te *TaskExecutor) mintTaskLifecycleRecordFor(sessionID string, t *task.Task, initiatedBy *session.InitiatedBy) error {
 	ls := te.getLifecycleStore()
 	if ls == nil || sessionID == "" {
 		return nil
@@ -450,6 +459,7 @@ func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) 
 		Origin:      &session.Origin{Kind: session.OriginKindTask, TaskID: t.ID},
 		WorkspaceID: t.WorkspaceID,
 		AgentID:     t.AgentID,
+		InitiatedBy: cloneInitiatedBy(initiatedBy),
 	}
 	if err := ls.Persist(rec); err != nil {
 		return fmt.Errorf(
@@ -574,7 +584,7 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string, occurren
 		return ErrExecutorDraining
 	}
 	defer te.wg.Done()
-	return te.executeTask(ctx, taskID, occurrenceMs, task.RunKindScheduled, false)
+	return te.executeTask(ctx, taskID, occurrenceMs, task.RunKindScheduled, false, nil)
 }
 
 // executeTaskPlanVerified is the ONE documented bypass of the plan-state gate
@@ -604,6 +614,14 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string, occurren
 // caller of a dispatch primitive must go through ExecuteTask/StartTaskNow and
 // pay the real requirePlanExecuting check.
 func (te *TaskExecutor) executeTaskPlanVerified(ctx context.Context, taskID string) error {
+	return te.executeTaskPlanInitiated(ctx, taskID, nil)
+}
+
+// executeTaskPlanInitiated is executeTaskPlanVerified for a member of a plan an
+// AGENT approved (Plan.InitiatedBy): the member is authorized against the live
+// delegation graph, with the initiating agent, at the moment it is dispatched.
+// A nil initiator is a plan a person approved or played.
+func (te *TaskExecutor) executeTaskPlanInitiated(ctx context.Context, taskID string, initiator *task.Initiator) error {
 	// Same wg-before-draining gate as ExecuteTask/StartTaskNow (fix-wave
 	// finding #1) — this bypass entry point skipped both halves entirely,
 	// leaving plan-member dispatches invisible to Drain's wg.Wait.
@@ -622,7 +640,7 @@ func (te *TaskExecutor) executeTaskPlanVerified(ctx context.Context, taskID stri
 	ctx = tools.WithAutoDenyAsk(ctx, true)
 	// Plan-member dispatch is never tied to a recurring occurrence — nil,
 	// task.RunKindScheduled (matching every other non-manual dispatch path).
-	return te.executeTask(ctx, taskID, nil, task.RunKindScheduled, true)
+	return te.executeTask(ctx, taskID, nil, task.RunKindScheduled, true, initiator)
 }
 
 // executeTask is ExecuteTask's real body. planVerifiedUnderDecisionMu is true
@@ -634,6 +652,7 @@ func (te *TaskExecutor) executeTaskPlanVerified(ctx context.Context, taskID stri
 // cannot be reached by accident.
 func (te *TaskExecutor) executeTask(
 	ctx context.Context, taskID string, occurrenceMs *int64, kind task.RunKind, planVerifiedUnderDecisionMu bool,
+	initiator *task.Initiator,
 ) error {
 	t, err := te.store.Get(taskID)
 	if err != nil {
@@ -706,6 +725,22 @@ func (te *TaskExecutor) executeTask(
 	}
 	t = claimed
 
+	// A run an agent started (a plan member of an agent-executed plan) is
+	// authorized HERE, after the claim and before anything else is written, with
+	// the live graph: edge removal while the plan runs, correction tails and
+	// late members are all covered by this one call. A denial fails the member
+	// visibly; no session is created.
+	var initiatedBy *session.InitiatedBy
+	if initiator != nil {
+		ib, denial := te.agentLoop.authorizeInitiatedRun(ctx, *initiator, t.AgentID, t.WorkspaceID)
+		if denial != nil {
+			release()
+			return te.failTaskBeforeDispatch(taskID, fmt.Errorf(
+				"task_executor: start refused by the delegation policy: %s", denial.Reason))
+		}
+		initiatedBy = ib
+	}
+
 	// M1 (ADR-052 FR-029): create the task session and persist its SessionID
 	// SYNCHRONOUSLY, in THIS call, before the task ever leaves ExecuteTask's
 	// own goroutine — not async inside the run goroutine as before. This
@@ -719,7 +754,7 @@ func (te *TaskExecutor) executeTask(
 	// pattern: a real transcript session is required before any in-progress
 	// event, live running slot or execution goroutine is created. A setup
 	// error aborts before worker execution and is recorded as Failed.
-	taskSessionID, sessErr := te.createTaskSessionSync(t)
+	taskSessionID, sessErr := te.createTaskSessionSyncAs(t, initiatedBy)
 	// The run owns one execution from here to its release: a person's Stop
 	// finds that barrier (task_execution_disposition.go). Admitting it is part
 	// of provisioning the run, so a refusal fails the dispatch the same way.
@@ -771,6 +806,12 @@ func (te *TaskExecutor) executeTask(
 // agent store is missing or NewSession fails, retry the binding write once,
 // and fail the dispatch visibly if it cannot be persisted.
 func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
+	return te.createTaskSessionSyncAs(t, nil)
+}
+
+// createTaskSessionSyncAs is createTaskSessionSync for a run an agent started
+// (initiatedBy already authorized); nil is a person or the scheduler.
+func (te *TaskExecutor) createTaskSessionSyncAs(t *task.Task, initiatedBy *session.InitiatedBy) (string, error) {
 	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
 	if sessStore == nil {
 		return "", fmt.Errorf("task_executor: agent store %q not found for task %q", t.AgentID, t.ID)
@@ -801,7 +842,7 @@ func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 	// doc comment for why this producer closes the boot-sweep visibility gap for
 	// CheckQueuedTasks, advanceBlockedTasks, SpawnTriggeredRun, and plan-member
 	// dispatch (every caller of ExecuteTask funnels through this function).
-	if mintErr := te.mintTaskLifecycleRecord(taskSessionID, t); mintErr != nil {
+	if mintErr := te.mintTaskLifecycleRecordFor(taskSessionID, t, initiatedBy); mintErr != nil {
 		return "", mintErr
 	}
 	if _, updateErr := te.persistTaskSessionBinding(t.ID, taskSessionID); updateErr != nil {
@@ -1136,6 +1177,17 @@ type activeRun struct {
 // an empty string and an error when the task cannot be found, already has no
 // agent, or the concurrency cap is exhausted.
 func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string, error) {
+	return te.StartTaskNowAs(ctx, taskID, nil)
+}
+
+// StartTaskNowAs is StartTaskNow with the starter named explicitly: initiator
+// is the agent whose own run_task call this is, or nil for a person (the REST
+// Run now / Start handlers) or the scheduler. The starter is never read from
+// ctx (a task run re-stamps ctx with the assignee). A non-nil initiator is
+// authorized by authorizeInitiatedRun before anything is written, on both the
+// new-launch and the existing-session re-dispatch branch; a denial is returned
+// as an error and leaves the task untouched.
+func (te *TaskExecutor) StartTaskNowAs(ctx context.Context, taskID string, initiator *task.Initiator) (string, error) {
 	// Reserve a wg slot BEFORE checking draining — see ExecuteTask's identical
 	// fix and its doc comment (fix-wave finding #1) for the full race this
 	// closes and why the ordering (Add, then Load) is race-free under Go's
@@ -1162,8 +1214,16 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	if gateErr := te.requirePlanExecuting(t); gateErr != nil {
 		return "", gateErr
 	}
+	var initiatedBy *session.InitiatedBy
+	if initiator != nil {
+		ib, denial := te.agentLoop.authorizeInitiatedRun(ctx, *initiator, t.AgentID, t.WorkspaceID)
+		if denial != nil {
+			return "", fmt.Errorf("task_executor: StartTaskNow: refused by the delegation policy: %s", denial.Reason)
+		}
+		initiatedBy = ib
+	}
 	if te.launcher != nil {
-		return te.startTaskNowViaLauncher(ctx, t)
+		return te.startTaskNowViaLauncherAs(ctx, t, initiatedBy)
 	}
 
 	// Idempotency guard. A bound session is returned ONLY when its durable
@@ -1269,7 +1329,7 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		// PROPAGATED through the truthful pre-dispatch failure
 		// (failTaskBeforeDispatch): the run is refused, never started on an
 		// unpersisted/mismatched classification.
-		if mintErr := te.mintTaskLifecycleRecord(taskSessionID, t); mintErr != nil {
+		if mintErr := te.mintTaskLifecycleRecordFor(taskSessionID, t, initiatedBy); mintErr != nil {
 			release()
 			return "", te.failTaskBeforeDispatch(taskID, mintErr)
 		}
@@ -1364,6 +1424,13 @@ func newSteeringRefusalError(err error) error {
 // startTaskNowViaLauncher is FR-A-010's single task front: Launch+Dispatch
 // for a task without a session and Dispatch alone for an existing session.
 func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Task) (string, error) {
+	return te.startTaskNowViaLauncherAs(ctx, t, nil)
+}
+
+// startTaskNowViaLauncherAs is startTaskNowViaLauncher carrying the
+// already-authorized initiator (nil = a person or the scheduler) onto the
+// launch request, so the child's record carries InitiatedBy.
+func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.Task, initiatedBy *session.InitiatedBy) (string, error) {
 	if t.SessionID != "" {
 		generation := 1
 		if lifecycle := te.getLifecycleStore(); lifecycle != nil {
@@ -1433,7 +1500,8 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 			CallID: t.OriginCallID,
 			TaskID: t.ID,
 		},
-		PlanID: t.PlanID,
+		PlanID:    t.PlanID,
+		Initiator: initiatedBy,
 	}
 	if steeringSessionID == "" {
 		req.WorkspaceID = t.WorkspaceID
@@ -1631,7 +1699,7 @@ func (te *TaskExecutor) StartOccurrenceRun(_ context.Context, taskID string, occ
 	// no AutoDenyAsk marker, so ToolAutoDenyAsk defaults false and the run
 	// stays attended — cards keep showing, matching FR-057's "a turn a person
 	// actually started must keep showing cards."
-	return te.executeTask(context.Background(), taskID, occurrenceMs, task.RunKindManual, false)
+	return te.executeTask(context.Background(), taskID, occurrenceMs, task.RunKindManual, false, nil)
 }
 
 // ResizeDispatchSema updates the global dispatch semaphore capacity.
