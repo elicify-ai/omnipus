@@ -1475,7 +1475,12 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 			continue
 		}
 		if existing, gerr := pe.taskStore.Get(m.ID); gerr == nil && existing != nil {
-			continue // already applied — idempotent no-op.
+			// Already applied - but the goal pairing may be the write a crash
+			// cut off, so it is made good here too (a no-op when present).
+			if err := pe.pairTailMemberGoal(m.ID); err != nil {
+				return err
+			}
+			continue
 		}
 		clone := m
 		if clone.PlanID == "" {
@@ -1484,6 +1489,9 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 		if err := pe.taskStore.Create(&clone); err != nil {
 			// A collision that isn't "exists" is a real error — surface it so
 			// ReplayAtBoot marks the intent not-done and retries next boot.
+			return err
+		}
+		if err := pe.pairTailMemberGoal(m.ID); err != nil {
 			return err
 		}
 	}

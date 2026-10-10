@@ -46,7 +46,7 @@ func GoalStoreForTasks(store *task.Store) *goal.Store {
 	return goal.NewStore(filepath.Dir(store.Dir()))
 }
 
-// syncTaskGoalRecord creates or updates the goal record paired with task t
+// SyncTaskGoalRecord creates or updates the goal record paired with task t
 // (ADR-086 D2/D5, GOAL-FR-003/FR-012/FR-021/FR-029). A task's goal stays in
 // the "defining" phase until the task itself starts and mints a session
 // (GOAL-FR-012) — this function only ever creates or updates the record, it
@@ -78,8 +78,8 @@ func GoalStoreForTasks(store *task.Store) *goal.Store {
 // divergence unrepresentable rather than merely fixed at three call sites.
 // criteriaProvided remains a parameter because it carries something t cannot:
 // whether THIS request touched criteria at all.
-func syncTaskGoalRecord(
-	store *task.Store,
+func SyncTaskGoalRecord(
+	gs *goal.Store,
 	t *task.Task,
 	criteriaProvided bool,
 	dod []task.AcceptanceCriterion, dodProvided bool,
@@ -89,7 +89,6 @@ func syncTaskGoalRecord(
 		return nil
 	}
 	criteria := t.Criteria
-	gs := GoalStoreForTasks(store)
 	now := time.Now().UTC()
 	existing, err := gs.GetByOwner(generated.GoalOwnerKindTask, t.ID)
 	if err != nil {
@@ -281,7 +280,7 @@ func RemoveTaskGoalRecords(gs *goal.Store, taskID string) error {
 // pkg/goal and pkg/task, and it is imported by all three of the other writer
 // packages (pkg/agent, pkg/gateway, pkg/sysagent/tools). So the TRANSITION has
 // exactly one implementation, shared — not the five mirrored copies this file
-// family's other goal helpers use (goalStoreForTasks, syncTaskGoalRecord,
+// family's other goal helpers use (goalStoreForTasks, SyncTaskGoalRecord,
 // terminateGoalForOwnerDeletion). Mirroring is what let three of seven writers
 // ship without the hook at all; for a rule whose whole job is to be applied
 // everywhere, one copy is the point.
@@ -1353,7 +1352,7 @@ func (tc *taskCreateToolExecute) persistAndRespond() *ToolResult {
 	// with entity.Criteria already populated (dual-write, for the consumers
 	// not yet re-pointed to read the goal record this round — see this
 	// wave's report); this call is what actually persists dod anywhere.
-	if gErr := syncTaskGoalRecord(tc.t.store, tc.entity, true, tc.dod, true, tc.t.goalMaxRoundsFn); gErr != nil {
+	if gErr := SyncTaskGoalRecord(GoalStoreForTasks(tc.t.store), tc.entity, true, tc.dod, true, tc.t.goalMaxRoundsFn); gErr != nil {
 		slog.Error("create_task: failed to create paired goal record",
 			"task_id", tc.entity.ID, "error", gErr)
 		return ErrorResult(fmt.Sprintf(
@@ -1963,7 +1962,7 @@ func (tu *taskUpdateToolExecute) buildJudgedContract() (*ToolResult, bool) {
 	// criteria / dod (GOAL-FR-021/FR-029/FR-030/D-C): the mandatory-count
 	// gate binds at edit too, uniformly with create_task — an update
 	// supplying either list must not reduce it below one item. Persisted to
-	// the paired goal record (syncTaskGoalRecord, below, after the store
+	// the paired goal record (SyncTaskGoalRecord, below, after the store
 	// write succeeds); entity.Criteria is ALSO dual-written onto the task
 	// record itself via patch.Criteria for the consumers not yet re-pointed
 	// to read the goal record this round.
@@ -2063,10 +2062,10 @@ func (tu *taskUpdateToolExecute) persistUpdate() (*ToolResult, bool) {
 	// GOAL-FR-029/FR-030: the task record's write already landed above
 	// (dual-write); this is what actually persists the change onto the
 	// task's paired goal record — creating one if this is a legacy task's
-	// first-ever criteria/dod (see syncTaskGoalRecord's doc comment).
+	// first-ever criteria/dod (see SyncTaskGoalRecord's doc comment).
 
 	if tu.criteriaProvided || tu.dodProvided {
-		if gErr := syncTaskGoalRecord(tu.t.store, tu.updated, tu.criteriaProvided, tu.newDoD, tu.dodProvided, tu.t.goalMaxRoundsFn); gErr != nil {
+		if gErr := SyncTaskGoalRecord(GoalStoreForTasks(tu.t.store), tu.updated, tu.criteriaProvided, tu.newDoD, tu.dodProvided, tu.t.goalMaxRoundsFn); gErr != nil {
 			slog.Error("update_task: failed to sync paired goal record",
 				"task_id", tu.taskID, "error", gErr)
 			tu.goalSyncWarning = gErr.Error()
