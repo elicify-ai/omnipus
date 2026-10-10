@@ -91,9 +91,21 @@ function shownForeground(sid: string, loaded: Session[]): void {
   useSessionStore.setState({ activeSessionId: sid })
   useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {} } as never)
   useConnectionStore.setState({ connection: connectionThat(true) } as never)
-  queryClient.setQueryData(['sessions'], loaded)
+  // An empty list means the roster has NOT resolved — leave the cache cold so
+  // the cold-cache / deferred-acknowledgement scenarios start honest.
+  if (loaded.length > 0) queryClient.setQueryData(['sessions'], loaded)
   hiddenSpy.mockReturnValue(false)
   noteForegroundAttach(sid)
+}
+
+function snapshotFrame(sid: string): ServerFrame {
+  return {
+    type: 'session_snapshot',
+    session_id: sid,
+    seq: 3,
+    boot_id: 'boot-s',
+    reason: 'unknown_position',
+  } as unknown as ServerFrame
 }
 
 beforeEach(() => {
@@ -181,5 +193,93 @@ describe('shown-commit acknowledgement through the production path (seam unmocke
     useChatStore.getState().handleFrame(catchUpComplete(sid))
 
     expect(sent).toEqual([])
+  })
+})
+
+describe('shown-commit acknowledgement on a cold roster cache (round 2 HIGH: the ack must not be lost)', () => {
+  it('a direct open whose validated session-detail is loaded acknowledges exactly once with the captured bound', () => {
+    const sid = 'main-ack-cold-detail'
+    shownForeground(sid, []) // the sidebar roster has NOT resolved
+    queryClient.setQueryData(['session-detail', sid], { session: mainSession(sid), messages: [] })
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
+  })
+
+  it('metadata still unknown at completion defers: the ack sends when the roster resolves, with the ORIGINAL bound — a newer frame never replaces it', () => {
+    const sid = 'main-ack-defer'
+    shownForeground(sid, []) // nothing loaded at attach time
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([]) // unknown metadata is never acknowledged on the spot
+
+    // A newer bound arrives before the metadata does — it must not be captured.
+    useChatStore.getState().handleFrame(stateFrame(sid, 9))
+
+    queryClient.setQueryData(['sessions'], [mainSession(sid)])
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
+  })
+
+  it('a deferred ack is dropped when the session is no longer the active foreground chat when the metadata resolves', () => {
+    const sid = 'main-ack-defer-moved-on'
+    shownForeground(sid, [])
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+
+    useSessionStore.setState({ activeSessionId: 'a-different-chat' })
+    queryClient.setQueryData(['sessions'], [mainSession(sid)])
+
+    expect(sent).toEqual([])
+  })
+
+  it('a deferred ack is dropped when another attach has replaced the shown foreground commit', () => {
+    const sid = 'main-ack-defer-replaced'
+    shownForeground(sid, [])
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+
+    noteForegroundAttach('a-newer-attach')
+    queryClient.setQueryData(['sessions'], [mainSession(sid)])
+
+    expect(sent).toEqual([])
+  })
+
+  it('metadata that resolves with UNKNOWN attention never produces ack fields (R2-T2)', () => {
+    const sid = 'main-ack-unknown-attention'
+    shownForeground(sid, [mainSession(sid, { needs_attention: undefined })])
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([])
+
+    // A later cache event must not send either.
+    queryClient.setQueryData(['sessions'], [mainSession(sid, { needs_attention: undefined })])
+    expect(sent).toEqual([])
+  })
+
+  it('full-snapshot attach answer: snapshot without a bound, then session_state with 7, then snapshot-mode completion ⇒ exactly one ack with 7 (R2-T1)', () => {
+    const sid = 'main-ack-full-snapshot'
+    shownForeground(sid, [mainSession(sid)])
+
+    useChatStore.getState().handleFrame(snapshotFrame(sid))
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete',
+      session_id: sid,
+      seq: 4,
+      boot_id: 'boot-s',
+      mode: 'snapshot',
+    } as unknown as ServerFrame)
+
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
   })
 })

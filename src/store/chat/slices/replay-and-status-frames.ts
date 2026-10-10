@@ -1249,12 +1249,22 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // handleFrame, so frame.session_id (which enqueue reads directly)
           // is guaranteed present here.
           useToolApprovalStore.getState().enqueue(frame)
+          // session-core-build-20261008 ARCHITECT-ANSWER-U8-U11, U11 N2:
+          // approval frames carry the HELPER's session id, never the main's,
+          // so the frame itself must never be matched against mains. The
+          // roster refetch is what lets a main's needs_attention refresh
+          // from server truth.
+          void queryClient.invalidateQueries({ queryKey: ['sessions'] })
           break
 
         case 'tool_approval_resolved':
           // The server closed this approval (a decision from any tab, timeout,
           // Stop, agent deletion, shutdown) — drop it here and keep it dropped.
           useToolApprovalStore.getState().markResolved(frame.approval_id)
+          // U11 N2, same reasoning as tool_approval_required above: any
+          // approval frame refreshes the roster; the frame's helper session
+          // id is never matched against mains.
+          void queryClient.invalidateQueries({ queryKey: ['sessions'] })
           break
 
         case 'session_state': {
