@@ -59,7 +59,13 @@ func TestContextOverflowPlain_CommittedReliefPreservesArchiveAndReload(t *testin
 	require.NoError(t, err)
 	require.Equal(t, 2, after.State.Skip, "exact completed oldest plain prefix")
 	require.Equal(t, before.State.Count, after.State.Count)
-	require.Equal(t, viewArchived(before), viewArchived(after))
+	// FR-030: relief evicts exactly the completed oldest prefix, so the LIVE
+	// view shrinks by that prefix and nothing else moves — the surviving slots
+	// are the tail of the pre-relief live view. (The previous form compared the
+	// two live views for equality, which no eviction can satisfy; the archive
+	// bytes themselves are pinned unchanged above.)
+	require.Equal(t, viewArchived(before)[after.State.Skip:], viewArchived(after),
+		"committed relief evicts exactly the completed oldest prefix and changes nothing else")
 
 	// A separately constructed REAL store has no live backend cache or staged
 	// message slice. Its metadata+archive projection must reproduce the view.
