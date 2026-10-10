@@ -488,6 +488,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agents/{id}/activity-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the open task and scheduler runs an agent should see in Activity
+         * @description Returns the OPEN task/scheduler runs where the agent is the assignee or one of the run's captured recipients (session-core FR-033), newest first. Each run carries its own session id for the Open control. An agent with no open run gets an empty array.
+         */
+        get: operations["listAgentActivityRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/agents/{id}/tools": {
         parameters: {
             query?: never;
@@ -4502,6 +4522,47 @@ export interface components {
              * @example 3
              */
             child_count?: number;
+        };
+        /**
+         * AgentActivityRun
+         * @description One task or scheduler run shown as a row in the Activity panel for an agent (session-core FR-033). It exists even when the current chat spawned nothing: the agent is either the run's assignee or one of its captured recipients (FR-019). Only OPEN runs are listed. Provider-run token availability is not carried (descoped); a client must treat a missing figure as unknown, never zero.
+         */
+        AgentActivityRun: {
+            /** @description The TaskRun id. */
+            run_id: string;
+            /** @description The task this run belongs to. */
+            task_id: string;
+            /** @description The task title, for the row label. */
+            task_title: string;
+            /**
+             * @description How the run started - a person or agent starting the task (`task`), or a scheduled fire (`scheduled`).
+             * @enum {string}
+             */
+            kind: "task" | "scheduled";
+            /**
+             * @description `main` when the run is a fresh child of the assignee's main (FR-017) - the client shows it as the one MAIN row for that run, not as a task row plus a child row; `isolated` for an independent chat.
+             * @enum {string}
+             */
+            mode: "main" | "isolated";
+            /**
+             * @description The run's session lifecycle - running, queued for a slot, or waiting on input.
+             * @enum {string}
+             */
+            state: "running" | "queued" | "waiting";
+            /**
+             * @description Why the agent sees this run - it is the assignee, or its main is one of the run's captured recipients.
+             * @enum {string}
+             */
+            role: "assignee" | "recipient";
+            /** @description The task's assignee agent. */
+            agent_id: string;
+            /** @description The run's own session - the target of the row's Open control. Absent when the run has no session yet. */
+            session_id?: string;
+            /**
+             * Format: date-time
+             * @description When the run opened.
+             */
+            started_at: string;
         };
         /** @description Aggregated statistics for a session transcript. */
         SessionStats: {
@@ -18937,6 +18998,38 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    listAgentActivityRuns: {
+        parameters: {
+            query?: {
+                /** @description Restrict to runs of tasks in this workspace. */
+                workspace_id?: string;
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Agent ID.
+                 * @example jim
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Open runs for this agent. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentActivityRun"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     getAgentTools: {
         parameters: {
             query?: never;
@@ -26550,6 +26643,7 @@ export type OnboardingCompleteResponse = components["schemas"]["OnboardingComple
 export type ProbeProviderRequest = components["schemas"]["ProbeProviderRequest"];
 export type ProbeProviderResponse = components["schemas"]["ProbeProviderResponse"];
 export type Session = components["schemas"]["Session"];
+export type AgentActivityRun = components["schemas"]["AgentActivityRun"];
 export type SessionStats = components["schemas"]["SessionStats"];
 export type SessionDetail = components["schemas"]["SessionDetail"];
 export type SessionPage = components["schemas"]["SessionPage"];

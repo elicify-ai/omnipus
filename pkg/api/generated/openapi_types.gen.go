@@ -479,6 +479,81 @@ func (e AgentType) Valid() bool {
 	}
 }
 
+// Defines values for AgentActivityRunKind.
+const (
+	AgentActivityRunKindScheduled AgentActivityRunKind = "scheduled"
+	AgentActivityRunKindTask      AgentActivityRunKind = "task"
+)
+
+// Valid indicates whether the value is a known member of the AgentActivityRunKind enum.
+func (e AgentActivityRunKind) Valid() bool {
+	switch e {
+	case AgentActivityRunKindScheduled:
+		return true
+	case AgentActivityRunKindTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentActivityRunMode.
+const (
+	AgentActivityRunModeIsolated AgentActivityRunMode = "isolated"
+	AgentActivityRunModeMain     AgentActivityRunMode = "main"
+)
+
+// Valid indicates whether the value is a known member of the AgentActivityRunMode enum.
+func (e AgentActivityRunMode) Valid() bool {
+	switch e {
+	case AgentActivityRunModeIsolated:
+		return true
+	case AgentActivityRunModeMain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentActivityRunRole.
+const (
+	AgentActivityRunRoleAssignee  AgentActivityRunRole = "assignee"
+	AgentActivityRunRoleRecipient AgentActivityRunRole = "recipient"
+)
+
+// Valid indicates whether the value is a known member of the AgentActivityRunRole enum.
+func (e AgentActivityRunRole) Valid() bool {
+	switch e {
+	case AgentActivityRunRoleAssignee:
+		return true
+	case AgentActivityRunRoleRecipient:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentActivityRunState.
+const (
+	AgentActivityRunStateQueued  AgentActivityRunState = "queued"
+	AgentActivityRunStateRunning AgentActivityRunState = "running"
+	AgentActivityRunStateWaiting AgentActivityRunState = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the AgentActivityRunState enum.
+func (e AgentActivityRunState) Valid() bool {
+	switch e {
+	case AgentActivityRunStateQueued:
+		return true
+	case AgentActivityRunStateRunning:
+		return true
+	case AgentActivityRunStateWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentColor.
 const (
 	AgentColorHash22D3EE AgentColor = "#22D3EE"
@@ -14331,6 +14406,51 @@ type AgentToolsCfgBuiltinPolicies string
 
 // AgentType Agent lifecycle classification. Built-in chat colleagues Mia, Jim, Ava and Admin use core; built-in Planner, Researcher and General Purpose use Subagent on the wire. Hidden Judge and Plan Supervisor use system and are excluded from chat/team/delegation selection. Custom creation accepts Main, Subagent and subagent_3p only. Runtime type is immutable after creation. Hidden instructions and supported model tuning remain editable, while hidden capabilities are fixed. Ordinary built-in capabilities are editable within the global policy ceiling. Use editable_fields for the exact rules.
 type AgentType string
+
+// AgentActivityRun One task or scheduler run shown as a row in the Activity panel for an agent (session-core FR-033). It exists even when the current chat spawned nothing: the agent is either the run's assignee or one of its captured recipients (FR-019). Only OPEN runs are listed. Provider-run token availability is not carried (descoped); a client must treat a missing figure as unknown, never zero.
+type AgentActivityRun struct {
+	// AgentId The task's assignee agent.
+	AgentId string `json:"agent_id"`
+
+	// Kind How the run started - a person or agent starting the task (`task`), or a scheduled fire (`scheduled`).
+	Kind AgentActivityRunKind `json:"kind"`
+
+	// Mode `main` when the run is a fresh child of the assignee's main (FR-017) - the client shows it as the one MAIN row for that run, not as a task row plus a child row; `isolated` for an independent chat.
+	Mode AgentActivityRunMode `json:"mode"`
+
+	// Role Why the agent sees this run - it is the assignee, or its main is one of the run's captured recipients.
+	Role AgentActivityRunRole `json:"role"`
+
+	// RunId The TaskRun id.
+	RunId string `json:"run_id"`
+
+	// SessionId The run's own session - the target of the row's Open control. Absent when the run has no session yet.
+	SessionId *string `json:"session_id,omitempty"`
+
+	// StartedAt When the run opened.
+	StartedAt time.Time `json:"started_at"`
+
+	// State The run's session lifecycle - running, queued for a slot, or waiting on input.
+	State AgentActivityRunState `json:"state"`
+
+	// TaskId The task this run belongs to.
+	TaskId string `json:"task_id"`
+
+	// TaskTitle The task title, for the row label.
+	TaskTitle string `json:"task_title"`
+}
+
+// AgentActivityRunKind How the run started - a person or agent starting the task (`task`), or a scheduled fire (`scheduled`).
+type AgentActivityRunKind string
+
+// AgentActivityRunMode `main` when the run is a fresh child of the assignee's main (FR-017) - the client shows it as the one MAIN row for that run, not as a task row plus a child row; `isolated` for an independent chat.
+type AgentActivityRunMode string
+
+// AgentActivityRunRole Why the agent sees this run - it is the assignee, or its main is one of the run's captured recipients.
+type AgentActivityRunRole string
+
+// AgentActivityRunState The run's session lifecycle - running, queued for a slot, or waiting on input.
+type AgentActivityRunState string
 
 // AgentColor Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write.
 type AgentColor string
@@ -28583,6 +28703,12 @@ type bearerAuthContextKey string
 // DeleteAgentParams defines parameters for DeleteAgent.
 type DeleteAgentParams struct {
 	Revision ConfigurationRevision `form:"revision" json:"revision"`
+}
+
+// ListAgentActivityRunsParams defines parameters for ListAgentActivityRuns.
+type ListAgentActivityRunsParams struct {
+	// WorkspaceId Restrict to runs of tasks in this workspace.
+	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // ConfigureChannelJSONBody defines parameters for ConfigureChannel.
