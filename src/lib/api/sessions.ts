@@ -284,6 +284,16 @@ export interface UserMessage extends MessageBase { // not-wire-format: SPA-inter
   role: 'user'
   /** 'done' — delivered to gateway. 'error' — WS send failed; show Retry. */
   status?: 'done' | 'error'
+  /**
+   * FR-024 (session-core) — stamped ONLY from the wire
+   * `input_disposition.state === 'discarded'` on a cold REST load
+   * (`rawToMessage`): Stop discarded this input before it was delivered, and
+   * the bubble must show the same quiet "Not delivered" state the live
+   * `message_status` frame drives. The transient delivery states
+   * ('queued'/'sending'/'received'/'working'/'failed') are store-only
+   * (ChatMessage.deliveryStatus) and never appear on the REST Message.
+   */
+  deliveryStatus?: 'discarded'
   tool_calls?: never
 }
 
@@ -412,6 +422,13 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
   timestamp: string
   /** Generated wire correlation id (`Message.client_message_id`) — present on saved user entries. */
   client_message_id?: string
+  /**
+   * FR-024 (session-core) — read-only record that this user input was
+   * DISCARDED by Stop before it was delivered into the agent's model input.
+   * Present on discarded entries only; absent on every delivered message
+   * (contracts/components/schemas/Message.yaml `input_disposition`).
+   */
+  input_disposition?: WireMessage['input_disposition']
   tokens?: number
   cost?: number
   status?: 'ok' | 'error' | 'interrupted'
@@ -534,6 +551,14 @@ function rawToMessage(raw: RawMessage): Message {
       // (the /clear transcript re-read's merge does exactly that).
       clientMessageId: raw.client_message_id,
       status: (baseStatus === 'done' || baseStatus === 'error') ? baseStatus : 'done',
+      // FR-024 — the wire `input_disposition` (present on discarded user
+      // inputs only) maps onto the same quiet deliveryStatus the live
+      // `message_status` frame stamps, so a reloaded thread shows the
+      // identical "Not delivered" status — never an error. The message text
+      // is kept (the archived bytes are preserved, BDD-07.3); an absent or
+      // unknown disposition leaves the field undefined and today's rendering
+      // unchanged.
+      ...(raw.input_disposition?.state === 'discarded' ? { deliveryStatus: 'discarded' as const } : {}),
     } satisfies UserMessage
   }
   if (role === 'system') {
