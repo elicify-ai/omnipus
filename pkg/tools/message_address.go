@@ -87,6 +87,15 @@ func (t *MessageTool) SetPeerRouter(r PeerRouter) { t.peerRouter = r }
 // SetReplyRouter injects the reply seam. Nil leaves the reply form refused.
 func (t *MessageTool) SetReplyRouter(r ReplyRouter) { t.replyRouter = r }
 
+// ErrMainConnectorReplyOnly marks an ordinary send refused because the turn is
+// a main session addressing a connector (reply_to is the only way out).
+var ErrMainConnectorReplyOnly = errors.New("send_message_main_connector_reply_only")
+
+// SetMainConnectorGuard installs the main-session test for the ordinary form.
+func (t *MessageTool) SetMainConnectorGuard(g func(sessionID, channel string) bool) {
+	t.mainConnectorGuard = g
+}
+
 func addrRefuse(format string, a ...any) *ToolResult {
 	return &ToolResult{ForLLM: fmt.Sprintf(format, a...), IsError: true}
 }

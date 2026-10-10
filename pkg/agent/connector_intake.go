@@ -10,6 +10,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -50,6 +51,9 @@ func (al *AgentLoop) boundConnectorPair(msg bus.InboundMessage) (addressing.Pair
 		return addressing.Pair{}, "", false
 	}
 	instanceID := inboundInstanceID(msg)
+	// ONE config snapshot for workspace AND identity (security review r1 F2):
+	// reading them through separate GetConfig calls could mix two reload
+	// generations into a pair the instance was never bound to.
 	cfg := al.GetConfig()
 	if cfg == nil {
 		return addressing.Pair{}, "", false
@@ -58,7 +62,11 @@ func (al *AgentLoop) boundConnectorPair(msg bus.InboundMessage) (addressing.Pair
 	if !ok || strings.TrimSpace(inst.WorkspaceID) == "" {
 		return addressing.Pair{}, "", false
 	}
-	identity := al.resolveInboundIdentity(instanceID)
+	var identity *config.ChannelIdentity
+	if inst.Identity != nil {
+		id := *inst.Identity
+		identity = &id
+	}
 	if identity == nil || strings.ToLower(strings.TrimSpace(identity.Kind)) != "agent" || strings.TrimSpace(identity.ID) == "" {
 		return addressing.Pair{}, "", false
 	}
@@ -89,8 +97,17 @@ func (al *AgentLoop) admitBoundConnectorInput(msg *bus.InboundMessage) (refusal 
 	if eErr != nil || !eligible {
 		return unroutable, fmt.Errorf("connector intake: %s/%s has no eligible main (%v)", pair.WorkspaceID, pair.AgentID, eErr)
 	}
-	// 3. Bounds before any write.
+	// 3. Bounds before any write - on the RAW text AND on the composed envelope
+	// the turn will measure (security review r1 F3): the turn's own gate sees
+	// the envelope, so an input that only fits raw must be refused here, before
+	// the capture or the transcript entry exist.
 	if reply, over := al.refuseOversizedUserMessage(*msg); over {
+		return reply, nil
+	}
+	requestID := uuid.New().String()
+	composed := *msg
+	composed.Content = composeRequestText(requestID, connectorSenderLabel(*msg, connectorInstanceKey(*msg)), msg.Content)
+	if reply, over := al.refuseOversizedUserMessage(composed); over {
 		return reply, nil
 	}
 	store := al.GetSessionStore()
@@ -104,11 +121,7 @@ func (al *AgentLoop) admitBoundConnectorInput(msg *bus.InboundMessage) (refusal 
 		return unroutable, fmt.Errorf("connector intake: main session: %w", mErr)
 	}
 	// 5. Capture, then append (discard the capture if the append fails).
-	instanceKey := msg.InstanceID
-	if strings.TrimSpace(instanceKey) == "" {
-		instanceKey = msg.Channel
-	}
-	requestID := uuid.New().String()
+	instanceKey := connectorInstanceKey(*msg)
 	capture := addressing.Capture{
 		RequestID:         requestID,
 		ReceiverSessionID: meta.ID,
@@ -147,7 +160,7 @@ func (al *AgentLoop) admitBoundConnectorInput(msg *bus.InboundMessage) (refusal 
 	// 6. The model's envelope; the route and the sender stay server-side.
 	msg.TranscriptEntryID = requestID
 	msg.SessionID = meta.ID
-	msg.Content = composeRequestText(requestID, connectorSenderLabel(*msg, instanceKey), raw)
+	msg.Content = composed.Content
 	if msg.Metadata == nil {
 		msg.Metadata = map[string]string{}
 	}
@@ -201,4 +214,13 @@ func senderDisplayName(s bus.SenderInfo) string {
 		return "@" + strings.TrimPrefix(u, "@")
 	}
 	return strings.TrimSpace(s.PlatformID)
+}
+
+// connectorInstanceKey is the instance a connector message arrived on, as the
+// capture and the sender label name it.
+func connectorInstanceKey(msg bus.InboundMessage) string {
+	if k := msg.InstanceID; strings.TrimSpace(k) != "" {
+		return k
+	}
+	return msg.Channel
 }

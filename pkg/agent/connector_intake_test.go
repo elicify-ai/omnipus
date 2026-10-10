@@ -312,3 +312,84 @@ func TestReply_Connector_AppendFailure_ErrorFrameNotToolError(t *testing.T) {
 		t.Fatalf("errors = %v", errs.errors)
 	}
 }
+
+// Security review r1 F2: workspace and identity must come from ONE config
+// snapshot. Two internally-coherent generations A (WA/agentA) and B (WB/agentB)
+// are swapped while the pair is resolved; a hybrid {WA, agentB} must never
+// appear.
+func TestBoundConnectorPair_NeverMixesConfigGenerations(t *testing.T) {
+	f := boundConnFixture(t)
+	mk := func(ws, agentID string) *config.Config {
+		c := *f.al.GetConfig()
+		c.Channels = map[string]config.ChannelInstanceConfig{
+			connInst: {WorkspaceID: ws, Identity: &config.ChannelIdentity{Kind: config.ChannelIdentityKindAgent, ID: agentID}},
+		}
+		return &c
+	}
+	cfgA, cfgB := mk("WA", "agentA"), mk("WB", "agentB")
+	f.al.SwapConfig(cfgA)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if i%2 == 0 {
+				f.al.SwapConfig(cfgB)
+			} else {
+				f.al.SwapConfig(cfgA)
+			}
+		}
+	}()
+	msg := connMsg("chat-1", "hi")
+	var hybrids int
+	for i := 0; i < 200000; i++ {
+		p, _, ok := f.al.boundConnectorPair(msg)
+		if !ok {
+			continue
+		}
+		if !(p.WorkspaceID == "WA" && p.AgentID == "agentA") && !(p.WorkspaceID == "WB" && p.AgentID == "agentB") {
+			hybrids++
+		}
+	}
+	close(stop)
+	<-done
+	if hybrids != 0 {
+		t.Fatalf("resolved %d hybrid pairs mixing two config generations", hybrids)
+	}
+}
+
+// Security review r1 F3: every size refusal happens BEFORE any write, including
+// the one caused by the server envelope. With the turn's cap at exactly the raw
+// length, the composed content is over and the input must be refused with the
+// main untouched.
+func TestAdmitBoundConnectorInput_EnvelopeOverBoundRefusedBeforeAnyWrite(t *testing.T) {
+	f := boundConnFixture(t)
+	cfg := f.al.GetConfig()
+	cfg.Context.BuiltinSuccessCap = 4000
+	raw := strings.Repeat("x", 4000)
+	msg := connMsg("chat-1", raw)
+	refusal, _ := f.al.admitBoundConnectorInput(&msg)
+	if refusal == "" {
+		t.Fatal("an input whose envelope pushes it past the user-message bound must be refused at intake")
+	}
+	if msg.SessionID != "" || msg.Content != raw {
+		t.Fatalf("a refused message must stay untouched: %+v", msg)
+	}
+	mainID, _ := session.MainSessionID(addrWS, addrReceiver)
+	if _, err := f.al.GetSessionStore().GetMeta(mainID); err == nil {
+		t.Fatal("a refused message created the main")
+	}
+	// Just under: raw + envelope still fits.
+	small := connMsg("chat-2", strings.Repeat("x", 3000))
+	if r, err := f.al.admitBoundConnectorInput(&small); r != "" || err != nil {
+		t.Fatalf("an input that fits with its envelope was refused: %q %v", r, err)
+	}
+	if _, over := f.al.refuseOversizedUserMessage(small); over {
+		t.Fatalf("the turn's own gate would refuse what intake admitted (composed length %d)", len(small.Content))
+	}
+}
