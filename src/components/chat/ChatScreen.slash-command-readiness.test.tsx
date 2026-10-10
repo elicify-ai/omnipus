@@ -176,7 +176,7 @@ async function mockRuntimeWithText(text: string) {
 }
 
 describe('slash command typed before the command list resolves', () => {
-  it('"/new" is held while the list loads, then sent as an ordinary message, and does not start a chat', async () => {
+  it('"/new" typed while the list loads is refused at once and never sent, before or after the list lands (WC-1)', async () => {
     const { setText, send } = await mockRuntimeWithText('/new')
 
     const { rerender } = render(<OmnipusComposer />)
@@ -188,10 +188,9 @@ describe('slash command typed before the command list resolves', () => {
     let dispatched = true
     act(() => { dispatched = fireEvent.submit(form) })
 
-    // fireEvent returns false when the handler called preventDefault(), i.e.
-    // assistant-ui never got to call composer.send() — "/new" did NOT go out
-    // as a chat message. This is the exact assertion that fails without the
-    // readiness gate.
+    // WC-1 (founder, 2026-10-09): /new is retired. It is refused visibly at
+    // once — not held for the list, not sent as a chat message. fireEvent
+    // returns false because the handler called preventDefault().
     expect(dispatched).toBe(false)
     expect(send).not.toHaveBeenCalled()
     // The session is still the one we started on — nothing has run yet.
@@ -201,11 +200,11 @@ describe('slash command typed before the command list resolves', () => {
     commandsStillLoading = false
     act(() => { rerender(<OmnipusComposer />) })
 
-    // /new is not a client command (FR-007). The held text is sent, and the
-    // session is not cleared.
+    // The list landing changes nothing: the refused /new is never sent later,
+    // the composer was cleared by the refusal, and no chat was started.
     expect(useSessionStore.getState().activeSessionId).toBe('sess_readiness_test')
-    expect(setText).not.toHaveBeenCalledWith('')
-    expect(send).toHaveBeenCalledTimes(1)
+    expect(setText).toHaveBeenCalledWith('')
+    expect(send).not.toHaveBeenCalled()
   })
 
   it('a non-command "/zzz hi" is held and then delivered verbatim — the gate never eats input', async () => {
@@ -245,7 +244,7 @@ describe('slash command typed before the command list resolves', () => {
     expect(send).not.toHaveBeenCalled()
   })
 
-  it('once the list has loaded, "/new" is not a client command and is not held', async () => {
+  it('once the list has loaded, "/new" is still refused and never sent (WC-1)', async () => {
     commandsStillLoading = false
     const { setText, send } = await mockRuntimeWithText('/new')
 
@@ -257,11 +256,11 @@ describe('slash command typed before the command list resolves', () => {
     let dispatched = true
     act(() => { dispatched = fireEvent.submit(form) })
 
-    // Not intercepted: the submit is not preventDefault'd, and the session
-    // is not cleared.
-    expect(dispatched).toBe(true)
+    // WC-1: intercepted and refused visibly — the submit is preventDefault'd,
+    // the composer is cleared, nothing is sent, and no chat is started.
+    expect(dispatched).toBe(false)
     expect(useSessionStore.getState().activeSessionId).toBe('sess_readiness_test')
-    expect(setText).not.toHaveBeenCalledWith('')
+    expect(setText).toHaveBeenCalledWith('')
     expect(send).not.toHaveBeenCalled()
   })
 })
