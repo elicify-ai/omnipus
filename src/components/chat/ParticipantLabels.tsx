@@ -31,9 +31,12 @@ import { collectPairedReplyToIds, participantLabel, replyHeaderParts, truncatePa
  * The list rows get theirs from the parent lists (identity-stable memo);
  * MessageItem — which already re-renders on every store change via its
  * whole-store subscription — takes this cheap per-render memo instead.
+ * Accepts undefined: a consumer without a messages projection (narrow
+ * store shapes) degrades to an empty set — no pairing, today's rendering —
+ * never a crash.
  */
-export function usePairedReplyToIds(messages: readonly { replyToMessageId?: string }[]): ReadonlySet<string> {
-  return useMemo(() => collectPairedReplyToIds(messages), [messages])
+export function usePairedReplyToIds(messages: readonly { replyToMessageId?: string }[] | undefined): ReadonlySet<string> {
+  return useMemo(() => collectPairedReplyToIds(messages ?? []), [messages])
 }
 
 /** Everything a label/header needs from the catalog + current workspace. */
