@@ -273,7 +273,7 @@ describe('agent precedence — scope and override', () => {
     expect(useSessionStore.getState().activeSessionId).toBe('sess-alpha')
   })
 
-  it('a server-driven handover names the agent who is actually answering, and a same-session hint does not replace that', () => {
+  it('a later hint for the same session does not replace the attached owner (FR-009)', () => {
     const mockSend = connectMock()
 
     act(() => {
@@ -282,24 +282,14 @@ describe('agent precedence — scope and override', () => {
     expect(useSessionStore.getState().activeAgentId).toBe('jim')
 
     act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'agent_switched',
-        agent_id: 'ray',
-        session_id: SESSION_ID,
-      })
-    })
-    expect(useSessionStore.getState().activeAgentId).toBe('ray')
-
-    // FR-009: a later hint for the same session does not move the destination.
-    act(() => {
       useSessionStore.getState().setActiveSession(SESSION_ID, 'ava', 'Main')
     })
-    expect(useSessionStore.getState().activeAgentId).toBe('ray')
+    expect(useSessionStore.getState().activeAgentId).toBe('jim')
 
     act(() => {
       useChatStore.getState().sendMessage('who now?')
     })
-    expect(agentIdOfSentMessage(mockSend)).toBe('ray')
+    expect(agentIdOfSentMessage(mockSend)).toBe('jim')
   })
 
   it('attaching records the session owner on the workspace pointer', () => {

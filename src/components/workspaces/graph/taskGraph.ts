@@ -100,8 +100,6 @@ export interface TaskNodeData extends Record<string, unknown> {
   agentName?: string
   /** Resolved agent avatar colour (hex). */
   agentColor?: string
-  /** Resolved agent Phosphor icon name. */
-  agentIcon?: string
   /**
    * Keyboard/mouse-activation callback GraphView injects per-node at render
    * time (see GraphView.tsx) — `buildTaskGraph` itself never sets this, only
@@ -335,7 +333,6 @@ export function buildTaskGraph(
           task,
           agentName: task.agent_name ?? agent?.name ?? task.agent_id,
           agentColor: agent?.color,
-          agentIcon: agent?.icon,
         },
         sourcePosition: Position.Right,
         targetPosition: Position.Left,

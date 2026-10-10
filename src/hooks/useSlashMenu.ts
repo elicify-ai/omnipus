@@ -49,8 +49,6 @@ export interface SlashItem {
   argumentHint?: string
   /** Agent-row-only (section === 'agents') — the avatar dot's background color. */
   agentColor?: string
-  /** Agent-row-only — Phosphor icon name for the avatar; falls back to the agent's initial when unset. */
-  agentIcon?: string
   /**
    * Agent-row-only — the agent's display name, for the render layer's
    * avatar-initial computation (Fix 9). Carrying the name explicitly (not

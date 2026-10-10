@@ -55,8 +55,8 @@ import { BrowserLiveView } from './BrowserLiveView'
 function seedAgents() {
   const agents: Agent[] = [
     // Agent-first navigation spec DS-I/I03: legacy identity gold becomes Orange.
-    makeAgent({ id: 'jim', name: 'Jim', color: '#FB923C', icon: 'compass' }),
-    makeAgent({ id: 'ray', name: 'Ray', color: '#3B82F6', icon: undefined }),
+    makeAgent({ id: 'jim', name: 'Jim', color: '#FB923C' }),
+    makeAgent({ id: 'ray', name: 'Ray', color: '#3B82F6' }),
   ]
   queryClient.setQueryData(['agents'], agents)
 }

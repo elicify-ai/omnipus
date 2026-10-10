@@ -52,7 +52,7 @@ function agent(id: string, over: Partial<Agent> = {}): Agent {
 }
 
 const AGENTS: Agent[] = [
-  agent('mia', { name: 'Mia', default: true, color: '#3B82F6', icon: 'Robot' }),
+  agent('mia', { name: 'Mia', default: true, color: '#3B82F6' }),
   agent('jim', { name: 'Jim' }),
   agent('planner', { name: 'Planner', type: 'Subagent' }),
   agent('explorer', { name: 'Explorer', type: 'Subagent' }),
@@ -215,7 +215,7 @@ describe('buildTeamGraphModel', () => {
 // "looked absent" even though it always verifies work on this workspace.
 
 describe('buildTeamGraphModel — implicit System agent nodes (Judge, ADR-049 D3)', () => {
-  const JUDGE = agent('judge', { name: 'Judge', type: 'system', color: '#9CA3AF', icon: 'Scales' })
+  const JUDGE = agent('judge', { name: 'Judge', type: 'system', color: '#9CA3AF' })
   const AGENTS_WITH_JUDGE = [...AGENTS, JUDGE]
 
   it('renders the System agent as an implicit node even though it is never in state.members', () => {
@@ -308,8 +308,12 @@ describe('validateConnection', () => {
     edges: [{ from: 'mia', to: 'jim', modes: ['direct'] }],
   })
 
-  it('rejects self-edges for roles other than Jim and General Purpose', () => {
-    expect(validateConnection('mia', 'mia', s, WORKER_IDS)).toBe('self-edge')
+  it('treats a first self-edge as an ordinary edge (DESIGN-RULING-delegation-20261009, U5a)', () => {
+    expect(validateConnection('mia', 'mia', s, WORKER_IDS)).toBeNull()
+  })
+  it('rejects a second identical self-edge as a duplicate', () => {
+    const withSelf = { ...s, edges: [...s.edges, { from: 'mia', to: 'mia', modes: ['direct' as const] }] }
+    expect(validateConnection('mia', 'mia', withSelf, WORKER_IDS)).toBe('duplicate')
   })
   it('allows explicit Jim and General Purpose self-edges', () => {
     const eligible = { ...s, members: [...s.members, 'worker'] }
@@ -362,11 +366,11 @@ describe('rejectionMessageForFailedConnection', () => {
     edges: [{ from: 'mia', to: 'jim', modes: ['direct'] }],
   })
 
-  it('surfaces the self-edge message for a rejected self-drag (mia -> mia)', () => {
-    // This is the exact drag the bug report reproduces: a handle dragged back
-    // onto its own node.
-    expect(rejectionMessageForFailedConnection('mia', 'mia', false, s, WORKER_IDS)).toBe(
-      REJECTION_MESSAGE['self-edge'],
+  it('surfaces the duplicate message for a rejected self-drag onto an existing self-edge (mia -> mia)', () => {
+    // A handle dragged back onto its own node, where the self-edge exists.
+    const withSelf = { ...s, edges: [...s.edges, { from: 'mia', to: 'mia', modes: ['direct' as const] }] }
+    expect(rejectionMessageForFailedConnection('mia', 'mia', false, withSelf, WORKER_IDS)).toBe(
+      REJECTION_MESSAGE.duplicate,
     )
   })
 

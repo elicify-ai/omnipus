@@ -1,9 +1,7 @@
 import { ArrowRight, CaretDown, CaretRight, Folder } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
-import type { Agent } from '@/lib/api'
 import { cn, initialOf } from '@/lib/utils'
-import { IconRenderer } from '@/components/shared/IconRenderer'
 
 const COARSE_TARGET =
   'pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]'
@@ -48,8 +46,7 @@ export function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch
   )
 }
 
-export function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: {
-  agent: Agent | undefined
+export function AgentHeader({ name, isCollapsed, onToggle, panelId }: {
   name: string
   isCollapsed: boolean
   onToggle: () => void
@@ -68,11 +65,7 @@ export function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: {
         className="flex h-[var(--space-3)] w-[var(--space-3)] shrink-0 items-center justify-center rounded-full border border-[var(--color-primary)] bg-[var(--color-surface-3)] text-[length:var(--type-caption-size)]"
         aria-hidden="true"
       >
-        {agent?.icon ? (
-          <IconRenderer icon={agent.icon} size={8} />
-        ) : (
-          <span className="text-[var(--color-secondary)] font-bold">{initialOf(name)}</span>
-        )}
+        <span className="text-[var(--color-secondary)] font-bold">{initialOf(name)}</span>
       </span>
       <span className="flex-1 text-left truncate">{name}</span>
     </Button>

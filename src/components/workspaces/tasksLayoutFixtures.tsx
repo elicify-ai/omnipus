@@ -23,7 +23,7 @@ export function layoutPlan(overrides: Partial<Plan> = {}): Plan {
 
 export function layoutAgent(overrides: Partial<Agent> = {}): Agent {
   return {
-    id: 'ray', name: 'Ray', type: 'core', locked: true, figure: 'Robot', role: 'general', needs_model: false, status: 'active', soul: '',
+    id: 'ray', name: 'Ray', type: 'core', locked: true, needs_model: false, status: 'active', soul: '',
     timeout_seconds: 300, max_tool_iterations: 50, max_tool_iterations_source: 'global',
     max_tool_iterations_override_ignored: false, memory_enabled: true, revision: '0'.repeat(64),
     figure: 'Omnipus', role: 'general',

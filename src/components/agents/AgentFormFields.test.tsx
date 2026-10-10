@@ -1,10 +1,9 @@
 /**
  * AgentFormFields.test.tsx
  *
- * Tests for the three primitives lifted from AgentProfile.tsx so the
+ * Tests for the primitives lifted from AgentProfile.tsx so the
  * wizard and the edit slide-over share one widget:
  *   - <AvatarColorPicker>  — 10-colour identity palette (Azure..Grey) with semantic aria-labels
- *   - <IconPicker>         — SmartSelect over ICON_OPTIONS
  *   - <AvatarHeader>       — 48-px circle with bg color + icon
  *
  * Traces:
@@ -30,9 +29,8 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function () {}
 }
 
-import { render, screen, fireEvent, within } from '@testing-library/react'
-import { AvatarColorPicker, IconPicker, AvatarHeader } from './AgentFormFields'
-import { ICON_OPTIONS } from '@/lib/agentIcons'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { AvatarColorPicker, AvatarHeader } from './AgentFormFields'
 
 // SPEC "Locked identity vocabulary" ordered palette (Azure..Grey).
 // Not src/lib/constants.ts AVATAR_COLORS (the retired eight brand swatches)
@@ -108,59 +106,6 @@ describe('AvatarColorPicker', () => {
       />,
     )
     expect(screen.getByTestId(`wizard-color-${azure.name}`)).toBeInTheDocument()
-  })
-})
-
-describe('IconPicker', () => {
-  it('exposes a field-named accessible name, with the current value as visible text', () => {
-    // SmartSelect requires `ariaLabel` (7-reviewer finding: the trigger's
-    // accessible name must identify the FIELD, e.g. "Icon", not float with
-    // whatever value happens to be selected — a value-only name is
-    // useless to a screen-reader user who can't tell which field they're
-    // on). IconPicker passes ariaLabel="Icon", so the trigger's accessible
-    // name is "Icon" while its visible text content remains the chosen
-    // item's label ("Robot") for sighted users. Per
-    // docs/internal/design/components/smart-select.md the trigger carries
-    // role="combobox" (a <button> element exposing the combobox role).
-    const onChange = vi.fn()
-    render(<IconPicker value="Robot" onChange={onChange} />)
-    const trigger = screen.getByRole('combobox', { name: 'Icon' })
-    expect(trigger).toBeInTheDocument()
-    // Selected label must still be visible to the user (sighted) via the
-    // trigger's text content, even though it no longer drives the
-    // accessible name.
-    expect(within(trigger).getByText('Robot')).toBeInTheDocument()
-  })
-
-  it('exposes one option per ICON_OPTIONS entry (10 entries)', async () => {
-    // Traces: wave5a-wire-ui-spec.md US-7 AC1 — every ICON_OPTIONS entry
-    // is available from the picker. SmartSelect renders the options inside
-    // a Radix popover; opening it (click the trigger) materialises the
-    // items as cmdk CommandItem nodes. The combobox trigger also carries the
-    // selected label as visible text, so use findAllByText and assert
-    // >= 1 (the popover's CommandItem).
-    const onChange = vi.fn()
-    render(<IconPicker value="Robot" onChange={onChange} />)
-    fireEvent.click(screen.getByRole('combobox', { name: 'Icon' }))
-    for (const { name } of ICON_OPTIONS) {
-      // cmdk renders each CommandItem with the item label as text content.
-      // With 10 items (>= SmartSelect's SEARCHABLE_THRESHOLD of 5), the
-      // searchable popover+Command branch is used.
-      const matches = await screen.findAllByText(name)
-      expect(matches.length).toBeGreaterThanOrEqual(1)
-    }
-  })
-
-  it('calls onChange with the picked icon name', async () => {
-    // Traces: wave5a-wire-ui-spec.md US-7 AC1 — picking an option commits
-    // the wire-shape IconName back to the parent.
-    const onChange = vi.fn()
-    render(<IconPicker value="Robot" onChange={onChange} />)
-    fireEvent.click(screen.getByRole('combobox', { name: 'Icon' }))
-    // Pick a non-default option to prove the change is observed.
-    const target = 'Lightbulb'
-    fireEvent.click(await screen.findByText(target))
-    expect(onChange).toHaveBeenCalledWith(target)
   })
 })
 

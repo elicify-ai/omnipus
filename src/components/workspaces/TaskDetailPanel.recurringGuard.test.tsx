@@ -125,20 +125,6 @@ describe('TaskDetailPanel — defensive guard for a force-fed recurring task (FR
     expect(screen.queryByRole('combobox', { name: 'Trigger' })).not.toBeInTheDocument()
   })
 
-  it('renders the same guard for an `every` (fixed-interval) legacy trigger', async () => {
-    const everyTask = makeTask({
-      id: 'legacy-every-2',
-      trigger: { type: 'every', config: { every_ms: 1_800_000 } },
-    })
-    render(
-      <QueryClientProvider client={makeClient()}>
-        <TaskDetailPanel task={everyTask} onClose={vi.fn()} />
-      </QueryClientProvider>,
-    )
-    expect(await screen.findByText(/repeats/i)).toBeInTheDocument()
-    expect(screen.queryByRole('combobox', { name: 'Trigger' })).not.toBeInTheDocument()
-  })
-
   it('grill-code FIX 3: renders the SPECIFIC rule summary for an RRULE trigger, not the generic placeholder', async () => {
     // FREQ=WEEKLY;BYDAY=MO, no COUNT/UNTIL → summarizeRecurrence produces the
     // exact "Repeats every week on Monday" text (recurrence.ts coreClause +
