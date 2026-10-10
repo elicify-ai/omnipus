@@ -305,7 +305,7 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			credKey := mcpEnvCredKey(req.Name, key)
 			if _, err := a.storeCredential(credKey, value); err != nil {
 				slog.Error("rest: add mcp server: store env credential", "server", req.Name, "env_key", key, "error", err)
-				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store env credential %q: %v", key, err))
+				jsonServerFailure(w, http.StatusInternalServerError, "could not store an env credential", err)
 				return
 			}
 			envRefs[key] = credKey
@@ -385,7 +385,7 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("rest: add mcp server", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 	// Config write succeeded — reconcile the live manager so the server actually
@@ -493,7 +493,7 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 		return nil
 	}); err != nil {
 		slog.Error("rest: delete mcp server", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 	if !found {
@@ -830,7 +830,7 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 		slog.Error("rest: patch mcp server", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 	// Config write succeeded — reconcile the live manager so an edited server

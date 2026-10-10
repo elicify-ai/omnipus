@@ -360,7 +360,7 @@ func (sm *restAPISetAgentMailbox) storePassword() bool {
 	if sm.passwordProvided && !sm.clearPassword {
 		if _, err := sm.a.storeCredential(sm.refName, *sm.req.Password); err != nil {
 			logsafeError("rest: store mailbox credential", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
-			jsonErr(sm.w, http.StatusInternalServerError, fmt.Sprintf("could not store mailbox password: %v", err))
+			jsonServerFailure(sm.w, http.StatusInternalServerError, "could not store mailbox password", err)
 			return true
 		}
 	}
@@ -495,7 +495,7 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 			return true
 		}
 		logsafeError("rest: configure mailbox", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
-		jsonErr(sm.w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(sm.w, http.StatusInternalServerError, "could not save config", err)
 		return true
 	}
 	return false
@@ -638,7 +638,7 @@ func (a *restAPI) deleteAgentMailbox(w http.ResponseWriter, agentID, workspaceID
 			return
 		}
 		logsafeError("rest: delete mailbox", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 

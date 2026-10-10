@@ -245,7 +245,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		if mkErr := os.MkdirAll(uploadDir, 0o700); mkErr != nil {
 			part.Close()
 			slog.Error("rest: upload: mkdir failed", "dir", uploadDir, "error", mkErr)
-			jsonErr(ru.w, http.StatusInternalServerError, fmt.Sprintf("could not create upload directory: %v", mkErr))
+			jsonServerFailure(ru.w, http.StatusInternalServerError, "could not create upload directory", mkErr)
 			return
 		}
 
@@ -280,7 +280,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			part.Close()
 			slog.Error("rest: upload: create file failed", "path", destPath, "error", createErr)
 			cleanupUploaded()
-			jsonErr(ru.w, http.StatusInternalServerError, fmt.Sprintf("could not create file: %v", createErr))
+			jsonServerFailure(ru.w, http.StatusInternalServerError, "could not create file", createErr)
 			return
 		}
 
@@ -407,7 +407,7 @@ func (ru *restAPIHandleUpload) finishLegacyUpload(sanitized string, destPath str
 			slog.Warn("rest: upload: remove partial file failed", "path", destPath, "error", rmErr)
 		}
 		cleanupUploaded()
-		jsonErr(ru.w, http.StatusInternalServerError, fmt.Sprintf("file write failed: %v", copyErr))
+		jsonServerFailure(ru.w, http.StatusInternalServerError, "file write failed", copyErr)
 		return restAPIHandleUploadReturn
 	}
 
