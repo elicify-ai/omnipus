@@ -47,5 +47,5 @@ export function ActivityAvatar({ item, size = 'md' }: ActivityAvatarProps) {
 
   // Every agent kind (native, external CLI, unresolved) draws its AgentMark;
   // the 28px `sm` slot fits the 26px mark.
-  return <AgentMark agent={item.agent} name={item.agentName} size={26} />
+  return <AgentMark agent={item.agent} name={item.agentName ?? ''} size={26} />
 }

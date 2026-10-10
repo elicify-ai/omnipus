@@ -107,6 +107,13 @@ interface SubagentSpanBase {
    */
   hasRun?: boolean
   /**
+   * FR-013 / U4: set when a `subagent_message` of kind `not_delivered` arrived
+   * for this span — the server refused the child's report at an inbox cap and
+   * did not save it. `text` is the server-authored line (never the refused
+   * body). Sticky; Activity shows it as its own "Not delivered" row.
+   */
+  notDelivered?: { text?: string; at: string }
+  /**
    * ADR-091 D7 table's own status-line example, "last update N s ago":
    * the ISO timestamp (`created_at`) of the last `subagent_message` OR
    * `subagent_state` frame reduced onto this span (also seeded at
@@ -607,7 +614,7 @@ export interface SessionChatState {
    * message-only update and a later state-only update for the SAME span_id
    * both survive to be applied together.
    */
-  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string; hasRun?: boolean }>
+  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string; hasRun?: boolean; notDelivered?: { text?: string; at: string } }>
   /**
    * Session-scoped record of every replay_message id that has EVER been
    * merged (via the `replay_message` same-turn/same-agent coalesce branch)

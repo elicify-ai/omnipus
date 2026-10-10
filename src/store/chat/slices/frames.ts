@@ -12,6 +12,7 @@ import { tasksQueryKeys } from '@/lib/api'
 import type {
   SubagentStartFrame,
   SubagentEndFrame,
+  SubagentMessageFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -368,6 +369,37 @@ function recordPendingSpanUpdate(
     delete next[keys[0]]
   }
   return next
+}
+
+type SubagentMessageFields = Pick<SubagentMessageFrame, 'kind' | 'text' | 'created_at'>
+
+/**
+ * What one subagent_message reduces onto its span. 'steer'/'respond' carry no
+ * text and read as 'steered'; every other kind shows its text truncated to 120
+ * characters. A `not_delivered` line (FR-013) is NOT a status line: it is
+ * recorded separately so Activity can show its own row.
+ */
+function reduceSubagentMessage(mf: SubagentMessageFields): {
+  nextStatusLine: string | undefined
+  notDelivered: { text?: string; at: string } | undefined
+} {
+  if (mf.kind === 'not_delivered') return { nextStatusLine: undefined, notDelivered: { text: mf.text, at: mf.created_at } }
+  if (mf.kind === 'steer' || mf.kind === 'respond') return { nextStatusLine: 'steered', notDelivered: undefined }
+  const nextStatusLine = mf.text ? (mf.text.length > 120 ? `${mf.text.slice(0, 120)}…` : mf.text) : undefined
+  return { nextStatusLine, notDelivered: undefined }
+}
+
+/** Pending-slot patch for a message that beat its span's subagent_start; omits absent keys. */
+function pendingMessagePatch(
+  statusLine: string | undefined,
+  notDelivered: { text?: string; at: string } | undefined,
+  createdAt: string,
+): PendingSpanUpdate {
+  return {
+    ...(statusLine !== undefined ? { statusLine } : {}),
+    lastUpdateAt: createdAt,
+    ...(notDelivered ? { notDelivered } : {}),
+  }
 }
 
 /**
@@ -2234,6 +2266,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 childSessionId: sf.child_session_id,
                 statusLine: pendingUpdate?.statusLine,
                 lifecycleState: pendingUpdate?.lifecycleState, hasRun: pendingUpdate?.hasRun,
+                notDelivered: pendingUpdate?.notDelivered,
                 // Seeds the status line's "last update N s ago" fallback
                 // (D7 table) from the moment the span itself appears — a
                 // real subagent_message/subagent_state, each carrying its
@@ -2346,18 +2379,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               // present, truncated to 120 characters with an ellipsis. A
               // kind with no text (e.g. a bare 'artifact' ping) leaves the
               // existing statusLine untouched rather than blanking it.
-              const nextStatusLine =
-                mf.kind === 'steer' || mf.kind === 'respond'
-                  ? 'steered'
-                  : mf.text
-                    ? mf.text.length > 120 ? `${mf.text.slice(0, 120)}…` : mf.text
-                    : undefined
+              const { nextStatusLine, notDelivered } = reduceSubagentMessage(mf)
 
               function applyToSpan(span: SubagentSpan): SubagentSpan {
                 return {
                   ...span,
                   statusLine: nextStatusLine ?? span.statusLine,
                   lastUpdateAt: mf.created_at,
+                  ...(notDelivered ? { notDelivered } : {}),
                 }
               }
 
@@ -2394,9 +2423,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               draft.pendingSpanUpdatesBySpanId = recordPendingSpanUpdate(
                 draft.pendingSpanUpdatesBySpanId,
                 mf.span_id,
-                nextStatusLine !== undefined
-                  ? { statusLine: nextStatusLine, lastUpdateAt: mf.created_at }
-                  : { lastUpdateAt: mf.created_at },
+                pendingMessagePatch(nextStatusLine, notDelivered, mf.created_at),
               )
             }) as Partial<SessionChatState>
           })
