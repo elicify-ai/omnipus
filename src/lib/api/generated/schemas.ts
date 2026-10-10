@@ -1273,7 +1273,7 @@ type AgentFieldDescriptor = {
   editable: boolean;
   reason?: string | undefined;
 };
-type AgentFigure = "Robot" | "Man" | "Woman" | "Omnipus";
+type AgentFigure = "Robot" | "Man" | "Woman" | "Omnipus" | "Monogram";
 type AgentRole =
   | "writer"
   | "designer"
@@ -3739,7 +3739,13 @@ export const AgentFieldDescriptor: z.ZodType<AgentFieldDescriptor> = z.object({
   editable: z.boolean(),
   reason: z.string().optional(),
 });
-export const AgentFigure = z.enum(["Robot", "Man", "Woman", "Omnipus"]);
+export const AgentFigure = z.enum([
+  "Robot",
+  "Man",
+  "Woman",
+  "Omnipus",
+  "Monogram",
+]);
 export const AgentRole = z.enum([
   "writer",
   "designer",

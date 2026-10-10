@@ -5119,6 +5119,11 @@
   ],
   "reviewedBoundaries": [
     {
+      "path": "src/components/chat/AgentStatusIndicator.monogram.wave1.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
       "path": "src/components/panel-shell/usePanelShell.standalone.test.tsx",
       "kind": "test",
       "reason": "Exact test-only boundary: W1/F3 render the existing application-classified ToastContainer to assert real visible error alerts, rather than asserting only queued toast data. The application-only import is confined to this test; no production consumer or public component export is added. All existing assertions and production catalog locks remain unchanged."

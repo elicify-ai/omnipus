@@ -102,6 +102,8 @@ During a live reply, an inline mark replaces the old bouncing-dot indicator. It 
 
 **Limits of the inline mark:** it needs an assistant reply to display against. A question or approval can still need attention when no inline mark is visible. In loaded history, a running reply that already has visible content does not show the Thinking or Working mark. Queued work has no inline **Queued** mark; check **Sessions** or Activity instead. For background processes that outlast their tool call, use the Sessions command count and the Activity panel.
 
+In the simpler message-list fallback, live tool activity appears against the reply that owns it, before the answer finishes. If a hidden tool finishes successfully and the reply still has nothing visible, the mark returns to Thinking while the agent continues. If a tool failure makes its **Failed** card visible, that otherwise-empty reply shows the card without an extra Thinking mark, even when the failure has no separate error text.
+
 The mark's figure and badge stay fully opaque. With normal motion they gently change size, and a separate glow animates behind them; Working also has a moving highlight. If your system requests reduced motion, these loops stop and the thinking phrase stops rotating. The name and current phrase remain visible.
 
 A failure or refusal routed to an existing chat appears in that conversation, including when no reply has started. It does not turn into an app-wide connection banner when you open another conversation or start a new chat. Connection and routing-protocol failures remain separate app-wide problems.

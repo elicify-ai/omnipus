@@ -16,7 +16,9 @@ export function expectLockedIdentityColours(root: HTMLElement) {
 
 export function expectEditableIdentityChoices(root: HTMLElement) {
   const basics = within(root)
-  for (const figure of ['Robot', 'Man', 'Woman', 'Omnipus']) {
+  // The 5th figure (Monogram) is offered like the other four: enabled, and not
+  // pressed by default (Omnipus stays the default). ARCH-RULING-monogram AC-13.
+  for (const figure of ['Robot', 'Man', 'Woman', 'Omnipus', 'Monogram']) {
     const choice = basics.getByRole('button', { name: figure })
     expect(choice, figure).toBeEnabled()
     expect(choice, figure).toHaveAttribute('aria-pressed', String(figure === 'Omnipus'))

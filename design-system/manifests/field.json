@@ -94,6 +94,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Field [check:field-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"field-input\"]", "attribute": "aria-describedby" }],
       "applicable": true
     },
     {

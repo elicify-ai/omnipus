@@ -53,6 +53,11 @@ export const FIGURE_ART = {
   Man: { art: 'man', face: 'eyes' },
   Woman: { art: 'woman', face: 'eyes' },
   Omnipus: { art: 'octopus', face: 'none' },
+  // The 5th figure. `art: 'monogram'` is deliberately NOT an AgentIconArtKey:
+  // AgentIcon branches to `monogramInner` before the figure-art lookup, and the
+  // `art` value is used only as the ink/glow span's `data-art` attribute. face
+  // is 'none' because no eyes art is baked (the letter is the mark).
+  Monogram: { art: 'monogram', face: 'none' },
 } as const
 
 // not-wire-format: figure keys accepted by AgentIcon, not an API resource.

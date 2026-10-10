@@ -6,7 +6,7 @@
     { "id": "empty-state-interaction", "kind": "interaction", "file": "src/components/ui/empty-state.stories.tsx", "test": "With Action", "story": "WithAction", "applicable": true },
     { "id": "empty-state-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-axe] axe", "story": "WithAction", "applicable": true },
     { "id": "empty-state-keyboard", "kind": "keyboard", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-keyboard] keyboard", "story": "WithAction", "applicable": true },
-    { "id": "empty-state-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-browser] browser", "story": "WithAction", "applicable": true },
+    { "id": "empty-state-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-browser] browser", "story": "WithAction", "requiredTargets": [{ "selector": "[data-testid=\"empty-state\"]", "text": "No notifications yet" }], "applicable": true },
     { "id": "empty-state-pointer", "kind": "pointer", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-pointer] pointer", "story": "WithAction", "applicable": true },
     { "id": "empty-state-reduced-motion", "kind": "reduced-motion", "applicable": false, "reason": "EmptyState adds no motion; its Button has a separate motion contract." },
     { "id": "empty-state-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-forced-colors] forced-colors", "story": "WithAction", "applicable": true },

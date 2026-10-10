@@ -42,6 +42,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchAgents: vi.fn().mockResolvedValue([
       { id: 'agent-1', name: 'Mia', color: '#3B82F6', icon: 'lightbulb', figure: 'Omnipus', role: 'general' },
       { id: 'agent-jim', name: 'Jim', color: '#22D3EE', icon: 'graph', figure: 'Man', role: 'general' },
+      { id: 'agent-research', name: 'Research Assistant', color: '#3B82F6', figure: 'Monogram', role: 'researcher' },
     ]),
     fetchSessionMessages: vi.fn().mockResolvedValue([]),
     fetchCommands: vi.fn().mockResolvedValue([]),
@@ -194,6 +195,24 @@ function expectMarkMotion(bubble: HTMLElement, motion: 'thinking' | 'working' | 
   else expect(mark?.querySelector('[data-glow]')).not.toBeNull()
 }
 
+// I1 / AC-16: the full reply name and painted initial must agree through the
+// real screen → indicator → AgentIcon path, in both ink and glow. The guest's
+// R deliberately differs from the active owner's M.
+function expectMonogramReply(bubble: HTMLElement) {
+  expectNameOnly(bubble, 'Research Assistant')
+  const mark = within(bubble).getByTestId('agent-icon')
+  expect(mark).toHaveAttribute('data-figure', 'Monogram')
+  for (const layer of ['data-ink', 'data-glow']) {
+    const letters = mark.querySelectorAll(`[${layer}] [data-initial]`)
+    expect(letters, `${layer} has one guest initial`).toHaveLength(1)
+    expect(letters[0].tagName.toLowerCase()).toBe('text')
+    expect(letters[0]).toHaveAttribute('data-initial', 'R')
+    expect(letters[0].textContent, `${layer} paints the guest's R`).toBe('R')
+  }
+  expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
+  expect(useSessionStore.getState().activeAgentId).toBe('agent-1')
+}
+
 describe('live inline indicator', () => {
   beforeEach(() => {
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
@@ -233,6 +252,17 @@ describe('live inline indicator', () => {
     expect(bubble.querySelector('[data-art]')?.getAttribute('data-art')).toBe('man')
     expectNameOnly(bubble, 'Jim')
     expectMarkMotion(bubble, 'thinking')
+  })
+
+  it('passes the guest name into the live Monogram mark through ResolvedAgentMark (I1)', async () => {
+    const sid = 'live-monogram-name'
+    seedMessages(sid, streamingPair(sid, 'agent-research'), { streaming: true, replaying: false })
+    const bubble = assistantBubble(await mount())
+    await within(bubble).findByText('Research Assistant')
+    // AssistantUI's running root proves this is the live path, not the
+    // plain/virtual row, which marks its root complete even while streaming.
+    expect(bubble).toHaveAttribute('data-status', 'running')
+    expectMonogramReply(bubble)
   })
 
   it('keeps the existing hidden-command label while the phase is Working', async () => {
@@ -496,6 +526,17 @@ describe('plain, replay, and idle bubbles', () => {
       expect(within(bubble).queryByText('Working on it…')).not.toBeInTheDocument()
     },
   )
+
+  it('passes the guest name into the plain Monogram mark through VirtualAssistantMessageRow (I1)', async () => {
+    const sid = 'plain-monogram-name'
+    seedMessages(sid, streamingPair(sid, 'agent-research'), { streaming: true, replaying: false })
+    const bubble = assistantBubble(await mount())
+    await within(bubble).findByText('Research Assistant')
+    expect(globalThis.ResizeObserver).toBeUndefined()
+    expect(bubble).toHaveAttribute('data-status', 'complete')
+    expect(bubble.closest('[data-index]')).toBeNull()
+    expectMonogramReply(bubble)
+  })
 
   it('shows a finished plain-path reply as the guest name only', async () => {
     const sid = 'plain-1'
