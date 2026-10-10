@@ -98,10 +98,12 @@ export function ReplyHeaderView({ header }: { header: NonNullable<ReturnType<typ
   return (
     <span
       data-testid="reply-header"
-      className="inline-flex max-w-full items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+      className="inline-flex max-w-full items-center text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
     >
-      <span className="shrink-0">{header.author}</span>
-      <span aria-hidden="true" className="shrink-0">→</span>
+      {/* The arrow is literal TEXT (not a flex-gap seam) so the header reads
+          exactly as the ruling writes it — "Ava → Alice · Telegram" — in
+          copy/paste, textContent and screen readers alike. */}
+      <span className="shrink-0">{header.author} → </span>
       {header.targetTruncated ? (
         <Tooltip content={header.targetFull} side="top" data-testid="reply-target-tooltip">
           <span data-testid="reply-target-trigger" className="min-w-0 max-w-full truncate">

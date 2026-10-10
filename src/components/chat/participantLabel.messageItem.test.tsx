@@ -107,8 +107,11 @@ describe('MessageItem — the paired send_message chip is hidden (same helper as
     })
     const { container } = render(<MessageItem message={turn} />)
     const badges = [...container.querySelectorAll('[data-testid="tool-call-badge"]')]
+    // Two send_message calls went in; only the UNPAIRED one may render (the
+    // real ToolCallBadge labels it "Send message" — no GenericToolCall mock
+    // on this surface, so the count is the discriminating assertion).
     expect(badges).toHaveLength(1)
-    expect(badges[0].textContent).toBe('send_message')
+    expect(badges[0].textContent).toContain('Send message')
   })
 
   it('renders the chip when no reply bubble carries the pairing', () => {
