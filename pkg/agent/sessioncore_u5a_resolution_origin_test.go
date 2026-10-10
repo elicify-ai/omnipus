@@ -32,31 +32,22 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// newSelfSteeringSession creates a chat session whose ACTIVE agent equals
+// newSelfSteeringSession creates a chat session whose IMMUTABLE owner equals
 // testDefaultAgentID, so a launch to testDefaultAgentID is a genuine
-// caller==target self-reassignment. A session no longer seeds ActiveAgentID at
-// creation (session-core U1 / DEL-11) and SwitchAgent refuses a no-op switch to
-// the owner, so the session is created owned by a distinct decoy id and then
-// switched to the real target — the mutable handover owner the launcher reads.
+// caller==target self-reassignment.
+//
+// U1/DEL-11 deleted the mutable handover owner and the launcher now reads
+// meta.AgentID (steer_launcher.go::launchSteered;
+// ordinary_root_record.go::initializeOrdinaryRootRecord), so the caller is the
+// session's CREATION agent — a decoy-then-SwitchAgent fixture would leave the
+// caller at the decoy. Owning the session by testDefaultAgentID directly is the
+// only way to pin caller==target.
 func newSelfSteeringSession(t *testing.T, al *AgentLoop, workspaceID string) string {
 	t.Helper()
-	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "u5a-decoy-owner")
-	if err != nil {
-		t.Fatalf("NewSession(self-steerer): %v", err)
-	}
-	if err := al.GetSessionStore().SwitchAgent(meta.ID, testDefaultAgentID); err != nil {
-		t.Fatalf("SwitchAgent(self-steerer -> %q): %v", testDefaultAgentID, err)
-	}
-	if workspaceID != "" {
-		if err := al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &workspaceID}); err != nil {
-			t.Fatalf("SetMeta(self-steerer).WorkspaceID: %v", err)
-		}
-	}
-	return meta.ID
+	return newTestSteeringSessionOwnedBy(t, al, workspaceID, testDefaultAgentID)
 }
 
 // TestLaunch_DefaultResolutionRace_DelegateOrigin_RefusesLaunch is F1: the gate
@@ -94,8 +85,7 @@ func TestLaunch_DefaultResolutionRace_DelegateOrigin_RefusesLaunch(t *testing.T)
 	}
 
 	l := NewSteerLauncher(al)
-	steerer := newTestSteeringSession(t, al, "") // UNBOUND steering session
-	bindSteeringAgent(t, al, steerer)
+	steerer := newCallerSteeringSession(t, al, "") // UNBOUND steering session
 
 	_, err := l.Launch(unbound, steer.LaunchRequest{
 		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "do work",
@@ -177,8 +167,7 @@ func TestLaunch_UnreadableGraph_TaskOtherAgent_RefusesLaunch(t *testing.T) {
 	al.GetConfig().Performance.MaxDelegationDepth = 5
 
 	l := NewSteerLauncher(al)
-	steerer := newTestSteeringSession(t, al, testWS)
-	bindSteeringAgent(t, al, steerer) // caller = u5aCallerAgentID != target
+	steerer := newCallerSteeringSession(t, al, testWS) // caller = u5aCallerAgentID != target
 
 	_, err := l.Launch(ctxWS(testWS, 0), steer.LaunchRequest{
 		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "do work",
