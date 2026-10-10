@@ -4,10 +4,18 @@
  * An unconfirmed first send with no real session id prompts. Declining keeps
  * that delivery and the saved pointer. Confirming abandons it and starts an
  * extra without replacing the main pointer. `__pending` is never saved.
+ *
+ * M7: this flow is the ONE owner of the new-chat decision. The sidebar asks
+ * it and renders the outcome (the dialog reads the store's `newChatPrompt`);
+ * it never re-decides. A confirm names the clientMessageId the open dialog
+ * was asked about, and if that message is no longer the pending one, nothing
+ * is abandoned and the refusal is VISIBLE (a warning toast) — never a silent
+ * no-op.
  */
 import type { AgentKind } from '@/lib/api'
 import { decideNewChat } from '@/lib/nav/extraChatGuard'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useUiStore } from '@/store/ui'
 import { resumeWorkspaceEntryQueue, supersedeNavigationIntent } from '@/store/session/workspaceEntryFlow'
 import {
   abandonRegisteredPendingFirstSend,
@@ -21,6 +29,8 @@ export type NewChatPrompt = {
   mainSessionId: string
   clientMessageId: string
   started: false
+  /** The agent the question was asked for — the sidebar row whose dialog it is. */
+  agentId: string | null
 }
 
 /** A string is the extra's owner. An object is the dialog choice, plus that owner. */
@@ -28,6 +38,13 @@ export type NewChatStartArg =
   | string
   | null
   | { choice?: 'decline' | 'confirm'; agentId?: string | null; clientMessageId?: string }
+
+/**
+ * What runStartNewSession actually DID — callers navigate only on
+ * 'started'. 'prompt' opened the dialog (store `newChatPrompt`), 'kept'
+ * answered "keep this chat", 'refused' declined a stale confirm visibly.
+ */
+export type NewChatOutcome = 'started' | 'prompt' | 'kept' | 'refused'
 
 function choiceOf(arg: unknown): 'decline' | 'confirm' | undefined {
   if (!arg || typeof arg !== 'object' || !('choice' in arg)) return undefined
@@ -50,7 +67,7 @@ function capturedClientMessageId(arg: NewChatStartArg | undefined): string | und
 export function runStartNewSession(
   agentOrChoice?: NewChatStartArg,
   agentType?: AgentKind | null,
-): void {
+): NewChatOutcome {
   const state = useSessionStore.getState()
   const workspaceId = useWorkspacesStore.getState().activeWorkspaceId
   const agentId = state.activeAgentId
@@ -69,21 +86,27 @@ export function runStartNewSession(
       mainSessionId: decision.mainSessionId,
       clientMessageId: decision.clientMessageId,
       started: false,
+      agentId: agentHintOf(agentOrChoice) ?? state.activeAgentId ?? null,
     }
     useSessionStore.setState({ newChatPrompt: prompt })
-    return
+    return 'prompt'
   }
   if (decision.action === 'decline') {
     useSessionStore.setState({ newChatPrompt: null })
-    return
+    return 'kept'
   }
   // A dialog opened against an older id must not discard the message that
   // has since reused the pending slot. A confirm with no captured id still
-  // abandons whatever is pending now.
+  // abandons whatever is pending now. M7: the stale case is never silent —
+  // the prompt closes and a warning toast says why nothing started.
   const capturedId = capturedClientMessageId(agentOrChoice)
   if (decision.action === 'confirm' && capturedId && readPendingFirstSend()?.clientMessageId !== capturedId) {
     useSessionStore.setState({ newChatPrompt: null })
-    return
+    useUiStore.getState().addToast({
+      message: 'That message is no longer pending, so nothing was abandoned.',
+      variant: 'warning',
+    })
+    return 'refused'
   }
 
   // A deliberately new chat wins over a failed or still-loading restore.
@@ -101,4 +124,15 @@ export function runStartNewSession(
   // and it does not replace the main pointer the sidebar row uses.
   useSessionStore.getState().setActiveSession(null, hint, agentType ?? undefined)
   resumeWorkspaceEntryQueue()
+  return 'started'
+}
+
+/**
+ * Close the outstanding "Start a new chat?" question without answering it
+ * (the dialog's "Keep this chat"). Only ever clears the prompt — never
+ * starts an extra and never touches the delivery — so a state change while
+ * the dialog was open cannot turn a dismiss into an action.
+ */
+export function dismissNewChatPrompt(): void {
+  useSessionStore.setState({ newChatPrompt: null })
 }

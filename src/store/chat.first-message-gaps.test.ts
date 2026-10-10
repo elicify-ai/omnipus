@@ -263,7 +263,7 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
     const oldRequest = structuredClone(useChatStore.getState().pendingFirstSend)
     act(() => useSessionStore.getState().startNewSession())
     expect(useSessionStore.getState().newChatPrompt).toStrictEqual({
-      action: 'prompt', mainSessionId: '', clientMessageId: OLD_ID, started: false,
+      action: 'prompt', mainSessionId: '', clientMessageId: OLD_ID, started: false, agentId: 'mia',
     })
     expect(useSessionStore.getState().activeSessionId, 'FR-005: prompting does not leave the pending chat').toBe('__pending')
     expect(useChatStore.getState().sessionsById.__pending, 'FR-005: prompting preserves the complete pending bucket')

@@ -354,6 +354,31 @@ describe('frozen pending record (round 4 invariants, spec FR-047 / BDD-13.2 / no
     ])
   })
 
+  // M6 port (the former mainAttention copy's "hidden-reconnect" pin): a
+  // reconnect completion while the tab is hidden is a prefetch and sends
+  // nothing; the SAME record still sends its original bound once the tab is
+  // visible again — the guard waits, it does not cancel.
+  it('I3: a reconnect completion while hidden sends nothing; the same record sends its original 7 once visible', () => {
+    const sid = 'main-ack-i3-hidden-reconnect'
+    shownForeground(sid, [mainSession(sid)])
+    useConnectionStore.setState({ connection: connectionThat(false) } as never)
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([])
+
+    useConnectionStore.setState({ connection: connectionThat(true) } as never)
+    hiddenSpy.mockReturnValue(true)
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent, 'hidden reconnect is a prefetch, never a send').toEqual([])
+
+    hiddenSpy.mockReturnValue(false)
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent, 'the waiting record sends the original bound once visible').toEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
+  })
+
   it('I5: a populated roster that omits the target session is not borrowed — no ack fields', () => {
     const sid = 'main-ack-i5-not-listed'
     shownForeground(sid, [mainSession('another-main-entirely')])

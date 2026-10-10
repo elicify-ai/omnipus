@@ -4,7 +4,6 @@ import { Buildings, CaretDown, CaretRight, ClockCounterClockwise, Plus } from '@
 import type { Agent, Session, Workspace } from '@/lib/api'
 import { workspacesQueryKeys } from '@/lib/api'
 import { queryClient } from '@/lib/queryClient'
-import { decideNewChat } from '@/lib/nav/extraChatGuard'
 import type { EligibleRow } from '@/lib/nav/eligibleMains'
 import { useSelectSession } from '@/components/chat/useSelectSession'
 import { Button } from '@/components/ui/button'
@@ -13,18 +12,13 @@ import { ErrorState } from '@/components/ui/error-state'
 import { IconButton } from '@/components/ui/icon-button'
 import { Tooltip } from '@/components/ui/tooltip'
 import { useSessionStore } from '@/store/session'
+import { dismissNewChatPrompt } from '@/store/session/newChatFlow'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 import { SidebarAgentIcon } from './SidebarAgentIcon'
 import { attentionCountLabel, useAttentionMotion } from './attentionCue'
-import {
-  beginPairExtra,
-  captureUnconfirmedTarget,
-  currentNewChatInput,
-  pendingIdStillSelected,
-  type CapturedPending,
-} from './pairExtra'
+import { beginPairExtra } from './pairExtra'
 import { workspaceMains, type RosterState } from './workspaceRoster'
 import './attention.css'
 import './agent-row.css'
@@ -289,11 +283,16 @@ function AgentMainRow({
   onOverlayClose: () => void
 }) {
   const navigate = useNavigate()
-  const [promptOpen, setPromptOpen] = useState(false)
-  const [abandonTarget, setAbandonTarget] = useState<CapturedPending | null>(null)
   const [unresolved, setUnresolved] = useState(false)
   const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
   const ownsSelectedChat = useSessionStore((state) => state.activeAgentId === row.agentId)
+  // M7: the "Start a new chat?" question lives in the store and newChatFlow
+  // is its only decision owner. This row renders the dialog when the flow
+  // asked its question for THIS agent; confirm executes exactly what was
+  // asked (the prompt's own clientMessageId), and a state change while the
+  // dialog was open is answered by the flow visibly, never silently.
+  const prompt = useSessionStore((state) => state.newChatPrompt)
+  const promptOpen = prompt?.action === 'prompt' && prompt.agentId === row.agentId
   const selected = activeWorkspaceId === workspace.id && ownsSelectedChat
   const pastLabel = `Past sessions with ${row.name}`
   const extraLabel = `New chat with ${row.name}`
@@ -309,38 +308,16 @@ function AgentMainRow({
   }
 
   const startExtra = () => {
-    const decision = decideNewChat(currentNewChatInput(row.mainSessionId))
-    if (decision.action === 'prompt') {
-      setAbandonTarget(captureUnconfirmedTarget())
-      setPromptOpen(true)
-      return
-    }
-    if (decision.action === 'start-extra') {
-      beginPairExtra(workspace.id, row.agentId, navigate, onOverlayClose)
-    }
+    beginPairExtra(workspace.id, row.agentId, navigate, onOverlayClose)
   }
 
   const confirmExtra = () => {
-    const target = abandonTarget
-    const decision = decideNewChat({ ...currentNewChatInput(row.mainSessionId), choice: 'confirm' })
-    setAbandonTarget(null)
-    setPromptOpen(false)
-    // Abandon only the id this dialog opened against. A newer message that
-    // reused the pending slot is a different delivery.
-    if (
-      target
-      && decision.action === 'confirm'
-      && decision.abandonedClientMessageId === target.clientMessageId
-      && pendingIdStillSelected(target)
-    ) {
-      beginPairExtra(workspace.id, row.agentId, navigate, onOverlayClose, 'confirm', target)
-    }
+    const asked = useSessionStore.getState().newChatPrompt
+    beginPairExtra(workspace.id, row.agentId, navigate, onOverlayClose, 'confirm', asked?.clientMessageId)
   }
 
   const declineExtra = () => {
-    decideNewChat({ ...currentNewChatInput(row.mainSessionId), choice: 'decline' })
-    setAbandonTarget(null)
-    setPromptOpen(false)
+    dismissNewChatPrompt()
   }
 
   return (
@@ -401,6 +378,7 @@ function AgentMainRow({
         emphasis="cancel"
         onConfirm={confirmExtra}
       />
+
     </div>
   )
 }

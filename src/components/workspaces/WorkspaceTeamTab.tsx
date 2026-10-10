@@ -145,40 +145,6 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
     [],
   )
 
-  useEffect(() => {
-    if (!delegation) return
-    const seed = workspace.core_team ?? []
-    const next = buildTeamEditState(delegation, seed)
-    const nextKey = stateKey(next)
-    if (!hydratedRef.current) {
-      hydratedRef.current = true
-      revisionRef.current = delegation.revision
-      baselineRef.current = nextKey
-      setEditState(next)
-      // D3 fix: flip the reactive readiness flag in the SAME commit the
-      // freshly-hydrated data lands (see `hydrated`'s doc comment above) —
-      // batched with `setEditState` above into one render, so there is no
-      // intermediate frame where `disabled` is already false but the data
-      // is still stale.
-      setHydrated(true)
-      return
-    }
-    // Background refetch: adopt the new server value only when the user has no
-    // pending edits (local state still equals the previous baseline).
-    setEditState((prev) => {
-      if (!prev) {
-        baselineRef.current = nextKey
-        revisionRef.current = delegation.revision
-        return next
-      }
-      const adopt = stateKey(prev) === baselineRef.current
-      if (!adopt) return prev
-      baselineRef.current = nextKey
-      revisionRef.current = delegation.revision
-      return next
-    })
-  }, [delegation, workspace.core_team, stateKey])
-
   // ── Auto-save ───────────────────────────────────────────────────────────────
   // The auto-save `data` MUST include `members`, not just `edges` — D7 fix.
   // useAutoSave's change-detection JSON-compares consecutive `data` snapshots
@@ -352,6 +318,7 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
     status: saveStatus,
     error: saveError,
     lastSavedAt,
+    rebaseline,
   } = useAutoSave(saveBody, saveFn, {
     // D3 residual (2nd site) fix: `hydrated` (reactive state), not
     // `hydratedRef.current` — see `hydrated`'s doc comment above for why a
@@ -362,6 +329,56 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
     // `beaconFlush`'s definition for why.
     beaconFlush,
   })
+
+  // ── Hydration / background-refetch adoption ────────────────────────────────
+  // Declared AFTER useAutoSave so the adopt branch can call its rebaseline
+  // (below) — a const from this render, not hoisted.
+  useEffect(() => {
+    if (!delegation) return
+    const seed = workspace.core_team ?? []
+    const next = buildTeamEditState(delegation, seed)
+    const nextKey = stateKey(next)
+    if (!hydratedRef.current) {
+      hydratedRef.current = true
+      revisionRef.current = delegation.revision
+      baselineRef.current = nextKey
+      setEditState(next)
+      // D3 fix: flip the reactive readiness flag in the SAME commit the
+      // freshly-hydrated data lands (see `hydrated`'s doc comment above) —
+      // batched with `setEditState` above into one render, so there is no
+      // intermediate frame where `disabled` is already false but the data
+      // is still stale.
+      setHydrated(true)
+      return
+    }
+    // Background refetch: adopt the new server value only when the user has no
+    // pending edits (local state still equals the previous baseline).
+    setEditState((prev) => {
+      if (!prev) {
+        baselineRef.current = nextKey
+        revisionRef.current = delegation.revision
+        return next
+      }
+      const adopt = stateKey(prev) === baselineRef.current
+      if (!adopt) return prev
+      baselineRef.current = nextKey
+      revisionRef.current = delegation.revision
+      // SERVER-driven adoption, not a user edit — re-base the autosave onto
+      // the adopted snapshot so the debounced change-detector never sees it
+      // as an edit. Without this, a refetch carrying a changed roster armed
+      // a 500ms echo PUT of the server's own state straight back (measured
+      // under load in the HF2 Team integration tests: the echo PUT failed
+      // CSRF client-side and rendered a persistent error alert inside the
+      // panel after a successful recovery; with a live session it carries
+      // the pre-adoption revision and 409s). Called from inside the updater
+      // deliberately — rebaseline is idempotent, so StrictMode's
+      // double-invoked updater is harmless, and keeping the adopt decision
+      // here avoids re-running this effect on every editState identity
+      // change.
+      rebaseline({ members: next.members, edges: buildSaveEdges(next) })
+      return next
+    })
+  }, [delegation, workspace.core_team, stateKey, rebaseline])
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const workerIds = useMemo(() => {

@@ -155,22 +155,8 @@ describe('sessionCoreSeam end to end at eligibleMainAgents (unmocked)', () => {
     })
   })
 
-  it('a non-main chat session is never acknowledged', async () => {
-    const { ackForShownCommit } = await import('@/lib/nav/mainAttention')
-    const ack = ackForShownCommit({
-      attemptKind: 'shown-commit',
-      session,
-      generation: 1,
-      frame: boundFrame,
-      newerOutcomeId: null,
-      foreground: {
-        sessionId: session.id,
-        generation: 1,
-        frame: boundFrame,
-      },
-      viewerId: 'user-a',
-    })
-    expect(ack.acknowledge).toBe(false)
-    expect(ack.fields).toBeUndefined()
-  })
+  // M6: the former "a non-main chat session is never acknowledged" pin here
+  // drove the deleted mainAttention copy; the same behaviour is asserted
+  // through the live foregroundAck path ("a non-main session is never
+  // acknowledged" in src/store/session/foregroundAck.shown-commit.test.ts).
 })
