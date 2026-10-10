@@ -329,25 +329,13 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 	})
 }
 
-// listAgentSessions returns the union of an agent's sessions from both
-// session stores, deduplicated by session ID. Ordinary chat sessions moved
-// to the shared store (AgentLoop.GetSessionStore — "the shared store for new
-// sessions") some time ago; AgentLoop.GetAgentStore's own doc marks it "kept
-// for legacy per-agent session access". This endpoint used to read
-// GetAgentStore exclusively, so it silently omitted every session minted
-// after that move.
-//
-// This does not call AgentLoop.ListAllSessions: that helper merges the
-// shared store with EVERY registered agent's legacy store to build a
-// cross-agent list, which would mean opening and reading every OTHER
-// agent's session directory off disk just to filter the result back down to
-// this one agent — needless I/O for a single-agent-scoped endpoint. Instead
-// this inlines the same shared-primary/per-agent-secondary merge idiom
-// ListAllSessions and createSessionHTTP already use, scoped to just the two
-// stores that can hold this agent's sessions.
+// listAgentSessions returns an agent's sessions from the one shared session
+// store, filtered by membership (AgentIDs). It does not call
+// AgentLoop.ListAllSessions: that helper builds the cross-agent list, which
+// would read every other agent's sessions just to filter the result back down
+// to this one agent.
 func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// agentID is already validated by HandleAgents before reaching here.
-	seen := make(map[string]bool)
 	var metas []*session.UnifiedMeta
 	var errs []error
 
@@ -377,23 +365,6 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 			// field on every read, so this is never empty for a real session).
 			if slices.Contains(m.AgentIDs, agentID) {
 				metas = append(metas, m)
-				seen[m.ID] = true
-			}
-		}
-	}
-
-	if legacy := a.agentLoop.GetAgentStore(agentID); legacy != nil {
-		legacyMetas, err := legacy.ListSessions()
-		if err != nil {
-			logsafeWarn("rest: list agent sessions: legacy store", "agent_id", agentID, "error", err)
-			errs = append(errs, fmt.Errorf("legacy: %w", err))
-		}
-		for _, m := range legacyMetas {
-			// A session can exist in both stores (a pre-fix duplicate-mint bug
-			// produced exactly that) — the shared-store copy wins.
-			if !seen[m.ID] {
-				metas = append(metas, m)
-				seen[m.ID] = true
 			}
 		}
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/utils"
+	"github.com/google/uuid"
 )
 
 // gatewayPrincipal returns the WS-authenticated gateway principal that an
@@ -702,8 +703,15 @@ func (al *AgentLoop) processSystemMessage(
 	// session's data. Falls back to the unscoped main key only when no
 	// origin session is known (a system message with no AsyncNotifier
 	// origin), matching the pre-fix behavior for that narrower case.
-	sessionKey := routing.BuildAgentMainSessionKey(agent.ID)
-	if transcriptSessionID != "" {
+	//
+	// DEL-10 step 0: a system message with NO origin session no longer borrows an
+	// agent-wide "agent:<id>:main" history bucket (in the one shared store that
+	// name would be a session directory literally called "agent:<id>:main", and
+	// ":" is not a legal Windows file name character). It runs without session
+	// history, under a one-off scope key that is never persisted.
+	noHistory := transcriptSessionID == ""
+	sessionKey := fmt.Sprintf("agent:%s:system:%s", agent.ID, uuid.NewString())
+	if !noHistory {
 		sessionKey = fmt.Sprintf("agent:%s:session:%s", agent.ID, transcriptSessionID)
 	}
 
@@ -733,6 +741,7 @@ func (al *AgentLoop) processSystemMessage(
 		TranscriptSessionID:  transcriptSessionID,
 		TranscriptStore:      transcriptStore,
 		WorkspaceID:          workspaceID,
+		NoHistory:            noHistory,
 	})
 }
 

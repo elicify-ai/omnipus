@@ -2154,7 +2154,7 @@ func (pe *PlanEngine) mintPlanSession(agentID, title string) (string, error) {
 	if pe.agentLoop.GetRegistry() == nil {
 		return "", fmt.Errorf("plan_engine: no agent registry; cannot mint a session for agent %q", agentID)
 	}
-	store := pe.agentLoop.GetAgentStore(agentID)
+	store := pe.agentLoop.GetSessionStore()
 	if store == nil {
 		return "", fmt.Errorf("plan_engine: agent %q has no resolvable session store", agentID)
 	}

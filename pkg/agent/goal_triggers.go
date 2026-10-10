@@ -1375,16 +1375,9 @@ func (al *AgentLoop) goalQuietWindowSettle(now time.Time) {
 				map[string]any{"goal_id": rec.GoalID, "owner_id": rec.OwnerID})
 			continue
 		}
-		// ADR-086 parity: a CHAT goal's session lives in the shared store, but a
-		// TASK goal's session is minted per-agent by
-		// task_executor.go::createTaskSessionSync via GetAgentStore. Reading only
-		// the shared store here missed EVERY task-owned goal — GetMeta returned
-		// ENOENT and the record was skipped before one keeper precondition ran,
-		// so a quiet task was never nudged, pushed or re-armed. ResolveSessionStore
-		// tries the shared store first (so chat behaviour is byte-identical) and
-		// then finds the per-agent owner, which is the owner-kind-agnostic
-		// property GOAL-FR-014 requires. Measured marginal cost: ~4.6us per
-		// task-owned goal per 30s sweep. Do NOT narrow this back to one store.
+		// ADR-086 parity: chat and task goal sessions both live in the one shared
+		// store; ResolveSessionStore is owner-kind-agnostic (GOAL-FR-014), so a
+		// quiet task-owned goal is nudged, pushed or re-armed like a chat goal.
 		recStore := al.ResolveSessionStore(sessionID)
 		if recStore == nil {
 			recStore = store

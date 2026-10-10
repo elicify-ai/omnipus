@@ -226,7 +226,9 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 	provider := &simpleMockProvider{response: "continued response"}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
-	al.Steer(providers.Message{Role: "user", Content: "new direction"})
+	// DEL-04: the steering queue is scoped; a message is enqueued in the scope
+	// of the session that will consume it (there is no shared fallback bucket).
+	_, _, _ = al.enqueueSteeringMessage("test-session", "", providers.Message{Role: "user", Content: "new direction"}, "")
 
 	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
 	if err != nil {
@@ -706,7 +708,15 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
 	// Enqueue a steering message before processing starts
-	al.Steer(providers.Message{Role: "user", Content: "pre-enqueued steering"})
+	// DEL-04: enqueue in the scope of the session whose turn will poll it.
+	route, _, routeErr := al.resolveMessageRoute(bus.InboundMessage{
+		Channel: "test", ChatID: "chat1", SessionKey: "test-session", Content: "initial message",
+		Sender: bus.SenderInfo{CanonicalID: "cron"},
+	})
+	if routeErr != nil {
+		t.Fatalf("resolve route: %v", routeErr)
+	}
+	_, _, _ = al.enqueueSteeringMessage(resolveScopeKey(route, "test-session"), "", providers.Message{Role: "user", Content: "pre-enqueued steering"}, "")
 
 	// Process a normal message - the initial steering poll should inject the steering message
 	_, err = al.ProcessDirectWithChannel(
@@ -1070,11 +1080,11 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.SetMediaStore(store)
 
-	if err = al.Steer(providers.Message{
+	if _, _, err = al.enqueueSteeringMessage(sessionKey, "", providers.Message{
 		Role:    "user",
 		Content: "describe this image",
 		Media:   []string{ref},
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("Steer failed: %v", err)
 	}
 

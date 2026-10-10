@@ -679,7 +679,7 @@ func extractTarGz(archivePath, destDir string) error {
 }
 
 // HandleClearSessions handles DELETE /api/v1/sessions/all.
-// HandleClearSessions removes all session directories from all agent stores.
+// HandleClearSessions removes every session from the one shared session store.
 func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -687,18 +687,17 @@ func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	totalRemoved := 0
 	var warnings []string
-	for _, id := range a.agentLoop.GetRegistry().ListAgentIDs() {
-		store := a.agentLoop.GetAgentStore(id)
-		if store == nil {
-			continue
-		}
-		n, err := store.ClearAll()
-		if err != nil {
-			slog.Error("rest: clear sessions for agent", "agent_id", id, "error", err)
-			warnings = append(warnings, fmt.Sprintf("agent %q: %v", id, err))
-		}
-		totalRemoved += n
+	store := a.agentLoop.GetSessionStore()
+	if store == nil {
+		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
+		return
 	}
+	n, err := store.ClearAll()
+	if err != nil {
+		slog.Error("rest: clear sessions", "error", err)
+		warnings = append(warnings, fmt.Sprintf("session store: %v", err))
+	}
+	totalRemoved += n
 	resp := gen.ClearAllSessionsResponse{
 		Status: gen.ClearAllSessionsResponseStatusCleared,
 		Count:  totalRemoved,

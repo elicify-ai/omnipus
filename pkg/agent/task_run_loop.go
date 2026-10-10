@@ -193,7 +193,7 @@ const claimBareMarker = "bare_marker"
 // blocked claim.
 func (te *TaskExecutor) resolveRunClaim(t *task.Task, taskSessionID, resp string, state *taskRunState) (runClaim, error) {
 	if !te.dispatchesExternalCLI(t.AgentID) {
-		store := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
+		store := te.agentLoop.GetSessionStore()
 		if store == nil || taskSessionID == "" {
 			return runClaim{}, nil
 		}
@@ -249,7 +249,7 @@ func (te *TaskExecutor) finishRunTurn(
 	run *activeRun,
 	state *taskRunState,
 ) (step runStep, nextPrompt, redispatchTaskID string) {
-	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 
 	var goalReadErr *goalRecordReadError
 	if errors.As(turnErr, &goalReadErr) {
@@ -455,7 +455,7 @@ func (te *TaskExecutor) adjudicateRunClaim(
 	run *activeRun,
 	state *taskRunState,
 ) (runStep, string, string) {
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 	if strings.TrimSpace(evidence) == "" {
 		steer := "A completion claim needs your own one-line statement of what you verified. Verify the work, then claim again with that line."
 		return te.continueAfterInnerTry(ctx, t, taskSessionID, "a completion claim with no evidence", steer, sessStore, run, state)
@@ -740,7 +740,7 @@ func (te *TaskExecutor) consumeTaskAttempt(
 			logger.WarnCF("task_executor", "goal: could not persist why the previous run failed",
 				map[string]any{"task_id": updated.ID, "error": serr.Error()})
 		}
-		te.appendRunSystemTranscript(updated, taskSessionID, te.agentLoop.taskSessionStore(taskSessionID, updated.AgentID), restartNote)
+		te.appendRunSystemTranscript(updated, taskSessionID, te.agentLoop.GetSessionStore(), restartNote)
 		te.supersedeTaskSession(updated.AgentID, taskSessionID)
 		logger.InfoCF("task_executor", "goal: run failed — restarting the task in a fresh run",
 			map[string]any{"task_id": updated.ID, "attempt": newAttempt, "max_attempts": maxAttempts, "reason": reason})

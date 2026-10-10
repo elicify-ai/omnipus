@@ -771,7 +771,7 @@ func (te *TaskExecutor) executeTask(
 // agent store is missing or NewSession fails, retry the binding write once,
 // and fail the dispatch visibly if it cannot be persisted.
 func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 	if sessStore == nil {
 		return "", fmt.Errorf("task_executor: agent store %q not found for task %q", t.AgentID, t.ID)
 	}
@@ -1038,7 +1038,7 @@ func (te *TaskExecutor) reportTaskGoalActivationFailure(t *task.Task, taskSessio
 	logger.ErrorCF("task_executor", "goal: task goal activation failed — this task will run with NO goal loop (no adjudication, no criteria judged)",
 		map[string]any{"task_id": t.ID, "goal_id": goalID, "session_id": taskSessionID, "error": err.Error()})
 	if te.agentLoop != nil {
-		if sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID); sessStore != nil {
+		if sessStore := te.agentLoop.GetSessionStore(); sessStore != nil {
 			te.agentLoop.writeGoalSystemTranscript(sessStore, taskSessionID, t.AgentID, fmt.Sprintf(
 				"This task's goal could not be activated (%v). The run continues WITHOUT a goal loop: no acceptance criteria will be adjudicated for it.",
 				err))
@@ -1239,7 +1239,7 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 
 	// Create the session synchronously so we can return the session_id to the
 	// caller before the goroutine starts.
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 	var taskSessionID string
 	if sessStore != nil {
 		meta, sessErr := sessStore.NewSession(session.SessionTypeTask, "system", t.AgentID)
@@ -2158,7 +2158,7 @@ func (al *AgentLoop) processTaskDirect(
 		DefaultResponse:        defaultResponse,
 		SendResponse:           false,
 		TranscriptSessionID:    taskChatID,
-		TranscriptStore:        al.taskSessionStore(taskChatID, agentID),
+		TranscriptStore:        al.GetSessionStore(),
 		OriginKind:             session.OriginKindTask,
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,

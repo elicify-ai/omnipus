@@ -4,8 +4,8 @@
 # Regression guard for session-core U2 / DEL-12 (spec C-ARCHIVE Decision D): the
 # runtime has ONE model-content store, the addressed archive, and rebuilds
 # nothing from the UI transcript. The retired surfaces below must not return as
-# live definitions or calls outside pkg/memory (whose JSONLStore is the legacy
-# fallback awaiting DEL-10):
+# live definitions or calls (DEL-10/DEL-12: there is ONE shared session store and
+# no JSONL/SessionManager fallback, no per-agent store accessor):
 #
 #   - transcript -> model-history hydration (hydrateAgentHistory,
 #     HydrateAgentHistoryFromTranscript, hydrateOneAgent)
@@ -38,9 +38,8 @@ if ! grep -rqE --include='*.go' 'func \(us \*UnifiedStore\) ReadArchive\(' pkg/s
   exit 2
 fi
 
-PATTERN='(hydrateAgentHistory|HydrateAgentHistoryFromTranscript|hydrateOneAgent|\.MarkHydrated|\.SetHistory|\.TruncateHistory)\('
+PATTERN='(hydrateAgentHistory|HydrateAgentHistoryFromTranscript|hydrateOneAgent|\.MarkHydrated|\.SetHistory|\.TruncateHistory|GetAgentStore|getLegacyAgentStore|taskSessionStore|initSessionStore|NewJSONLBackend|NewJSONLStore|session\.NewSessionManager)\('
 offenders=$(grep -rnE --include='*.go' "$PATTERN" pkg cmd 2>/dev/null \
-  | grep -v '^pkg/memory/' \
   | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' \
   | grep -v 'TruncateHistory(context\.' )
 if [ -n "$offenders" ]; then

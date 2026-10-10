@@ -68,6 +68,17 @@ func NewAgentRegistry(
 		provider: provider,
 	}
 
+	// Every agent shares the ONE session store. The loop opens it at boot, before
+	// the registry exists; a registry built without one (a reload, a test) gets
+	// the same instance. If it cannot be opened there is no store for any agent,
+	// so none is registered - the failure is logged here and boot refuses it
+	// earlier in the real path.
+	if _, storeErr := openSharedSessionStore(sessionsHomeFor(cfg)); storeErr != nil {
+		logger.ErrorCF("agent", "No agent registered: the shared session store could not be opened",
+			map[string]any{"error": storeErr.Error()})
+		return registry
+	}
+
 	// Register agents from config (core agents seeded by coreagent.SeedConfig are
 	// stored in cfg.Agents.List alongside custom agents).
 	//

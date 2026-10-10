@@ -1250,7 +1250,7 @@ func (pe *PlanEngine) reconcileUnifiedMetaStatus(rec *session.LifecycleRecord) {
 	if pe.agentLoop == nil || rec == nil || rec.AgentID == "" {
 		return
 	}
-	sessStore := pe.agentLoop.GetAgentStore(rec.AgentID)
+	sessStore := pe.agentLoop.GetSessionStore()
 	if sessStore == nil {
 		return
 	}

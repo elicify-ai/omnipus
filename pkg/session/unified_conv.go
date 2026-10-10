@@ -60,6 +60,22 @@ import (
 // rewritten; an interrupted one is finished without appending a second copy.
 // Any failure is a visible cutover error naming the affected saved chat.
 func CutoverSavedChatsAtBoot(baseDir string) error {
+	return CutoverSavedChatsAtBootWithAgentStores(baseDir, nil)
+}
+
+// CutoverSavedChatsAtBootWithAgentStores is the cutover that also takes in the
+// retired per-agent stores (DEL-10, spec CONV Inputs/Destination): every
+// per-agent session directory moves into the shared store under the same id,
+// and every per-agent `.context` model archive is converted into the chat it
+// belongs to in the shared store. A same-id conflict refuses the cutover
+// visibly and leaves the source in place; a completed transfer is not repeated.
+func CutoverSavedChatsAtBootWithAgentStores(baseDir string, agentSessionDirs []string) error {
+	sources := convAgentSources(baseDir, agentSessionDirs)
+	for _, dir := range sources {
+		if err := convMoveAgentSessionDirs(baseDir, dir); err != nil {
+			return err
+		}
+	}
 	// Faithful model-content conversion FIRST (unified_conv_archive.go): the
 	// legacy .context model archives become the addressed archive the runtime now
 	// reads. Then the metadata/recovery passes.
@@ -70,6 +86,11 @@ func CutoverSavedChatsAtBoot(baseDir string) error {
 	}
 	if err := convConvertLegacyModelArchives(baseDir); err != nil {
 		return err
+	}
+	for _, dir := range sources {
+		if err := convConvertLegacyModelArchivesFrom(baseDir, filepath.Join(dir, convContextDir), true); err != nil {
+			return err
+		}
 	}
 	if err := convConvergeFlatJSONLSources(baseDir); err != nil {
 		return err

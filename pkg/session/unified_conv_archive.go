@@ -48,7 +48,15 @@ const convContextDir = ".context"
 // sibling `.context/<key>.meta.json` window state. It is idempotent and retry
 // safe (a completed conversion is recognized and not rewritten).
 func convConvertLegacyModelArchives(baseDir string) error {
-	contextDir := filepath.Join(baseDir, convContextDir)
+	return convConvertLegacyModelArchivesFrom(baseDir, filepath.Join(baseDir, convContextDir), false)
+}
+
+// convConvertLegacyModelArchivesFrom is convConvertLegacyModelArchives with an
+// explicit source directory: the per-agent transfer (DEL-10) converts a
+// per-agent store's `.context` into the SHARED destination baseDir. When
+// perAgent is set, an archive whose key does not name an owning session id is
+// left where it is with a WARN (it has no chat to join; nothing is lost).
+func convConvertLegacyModelArchivesFrom(baseDir, contextDir string, perAgent bool) error {
 	entries, err := os.ReadDir(contextDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -62,7 +70,7 @@ func convConvertLegacyModelArchives(baseDir string) error {
 			continue
 		}
 		base := strings.TrimSuffix(name, ".jsonl")
-		if err := convConvertOneLegacyArchive(baseDir, contextDir, base); err != nil {
+		if err := convConvertOneLegacyArchive(baseDir, contextDir, base, perAgent); err != nil {
 			return err
 		}
 	}
@@ -71,7 +79,7 @@ func convConvertLegacyModelArchives(baseDir string) error {
 
 // convConvertOneLegacyArchive converts one `.context/<base>.jsonl` (+ meta) to
 // the addressed archive for its owning session id, then retires the source.
-func convConvertOneLegacyArchive(baseDir, contextDir, base string) error {
+func convConvertOneLegacyArchive(baseDir, contextDir, base string, perAgent bool) error {
 	meta, metaErr := convReadLegacyMeta(filepath.Join(contextDir, base+".meta.json"))
 	if metaErr != nil {
 		return fmt.Errorf("conversion: saved chat %q: read legacy meta: %w", base, metaErr)
@@ -84,6 +92,11 @@ func convConvertOneLegacyArchive(baseDir, contextDir, base string) error {
 		// The sanitized filename is the only identity available; use it rather
 		// than guess an owner (spec CONV / Identity).
 		id = base
+	}
+	if perAgent && (strings.ContainsAny(id, ":") || validateSessionID(id) != nil) {
+		slog.Warn("conversion: per-agent model archive names no session; left in place",
+			"archive", filepath.Join(contextDir, base+".jsonl"), "key", meta.Key)
+		return nil
 	}
 	raw, err := os.ReadFile(filepath.Join(contextDir, base+".jsonl"))
 	if err != nil {

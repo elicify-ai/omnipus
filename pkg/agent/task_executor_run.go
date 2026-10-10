@@ -661,7 +661,7 @@ func (al *AgentLoop) runTaskExternalCLIOnce(
 		SenderID:            "task-executor",
 		UserMessage:         prompt,
 		TranscriptSessionID: taskChatID,
-		TranscriptStore:     al.taskSessionStore(taskChatID, agent.ID),
+		TranscriptStore:     al.GetSessionStore(),
 		// WorkspaceID is already on ctx via tools.WithWorkspaceID (set by the
 		// task executor before calling processTaskDirect); thread it through
 		// processOptions explicitly too so runExternalCLISubTurn's
