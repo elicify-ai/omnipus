@@ -18,7 +18,8 @@ import type { CancelFrame } from '@/lib/api/generated/asyncapi-types'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
-import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
+import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingClearRefetchSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
+import { isClearCommandText } from '@/lib/clearMarker'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
 import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
@@ -72,6 +73,32 @@ function markUserMessageFailed(draft: { messagesById: Record<string, { status?: 
     um.status = 'error'
     um.deliveryStatus = 'failed'
   }
+}
+
+/** A mid-turn steering send that never reached the gateway: the in-flight
+ * turn is unaffected — only THIS message failed. Mark just the user bubble
+ * as 'error' (Retry affordance) and leave `isStreaming` alone; there is no
+ * assistant placeholder to roll back because a mid-turn steering send never
+ * creates one. ADR-070 §2.1 deliberately does NOT close the pre-steer bubble
+ * here: the backend never received this steer, so it keeps writing into the
+ * SAME original segment exactly as before — closing the bubble would be
+ * actively wrong, not just unnecessary (a real, previously-uncaught gap:
+ * closing it unconditionally alongside the append broke the assertion that
+ * branch's own pre-existing test pins).
+ * Extracted out of sendMessage (pure relocation, 2026-10-10, same move
+ * performResendMessage made) so sendMessage stays within its grandfathered
+ * function-size budget; the behavior is byte-identical. */
+function handleFailedSteerSend(
+  withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void,
+  sessionId: string,
+  userMsgId: string,
+): void {
+  withBucket(sessionId, (b) => produce(b, (draft) => {
+    markUserMessageFailed(draft, userMsgId)
+  }) as Partial<SessionChatState>)
+  useConnectionStore.getState().setConnectionError(
+    'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
+  )
 }
 
 /** Review finding 17: resends messageId IN PLACE — same id, original
@@ -482,14 +509,15 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             // just unnecessary (a real, previously-uncaught gap: closing it
             // unconditionally alongside the append broke the assertion this
             // branch's own pre-existing test pins).
-            withBucket(activeSessionId, (b) => produce(b, (draft) => {
-              markUserMessageFailed(draft, userMsg.id)
-            }) as Partial<SessionChatState>)
-            useConnectionStore.getState().setConnectionError(
-              'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
-            )
+            handleFailedSteerSend(withBucket, activeSessionId, userMsg.id)
             return
           }
+
+          // FR-030/031 (U10b): an outgoing /clear arms the post-turn
+          // transcript re-read (runtime-state.ts::pendingClearRefetchSids) —
+          // the clear's marker entry is never pushed live, so the reply
+          // turn's done re-reads the transcript instead.
+          if (isClearCommandText(content)) pendingClearRefetchSids.add(activeSessionId)
 
           // ADR-070 §2.1: only NOW, once the steer has genuinely reached the
           // gateway, close the assistant bubble that was open at send-time —
@@ -640,6 +668,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           // The attempted turn is over (it never started) — free the next
           // drained message to send, if any.
           maybeDrainNext()
+        } else {
+          // FR-030/031 (U10b): an outgoing /clear arms the post-turn
+          // transcript re-read (runtime-state.ts::pendingClearRefetchSids) —
+          // the clear's marker entry is never pushed live, so the reply
+          // turn's done re-reads the transcript instead.
+          if (isClearCommandText(content)) pendingClearRefetchSids.add(activeSessionId)
         }
       } else {
         // Kickoff hardening: a workspace-setup kickoff already owns

@@ -26,7 +26,8 @@ import {
 } from '@/lib/llm-error'
 import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
-import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
+import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingClearRefetchSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
+import { refreshTranscriptAfterClear } from '../clear-refetch'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
 import { gateFrameBySeq, cursorFromTerminalFrame, insertHistoryMessageId, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SessionCursor, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
@@ -459,6 +460,41 @@ function scheduleReplayErrorRetry(sid: string): void {
     delete replayErrorRetryTimers[sid]
     useConnectionStore.getState().connection?.send({ type: 'attach_session', session_id: sid })
   }, delay)
+}
+
+// FR-I-014: the shared replay-display threshold. setReplaying (store.ts)
+// carries its own copy of this constant — the two must stay in lockstep, so
+// both sites' comments cite each other.
+const MIN_REPLAY_DISPLAY_MS = 750
+
+// Clears a session's isReplaying after the minimum replay-display window:
+// immediately once MIN_REPLAY_DISPLAY_MS has elapsed, otherwise after a
+// deferred timer (cancelling any stale one first). Extracted 2026-10-10 from
+// the 'done' and 'error' cases, which carried byte-identical copies of this
+// block (the same extract-to-module-scope move scheduleReplayErrorRetry
+// made, for the same handleFrame line budget); no behavior change from the
+// inline versions it replaces. Returns whether the clear happened
+// immediately (callers flip isReplaying inside their own bucket writes).
+function scheduleReplayingClear(
+  sid: string,
+  wasReplaying: boolean,
+  elapsed: number,
+  withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void,
+): boolean {
+  const clearReplayingNow = wasReplaying && elapsed >= MIN_REPLAY_DISPLAY_MS
+  if (wasReplaying) {
+    sawReplayMessageThisTurn[sid] = false
+    if (!clearReplayingNow) {
+      if (replayingClearTimers[sid]) {
+        clearTimeout(replayingClearTimers[sid])
+      }
+      replayingClearTimers[sid] = setTimeout(() => {
+        delete replayingClearTimers[sid]
+        withBucket(sid, () => ({ isReplaying: false }))
+      }, MIN_REPLAY_DISPLAY_MS - elapsed)
+    }
+  }
+  return clearReplayingNow
 }
 
 function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: TokenFrameType): void {
@@ -1365,22 +1401,10 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             const priorBucket = get().sessionsById[sid] ?? EMPTY_BUCKET
             const wasReplaying = priorBucket.isReplaying
             const elapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
-            // FR-I-014: mirror the same MIN_REPLAY_DISPLAY_MS used in setReplaying above.
-            // Both code paths that clear isReplaying must use the same threshold.
-            const MIN_REPLAY_DISPLAY_MS = 750
-            const clearReplayingNow = wasReplaying && elapsed >= MIN_REPLAY_DISPLAY_MS
-            if (wasReplaying) {
-              sawReplayMessageThisTurn[sid] = false
-              if (!clearReplayingNow) {
-                if (replayingClearTimers[sid]) {
-                  clearTimeout(replayingClearTimers[sid])
-                }
-                replayingClearTimers[sid] = setTimeout(() => {
-                  delete replayingClearTimers[sid]
-                  withBucket(sid, () => ({ isReplaying: false }))
-                }, MIN_REPLAY_DISPLAY_MS - elapsed)
-              }
-            }
+            // FR-I-014: scheduleReplayingClear mirrors the same
+            // MIN_REPLAY_DISPLAY_MS setReplaying (store.ts) uses — both code
+            // paths that clear isReplaying must use the same threshold.
+            const clearReplayingNow = scheduleReplayingClear(sid, wasReplaying, elapsed, withBucket)
             // ADR-082 D3/D4 (FR-007/FR-009), review S1/CR1, updated for
             // #823 pass 2: a `done` frame can still arrive TWICE for a
             // mid-turn attach on Lane A's current gateway — once marking the
@@ -1601,6 +1625,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // The turn that just completed may be one we sent from the
             // offline-queue drain — send the next queued message, if any.
             maybeDrainNext()
+            // FR-030/031 (U10b): the turn that just completed may be the
+            // reply to a /clear this client sent. Re-read the session's
+            // transcript so the view reflects the server — the marker entry
+            // the clear appended is never pushed live, so only a fresh read
+            // shows it (see clear-refetch.ts; consumed at most once).
+            if (pendingClearRefetchSids.delete(sid)) {
+              refreshTranscriptAfterClear(sid, withBucket)
+            }
           } else {
             // Defensive (boundary case, not an observed failure): a 'done'
             // frame with no session_id at all (a protocol-violating/malformed
@@ -1766,20 +1798,9 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             const redirectStoppedTurn = consumeRedirectStop(sid, llmError?.code)
             const wasReplaying = (get().sessionsById[sid] ?? EMPTY_BUCKET).isReplaying
             const replayElapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
-            const MIN_REPLAY_DISPLAY_MS = 750
-            const clearReplayingNow = wasReplaying && replayElapsed >= MIN_REPLAY_DISPLAY_MS
-            if (wasReplaying) {
-              sawReplayMessageThisTurn[sid] = false
-              if (!clearReplayingNow) {
-                if (replayingClearTimers[sid]) {
-                  clearTimeout(replayingClearTimers[sid])
-                }
-                replayingClearTimers[sid] = setTimeout(() => {
-                  delete replayingClearTimers[sid]
-                  withBucket(sid, () => ({ isReplaying: false }))
-                }, MIN_REPLAY_DISPLAY_MS - replayElapsed)
-              }
-            }
+            // Same scheduleReplayingClear the done case uses — the two cases
+            // carried byte-identical copies of this block until 2026-10-10.
+            const clearReplayingNow = scheduleReplayingClear(sid, wasReplaying, replayElapsed, withBucket)
             withBucket(targetSid, (b) => {
               const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
               // ADR-051 — live→replay dedup (per-bucket half; the foreground

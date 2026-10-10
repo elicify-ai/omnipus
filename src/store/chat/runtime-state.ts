@@ -39,6 +39,16 @@ export const pendingCancelAckSids = new Set<string>()
 // treating it as an error. Cleared on socket drop with pendingCancelAckSids.
 export const pendingRedirectSids = new Set<string>()
 
+// FR-030/031 (U10b): session ids this client has sent a /clear command for
+// (outbound-lifecycle's sendMessage arms it once the frame is on the wire)
+// whose reply turn has not finished yet. The successful clear appends a
+// chat-view marker entry server-side that is never pushed live, so when the
+// reply turn's `done` frame lands, the frames slice consumes the arm and
+// re-reads the session's transcript query (clear-refetch.ts) — the view then
+// reflects the server instead of a locally faked cleared view. Consumed at
+// most once per send.
+export const pendingClearRefetchSids = new Set<string>()
+
 // #823 catch-up redesign, Opus review round 2 item 7 (LOW): applySeqGate's
 // gap branch (frames.ts) sends `attach_session{S, cursor}` to recover from a
 // sequence gap. Without a guard, EVERY subsequent gapped frame that arrives
