@@ -143,7 +143,7 @@ func (al *AgentLoop) replayPostFinishWake(sessionID, messageID string) error {
 		if err != nil {
 			return fmt.Errorf("steer: post-finish wake: reload recipient %q: %w", sessionID, err)
 		}
-		externalHold.bind(rec.Generation)
+		externalHold.bind(rec.Generation, "")
 	}
 	content := deliverySummary(*durable)
 	if ts := al.getActiveTurnState(sessionID); ts != nil && ts.IsAlive() {

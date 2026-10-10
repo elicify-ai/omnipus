@@ -103,9 +103,9 @@ func (al *AgentLoop) deliverExternalCLIInstruction(
 	}
 	if expected.Generation != 0 &&
 		(expected.SessionID != sess.claim.SessionID || expected.Generation != sess.claim.Generation) {
-		return "", fmt.Errorf(
+		return "", &authoredRefusal{text: fmt.Sprintf(
 			"external-cli steer: the selected execution for session %s was superseded; the instruction was not delivered",
-			sessionID)
+			sessionID)}
 	}
 	// Queue FIRST, so the instruction is present before the run ends: the
 	// post-turn drain sees it and re-enters the external-CLI body with it. The
@@ -131,9 +131,9 @@ func (al *AgentLoop) deliverExternalCLIInstruction(
 // noLiveExternalConversationErr is the shared BDD-05.6 refusal for "there is no
 // live external CLI conversation to deliver to".
 func (al *AgentLoop) noLiveExternalConversationErr(sessionID string) error {
-	return fmt.Errorf(
+	return &authoredRefusal{text: fmt.Sprintf(
 		"external-cli steer: session %s has no live external CLI conversation to deliver to (FR-043); the instruction was not delivered",
-		sessionID)
+		sessionID)}
 }
 
 // loadLifecycleRecord loads sessionID's durable lifecycle record, or (nil, err)

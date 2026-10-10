@@ -643,6 +643,12 @@ func (al *AgentLoop) ReviveStoppedSessionAsRedirect(ctx context.Context, session
 // closes.
 var reviveAfterAvailabilityTestHook func(sessionID string)
 
+// reviveBeforeReservationTestHook is the matching test-only seam fired after the
+// revival's own lifecycle read and before the external-conversation reservation,
+// so a test can fail the reservation's later reads (NEW-8). Always nil in
+// production; never set outside a _test.go file.
+var reviveBeforeReservationTestHook func(sessionID string)
+
 // reviveStoppedSession is ReviveStoppedSession's body. asRedirect is true only
 // for the /stop-redirect delivery (RedirectSteeredSession's waiter and the
 // stopped-helper branch of RedirectSessionTurn): the instruction is then
@@ -694,9 +700,19 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	// step, and the hold lasts until the revived turn begins (or the revival
 	// fails below), so a completion still unwinding cannot release the driver
 	// between this check and the dispatch.
+	if reviveBeforeReservationTestHook != nil {
+		reviveBeforeReservationTestHook(sessionID)
+	}
 	externalHold, availErr := al.reserveExternalConversation(sessionID, rec)
 	if availErr != nil {
-		return false, &curatedTurnError{text: fmt.Sprintf("steer: revive %q: %s", sessionID, availErr.Error())}
+		// Only the authored "conversation no longer available" refusal is
+		// publishable text. A lifecycle read fault carries store paths: it stays an
+		// ordinary wrapped error (cause preserved for logs and errors.Is) and is
+		// never given the publishable-text capability (NEW-8).
+		if errors.Is(availErr, errExternalResumeUnavailable) {
+			return false, &curatedTurnError{text: fmt.Sprintf("steer: revive %q: %s", sessionID, errExternalResumeUnavailable.Error())}
+		}
+		return false, fmt.Errorf("steer: revive %q: %w", sessionID, availErr)
 	}
 	dispatched := false
 	defer func() {
@@ -748,7 +764,10 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	// NEW-5/NEW-6: the hold now names the turn that will consume it, so only that
 	// turn (reaching the holder, or ending) retires it; a failed dispatch below
 	// still cancels this revival's own hold through the deferred owner-clear.
-	externalHold.bind(newGeneration)
+	// The run identity is minted here (exactly what dispatchSteeredSession does)
+	// so the hold can name the execution it was dispatched as.
+	runID, bootSeq := freshRunID(), al.bootEpochFor()
+	externalHold.bind(newGeneration, runID)
 	// al.dispatchSteeredSession IS steer.SessionLauncher.Dispatch's own body
 	// (SteerLauncher.Dispatch, steer_launcher.go: "a thin delegate onto
 	// AgentLoop.dispatchSteeredSession") — called directly here, exactly as
@@ -756,7 +775,7 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	// revival works whether or not the optional externally-injected
 	// steer.SessionLauncher (SetSteerSessionLauncher, wired post-boot for
 	// pkg/tools callers that cannot import pkg/agent) has been set.
-	if _, derr := al.dispatchSteeredSession(ctx, sessionID, newGeneration); derr != nil {
+	if _, derr := al.dispatchSteeredSessionWithReservation(ctx, sessionID, newGeneration, false, runID, bootSeq); derr != nil {
 		return false, fmt.Errorf("steer: revive %q: dispatch generation %d: %w", sessionID, newGeneration, derr)
 	}
 	dispatched = true

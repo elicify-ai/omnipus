@@ -1278,12 +1278,16 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 	// the retained external-CLI driver — and its RunOptions snapshot — here. A
 	// pending continuation keeps it (releaseExternalRunIfIdle re-checks the
 	// scope), and a follow-up after release refuses visibly (N5/N7).
-	// NEW-6: first retire the revival hold bound to THIS turn's generation — a
+	// NEW-6: first retire the revival hold bound to THIS turn's execution — a
 	// turn that failed before reaching the holder never consumed it — then
-	// release. Another revival's hold (a later generation) keeps the driver.
+	// release (retire re-runs the idle release). Another revival's hold (a later
+	// generation or another run id) keeps the driver.
 	defer func() {
-		al.releaseExternalReservationsForGeneration(rec.SessionID, gen)
-		al.releaseExternalRunIfIdle(rec.SessionID)
+		claim := al.tsExecutionClaim(ts, rec.SessionID)
+		if claim.Generation == 0 {
+			claim.Generation = gen
+		}
+		al.retireExternalReservations(rec.SessionID, claim)
 	}()
 	// Stop ends the turn, not the session or its goal. In particular, do not
 	// spend the durable marker or write a "session ended" goal outcome here.

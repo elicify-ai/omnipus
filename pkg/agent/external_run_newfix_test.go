@@ -219,10 +219,18 @@ func TestNEW4_ReservationEndsWithTheRevivalOrStop(t *testing.T) {
 	sess.driver = runner.NewFakeRunner()
 	sess.mu.Unlock()
 
-	_, err = al.reserveExternalConversation("n4-hold", rec)
+	// Round 5 (NEW-7): Stop no longer clears every hold of the session. The hold of
+	// an execution whose admission a Stop removed ends with that execution, and
+	// only that one's.
+	stopped, err := al.reserveExternalConversation("n4-hold", rec)
 	require.NoError(t, err)
-	al.releaseExternalRunAfterStop("n4-hold")
+	stopped.bind(2, "run-stopped")
+	al.retireExternalReservations("n4-hold", executionClaim{SessionID: "n4-hold", Generation: 2, RunID: "run-other"})
 	sess.mu.Lock()
-	require.Nil(t, sess.driver, "Stop ends the episode: a reservation whose turn never began is dropped with the driver")
+	require.NotNil(t, sess.driver, "a Stop selecting another execution must not drop this hold")
+	sess.mu.Unlock()
+	al.retireExternalReservations("n4-hold", executionClaim{SessionID: "n4-hold", Generation: 2, RunID: "run-stopped"})
+	sess.mu.Lock()
+	require.Nil(t, sess.driver, "the selected execution ended: its hold is dropped with the idle driver")
 	sess.mu.Unlock()
 }

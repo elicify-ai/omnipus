@@ -97,9 +97,13 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	}
 	// N6: once this Stop has ended the session's episode, release any retained
 	// external-CLI driver (its option/env snapshot). No-op while the run is still
-	// winding down (releaseExternalRunIfIdle checks the running flag); the
-	// steered exit path's own release covers that case.
-	defer al.releaseExternalRunAfterStop(req.SessionID)
+	// winding down (releaseExternalRunIfIdle checks the running flag; the steered
+	// exit path's own release covers that case) and while any revival still holds
+	// the driver: a Stop retires only the holds of the admissions it actually
+	// selected, at their settlement (removeQueuedStopEffects, NEW-7) — never a
+	// session-wide clear, which a failed or delayed Stop would aim at someone
+	// else's accepted revival.
+	defer al.releaseExternalRunIfIdle(req.SessionID)
 	hooksFor := req.HooksFor
 	if hooksFor == nil {
 		// Founder decision Q13: a plain Stop ends the session's current turn
