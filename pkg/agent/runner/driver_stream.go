@@ -27,6 +27,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // stderrTail is a bounded, concurrency-safe ring buffer that retains the most
@@ -224,7 +226,20 @@ func deliverFatal(ctx context.Context, out chan<- RunEvent, ev RunEvent) bool {
 func detectCLIVersion(ctx context.Context, binary string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, binary, "--version").CombinedOutput()
+	cmd := exec.CommandContext(ctx, binary, "--version")
+	// SECURITY (env scrub — u5b finding): this probe execs a CALLER-SUPPLIED
+	// binary (`binary` comes from opts.CLIPath via resolveCLIBinary, or a bare
+	// name like "claude"). Leaving cmd.Env nil makes the child inherit the
+	// ENTIRE gateway environment — OMNIPUS_MASTER_KEY, the bearer token,
+	// FLY_API_TOKEN and every other gateway secret. Apply the SAME env policy
+	// as every other external-CLI runner launch: the runner credential
+	// allowlist (sandbox.ScrubGatewayEnvForRunner), which keeps the CLI's own
+	// credential env (ANTHROPIC_API_KEY, CLAUDE_CONFIG_DIR, CODEX_HOME, …) plus
+	// PATH/HOME so a legit `--version` handshake still resolves and runs, while
+	// stripping gateway-only secrets. Mirrors conntest.probeVersion. Reuse, do
+	// not fork a second env policy.
+	cmd.Env = sandbox.ScrubGatewayEnvForRunner()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("version check for %q: %w", binary, err)
 	}

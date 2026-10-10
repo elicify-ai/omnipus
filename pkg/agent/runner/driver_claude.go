@@ -650,7 +650,12 @@ func (d *ClaudeDriver) Input(_ string) error {
 // conversation id was captured it refuses VISIBLY rather than starting a fresh
 // conversation (BDD-05.6); with no prior Run at all it defers to Run's
 // ErrMaxTurnsRequired (no hidden default, FR-004).
-func (d *ClaudeDriver) Resume(ctx context.Context, runID string) (<-chan RunEvent, error) {
+//
+// The optional instruction (FR-043 delivery) is piped to the child's stdin —
+// `claude -p` consumes all of stdin as the prompt when no positional prompt is
+// given (see buildArgs) — so the new instruction S reaches the SAME resumed
+// conversation. A bare continuation passes no instruction and delivers none.
+func (d *ClaudeDriver) Resume(ctx context.Context, runID string, instruction ...string) (<-chan RunEvent, error) {
 	d.mu.Lock()
 	last := d.lastOpts
 	maxTurns := d.runMaxTurns
@@ -659,7 +664,9 @@ func (d *ClaudeDriver) Resume(ctx context.Context, runID string) (<-chan RunEven
 
 	opts := last
 	opts.RunID = runID
-	opts.Input = "" // resume continues the conversation; do not replay the original prompt
+	// A delivery resume carries the new instruction S (stdin); a bare resume
+	// delivers nothing and never replays the original prompt.
+	opts.Input = resumeInstruction(instruction)
 	opts.resumeNativeID = nativeID
 
 	if nativeID == "" && maxTurns > 0 {

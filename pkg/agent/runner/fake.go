@@ -26,6 +26,10 @@ type FakeRunner struct {
 	testResult ConnectionTestResult
 	runOpts    []RunOptions
 	resumeIDs  []string
+	// resumeInputs records the instruction delivered by each Resume call (empty
+	// for a bare continuation), so a delivery-path test can assert the new
+	// instruction S actually reached the runner (FR-043).
+	resumeInputs []string
 }
 
 // NewFakeRunner returns a FakeRunner with a buffered event channel.
@@ -80,12 +84,24 @@ func (f *FakeRunner) Input(text string) error {
 	return nil
 }
 
-// Resume records the runID and returns the same event channel.
-func (f *FakeRunner) Resume(ctx context.Context, runID string) (<-chan RunEvent, error) {
+// Resume records the runID (and any delivered instruction) and returns the
+// same event channel.
+func (f *FakeRunner) Resume(ctx context.Context, runID string, instruction ...string) (<-chan RunEvent, error) {
 	f.mu.Lock()
 	f.resumeIDs = append(f.resumeIDs, runID)
+	f.resumeInputs = append(f.resumeInputs, resumeInstruction(instruction))
 	f.mu.Unlock()
 	return f.eventCh, nil
+}
+
+// ReceivedResumeInputs returns the instruction delivered by every Resume call
+// (snapshot), parallel to ReceivedResumeIDs.
+func (f *FakeRunner) ReceivedResumeInputs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.resumeInputs))
+	copy(out, f.resumeInputs)
+	return out
 }
 
 // Test returns the configured test result (default: OK=true).

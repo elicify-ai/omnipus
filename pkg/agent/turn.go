@@ -1491,16 +1491,44 @@ func (ts *turnState) finalContentLen() int {
 	return len(ts.finalContent)
 }
 
+// setTurnCancel registers the cancel func the HARD-abort cascade
+// (requestHardAbort / InterruptSessionHard) fires to tear down the whole turn.
+//
+// F2 replay: requestHardAbort latches ts.hardAbort and fires whatever cancel
+// funcs ALREADY exist, and never re-fires once hardAbort is set. A turn that is
+// hard-stopped AFTER admission but BEFORE this slot is registered therefore
+// spent its only abort with nothing to fire, and the abort would be silently
+// lost — a real case: an external-CLI run registers its runCtx cancel func here
+// (external_dispatch.go::runExternalCLISubTurn) well after the steered turn was
+// admitted, so a Stop in that window let the CLI start anyway. Replay the latch
+// so a cancel func registered while the turn is already hard-aborted fires at
+// once. This is atomic with requestHardAbort under ts.mu: either requestHardAbort
+// saw this slot and fired it, or this sees hardAbort and fires it — never
+// neither.
 func (ts *turnState) setTurnCancel(cancel context.CancelFunc) {
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	ts.turnCancel = cancel
+	replay := ts.hardAbort
+	ts.mu.Unlock()
+	if replay && cancel != nil {
+		cancel()
+	}
 }
 
+// setProviderCancel registers the cancel func the GRACEFUL cascade
+// (Interrupt → providerCancel) fires to abort the in-flight provider call
+// immediately; the hard cascade re-fires the same slot defensively. It carries
+// the same F2 replay as setTurnCancel (see that method): both slots are set to
+// the SAME func for an external-CLI sub-turn, so either one being registered
+// late must consume an already-latched hard abort.
 func (ts *turnState) setProviderCancel(cancel context.CancelFunc) {
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	ts.providerCancel = cancel
+	replay := ts.hardAbort
+	ts.mu.Unlock()
+	if replay && cancel != nil {
+		cancel()
+	}
 }
 
 // appendToAccumulator extends ADR-087 D6.1's turn-scoped accumulator with

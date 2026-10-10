@@ -9,6 +9,8 @@ Authority and complete clause/reuse map: **Session core with an agent address bo
 
 **Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: founder decision, 2026-10-06.
 
+**[External-worker qualification, U5b 2026-10-09]:** where this file's generic helper-continuation or "any root or helper chat" redirect language appears, it is native-engine behaviour. An external-CLI (subagent_3p) helper refuses `/stop-redirect` (`not_steerable`) and steers by interrupt + native-conversation resume; once its run has ended, its CLI conversation is gone and a follow-up refuses (start a new delegation). See FR-043.
+
 ## Amended 2026-10-06 — founder decision
 
 [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](ADR-20260928-sub-agent-control-plane.md)::D2/D8 and [Steering commands: no person question](ADR-20261004-steering-commands-no-person-question.md)::C1 supersede conflicting generation, boot and message rules below. Both call `AgentLoop.StopSession` with polite stop, force at 3 s and detach 3 s later; no public `hard` option or agent `cancel_grace`.
