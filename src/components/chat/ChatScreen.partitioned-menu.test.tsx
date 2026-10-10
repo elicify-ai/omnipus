@@ -193,7 +193,7 @@ describe('Partitioned slash menu — section headers', () => {
     // /clear. Exact option order also guards against unrelated/invented rows.
     expect(screen.getByText('/clear')).toBeInTheDocument()
     expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
-      '/resume', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
+      '/sessions', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
       '/code-review', '/data-analysis', '/web-research',
     ])
     expect(screen.getByText('/help')).toBeInTheDocument()

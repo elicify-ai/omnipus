@@ -215,7 +215,7 @@ describe('Skills filter mode (D9)', () => {
     // it. Preserve exact commands-then-skills order and reject extra rows.
     expect(screen.getByText('/clear')).toBeInTheDocument()
     expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
-      '/resume', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
+      '/sessions', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
       '/code-review', '/data-analysis', '/web-research',
     ])
     expect(screen.getByText('/help')).toBeInTheDocument()
