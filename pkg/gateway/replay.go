@@ -936,6 +936,12 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		agentIDCopy := entry.AgentID
 		sr.msgFrame.AgentId = &agentIDCopy
 	}
+	// FR-027: a guest reply names the admitted request it answers, the same
+	// value the live frames carry.
+	if entry.ReplyToMessageID != "" {
+		replyCopy := entry.ReplyToMessageID
+		sr.msgFrame.ReplyToMessageId = &replyCopy
+	}
 	// #823 catch-up redesign (BE-DESIGN.md §4.2/§6.3): the persisted entry
 	// id is the same id the live frames used (user_message.id; an assistant
 	// round's token/done message_id), so a client can merge a replayed

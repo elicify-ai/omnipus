@@ -108,6 +108,10 @@ type AgentLoop struct {
 	// already deleted (see websocket_replay.go's replay-derived liveness
 	// comment near streamReplay) — these fields had no reader or writer
 	// left anywhere in the repo.
+	// addressDeps / requestLedger back session-core U8's peer and reply routing
+	// (address_router.go).
+	addressDeps   atomic.Pointer[AddressDeps]
+	requestLedger atomic.Pointer[ledgerHolder]
 	// postFinishRevivalMu / postFinishRevival mark a session whose
 	// SPECIFIC generation was JUST created by a post-finish revival
 	// (issue #1020 round-4 correction). The key is the NEW generation

@@ -858,9 +858,14 @@ type MessageFrame struct {
 	// Optional media:// refs for files the user attached to this message (e.g. images uploaded via POST /api/v1/upload). The server threads each ref into the LLM content array as a multimodal content block so the agent can see the attachment. Empty or omitted for text-only messages.
 	Media []string `json:"media,omitempty"`
 	// Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn to the chosen model, falling back to the agent's `model` config when absent; `workspace_id` — the active workspace this chat belongs to; and `workspace_setup_kickoff` (boolean) — a one-time marker that this message is the workspace setup kickoff for `metadata.workspace_id`.
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	SessionId *string        `json:"session_id,omitempty"`
-	Type      string         `json:"type"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Optional request to a peer agent: the {workspace_id, agent_id} pair the user @-addressed from the chat named by session_id. Valid only together with session_id; the server refuses it otherwise. Mirrors contracts/components/schemas/AgentAddress.yaml.
+	Recipient *struct {
+		AgentId     string `json:"agent_id"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"recipient,omitempty"`
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
 }
 
 // MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission; discarded (reason stopped_before_delivery) means Stop discarded the input before delivery (session-core FR-024). Emitted only when the client supplied client_message_id.
@@ -1027,9 +1032,11 @@ type ReplayMessageFrame struct {
 		State           string  `json:"state"`
 	} `json:"input_disposition,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
-	Model     *string `json:"model,omitempty"`
-	Role      string  `json:"role"`
-	SessionId string  `json:"session_id"`
+	Model *string `json:"model,omitempty"`
+	// Present only on a guest reply: the message_id of the admitted request this entry answers.
+	ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
+	Role             string  `json:"role"`
+	SessionId        string  `json:"session_id"`
 	// Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence (for example the tool-iteration-limit notice) written after the turn's earlier narration was already persisted. Live, the gateway closes the narration bubble with done(<narration id>) before this entry arrives, so it is a separate message; the replay stream has no such boundary, so the SPA must start a new message for this frame instead of merging it into the preceding same-turn assistant entry. Absent on every other frame, including entries written before this field existed.
 	TerminalOutcome *bool   `json:"terminal_outcome,omitempty"`
 	Timestamp       *string `json:"timestamp,omitempty"`
@@ -1251,6 +1258,8 @@ type TokenFrame struct {
 	MessageId *string `json:"message_id,omitempty"`
 	// Set only on a catch-up token: REPLACES the open bubble's content for this session instead of appending, making catch-up idempotent.
 	Replace *bool `json:"replace,omitempty"`
+	// Present only on a guest reply: the message_id of the admitted request this answer addresses.
+	ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy (e.g. a projection token inside a snapshot). Keep in sync by hand with contracts/components/schemas/TokenFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`

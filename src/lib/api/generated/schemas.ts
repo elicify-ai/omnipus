@@ -194,6 +194,7 @@ type Message = {
   attachments?: Array<Attachment> | undefined;
   tool_calls?: Array<ToolCall> | undefined;
   agent_id: string;
+  reply_to_message_id?: string | undefined;
   messages_compacted?: number | undefined;
   truncated?: boolean | undefined;
   truncation_reason?: ("cancelled" | "max_output_tokens") | undefined;
@@ -3590,6 +3591,7 @@ export const Message: z.ZodType<Message> = z.object({
   attachments: z.array(Attachment).optional(),
   tool_calls: z.array(ToolCall).optional(),
   agent_id: z.string(),
+  reply_to_message_id: z.string().min(1).optional(),
   messages_compacted: z.number().int().optional(),
   truncated: z.boolean().optional(),
   truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
@@ -16406,6 +16408,12 @@ export const MessageFrameBase = z
     client_message_id: z.string().min(1).max(128).optional(),
     content: z.string().max(5242880),
     session_id: z.string().min(1).max(255).optional(),
+    recipient: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .strict().optional(),
     agent_id: z.string().min(1).max(128).optional(),
     media: z.array(z.string().min(1).max(256)).max(16).optional(),
     auto_approve: z.boolean().nullable().optional(),
@@ -16512,6 +16520,7 @@ export const TokenFrame = z
     session_id: z.string().min(1).max(255),
     content: z.string().max(65536),
     agent_id: z.string().optional(),
+    reply_to_message_id: z.string().min(1).optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
     goal_id: z.string().optional(),
@@ -16802,6 +16811,7 @@ export const ReplayMessageFrame = z
     content: z.string(),
     role: z.enum(["user", "assistant", "system", "turn_canceled"]),
     id: z.string().optional(),
+    reply_to_message_id: z.string().min(1).optional(),
     timestamp: z.string().optional(),
     agent_id: z.string().optional(),
     model: z.string().max(256).optional(),

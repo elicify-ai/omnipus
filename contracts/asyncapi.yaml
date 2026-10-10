@@ -1715,6 +1715,26 @@ components:
           type: string
           minLength: 1
           maxLength: 255
+        recipient:
+          type: object
+          required:
+          - workspace_id
+          - agent_id
+          additionalProperties: false
+          description: >
+            Optional request to a peer agent: the {workspace_id, agent_id}
+            pair the user @-addressed from the chat named by session_id.
+            Valid only together with session_id; the server refuses it
+            otherwise. Mirrors contracts/components/schemas/AgentAddress.yaml.
+          properties:
+            workspace_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+            agent_id:
+              type: string
+              minLength: 1
+              maxLength: 128
         agent_id:
           type: string
           minLength: 1
@@ -2054,6 +2074,12 @@ components:
           maxLength: 65536
         agent_id:
           type: string
+        reply_to_message_id:
+          type: string
+          minLength: 1
+          description: >
+            Present only on a guest reply: the message_id of the admitted
+            request this answer addresses.
         turn_id:
           type: string
           description: >-
@@ -3655,6 +3681,12 @@ components:
           - turn_canceled
         id:
           type: string
+        reply_to_message_id:
+          type: string
+          minLength: 1
+          description: >
+            Present only on a guest reply: the message_id of the admitted
+            request this entry answers.
         timestamp:
           type: string
           format: date-time

@@ -696,6 +696,9 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// The webchatChannel and wsHandler share a reference so streaming can suppress duplicate Send().
 	wch := newWebchatChannel(stg.wsHandler)
 	stg.wsHandler.webchatCh = wch
+	// Peer requests and guest replies (session-core U8): the gateway owns
+	// member eligibility and live delivery.
+	stg.wsHandler.agentLoop.SetAddressDeps(gatewayAddressDeps{h: stg.wsHandler})
 	stg.runningServices.ChannelManager.RegisterChannel("webchat", wch)
 
 	// Live interactive browser panel WebSocket (ADR-038 D1) — a dedicated

@@ -328,6 +328,10 @@ type TranscriptEntry struct {
 	Attachments         []Attachment                   `json:"attachments,omitempty"`
 	ToolCalls           []ToolCall                     `json:"tool_calls,omitempty"`
 	AgentID             string                         `json:"agent_id"` // which agent produced this entry (FR-002)
+	// ReplyToMessageID is set only on a guest reply (session-core FR-027): the
+	// id of the admitted request this entry answers. The guest author is
+	// AgentID. Projected as reply_to_message_id live and on replay.
+	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
 	// Model records which model produced this assistant message. Populated
 	// on every assistant message written via pkg/agent/turn.go (FR-013).
 	// Empty for legacy turns written before this field existed; the UI

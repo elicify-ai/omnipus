@@ -98,6 +98,10 @@ export interface MessageFrame {
   client_message_id?: string;
   content: string;
   session_id?: string;
+  recipient?: {
+    workspace_id: string;
+    agent_id: string;
+  };
   agent_id?: string;
   media?: Array<string>;
   auto_approve?: boolean | null;
@@ -168,6 +172,7 @@ export interface TokenFrame {
   session_id: string;
   content: string;
   agent_id?: string;
+  reply_to_message_id?: string;
   turn_id?: string;
   message_id?: string;
   goal_id?: string;
@@ -409,6 +414,7 @@ export interface ReplayMessageFrame {
   content: string;
   role: "user" | "assistant" | "system" | "turn_canceled";
   id?: string;
+  reply_to_message_id?: string;
   timestamp?: string;
   agent_id?: string;
   model?: string;

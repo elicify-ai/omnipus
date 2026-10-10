@@ -74,10 +74,8 @@ func (ts *turnState) warnAbandonedTranscriptWrite(writer string) {
 // It is a no-op when no transcript store or session ID is configured, or when
 // the turn has been marked abandoned (B4: suppresses writes from stuck goroutines).
 //
-// Bug 1 fix: the AgentID on the entry reflects the runtime-current active agent
-// (via activeAgentResolver) rather than the turn's starting agent. This ensures
-// that tool_call entries produced after a handoff carry the correct agent_id —
-// the new active agent — instead of the one that initiated the turn.
+// The AgentID on the entry is the turn's own agent (a session has one immutable
+// owner and there is no mid-turn agent switch).
 func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, archiveLine ...int) (err error) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)

@@ -21,6 +21,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
@@ -1319,9 +1320,13 @@ func (wh *wsHandlerReadLoop) handleMessageFrame(data []byte) wsHandlerReadLoopFl
 		})
 		return wsHandlerReadLoopContinue
 	}
-	wh.h.handleChatMessageWithClientID(
+	var recipient *addressing.Pair
+	if f.Recipient != nil {
+		recipient = &addressing.Pair{WorkspaceID: f.Recipient.WorkspaceId, AgentID: f.Recipient.AgentId}
+	}
+	wh.h.handleChatMessageToRecipient(
 		wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
-		modelName, workspaceID, setupKickoff, clientMessageID, f.AutoApprove, wh.wc,
+		modelName, workspaceID, setupKickoff, clientMessageID, f.AutoApprove, recipient, wh.wc,
 	)
 	return wsHandlerReadLoopNext
 }

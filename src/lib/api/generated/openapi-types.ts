@@ -4689,6 +4689,11 @@ export interface components {
              */
             agent_id: string;
             /**
+             * @description Present only on a guest reply (session-core FR-027): the message_id of the admitted request this entry answers. The guest author is the existing agent_id. Same value live and on replay.
+             * @example msg_01HXYZ
+             */
+            readonly reply_to_message_id?: string;
+            /**
              * @description Number of messages compacted (present only on compaction entries).
              * @example 120
              */

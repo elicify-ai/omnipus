@@ -548,6 +548,10 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 			OwnershipChecked: origin.OwnershipChecked,
 		})
 	})
+	// Peer and reply forms (session-core U8): the router resolves the live
+	// AgentLoop on each call, so a reload never leaves a stale one behind.
+	messageTool.SetPeerRouter(rw.rs.al.NewAddressRouter())
+	messageTool.SetReplyRouter(rw.rs.al.NewAddressRouter())
 	// Re-apply the stored resolver: this runs on every reload, and the
 	// MessageTool above is brand new each time (ADR-065).
 	if own := rw.rs.al.ChannelOwnership(); own != nil {
