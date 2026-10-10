@@ -195,6 +195,7 @@ function seedSubagentFramesInParentTranscript(rootId: string, childId: string, c
   const spanId = `span_${callId}`
   const startEntry = {
     id: `${callId}:start`,
+    view_membership: 'chat',
     type: 'system',
     system_subtype: 'subagent_start',
     timestamp: now,
@@ -211,6 +212,7 @@ function seedSubagentFramesInParentTranscript(rootId: string, childId: string, c
   }
   const stateEntry = {
     id: `${callId}:state`,
+    view_membership: 'chat',
     type: 'system',
     system_subtype: 'subagent_state',
     timestamp: now,
