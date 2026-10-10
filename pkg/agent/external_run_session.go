@@ -248,35 +248,55 @@ func (al *AgentLoop) markExternalRunStarted(sessionKey string) error {
 // driver. It is taken together with the availability decision, under the holder
 // lock (NEW-4), and is a distinct identity per revival (NEW-5): two overlapping
 // revivals each hold their own entry, so one giving up never ends the other's
-// hold. It ends when its owner cancels it, when the turn of the generation it
-// was bound to reaches the holder (beginExternalRun) or ends (NEW-6), or on
-// Stop.
+// hold. After dispatch it is bound to the exact execution it was dispatched as
+// (generation + run id): only that execution's own settlement — the turn
+// reaching the holder (beginExternalRun), the turn ending, a failed promotion, or
+// an accepted Stop selecting that admission (NEW-6/NEW-7) — or its owner's
+// cancel can end it. Stop never clears a hold it did not select, and a stopped
+// Resume that keeps its generation but gets a new run id keeps its own hold.
 type externalConversationReservation struct {
+	al   *AgentLoop
+	key  string
 	sess *externalCLIRunSession
-	// gen is the generation the revival minted (or, for a revival that found the
-	// record already revived, the current one) — the turn that will consume the
-	// hold. Zero until bind; guarded by sess.mu.
-	gen int
+	// gen/runID name the execution that will consume the hold; zero until bind
+	// (a wake replay binds the generation only, runID ""). Guarded by sess.mu.
+	gen   int
+	runID string
 }
 
-// bind records the generation of the turn this revival dispatches, so that
-// turn (and only that turn) can consume or retire the hold. A no-op for a nil
-// or already-ended reservation.
-func (r *externalConversationReservation) bind(gen int) {
+// bind records the execution this revival dispatches, so that execution (and
+// only it) can consume or retire the hold. A no-op for a nil or already-ended
+// reservation.
+func (r *externalConversationReservation) bind(gen int, runID string) {
 	if r == nil || r.sess == nil {
 		return
 	}
 	r.sess.mu.Lock()
 	defer r.sess.mu.Unlock()
 	if _, held := r.sess.reservations[r]; held {
-		r.gen = gen
+		r.gen, r.runID = gen, runID
 	}
 }
 
-// cancel ends THIS reservation only. It is a no-op for a nil reservation (a
-// revival that needed none) and idempotent; it never touches another revival's
-// hold (NEW-5).
+// cancel ends THIS reservation only, then re-evaluates the ordinary idle release
+// (NEW-9): the old episode's disposal may already have run its one release while
+// this hold was live, and nothing else would run it again. It is a no-op for a
+// nil reservation (a revival that needed none), idempotent, and never touches
+// another revival's hold (NEW-5) — the idle release itself keeps the driver
+// while any hold, run or pending steer remains.
 func (r *externalConversationReservation) cancel() {
+	if r == nil || r.sess == nil {
+		return
+	}
+	r.cancelQuietly()
+	if r.al != nil {
+		r.al.releaseExternalRunIfIdle(r.key)
+	}
+}
+
+// cancelQuietly ends this reservation without any release: the read-only
+// availability probe must not release a driver as a side effect.
+func (r *externalConversationReservation) cancelQuietly() {
 	if r == nil || r.sess == nil {
 		return
 	}
@@ -285,32 +305,38 @@ func (r *externalConversationReservation) cancel() {
 	r.sess.mu.Unlock()
 }
 
-// dropReservationsForGenerationLocked ends every hold bound to generation gen
-// (the turn of that generation has reached the holder, or has ended). Holds
-// bound to another generation, and holds not yet bound, are untouched. Caller
-// holds s.mu.
-func (s *externalCLIRunSession) dropReservationsForGenerationLocked(gen int) {
-	if gen == 0 {
-		return
-	}
+// matchesLocked reports whether the hold belongs to execution claim: same
+// generation and, when the hold names a run, the same run id. Caller holds the
+// holder mutex.
+func (r *externalConversationReservation) matchesLocked(claim executionClaim) bool {
+	return r.gen != 0 && r.gen == claim.Generation && (r.runID == "" || r.runID == claim.RunID)
+}
+
+// dropReservationsForExecutionLocked ends every hold that belongs to execution
+// claim. Holds of another generation or another run, and holds not yet bound,
+// are untouched. Caller holds s.mu.
+func (s *externalCLIRunSession) dropReservationsForExecutionLocked(claim executionClaim) {
 	for r := range s.reservations {
-		if r.gen == gen {
+		if r.matchesLocked(claim) {
 			delete(s.reservations, r)
 		}
 	}
 }
 
-// releaseExternalReservationsForGeneration ends the holds bound to the turn of
-// generation gen once that turn has ended, whatever its outcome (NEW-6): an
-// accepted revival whose turn failed before it reached beginExternalRun has no
-// other consumer, and its hold would pin the driver and its prompt/environment
-// snapshot indefinitely.
-func (al *AgentLoop) releaseExternalReservationsForGeneration(sessionKey string, gen int) {
-	if sess := al.externalRunSessionIfPresent(sessionKey); sess != nil {
-		sess.mu.Lock()
-		sess.dropReservationsForGenerationLocked(gen)
-		sess.mu.Unlock()
+// retireExternalReservations ends the holds that belong to execution claim once
+// that execution can no longer consume them — its turn ended (whatever the
+// outcome), its promotion failed, or an accepted Stop removed its queued
+// admission — and then re-runs the ordinary idle release: the old episode's one
+// release may already have skipped for this hold (NEW-6, NEW-9).
+func (al *AgentLoop) retireExternalReservations(sessionKey string, claim executionClaim) {
+	sess := al.externalRunSessionIfPresent(sessionKey)
+	if sess == nil {
+		return
 	}
+	sess.mu.Lock()
+	sess.dropReservationsForExecutionLocked(claim)
+	sess.mu.Unlock()
+	al.releaseExternalRunIfIdle(sessionKey)
 }
 
 // reserveExternalConversation decides whether reviving sessionKey's steered
@@ -344,7 +370,7 @@ func (al *AgentLoop) reserveExternalConversation(sessionKey string, rec *session
 	if sess.driver == nil {
 		return nil, errExternalResumeUnavailable
 	}
-	res := &externalConversationReservation{sess: sess}
+	res := &externalConversationReservation{al: al, key: sessionKey, sess: sess}
 	if sess.reservations == nil {
 		sess.reservations = make(map[*externalConversationReservation]struct{})
 	}
@@ -358,7 +384,7 @@ func (al *AgentLoop) reserveExternalConversation(sessionKey string, rec *session
 // the reservation; this form serves read-only questions and the gate tests.
 func (al *AgentLoop) externalConversationAvailable(sessionKey string, rec *session.LifecycleRecord) bool {
 	res, err := al.reserveExternalConversation(sessionKey, rec)
-	res.cancel()
+	res.cancelQuietly()
 	return err == nil
 }
 
@@ -406,9 +432,9 @@ func (al *AgentLoop) beginExternalRun(
 	defer sess.mu.Unlock()
 	claim := al.tsExecutionClaim(ts, sessionKey)
 	// The revived turn has reached the holder: the reservations bound to ITS
-	// generation have done their job (the entry below either takes the driver or
+	// execution have done their job (the entry below either takes the driver or
 	// refuses visibly). A reservation of another revival stays.
-	sess.dropReservationsForGenerationLocked(claim.Generation)
+	sess.dropReservationsForExecutionLocked(claim)
 	resumeRequested := externalResumeRequested(ts)
 	needsResume := resumeRequested || (resumeOnly && (sess.started || priorRun))
 	if needsResume {
@@ -521,19 +547,6 @@ func (al *AgentLoop) releaseExternalRunIfIdle(sessionKey string) {
 		return
 	}
 	sess.releaseDriverLocked()
-}
-
-// releaseExternalRunAfterStop is the Stop path's release: the session's episode
-// is over by an explicit operator decision, so a revival reservation whose turn
-// never began (it was stopped before beginExternalRun) is dropped with the
-// driver instead of pinning it forever.
-func (al *AgentLoop) releaseExternalRunAfterStop(sessionKey string) {
-	if sess := al.externalRunSessionIfPresent(sessionKey); sess != nil {
-		sess.mu.Lock()
-		clear(sess.reservations)
-		sess.mu.Unlock()
-	}
-	al.releaseExternalRunIfIdle(sessionKey)
 }
 
 // ForgetExternalRunSession drops sessionID's retained external-CLI driver and

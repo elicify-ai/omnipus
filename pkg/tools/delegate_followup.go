@@ -38,6 +38,24 @@ func controlFailure(action, fixed string, cause error) *ToolResult {
 	return ErrorResult("delegate: " + action + ": " + fixed).WithError(cause)
 }
 
+// displayableCause returns the text of err that may reach the calling agent: an
+// authored refusal's own sentence (refusalTexter), or the fixed text of a plain
+// context error. Anything else — a wrapped store error that can carry paths —
+// is not displayable.
+func displayableCause(err error) (string, bool) {
+	var texter refusalTexter
+	if errors.As(err, &texter) {
+		return texter.RefusalText(), true
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return context.DeadlineExceeded.Error(), true
+	case errors.Is(err, context.Canceled):
+		return context.Canceled.Error(), true
+	}
+	return "", false
+}
+
 // lifecycleLoadFailure is controlFailure for a failed lifecycle Load. A genuinely
 // absent record names the looked-up id (so a mistyped id is visible); anything
 // else is a store fault shown as a fixed sentence.
@@ -187,8 +205,13 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 				providers.Message{Role: "user", Content: text}, requestedCorrelationID)
 			if derr != nil {
 				// Truthful visible refusal: no live conversation, or the
-				// interrupt/enqueue failed. Never a silent success.
-				return ErrorResult(fmt.Sprintf("delegate: steer: not_steerable: %v", derr)).WithError(derr)
+				// interrupt/enqueue failed. Never a silent success. Authored
+				// refusals and plain context errors are shown; a store fault is
+				// a fixed sentence with its cause kept for logs and errors.Is.
+				if text, ok := displayableCause(derr); ok {
+					return ErrorResult("delegate: steer: not_steerable: " + text).WithError(derr)
+				}
+				return controlFailure("steer", fmt.Sprintf("not_steerable: the live instruction for session %s could not be delivered right now; retry shortly", sessionID), derr)
 			}
 			return NewToolResult(fmt.Sprintf(
 				"Steering message delivered to external CLI session %s by interrupt + native-conversation resume (correlation_id=%s); it will reach the same conversation.",
@@ -344,7 +367,10 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	resolvedCorrelationID, serr, postFinish := enqueueSteeringWithStatus(t.steering, sessionID, rec.AgentID,
 		providers.Message{Role: "user", Content: text}, requestedCorrelationID)
 	if serr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: steer: %v", serr)).WithError(serr)
+		if text, ok := displayableCause(serr); ok {
+			return ErrorResult("delegate: steer: " + text).WithError(serr)
+		}
+		return controlFailure("steer", fmt.Sprintf("the steering message for session %s could not be queued right now; retry shortly", sessionID), serr)
 	}
 	if postFinish {
 		// Round-4 correction: a steer that landed in a terminal-transition
