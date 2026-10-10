@@ -74,7 +74,8 @@
       "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Command [check:command-browser] browser",
-      "story": "CommandContract"
+      "story": "CommandContract",
+      "requiredTargets": [{ "selector": "[data-ds-trigger]", "attribute": "data-ds-trigger", "value": "true" }]
     },
     {
       "id": "command-pointer",

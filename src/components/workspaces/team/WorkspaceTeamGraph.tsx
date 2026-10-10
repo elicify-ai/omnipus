@@ -27,7 +27,8 @@ import '../reactflow-theme.css'
 import { Star, Lightning, Trash, Warning, PencilSimple, X, Scales } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { IconButton } from '@/components/ui/icon-button'
-import { cn, initialOf } from '@/lib/utils'
+import { AgentMark } from '@/components/agents/AgentMark'
+import { cn } from '@/lib/utils'
 import { EdgeModeEditor, EdgeLabelChip } from './EdgeModeEditor'
 import { AgentDelegatePicker } from './AgentDelegatePicker'
 import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
@@ -123,7 +124,6 @@ const FULL_TARGET_HANDLE_CLASS =
 // ── Custom node: one agent ───────────────────────────────────────────────────
 function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
   const { model } = data
-  const initial = initialOf(model.name)
   const { allNodes, editState, workerIds, onDelegate } = useTeamGraphCanvasContext()
 
   const connection = useConnection()
@@ -209,13 +209,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
         title={`${model.name} — Verifier, implicit member of every workspace. System agents cannot be added to or removed from the team roster.`}
       >
         <div className="flex items-center gap-[var(--space-2)]">
-          <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]"
-            style={{ backgroundColor: model.color ?? 'var(--color-surface-3)' }}
-            aria-hidden="true"
-          >
-            {initial}
-          </div>
+          <AgentMark agent={model.agent} name={model.name} size={40} />
           <div className="min-w-0 flex-1">
             <span className="block truncate font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
               {model.name}
@@ -344,13 +338,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
       </div>
 
       <div className="pointer-events-none flex items-center gap-[var(--space-2)]">
-        <div
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]"
-          style={{ backgroundColor: model.color ?? 'var(--color-surface-3)' }}
-          aria-hidden="true"
-        >
-          {initial}
-        </div>
+        <AgentMark agent={model.agent} name={model.name} size={40} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-[var(--space-1)]">
             <span className="truncate font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">

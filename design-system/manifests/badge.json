@@ -67,6 +67,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Badge [check:badge-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"badge\"]", "text": "Status" }],
       "applicable": true
     },
     {

@@ -51,12 +51,77 @@ const BADGES = {
   "science": "<g transform=\"translate(140 140) scale(0.44)\"><path d=\"M225.15,197.71,164,95.81V44h4a12,12,0,0,0,0-24H88a12,12,0,0,0,0,24h4V95.81L30.85,197.71A20,20,0,0,0,48,228H208a20,20,0,0,0,17.15-30.29ZM140,44V99.14a12,12,0,0,0,1.71,6.17l35.13,58.54c-10.79.86-25.15-1.31-43.42-10.56-14-7.08-27.46-11.33-40.27-12.76l21.14-35.22A12,12,0,0,0,116,99.14V44ZM55.06,204,79,164.19c13-1.11,27.62,2.42,43.62,10.52,19.61,9.92,36.25,13.31,49.85,13.31A75.44,75.44,0,0,0,190.11,186l10.83,18Z\"></path></g>"
 } satisfies Record<AgentIconRole, string>
 
+/** Every badge is stored inside this wrapper, which shrinks it into the mark's
+ *  bottom-right corner. Stripping it yields the plain 256-unit glyph. */
+const BADGE_WRAPPER_OPEN = '<g transform="translate(140 140) scale(0.44)">'
+const BADGE_WRAPPER_CLOSE = '</g>'
+
+/**
+ * Inner SVG (no outer <svg>) for one role badge on its own, at full 256-unit
+ * scale with no figure — for places that show the role by itself, such as the
+ * Role badge picker. Same art as the badge on the mark; never a second copy.
+ */
+export function roleBadgeInner(role: AgentIconRole): string {
+  if (!Object.hasOwn(BADGES, role)) {
+    throw new Error(`AgentIcon has no badge for ${role}`)
+  }
+  const badge = BADGES[role]
+  if (!badge.startsWith(BADGE_WRAPPER_OPEN) || !badge.endsWith(BADGE_WRAPPER_CLOSE)) {
+    throw new Error(`AgentIcon badge for ${role} is not in the expected wrapper`)
+  }
+  return badge.slice(BADGE_WRAPPER_OPEN.length, badge.length - BADGE_WRAPPER_CLOSE.length)
+}
+
 /** Inner SVG (no outer <svg>) for one figure and role. Mask ids are rewritten so two marks on one page do not collide. */
 export function agentIconInner(art: AgentIconArtKey, role: AgentIconRole, maskId: string): string {
-  const figure = FIGURES[art]
-  const badge = BADGES[role]
-  if (!figure || !badge) {
+  if (!Object.hasOwn(FIGURES, art) || !Object.hasOwn(BADGES, role)) {
     throw new Error(`AgentIcon has no art for ${art}/${role}`)
   }
+  const figure = FIGURES[art]
+  const badge = BADGES[role]
   return (figure + badge).split('MASK_ID').join(maskId)
+}
+
+/**
+ * Escapes user data before it is interpolated into injected SVG markup.
+ * `&` is escaped first so its own entity is never double-escaped. ARCH-RULING
+ * monogram D2b / AC-19: the agent name is user data and must never enter the
+ * markup string raw.
+ */
+export function escapeMarkup(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+// The letter's font comes from `.font-headline` (globals.css) — the brand
+// headline stack (`--font-family-heading`). It is a global class, not a
+// Tailwind utility, so it needs no `@source` line. The mask cutout below is
+// copied verbatim from the figure strings: the same (196,196) r=66 circle that
+// clears the role badge, so a tall/wide letter never collides with it. #fff/#000
+// are silhouette data (see the file header), not paint, and are not recoloured.
+const MONOGRAM_MASK =
+  '<defs><mask id="MASK_ID" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">' +
+  '<rect width="256" height="256" fill="#fff"/>' +
+  '<circle cx="196" cy="196" r="66" fill="#000"/></mask></defs>'
+
+/**
+ * Inner SVG (no outer <svg>) for the Monogram figure: the agent name's initial
+ * inside the shared badge-cutout mask, followed by the role badge — the same
+ * composed shape the four figure strings use. `escapedInitial` must already be
+ * escaped (see `escapeMarkup`). Mask ids are rewritten so two marks on one page
+ * do not collide. ARCH-RULING monogram D2b.
+ */
+export function monogramInner(role: AgentIconRole, maskId: string, escapedInitial: string): string {
+  if (!Object.hasOwn(BADGES, role)) {
+    throw new Error(`AgentIcon has no badge for ${role}`)
+  }
+  const badge = BADGES[role]
+  const ink =
+    `${MONOGRAM_MASK}<g mask="url(#MASK_ID)">` +
+    `<text data-initial="${escapedInitial}" class="font-headline" x="128" y="128" dy="0.35em" ` +
+    `text-anchor="middle" font-size="132" font-weight="600">${escapedInitial}</text></g>`
+  return (ink + badge).split('MASK_ID').join(maskId)
 }

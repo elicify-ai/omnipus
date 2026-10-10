@@ -11,7 +11,7 @@
 
 import dagre from '@dagrejs/dagre'
 import { MarkerType, Position, type Edge, type Node } from '@xyflow/react'
-import type { Agent, Task, Plan } from '@/lib/api'
+import type { Task, Plan } from '@/lib/api'
 import {
   STATUS_ANIMATED,
   STATUS_COLORS,
@@ -100,8 +100,6 @@ export interface TaskNodeData extends Record<string, unknown> {
   agentName?: string
   /** Resolved agent avatar colour (hex). */
   agentColor?: string
-  /** Resolved agent Phosphor icon name. */
-  agentIcon?: string
   /**
    * Keyboard/mouse-activation callback GraphView injects per-node at render
    * time (see GraphView.tsx) — `buildTaskGraph` itself never sets this, only
@@ -131,8 +129,7 @@ export const NODE_HEIGHT = 96
 export interface AgentLike {
   id: string
   name?: string
-  color?: Agent['color']
-  icon?: string
+  color?: string
 }
 
 /**
@@ -335,7 +332,6 @@ export function buildTaskGraph(
           task,
           agentName: task.agent_name ?? agent?.name ?? task.agent_id,
           agentColor: agent?.color,
-          agentIcon: agent?.icon,
         },
         sourcePosition: Position.Right,
         targetPosition: Position.Left,

@@ -657,7 +657,7 @@ type AgentConfig struct {
 	// Distinct from the global VoiceConfig engine settings.
 	// Schema-pinned; not yet active (TTS delivery, tracked #306).
 	Voice string `json:"voice,omitempty"`
-	// Figure is the agent mark body: Robot, Man, Woman, or Omnipus.
+	// Figure is the agent mark body: Robot, Man, Woman, Omnipus, or Monogram.
 	// Empty until create or boot migration fills it.
 	Figure string `json:"figure,omitempty"`
 	// Role is the curated role slug (the badge). Not the legacy Icon.

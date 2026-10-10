@@ -2,6 +2,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { Circle, Lightning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { AgentMark } from './AgentMark'
 import type { Agent, ExecutorConfig } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -64,13 +65,8 @@ export function WorkerCard({ agent }: WorkerCardProps) {
         aria-label={`View worker ${agent.name}`}
       >
         <div className="flex items-start gap-[var(--space-2-5)]">
-          {/* Avatar */}
-          <div
-            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-[length:var(--type-body-compact-size)] font-bold"
-            style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
-          >
-            <Lightning size={18} weight="fill" className="text-[var(--color-secondary)]" />
-          </div>
+          {/* Avatar — the worker's own mark, decorative next to the visible name */}
+          <AgentMark agent={agent} size={40} />
 
           {/* Info */}
           <div className="flex-1 min-w-0">

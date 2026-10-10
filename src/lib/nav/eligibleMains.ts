@@ -28,13 +28,19 @@ export type EligibleRosterEntry = { // not-wire-format: local pairing of a gener
   member: WorkspaceMemberConfig
 }
 
+export type EligibleAdminEntry = { // not-wire-format: the loaded Admin agent plus the seam-read Admin main id; never a membership entry
+  agent: Agent
+  mainSessionId: string | undefined
+}
+
 export type EligibleInput = { // not-wire-format: function arguments assembled from already-loaded SPA state for eligible mains; not a request or response body
   workspaceId: string
   isDefaultWorkspace: boolean
   rosterState: 'fresh' | 'failed-no-cache' | 'failed-stale-cache'
   roster: EligibleRosterEntry[]
-  /** Validated default-workspace Admin, even when Admin is not a member. */
-  adminDefault: EligibleRosterEntry | null
+  /** Default-workspace Admin, even though Admin is not a member: the agent plus
+   *  the id the seam read from Workspace.admin_main_session_id (or undefined). */
+  adminDefault: EligibleAdminEntry | null
   sessions: Session[]
   cachedRows: EligibleRow[]
 }
@@ -49,11 +55,14 @@ function isEligibleColleague(agent: Agent): boolean {
   return agent.id !== ADMIN_AGENT_ID && COLLEAGUE_TYPES.has(agent.type)
 }
 
-function validatedMainId(member: WorkspaceMemberConfig): string | undefined {
-  const id = mainSessionIdOfMember(member)
+function validatedId(id: string | undefined): string | undefined {
   if (typeof id !== 'string') return undefined
   if (id.trim() === '' || id === '__pending') return undefined
   return id
+}
+
+function validatedMainId(member: WorkspaceMemberConfig): string | undefined {
+  return validatedId(mainSessionIdOfMember(member))
 }
 
 function rowFor(workspaceId: string, agent: Agent, mainSessionId: string): EligibleRow {
@@ -108,7 +117,7 @@ export function eligibleMainAgents(input: EligibleInput): EligibleResult {
   }
 
   if (input.isDefaultWorkspace && input.adminDefault) {
-    const mainSessionId = validatedMainId(input.adminDefault.member)
+    const mainSessionId = validatedId(input.adminDefault.mainSessionId)
     if (mainSessionId === undefined) {
       missingMainAgentIds.push(input.adminDefault.agent.id)
     } else {

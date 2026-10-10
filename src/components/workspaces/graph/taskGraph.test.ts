@@ -130,17 +130,16 @@ describe('buildTaskGraph — edges', () => {
 })
 
 describe('buildTaskGraph — agent avatar resolution', () => {
-  it('resolves agent colour + icon from the agents cache', () => {
+  it('resolves agent colour from the agents cache', () => {
     // Agent-first navigation spec, Locked identity vocabulary / DS-I I03:
     // legacy identity gold maps to Orange #FB923C, not task-status Forge Gold.
     const agents: AgentLike[] = [
-      makeAgent({ id: 'mia', name: 'Mia', color: '#FB923C', icon: 'Robot' }),
+      makeAgent({ id: 'mia', name: 'Mia', color: '#FB923C' }),
     ]
     const tasks = [makeTask({ id: 'a', agent_id: 'mia' })]
     const { nodes } = buildTaskGraph(tasks, agents)
     expect(nodes[0].data.agentName).toBe('Mia')
     expect(nodes[0].data.agentColor).toBe('#FB923C')
-    expect(nodes[0].data.agentIcon).toBe('Robot')
   })
 
   it('falls back to the wire agent_name then agent_id when uncached', () => {

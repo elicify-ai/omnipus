@@ -14,12 +14,25 @@
  * contract changes again, only this module changes; every other nav module
  * keeps calling these functions.
  */
-import type { Session as WireSession, WorkspaceMemberConfig } from '@/lib/api/generated/openapi-types'
+import type { Session as WireSession, Workspace as WireWorkspace, WorkspaceMemberConfig } from '@/lib/api/generated/openapi-types'
 import type { SessionStateFrame } from '@/lib/api/generated/asyncapi-types'
 
 /** Validated main session id for a workspace member, or unavailable. */
 export function mainSessionIdOfMember(member: unknown): string | undefined {
   const id = (member as WorkspaceMemberConfig | null | undefined)?.main_session_id
+  if (typeof id !== 'string') return undefined
+  if (id.trim() === '') return undefined
+  return id
+}
+
+/**
+ * Validated id of the built-in Admin's main on a workspace, or unavailable.
+ * The server sends it only on the default workspace, and only when that main
+ * resolves (architect ruling, Workspace.admin_main_session_id). Admin is not a
+ * workspace member, so it is never read from member_configs and never built.
+ */
+export function adminMainSessionIdOfWorkspace(workspace: unknown): string | undefined {
+  const id = (workspace as WireWorkspace | null | undefined)?.admin_main_session_id
   if (typeof id !== 'string') return undefined
   if (id.trim() === '') return undefined
   return id

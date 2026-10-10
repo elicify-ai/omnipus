@@ -2,7 +2,7 @@
 // agents. W4 of agent-form-requirements delivery.
 //
 // Split into sub-components per the plan's file-ownership matrix:
-//   ./wizard/Step1Identity.tsx   — color, icon, name, description, model
+//   ./wizard/Step1Identity.tsx   — name, description, look (badge, figure, colour), model
 //   ./wizard/Step2Personality.tsx — soul, heartbeat, voice
 //   ./wizard/Step3Tools.tsx      — tools_cfg, skills, fallback_models
 //   ./wizard/Advanced.tsx       — model_params, shell, etc. (deferred)
@@ -44,7 +44,6 @@ export interface WizardSubmitPayload {
   name: string
   description: string
   color: string
-  icon: string
   /** Omitted until the operator picks one. The preview still shows Omnipus. */
   figure?: AgentFigure
   /** Omitted until the operator picks one. The preview still shows general. */
@@ -188,7 +187,6 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     name: '',
     description: '',
     color: defaultColorHex,
-    icon: 'Robot',
     model: '',
     provider: '',
     soul: '',

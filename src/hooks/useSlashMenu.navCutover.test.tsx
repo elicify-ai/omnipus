@@ -254,7 +254,9 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
     }))
     act(() => result.current.onInputChange('@mi'))
     expect(result.current.isMentionMode).toBe(false)
-    expect(result.current.slashItems.filter((item) => item.section === 'agents')).toEqual([])
+    // The 'agents' section no longer exists in the SlashItem type; this runtime
+    // guard still proves no agent row is produced if one were ever re-added.
+    expect(result.current.slashItems.filter((item) => (item.section as string) === 'agents')).toEqual([])
     act(() => result.current.handleKeyDown(enter()))
     expect(useSessionStore.getState().activeAgentId).toBeNull()
     expect(result.current.mentionAnnouncement).toBeNull()

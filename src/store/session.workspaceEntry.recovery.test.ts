@@ -21,7 +21,10 @@ import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
 
 const seam = vi.hoisted(() => ({ mains: new Map<object, string>() }))
-vi.mock('@/lib/nav/sessionCoreSeam', () => ({
+vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
+  // Real seam for everything the stubs don't override (notably
+  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
+  ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
   mainSessionIdOfMember: (member: object) => seam.mains.get(member),
   isMainSession: () => false,
   sessionAttention: () => 'unknown',

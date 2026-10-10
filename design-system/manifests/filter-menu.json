@@ -16,7 +16,7 @@
     {"id": "filter-menu-interaction", "kind": "interaction", "file": "src/components/ui/filter-menu.stories.tsx", "test": "Selection", "story": "Selection", "applicable": true},
     {"id": "filter-menu-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-axe] axe", "story": "Default", "applicable": true},
     {"id": "filter-menu-keyboard", "kind": "keyboard", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-keyboard] keyboard", "story": "Default", "applicable": true},
-    {"id": "filter-menu-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-browser] browser", "story": "Default", "applicable": true},
+    {"id": "filter-menu-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-browser] browser", "story": "Default", "requiredTargets": [{ "selector": "[data-testid=\"filter-owner\"] button", "attribute": "aria-haspopup", "value": "menu" }], "applicable": true},
     {"id": "filter-menu-pointer", "kind": "pointer", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-pointer] pointer", "story": "Default", "applicable": true},
     {"id": "filter-menu-reduced-motion", "kind": "reduced-motion", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-reduced-motion] reduced-motion", "story": "Default", "applicable": true},
     {"id": "filter-menu-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-forced-colors] forced-colors", "story": "Default", "applicable": true},

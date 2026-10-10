@@ -1,22 +1,25 @@
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { AgentMark } from '@/components/agents/AgentMark'
+import type { Agent } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import type { AttentionMotion } from './attentionCue'
 import './attention.css'
 
 /**
- * One slot in front of the agent name. Wave 1 replaces the inner avatar
- * with the shared AgentIcon; callers keep this component.
+ * One slot in front of the agent name: the agent's own AgentMark (the same
+ * mark every surface draws), wrapped in the attention halo. An agent that is
+ * not loaded draws the Omnipus fallback — never a guessed figure or initial.
  */
 export function SidebarAgentIcon({
+  agent,
   name,
   halo,
   motion,
 }: {
+  agent: Agent | undefined
   name: string
   halo: boolean
   motion: AttentionMotion
 }) {
-  const initial = name.trim().charAt(0).toUpperCase()
   return (
     <span
       data-attention-halo={halo ? 'warning' : undefined}
@@ -26,9 +29,7 @@ export function SidebarAgentIcon({
         halo && motion === 'loop' && 'sidebar-attention-halo-loop',
       )}
     >
-      <Avatar size="sm" aria-hidden="true">
-        <AvatarFallback>{initial || '?'}</AvatarFallback>
-      </Avatar>
+      <AgentMark agent={agent} name={name} size={26} />
     </span>
   )
 }

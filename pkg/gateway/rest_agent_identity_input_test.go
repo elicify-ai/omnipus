@@ -131,7 +131,7 @@ func TestAgentIdentity_CreateNonemptyInvalidIsZeroWrite(t *testing.T) {
 // than naming the field; keep that existing envelope, not a new message format.
 func identityInputError(field, operation string, strict bool) map[string]any {
 	message := map[string]string{
-		"figure": "figure must be Robot, Man, Woman, or Omnipus",
+		"figure": "figure must be Robot, Man, Woman, Omnipus, or Monogram",
 		"role":   "role must be one of the curated role slugs",
 		"color":  "color must be one of the ten identity colours",
 	}[field]
@@ -141,7 +141,7 @@ func identityInputError(field, operation string, strict bool) map[string]any {
 			"subagent_3p": "AgentCreateRequestSubagent3p", "PUT": "AgentUpdateRequest",
 		}[operation]
 		allowed := map[string][]string{
-			"figure": {"Robot", "Man", "Woman", "Omnipus"},
+			"figure": {"Robot", "Man", "Woman", "Omnipus", "Monogram"},
 			"role":   {"writer", "designer", "image", "video", "audio", "social", "developer", "data", "analyst", "itops", "automation", "security", "quality", "science", "orchestrator", "project", "product", "sales", "marketing", "finance", "legal", "support", "documents", "researcher", "people", "tutor", "knowledge", "translator", "general", "personal", "office"},
 			"color":  {"#3B82F6", "#38BDF8", "#22D3EE", "#818CF8", "#A78BFA", "#C084FC", "#E879F9", "#F472B6", "#FB923C", "#9CA3AF"},
 		}[field]

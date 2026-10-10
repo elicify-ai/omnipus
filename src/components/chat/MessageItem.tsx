@@ -1,10 +1,11 @@
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { User, Robot } from '@phosphor-icons/react'
+import { User } from '@phosphor-icons/react'
 import { useQuery } from '@tanstack/react-query'
 import { ToolCallBadge } from './ToolCallBadge'
 import { ModelFooter } from './ModelFooter'
+import { AgentMark } from '@/components/agents/AgentMark'
 import type { ChatMessage, PositionedToolCall } from '@/store/chat'
 import { useChatStore } from '@/store/chat'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -106,19 +107,10 @@ function formatTimestamp(ts: string): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-// Avatar background/text color: accent-tinted for the user, the agent's own
-// color when known, else a neutral surface fallback.
-function avatarStyle(isUser: boolean, agentColor: string | undefined): React.CSSProperties {
-  if (isUser) {
-    return {
-      backgroundColor: 'color-mix(in srgb, var(--color-accent) 20%, transparent)',
-      color: 'var(--color-accent)',
-    }
-  }
-  if (agentColor) {
-    return { backgroundColor: agentColor, color: 'var(--color-secondary)' }
-  }
-  return { backgroundColor: 'var(--color-surface-3)', color: 'var(--color-secondary)' }
+// The user's avatar: accent-tinted circle. Agents draw their own AgentMark.
+const USER_AVATAR_STYLE: React.CSSProperties = {
+  backgroundColor: 'color-mix(in srgb, var(--color-accent) 20%, transparent)',
+  color: 'var(--color-accent)',
 }
 
 export function MessageItem({ message }: MessageItemProps) {
@@ -188,17 +180,18 @@ export function MessageItem({ message }: MessageItemProps) {
       data-message-id={message.id}
       className={cn('group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]', isUser ? 'flex-row-reverse' : undefined)}
     >
-      {/* Avatar — assistant messages carry the speaking agent's color. */}
-      <div
-        className={cn('shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[length:var(--type-utility-xs-size)]')}
-        style={avatarStyle(isUser, agent?.color)}
-      >
-        {isUser ? (
+      {/* Avatar — O11 attribution: an assistant message shows the speaking
+          agent's own mark (figure, role badge, colour), never a generic one. */}
+      {isUser ? (
+        <div
+          className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[length:var(--type-utility-xs-size)]"
+          style={USER_AVATAR_STYLE}
+        >
           <User size={14} weight="bold" />
-        ) : (
-          <Robot size={14} weight="bold" />
-        )}
-      </div>
+        </div>
+      ) : (
+        <AgentMark agent={agent ?? undefined} name={agentName ?? undefined} size={26} />
+      )}
 
       {/* Content */}
       <div className={cn('flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0', isUser ? 'items-end' : undefined)}>

@@ -119,7 +119,7 @@ type CoreAgent struct {
 	Name        string // Display name (e.g., "Jim")
 	Subtitle    string // Role subtitle (e.g., "General Purpose")
 	Description string // One-line description
-	Figure      string // Mark body: Robot, Man, Woman, or Omnipus
+	Figure      string // Mark body: Robot, Man, Woman, Omnipus, or Monogram
 	Role        string // Curated role slug (the badge, not Icon)
 	Color       string // Canonical palette hex
 }

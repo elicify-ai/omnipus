@@ -60,13 +60,16 @@ describe('identity colour choices', () => {
 })
 
 describe('create wizard identity preview', () => {
-  it('previews the chosen figure, role and colour and does not offer an upload', () => {
+  it('previews the chosen figure, role and colour and does not offer an upload', async () => {
     const onSubmit = vi.fn()
     render(<CreateAgentWizard initialType="Main" onSubmit={onSubmit} onClose={vi.fn()} connectedProviders={[]} />)
+    // The role is ONE searchable dropdown (founder 2026-10-10): each option
+    // shows its badge; picking one previews the badge on the mark.
     expect(screen.getByRole('button', { name: 'Woman' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Writer' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Role badge' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Woman' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Writer' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Role badge' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Writer' }))
     fireEvent.click(screen.getByRole('button', { name: 'Sky' }))
     const preview = document.querySelector('[data-art]')
     expect(preview?.getAttribute('data-art')).toBe('woman')
@@ -100,7 +103,8 @@ describe('create wizard identity preview', () => {
     fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'Writes release notes' } })
     fireEvent.click(screen.getByTestId('wizard-inherit-model'))
     fireEvent.click(screen.getByRole('button', { name: 'Woman' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Writer' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Role badge' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Writer' }))
     fireEvent.click(screen.getByRole('button', { name: 'Sky' }))
     expect(onSubmit).not.toHaveBeenCalled()
     fireEvent.click(screen.getByTestId('wizard-next-1'))
@@ -121,5 +125,46 @@ describe('create wizard identity preview', () => {
     expect(getComputedStyle(mark as Element).color).toBe('rgb(56, 189, 248)') // Spec Sky hex -> RGB.
     expect(mark?.querySelector('[data-art="woman"]')).not.toBeNull()
     expect(mark?.querySelector('[data-role="writer"]')).not.toBeNull()
+  })
+})
+
+// The 5th figure, Monogram, in the create wizard. Oracles are the picker
+// thumbnails and the preview's data-initial seam (ARCH-RULING-monogram D2b/D3).
+describe('create wizard Monogram figure', () => {
+  it('offers exactly the five figure choices in the founder order (AC-13, founder 2026-10-10)', () => {
+    render(<CreateAgentWizard initialType="Main" onSubmit={vi.fn()} onClose={vi.fn()} connectedProviders={[]} />)
+    // The Look row is ONE row of five picture thumbnails (founder 2026-10-10:
+    // "order Omnipus, Man, Robot, Woman, Monogram" — the pre-decision order
+    // [Robot, Man, Woman, Omnipus, Monogram] is superseded). Each thumbnail
+    // is a picture (an AgentIcon), so the stable handle is its test id.
+    const figureWords = ['Omnipus', 'Man', 'Robot', 'Woman', 'Monogram']
+    const thumbnails = screen.getAllByTestId(/^wizard-figure-/)
+    expect(thumbnails.map((button) => button.getAttribute('data-testid'))).toEqual(
+      figureWords.map((figure) => `wizard-figure-${figure}`),
+    )
+    for (const figure of figureWords) {
+      expect(screen.getByRole('button', { name: figure })).toBeEnabled()
+    }
+  })
+
+  it('shows the Monogram initial in the preview and tracks the name as typed (AC-14)', () => {
+    render(<CreateAgentWizard initialType="Main" onSubmit={vi.fn()} onClose={vi.fn()} connectedProviders={[]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Monogram' }))
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Research Assistant' } })
+    const mark = document.querySelector('[data-testid="agent-icon"]')
+    expect(mark).not.toBeNull()
+    expect(mark).toHaveAttribute('data-figure', 'Monogram')
+    const letter = document.querySelector('[data-initial]')
+    expect(letter, 'preview letter node').not.toBeNull()
+    // Attribute AND painted text (F-1): a wrong painted glyph must fail RED.
+    expect(letter!.tagName.toLowerCase(), 'preview letter is an SVG <text>').toBe('text')
+    expect(letter!.getAttribute('data-initial')).toBe('R')
+    expect(letter!.textContent, 'painted preview initial').toBe('R')
+    // The preview initial tracks the name as it is typed.
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Zeta' } })
+    const updated = document.querySelector('[data-initial]')
+    expect(updated!.tagName.toLowerCase()).toBe('text')
+    expect(updated!.getAttribute('data-initial')).toBe('Z')
+    expect(updated!.textContent, 'painted preview initial after typing').toBe('Z')
   })
 })

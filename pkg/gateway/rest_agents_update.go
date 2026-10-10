@@ -284,7 +284,7 @@ func acceptAgentIdentityWrite(w http.ResponseWriter, req *gen.AgentUpdateRequest
 		_, figureValid = coreagent.CanonicalFigure(string(*req.Figure))
 	}
 	if !figureValid || presence.hasNull("figure") {
-		jsonErr(w, http.StatusBadRequest, "figure must be Robot, Man, Woman, or Omnipus")
+		jsonErr(w, http.StatusBadRequest, "figure must be Robot, Man, Woman, Omnipus, or Monogram")
 		return false
 	}
 	roleValid := true

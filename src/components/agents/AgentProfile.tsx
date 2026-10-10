@@ -39,7 +39,7 @@ import {
 import { DeleteAgentControl } from './DeleteAgentControl'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ExecutorSelector } from './ExecutorSelector'
-import { BehaviorFields, AvatarColorPicker, FigurePicker, RolePicker, UploadMdButton } from './AgentFormFields'
+import { AgentLookPicker, BehaviorFields, UploadMdButton } from './AgentFormFields'
 import { AgentIcon } from '@/components/ui/agent-icon'
 import { AgentColor } from '@/lib/api/generated/schemas'
 import { CliPathValidationHint } from './CliPathValidationHint'
@@ -71,7 +71,6 @@ import { formatTokens } from '@/lib/formatTokens'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
 import type { AgentColor as AgentColorValue, AgentFigure, AgentRole, FallbackModel } from '@/lib/api/generated/openapi-types'
-import { type IconName } from '@/lib/agentIcons'
 import { agentKindFlags } from '@/lib/agentKind'
 import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { useCliDetect } from '@/hooks/useCliDetect'
@@ -362,7 +361,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // via default provider (back-compat with pre-O3 agents).
   const [primaryProvider, setPrimaryProvider] = useState('')
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
-  const [selectedIcon, setSelectedIcon] = useState<IconName>('Robot')
   const [selectedFigure, setSelectedFigure] = useState<AgentFigure>('Omnipus')
   const [selectedRole, setSelectedRole] = useState<AgentRole>('general')
   // W6-B4 / G3: `default` flag mirrors Agent.default on the wire. At most one
@@ -597,7 +595,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // O3 two-field: hydrate the explicit provider routing key.
     setPrimaryProvider(agent.provider ?? '')
     setSelectedColor(agent.color)
-    setSelectedIcon((agent.icon as IconName) ?? 'Robot')
     setSelectedFigure(agent.figure ?? 'Omnipus')
     setSelectedRole(agent.role ?? 'general')
     // W6-B4 / G3: hydrate the `default` flag from the agent response. The
@@ -1414,34 +1411,24 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 </div>
               )}
-              {/* W1-6 / FR-020: figure, role, and colour choices stay visible
-                  for built-ins, locked by the server's field descriptors.
-                  The header previews the same local draft as these pickers. */}
-              <div className="space-y-[var(--space-1)]">
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Figure</p>
-                <FigurePicker
-                  value={selectedFigure}
-                  disabled={!isFieldEditable('figure')}
-                  onChange={(figure) => { markDirty(); setSelectedFigure(figure) }}
-                />
-              </div>
-              <div className="space-y-[var(--space-1)]">
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Role</p>
-                <RolePicker
-                  value={selectedRole}
-                  disabled={!isFieldEditable('role')}
-                  onChange={(role) => { markDirty(); setSelectedRole(role) }}
-                />
-              </div>
-              <div className="space-y-[var(--space-1)]">
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Colour</p>
-                <AvatarColorPicker
-                  value={selectedColor}
-                  disabled={!isFieldEditable('color')}
-                  onChange={(color) => { markDirty(); setSelectedColor(color) }}
-                  testIdPrefix="avatar-color"
-                />
-              </div>
+              {/* W1-6 / FR-020: the look (role badge, figure, colour) stays
+                  visible for built-ins, locked per field by the server's field
+                  descriptors. The same AgentLookPicker as the create wizard;
+                  like the header mark, it previews the SAVED name (a draft
+                  rename is not previewed before its autosave completes). */}
+              <AgentLookPicker
+                name={agent.name}
+                figure={selectedFigure}
+                role={selectedRole}
+                color={selectedColor}
+                figureLocked={!isFieldEditable('figure')}
+                roleLocked={!isFieldEditable('role')}
+                colorLocked={!isFieldEditable('color')}
+                onFigureChange={(figure) => { markDirty(); setSelectedFigure(figure) }}
+                onRoleChange={(role) => { markDirty(); setSelectedRole(role) }}
+                onColorChange={(color) => { markDirty(); setSelectedColor(color) }}
+                testIdPrefix="avatar"
+              />
             </div>
           </section>
 
@@ -2410,6 +2397,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         <div className="flex items-center gap-[var(--space-2)] min-w-0">
           <AgentIcon figure={selectedFigure} role={selectedRole} size={26}
             color={(selectedColor ?? AgentColor.options[9]) as AgentColorValue}
+            name={agent.name}
           />
           <h1 className="font-headline text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] truncate">
             {agent.name}
@@ -2517,13 +2505,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </div>
         </div>
       )}
-            {/* Legacy Phosphor slug. Kept once, above both layouts, so the
-                desktop tabs and the phone accordion do not each print it.
-                The editor never writes this field. */}
-            <div className="space-y-[var(--space-1)]" data-testid="avatar-icon-readonly">
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar icon</p>
-              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{selectedIcon}</span>
-            </div>
             <Tabs defaultValue="basics" className="hidden sm:block w-full" aria-hidden={smAndUp ? undefined : true}>
         {/* Tab order (item 4 reorg): Basics, Personality, Tools (or Runtime
             for external), Skills, Heartbeat, Advanced. Heartbeat moves from

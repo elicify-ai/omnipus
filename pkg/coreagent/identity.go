@@ -50,7 +50,7 @@ func init() {
 	}
 }
 
-// CanonicalFigure reports whether raw is one of the four figure words, exact case.
+// CanonicalFigure reports whether raw is one of the five figure words, exact case.
 func CanonicalFigure(raw string) (string, bool) {
 	f := generated.AgentFigure(raw)
 	if !f.Valid() {

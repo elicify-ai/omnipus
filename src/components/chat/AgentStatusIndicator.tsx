@@ -190,12 +190,15 @@ export function AgentStatusIndicator({
   figure,
   role,
   color,
+  name,
 }: {
   phase: MarkPhase
   label: string | null
   figure?: string
   role?: string
   color?: string
+  /** The agent's display name. Monogram draws its initial from this. */
+  name?: string
 }) {
   const reduced = usePrefersReducedMotion()
   const rotating = phase === 'thinking' && label == null && !reduced
@@ -214,10 +217,14 @@ export function AgentStatusIndicator({
   const drawnRole = isRole(role) ? role : null
   const drawnColor = isPaletteColor(color) ? color : null
   const motion = motionFor(phase, reduced)
+  // Monogram draws its initial from the name; with no name the mark is not drawn
+  // (the existing incomplete-identity pattern — the phrase still renders). A
+  // placeholder name is never substituted: it would draw a wrong initial.
+  const nameAvailable = drawnFigure !== 'Monogram' || (name ?? '').trim().length > 0
 
   return (
     <span className="inline-flex items-center gap-[var(--space-2)] py-[var(--space-1)] text-[var(--color-muted)] italic">
-      {drawnFigure && drawnRole && drawnColor && (
+      {drawnFigure && drawnRole && drawnColor && nameAvailable && (
         <span data-art={FIGURE_ART[drawnFigure].art}>
           <AgentIcon
             figure={drawnFigure}
@@ -226,6 +233,7 @@ export function AgentStatusIndicator({
             size={48}
             motion={motion}
             decorative
+            name={name ?? ''}
             {...(reduced ? { reducedMotion: true as const } : {})}
           />
         </span>

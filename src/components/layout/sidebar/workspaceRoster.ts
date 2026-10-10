@@ -1,11 +1,13 @@
 import type { Agent, Session, Workspace } from '@/lib/api'
 import {
   eligibleMainAgents,
+  type EligibleAdminEntry,
   type EligibleResult,
   type EligibleRosterEntry,
   type EligibleRow,
 } from '@/lib/nav/eligibleMains'
 import { projectMainAttention, type Signal } from '@/lib/nav/mainAttention'
+import { adminMainSessionIdOfWorkspace } from '@/lib/nav/sessionCoreSeam'
 
 const ADMIN_AGENT_ID = 'admin'
 
@@ -31,11 +33,12 @@ function memberRoster(workspace: Workspace, agents: Agent[]): EligibleRosterEntr
   return roster
 }
 
-function adminDefault(workspace: Workspace, agents: Agent[]): EligibleRosterEntry | null {
+function adminDefault(workspace: Workspace, agents: Agent[]): EligibleAdminEntry | null {
   if (!workspace.is_default) return null
   const agent = agents.find((candidate) => candidate.id === ADMIN_AGENT_ID)
   if (!agent) return null
-  return { agent, member: workspace.member_configs?.[ADMIN_AGENT_ID] ?? {} }
+  // Admin is not a member: its main id rides on the default workspace itself.
+  return { agent, mainSessionId: adminMainSessionIdOfWorkspace(workspace) }
 }
 
 export function workspaceMains(
