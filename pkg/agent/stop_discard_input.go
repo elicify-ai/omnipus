@@ -53,6 +53,11 @@ func (al *AgentLoop) discardUndeliveredHumanInput(sessionID string) ([]Discarded
 				errs = append(errs, fmt.Errorf("label discarded input %q: %w", item.transcriptEntryID, err))
 				continue
 			}
+			// F4: when the discarded input is an admitted U8 request, its reply
+			// authority ends with it. A message with no capture is a no-op.
+			if dErr := al.DiscardRequest(sessionID, item.transcriptEntryID); dErr != nil {
+				errs = append(errs, fmt.Errorf("revoke reply authority of discarded input %q: %w", item.transcriptEntryID, dErr))
+			}
 			out = append(out, DiscardedInput{SessionID: sessionID, MessageID: item.transcriptEntryID})
 		}
 	}
