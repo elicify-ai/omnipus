@@ -292,3 +292,36 @@ func TestUnifiedStore_DeleteSessionRemovesModelArchive(t *testing.T) {
 	_, err = os.Stat(archivePath)
 	require.True(t, os.IsNotExist(err), "the model archive is removed with the session")
 }
+
+// TestArchiveBackend_CommitWindowRefusesSkipRegression is the port of the
+// deleted pkg/memory TestCommitWindow_RefusesSkipRegression (session-core
+// DEL-10 moved the window cursor into archiveBackend): a real commit must never
+// move Skip backward, while RestoreWindow is exempt.
+func TestArchiveBackend_CommitWindowRefusesSkipRegression(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+	const key = "cw-gap6-skip-regression"
+	for _, m := range []providers.Message{userMsg("one"), asstMsg("two"), userMsg("three"), asstMsg("four")} {
+		require.NoError(t, b.appendMessage(key, m))
+	}
+	snap, err := b.WindowView(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, 0, snap.State.Skip)
+	require.Equal(t, 4, snap.State.Count)
+
+	advanced := snap.State.Clone()
+	advanced.Skip = 2
+	require.NoError(t, b.CommitWindow(ctx, key, snap.State, advanced), "a forward commit must succeed")
+
+	back := advanced.Clone()
+	back.Skip = 1
+	require.Error(t, b.CommitWindow(ctx, key, advanced, back),
+		"a commit must never move Skip backward")
+
+	// RestoreWindow (restore=true) is deliberately exempt: undoing a prior
+	// advance is a legitimate backward move.
+	require.NoError(t, b.RestoreWindow(ctx, key, advanced, back))
+	restored, err := b.WindowView(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, 1, restored.State.Skip)
+}

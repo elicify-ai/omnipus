@@ -371,7 +371,7 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 	// marker. Without this line the fixture is the crash gap and the
 	// handback is legitimately re-woken.
 	archived := providers.Message{Role: "user", Content: deliverySummary(consumedHandback)}
-	if _, err := h.sessions.AppendWindowMessage(context.Background(), child, archived); err != nil {
+	if _, err := appendWindowMsg(h.sessions, context.Background(), child, archived); err != nil {
 		t.Fatalf("AppendWindowMessage archived handback instruction: %v", err)
 	}
 	// Instrument check: the archive write must read back from the child

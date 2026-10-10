@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/elicify-ai/omnipus/pkg/memory"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -47,4 +48,14 @@ func scanJSONLRangeFixture(ctx context.Context, r io.Reader, from, to int, fn fu
 		idx++
 	}
 	return sc.Err()
+}
+
+// appendWindowMsg is the test replacement for the deleted AppendWindowMessage
+// (session-core DEL-12/DEL-10): it appends one MODEL message through the
+// checked model seam and returns the bounded view after the append.
+func appendWindowMsg(store session.ContextWindowStore, ctx context.Context, key string, msg providers.Message) (session.WindowView, error) {
+	_, view, err := store.AppendModelMessage(ctx, key, session.ModelAppend{
+		Message: msg, ViewMembership: session.ViewMembershipModel, Source: session.EntrySource{Kind: sourceKindForRole(msg.Role)},
+	})
+	return view, err
 }

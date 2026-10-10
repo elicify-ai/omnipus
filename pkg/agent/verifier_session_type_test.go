@@ -54,7 +54,7 @@ func TestVerifierSessionType_RealAdjudicationStampsVerifierType(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 
-	judgeStore := al.GetAgentStore(string(coreagent.IDJudge))
+	judgeStore := al.GetSessionStore()
 	if judgeStore == nil {
 		t.Fatal("judge session store not available")
 	}
@@ -94,7 +94,7 @@ func TestVerifierSessionType_ChatIDIsAPreCreatedSessionNotAnAdHocString(t *testi
 
 	chatID := al.newVerifierSessionChatID("agent:judge:verify:test-key", "task:t-precreate")
 
-	judgeStore := al.GetAgentStore(string(coreagent.IDJudge))
+	judgeStore := al.GetSessionStore()
 	if judgeStore == nil {
 		t.Fatal("judge session store not available")
 	}

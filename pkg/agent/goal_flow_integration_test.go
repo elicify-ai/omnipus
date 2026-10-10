@@ -178,7 +178,19 @@ func newSlowFirstCommitSessions(t *testing.T, base session.SessionStore, delay t
 }
 
 func (s *slowFirstCommitSessions) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (session.WindowView, error) {
-	return s.inner.AppendWindowMessage(ctx, key, msg)
+	return appendWindowMsg(s.inner, ctx, key, msg)
+}
+
+func (s *slowFirstCommitSessions) AppendModelMessage(ctx context.Context, key string, in session.ModelAppend) (session.ModelSlot, session.WindowView, error) {
+	return s.inner.AppendModelMessage(ctx, key, in)
+}
+
+func (s *slowFirstCommitSessions) PlaceSavedInput(ctx context.Context, key string, src session.ArchiveAddress) (session.ModelSlot, session.WindowView, error) {
+	return s.inner.PlaceSavedInput(ctx, key, src)
+}
+
+func (s *slowFirstCommitSessions) ReadModelSlots(ctx context.Context, key string, from, to int, fn func(session.ModelSlot, []byte) error) error {
+	return s.inner.ReadModelSlots(ctx, key, from, to, fn)
 }
 
 func (s *slowFirstCommitSessions) WindowView(ctx context.Context, key string) (session.WindowView, error) {

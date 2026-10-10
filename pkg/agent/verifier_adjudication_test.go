@@ -203,7 +203,7 @@ func TestRunVerifierAdjudication_RegistersSessionBeforeDispatch(t *testing.T) {
 	if strings.Contains(spy.registerCalls[0].sessionID, "agent:judge:verify:") {
 		t.Errorf("sessionID = %q carries the retired sessionKey shape — cancel cannot match it", spy.registerCalls[0].sessionID)
 	}
-	judgeStore := al.GetAgentStore(string(coreagent.IDJudge))
+	judgeStore := al.GetSessionStore()
 	if judgeStore == nil {
 		t.Fatal("judge session store not available")
 	}

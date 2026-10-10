@@ -41,11 +41,11 @@ func TestCommitWindowProjections_TranscriptUndoFailure_PropagatesNotSwallowed(t 
 	asstMsg := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{{
 		ID: "tc-gap2", Type: "function", Function: &providers.FunctionCall{Name: "read", Arguments: "{}"},
 	}}}
-	_, err := store.AppendWindowMessage(ctx, key, asstMsg)
+	_, err := appendWindowMsg(store, ctx, key, asstMsg)
 	require.NoError(t, err, "seed: AppendWindowMessage(assistant call)")
 
 	toolMsg := providers.Message{Role: "tool", ToolCallID: "tc-gap2", Content: "a real archived tool result"}
-	snap0, err := store.AppendWindowMessage(ctx, key, toolMsg)
+	snap0, err := appendWindowMsg(store, ctx, key, toolMsg)
 	require.NoError(t, err, "seed: AppendWindowMessage(tool result)")
 	require.Equal(t, 2, snap0.State.Count, "precondition: the assistant call and its result are archived")
 	require.Len(t, viewArchived(snap0), 2)

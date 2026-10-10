@@ -171,7 +171,7 @@ func TestBoot_ConsumedMarkerWithArchivedInstruction_StaysAcknowledgedWithoutRede
 	h := newBootRecoveryHarness(t)
 	parent, child, messageID := persistedCrashGap(t, h)
 	archived := providers.Message{Role: "user", Content: "A delegated session is asking: choose"}
-	if _, err := h.sessions.AppendWindowMessage(context.Background(), child, archived); err != nil {
+	if _, err := appendWindowMsg(h.sessions, context.Background(), child, archived); err != nil {
 		t.Fatalf("AppendWindowMessage archived instruction: %v", err)
 	}
 	// Instrument check: the archive write must read back from the child

@@ -42,7 +42,7 @@ import (
 type cwR1Harness struct {
 	al    *AgentLoop
 	agent *AgentInstance
-	store *memory.JSONLStore
+	store *session.UnifiedStore
 	cfg   *config.Config
 	dir   string
 	key   string
@@ -101,7 +101,9 @@ func (h *cwR1Harness) archive(t *testing.T) []memory.ArchivedMessage {
 
 func (h *cwR1Harness) meta(t *testing.T) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(h.dir, h.key+".meta.json"))
+	// session-core DEL-10: the window cursor lives in the archive backend's own
+	// content-free meta beside the session's one archive directory.
+	data, err := os.ReadFile(filepath.Join(h.dir, h.key, "backend_meta.json"))
 	require.NoError(t, err, "read actual persisted window metadata")
 	var out map[string]any
 	require.NoError(t, json.Unmarshal(data, &out), "metadata must decode")
