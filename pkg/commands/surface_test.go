@@ -271,10 +271,12 @@ func TestChannelRegistrationFilter(t *testing.T) {
 		channelDefs = append(channelDefs, def)
 	}
 
-	// The channel set must include all 15 canonical commands.
+	// The channel set must include all 16 canonical commands (/clear restored
+	// by U10b, FR-030/031).
 	wantInChannel := []string{
 		"help",
 		"model",
+		"clear",
 		"cancel",
 		"stop",
 		"stop-redirect",
@@ -299,8 +301,9 @@ func TestChannelRegistrationFilter(t *testing.T) {
 		}
 	}
 
-	// Removed commands must be excluded.
-	for _, banned := range []string{"skill", "use", "new", "clear", "agents", "show", "list", "switch", "check", "start"} {
+	// Removed commands must be excluded. /clear is NOT in this list: U10b
+	// (FR-030/031) restored it as a canonical command.
+	for _, banned := range []string{"skill", "use", "new", "agents", "show", "list", "switch", "check", "start"} {
 		if names[banned] {
 			t.Errorf("removed command %q must not appear in channel registration (D1/U10a)", banned)
 		}
@@ -334,9 +337,10 @@ func containsSubstring(s, sub string) bool {
 // TestBuiltinDefinitions_CountsAndSurfaces verifies the complete set.
 // Updated for D1 (skill removed), D7/D9 (agents+skills surfaced on web), the
 // memory commands, ADR-049's /goal + /loop, ADR-20260928 D9's /stop +
-// /stop-redirect, and U10a (2026-10-09) which removed /new, /agents, /clear,
-// /start, /show, /list, /switch and /check — leaving 15 canonical commands and
-// ZERO hidden/deprecated commands (all deprecated multiplexers are gone).
+// /stop-redirect, U10a (2026-10-09) which removed /new, /agents, /start, /show,
+// /list, /switch and /check, and U10b which restored /clear (FR-030/031) —
+// leaving 16 canonical commands and ZERO hidden/deprecated commands (all
+// deprecated multiplexers are gone).
 func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 	defs := BuiltinDefinitions()
 
@@ -350,10 +354,11 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 		}
 	}
 
-	// 15 canonical (help/model/cancel/stop/stop-redirect/tasks/skills/channels/
-	// status/config/remember/recall/retrospective/goal/loop) + 0 hidden = 15.
-	if canonical != 15 {
-		t.Errorf("expected 15 canonical commands (U10a removed new+agents and all deprecated multiplexers), got %d",
+	// 16 canonical (help/model/clear/cancel/stop/stop-redirect/tasks/skills/
+	// channels/status/config/remember/recall/retrospective/goal/loop) + 0 hidden.
+	// /clear was restored by U10b (FR-030/031, founder ruling 2026-10-09).
+	if canonical != 16 {
+		t.Errorf("expected 16 canonical commands (U10a removed new+agents and deprecated multiplexers; U10b restored /clear), got %d",
 			canonical)
 	}
 	if hidden != 0 {
@@ -361,30 +366,30 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 			hidden)
 	}
 
-	// Web surface: help, model, cancel, stop, stop-redirect, skills, remember,
-	// recall, retrospective, goal, loop = 11 (tasks/channels/status/config are
-	// CLI/Channel only).
+	// Web surface: help, model, clear, cancel, stop, stop-redirect, skills,
+	// remember, recall, retrospective, goal, loop = 12 (tasks/channels/status/
+	// config are CLI/Channel only).
 	webCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceWeb) {
 			webCount++
 		}
 	}
-	if webCount != 11 {
-		t.Errorf("expected 11 web-surface canonical commands (U10a removed new+agents), got %d",
+	if webCount != 12 {
+		t.Errorf("expected 12 web-surface canonical commands (U10a removed new+agents; U10b restored /clear), got %d",
 			webCount)
 	}
 
-	// CLI/Channel surface: all 15 canonical.
+	// CLI/Channel surface: all 16 canonical.
 	cliCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceCLI) {
 			cliCount++
 		}
 	}
-	if cliCount != 15 {
+	if cliCount != 16 {
 		t.Errorf(
-			"expected 15 CLI-surface canonical commands (U10a removed new+agents and deprecated multiplexers), got %d",
+			"expected 16 CLI-surface canonical commands (U10a removed new+agents and deprecated multiplexers; U10b restored /clear), got %d",
 			cliCount,
 		)
 	}

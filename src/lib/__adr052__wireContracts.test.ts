@@ -227,7 +227,7 @@ describe('ADR-052 FR-036 — Session type "verifier" wire contract', () => {
     ['task'],
     ['channel'],
     ['scheduled'],
-    ['heartbeat'],
+    ['main'],
     ['verifier'],
   ] as const)('accepts session type %s', (type) => {
     const result = SessionSchema.safeParse(baseSession({ type }))
@@ -249,11 +249,11 @@ describe('ADR-052 FR-036 — Session type "verifier" wire contract', () => {
     expect(result.success).toBe(false)
   })
 
-  it('accepts a session with type omitted (legacy sessions default to chat client-side, not enforced here)', () => {
+  it('rejects a session with type omitted (session-core C-MAIN: type is required, never defaulted to chat)', () => {
     const withoutType = baseSession()
     delete (withoutType as { type?: unknown }).type
     const result = SessionSchema.safeParse(withoutType)
-    expect(result.success).toBe(true)
+    expect(result.success).toBe(false)
   })
 })
 

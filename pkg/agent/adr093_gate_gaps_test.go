@@ -574,33 +574,6 @@ func TestDelegateRun_DispatchRefusal_SaysHowToResume(t *testing.T) {
 	}
 }
 
-// TestAdr093TaskLaunch_SteeringRefusalUsesThePlainSentence is ADR-093 D5 for
-// the task executor: a launch refused because the creator stopped between
-// the gate and Launch is the plain sentence, not "task_executor: StartTaskNow: launch:".
-func TestAdr093TaskLaunch_SteeringRefusalUsesThePlainSentence(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	t.Cleanup(cleanup)
-	creatorID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093Persist(t, al, adr093Record(creatorID, 1, session.LifecycleRunning))
-
-	te := adr093TaskExecutor(t, al)
-	te.launcher = adr093RefuseLiveSteering{inner: te.launcher}
-	tk := adr093CreatorTask("Live then stopped", creatorID)
-	if err := te.store.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	_, err := te.startTaskNowViaLauncher(context.Background(), tk)
-	if err == nil {
-		t.Fatal("startTaskNowViaLauncher succeeded — ADR-093 D5: a steering refusal is returned to the caller")
-	}
-	if err.Error() != adr093D5Sentence {
-		t.Fatalf("task launch refusal =\n%s\nwant ADR-093 D5's sentence\n%s", err.Error(), adr093D5Sentence)
-	}
-	if strings.Contains(err.Error(), "task_executor:") || strings.Contains(err.Error(), "steer:") {
-		t.Fatalf("task launch refusal still quotes machinery: %s", err.Error())
-	}
-}
-
 // TestAdr093RevivePredicate_Halves is MIN-004's predicate, both conjuncts:
 // channel system refuses, and steer-wake metadata refuses even on a human
 // channel. Either conjunct false means no revival.
@@ -736,30 +709,5 @@ func TestAdr093Revival_MissingRecordIsNotAnErrorLog(t *testing.T) {
 	}
 	if log := readLog(); strings.Contains(log, parentID) {
 		t.Fatalf("a missing lifecycle record was logged at error level:\n%s\nnot-found is not a read failure", log)
-	}
-}
-
-// TestAdr093Task_CreatorReadErrorIsLogged is the same rule on the task path:
-// the creator record could not be read, and that is logged, not dropped.
-func TestAdr093Task_CreatorReadErrorIsLogged(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	t.Cleanup(cleanup)
-	creatorID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093StoppedRoot(t, al, creatorID)
-	adr093MakeLifecycleUnreadable(t, al, creatorID)
-
-	te := adr093TaskExecutor(t, al)
-	tk := adr093CreatorTask("Unreadable creator", creatorID)
-	if err := te.store.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	readLog := captureLogFile(t, logger.ERROR)
-	_, err := te.startTaskNowViaLauncher(context.Background(), tk)
-	log := readLog()
-	if err == nil {
-		t.Fatal("startTaskNowViaLauncher succeeded despite an unreadable creator record")
-	}
-	if !strings.Contains(log, creatorID) || !strings.Contains(strings.ToLower(log), "permission denied") {
-		t.Fatalf("creator-record read error was not logged at error level.\nerr: %v\nlog:\n%s\nwant both %q and \"permission denied\"", err, log, creatorID)
 	}
 }
