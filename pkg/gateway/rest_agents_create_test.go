@@ -853,43 +853,6 @@ func TestCreateAgent_ImmediateSessionCreate_NoRace(t *testing.T) {
 		sw.Code, sw.Body.String())
 }
 
-// TestCreateAgent_RejectsReservedDefaultName verifies createAgent 400s on a
-// name of "default", case-insensitively.
-func TestCreateAgent_RejectsReservedDefaultName(t *testing.T) {
-	for _, name := range []string{"default", "Default", "DEFAULT", "  default  "} {
-		t.Run("name="+name, func(t *testing.T) {
-			api := buildExecutorTestAPI(t)
-
-			body := `{"name":"` + name + `","type":"Main","soul":"s"}`
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
-			r.Header.Set("Content-Type", "application/json")
-			api.HandleAgents(w, r)
-
-			require.Equal(t, http.StatusBadRequest, w.Code,
-				"create with reserved name %q must be rejected 400, got body: %s", name, w.Body.String())
-			assert.Contains(t, w.Body.String(), "reserved",
-				"error body must explain the name is reserved")
-		})
-	}
-}
-
-// TestCreateAgent_AllowsNonReservedNameContainingDefault verifies the check
-// is an exact match (after trim/case-fold), not a substring match — a name
-// like "Default Assistant" must NOT be rejected.
-func TestCreateAgent_AllowsNonReservedNameContainingDefault(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	body := `{"name":"Default Assistant","type":"Main","soul":"s"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	require.Equal(t, http.StatusCreated, w.Code,
-		"a name merely containing \"default\" as a substring must be allowed, got body: %s", w.Body.String())
-}
-
 // TestCreateAgent_TypeOmitted_Rejected is the W1 behavior-change guard: the
 // historical omit-type→Main default is RETIRED. type is now a required,
 // single-value discriminator on every create variant — a body without it

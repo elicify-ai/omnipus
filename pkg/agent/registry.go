@@ -85,24 +85,6 @@ func NewAgentRegistry(
 	for i := range cfg.Agents.List {
 		ac := &cfg.Agents.List[i]
 		id := routing.NormalizeAgentID(ac.ID)
-		// ADR-071 §5.1.3 part 3: a PRE-EXISTING agent already id'd literally
-		// "default" at boot/reload gets a WARN, not a hard abort — the create
-		// (id: always a fresh uuid) and update (id: immutable via PUT)
-		// boundary rejections in pkg/gateway/rest.go only stop this going
-		// forward; a hand-edited config.json is the one path that still
-		// reaches here. The agent stays fully reachable by every OTHER
-		// route (routing bindings, the UI agent picker, delegate, direct
-		// agent_id addressing) — only switch_agent's literal target:"default"
-		// path is shadowed, since that sentinel always wins over an
-		// id-matched lookup, matched case-insensitively (strings.EqualFold,
-		// same as this check). id is already lowercased by
-		// NormalizeAgentID, matching switch_agent's case-insensitive
-		// collision rule.
-		if id == tools.SwitchAgentDefaultTarget {
-			logger.WarnCF("agent",
-				"agent id is literally \"default\" — unreachable via switch_agent's target:\"default\" literal path (that sentinel always resolves to the CONFIGURED default agent instead); rename this agent",
-				map[string]any{"agent_id": id, "name": ac.Name})
-		}
 		instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
 		// Upgrade agent type for runtime-seeded core agents whose config may not
 		// have Type field set (e.g., agents seeded before the Type field was introduced).
@@ -181,8 +163,7 @@ func (r *AgentRegistry) ForEachTool(name string, fn func(tools.Tool)) {
 }
 
 // GetAgentName returns the display name for agentID and true if the agent
-// exists in the registry. It satisfies the tools.AgentRegistryReader interface
-// used by HandoffTool to avoid an import cycle.
+// exists in the registry.
 func (r *AgentRegistry) GetAgentName(agentID string) (string, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -195,21 +176,6 @@ func (r *AgentRegistry) GetAgentName(agentID string) (string, bool) {
 		name = agentID
 	}
 	return name, true
-}
-
-// IsWorker reports whether the agent identified by agentID is a sub-agent worker
-// (the delegation-only labor tier). Returns false when the agent does not exist,
-// so callers that have already validated existence get a definitive worker/not-worker
-// answer. Satisfies the tools.AgentRegistryReader interface used by HandoffTool to
-// reject worker handoff targets without an import cycle.
-func (r *AgentRegistry) IsWorker(agentID string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	agent, ok := r.agents[agentID]
-	if !ok {
-		return false
-	}
-	return agent.IsWorker()
 }
 
 // IsExternalCLI reports whether agentID resolves to a subagent_3p (external

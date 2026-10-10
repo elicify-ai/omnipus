@@ -67,25 +67,10 @@ func childrenOf(t *testing.T, al *AgentLoop, steeringSessionID string) int {
 }
 
 // u5aCallerAgentID is the steering session's delegating-agent identity. It is
-// deliberately DISTINCT from testDefaultAgentID (the target): a session is
-// created owned by its creator, and SwitchAgent refuses a no-op switch to the
-// already-active agent — the same reason
-// TestLaunch_DepthBudgetUsesEdgeAndPerformancePrecedence switches to a distinct
-// "depth-parent" caller.
+// deliberately DISTINCT from testDefaultAgentID (the target): a steering
+// session is created owned by this caller (newTestSteeringSessionOwnedBy), the
+// immutable owner a launch reads as its delegating agent.
 const u5aCallerAgentID = "u5a-seed-delegate-caller"
-
-// bindSteeringAgent switches the steering session's active agent identity to
-// the delegating caller. newTestSteeringSession's freshly-created session
-// records NO ActiveAgentID (U1/DEL-11: a session's owner is its immutable
-// AgentID), and launchSteered's fail-closed parent-agent guard
-// (tools.delegate.require_parent_agent_id, default true) refuses a launch whose
-// steering meta has an empty one — so the launch tests must pin it.
-func bindSteeringAgent(t *testing.T, al *AgentLoop, sessionID string) {
-	t.Helper()
-	if err := al.GetSessionStore().SwitchAgent(sessionID, u5aCallerAgentID); err != nil {
-		t.Fatalf("SwitchAgent(%q, %q): %v", sessionID, u5aCallerAgentID, err)
-	}
-}
 
 // TestLaunch_UnreadableGraph_DelegateOrigin_RefusesLaunchNoGlobalBudget is
 // condition 2: with the workspace's delegation graph unreadable, a Delegate
@@ -103,8 +88,7 @@ func TestLaunch_UnreadableGraph_DelegateOrigin_RefusesLaunchNoGlobalBudget(t *te
 	al.GetConfig().Performance.MaxDelegationDepth = 10
 
 	l := NewSteerLauncher(al)
-	steerer := newTestSteeringSession(t, al, testWS)
-	bindSteeringAgent(t, al, steerer)
+	steerer := newTestSteeringSessionOwnedBy(t, al, testWS, u5aCallerAgentID)
 
 	_, err := l.Launch(ctxWS(testWS, 0), steer.LaunchRequest{
 		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "do work",
@@ -133,8 +117,7 @@ func TestLaunch_MissingEdge_DelegateOrigin_RefusesLaunch(t *testing.T) {
 	al.GetConfig().Performance.MaxDelegationDepth = 10
 
 	l := NewSteerLauncher(al)
-	steerer := newTestSteeringSession(t, al, testWS)
-	bindSteeringAgent(t, al, steerer)
+	steerer := newTestSteeringSessionOwnedBy(t, al, testWS, u5aCallerAgentID)
 
 	_, err := l.Launch(ctxWS(testWS, 0), steer.LaunchRequest{
 		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "do work",
@@ -163,8 +146,7 @@ func TestLaunch_MissingEdge_TaskOrigin_Exempt(t *testing.T) {
 	al.GetConfig().Performance.MaxDelegationDepth = 5
 
 	l := NewSteerLauncher(al)
-	steerer := newTestSteeringSession(t, al, testWS)
-	bindSteeringAgent(t, al, steerer)
+	steerer := newTestSteeringSessionOwnedBy(t, al, testWS, u5aCallerAgentID)
 
 	res, err := l.Launch(ctxWS(testWS, 0), steer.LaunchRequest{
 		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "do work",
@@ -199,8 +181,7 @@ func TestLaunch_UnboundTurn_ReadsResolvedDefaultGraph(t *testing.T) {
 	al.GetConfig().Performance.MaxDelegationDepth = 10
 
 	l := NewSteerLauncher(al)
-	steerer := newTestSteeringSession(t, al, "") // UNBOUND steering session
-	bindSteeringAgent(t, al, steerer)
+	steerer := newTestSteeringSessionOwnedBy(t, al, "", u5aCallerAgentID) // UNBOUND steering session
 
 	res, err := l.Launch(context.Background(), steer.LaunchRequest{ // no ctx workspace
 		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "do work",

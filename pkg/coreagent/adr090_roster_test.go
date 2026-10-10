@@ -111,7 +111,7 @@ func assertADR090PolicyInventory(t *testing.T, cfg *config.Config) {
 
 func TestADR090_FreshSkillAssignmentsAndExplicitEmptySelectionsPersist(t *testing.T) {
 	wantSkills := map[string][]string{
-		"mia":            {"interview", "handoff", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
+		"mia":            {"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
 		"jim":            {"interview", "orchestrate", "plan", "define-goal"},
 		"ava":            {"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team"},
 		"admin":          {"interview", "mcp-install", "provider-setup", "channel-setup", "doctor"},

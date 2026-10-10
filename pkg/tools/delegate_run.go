@@ -259,7 +259,6 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		Limits: steer.Limits{
 			TimeoutSeconds: int(dt.timeout / time.Second),
 		},
-		ToolExclusions:    []string{string(ExcludedSwitchAgent)},
 		RequestedSkill:    strings.TrimSpace(dt.requestedSkill),
 		ContextReferences: dt.snapshotReferences(),
 		ContextNotes:      dt.snapshotNotes(),

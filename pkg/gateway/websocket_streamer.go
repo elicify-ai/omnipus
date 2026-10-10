@@ -108,17 +108,14 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 	// Resolve the active agent for this session so the transcript entry
 	// can be tagged with the correct agent ID (FR-002). Key by sessionID.
 	//
-	// Prefer the handoff override, then fall back to the session's
-	// ActiveAgentID from metadata. Without the fallback, assistant entries
-	// for un-handed-off sessions get written with AgentID="", which means
+	// Use the session's ActiveAgentID from metadata, then its AgentID.
+	// Without that, assistant entries get written with AgentID="", which means
 	// HydrateAgentHistoryFromTranscript attributes them to "main" instead
 	// of the real owning agent — so the next turn's LLM call has only
 	// tool_calls/tool_results in its history, no connecting reasoning text,
 	// and the agent re-starts the task from scratch.
 	activeAgentID := ""
-	if aid, ok := h.agentLoop.GetSessionActiveAgent(sid); ok && aid != "" {
-		activeAgentID = aid
-	} else if agentStore != nil {
+	if agentStore != nil {
 		if meta, err := agentStore.GetMeta(sid); err == nil && meta != nil {
 			if meta.ActiveAgentID != "" {
 				activeAgentID = meta.ActiveAgentID
@@ -157,9 +154,8 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 // against a session id that does not resolve to a real, store-backed session
 // (ADR-057 FR-001/FR-002/W3, spec BDD-03 row `pkg/gateway/websocket.go:4256`
 // "streamed assistant"). Mirrors pkg/agent/turn.go's transcriptWriteFailures
-// and pkg/tools/handoff.go's handoffTranscriptWriteFailures — each unit that
-// owns a converted call site gets its own package-local counter rather than
-// sharing one across package boundaries. The write itself stays best-effort
+// — each unit that owns a converted call site gets its own package-local
+// counter rather than sharing one across package boundaries. The write itself stays best-effort
 // by design (a failed streamed-transcript record must never fail the turn
 // that already streamed successfully to the client); this counter is the
 // only durable, operator-visible signal that it happened. Exposed via

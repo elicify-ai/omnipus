@@ -23,7 +23,7 @@
 //	Scenario: RetentionSweep evicts a swept session from the cache (companion-fix regression)
 //	Scenario: GetOrCreateScheduledSession's second call serves from cache
 //	Scenario (concurrency, -race): list-while-writing, NewChannelSession-while-listing, delete-while-listing
-//	Scenario (concurrency, -race): SetMeta/SwitchAgent (RMW) interleaved with ListSessions/GetMeta
+//	Scenario (concurrency, -race): SetMeta (RMW) interleaved with ListSessions/GetMeta
 //	Scenario (MB-1 regression): a FAILED SetMeta must not corrupt the cache — GetMeta/ListSessions
 //	  keep returning the OLD (disk-matching) value, never the attempted-but-unpersisted one
 //	Scenario: loadMetaCacheLocked (boot-time cache seed) happy path — a fresh store over N
@@ -312,19 +312,19 @@ func TestConcurrentDeleteWhileListing(t *testing.T) {
 	assert.Empty(t, metas, "all sessions must be deleted by the end of the concurrent run")
 }
 
-// TestConcurrentSetMetaSwitchAgentWhileReading is the -race test-gap fix
+// TestConcurrentSetMetaWhileReading is the -race test-gap fix
 // (pr-test sev3): the existing concurrency trio above covers
 // NewSession/NewChannelSession/DeleteSession racing ListSessions, but none of
 // them exercise the specific read-modify-write pattern readMetaLocked's doc
-// comment calls out — SetMeta/SwitchAgent mutate the value readMetaLocked
-// returns and then call writeMetaLocked. This interleaves SetMeta and
-// SwitchAgent (both RMW callers) with ListSessions and GetMeta (both readers)
+// comment calls out — SetMeta mutates the value readMetaLocked
+// returns and then calls writeMetaLocked. This interleaves two SetMeta
+// writers (RMW callers) with ListSessions and GetMeta (both readers)
 // across many sessions; run with -race to catch any metaCache/cacheMu misuse
 // on this path specifically.
 //
-// Traces to: pkg/session/unified.go readMetaLocked, SetMeta, SwitchAgent,
+// Traces to: pkg/session/unified.go readMetaLocked, SetMeta,
 // ListSessions, GetMeta.
-func TestConcurrentSetMetaSwitchAgentWhileReading(t *testing.T) {
+func TestConcurrentSetMetaWhileReading(t *testing.T) {
 	store := newTestStore(t)
 	const n = 10
 	const iterations = 50
@@ -354,9 +354,9 @@ func TestConcurrentSetMetaSwitchAgentWhileReading(t *testing.T) {
 		agents := []string{"agent-1", "agent-2"}
 		for i := 0; i < iterations; i++ {
 			id := ids[i%n]
-			newAgent := agents[i%2]
-			if err := store.SwitchAgent(id, newAgent); err != nil && !errors.Is(err, ErrAlreadyActive) {
-				t.Errorf("SwitchAgent failed: %v", err)
+			newTitle := agents[i%2]
+			if err := store.SetMeta(id, MetaPatch{Title: &newTitle}); err != nil {
+				t.Errorf("SetMeta (second writer) failed: %v", err)
 			}
 		}
 	}()

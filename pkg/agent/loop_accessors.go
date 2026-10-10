@@ -221,56 +221,6 @@ func (al *AgentLoop) GetConfig() *config.Config {
 	return al.cfg
 }
 
-// GetSessionActiveAgent returns the agent that the handoff tool last switched
-// the given session to. Returns ("", false) if no handoff override is active
-// for this session_id.
-func (al *AgentLoop) GetSessionActiveAgent(sessionID string) (string, bool) {
-	if sessionID == "" {
-		return "", false
-	}
-	if v, ok := al.sessionActiveAgent.Load("session:" + sessionID); ok {
-		s, ok := v.(string)
-		if !ok {
-			logger.ErrorCF("agent", "sessionActiveAgent: invariant violated — unexpected value type",
-				map[string]any{"session_id": sessionID, "got_type": fmt.Sprintf("%T", v)})
-			return "", false
-		}
-		return s, true
-	}
-	return "", false
-}
-
-// GetLastSwitchToDefault returns whether the most recent switch_agent call
-// on the given session was a return-to-default (true) or a named-agent
-// hand-off (false), as reported by the tool itself
-// (tools.HandoffEvent.ToDefault) rather than re-derived from the resulting
-// agent id. Returns (false, false) if no such record is pending — e.g. no
-// switch_agent has run yet for this session, or it has already been
-// consumed.
-//
-// One-shot: this LoadAndDeletes the entry, since it exists only to answer
-// "was the switch that just completed a return-to-default" once, at the WS
-// agent_switched frame builder that reads it right after the matching
-// ToolExecEnd event fires. Leaving stale entries around risks a later,
-// unrelated switch_agent call on the same session silently reusing a value
-// it never itself observed.
-func (al *AgentLoop) GetLastSwitchToDefault(sessionID string) (bool, bool) {
-	if sessionID == "" {
-		return false, false
-	}
-	v, ok := al.lastSwitchToDefault.LoadAndDelete("session:" + sessionID)
-	if !ok {
-		return false, false
-	}
-	b, ok := v.(bool)
-	if !ok {
-		logger.ErrorCF("agent", "lastSwitchToDefault: invariant violated — unexpected value type",
-			map[string]any{"session_id": sessionID, "got_type": fmt.Sprintf("%T", v)})
-		return false, false
-	}
-	return b, true
-}
-
 // SetPlanEngine installs the single hybrid plan-coordinator instance
 // (ADR-049 D4) so command handlers and REST handlers can reach its Admit/
 // Release admission authority and PausePlansOwnedBy/ResumePlansOwnedBy/

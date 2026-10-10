@@ -133,8 +133,7 @@ type SteeredBy struct {
 	ReportingTarget ReportingTarget `json:"reporting_target"`
 	Authorization   Authorization   `json:"authorization"`
 	Limits          Limits          `json:"limits"`
-	// ToolExclusions names tools this steered session may not call —
-	// `switch_agent` today.
+	// ToolExclusions names tools this steered session may not call.
 	ToolExclusions []string `json:"tool_exclusions,omitempty"`
 }
 

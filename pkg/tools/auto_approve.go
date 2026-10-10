@@ -185,7 +185,6 @@ var autoApproveClasses = map[string]AutoApproveClass{
 
 	// Agents & tasks
 	"delegate":        AutoRuns,
-	"switch_agent":    AutoRuns,
 	"message_parent":  AutoRuns,
 	"list_agents":     AutoRuns,
 	"create_plan":     AutoRuns,

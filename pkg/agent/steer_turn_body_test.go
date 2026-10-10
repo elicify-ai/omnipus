@@ -135,32 +135,15 @@ func waitUntil(t *testing.T, timeout time.Duration, what string, cond func() boo
 	t.Fatalf("timed out after %s waiting for %s", timeout, what)
 }
 
-// newSteeringSessionWithActiveAgent creates the steering chat session with an
-// explicit ActiveAgentID.
-//
-// Launch's fail-closed parent-identity guard
+// newSteeringSessionWithActiveAgent creates the steering chat session OWNED by
+// testDefaultAgentID: Launch's fail-closed parent-identity guard
 // (config.DelegateToolConfig.RequireParentAgentID, which resolves TRUE when
-// unset) reads steererMeta.ActiveAgentID, and a freshly created session
-// carries NO ActiveAgentID (session-core U1/DEL-11: createSessionLocked no
-// longer seeds it). So the guard is satisfied the same way production
-// satisfies it — a genuine handover: the session is created under one agent
-// and switched to mia, which is what UnifiedStore.SwitchAgent is for. Writing
-// the field any other way, or flipping the guard off in the harness, would
-// hide that requirement instead of meeting it.
-//
-// (That the guard and the empty-ActiveAgentID producer disagree today is a
-// PRE-EXISTING failure on this branch tip, not this lane's: on the untouched
-// tip, TestLaunch_AtExhaustedDepthBudget_Refused already fails with
-// "delegating agent identity is empty" on its first Launch. Reported, not
-// fixed here.)
+// unset) reads the steering session's immutable owner, Session.agent_id.
 func newSteeringSessionWithActiveAgent(t *testing.T, al *AgentLoop) string {
 	t.Helper()
-	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", delegateExtCLIAgentID)
+	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", testDefaultAgentID)
 	if err != nil {
 		t.Fatalf("NewSession(steerer): %v", err)
-	}
-	if err := al.GetSessionStore().SwitchAgent(meta.ID, testDefaultAgentID); err != nil {
-		t.Fatalf("SwitchAgent(steerer -> %s): %v", testDefaultAgentID, err)
 	}
 	return meta.ID
 }

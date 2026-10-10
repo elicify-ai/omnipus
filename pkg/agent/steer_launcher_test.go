@@ -156,7 +156,14 @@ func newSteerAL(t *testing.T) (*AgentLoop, func()) {
 // returns its id, for use as a Launch request's SteeringSessionID.
 func newTestSteeringSession(t *testing.T, al *AgentLoop, workspaceID string) string {
 	t.Helper()
-	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", testDefaultAgentID)
+	return newTestSteeringSessionOwnedBy(t, al, workspaceID, testDefaultAgentID)
+}
+
+// newTestSteeringSessionOwnedBy is newTestSteeringSession with an explicit
+// immutable owner (Session.agent_id) — the delegating agent a launch reads.
+func newTestSteeringSessionOwnedBy(t *testing.T, al *AgentLoop, workspaceID, ownerAgentID string) string {
+	t.Helper()
+	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", ownerAgentID)
 	if err != nil {
 		t.Fatalf("NewSession(steerer): %v", err)
 	}
@@ -468,10 +475,7 @@ func TestLaunch_DepthBudgetUsesEdgeAndPerformancePrecedence(t *testing.T) {
 			defer cleanup()
 			al.GetConfig().Performance.MaxDelegationDepth = tc.globalDepth
 
-			parentID := newTestSteeringSession(t, al, workspaceID)
-			if err := al.GetSessionStore().SwitchAgent(parentID, parentAgentID); err != nil {
-				t.Fatalf("SwitchAgent(parent): %v", err)
-			}
+			parentID := newTestSteeringSessionOwnedBy(t, al, workspaceID, parentAgentID)
 			result, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 				SteeringSessionID: parentID,
 				TargetAgentID:     testDefaultAgentID,

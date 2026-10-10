@@ -16,8 +16,8 @@ import (
 // InspectSessionStore is the subset of *session.UnifiedStore
 // InspectSessionTool needs: metadata + transcript read, keyed purely on
 // session ID (the store resolves the owning agent internally — mirrors
-// DelegateSessionStore/HandoffSessionStore's narrow-interface pattern in
-// this package, delegate.go/handoff.go).
+// DelegateSessionStore's narrow-interface pattern in this package,
+// delegate.go).
 type InspectSessionStore interface {
 	// GetMeta returns the session's metadata (agent, channel, etc.).
 	GetMeta(sessionID string) (*session.UnifiedMeta, error)

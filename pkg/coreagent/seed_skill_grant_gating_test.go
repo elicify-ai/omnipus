@@ -43,7 +43,7 @@ func TestSeedConfig_FreshInstallSeedsCoreGrants(t *testing.T) {
 	// pkg/coreagent/skill_allowlist_seed_test.go's FR-9.4 comment, which
 	// predates D5.1 but seeds the identical mapping).
 	want := map[string][]string{
-		"mia":   {"interview", "handoff", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
+		"mia":   {"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
 		"jim":   {"interview", "orchestrate", "plan", "define-goal"},
 		"ava":   {"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team"},
 		"admin": {"interview", "mcp-install", "provider-setup", "channel-setup", "doctor"},

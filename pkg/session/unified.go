@@ -239,7 +239,7 @@ type UnifiedStore struct {
 	// so a loop tick no longer touches this entry's Stats field and a
 	// transcript append no longer touches its Loop fields; via
 	// readMetaLocked self-healing
-	// the cache on a cache-miss disk read (SetMeta, SwitchAgent,
+	// the cache on a cache-miss disk read (SetMeta,
 	// AppendTranscript, GetOrCreateScheduledSession, and GetMeta's cache-miss
 	// path all reach the cache this way, composing across all four on-disk
 	// group files — see readUnifiedMeta); and via ListSessions' own
@@ -284,7 +284,7 @@ type UnifiedStore struct {
 	// SetMeta (including a bare Owner/Title patch — u4IndexAddChild is a
 	// no-op when ParentSessionID is unchanged/empty, so this is safe to call
 	// unconditionally rather than only when the patch touches
-	// ParentSessionID specifically), SwitchAgent, NewChannelSession, and
+	// ParentSessionID specifically), NewChannelSession, and
 	// unified_api.go's CreateSessionWithID/AppendTranscriptStrict call sites
 	// via the writeMetaLocked dispatcher. U6 consumes ChildCount for
 	// roots-only listing (FR-097's stated ownership split: "U4 creates the
@@ -599,9 +599,8 @@ func (us *UnifiedStore) createSessionLocked(
 	// session's owner is its immutable AgentID. Seeding it here (as this
 	// literal once did, ActiveAgentID = creatingAgentID) both persisted a
 	// redundant second owner on every meta.json and made a session look
-	// handed-over the moment it was created. It stays empty until something
-	// genuinely switches the session's active agent (UnifiedStore.SwitchAgent,
-	// still present until the switch_agent teardown unit deletes it).
+	// handed-over the moment it was created. Nothing writes it any more: the
+	// switch_agent tool and UnifiedStore.SwitchAgent were deleted (DEL-07).
 	meta := &UnifiedMeta{
 		SessionMeta: SessionMeta{
 			ID:        sessionID,
@@ -843,7 +842,7 @@ func (us *UnifiedStore) GetMeta(sessionID string) (*UnifiedMeta, error) {
 //
 // MB-1 fix (cache/disk divergence on write failure): an earlier version of
 // this method returned the LIVE cache entry pointer on a hit, reasoning that
-// every read-modify-write caller (SetMeta, SwitchAgent, AppendTranscript,
+// every read-modify-write caller (SetMeta, AppendTranscript,
 // GetOrCreateScheduledSession, GetMeta's cache-miss path) holds the
 // session's shard across its entire mutate-then-write, so no reader of a
 // DIFFERENT session could observe this entry mid-mutation. That reasoning
@@ -894,7 +893,7 @@ func (us *UnifiedStore) readMetaLocked(sessionID string) (*UnifiedMeta, error) {
 	// Before this fix, this was the second of two metaCache-population
 	// paths (alongside loadMetaCacheLocked) that populated the cache
 	// without ever touching parentIndex/childToParent — every caller that
-	// reaches this branch (GetMeta, SetMeta, SwitchAgent, AppendTranscript,
+	// reaches this branch (GetMeta, SetMeta, AppendTranscript,
 	// GetOrCreateScheduledSession, ListSessions' out-of-band reconcile) was
 	// silently leaving ChildCount under-reporting for the session it just
 	// composed from disk. A no-op when meta.ParentSessionID is empty;
