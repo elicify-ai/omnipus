@@ -975,7 +975,10 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	// main per eligible member — the same get-or-create the membership write
 	// path runs, so a member's identity does not depend on which surface
 	// established the membership. Best-effort and idempotent.
-	a.ensureMainsForTeam(ws)
+	if mainsErr := a.ensureMainsForTeam(ws); mainsErr != nil {
+		logsafeError("rest: workspace create: some team mains were not created; each is re-attempted when its chat is opened",
+			"workspace_id", ws.ID, "error", mainsErr)
+	}
 	wire := workspaceToWire(a, ws, 0)
 	if a.auditor != nil {
 		if err := a.auditor.Log(
@@ -1446,7 +1449,10 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 	// Best-effort and idempotent: the get-or-create reuses an existing main,
 	// and a pair whose stored identity is unreadable or mismatched is logged
 	// and skipped here — its refusal is served on the main's own lookup/attach.
-	rw.a.ensureMainsForTeam(rw.ws)
+	if mainsErr := rw.a.ensureMainsForTeam(rw.ws); mainsErr != nil {
+		logsafeError("rest: workspace team update: some team mains were not created; each is re-attempted when its chat is opened",
+			"workspace_id", rw.ws.ID, "error", mainsErr)
+	}
 
 	// FR-007: after persisting, reconcile cron schedules to reflect the new
 	// member_configs. Best-effort: a failure is logged but does not prevent
