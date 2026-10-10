@@ -52,7 +52,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Separator } from '@/components/ui/separator'
 import { isClearContextMarker } from '@/lib/clearMarker'
 import { useChatStore } from '@/store/chat'
-import { pendingRedirectSids } from '@/store/chat/runtime-state'
+import { pendingClearRefetches, pendingRedirectSids } from '@/store/chat/runtime-state'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
@@ -3334,7 +3334,21 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
       {historyError ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           <p>Could not load messages.</p>
-          <Button variant="outline" size="sm" onClick={() => refetchHistory()}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              refetchHistory()
+              // D5 (FR-030/031): when a /clear operation still owes the view
+              // its transcript re-read, this Retry completes THAT recovery
+              // too — a fresh read plus the merge — without resending
+              // /clear. No-op when no clear operation is pending.
+              const sid = activeSessionId
+              if (sid && sid !== '__pending' && pendingClearRefetches[sid]) {
+                useChatStore.getState().retryClearTranscript(sid)
+              }
+            }}
+          >
             <ArrowCounterClockwise size={14} /> Retry
           </Button>
         </div>

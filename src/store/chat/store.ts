@@ -11,6 +11,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
 import { EMPTY_BUCKET, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from './runtime-state'
 import { applyMessageArray, emptySessionState, omitKeys } from './session'
+import { flushHeldClearProjection, retryClearTranscriptRead } from './clear-refetch'
 import type { ChatMessage, ChatStore, OutboundQueueItem, RateLimitEventData, SessionChatState } from './types'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
@@ -390,6 +391,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const MIN_REPLAY_DISPLAY_MS = 750
       if (elapsed >= MIN_REPLAY_DISPLAY_MS) {
         withBucket(sid, () => ({ isReplaying: false }))
+        // D1: replay→idle — apply any transcript projection the /clear
+        // re-read held back during replay (no new network read).
+        flushHeldClearProjection(sid, withBucket)
       } else {
         // Cancel any previous pending timer before scheduling a new one so a
         // burst of `done` frames doesn't queue multiple stale clears.
@@ -399,6 +403,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
         replayingClearTimers[sid] = setTimeout(() => {
           delete replayingClearTimers[sid]
           withBucket(sid, () => ({ isReplaying: false }))
+          // D1: the deferred display window just made the bucket idle.
+          flushHeldClearProjection(sid, withBucket)
         }, MIN_REPLAY_DISPLAY_MS - elapsed)
       }
     },
@@ -416,6 +422,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
         messagesById: msgById,
         messageOrder: msgOrder,
       }))
+    },
+
+    // D5 (FR-030/031 clear refresh): the history-Retry recovery control.
+    // Repeats the rejecting read AND the merge application for the retained
+    // /clear operation — never a /clear resend. No-op when no clear
+    // operation owes a refresh.
+    retryClearTranscript: (sessionId) => {
+      retryClearTranscriptRead(sessionId, withBucket)
     },
 
     // ADR-049 D2/D4/SD-C10 (verdict-card fix): originally, the WS

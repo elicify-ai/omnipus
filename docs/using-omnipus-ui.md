@@ -142,9 +142,11 @@ A turn stopped by `/stop-redirect` keeps its partial reply but is not labelled (
 
 ### Clear a chat's context
 
-`/clear` empties what the model is currently working from in this chat. The conversation and its whole history are kept — nothing is deleted, no new chat is started — and you stay in the same chat. The chat view re-reads the chat from the server and shows a quiet **Conversation context cleared** divider; from that point the assistant continues with a fresh context, while the earlier messages stay searchable and openable in history.
+`/clear` clears this chat's model context without deleting the saved conversation or starting another chat. You stay in the same chat. The context change happens on the server; it does not wait for the chat view to update.
 
-The command runs on the server and waits for a safe point: if a reply is already being written, the clear takes effect when that turn ends. Messages you sent while the turn was running are kept and delivered afterwards in the same chat.
+After the command's reply, the chat re-reads its saved messages from the server. When that read succeeds, the view is replaced with the server's current view and the marker appears as a quiet **Conversation context cleared** divider. A failed or delayed refresh can leave the divider absent even though the server has already cleared the context; the chat tries the read again after a later reply ends, and if the history list shows **Could not load messages.**, that screen's **Retry** also completes the refresh — you do not need to repeat `/clear`. Anything typed while the refresh was still on its way is kept, and the earlier messages remain in the saved history.
+
+The server runs the command at the start of the chat's next turn, so a `/clear` sent while a reply is being written takes effect when that turn ends.
 
 `/clear` works in a main or extra chat only. In a helper, worker, delegate or task-child session it refuses with an explanation and changes nothing — no view move, no history change, no new chat. The refusal appears as the command's reply.
 

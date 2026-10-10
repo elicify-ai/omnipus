@@ -16,6 +16,7 @@ import type {
 } from '@/lib/api/generated/asyncapi-types'
 import { applySnapshotHistoryWipe, cursorFromTerminalFrame } from '../cursor'
 import { replayErrorRetryAttempts, replayErrorRetryTimers } from '../runtime-state'
+import { flushHeldClearProjection } from '../clear-refetch'
 import type { ChatMessage, ChatStore, SessionChatState } from '../types'
 import { finishRecoveredFirstSend } from './first-send-frames'
 import { acknowledgeShownCatchUp, noteServerAttentionFrame } from '@/store/session/foregroundAck'
@@ -232,6 +233,9 @@ export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: C
           draft.messageOrder.push(newMsg.id)
         }) as Partial<SessionChatState>
       })
+      // D1: catch-up completion is a replay→idle transition — a projection
+      // the clear re-read held back during replay applies here, with no new read.
+      flushHeldClearProjection(targetSid, withBucket)
       return true
     }
 

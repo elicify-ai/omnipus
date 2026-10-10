@@ -1,34 +1,35 @@
-// clear-transcript-refetch.test.ts — FR-030/031 (U10b), R3 round 2: the
-// transcript re-read after a /clear, rebuilt per review round 1 (C1–C5).
+// clear-transcript-refetch.test.ts — FR-030/031 (U10b) SPA half, R3 round 3.
 //
-// Oracles: docs/internal/specs/session-core-spec.md FR-030 ("clears the chat
-// UI and model context with a marker by moving/advancing the ... display
-// window start", "preserves the transcript", pending input kept) and the
-// saved server reference
-// /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/
-// joint-merge-20261009/core-clear-reference-67345b1d7/{cmd_clear,clear_session}.go
-// (one chat-view marker entry "Conversation context cleared", never pushed
-// live; the clear dispatches only at the start of the session's own turn).
+// Oracles: docs/internal/specs/session-core-spec.md FR-030; the saved server
+// reference core-clear-reference-67345b1d7/{cmd_clear,clear_session}.go (one
+// chat-view marker entry "Conversation context cleared", never pushed live;
+// the clear dispatches only at the start of the session's own turn); and
+// contracts/components/schemas/MessageStatusFrame.yaml (a `received`
+// delivery status is a durable transcript append).
 //
-// The rules under test:
-//   C1  the refresh intent belongs to the /clear OPERATION, recorded on every
-//       send path (normal, offline-queue drain, Retry/resend), bound to that
-//       send so the turn that was running at send-time cannot consume it;
-//   C2  the re-read is a read that REJECTS on failure (real QueryClient
-//       fetchQuery; only the network function is stubbed here) — on failure
-//       nothing stale is applied and the intent survives;
-//   C3  the fetched projection is MERGED into the bucket — server rows are
-//       authoritative for what the server has, while unsaved/failed/pending
-//       user messages (and their Retry state) and newer client-only system
-//       rows survive;
-//   C4  a busy bucket (streaming/replaying) defers the application and
-//       applies it once idle; the intent clears only after the post-clear
-//       projection, marker included, is applied.
+// Round-3 rules under test (review round 2):
+//   D1  a projection fetched while the bucket is streaming OR replaying is
+//       KEPT and applied on every busy→idle transition (turn done/error,
+//       replay clear, catch-up completion) without a new network read;
+//   D2  the read belongs to ONE /clear operation: it is keyed by that
+//       operation's client_message_id, an obsolete response is ignored, and
+//       an intent is retired only by a projection carrying THAT operation's
+//       marker (the marker after that operation's own user row);
+//   D3  only genuinely unconfirmed input is preserved across the merge — a
+//       confirmed (received/working) pre-clear row obeys the server's
+//       post-clear window;
+//   D4  the real REST adapter carries the generated wire client_message_id
+//       into the user row, so server rows and optimistic bubbles
+//       correlate — the tests stub the HTTP edge, not the adapter;
+//   D5  the history Retry completes the recovery: fetch + apply, no /clear
+//       resend;
+//   D6  a second turn completion after the marker is applied re-reads
+//       nothing.
 //
-// What is real: the chat store's sendMessage/resend paths, the frame
-// reducer, the real React Query client (fetchQuery/rejection semantics), and
-// the real bucket state machine. What is stubbed: the network edge only —
-// GET /sessions/{id}/messages (fetchSessionMessages) and the WS connection.
+// What is real: the chat store's send/resend/frame paths, the REST adapter
+// (fetchSessionMessages → parseWireMessageList → rawToMessage), the real
+// React Query client. What is stubbed: the network edge only — the HTTP
+// request function in '@/lib/http' and the WS connection.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './store'
@@ -36,46 +37,66 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
 import { ApiError } from '@/lib/api-error'
+import { replayingStartedAt } from './runtime-state'
 import type { ServerFrame } from '@/lib/ws'
 import type { ChatMessage } from './types'
 
-// The ONLY stub: the network edge (GET /sessions/{id}/messages). Hoisted so
-// the factory and the test's handle share one vi.fn; the real React Query
-// client above stays real, so fetchQuery's rejection semantics are genuine.
-const fetchSessionMessagesMock = vi.hoisted(() => vi.fn<() => Promise<ChatMessage[]>>())
+// The ONLY stub: the HTTP edge (GET /sessions/{id}/messages answers here).
+// fetchSessionMessages and rawToMessage stay real, so the wire fixtures
+// below go through the actual adapter — the correlation field this suite
+// depends on is the adapter's own output, not a test fabrication.
+const requestMock = vi.hoisted(() => vi.fn())
 
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>()
+vi.mock('@/lib/api/http', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/http')>()
   return {
     ...actual,
-    fetchSessionMessages: fetchSessionMessagesMock,
+    request: requestMock,
   }
 })
-
-const fetchMock = fetchSessionMessagesMock
 
 const SID = 'sess-clear-refetch'
 const MARKER_TEXT = 'Conversation context cleared'
 const SUCCESS_REPLY = 'Context cleared. The conversation and its history are kept; the assistant continues from here with a fresh context.'
 
-// A post-clear server projection: the /clear user row (carrying the send's
-// client_message_id — the server echo supersedes the local optimistic
-// bubble), the command reply and the ONE chat-view marker entry.
-function postClearProjection(clearClientMessageId?: string): ChatMessage[] {
+// ── Raw (wire-shaped) fixtures — what the server actually answers ────────────
+
+function rawUser(id: string, clientMessageId: string | undefined, content: string, ts: string): Record<string, unknown> {
+  return { id, role: 'user', content, timestamp: ts, agent_id: 'jim', status: 'ok', ...(clientMessageId ? { client_message_id: clientMessageId } : {}) }
+}
+function rawAssistant(id: string, content: string, ts: string): Record<string, unknown> {
+  return { id, role: 'assistant', content, timestamp: ts, agent_id: 'jim', status: 'ok' }
+}
+function rawSystem(id: string, content: string, ts: string): Record<string, unknown> {
+  return { id, role: 'system', content, timestamp: ts, agent_id: 'jim', status: 'ok' }
+}
+
+/** The server's projection once clear #N has executed: its own user row (echoing
+ * the send's client_message_id), the reply, and the ONE marker entry after it. */
+function rawPostClearProjection(clearClientMessageId: string, n: number): Record<string, unknown>[] {
+  const t = (s: number) => `2026-10-10T00:00:0${s}Z`
   return [
-    { id: 'u-clear', role: 'user', content: '/clear', clientMessageId: clearClientMessageId, timestamp: '2026-10-10T00:00:00Z', agentId: 'jim', status: 'done' },
-    { id: 'a-reply', role: 'assistant', content: SUCCESS_REPLY, timestamp: '2026-10-10T00:00:01Z', agentId: 'jim', status: 'done' },
-    { id: 'clear-marker-1', role: 'system', content: MARKER_TEXT, timestamp: '2026-10-10T00:00:02Z', agentId: 'jim', status: 'done' },
+    rawUser(`srv-u-clear-${n}`, clearClientMessageId, '/clear', t(0)),
+    rawAssistant(`srv-a-reply-${n}`, SUCCESS_REPLY, t(1)),
+    rawSystem(`srv-clear-marker-${n}`, MARKER_TEXT, t(2)),
   ]
 }
 
-function preClearProjection(): ChatMessage[] {
-  // What the server returns BEFORE the clear has executed (no marker yet).
+/** The server's projection BEFORE a clear has executed (no marker, no clear rows). */
+function rawPreClearProjection(): Record<string, unknown>[] {
   return [
-    { id: 'u-1', role: 'user', content: 'earlier question', timestamp: '2026-10-09T23:00:00Z', agentId: 'jim', status: 'done' },
-    { id: 'a-1', role: 'assistant', content: 'earlier answer', timestamp: '2026-10-09T23:00:05Z', agentId: 'jim', status: 'done' },
+    rawUser('srv-u-1', 'cmid-earlier', 'earlier question', '2026-10-09T23:00:00Z'),
+    rawAssistant('srv-a-1', 'earlier answer', '2026-10-09T23:00:05Z'),
   ]
 }
+
+// ── Local (ChatMessage) fixtures for seeding buckets ─────────────────────────
+
+function localMessage(partial: Partial<ChatMessage> & Pick<ChatMessage, 'id' | 'role' | 'content'>): ChatMessage {
+  return { timestamp: new Date().toISOString(), status: 'done', ...partial } as ChatMessage
+}
+
+// ── Harness ──────────────────────────────────────────────────────────────────
 
 function doneFrame(turnId: string | undefined, seq: number): ServerFrame {
   return {
@@ -83,7 +104,7 @@ function doneFrame(turnId: string | undefined, seq: number): ServerFrame {
   } as ServerFrame
 }
 
-function seedBucket(messages: ChatMessage[], opts: { isStreaming?: boolean; activeTurnId?: string | null } = {}): void {
+function seedBucket(messages: ChatMessage[], opts: { isStreaming?: boolean; isReplaying?: boolean; activeTurnId?: string | null } = {}): void {
   useChatStore.setState((s) => ({
     ...s,
     sessionsById: {
@@ -93,7 +114,7 @@ function seedBucket(messages: ChatMessage[], opts: { isStreaming?: boolean; acti
         messagesById: Object.fromEntries(messages.map((m) => [m.id, m])),
         messageOrder: messages.map((m) => m.id),
         isStreaming: opts.isStreaming ?? false,
-        isReplaying: false,
+        isReplaying: opts.isReplaying ?? false,
         replayCompletedForSession: SID,
         activeTurnId: opts.activeTurnId ?? null,
         toolCalls: {},
@@ -106,7 +127,7 @@ function seedBucket(messages: ChatMessage[], opts: { isStreaming?: boolean; acti
     messages: [],
     messagesById: {},
     isStreaming: opts.isStreaming ?? false,
-    isReplaying: false,
+    isReplaying: opts.isReplaying ?? false,
     replayCompletedForSession: SID,
   }))
 }
@@ -117,21 +138,22 @@ function bucket(): ReturnType<typeof useChatStore.getState>['sessionsById'][stri
   return b!
 }
 
-let sentFrames: unknown[] = []
-let connectionOk: boolean
-
-/** The client_message_id of the Nth outgoing frame — what the server echoes back on its own row. */
+/** The client_message_id of the Nth outgoing frame — the operation's identity. */
 function sentClientMessageId(index = 0): string {
   const cmid = (sentFrames[index] as { client_message_id?: string } | undefined)?.client_message_id
   expect(cmid, 'the send carried a client_message_id').toBeTruthy()
   return cmid!
 }
 
+let sentFrames: unknown[] = []
+let connectionOk: boolean
+
 beforeEach(() => {
   sentFrames = []
   connectionOk = true
-  fetchMock.mockReset()
+  requestMock.mockReset()
   queryClient.removeQueries()
+  delete replayingStartedAt[SID]
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'jim', activeAgentType: null })
   useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {} } as never)
   useConnectionStore.setState({
@@ -144,216 +166,42 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('C1 — the refresh belongs to the /clear operation, not to any done', () => {
-  it('an idle /clear arms the refresh; its reply turn done consumes it and the marker lands', async () => {
-    seedBucket([preClearProjection()[0]])
-    fetchMock.mockImplementation(async () => postClearProjection(sentClientMessageId()))
+// ── Round-2 rules that must keep holding ─────────────────────────────────────
+
+describe('/clear re-read — C1/C3/D3/D4 through the real REST adapter', () => {
+  it('an idle /clear re-reads at its reply turn; the marker lands; the optimistic bubble correlates away (D4)', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    requestMock.mockImplementation(async () => rawPostClearProjection(sentClientMessageId(), 1))
 
     useChatStore.getState().sendMessage('/clear')
-    expect(sentFrames).toHaveLength(1)
-    expect(sentFrames[0]).toMatchObject({ type: 'message', content: '/clear', session_id: SID })
-
-    // The reply turn (a different, newly-started turn) completes.
     useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
 
     await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(SID)
+      expect(requestMock).toHaveBeenCalled()
     })
     await vi.waitFor(() => {
       const b = bucket()
-      expect(b.messageOrder).toEqual(['u-clear', 'a-reply', 'clear-marker-1'])
-      expect(b.messagesById['clear-marker-1']?.content).toBe(MARKER_TEXT)
+      // Exactly ONE /clear user bubble: the server echo superseded the local
+      // optimistic row through the REAL adapter's client_message_id.
+      const clearBubbles = b.messageOrder.filter((id) => b.messagesById[id]?.content === '/clear')
+      expect(clearBubbles).toHaveLength(1)
+      expect(b.messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
+      expect(b.messageOrder).toEqual(['srv-u-clear-1', 'srv-a-reply-1', 'srv-clear-marker-1'])
     })
   })
 
-  it('a /clear sent mid-turn is NOT consumed by the running turn\'s own done — only by the reply turn that follows', async () => {
-    seedBucket(
-      [{ id: 'a-live', role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true }],
-      { isStreaming: true, activeTurnId: 'turn-A' },
-    )
-    fetchMock.mockImplementation(async () => postClearProjection(sentClientMessageId()))
-
-    // /clear is queued mid-turn; the gateway dispatches it only after A ends.
-    useChatStore.getState().sendMessage('/clear')
-    expect(sentFrames).toHaveLength(1)
-
-    // Turn A — the turn that was running at send-time — completes first.
-    useChatStore.getState().handleFrame(doneFrame('turn-A', 1))
-    await new Promise((r) => setTimeout(r, 10))
-    expect(fetchMock, "A's own done must not consume /clear's refresh").not.toHaveBeenCalled()
-
-    // The clear dispatches; its reply turn completes.
-    useChatStore.getState().handleFrame(doneFrame('turn-clear', 2))
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1)
-    })
-    await vi.waitFor(() => {
-      expect(bucket().messagesById['clear-marker-1']?.content).toBe(MARKER_TEXT)
-    })
-  })
-
-  it("a done with no turn id cannot be told apart, so it is treated as the reply's (consumed)", async () => {
-    seedBucket([preClearProjection()[0]])
-    fetchMock.mockImplementation(async () => postClearProjection(sentClientMessageId()))
-
-    useChatStore.getState().sendMessage('/clear')
-    useChatStore.getState().handleFrame(doneFrame(undefined, 1))
-
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(SID)
-    })
-  })
-
-  it("a plain message's done never starts the refresh", async () => {
-    seedBucket([preClearProjection()[0]])
-    useChatStore.getState().sendMessage('hello there')
-    useChatStore.getState().handleFrame(doneFrame('turn-x', 1))
-    await new Promise((r) => setTimeout(r, 10))
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  it("a failed /clear send arms nothing — and its Retry (resend path) does", async () => {
-    seedBucket([preClearProjection()[0]])
-    fetchMock.mockImplementation(async () => postClearProjection(sentClientMessageId()))
-
-    // Initial send fails on the wire: the bubble is kept with Retry, nothing armed.
-    connectionOk = false
-    useChatStore.getState().sendMessage('/clear')
-    await new Promise((r) => setTimeout(r, 10))
-    const failedId = bucket().messageOrder.find((id) => bucket().messagesById[id]?.content === '/clear')
-    expect(failedId, 'the failed /clear bubble is kept').toBeTruthy()
-    const failed = bucket().messagesById[failedId!]!
-    expect(failed.role).toBe('user')
-    expect(failed.status).toBe('error')
-    useChatStore.getState().handleFrame(doneFrame('turn-z', 1))
-    await new Promise((r) => setTimeout(r, 10))
-    expect(fetchMock).not.toHaveBeenCalled()
-
-    // Retry: the resend path sends the SAME message successfully and arms the refresh.
-    connectionOk = true
-    useChatStore.getState().resendMessage(failed.id)
-    expect(sentFrames).toHaveLength(2)
-    useChatStore.getState().handleFrame(doneFrame('turn-retry', 2))
-
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1)
-    })
-    await vi.waitFor(() => {
-      expect(bucket().messagesById['clear-marker-1']?.content).toBe(MARKER_TEXT)
-    })
-  })
-
-  it("'/clear extra text' is the same server command (first-token grammar) and arms the refresh", async () => {
-    seedBucket([preClearProjection()[0]])
-    fetchMock.mockImplementation(async () => postClearProjection(sentClientMessageId()))
-
-    useChatStore.getState().sendMessage('/clear ignore trailing words')
-    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
-
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1)
-    })
-  })
-
-  it('the offline-queue drain path arms the refresh too (a drained /clear re-reads)', async () => {
-    // Offline: the /clear is buffered, not sent.
-    useConnectionStore.setState({
-      connection: { send: (p: unknown) => { sentFrames.push(p); return true }, close: () => {} } as never,
-      isConnected: false,
-    } as never)
-    seedBucket([preClearProjection()[0]])
-    fetchMock.mockImplementation(async () => postClearProjection(sentClientMessageId()))
-
-    useChatStore.getState().sendMessage('/clear')
-    expect(sentFrames).toHaveLength(0)
-
-    // Connection returns; the queue drains on the next opportunity.
-    useConnectionStore.setState({ isConnected: true } as never)
-    useChatStore.getState().drainOutboundQueue()
-    expect(sentFrames).toHaveLength(1)
-
-    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1)
-    })
-  })
-})
-
-describe('C2 — the re-read is a rejecting fetch; failure keeps the intent and applies nothing', () => {
-  it('a failed read applies nothing stale and survives for the next opportunity', async () => {
-    seedBucket([preClearProjection()[0]])
-    fetchMock.mockRejectedValueOnce(new ApiError(404, 'messages not found'))
-
-    useChatStore.getState().sendMessage('/clear')
-    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
-
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1)
-    })
-    await new Promise((r) => setTimeout(r, 10))
-    // Nothing stale was applied: the bucket still holds its own rows (plus
-    // the local /clear bubble, which DID reach the wire and is not yet
-    // superseded by any server row) — and no projected row, no marker.
-    const b = bucket()
-    expect(b.messageOrder).not.toContain('u-clear')
-    expect(b.messageOrder).not.toContain('a-reply')
-    expect(b.messagesById['clear-marker-1']).toBeUndefined()
-    expect(b.messageOrder).toContain('u-1')
-
-    // The intent survived: the next opportunity (a later done) retries the read.
-    fetchMock.mockImplementationOnce(async () => postClearProjection(sentClientMessageId()))
-    useChatStore.getState().handleFrame(doneFrame('turn-clear-2', 2))
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(2)
-    })
-    await vi.waitFor(() => {
-      expect(bucket().messagesById['clear-marker-1']?.content).toBe(MARKER_TEXT)
-    })
-  })
-
-  it('a projection without the marker (the clear has not executed yet) keeps the intent and retries', async () => {
-    seedBucket([preClearProjection()[0]])
-    fetchMock.mockResolvedValueOnce(preClearProjection())
-
-    useChatStore.getState().sendMessage('/clear')
-    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
-
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1)
-    })
-    // Server projection applied honestly, but no marker yet → intent kept.
-    // (The local /clear bubble stays too: no server row has superseded it.)
-    await vi.waitFor(() => {
-      const b = bucket()
-      expect(b.messageOrder).toContain('u-1')
-      expect(b.messageOrder).toContain('a-1')
-      expect(b.messagesById['clear-marker-1']).toBeUndefined()
-    })
-
-    fetchMock.mockImplementationOnce(async () => postClearProjection(sentClientMessageId()))
-    useChatStore.getState().handleFrame(doneFrame('turn-clear-2', 2))
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(2)
-    })
-    await vi.waitFor(() => {
-      expect(bucket().messagesById['clear-marker-1']?.content).toBe(MARKER_TEXT)
-    })
-  })
-})
-
-describe('C3 — the projection is merged, never replacing newer local state', () => {
   it('a failed follow-up send (and its Retry state) survives a delayed projection', async () => {
-    seedBucket([preClearProjection()[0]])
-    let releaseFetch: (value: ChatMessage[]) => void = () => {}
-    fetchMock.mockReturnValueOnce(new Promise<ChatMessage[]>((resolve) => { releaseFetch = resolve }))
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    let releaseFetch: (value: unknown[]) => void = () => {}
+    requestMock.mockImplementationOnce(() => new Promise<unknown[]>((resolve) => { releaseFetch = resolve }))
 
     useChatStore.getState().sendMessage('/clear')
+    const clearCmid = sentClientMessageId(0)
     useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
     await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalled()
+      expect(requestMock).toHaveBeenCalled()
     })
 
-    // While the read is in flight, the user sends a follow-up whose send fails.
     connectionOk = false
     useChatStore.getState().sendMessage('follow-up that fails')
     await new Promise((r) => setTimeout(r, 10))
@@ -361,74 +209,281 @@ describe('C3 — the projection is merged, never replacing newer local state', (
     expect(failedId).toBeTruthy()
     expect(bucket().messagesById[failedId!]?.status).toBe('error')
 
-    // The delayed projection lands — it cannot contain the failed message.
-    releaseFetch(postClearProjection(sentClientMessageId(0)))
+    releaseFetch(rawPostClearProjection(clearCmid, 1))
     await vi.waitFor(() => {
-      expect(bucket().messagesById['clear-marker-1']?.content).toBe(MARKER_TEXT)
+      expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
     })
 
-    // The failed message and its Retry affordance survive the merge.
     const b = bucket()
     expect(b.messagesById[failedId!]?.content).toBe('follow-up that fails')
     expect(b.messagesById[failedId!]?.status).toBe('error')
     expect(b.messagesById[failedId!]?.deliveryStatus).toBe('failed')
-    expect(b.messageOrder).toContain(failedId!)
-    // ...and it sits after the server rows (it happened after the clear).
-    expect(b.messageOrder.indexOf(failedId!)).toBeGreaterThan(b.messageOrder.indexOf('clear-marker-1'))
+    expect(b.messageOrder.indexOf(failedId!)).toBeGreaterThan(b.messageOrder.indexOf('srv-clear-marker-1'))
   })
 
-  it('newer client-only system rows (a /new refusal) survive; rows the server dropped do not', async () => {
-    seedBucket([
-      // A pre-clear system row the server projection drops (superseded view).
-      { id: 'old-server-sys', role: 'system', content: 'old server marker', timestamp: '2026-10-09T22:00:00Z', agentId: 'jim', status: 'done' },
-      preClearProjection()[0],
-    ])
-    fetchMock.mockImplementation(async () => postClearProjection(sentClientMessageId()))
-
-    useChatStore.getState().sendMessage('/clear')
-    // A client-only refusal lands AFTER the /clear was sent (armed time).
-    useChatStore.getState().appendMessage({
-      id: 'local-refusal-1', role: 'system', content: '/new no longer exists.', timestamp: new Date().toISOString(), status: 'done',
-    })
-
-    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
-    await vi.waitFor(() => {
-      expect(bucket().messagesById['clear-marker-1']?.content).toBe(MARKER_TEXT)
-    })
-
-    const b = bucket()
-    expect(b.messageOrder).toContain('local-refusal-1')
-    expect(b.messagesById['local-refusal-1']?.content).toBe('/new no longer exists.')
-    expect(b.messageOrder).not.toContain('old-server-sys')
-  })
 })
 
-describe('C4 — a busy bucket defers the application and never abandons it', () => {
-  it('the read landing mid-turn applies when the bucket goes idle (marker appears after idle)', async () => {
-    seedBucket([preClearProjection()[0]])
-    fetchMock.mockImplementation(async () => postClearProjection(sentClientMessageId()))
+describe('/clear re-read — D1/D2: the held projection and operation ownership', () => {
+  it('a read landing while STREAMING is held, and a FAILING later read still ends with the marker (D1a)', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    let releaseRead1: (value: unknown[]) => void = () => {}
+    requestMock.mockImplementationOnce(() => new Promise<unknown[]>((resolve) => { releaseRead1 = resolve }))
+
+    useChatStore.getState().sendMessage('/clear')
+    const clearCmid = sentClientMessageId(0)
+    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
+    await vi.waitFor(() => {
+      expect(requestMock).toHaveBeenCalledTimes(1)
+    })
+
+    // A follow-up turn starts before read #1 resolves.
+    seedBucket(
+      [...bucket().messageOrder.map((id) => bucket().messagesById[id]!), localMessage({ id: 'a-live', role: 'assistant', content: '', status: 'streaming', isStreaming: true })],
+      { isStreaming: true, activeTurnId: 'turn-followup' },
+    )
+    // Read #1 succeeds — with the marker — while the bucket is streaming.
+    releaseRead1(rawPostClearProjection(clearCmid, 1))
+    await new Promise((r) => setTimeout(r, 10))
+    // Deferred, not applied, and NOT erased: the next read fails…
+    requestMock.mockImplementationOnce(async () => { throw new ApiError(404, 'messages not found') })
+    // …and the stream ends. The held marker must surface without a good read.
+    useChatStore.getState().handleFrame(doneFrame('turn-followup', 2))
+
+    await vi.waitFor(() => {
+      expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
+    })
+    // The HELD projection satisfied the idle transition — the queued failing
+    // read was never consumed, because the held result already carried the
+    // marker (a deferred success must not force a second network read).
+    expect(requestMock).toHaveBeenCalledTimes(1)
+    // And a later failing recovery attempt cannot take the marker away.
+    useChatStore.getState().retryClearTranscript(SID)
+    await new Promise((r) => setTimeout(r, 10))
+    expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
+    expect(requestMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('a read landing while REPLAYING is applied when replay ends with NO done/error (D1b)', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    let releaseRead1: (value: unknown[]) => void = () => {}
+    requestMock.mockImplementationOnce(() => new Promise<unknown[]>((resolve) => { releaseRead1 = resolve }))
+
+    useChatStore.getState().sendMessage('/clear')
+    const clearCmid = sentClientMessageId(0)
+    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
+    await vi.waitFor(() => {
+      expect(requestMock).toHaveBeenCalledTimes(1)
+    })
+
+    // The bucket enters replay (a re-attach) before read #1 resolves…
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })], { isReplaying: true })
+    replayingStartedAt[SID] = Date.now() - 5_000
+    // …and read #1 lands — with the marker — during replay.
+    releaseRead1(rawPostClearProjection(clearCmid, 1))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(bucket().messagesById['srv-clear-marker-1']).toBeUndefined()
+
+    // Replay ends with no done and no error; backdated start ⇒ immediate clear.
+    useChatStore.getState().setReplaying(false)
+    await vi.waitFor(() => {
+      expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
+    })
+    // No extra network read was needed.
+    expect(requestMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('operation ownership: an older read can neither retire nor satisfy a newer /clear (D2)', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    let releaseRead1: (value: unknown[]) => void = () => {}
+    requestMock.mockImplementationOnce(() => new Promise<unknown[]>((resolve) => { releaseRead1 = resolve }))
+
+    // Clear #1 finishes; its read is outstanding.
+    useChatStore.getState().sendMessage('/clear')
+    const cmid1 = sentClientMessageId(0)
+    useChatStore.getState().handleFrame(doneFrame('turn-1', 1))
+    await vi.waitFor(() => {
+      expect(requestMock).toHaveBeenCalledTimes(1)
+    })
+
+    // Clear #2 is sent and finishes while read #1 is still outstanding. Its
+    // read is its OWN network read (keyed by its operation), not a join of
+    // #1's outstanding request — queued BEFORE the done so it serves read
+    // #2 — and it fails fast and non-retryably, so #2's intent survives for
+    // a later opportunity.
+    requestMock.mockImplementationOnce(async () => { throw new ApiError(404, 'messages not found') })
+    useChatStore.getState().sendMessage('/clear')
+    const cmid2 = sentClientMessageId(1)
+    useChatStore.getState().handleFrame(doneFrame('turn-2', 2))
+    await vi.waitFor(() => {
+      expect(requestMock).toHaveBeenCalledTimes(2)
+    })
+    await new Promise((r) => setTimeout(r, 10))
+
+    // Read #1 (marker #1, before #2 executed) resolves: it must not retire #2
+    // and must not present #1's rows as #2's post-clear view.
+    releaseRead1(rawPostClearProjection(cmid1, 1))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(bucket().messagesById['srv-clear-marker-2']).toBeUndefined()
+
+    // Read #2 resolves: #2's own marker (after #2's own user row) retires #2.
+    requestMock.mockImplementationOnce(async () => rawPostClearProjection(cmid2, 2))
+    useChatStore.getState().handleFrame(doneFrame('turn-3', 3))
+    await vi.waitFor(() => {
+      expect(bucket().messagesById['srv-clear-marker-2']?.content).toBe(MARKER_TEXT)
+    })
+    expect(bucket().messageOrder).not.toContain('srv-clear-marker-1')
+    expect(requestMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('a confirmed (received) pre-clear row obeys the post-clear window; a failed one is kept (D3)', async () => {
+    seedBucket([
+      localMessage({ id: 'confirmed-1', role: 'user', content: 'confirmed earlier question', deliveryStatus: 'received' }),
+      localMessage({ id: 'failed-1', role: 'user', content: 'failed earlier question', status: 'error', deliveryStatus: 'failed' }),
+    ])
+    requestMock.mockImplementation(async () => rawPostClearProjection(sentClientMessageId(), 1))
+
+    useChatStore.getState().sendMessage('/clear')
+    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
+
+    await vi.waitFor(() => {
+      expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
+    })
+    const b = bucket()
+    // Durably-appended pre-clear input obeys the server's display window…
+    expect(b.messageOrder).not.toContain('confirmed-1')
+    // …while genuinely unconfirmed/failed input survives.
+    expect(b.messageOrder).toContain('failed-1')
+    expect(b.messagesById['failed-1']?.status).toBe('error')
+  })
+
+  it('a projection without THIS operation’s marker keeps the intent and retries', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    requestMock.mockImplementationOnce(async () => rawPreClearProjection())
+
+    useChatStore.getState().sendMessage('/clear')
+    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
+
+    await vi.waitFor(() => {
+      expect(requestMock).toHaveBeenCalledTimes(1)
+    })
+    await vi.waitFor(() => {
+      const b = bucket()
+      expect(b.messageOrder).toContain('srv-u-1')
+      expect(b.messagesById['srv-clear-marker-1']).toBeUndefined()
+    })
+
+    requestMock.mockImplementationOnce(async () => rawPostClearProjection(sentClientMessageId(0), 1))
+    useChatStore.getState().handleFrame(doneFrame('turn-clear-2', 2))
+    await vi.waitFor(() => {
+      expect(requestMock).toHaveBeenCalledTimes(2)
+    })
+    await vi.waitFor(() => {
+      expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
+    })
+  })
+
+})
+
+describe('/clear re-read — D5/D6: recovery and retirement', () => {
+  it('a failed read applies nothing stale and the history Retry completes recovery without resending /clear (D5)', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    requestMock.mockImplementationOnce(async () => { throw new ApiError(404, 'messages not found') })
+
+    useChatStore.getState().sendMessage('/clear')
+    expect(sentFrames).toHaveLength(1)
+    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
+
+    await vi.waitFor(() => {
+      expect(requestMock).toHaveBeenCalledTimes(1)
+    })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(bucket().messagesById['srv-clear-marker-1']).toBeUndefined()
+
+    // The screen's history Retry (no /clear resend) completes fetch + apply.
+    requestMock.mockImplementationOnce(async () => rawPostClearProjection(sentClientMessageId(0), 1))
+    useChatStore.getState().retryClearTranscript(SID)
+
+    await vi.waitFor(() => {
+      expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
+    })
+    expect(requestMock).toHaveBeenCalledTimes(2)
+    // Exactly one /clear frame went out in total.
+    expect(sentFrames).toHaveLength(1)
+  })
+
+  it('a second completion after the marker is applied re-reads nothing (D6)', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    requestMock.mockImplementation(async () => rawPostClearProjection(sentClientMessageId(), 1))
 
     useChatStore.getState().sendMessage('/clear')
     useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
     await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalled()
+      expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
     })
+    expect(requestMock).toHaveBeenCalledTimes(1)
 
-    // A follow-up turn starts before the read resolves.
-    seedBucket(
-      [
-        ...bucket().messageOrder.map((id) => bucket().messagesById[id]!),
-        { id: 'a-live', role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true },
-      ],
-      { isStreaming: true, activeTurnId: 'turn-followup' },
-    )
+    // A second done for the session: the operation is retired — no re-read.
+    useChatStore.getState().handleFrame(doneFrame('turn-clear-2', 2))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(requestMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("a plain message's done never starts a refresh, and a failed /clear send arms nothing", async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    useChatStore.getState().sendMessage('hello there')
+    useChatStore.getState().handleFrame(doneFrame('turn-x', 1))
     await new Promise((r) => setTimeout(r, 10))
-    expect(bucket().messagesById['clear-marker-1']).toBeUndefined()
+    expect(requestMock).not.toHaveBeenCalled()
 
-    // The follow-up turn ends; the held projection is applied then.
-    useChatStore.getState().handleFrame(doneFrame('turn-followup', 2))
+    connectionOk = false
+    useChatStore.getState().sendMessage('/clear')
+    await new Promise((r) => setTimeout(r, 10))
+    useChatStore.getState().handleFrame(doneFrame('turn-y', 2))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(requestMock).not.toHaveBeenCalled()
+  })
+
+  it("a /clear sent mid-turn is not consumed by the running turn's own done (C1 kept)", async () => {
+    seedBucket(
+      [localMessage({ id: 'a-live', role: 'assistant', content: '', status: 'streaming', isStreaming: true })],
+      { isStreaming: true, activeTurnId: 'turn-A' },
+    )
+    requestMock.mockImplementation(async () => rawPostClearProjection(sentClientMessageId(), 1))
+
+    useChatStore.getState().sendMessage('/clear')
+    useChatStore.getState().handleFrame(doneFrame('turn-A', 1))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(requestMock).not.toHaveBeenCalled()
+
+    useChatStore.getState().handleFrame(doneFrame('turn-clear', 2))
     await vi.waitFor(() => {
-      expect(bucket().messagesById['clear-marker-1']?.content).toBe(MARKER_TEXT)
+      expect(requestMock).toHaveBeenCalled()
+    })
+    await vi.waitFor(() => {
+      expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
+    })
+  })
+
+  it("the offline-queue drain path arms the refresh, and '/clear extra text' is the same command", async () => {
+    useConnectionStore.setState({
+      connection: { send: (p: unknown) => { sentFrames.push(p); return true }, close: () => {} } as never,
+      isConnected: false,
+    } as never)
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    requestMock.mockImplementation(async () => rawPostClearProjection(sentClientMessageId(), 1))
+
+    useChatStore.getState().sendMessage('/clear')
+    expect(sentFrames).toHaveLength(0)
+    useConnectionStore.setState({ isConnected: true } as never)
+    useChatStore.getState().drainOutboundQueue()
+    expect(sentFrames).toHaveLength(1)
+
+    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
+    await vi.waitFor(() => {
+      expect(requestMock).toHaveBeenCalled()
+    })
+    await vi.waitFor(() => {
+      expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
     })
   })
 })

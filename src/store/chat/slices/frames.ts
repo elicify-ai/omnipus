@@ -27,7 +27,7 @@ import {
 import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
-import { settleClearRefetchAfterTurn } from '../clear-refetch'
+import { flushHeldClearProjection, settleClearRefetchAfterTurn } from '../clear-refetch'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
 import { gateFrameBySeq, cursorFromTerminalFrame, insertHistoryMessageId, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SessionCursor, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
@@ -491,6 +491,9 @@ function scheduleReplayingClear(
       replayingClearTimers[sid] = setTimeout(() => {
         delete replayingClearTimers[sid]
         withBucket(sid, () => ({ isReplaying: false }))
+        // D1: the timer is a busy→idle transition — a projection the clear
+        // re-read held back during replay applies here, with no new read.
+        flushHeldClearProjection(sid, withBucket)
       }, MIN_REPLAY_DISPLAY_MS - elapsed)
     }
   }

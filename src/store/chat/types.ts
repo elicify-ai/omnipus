@@ -1008,6 +1008,13 @@ export interface ChatStore {
    * existing, resend-eligible (role:'user') message.
    */
   resendMessage: (messageId: string) => void
+  /**
+   * D5 (FR-030/031 clear refresh): repeats the post-/clear transcript read
+   * AND its merge application for the session's retained clear operation —
+   * the screen's history-Retry recovery control. Never resends /clear.
+   * No-op when no clear operation owes a refresh.
+   */
+  retryClearTranscript: (sessionId: string) => void
   /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. `sessionId` (the sending session, or the pending-bucket key when no session exists yet) is threaded through into the production telemetry record for operator correlation. */
   _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => void
   /**
