@@ -62,6 +62,16 @@ func convConvertLegacyModelArchivesFrom(baseDir, contextDir string, perAgent boo
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil // fresh install: no legacy model archive
 		}
+		// A path that is not a directory (a stray file where the sessions
+		// directory or its .context should be) cannot hold a legacy archive:
+		// there is nothing to convert, so this scan has no work. Any other read
+		// error still refuses the cutover visibly.
+		if info, statErr := os.Stat(contextDir); statErr == nil && !info.IsDir() {
+			return nil
+		}
+		if info, statErr := os.Stat(filepath.Dir(contextDir)); statErr == nil && !info.IsDir() {
+			return nil
+		}
 		return fmt.Errorf("conversion: read %s: %w", contextDir, err)
 	}
 	for _, e := range entries {

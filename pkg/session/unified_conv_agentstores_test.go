@@ -11,6 +11,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -73,6 +74,19 @@ func TestAgentStoreCutover_SameIDConflictRefusesVisiblyAndKeepsTheSource(t *test
 	assert.Equal(t, "shared copy", string(b), "the shared copy is untouched")
 }
 
+// An existing but EMPTY shared directory is still a conflict: a bare rename
+// would silently replace it.
+func TestAgentStoreCutover_EmptySharedDirIsStillAConflict(t *testing.T) {
+	base := t.TempDir()
+	shared := filepath.Join(base, "sessions")
+	agentDir := filepath.Join(base, "agents", "a", "sessions")
+	id := newPerAgentSession(t, agentDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(shared, id), 0o700))
+	err := CutoverSavedChatsAtBootWithAgentStores(shared, []string{agentDir})
+	require.Error(t, err)
+	assert.FileExists(t, filepath.Join(agentDir, id, "meta.json"), "the source is retained")
+}
+
 func TestAgentStoreCutover_PerAgentModelArchiveJoinsTheSharedChat(t *testing.T) {
 	base := t.TempDir()
 	shared := filepath.Join(base, "sessions")
@@ -91,6 +105,11 @@ func TestAgentStoreCutover_PerAgentModelArchiveJoinsTheSharedChat(t *testing.T) 
 
 	require.NoError(t, CutoverSavedChatsAtBootWithAgentStores(shared, []string{agentDir}))
 	// Retry after an interruption (or a second boot) must not add a second copy.
+	require.NoError(t, CutoverSavedChatsAtBootWithAgentStores(shared, []string{agentDir}))
+
+	// Interrupted-retire case: the converted copy and its completion mark exist
+	// but the legacy source is still there. A rerun must not add a second copy.
+	convSeedContext(t, agentDir, "sanitized-key", raw, convMeta(key))
 	require.NoError(t, CutoverSavedChatsAtBootWithAgentStores(shared, []string{agentDir}))
 
 	us, err := NewUnifiedStore(shared)
@@ -118,4 +137,33 @@ func TestAgentStoreCutover_ArchiveWithNoSessionIsLeftInPlace(t *testing.T) {
 	for _, e := range entries {
 		assert.NotContains(t, e.Name(), ":", "no colon-named directory appears among the shared sessions")
 	}
+}
+
+// A stray FILE where the sessions directory (or its .context) should be holds no
+// legacy archive: the legacy-archive scan has nothing to do. Any other read error
+// still refuses the cutover.
+func TestConvLegacyArchiveScan_StrayFileIsNotAnError(t *testing.T) {
+	base := t.TempDir()
+	stray := filepath.Join(base, "sessions")
+	require.NoError(t, os.WriteFile(stray, []byte("not a directory"), 0o600))
+	require.NoError(t, convConvertLegacyModelArchives(stray), "sessions is a file: no .context beneath it")
+
+	dir := filepath.Join(base, "sessions2")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, convContextDir), []byte("x"), 0o600))
+	require.NoError(t, convConvertLegacyModelArchives(dir), ".context is a file: nothing to convert")
+}
+
+func TestConvLegacyArchiveScan_OtherReadErrorsStillRefuse(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("permission errors are not produced for root or on Windows")
+	}
+	base := t.TempDir()
+	ctxDir := filepath.Join(base, convContextDir)
+	require.NoError(t, os.MkdirAll(ctxDir, 0o700))
+	require.NoError(t, os.Chmod(ctxDir, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(ctxDir, 0o700) })
+	err := convConvertLegacyModelArchives(base)
+	require.Error(t, err, "an unreadable .context is refused visibly, not skipped")
+	assert.Contains(t, err.Error(), convContextDir)
 }
