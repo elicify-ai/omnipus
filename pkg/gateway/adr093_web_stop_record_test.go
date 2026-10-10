@@ -208,6 +208,11 @@ func newU2ScopeFixture(t *testing.T) *u2ScopeFixture {
 	// Reuse mustAgentLoop's isolation/membership setup, but own Close so the
 	// goals test can join detached workers before reading their final writes.
 	ensureTestWorkspaceMembership(t, cfg)
+	// This fixture builds its loop directly rather than through mustAgentLoop,
+	// so it must seed the default workspace's delegation mesh itself — the U5a
+	// launch gate (pkg/agent/steer_launcher.go::startingRemainingDepth) needs a
+	// caller→target edge for every helper it launches.
+	seedDefaultDelegationGraph(t, testHarnessAgentIDs(cfg))
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
 	p := &u2ScopeProvider{entered: make(chan context.Context, 8), release: make(chan struct{})}

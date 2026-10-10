@@ -79,6 +79,11 @@ func mustAgentLoop(
 	if err != nil {
 		t.Fatalf("agent.NewAgentLoop: %v", err)
 	}
+	// Mirror pkg/agent/test_helpers_test.go's mustNewAgentLoop: seed the default
+	// workspace's delegation mesh so the U5a launch gate
+	// (pkg/agent/steer_launcher.go::startingRemainingDepth) finds a caller→target
+	// edge for a launched root whose steering session has an identified owner.
+	seedDefaultDelegationGraph(t, testHarnessAgentIDs(cfg))
 	t.Cleanup(al.Close)
 	return al
 }
@@ -113,6 +118,87 @@ func mustAgentLoopNoWorkspaceSeed(
 // individual test creates itself (e.g. rest_workspaces_test.go's own
 // writeWorkspaceFile calls) so the two never collide.
 const testHarnessWorkspaceMembershipID = "gateway-test-harness-default"
+
+// testHarnessDelegationDefaultID is the id of the is_default workspace
+// mustAgentLoop seeds a delegation mesh into, when the effective home carries
+// no is_default workspace of its own. Deliberately DISTINCT from
+// testHarnessWorkspaceMembershipID: that one carries core_team membership only
+// (never is_default, never a delegation edge), while this one is the workspace
+// every UNBOUND delegation/launch gate resolves (workspace.ResolveDefaultID).
+// Mirrors pkg/agent/test_helpers_test.go's testHarnessDelegationDefaultID.
+const testHarnessDelegationDefaultID = "gateway-test-harness-delegation-default"
+
+// seedDefaultDelegationGraph writes an is_default workspace under the CURRENT
+// effective Omnipus home carrying a directed delegation edge for every ordered
+// pair of ids (self edges included), unless the home already carries an
+// is_default workspace whose id is not testHarnessDelegationDefaultID — i.e. a
+// test seeded its own with writeWorkspaceFile/seedDelegationEdge first, and is
+// left byte-for-byte untouched.
+//
+// Why: the U5a launch gate
+// (pkg/agent/steer_launcher.go::startingRemainingDepth) consults the resolved
+// (for an unbound turn, the is_default) workspace's delegation graph for the
+// caller→target edge of every launch whose steering session has an identified
+// owner. pkg/gateway's launcher tests (websocket_stop_scope_test.go,
+// one_stop_unified_test.go, qa4_refused_session_delete_test.go, …) predate that
+// gate and declare no graph, so their launches refuse (steer.ErrInvalidEdge)
+// where they used to run. The mesh restores the graph-free latitude they were
+// written against without asserting any specific edge a test did not ask for.
+//
+// The mesh is a UNION across calls because the shared test home is reused by the
+// whole binary — a later test's agents must be able to delegate to each other
+// too. Guarded by testHarnessWorkspaceMu so it is safe under t.Parallel,
+// mirroring seedTestWorkspaceMembershipForIDs.
+func seedDefaultDelegationGraph(t *testing.T, ids []string) {
+	t.Helper()
+	home := config.OmnipusHomeDir()
+
+	testHarnessWorkspaceMu.Lock()
+	defer testHarnessWorkspaceMu.Unlock()
+
+	if def, err := workspace.ResolveDefaultID(home); err == nil && def != "" && def != testHarnessDelegationDefaultID {
+		return // a test seeded its own default graph — never touch it
+	}
+
+	type pair struct{ from, to string }
+	seen := map[pair]bool{}
+	if existing, ok := workspace.LoadDelegation(home, testHarnessDelegationDefaultID); ok {
+		for _, e := range existing {
+			seen[pair{e.FromAgent, e.ToAgent}] = true
+		}
+	}
+	for _, from := range ids {
+		for _, to := range ids {
+			seen[pair{from, to}] = true
+		}
+	}
+	if len(seen) > 0 {
+		edges := make([]workspace.DelegationEdge, 0, len(seen))
+		for p := range seen {
+			edges = append(edges, workspace.DelegationEdge{FromAgent: p.from, ToAgent: p.to})
+		}
+		if err := workspace.SaveDelegation(home, testHarnessDelegationDefaultID, edges); err != nil {
+			t.Fatalf("seedDefaultDelegationGraph: save delegation %s: %v", testHarnessDelegationDefaultID, err)
+		}
+	}
+
+	rec, err := readWorkspaceFile(home, testHarnessDelegationDefaultID)
+	if err != nil {
+		if !errors.Is(err, errWorkspaceNotFound) {
+			t.Fatalf("seedDefaultDelegationGraph: read %s: %v", testHarnessDelegationDefaultID, err)
+		}
+		rec = storedWorkspace{
+			ID:     testHarnessDelegationDefaultID,
+			Name:   testHarnessDelegationDefaultID,
+			Status: "active",
+		}
+	}
+	rec.ID = testHarnessDelegationDefaultID
+	rec.IsDefault = true
+	if err := writeWorkspaceFile(home, rec); err != nil {
+		t.Fatalf("seedDefaultDelegationGraph: write %s: %v", testHarnessDelegationDefaultID, err)
+	}
+}
 
 // testHarnessWorkspaceMu serializes read-merge-write access to the shared
 // harness seed file across concurrently running (t.Parallel) tests within
