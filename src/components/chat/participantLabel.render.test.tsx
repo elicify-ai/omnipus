@@ -61,6 +61,59 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
+import { MockButton } from '@/test/assistantUiMock'
+
+// The composer context (OmnipusComposer → useComposerRuntime) needs the same
+// mock surface the other ChatScreen tests pass: composer primitives + the
+// composer/thread runtime hooks.
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  ComposerPrimitive: {
+    Root: ({ children, className, onSubmit }: { children?: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
+              React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
+    Input: (props: Record<string, unknown>) => React.createElement('textarea', props),
+    Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string;
+              'data-testid'?: string; 'aria-label'?: string;
+            }) =>
+              React.createElement(MockButton, {
+                type: 'button', disabled, className,
+                'data-testid': testId ?? 'chat-send',
+                'aria-label': ariaLabel, children}),
+    AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string;
+            }) =>
+              React.createElement(MockButton, {
+                type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment', children}),
+  },
+  AttachmentPrimitive: {
+    Remove: ({ children, className, 'aria-label': ariaLabel }: {
+              children?: React.ReactNode; className?: string; 'aria-label'?: string;
+            }) =>
+              React.createElement(MockButton, {
+                type: 'button', className, 'aria-label': ariaLabel, children}),
+  },
+  ActionBarPrimitive: {
+    Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  useComposerRuntime: vi.fn(() => ({
+    getState: () => ({ text: '' }),
+    setText: vi.fn(),
+    addAttachment: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
+  })),
+  useMessage: () => ({
+    id: 'msg_1',
+    role: 'assistant',
+    status: { type: 'complete' },
+    content: [],
+  }),
+}))
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
