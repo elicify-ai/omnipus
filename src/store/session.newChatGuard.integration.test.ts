@@ -23,7 +23,10 @@ const CLIENT = 'client-1'
 const PAIR = `${WS}::mia`
 const POINTER_KEY = 'omnipus.sessionByWorkspace.v1'
 
-vi.mock('@/lib/nav/sessionCoreSeam', () => ({
+vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
+  // Real seam for everything the stubs don't override (notably
+  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
+  ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
   mainSessionIdOfMember: () => MAIN,
   isMainSession: (session: unknown) => {
     const id = typeof session === 'string'

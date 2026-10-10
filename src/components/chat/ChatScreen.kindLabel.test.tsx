@@ -16,7 +16,10 @@ const seam = vi.hoisted(() => ({
   mains: new Set<string>(),
 }))
 
-vi.mock('@/lib/nav/sessionCoreSeam', () => ({
+vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
+  // Real seam for everything the stubs don't override (notably
+  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
+  ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
   mainSessionIdOfMember: () => undefined,
   isMainSession: (session: unknown) => {
     const id = session && typeof session === 'object' && 'id' in session

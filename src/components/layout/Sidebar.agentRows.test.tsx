@@ -138,7 +138,10 @@ const seam = vi.hoisted(() => {
   }
 })
 
-vi.mock('@/lib/nav/sessionCoreSeam', () => ({
+vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
+  // Real seam for everything the stubs don't override (notably
+  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
+  ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
   mainSessionIdOfMember: (member: object) => seam.mainSessionIdOfMember(member),
   isMainSession: (session: unknown) => seam.isMainSession(session),
   sessionAttention: (session: unknown) => seam.sessionAttention(session),
@@ -178,6 +181,10 @@ const home = workspace({
   id: 'default',
   name: 'Default',
   is_default: true,
+  // ARCHITECT-ANSWER-ADMIN-MAIN-BOUND Q1: Admin's main id rides the default
+  // workspace itself (admin_main_session_id), never member_configs['admin'] —
+  // which is why the admin entry below carries no main and the row still shows.
+  admin_main_session_id: 'seam-opaque-admin',
   core_team: ['mia'],
   member_configs: { mia: miaMember, admin: adminMember },
 })
@@ -218,7 +225,10 @@ beforeEach(() => {
   seam.attention.clear()
   seam.mains.set(miaMember, 'seam-opaque-mia')
   seam.mains.set(jimMember, 'seam-opaque-jim')
-  seam.mains.set(adminMember, 'seam-opaque-admin')
+  // No mains.set(adminMember, …): the membership-supplied Admin main was the
+  // pre-ruling mechanism. Admin's main comes only from home.admin_main_session_id
+  // (seam-read by workspaceRoster.adminDefault), so the admin member-config
+  // entry must stay mainless and the Admin row must still render.
   seam.attention.set('seam-opaque-mia', 'on')
   seam.attention.set('seam-opaque-jim', 'on')
   seam.attention.set('seam-opaque-admin', 'off')

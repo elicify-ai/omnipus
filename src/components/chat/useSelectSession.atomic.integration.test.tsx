@@ -25,7 +25,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   return { ...actual, useNavigate: () => navigate }
 })
 
-vi.mock('@/lib/nav/sessionCoreSeam', () => ({
+vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
+  // Real seam for everything the stubs don't override (notably
+  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
+  ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
   mainSessionIdOfMember: () => undefined,
   isMainSession: () => false,
   sessionAttention: () => 'unknown',
