@@ -30,7 +30,6 @@ import { GenericToolCall } from './tools/GenericToolCall'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { renderHistoricalToolCall } from './tools/HistoricalToolCallBlock'
 import { classifySetGoalCall } from './tools/SetGoalToolUI'
-import { formatErrorDetail } from '@/lib/llm-error'
 import { FeedKindLabel } from './FeedKindLabel'
 import { UnavailableChatNotice } from './UnavailableChatNotice'
 import { RateLimitIndicator } from './RateLimitIndicator'
@@ -51,6 +50,9 @@ import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Separator } from '@/components/ui/separator'
 import { isClearContextMarker } from '@/lib/clearMarker'
+import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
+import { ParticipantMessageRow, ReplyHeaderView, useParticipantLabelParts } from './ParticipantLabel'
+import { collectPairedReplyToIds, isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
 import { pendingClearRefetches, pendingRedirectSids } from '@/store/chat/runtime-state'
 import { stampToolCallOffset } from '@/store/chat/session'
@@ -346,12 +348,6 @@ function SystemMessage() {
     </MessagePrimitive.Root>
   )
 }
-
-// ADR-051 — cap on the verbose-only "Technical details" disclosure content
-// in VirtualAssistantMessageRow (historical/replay render path). Mirrors
-// MessageItem.tsx's cap (live render path) so live and replay show the same
-// truncated length when a provider's error payload is verbose.
-const ERROR_DETAIL_MAX_CHARS = 512
 
 // Caps a context-specific thinking label (a bash `description`) to a single
 // line and ~48 chars — long enough to be informative, short enough to read
@@ -976,6 +972,12 @@ export function VirtualUserMessageRow({
   // by ChatScreen.goalCommandMarker.live.test.tsx.
   const setsGoal = messageSetsGoal(message.content)
 
+  // U8/F15/F17: a user entry carrying a server-stamped participant is a
+  // LEFT-side message from another participant (channel input, peer request) —
+  // never the web user's own bubble, which is exactly why the backend stamps
+  // no participant on it. Same row component every list path routes through.
+  if (message.participant) return <ParticipantMessageRow message={message} />
+
   return (
     <div
       data-testid="user-message"
@@ -1174,10 +1176,13 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   message,
   liteMode,
   delegationEvents,
+  pairedReplyToIds,
 }: {
   message: ChatMessage
   liteMode: boolean
   delegationEvents: readonly DelegationEvent[]
+  /** F17 (1): reply_to ids that have a reply bubble in the thread — the send_message chips paired with one are hidden. */
+  pairedReplyToIds: ReadonlySet<string>
 }) {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
@@ -1216,6 +1221,12 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
   const agentDisplayName = agent?.name ?? (messageAgentId || null)
+  // U8/F15/F17 — the reply header ("Ava → Alice · Telegram") replaces the
+  // plain author label on a reply bubble; the label parts (workspaces +
+  // current workspace) come from the same cached lookups the participant
+  // rows use.
+  const { workspaces: labelWorkspaces, currentWorkspaceId } = useParticipantLabelParts()
+  const replyHeader = replyHeaderParts(message, agents, currentWorkspaceId, labelWorkspaces)
   // ADR-087 D1 — the muted footer suffix: "(interrupted)" (FR-21, unchanged)
   // or "(cut off at the output limit)" for a max_output_tokens truncation.
   // getMessageStatusSuffix owns the precedence (interrupted/cancelled wins).
@@ -1244,8 +1255,11 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
         calls.set(id, stampToolCallOffset(id, call, textAtToolCallStart, undefined))
       }
     }
-    return [...calls.values()]
-  }, [message.id, message.tool_calls, toolCalls, toolCallOrder, textAtToolCallStart, toolCallOwners, isLastAssistant])
+    // F17 (1): a send_message chip whose reply_to names a request some reply
+    // bubble in the thread answers is hidden — the reply bubble IS that
+    // chip's display. Render-only: the persisted transcript keeps every call.
+    return [...calls.values()].filter((tc) => !isSendChipHiddenByReply(tc.tool, tc.params, pairedReplyToIds))
+  }, [message.id, message.tool_calls, toolCalls, toolCallOrder, textAtToolCallStart, toolCallOwners, isLastAssistant, pairedReplyToIds])
 
   // Live results must invalidate the split even without a message bake.
   const messageParts = useMemo(
@@ -1326,15 +1340,19 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
-        {agentDisplayName && (
+        {(replyHeader || agentDisplayName) && (
           <span className="inline-flex items-center gap-[var(--space-2)]">
-            <span
-              data-testid="agent-label"
-              title={agentDisplayName}
-              className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
-            >
-              {agentDisplayName}
-            </span>
+            {replyHeader ? (
+              <ReplyHeaderView header={replyHeader} />
+            ) : (
+              <span
+                data-testid="agent-label"
+                title={agentDisplayName ?? undefined}
+                className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+              >
+                {agentDisplayName}
+              </span>
+            )}
             {replyPhase.kind === 'idle' && (
               <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{IDLE_STATUS_TEXT}</span>
             )}
@@ -1442,42 +1460,10 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
           <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-[var(--space-1)]">{statusSuffix}</span>
         )}
 
-        {/* ADR-051 — verbose-only "Technical details" disclosure for typed
-            LLM errors. Parity with MessageItem.tsx's live-render disclosure:
-            mounted ONLY when (status==='error' && errorCode && verbose &&
-            errorDetail), ABSENT from the DOM otherwise. Replay frames carry
-            no errorDetail (gateway strips it before persisting), so on the
-            historical path this effectively fires only when a live error
-            bubble with detail set is still in the ring buffer after a
-            reload. `verboseChatEnabled` is already read at the top of this
-            row (the tool-call visibility gate uses the same hook). */}
-        {message.status === 'error'
-          && message.errorCode
-          && verboseChatEnabled
-          && message.errorDetail
-          && message.errorDetail.length > 0 && (
-          <details className="px-[var(--space-1)] mt-[var(--space-1)]" data-testid="error-detail-disclosure">
-            <summary
-              tabIndex={0}
-              className={cn(
-                'text-[length:var(--type-caption-size)] text-[var(--color-muted)] cursor-pointer select-none',
-                'inline-flex items-center gap-[var(--space-1)] hover:text-[var(--color-secondary)] transition-colors',
-              )}
-            >
-              Technical details
-            </summary>
-            <pre
-              className={cn(
-                'mt-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded-md',
-                'bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
-                'font-mono text-[length:var(--type-caption-size)] leading-relaxed whitespace-pre-wrap break-all',
-                'max-h-40 overflow-y-auto',
-              )}
-            >
-              {formatErrorDetail(message.errorDetail).slice(0, ERROR_DETAIL_MAX_CHARS)}
-            </pre>
-          </details>
-        )}
+        {/* ADR-051 — verbose-only "Technical details" disclosure (replay
+            path). Extracted verbatim to ErrorDetailDisclosure.tsx; same mount
+            gate, same DOM. */}
+        <ErrorDetailDisclosure message={message} verboseChatEnabled={verboseChatEnabled} />
 
         {/* Per-turn model record (FR-014). Mirrors MessageItem.tsx so
             replay sessions show the same model footer as the live
@@ -1499,6 +1485,11 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
   const delegationEvents = useChatDelegationEvents(sessionId)
   const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
+  // F17 (1): the reply_to ids that have a reply bubble in the thread —
+  // memoized on a pairing key so the Set's identity (and therefore the rows'
+  // React.memo) only changes when a pairing actually appears or disappears.
+  const replyPairKey = messages.map((m) => (m.replyToMessageId ? '1' : '0')).join('')
+  const pairedReplyToIds = useMemo(() => collectPairedReplyToIds(messages), [replyPairKey])
   return (
     <div
       data-testid="virtualized-message-list"
@@ -1529,7 +1520,7 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
           } else if (msg.role === 'system') {
             row = <VirtualSystemMessageRow message={msg} />
           } else {
-            row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} />
+            row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
           }
           const trailing = splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing
           return (
@@ -1643,6 +1634,11 @@ function VirtualizedMessageListInner({
   const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
   const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
+  // F17 (1): the reply_to ids that have a reply bubble in the thread —
+  // memoized on a pairing key so the Set's identity (and therefore the rows'
+  // React.memo) only changes when a pairing actually appears or disappears.
+  const replyPairKey = messages.map((m) => (m.replyToMessageId ? '1' : '0')).join('')
+  const pairedReplyToIds = useMemo(() => collectPairedReplyToIds(messages), [replyPairKey])
 
   // Separate the live streaming message from completed history.
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
@@ -1667,7 +1663,7 @@ function VirtualizedMessageListInner({
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
-    return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} />
+    return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} pairedReplyToIds={pairedReplyToIds} />
   }
 
   // Stick-to-bottom is delegated to assistant-ui's Viewport engine

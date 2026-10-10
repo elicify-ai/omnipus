@@ -649,6 +649,14 @@ function handleReplayMessageFrame({
   // never an error, and the archived text is kept. Absent on every delivered
   // entry, so today's rendering is unchanged there.
   const replayInputDiscarded = replayFrame.input_disposition?.state === 'discarded'
+  // U8/F15/F17 — the participant display fields, read off the SAME frame the
+  // other stamps come from so replay and live mint identical bubbles for the
+  // same message id. `participant` exists on server-written user entries
+  // (channel participants, peer requests — never the web user's own, F17);
+  // `reply_to_*` exists on connector/guest reply entries (assistant role).
+  const replayParticipant = replayFrame.participant
+  const replayReplyToMessageId = replayFrame.reply_to_message_id
+  const replayReplyToParticipant = replayFrame.reply_to_participant
   withBucket(targetSid, (b) => {
     return produce(b, (draft) => {
       // Cursor advancement is handled centrally before the switch (I1);
@@ -794,6 +802,13 @@ function handleReplayMessageFrame({
         // (role-gated like turnId/model above): the minted bubble carries the
         // same quiet deliveryStatus the live path showed before the reload.
         ...(replayInputDiscarded && role === 'user' ? { deliveryStatus: 'discarded' as const } : {}),
+        // U8/F15/F17 — participant label on user entries; the reply pair on
+        // assistant entries. Role-gated like the stamps above so a minted
+        // bubble matches exactly what the live path would have shown for the
+        // same message id (the render parity this reducer exists for).
+        ...(replayParticipant && role === 'user' ? { participant: replayParticipant } : {}),
+        ...(replayReplyToMessageId && role === 'assistant' ? { replyToMessageId: replayReplyToMessageId } : {}),
+        ...(replayReplyToParticipant && role === 'assistant' ? { replyToParticipant: replayReplyToParticipant } : {}),
       }
       draft.messagesById[newMsg.id] = newMsg
       // #823 Opus review round 2 item 2 (founder decision Q1): a
