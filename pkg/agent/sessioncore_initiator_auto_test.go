@@ -12,6 +12,8 @@ package agent
 
 import (
 	"context"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -215,44 +217,148 @@ func TestAutoInitiator_N1_StoredBudgetBoundsTheQueuedRun(t *testing.T) {
 	})
 }
 
-// F5: an automatic retry keeps the failed run's authority; it is re-authorized
-// against the current graph and cannot exceed the first run's budget.
-func TestAutoInitiator_F5_Retry(t *testing.T) {
-	prev := &session.InitiatedBy{
-		AgentID: rtCaller, SessionID: "", Depth: 1,
-		Authorization: session.Authorization{Mode: session.AuthorizationModeTask, RemainingDepth: 1},
+// seedFailedRun puts task id into the state a failed first attempt leaves it in
+// (in_progress, bound to a session whose lifecycle record carries the given
+// authority) without starting a worker, so the real retry decision and the real
+// queue pickup can be driven deterministically.
+func seedFailedRun(t *testing.T, al *AgentLoop, id, assignee string, ib *session.InitiatedBy, sb *session.SteeredBy) (*task.Task, string) {
+	t.Helper()
+	tk := &task.Task{ID: id, AgentID: assignee, WorkspaceID: testWS, Title: id, Status: task.StatusNext}
+	if err := GetTaskStore(al).Create(tk); err != nil {
+		t.Fatalf("create: %v", err)
 	}
-	mk := func(al *AgentLoop, id string) *task.Task {
-		tk := &task.Task{ID: id, AgentID: rtAssignee, WorkspaceID: testWS, Title: id, Status: task.StatusNext}
-		if err := GetTaskStore(al).Create(tk); err != nil {
-			t.Fatalf("create: %v", err)
-		}
-		return tk
+	sid := "session_seed_" + id
+	rec := &session.LifecycleRecord{
+		SessionID: sid, Generation: 1, State: session.LifecycleQueued, AgentID: assignee, WorkspaceID: testWS,
+		OwnerScopeKind: session.OwnerScopeHuman, Origin: &session.Origin{Kind: session.OriginKindTask, TaskID: id},
+		InitiatedBy: ib, SteeredBy: sb,
 	}
-	t.Run("edge removed after the first run: the retry is refused", func(t *testing.T) {
-		al, _ := newRunTaskPolicyLoop(t, []graphEdge{edge(rtAssignee, rtCaller, nil, nil)})
-		tk := mk(al, "t-auto-r1")
-		if err := al.taskExecutor.reExecuteTask(context.Background(), tk.ID, nil, prev); err == nil {
-			t.Fatal("a retry of an agent-initiated run without the edge must be refused")
+	if sb != nil {
+		rec.OwnerScopeKind, rec.OwnerScopeID = session.OwnerScopeParentSession, sb.SteeringSessionID
+	}
+	if err := al.GetSessionLifecycleStore().Persist(rec); err != nil {
+		t.Fatalf("persist record: %v", err)
+	}
+	ip, sidp := task.StatusInProgress, sid
+	got, err := GetTaskStore(al).Update(id, task.Patch{Status: &ip, SessionID: &sidp})
+	if err != nil {
+		t.Fatalf("mark in progress: %v", err)
+	}
+	return got, sid
+}
+
+func removeLifecycleFile(t *testing.T, al *AgentLoop, sessionID string) {
+	t.Helper()
+	removed := 0
+	root := filepath.Join(omnipusHome(), "session_lifecycle")
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.Contains(d.Name(), sessionID) {
+			if os.Remove(path) == nil {
+				removed++
+			}
 		}
-		assertRefusedNoSession(t, al, tk.ID, "delegation policy")
+		return nil
 	})
-	t.Run("edge present: the retry runs and does not exceed the first budget", func(t *testing.T) {
-		al, _ := newRunTaskPolicyLoop(t, []graphEdge{edge(rtCaller, rtAssignee, nil, nil)})
-		tk := mk(al, "t-auto-r2")
-		if err := al.taskExecutor.reExecuteTask(context.Background(), tk.ID, nil, prev); err != nil {
-			t.Fatalf("retry with the edge refused: %v", err)
+	if removed == 0 {
+		t.Fatalf("test setup: found no lifecycle file for %s under %s", sessionID, root)
+	}
+}
+
+var failedRunAuthority = &session.InitiatedBy{
+	AgentID: rtCaller, Depth: 1,
+	Authorization: session.Authorization{Mode: session.AuthorizationModeTask, RemainingDepth: 1},
+}
+
+// F5: the failed run's authority is persisted on the task by the retry decision
+// itself, so the queue pickup after a capacity refusal (or any other route)
+// runs under it: re-authorized against the CURRENT graph, with the failed run's
+// budget.
+func TestAutoInitiator_F5_RetryAuthoritySurvivesQueuePickup(t *testing.T) {
+	t.Run("edge removed before pickup: refused", func(t *testing.T) {
+		home := seedWorkspaceGraph(t, testWS, true, []graphEdge{edge(rtCaller, rtAssignee, nil, nil)})
+		al, _ := newRunTaskPolicyLoopAt(t, home)
+		tk, sid := seedFailedRun(t, al, "t-f5-a", rtAssignee, failedRunAuthority, nil)
+		if redispatch := al.taskExecutor.consumeTaskAttempt(context.Background(), tk, sid, "boom", nil); redispatch != tk.ID {
+			t.Fatalf("retry decision = %q, want a restart of %s", redispatch, tk.ID)
 		}
+		if got := taskNow(t, al, tk.ID); got.Initiator == nil || got.Initiator.AgentID != rtCaller || !got.Initiator.Direct {
+			t.Fatalf("the retry must persist the failed run's authority on the task, got %+v", got.Initiator)
+		}
+		rewriteWorkspaceGraph(t, home, testWS, true, []graphEdge{edge(rtAssignee, rtCaller, nil, nil)})
+		al.taskExecutor.CheckQueuedTasks(context.Background()) // the ordinary pickup, not the immediate retry
+		got := taskNow(t, al, tk.ID)
+		if got.Status != task.StatusFailed || !strings.Contains(got.Result, "delegation policy") {
+			t.Fatalf("queue pickup of the retry without the edge: status=%q result=%q", got.Status, got.Result)
+		}
+	})
+	t.Run("edge present: pickup runs within the failed run's budget", func(t *testing.T) {
+		home := seedWorkspaceGraph(t, testWS, true, []graphEdge{edge(rtCaller, rtAssignee, nil, nil)})
+		al, _ := newRunTaskPolicyLoopAt(t, home)
+		tk, sid := seedFailedRun(t, al, "t-f5-b", rtAssignee, failedRunAuthority, nil)
+		al.taskExecutor.consumeTaskAttempt(context.Background(), tk, sid, "boom", nil)
+		al.taskExecutor.CheckQueuedTasks(context.Background())
+		got := taskNow(t, al, tk.ID)
+		if got.SessionID == "" || got.SessionID == sid {
+			t.Fatalf("retry was not picked up into a fresh run: session=%q status=%q result=%q", got.SessionID, got.Status, got.Result)
+		}
+		rec := lifecycleOf(t, al, got.SessionID)
+		if rec.InitiatedBy == nil || rec.InitiatedBy.AgentID != rtCaller ||
+			rec.InitiatedBy.Authorization.RemainingDepth > failedRunAuthority.Authorization.RemainingDepth {
+			t.Fatalf("retry run authority = %+v, want %s within %d", rec.InitiatedBy, rtCaller, failedRunAuthority.Authorization.RemainingDepth)
+		}
+	})
+	t.Run("a tighter steering budget is the one carried", func(t *testing.T) {
+		home := seedWorkspaceGraph(t, testWS, true, []graphEdge{edge(rtCaller, rtAssignee, nil, nil)})
+		al, _ := newRunTaskPolicyLoopAt(t, home)
+		steered := &session.SteeredBy{
+			SteeringSessionID: "session_steerer", RootSessionID: "session_steerer",
+			ReportingTarget: session.ReportingTarget{SessionID: "session_steerer", Channel: "webchat", ChatID: "c"},
+			Authorization:   session.Authorization{Mode: session.AuthorizationModeTask, RemainingDepth: 0},
+		}
+		wide := &session.InitiatedBy{AgentID: rtCaller, Depth: 1,
+			Authorization: session.Authorization{Mode: session.AuthorizationModeTask, RemainingDepth: 2}}
+		tk, sid := seedFailedRun(t, al, "t-f5-c", rtAssignee, wide, steered)
+		al.taskExecutor.consumeTaskAttempt(context.Background(), tk, sid, "boom", nil)
+		got := taskNow(t, al, tk.ID)
+		if got.Initiator == nil || got.Initiator.Inherited == nil || *got.Initiator.Inherited != 1 {
+			t.Fatalf("carried budget = %+v, want the steering minimum 0 (+1 hop = 1), not the wider initiating 2", got.Initiator)
+		}
+		al.taskExecutor.CheckQueuedTasks(context.Background())
 		rec := lifecycleOf(t, al, taskNow(t, al, tk.ID).SessionID)
-		if rec.InitiatedBy == nil || rec.InitiatedBy.Authorization.RemainingDepth > prev.Authorization.RemainingDepth {
-			t.Fatalf("retry budget = %+v, want <= %d", rec.InitiatedBy, prev.Authorization.RemainingDepth)
+		if rec.InitiatedBy == nil || rec.InitiatedBy.Authorization.RemainingDepth != 0 {
+			t.Fatalf("retry run budget = %+v, want RemainingDepth 0", rec.InitiatedBy)
 		}
 	})
-	t.Run("a person's start retries as a person's start", func(t *testing.T) {
+	t.Run("a person-started run retries as a person's start", func(t *testing.T) {
 		al, _ := newRunTaskPolicyLoop(t, nil)
-		tk := mk(al, "t-auto-r3")
-		if err := al.taskExecutor.reExecuteTask(context.Background(), tk.ID, nil, nil); err != nil {
-			t.Fatalf("a person-started run's retry must not need an edge: %v", err)
+		tk, sid := seedFailedRun(t, al, "t-f5-d", rtAssignee, nil, nil)
+		al.taskExecutor.consumeTaskAttempt(context.Background(), tk, sid, "boom", nil)
+		if got := taskNow(t, al, tk.ID); got.Initiator != nil {
+			t.Fatalf("a person's run must not gain an initiator, got %+v", got.Initiator)
+		}
+		al.taskExecutor.CheckQueuedTasks(context.Background())
+		if got := taskNow(t, al, tk.ID); got.SessionID == "" || got.SessionID == sid {
+			t.Fatalf("person-started retry was not picked up: session=%q result=%q", got.SessionID, got.Result)
 		}
 	})
+}
+
+// N2: if the failed run's authority cannot be read, the retry is refused
+// visibly. Unknown authority is never a person's start. New-session storage
+// stays healthy, so only the read error can be what stops it.
+func TestAutoInitiator_N2_UnreadableRetryAuthorityFailsClosed(t *testing.T) {
+	al, _ := newRunTaskPolicyLoop(t, []graphEdge{edge(rtCaller, rtAssignee, nil, nil)})
+	tk, sid := seedFailedRun(t, al, "t-n2", rtAssignee, failedRunAuthority, nil)
+	removeLifecycleFile(t, al, sid)
+	if redispatch := al.taskExecutor.consumeTaskAttempt(context.Background(), tk, sid, "boom", nil); redispatch != "" {
+		t.Fatalf("an unreadable authority must not be retried, got redispatch %q", redispatch)
+	}
+	got := taskNow(t, al, tk.ID)
+	if got.Status != task.StatusFailed || !strings.Contains(got.Result, "authority could not be read") {
+		t.Fatalf("task must fail visibly: status=%q result=%q", got.Status, got.Result)
+	}
+	al.taskExecutor.CheckQueuedTasks(context.Background())
+	if again := taskNow(t, al, tk.ID); again.SessionID != sid {
+		t.Fatalf("no new session may start after the refusal, session=%q", again.SessionID)
+	}
 }

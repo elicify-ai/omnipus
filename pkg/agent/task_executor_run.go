@@ -65,10 +65,7 @@ func (te *TaskExecutor) runTask(
 			// own: an unattended (Calendar-triggered) run's steering retry must
 			// stay unattended, and a Run-now retry must stay attended.
 			redispatchCtx := tools.WithAutoDenyAsk(context.Background(), tools.ToolAutoDenyAsk(ctx))
-			// The retry keeps the failed run's own authority (initiator and
-			// remaining budget), re-authorized against the current graph.
-			redispatchInitiatedBy := te.runInitiatedBy(taskSessionID)
-			if err := te.reExecuteTask(redispatchCtx, redispatchTaskID, occurrenceMs, redispatchInitiatedBy); err != nil && !isRoutineAutoDispatchRefusal(err) {
+			if err := te.ExecuteTask(redispatchCtx, redispatchTaskID, occurrenceMs); err != nil && !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
@@ -494,10 +491,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 			// stamped it before detaching) into the redispatch — see runTask's
 			// identical redispatch fix for the full rationale.
 			redispatchCtx := tools.WithAutoDenyAsk(context.Background(), tools.ToolAutoDenyAsk(ctx))
-			// The retry keeps the failed run's own authority (initiator and
-			// remaining budget), re-authorized against the current graph.
-			redispatchInitiatedBy := te.runInitiatedBy(taskSessionID)
-			if err := te.reExecuteTask(redispatchCtx, redispatchTaskID, nil, redispatchInitiatedBy); err != nil && !isRoutineAutoDispatchRefusal(err) {
+			if err := te.ExecuteTask(redispatchCtx, redispatchTaskID, nil); err != nil && !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
