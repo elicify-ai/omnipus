@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -46,6 +47,12 @@ type cwR1Harness struct {
 	cfg   *config.Config
 	dir   string
 	key   string
+	// turnsMu guards turns: every turn state this harness minted, so a
+	// pre-seeded assistant call can be registered as the issuer of its tool
+	// results on ALL of them (effects design step 2 requires the turn to know
+	// the exact issuing assistant before a result is admitted).
+	turnsMu sync.Mutex
+	turns   []*turnState
 }
 
 func cwR1New(t *testing.T, window int) *cwR1Harness {
@@ -78,16 +85,34 @@ func cwR1New(t *testing.T, window int) *cwR1Harness {
 }
 
 func (h *cwR1Harness) turn(user string) *turnState {
-	return newTurnState(h.agent, processOptions{
+	ts := newTurnState(h.agent, processOptions{
 		SessionKey: h.key, UserMessage: user, Channel: "scheduled",
 		SkipInitialSteeringPoll: true,
 	}, turnEventScope{turnID: "cw-r1-turn"})
+	h.turnsMu.Lock()
+	h.turns = append(h.turns, ts)
+	h.turnsMu.Unlock()
+	return ts
 }
 
 func (h *cwR1Harness) append(t *testing.T, msgs ...providers.Message) {
 	t.Helper()
 	for _, m := range msgs {
 		h.store.AddFullMessage(h.key, m)
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			continue
+		}
+		// The just-appended assistant record is the issuer of these calls: the
+		// address its own checked append assigned is the last live slot.
+		view, err := h.store.WindowView(context.Background(), h.key)
+		require.NoError(t, err, "read the window to address the appended assistant")
+		require.NotEmpty(t, view.Live, "the appended assistant must occupy a live slot")
+		addr := view.Live[len(view.Live)-1].Addr
+		h.turnsMu.Lock()
+		for _, ts := range h.turns {
+			ts.recordCallIssuers(m, addr)
+		}
+		h.turnsMu.Unlock()
 	}
 }
 
@@ -183,4 +208,10 @@ func (h *cwR1Harness) check(t *testing.T, ts *turnState, messages []providers.Me
 	out, err := h.al.midTurnWindowCheck(ts, messages, nil)
 	require.NoError(t, err, "ADR-066 MAJ-CW-004: pressure alone cannot end a turn")
 	return out
+}
+
+// sessionDir is the one archive directory the owning session id names (the
+// routing key "cw-r1" is its own owning id), where the checkpoint meta lives.
+func (h *cwR1Harness) sessionDir() string {
+	return filepath.Join(h.dir, h.key)
 }

@@ -33,9 +33,9 @@ func TestCWSlideR1_MetadataWriteFailureCannotInstallOrSendCandidate(t *testing.T
 	meta, archive := h.meta(t), h.archive(t)
 	r, p := cwR1OpenAI(t, 0)
 	// Restore before cleanup removes the temporary directory, including on Fatal.
-	t.Cleanup(func() { require.NoError(t, os.Chmod(h.dir, 0o700), "restore fixture permissions") })
-	require.NoError(t, os.Chmod(h.dir, 0o500))
-	probe := fileutil.WriteFileAtomic(filepath.Join(h.dir, "must-not-write.json"), []byte("{}"), 0o600)
+	t.Cleanup(func() { require.NoError(t, os.Chmod(h.sessionDir(), 0o700), "restore fixture permissions") })
+	require.NoError(t, os.Chmod(h.sessionDir(), 0o500))
+	probe := fileutil.WriteFileAtomic(filepath.Join(h.sessionDir(), "must-not-write.json"), []byte("{}"), 0o600)
 	if !errors.Is(probe, os.ErrPermission) {
 		t.Fatalf("BLOCKED: real metadata-write permission instrument did not fail with permission error (got %v) — required for MAJ-CW-005 storage-error proof", probe)
 	}
