@@ -87,6 +87,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "SmartSelect [check:smart-select-browser] browser",
       "story": "Plain",
+      "requiredTargets": [{ "selector": "[aria-label=\"Project\"]", "attribute": "aria-label", "value": "Project" }],
       "applicable": true
     },
     {

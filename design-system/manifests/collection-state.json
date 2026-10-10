@@ -76,6 +76,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "CollectionState [check:collection-state-browser] browser",
       "story": "Ready",
+      "requiredTargets": [{ "selector": "[data-testid=\"collection\"]", "text": "Cached record" }],
       "applicable": true
     },
     {

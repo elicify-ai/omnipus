@@ -408,12 +408,15 @@ export function IdentityPreview({
   figure,
   role,
   color,
+  name,
 }: {
   figure: AgentFigure
   role: AgentRole
   color: string | null | undefined
+  /** The draft agent name. Monogram draws its initial from this. */
+  name: string
 }) {
-  return <AgentIcon figure={figure} role={role} color={color as AgentColorValue} size={40} />
+  return <AgentIcon figure={figure} role={role} color={color as AgentColorValue} size={40} name={name} />
 }
 
 // ── Avatar icon picker (lifted from AgentProfile.tsx:869-878) ──────────────

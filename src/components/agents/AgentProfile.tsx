@@ -2410,6 +2410,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         <div className="flex items-center gap-[var(--space-2)] min-w-0">
           <AgentIcon figure={selectedFigure} role={selectedRole} size={26}
             color={(selectedColor ?? AgentColor.options[9]) as AgentColorValue}
+            name={agent.name}
           />
           <h1 className="font-headline text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] truncate">
             {agent.name}

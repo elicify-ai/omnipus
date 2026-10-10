@@ -134,13 +134,13 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 	cases := []struct {
 		name, body, errorText string
 	}{
-		{"invalid figure alone", `{"figure":"octopus","role":"writer","color":"#22D3EE","description":"must not save"}`, "figure must be Robot, Man, Woman, or Omnipus"},
+		{"invalid figure alone", `{"figure":"octopus","role":"writer","color":"#22D3EE","description":"must not save"}`, "figure must be Robot, Man, Woman, Omnipus, or Monogram"},
 		{"invalid role alone", `{"figure":"Woman","role":"Developer","color":"#22D3EE","description":"must not save"}`, "role must be one of the curated role slugs"},
 		{"invalid color alone", `{"figure":"Woman","role":"writer","color":"#123456","description":"must not save"}`, "color must be one of the ten identity colours"},
-		{"empty figure", `{"figure":"","role":"writer","color":"#22D3EE"}`, "figure must be Robot, Man, Woman, or Omnipus"},
+		{"empty figure", `{"figure":"","role":"writer","color":"#22D3EE"}`, "figure must be Robot, Man, Woman, Omnipus, or Monogram"},
 		{"empty role", `{"figure":"Woman","role":"","color":"#22D3EE"}`, "role must be one of the curated role slugs"},
 		{"empty color", `{"figure":"Woman","role":"writer","color":""}`, "color must be one of the ten identity colours"},
-		{"null figure", `{"figure":null,"role":"writer","color":"#22D3EE"}`, "figure must be Robot, Man, Woman, or Omnipus"},
+		{"null figure", `{"figure":null,"role":"writer","color":"#22D3EE"}`, "figure must be Robot, Man, Woman, Omnipus, or Monogram"},
 		{"null role", `{"figure":"Woman","role":null,"color":"#22D3EE"}`, "role must be one of the curated role slugs"},
 		{"null color", `{"figure":"Woman","role":"writer","color":null}`, "color must be one of the ten identity colours"},
 	}

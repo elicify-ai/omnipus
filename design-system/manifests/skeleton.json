@@ -6,7 +6,7 @@
     { "id": "skeleton-interaction", "kind": "interaction", "file": "src/components/ui/skeleton.stories.tsx", "test": "Loading", "story": "Loading", "applicable": true },
     { "id": "skeleton-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-axe] axe", "story": "Loading", "applicable": true },
     { "id": "skeleton-keyboard", "kind": "keyboard", "applicable": false, "reason": "Skeleton is decorative and cannot receive focus." },
-    { "id": "skeleton-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-browser] browser", "story": "Loading", "applicable": true },
+    { "id": "skeleton-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-browser] browser", "story": "Loading", "requiredTargets": [{ "selector": "[data-testid=\"skeleton\"]", "attribute": "aria-hidden", "value": "true" }], "applicable": true },
     { "id": "skeleton-pointer", "kind": "pointer", "applicable": false, "reason": "Skeleton is decorative and has no pointer target." },
     { "id": "skeleton-reduced-motion", "kind": "reduced-motion", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-reduced-motion] reduced-motion", "story": "Loading", "applicable": true },
     { "id": "skeleton-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-forced-colors] forced-colors", "story": "Loading", "applicable": true },

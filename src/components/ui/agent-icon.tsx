@@ -1,9 +1,9 @@
 import { useId } from 'react'
 
 import { FIGURE_ART, type AgentIconColor, type AgentIconFigure, type AgentIconRole } from '@/design-system/agent-identity'
-import { cn } from '@/lib/utils'
+import { cn, initialOf } from '@/lib/utils'
 
-import { agentIconInner } from '@/lib/agentIconArt'
+import { agentIconInner, escapeMarkup, monogramInner } from '@/lib/agentIconArt'
 
 type AgentIconSize = 18 | 26 | 40 | 48
 type AgentIconMotion = 'none' | 'thinking' | 'working' | 'waiting'
@@ -23,10 +23,12 @@ type AgentIconBase = {
   reducedMotion?: boolean
 }
 
-export type AgentIconProps = AgentIconBase & (
-  | { decorative?: true; name?: string }
-  | { decorative: false; name: string }
-)
+export type AgentIconProps = AgentIconBase & {
+  /** The agent's display name. Monogram draws its initial from this. */
+  name: string
+  /** Default true: aria-hidden mark. false: role="img" + aria-label={name}. */
+  decorative?: boolean
+}
 
 const MARK_CLASS = {
   none: '',
@@ -78,15 +80,31 @@ function maskId(raw: string, suffix: string) {
 export function AgentIcon(props: AgentIconProps) {
   const { figure, role, color, size, motion = 'none', reducedMotion } = props
   const decorative = props.decorative !== false
-  const name = props.name
-  if (!decorative && !name) {
-    throw new Error('AgentIcon requires name when decorative is false')
+  // Required by type. The runtime guard fires only on an ABSENT name (a caller
+  // bug): a name the caller passed but that is empty/whitespace renders "?" (the
+  // degenerate-data case below), it does not throw. ARCH-RULING monogram D2a.
+  const name = props.name as string | undefined
+  if (name == null) {
+    throw new Error('AgentIcon requires name')
   }
 
   const baseId = useId()
   const art = FIGURE_ART[figure].art
-  const inkMarkup = withBadgeRole(agentIconInner(art, role, maskId(baseId, 'i')), role)
-  const glowMarkup = withBadgeRole(agentIconInner(art, role, maskId(baseId, 'g')), role)
+  // The Monogram letter: initialOf (trim → first code point → uppercase), then
+  // the Q-F3 letter/digit gate — any other first character renders "?". The
+  // letter is user data, so it is escaped before entering the markup string.
+  const initial = initialOf(name)
+  const mark = /^[\p{L}\p{Nd}]$/u.test(initial) ? initial : '?'
+  const escapedInitial = escapeMarkup(mark)
+  // Monogram bypasses the FIGURES lookup (its art key is not an AgentIconArtKey):
+  // the Monogram path builds its own masked group, and `art` is still used for
+  // the span `data-art` attribute.
+  const innerMarkup = (suffix: 'i' | 'g') =>
+    figure === 'Monogram'
+      ? monogramInner(role, maskId(baseId, suffix), escapedInitial)
+      : agentIconInner(FIGURE_ART[figure].art, role, maskId(baseId, suffix))
+  const inkMarkup = withBadgeRole(innerMarkup('i'), role)
+  const glowMarkup = withBadgeRole(innerMarkup('g'), role)
   const animate = reducedMotion !== true && motion !== 'none'
   const markClass = !animate ? '' : reducedMotion === false ? MARK_CLASS_FORCED[motion] : MARK_CLASS[motion]
   const glowClass = !animate ? '' : reducedMotion === false ? GLOW_CLASS_FORCED[motion] : GLOW_CLASS[motion]

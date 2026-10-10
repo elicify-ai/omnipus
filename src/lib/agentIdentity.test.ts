@@ -78,6 +78,8 @@ describe('agent identity vocabulary', () => {
     expect(FIGURE_ART.Man).toEqual({ art: 'man', face: 'eyes' })
     expect(FIGURE_ART.Woman).toEqual({ art: 'woman', face: 'eyes' })
     expect(FIGURE_ART.Omnipus).toEqual({ art: 'octopus', face: 'none' })
-    expect(Object.keys(FIGURE_ART).sort()).toEqual(['Man', 'Omnipus', 'Robot', 'Woman'])
+    // The 5th figure. face: 'none' — no eyes art is baked for the Monogram letter.
+    expect(FIGURE_ART.Monogram).toEqual({ art: 'monogram', face: 'none' })
+    expect(Object.keys(FIGURE_ART).sort()).toEqual(['Man', 'Monogram', 'Omnipus', 'Robot', 'Woman'])
   })
 })
