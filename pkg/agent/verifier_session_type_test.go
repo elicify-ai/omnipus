@@ -16,9 +16,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"

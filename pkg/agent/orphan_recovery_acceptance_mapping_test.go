@@ -11,7 +11,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func orphanACTestMapping(t *testing.T) {

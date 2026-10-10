@@ -55,7 +55,21 @@ func scanJSONLRangeFixture(ctx context.Context, r io.Reader, from, to int, fn fu
 // checked model seam and returns the bounded view after the append.
 func appendWindowMsg(store session.ContextWindowStore, ctx context.Context, key string, msg providers.Message) (session.WindowView, error) {
 	_, view, err := store.AppendModelMessage(ctx, key, session.ModelAppend{
-		Message: msg, ViewMembership: session.ViewMembershipModel, Source: session.EntrySource{Kind: sourceKindForRole(msg.Role)},
+		Message: msg, ViewMembership: session.ViewMembershipModel, Source: session.EntrySource{Kind: entrySourceKind(msg.Role)},
 	})
 	return view, err
+}
+
+// entrySourceKind mirrors the trusted-source kind the store mints from a message
+// role (pkg/session's own sourceKindForRole is unexported).
+func entrySourceKind(role string) string {
+	switch role {
+	case "user", "assistant", "system", "tool":
+		if role == "assistant" {
+			return "agent"
+		}
+		return role
+	default:
+		return "anonymous"
+	}
 }

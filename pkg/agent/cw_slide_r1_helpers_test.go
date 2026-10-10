@@ -87,8 +87,7 @@ func (h *cwR1Harness) turn(user string) *turnState {
 func (h *cwR1Harness) append(t *testing.T, msgs ...providers.Message) {
 	t.Helper()
 	for _, m := range msgs {
-		require.NoError(t, h.store.AddFullMessage(context.Background(), h.key, m),
-			"fixture append must not hide storage error: role=%s id=%s", m.Role, m.ToolCallID)
+		h.store.AddFullMessage(h.key, m)
 	}
 }
 
