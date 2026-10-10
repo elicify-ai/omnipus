@@ -27,13 +27,21 @@
 #      so the count is two. The pinned property is unchanged: a new site here
 #      silently changes when the wheel releases.)
 #   2. `bus.MessageBus.PublishInbound` is CALLED (never its own `func`
-#      definition in pkg/bus/bus.go) at EXACTLY SEVEN non-test sites in pkg/
+#      definition in pkg/bus/bus.go) at EXACTLY EIGHT non-test sites in pkg/
 #      (BROWSER-FR-029a's own text: the PublishInbound census is pinned, so a
 #      new publish site cannot appear un-classified). Verified today:
 #      pkg/agent/async_notifier.go, pkg/agent/loop.go (the goal-loop
 #      follow-up — this ONE call site is legitimate and must stay),
-#      pkg/agent/address_router.go (TWO sites), pkg/gateway/websocket_chat.go,
+#      pkg/agent/address_router.go (TWO sites), pkg/agent/connector_egress.go
+#      (the main-connector refusal note), pkg/gateway/websocket_chat.go,
 #      pkg/gateway/ws_ask_user.go, pkg/channels/base.go.
+#
+#      Security-lead ruling (OPSITE-connector_egress.md, u8-inbound-20261010):
+#      the connector_egress.go publication is a NON-operator, server-generated
+#      note. It never sets OperatorPrompt=true and it carries the owner-wake
+#      marker, so reviveInboundIsHumanTurn rejects it and it can never clear a
+#      landed human Stop; the pinned test is
+#      pkg/agent/refusal_note_stop_test.go.
 #
 #      Security-lead ruling (REVIEW-u8-r3-78271d0f0.md): the two
 #      pkg/agent/address_router.go publications and the
@@ -176,23 +184,23 @@ if [ "$op_count" -ne 2 ]; then
 fi
 
 echo ""
-echo "PublishInbound call sites: $pi_count (want exactly 7)"
+echo "PublishInbound call sites: $pi_count (want exactly 8)"
 if [ -n "$pi_hits" ]; then
   printf '%s\n' "$pi_hits" | sed 's/^/  /'
 fi
-if [ "$pi_count" -ne 7 ]; then
+if [ "$pi_count" -ne 8 ]; then
   fail=1
 fi
 
 echo ""
 if [ "$fail" -ne 0 ]; then
   echo "ERROR: BROWSER-FR-029/FR-029a's assignment partition is no longer exactly" >&2
-  echo "2 OperatorPrompt=true sites and 7 PublishInbound call sites (see counts" >&2
+  echo "2 OperatorPrompt=true sites and 8 PublishInbound call sites (see counts" >&2
   echo "above). This is the fail-closed browser-wheel release discriminator —" >&2
   echo "a new, un-classified site here silently changes when the wheel releases." >&2
   echo "See docs/internal/specs/browser-control-handover-spec.md FR-029/FR-029a." >&2
   exit 1
 fi
 
-echo "OK: exactly 2 OperatorPrompt=true sites and 7 PublishInbound call sites."
+echo "OK: exactly 2 OperatorPrompt=true sites and 8 PublishInbound call sites."
 exit 0
