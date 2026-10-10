@@ -88,7 +88,10 @@ func TestAttach_TwiceArchiveByteIdentical(t *testing.T) {
 	metaPath := filepath.Join(sessionDir, "backend_meta.json")
 	bytesBefore, err := os.ReadFile(archivePath)
 	require.NoError(t, err)
-	require.Equal(t, 110, strings.Count(string(bytesBefore), "\n"))
+	// 110 model records (21 user / 53 assistant / 36 tool) PLUS the 2 chat
+	// records the fixture wrote with AppendTranscript above: session-core D1
+	// puts chat and model records in the ONE file set.
+	require.Equal(t, 112, strings.Count(string(bytesBefore), "\n"))
 	skipBefore := readSkip(t, metaPath)
 	require.Equal(t, 70, skipBefore)
 
