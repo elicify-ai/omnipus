@@ -129,6 +129,7 @@ export const TokenFrame = z
     content: z.string().max(65536),
     agent_id: z.string().optional(),
     reply_to_message_id: z.string().min(1).optional(),
+    reply_to_participant: ChatParticipant.optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
     goal_id: z.string().optional(),
@@ -420,6 +421,8 @@ export const ReplayMessageFrame = z
     role: z.enum(["user", "assistant", "system", "turn_canceled"]),
     id: z.string().optional(),
     reply_to_message_id: z.string().min(1).optional(),
+    participant: ChatParticipant.optional(),
+    reply_to_participant: ChatParticipant.optional(),
     timestamp: z.string().optional(),
     agent_id: z.string().optional(),
     model: z.string().max(256).optional(),
@@ -562,6 +565,20 @@ export const MediaFrame = z
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
     seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ChatParticipant = z
+  .object({
+    kind: z.enum(["human", "agent"]),
+    display_name: z.string().min(1).max(128),
+    source: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional(),
+    agent: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .strict().optional(),
   })
   .strict();
 
@@ -1304,6 +1321,7 @@ export const UserMessageFrame = z
     .strict()).optional(),
     timestamp: z.string(),
     agent_id: z.string().optional(),
+    participant: ChatParticipant.optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();

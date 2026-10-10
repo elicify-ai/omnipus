@@ -172,6 +172,7 @@ export interface TokenFrame {
   content: string;
   agent_id?: string;
   reply_to_message_id?: string;
+  reply_to_participant?: ChatParticipant;
   turn_id?: string;
   message_id?: string;
   goal_id?: string;
@@ -414,6 +415,8 @@ export interface ReplayMessageFrame {
   role: "user" | "assistant" | "system" | "turn_canceled";
   id?: string;
   reply_to_message_id?: string;
+  participant?: ChatParticipant;
+  reply_to_participant?: ChatParticipant;
   timestamp?: string;
   agent_id?: string;
   model?: string;
@@ -532,6 +535,16 @@ export interface MediaFrame {
   session_id: string;
   parts: Array<MediaPart>;
   seq?: number;
+}
+
+export interface ChatParticipant {
+  kind: "human" | "agent";
+  display_name: string;
+  source?: string;
+  agent?: {
+    workspace_id: string;
+    agent_id: string;
+  };
 }
 
 export interface CommandSegmentInfo {
@@ -1135,6 +1148,7 @@ export interface UserMessageFrame {
   }>;
   timestamp: string;
   agent_id?: string;
+  participant?: ChatParticipant;
   seq?: number;
 }
 

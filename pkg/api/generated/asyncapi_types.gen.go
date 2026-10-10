@@ -451,6 +451,17 @@ type CatchUpCompleteFrame struct {
 	Type      string `json:"type"`
 }
 
+// ChatParticipant — Server-made display record of a chat participant (F15). Display only: no ids, no route. Mirrors contracts/components/schemas/ChatParticipant.yaml.
+type ChatParticipant struct {
+	Agent *struct {
+		AgentId     string `json:"agent_id"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"agent,omitempty"`
+	DisplayName string  `json:"display_name"`
+	Kind        string  `json:"kind"`
+	Source      *string `json:"source,omitempty"`
+}
+
 // CommandSegmentInfo — ADR-092 D3/D4. One segment of the bash command awaiting approval, split with the same splitter and program resolution the bash tool itself uses (splitShellSegments / shellCommandHeadDetailed, through the tool's own D3 evaluator), listed inside ToolApprovalRequiredFrame.segments. Every segment of the command is listed, in order, because one decision approves or denies the whole call; the server records no per-segment grant for a chained command. On Windows the whole command is one segment (FR-041).
 type CommandSegmentInfo struct {
 	// Argument tokens following the resolved binary, as split.
@@ -1023,11 +1034,13 @@ type ReplayMessageFrame struct {
 	GoalId *string `json:"goal_id,omitempty"`
 	Id     *string `json:"id,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
-	Model *string `json:"model,omitempty"`
+	Model       *string          `json:"model,omitempty"`
+	Participant *ChatParticipant `json:"participant,omitempty"`
 	// Present only on a guest reply: the message_id of the admitted request this entry answers.
-	ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
-	Role             string  `json:"role"`
-	SessionId        string  `json:"session_id"`
+	ReplyToMessageId   *string          `json:"reply_to_message_id,omitempty"`
+	ReplyToParticipant *ChatParticipant `json:"reply_to_participant,omitempty"`
+	Role               string           `json:"role"`
+	SessionId          string           `json:"session_id"`
 	// Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence (for example the tool-iteration-limit notice) written after the turn's earlier narration was already persisted. Live, the gateway closes the narration bubble with done(<narration id>) before this entry arrives, so it is a separate message; the replay stream has no such boundary, so the SPA must start a new message for this frame instead of merging it into the preceding same-turn assistant entry. Absent on every other frame, including entries written before this field existed.
 	TerminalOutcome *bool   `json:"terminal_outcome,omitempty"`
 	Timestamp       *string `json:"timestamp,omitempty"`
@@ -1250,7 +1263,8 @@ type TokenFrame struct {
 	// Set only on a catch-up token: REPLACES the open bubble's content for this session instead of appending, making catch-up idempotent.
 	Replace *bool `json:"replace,omitempty"`
 	// Present only on a guest reply: the message_id of the admitted request this answer addresses.
-	ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
+	ReplyToMessageId   *string          `json:"reply_to_message_id,omitempty"`
+	ReplyToParticipant *ChatParticipant `json:"reply_to_participant,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy (e.g. a projection token inside a snapshot). Keep in sync by hand with contracts/components/schemas/TokenFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -1398,9 +1412,10 @@ type UserMessageFrame struct {
 		Size     int64  `json:"size"`
 		Type     string `json:"type"`
 	} `json:"attachments,omitempty"`
-	ClientMessageId *string `json:"client_message_id,omitempty"`
-	Content         string  `json:"content"`
-	Id              string  `json:"id"`
+	ClientMessageId *string          `json:"client_message_id,omitempty"`
+	Content         string           `json:"content"`
+	Id              string           `json:"id"`
+	Participant     *ChatParticipant `json:"participant,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`

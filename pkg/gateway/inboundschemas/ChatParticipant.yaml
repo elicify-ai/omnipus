@@ -1,0 +1,35 @@
+title: ChatParticipant
+description: >
+  A server-made display record of one participant in a chat (session-core F15):
+  who wrote a user-role entry (Message.participant) or who a reply went to
+  (Message.reply_to_participant). It is a display label, not identity and not
+  authorization: it carries no principal, platform or canonical id, no
+  instance, chat, thread or message id, and no route. Assistant authorship
+  stays agent_id. Stamped only by the server, from the authenticated
+  connection or the server-held request capture — never from model or tool
+  input.
+type: object
+readOnly: true
+required:
+  - kind
+  - display_name
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - human
+      - agent
+  display_name:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Plain text. The server strips control characters before stamping.
+  source:
+    type: string
+    pattern: '^[a-z][a-z0-9_-]{0,31}$'
+    description: >
+      Present iff kind=human. "web" for the web UI, otherwise the connector's
+      platform (telegram, slack, google-chat, ...). Never an instance id.
+  agent:
+    $ref: ./AgentAddress.yaml

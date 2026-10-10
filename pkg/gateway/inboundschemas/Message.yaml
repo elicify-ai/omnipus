@@ -9,6 +9,8 @@ description: >
   (type=model_ref / model_ref), its trusted source/return-route
   provenance, and its partition/encoded-byte/entry-id marks are disk-only
   and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005).
+  The one display-only exception (F15) is participant / reply_to_participant
+  (ChatParticipant): a name, a kind and a source label, never an id or a route.
   Entries that belong to the model view only (view_membership="model")
   are excluded from this projection entirely.
 required:
@@ -131,6 +133,10 @@ properties:
     type: string
     description: ID of the agent that produced this entry (FR-002). Always present.
     example: "jim"
+  participant:
+    $ref: ./ChatParticipant.yaml
+  reply_to_participant:
+    $ref: ./ChatParticipant.yaml
   reply_to_message_id:
     type: string
     minLength: 1

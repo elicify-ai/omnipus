@@ -186,6 +186,20 @@ type Message = {
   attachments?: Array<Attachment> | undefined;
   tool_calls?: Array<ToolCall> | undefined;
   agent_id: string;
+  participant?:
+    | {
+        kind: "human" | "agent";
+        display_name: string;
+        source?: string | undefined;
+        agent?:
+          | {
+              workspace_id: string;
+              agent_id: string;
+            }
+          | undefined;
+      }
+    | undefined;
+  reply_to_participant?: participant | undefined;
   reply_to_message_id?: string | undefined;
   messages_compacted?: number | undefined;
   truncated?: boolean | undefined;
@@ -342,6 +356,17 @@ type ToolCall = {
   result?: {} | undefined;
   parent_tool_call_id?: string | undefined;
   content_state?: ("full" | "capped" | "emptied") | undefined;
+};
+type participant = {
+  kind: "human" | "agent";
+  display_name: string;
+  source?: string | undefined;
+  agent?:
+    | {
+        workspace_id: string;
+        agent_id: string;
+      }
+    | undefined;
 };
 type JudgeVerdict = {
   id: string;
@@ -3499,6 +3524,20 @@ export const ToolCall: z.ZodType<ToolCall> = z.object({
     .optional()
     .default("full"),
 });
+export const participant: z.ZodType<participant> = z.object({
+  kind: z.enum(["human", "agent"]),
+  display_name: z.string().min(1).max(128),
+  source: z
+    .string()
+    .regex(/^[a-z][a-z0-9_-]{0,31}$/)
+    .optional(),
+  agent: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .optional(),
+});
 export const CriterionVerdict: z.ZodType<CriterionVerdict> = z.object({
   criterion_id: z.string().min(1),
   met: z.boolean(),
@@ -3581,6 +3620,23 @@ export const Message: z.ZodType<Message> = z.object({
   attachments: z.array(Attachment).optional(),
   tool_calls: z.array(ToolCall).optional(),
   agent_id: z.string(),
+  participant: z
+    .object({
+      kind: z.enum(["human", "agent"]),
+      display_name: z.string().min(1).max(128),
+      source: z
+        .string()
+        .regex(/^[a-z][a-z0-9_-]{0,31}$/)
+        .optional(),
+      agent: z
+        .object({
+          workspace_id: z.string().min(1).max(128),
+          agent_id: z.string().min(1).max(128),
+        })
+        .optional(),
+    })
+    .optional(),
+  reply_to_participant: participant.optional(),
   reply_to_message_id: z.string().min(1).optional(),
   messages_compacted: z.number().int().optional(),
   truncated: z.boolean().optional(),
@@ -16514,6 +16570,7 @@ export const TokenFrame = z
     content: z.string().max(65536),
     agent_id: z.string().optional(),
     reply_to_message_id: z.string().min(1).optional(),
+    reply_to_participant: ChatParticipant.optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
     goal_id: z.string().optional(),
@@ -16805,6 +16862,8 @@ export const ReplayMessageFrame = z
     role: z.enum(["user", "assistant", "system", "turn_canceled"]),
     id: z.string().optional(),
     reply_to_message_id: z.string().min(1).optional(),
+    participant: ChatParticipant.optional(),
+    reply_to_participant: ChatParticipant.optional(),
     timestamp: z.string().optional(),
     agent_id: z.string().optional(),
     model: z.string().max(256).optional(),
@@ -16947,6 +17006,20 @@ export const MediaFrame = z
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
     seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ChatParticipant = z
+  .object({
+    kind: z.enum(["human", "agent"]),
+    display_name: z.string().min(1).max(128),
+    source: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional(),
+    agent: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .strict().optional(),
   })
   .strict();
 
@@ -17689,6 +17762,7 @@ export const UserMessageFrame = z
     .strict()).optional(),
     timestamp: z.string(),
     agent_id: z.string().optional(),
+    participant: ChatParticipant.optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();

@@ -2071,6 +2071,8 @@ components:
           description: >
             Present only on a guest reply: the message_id of the admitted
             request this answer addresses.
+        reply_to_participant:
+          $ref: '#/components/schemas/ChatParticipant'
         turn_id:
           type: string
           description: >-
@@ -3678,6 +3680,10 @@ components:
           description: >
             Present only on a guest reply: the message_id of the admitted
             request this entry answers.
+        participant:
+          $ref: '#/components/schemas/ChatParticipant'
+        reply_to_participant:
+          $ref: '#/components/schemas/ChatParticipant'
         timestamp:
           type: string
           format: date-time
@@ -4281,6 +4287,45 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/MediaFrame.yaml.
+    ChatParticipant:
+      title: ChatParticipant
+      description: >
+        Server-made display record of a chat participant (F15). Display only:
+        no ids, no route. Mirrors contracts/components/schemas/ChatParticipant.yaml.
+      type: object
+      readOnly: true
+      required:
+      - kind
+      - display_name
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+          - human
+          - agent
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        source:
+          type: string
+          pattern: '^[a-z][a-z0-9_-]{0,31}$'
+        agent:
+          type: object
+          required:
+          - workspace_id
+          - agent_id
+          additionalProperties: false
+          properties:
+            workspace_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+            agent_id:
+              type: string
+              minLength: 1
+              maxLength: 128
     CommandSegmentInfo:
       title: CommandSegmentInfo
       description: >
@@ -7321,6 +7366,8 @@ components:
           format: date-time
         agent_id:
           type: string
+        participant:
+          $ref: '#/components/schemas/ChatParticipant'
         seq:
           type: integer
           format: int64
