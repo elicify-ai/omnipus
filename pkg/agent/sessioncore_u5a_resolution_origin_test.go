@@ -17,8 +17,13 @@
 // N2 — the graph-read refusal must NOT regress the ruled task-self-reassignment
 // exemption: a task-origin launch back to the steering session's OWN agent
 // (caller == target) needs no delegation edge, so an UNREADABLE graph must not
-// refuse it. No blanket other-agent exemption: the delegate origin, and a
-// task-origin launch to a DIFFERENT agent, still refuse.
+// refuse it.
+//
+// Amended by initiator-auth (ARCHITECT-ANSWER-INITIATOR-AUTH.md D1): the
+// launcher no longer authorizes ANY task-origin launch — a task-origin launch
+// to a DIFFERENT agent is admitted on the global budget too, and the
+// caller→assignee check moved to AgentLoop.authorizeInitiatedRun in the task
+// executor. Only a DELEGATE-origin launch is graph-gated here.
 //
 // Every test drives the REAL steer.SessionLauncher.Launch path against a real
 // AgentLoop, mirroring sessioncore_u5a_launch_failclosed_test.go.
@@ -152,15 +157,20 @@ func TestLaunch_UnreadableGraph_TaskSelfReassignment_Exempt(t *testing.T) {
 	}
 }
 
-// TestLaunch_UnreadableGraph_TaskOtherAgent_RefusesLaunch is N2's
-// "no blanket other-agent exemption" control: the SAME unreadable graph, but a
-// task-origin launch to a DIFFERENT agent, MUST still refuse — the exemption is
-// tied to caller==target, never applied to other-agent delegation.
-func TestLaunch_UnreadableGraph_TaskOtherAgent_RefusesLaunch(t *testing.T) {
+// TestLaunch_TaskOrigin_NoGraphRead_AdmittedWithGlobalBudget (initiator-auth,
+// ARCHITECT-ANSWER-INITIATOR-AUTH.md D1): the launcher is NO LONGER an
+// authorization boundary for task origin. Only a DELEGATE-origin launch reads
+// the graph; a task-origin launch takes the global budget (tightened only by
+// the steering record's OnwardBudget). The caller→assignee check for an
+// agent-initiated task run now lives in AgentLoop.authorizeInitiatedRun,
+// enforced by the task executor before dispatch — see the run_task/execute_plan
+// policy tests. So an UNREADABLE graph does not refuse a task-origin launch,
+// and the child is admitted on the global cap.
+func TestLaunch_TaskOrigin_NoGraphRead_AdmittedWithGlobalBudget(t *testing.T) {
 	home := seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge(u5aCallerAgentID, testDefaultAgentID, nil, nil),
 	})
-	corruptDelegationStore(t, home, testWS)
+	corruptDelegationStore(t, home, testWS) // an unreadable graph must not matter for task origin
 
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -169,16 +179,25 @@ func TestLaunch_UnreadableGraph_TaskOtherAgent_RefusesLaunch(t *testing.T) {
 	l := NewSteerLauncher(al)
 	steerer := newCallerSteeringSession(t, al, testWS) // caller = u5aCallerAgentID != target
 
-	_, err := l.Launch(ctxWS(testWS, 0), steer.LaunchRequest{
+	res, err := l.Launch(ctxWS(testWS, 0), steer.LaunchRequest{
 		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "do work",
 		Origin: steer.Origin{Kind: steer.OriginKindTask, TaskID: "task-other-1", CallID: "call-task-other"},
 	})
-	if !errors.Is(err, steer.ErrInvalidEdge) {
-		t.Fatalf("an unreadable graph must still refuse a task-origin launch to a DIFFERENT agent "+
-			"(no blanket other-agent exemption); got %v, want steer.ErrInvalidEdge", err)
+	if err != nil {
+		t.Fatalf("a task-origin launch must not read the graph (initiator-auth D1): got %v", err)
 	}
-	if n := childrenOf(t, al, steerer); n != 0 {
-		t.Fatalf("refused task-other launch persisted %d child record(s), want 0", n)
+	if res.SessionID == "" {
+		t.Fatal("expected a child session for the admitted task-origin launch")
+	}
+	rec, loadErr := al.GetSessionLifecycleStore().Load(res.SessionID)
+	if loadErr != nil {
+		t.Fatalf("load child record: %v", loadErr)
+	}
+	if rec.SteeredBy == nil {
+		t.Fatal("child has no SteeredBy edge")
+	}
+	if got := rec.SteeredBy.Authorization.RemainingDepth; got != 4 {
+		t.Fatalf("task-origin child RemainingDepth = %d, want 4 (global cap 5, no edge read)", got)
 	}
 }
 
