@@ -17,9 +17,12 @@ import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
+import type { Session } from '@/lib/api'
 import type { ServerFrame, WsConnection } from '@/lib/ws'
+import { noteForegroundAttach } from '@/store/session/foregroundAck'
 
 const SID = 'helper-session-1'
+const MAIN_SID = 'main-approval-check'
 
 let sent: unknown[]
 
@@ -30,6 +33,41 @@ function connectionThat(): WsConnection {
       return true
     },
   } as unknown as WsConnection
+}
+
+function mainSession(id: string): Session {
+  return {
+    id,
+    agent_id: 'mia',
+    title: 'Mia main',
+    type: 'main',
+    needs_attention: true,
+    created_at: '2026-10-01T00:00:00Z',
+    updated_at: '2026-10-10T00:00:00Z',
+    message_count: 1,
+    workspace_id: 'ws-1',
+  }
+}
+
+function stateFrame(sessionId: string, attentionBound: number): ServerFrame {
+  return {
+    type: 'session_state',
+    user_id: '',
+    pending_approvals: [],
+    emitted_at: '2026-10-10T00:00:00Z',
+    session_id: sessionId,
+    attention_bound: attentionBound,
+  } as unknown as ServerFrame
+}
+
+function catchUpComplete(sessionId: string): ServerFrame {
+  return {
+    type: 'catch_up_complete',
+    session_id: sessionId,
+    seq: 1,
+    boot_id: 'boot-a',
+    mode: 'incremental',
+  } as unknown as ServerFrame
 }
 
 function requiredFrame(sessionId: string): ServerFrame {
@@ -79,11 +117,24 @@ describe('approval frames refresh the session list (U11 N2)', () => {
     expect(queryClient.getQueryState(['sessions'])?.isInvalidated).toBe(true)
   })
 
-  it('the approval frame carrying a MAIN session id never sends an acknowledgement — matching frames against mains is forbidden', () => {
-    // The frame here names a loaded main directly: the only legitimate effect
-    // is the roster refresh, never an attach/ack keyed off the frame's id.
+  it('approval frames never trigger the shown main’s acknowledgement early; the shown completion still acks with the frozen bound', () => {
+    // The claimed scenario, actually built: a real LOADED MAIN is the active
+    // shown foreground, its bound (7) has arrived, catch-up has NOT completed.
+    // Approval frames for a helper must produce no acknowledgement keyed off
+    // any of it; only the shown completion may ack, with the frozen bound.
+    useSessionStore.setState({ activeSessionId: MAIN_SID })
+    queryClient.setQueryData(['sessions'], [mainSession(MAIN_SID)])
+    noteForegroundAttach(MAIN_SID)
+    useChatStore.getState().handleFrame(stateFrame(MAIN_SID, 7))
+
     useChatStore.getState().handleFrame(requiredFrame(SID))
     useChatStore.getState().handleFrame(resolvedFrame(SID))
-    expect(sent).toEqual([])
+    expect(sent).toEqual([]) // no premature acknowledgement
+
+    // Positive control: the shown completion acknowledges with the frozen 7.
+    useChatStore.getState().handleFrame(catchUpComplete(MAIN_SID))
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: MAIN_SID, ack_attention: true, attention_bound: 7 },
+    ])
   })
 })

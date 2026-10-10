@@ -283,3 +283,103 @@ describe('shown-commit acknowledgement on a cold roster cache (round 2 HIGH: the
     ])
   })
 })
+
+describe('frozen pending record (round 4 invariants, spec FR-047 / BDD-13.2 / no-write row ~L191)', () => {
+  it('I2: a reconnect completion carrying bound 9 never replaces the deferred 7 — resolution acks the original 7', () => {
+    const sid = 'main-ack-i2-reconnect'
+    shownForeground(sid, []) // metadata unknown at the shown commit
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    // A reconnect (no new foreground attach) completes again with a newer bound.
+    useChatStore.getState().handleFrame(stateFrame(sid, 9))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+
+    queryClient.setQueryData(['sessions'], [mainSession(sid)])
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
+  })
+
+  it('I4: a failed deferred send keeps the record — after recovery and a newer completion, exactly one ack carries the original 7', () => {
+    const sid = 'main-ack-i4-failed-deferred-send'
+    shownForeground(sid, [])
+    useConnectionStore.setState({ connection: connectionThat(false) } as never)
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    queryClient.setQueryData(['sessions'], [mainSession(sid)]) // metadata resolves; send fails
+    expect(sent).toEqual([])
+
+    // Connection recovers; a newer completion arrives before any retry.
+    useConnectionStore.setState({ connection: connectionThat(true) } as never)
+    useChatStore.getState().handleFrame(stateFrame(sid, 9))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
+  })
+
+  it('I3: a retry after the user opened a different chat sends nothing', () => {
+    const sid = 'main-ack-i3-retry-after-switch'
+    shownForeground(sid, [mainSession(sid)])
+    useConnectionStore.setState({ connection: connectionThat(false) } as never)
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([]) // first attempt failed; the record is kept (I4)
+
+    useConnectionStore.setState({ connection: connectionThat(true) } as never)
+    useSessionStore.setState({ activeSessionId: 'a-newer-chat' }) // user moved on
+    useChatStore.getState().handleFrame(catchUpComplete(sid)) // retry attempt
+
+    expect(sent).toEqual([])
+  })
+
+  it('I3: a retry while still the foreground chat sends the original 7 exactly once', () => {
+    const sid = 'main-ack-i3-retry-in-front'
+    shownForeground(sid, [mainSession(sid)])
+    useConnectionStore.setState({ connection: connectionThat(false) } as never)
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([])
+
+    useConnectionStore.setState({ connection: connectionThat(true) } as never)
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
+  })
+
+  it('I5: a populated roster that omits the target session is not borrowed — no ack fields', () => {
+    const sid = 'main-ack-i5-not-listed'
+    shownForeground(sid, [mainSession('another-main-entirely')])
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([])
+
+    // Later cache events must not send either while the target stays unlisted.
+    queryClient.setQueryData(['sessions'], [mainSession('another-main-entirely')])
+    expect(sent).toEqual([])
+  })
+
+  it('I5: unknown attention arriving through the deferred resolver sends no ack fields', () => {
+    const sid = 'main-ack-i5-deferred-unknown-attention'
+    shownForeground(sid, []) // defer first: metadata unknown
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+
+    // Metadata resolves with UNKNOWN attention — still no ack fields.
+    queryClient.setQueryData(['sessions'], [mainSession(sid, { needs_attention: undefined })])
+    expect(sent).toEqual([])
+
+    // And a further refresh that still leaves attention unknown sends nothing.
+    queryClient.setQueryData(['sessions'], [mainSession(sid, { needs_attention: undefined })])
+    expect(sent).toEqual([])
+  })
+})

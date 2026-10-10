@@ -1,18 +1,28 @@
 /**
- * Shown-commit acknowledgement (FR-013).
+ * Shown-commit acknowledgement (FR-013, FR-047; spec BDD-13.2 and the
+ * "No-write / unresolved sources" row ~L191).
  *
- * The initial attach never acknowledges. A catch_up_complete for the winning
- * foreground main asks ackForShownCommit with the server snapshot remembered
- * for that session. The integer bound comes only from attentionBoundOfFrame.
- * No server bound means no acknowledgement and no attach fields. A retry
- * resends the fields captured at the shown commit, never a newer snapshot.
+ * The initial attach never acknowledges. One explicit pending record per
+ * SHOWN COMMIT carries everything the acknowledgement needs:
  *
- * A shown commit whose session metadata is still unknown (the roster and the
- * session detail have not resolved — the catch-up can beat them on a direct
- * open) is DEFERRED, not dropped: the bound is captured at that shown commit
- * and the acknowledgement is sent once the metadata becomes known, with every
- * guard re-checked at that moment. Unknown metadata is never acknowledged,
- * never guessed, and a deferred ack never recaptures a newer bound.
+ *   { sessionId, generation, bound, sent }
+ *
+ * I1. The record is created exactly once, at the shown commit (noteForegroundAttach),
+ *     and the bound is frozen from that attach's SessionStateFrame the first
+ *     time a completion observes one.
+ * I2. The bound is NEVER replaced — not by a later session_state, a reconnect,
+ *     a retry, or another completion. A newer shown commit creates its own new
+ *     record; the old one is dropped.
+ * I3. EVERY send attempt (initial, deferred-on-metadata, retry-after-failure)
+ *     re-checks ALL guards at that moment: same foreground session and
+ *     generation (structural — the record belongs to the current commit), tab
+ *     visible, still the active chat, isMainSession, attention known. The
+ *     record waits through temporary guards; a non-main or a replaced commit
+ *     can never send.
+ * I4. A FAILED send keeps the record for retry. Only a successful send ends
+ *     it (a replaced commit drops it with the commit).
+ * I5. Unknown metadata or unknown attention ⇒ no send (wait for a cache
+ *     event). Never acknowledge on guesses, never invent a session.
  */
 import type { Session, SessionDetail } from '@/lib/api'
 import type { AttachSessionFrame } from '@/lib/api/generated/asyncapi-types'
@@ -23,29 +33,22 @@ import {
   isMainSession,
   sessionAttention,
 } from '@/lib/nav/sessionCoreSeam'
-import { ackForShownCommit, type AckInput } from '@/lib/nav/mainAttention'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 
-type ForegroundCommit = {
+/** The one pending shown commit. Replaced wholesale by the next attach. */
+type ShownCommit = {
   sessionId: string
   generation: number
-  acked: boolean
-  captured: Record<string, unknown> | null
-}
-
-/** A shown commit waiting for its session's metadata to become known. */
-type DeferredAck = {
-  sessionId: string
-  generation: number
-  /** Fields frozen at the shown commit — a newer frame never replaces them. */
-  captured: Record<string, unknown>
+  /** Frozen at the first completion that observes a bound; never replaced (I2). */
+  bound: number | null
+  /** True only after a successful send (I4). */
+  sent: boolean
 }
 
 let generation = 0
-let foreground: ForegroundCommit | null = null
+let commit: ShownCommit | null = null
 const snapshotBySession = new Map<string, unknown>()
-const deferredAcks = new Map<string, DeferredAck>()
 let cacheWatcher: (() => void) | null = null
 
 function documentIsHidden(): boolean {
@@ -61,8 +64,8 @@ export function noteServerAttentionFrame(sessionId: string, frame: unknown): voi
  * The loaded session metadata the SPA already holds for this id: the
  * ['sessions'] list (fetchSessions → rawToSession) the sidebar's roster
  * reads, or the route's validated ['session-detail', id] entry — whichever
- * has resolved. Nothing here when neither has: the caller must treat unknown
- * metadata as no acknowledgement (or a defer), never a guess.
+ * has resolved. Nothing here when neither has: the caller treats unknown
+ * metadata as "wait", never a guess.
  */
 function loadedSession(sessionId: string): Session | null {
   const sessions = queryClient.getQueryData<Session[]>(['sessions'])
@@ -74,15 +77,10 @@ function loadedSession(sessionId: string): Session | null {
   return detail?.session?.id === sessionId ? detail.session : null
 }
 
-/** A successful visible attach becomes the foreground commit. It does not acknowledge. */
+/** A successful visible attach becomes the shown commit. It does not acknowledge. */
 export function noteForegroundAttach(sessionId: string): void {
   generation += 1
-  foreground = {
-    sessionId,
-    generation,
-    acked: false,
-    captured: null,
-  }
+  commit = { sessionId, generation, bound: null, sent: false }
 }
 
 function sendCaptured(sessionId: string, fields: Record<string, unknown>): boolean {
@@ -98,103 +96,62 @@ function sendCaptured(sessionId: string, fields: Record<string, unknown>): boole
 }
 
 /**
- * catch_up_complete for sessionId. Acknowledges only a shown winning main
- * whose server frame carries an integer bound. Prefetch, hidden reconnect,
- * unknown attention, a non-main, a failed send, a missing bound, and an
- * overtaken attempt do not. Unknown session METADATA defers instead of
- * dropping: the bound is kept and the ack sent when the metadata is known.
+ * Watch the query cache once, so a pending acknowledgement re-checks when its
+ * session's metadata (or the roster holding it) resolves.
  */
-export function acknowledgeShownCatchUp(sessionId: string): void {
-  const current = foreground
-  if (current && current.sessionId === sessionId && current.acked) return
-  if (current && current.sessionId === sessionId && current.captured && !documentIsHidden()) {
-    if (sendCaptured(sessionId, current.captured)) current.acked = true
-    return
-  }
-
-  const hidden = documentIsHidden()
-  const activeId = useSessionStore.getState().activeSessionId
-  let attemptKind: AckInput['attemptKind'] = 'shown-commit'
-  if (hidden) attemptKind = 'prefetch'
-  else if (!current || current.sessionId !== sessionId || activeId !== sessionId) attemptKind = 'overtaken'
-
-  const frame = snapshotBySession.get(sessionId) ?? null
-  // FR-047: the seam needs the REAL main/attention metadata (type,
-  // needs_attention) the SPA loaded for this session — a bare `{ id }` would
-  // read as a non-main and never acknowledge. If neither the roster nor the
-  // session detail has resolved, the metadata is unknown: freeze the bound
-  // this attach returned and defer, so a cold cache cannot lose the ack.
-  const session = loadedSession(sessionId)
-  if (!session) {
-    if (attemptKind === 'shown-commit') deferShownAck(sessionId, current, frame)
-    return
-  }
-  const result = ackForShownCommit({
-    attemptKind,
-    session,
-    generation: current?.generation ?? 0,
-    frame,
-    newerOutcomeId: null,
-    foreground: current
-      ? {
-          sessionId: current.sessionId,
-          generation: current.generation,
-          frame: snapshotBySession.get(current.sessionId) ?? null,
-        }
-      : null,
-    viewerId: 'local',
-  })
-  if (!result.acknowledge || !current || current.sessionId !== sessionId) return
-  current.captured = result.fields ?? {}
-  if (sendCaptured(sessionId, current.captured)) current.acked = true
-}
-
-/**
- * Freeze the shown commit's bound while its session metadata is unknown.
- * Only a genuine shown commit of the foreground with an integer bound
- * defers — no bound means no acknowledgement ever, and a prefetch or
- * overtaken attempt defers nothing.
- */
-function deferShownAck(sessionId: string, current: ForegroundCommit | null, frame: unknown): void {
-  if (!current || current.sessionId !== sessionId) return
-  const bound = attentionBoundOfFrame(frame)
-  if (bound === undefined) return
-  deferredAcks.set(sessionId, {
-    sessionId,
-    generation: current.generation,
-    captured: attachAckFields(bound),
-  })
-  ensureDeferredAckWatcher()
-}
-
-/** Watch the query cache once, so a deferred ack re-checks when its metadata resolves. */
-function ensureDeferredAckWatcher(): void {
+function ensurePendingAckWatcher(): void {
   if (cacheWatcher) return
   cacheWatcher = queryClient.getQueryCache().subscribe((event) => {
     const first = (event?.query?.queryKey as readonly unknown[] | undefined)?.[0]
     if (first !== 'sessions' && first !== 'session-detail') return
-    for (const entry of [...deferredAcks.values()]) resolveDeferredAck(entry)
+    if (commit && !commit.sent && commit.bound !== null) {
+      acknowledgeShownCatchUp(commit.sessionId)
+    }
   })
 }
 
 /**
- * A deferred shown commit's metadata now resolves (or never will). ONE
- * evaluation: keep waiting while the metadata is unknown; otherwise drop the
- * attempt unless EVERY shown-commit guard still holds — same foreground
- * commit and generation, tab visible, still the active chat, still a main
- * with known attention — and then send the ORIGINAL captured fields, never a
- * newer bound.
+ * catch_up_complete for sessionId — the shown commit's send attempt. Every
+ * attempt re-checks every guard (I3); a failed send keeps the pending record
+ * (I4); unknown metadata or attention waits for a cache event (I5). Prefetch,
+ * hidden reconnect, a non-main, a missing bound, and an overtaken attempt
+ * never send.
  */
-function resolveDeferredAck(entry: DeferredAck): void {
-  const session = loadedSession(entry.sessionId)
-  if (!session) return
-  deferredAcks.delete(entry.sessionId)
-  const current = foreground
-  if (!current || current.sessionId !== entry.sessionId || current.generation !== entry.generation) return
-  if (current.acked) return
+export function acknowledgeShownCatchUp(sessionId: string): void {
+  const current = commit
+  // Same foreground session AND generation, structurally: the record belongs
+  // to the current shown commit, and a newer attach replaced it wholesale (I2).
+  if (!current || current.sessionId !== sessionId || current.sent) return
+  // Tab visible (I3): a hidden completion is a prefetch, never a send.
   if (documentIsHidden()) return
-  if (useSessionStore.getState().activeSessionId !== entry.sessionId) return
+  // Still the active chat (I3): the user may have opened a New chat since.
+  if (useSessionStore.getState().activeSessionId !== sessionId) return
+
+  // Freeze the bound ONCE for this shown commit (I1/I2): the first bound any
+  // completion of this commit observes. A later frame never replaces it, and
+  // a commit that has seen no bound yet keeps waiting for one — no bound ⇒
+  // no write, never a substituted number (spec ~L191).
+  if (current.bound === null) {
+    current.bound = attentionBoundOfFrame(snapshotBySession.get(sessionId)) ?? null
+  }
+  if (current.bound === null) return
+
+  // Unknown metadata waits (I5): the roster or the session detail may still
+  // resolve; the watcher retries on the next cache event.
+  const session = loadedSession(sessionId)
+  if (!session) {
+    ensurePendingAckWatcher()
+    return
+  }
+  // A non-main can never become the shown main — permanent mismatch (I3).
   if (!isMainSession(session)) return
-  if (sessionAttention(session) === 'unknown') return
-  if (sendCaptured(entry.sessionId, entry.captured)) current.acked = true
+  // Unknown attention waits (I5): a roster refresh may make it known.
+  if (sessionAttention(session) === 'unknown') {
+    ensurePendingAckWatcher()
+    return
+  }
+
+  // Send the frozen bound. A failed send keeps the record (I4); the next
+  // completion or cache event retries through these same guards.
+  if (sendCaptured(sessionId, attachAckFields(current.bound))) current.sent = true
 }
