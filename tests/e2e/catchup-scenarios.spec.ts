@@ -466,12 +466,14 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         timeout: 60_000, message: 'The SPA must refetch its lifecycle list after reconnecting; the ordering gate cannot wait forever.',
       }).toBe(true)
       let regenerating = false
+      let retryHasContent = false
       let targetSessionId: string | null = null
       const retryDone: import('@/lib/api/generated/asyncapi-types').DoneFrame[] = []
       const retryErrors: import('@/lib/api/generated/asyncapi-types').ErrorFrame[] = []
       page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => {
         const frame = JSON.parse(payload.toString()) as import('@/lib/api/generated/asyncapi-types').ServerFrame
         if (!regenerating || !('session_id' in frame) || frame.session_id !== targetSessionId) return
+        if (frame.type === 'token' && /\S/.test(frame.content)) retryHasContent = true
         if (frame.type === 'done') retryDone.push(frame)
         if (frame.type === 'error') retryErrors.push(frame)
       }))
@@ -539,7 +541,11 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         await expect(stopButton(page)).toBeVisible()
         crashed = true
         await gw.kill9()
-        await gw.restart({ relogin: false })
+        // Keep the interrupted turn slow, not the completed retry: 300ms per
+        // frame made 800 observed CI frames consume 240s before the reply ended.
+        // At 25ms, the shortest measured 343-frame reply keeps Stop for 8.6s
+        // (>1s polling); a 3,947-delta replay takes ~99s within the same 240s wait.
+        await gw.restart({ relogin: false, env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '25' } })
 
         const notice = page.getByTestId('restart-interrupted-notice')
         const generateAgain = page.getByRole('button', { name: /Generate again/i })
@@ -563,9 +569,20 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
 
         regenerating = true
         await generateAgain.click()
-        await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
         await expect(notice).toHaveCount(0)
         await expect(generateAgain).toHaveCount(0)
+        // Resend only shows Stop after the first token; its working acknowledgement
+        // changes delivery ticks, not streaming state. Do not turn model startup
+        // latency into a 30s UI deadline. Use waitTurnDone's existing turn budget,
+        // but fail immediately on an error or an empty terminal response.
+        await expect.poll(() => retryHasContent || retryErrors.length > 0 || retryDone.length > 0, {
+          timeout: 240_000, message: 'Generate again must produce real answer content within the turn budget.',
+        }).toBe(true)
+        expect(retryErrors, 'Generate again must start without a provider/turn error').toEqual([])
+        expect(retryHasContent, 'Generate again must not finish without real answer content').toBe(true)
+        const retryAnswer = page.locator('[data-message-id]:not(.flex-row-reverse)[data-status="running"]')
+        await expect(retryAnswer.locator('.prose-sm')).toContainText(/\S/)
+        await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
         await waitTurnDone(page)
         const answer = assistantMessages(page)
         await expect(answer).toHaveCount(1, { timeout: 30_000 })
