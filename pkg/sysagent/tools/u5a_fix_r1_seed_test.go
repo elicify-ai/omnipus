@@ -226,7 +226,6 @@ func u5aCreateAgent(t *testing.T, deps *Deps, ctx context.Context, name string) 
 		"soul":        "You help.",
 		"model":       "test/model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	})
 	body := u5aParseJSON(t, res.ForLLM)
 	if res.IsError {
@@ -353,7 +352,6 @@ func TestCreateAgent_SeedFailureReturnsPartialNotMetadataOnly(t *testing.T) {
 		"soul":        "You help.",
 		"model":       "test/model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	})
 	if !res.IsError {
 		t.Fatalf("a seed failure after membership landed must NOT be reported as a normal success: %s", res.ForLLM)
@@ -422,7 +420,6 @@ func TestCreateAgent_JoinSerializesWithExplicitGraphWrite(t *testing.T) {
 				"soul":        "You help.",
 				"model":       "test/model",
 				"color":       "#22C55E",
-				"icon":        "robot",
 			})
 	}()
 

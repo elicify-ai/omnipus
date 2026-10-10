@@ -16,7 +16,7 @@ import (
 func TestAgentToolsFallbackModelsPersistAndClear(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	chain := []any{map[string]any{"model": "first", "provider": "provider-a"}, map[string]any{"model": "second", "provider": "provider-b"}}
-	args := map[string]any{"name": "Fallback Bot", "description": "Fallback parity", "soul": "Test instructions", "model": "primary", "color": "#22C55E", "icon": "Robot", "fallback_models": chain}
+	args := map[string]any{"name": "Fallback Bot", "description": "Fallback parity", "soul": "Test instructions", "model": "primary", "color": "#22C55E", "fallback_models": chain}
 	created := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
 	if created.IsError {
 		t.Fatalf("create: %s", created.ForLLM)

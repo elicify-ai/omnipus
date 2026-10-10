@@ -52,7 +52,7 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 	// fails the moment Parameters() and Execute() drift apart again.
 	consumedByExecute := map[string]bool{
 		"name": true, "description": true, "soul": true, "model": true,
-		"color": true, "icon": true, "agent_type": true, "cli": true,
+		"color": true, "agent_type": true, "cli": true,
 		"cli_path": true, "provider": true, "fallback_models": true,
 		"heartbeat": true, "max_tool_iterations": true,
 		"skills": true, "mcp_servers": true, "tool_policy_changes": true,
@@ -101,7 +101,7 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 	consumedByExecute := map[string]bool{
 		"id": true, "revision": true, "name": true, "description": true, "soul": true,
 		"model": true, "fallback_models": true, "provider": true,
-		"color": true, "icon": true, "skills": true, "mcp_servers": true,
+		"color": true, "skills": true, "mcp_servers": true,
 		"tool_policy_changes": true,
 		"max_tool_iterations": true,
 		"memory_enabled":      true, "default": true, "voice": true,
@@ -143,7 +143,6 @@ func TestAgentCreate_AppliesProviderAndMaxToolIterations(t *testing.T) {
 		"soul":                "You are a test bot.",
 		"model":               "test/model",
 		"color":               "#22C55E",
-		"icon":                "robot",
 		"provider":            "openrouter",
 		"max_tool_iterations": float64(42),
 	})
@@ -176,7 +175,6 @@ func TestAgentCreate_RejectsNegativeMaxToolIterations(t *testing.T) {
 		"soul":                "s",
 		"model":               "test/model",
 		"color":               "#22C55E",
-		"icon":                "robot",
 		"max_tool_iterations": float64(-1),
 	})
 	if !result.IsError {

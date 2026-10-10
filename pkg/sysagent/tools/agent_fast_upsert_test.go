@@ -206,7 +206,6 @@ func TestAgentCreate_DoesNotTriggerFullReload(t *testing.T) {
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	})
 	if result.IsError {
 		t.Fatalf("create_agent failed: %s", result.ForLLM)
@@ -262,7 +261,6 @@ func TestAgentUpdate_DoesNotTriggerFullReload(t *testing.T) {
 		"soul":        "original soul",
 		"model":       "test-model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	})
 	if createResult.IsError {
 		t.Fatalf("create_agent (setup) failed: %s", createResult.ForLLM)
@@ -338,7 +336,6 @@ func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	})
 	if createResult.IsError {
 		t.Fatalf("create_agent (setup) failed: %s", createResult.ForLLM)
@@ -354,7 +351,6 @@ func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
 		"soul":        "You persist.",
 		"model":       "test-model",
 		"color":       "#3366FF",
-		"icon":        "robot",
 	})
 	if keeperResult.IsError {
 		t.Fatalf("create_agent (keeper) failed: %s", keeperResult.ForLLM)
