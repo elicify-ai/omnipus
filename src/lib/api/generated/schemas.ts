@@ -3058,6 +3058,7 @@ type SessionLifecycleRecord = {
           | "task"
           | "chat"
           | "channel"
+          | "main"
           | "scheduled"
           | "heartbeat"
           | "verifier"
@@ -7321,6 +7322,7 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
           "task",
           "chat",
           "channel",
+          "main",
           "scheduled",
           "heartbeat",
           "verifier",

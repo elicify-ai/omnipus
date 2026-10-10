@@ -3198,6 +3198,7 @@ const (
 	DelegateStatusResponseSessionOriginKindDelegate  DelegateStatusResponseSessionOriginKind = "delegate"
 	DelegateStatusResponseSessionOriginKindHeartbeat DelegateStatusResponseSessionOriginKind = "heartbeat"
 	DelegateStatusResponseSessionOriginKindHuman     DelegateStatusResponseSessionOriginKind = "human"
+	DelegateStatusResponseSessionOriginKindMain      DelegateStatusResponseSessionOriginKind = "main"
 	DelegateStatusResponseSessionOriginKindPlan      DelegateStatusResponseSessionOriginKind = "plan"
 	DelegateStatusResponseSessionOriginKindScheduled DelegateStatusResponseSessionOriginKind = "scheduled"
 	DelegateStatusResponseSessionOriginKindTask      DelegateStatusResponseSessionOriginKind = "task"
@@ -3216,6 +3217,8 @@ func (e DelegateStatusResponseSessionOriginKind) Valid() bool {
 	case DelegateStatusResponseSessionOriginKindHeartbeat:
 		return true
 	case DelegateStatusResponseSessionOriginKindHuman:
+		return true
+	case DelegateStatusResponseSessionOriginKindMain:
 		return true
 	case DelegateStatusResponseSessionOriginKindPlan:
 		return true
@@ -10452,6 +10455,7 @@ const (
 	SessionLifecycleRecordOriginKindDelegate  SessionLifecycleRecordOriginKind = "delegate"
 	SessionLifecycleRecordOriginKindHeartbeat SessionLifecycleRecordOriginKind = "heartbeat"
 	SessionLifecycleRecordOriginKindHuman     SessionLifecycleRecordOriginKind = "human"
+	SessionLifecycleRecordOriginKindMain      SessionLifecycleRecordOriginKind = "main"
 	SessionLifecycleRecordOriginKindPlan      SessionLifecycleRecordOriginKind = "plan"
 	SessionLifecycleRecordOriginKindScheduled SessionLifecycleRecordOriginKind = "scheduled"
 	SessionLifecycleRecordOriginKindTask      SessionLifecycleRecordOriginKind = "task"
@@ -10470,6 +10474,8 @@ func (e SessionLifecycleRecordOriginKind) Valid() bool {
 	case SessionLifecycleRecordOriginKindHeartbeat:
 		return true
 	case SessionLifecycleRecordOriginKindHuman:
+		return true
+	case SessionLifecycleRecordOriginKindMain:
 		return true
 	case SessionLifecycleRecordOriginKindPlan:
 		return true
@@ -16952,7 +16958,7 @@ type DelegateStatusResponse struct {
 			// CallId For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
 			CallId *string `json:"call_id,omitempty"`
 
-			// Kind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+			// Kind The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
 			Kind DelegateStatusResponseSessionOriginKind `json:"kind"`
 
 			// TaskId For task-origin sessions, the persistent task id from the task record (persisted on the task disk-only, by tools/task.go). Absent for delegate-origin and other kinds.
@@ -17046,7 +17052,7 @@ type DelegateStatusResponse struct {
 	UnackedCount int `json:"unacked_count"`
 }
 
-// DelegateStatusResponseSessionOriginKind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+// DelegateStatusResponseSessionOriginKind The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
 type DelegateStatusResponseSessionOriginKind string
 
 // DelegateStatusResponseSessionOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
@@ -24853,7 +24859,7 @@ type SessionLifecycleRecord struct {
 		// CallId For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
 		CallId *string `json:"call_id,omitempty"`
 
-		// Kind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+		// Kind The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
 		Kind SessionLifecycleRecordOriginKind `json:"kind"`
 
 		// TaskId For task-origin sessions, the persistent task id from the task record (persisted on the task disk-only, by tools/task.go). Absent for delegate-origin and other kinds.
@@ -24943,7 +24949,7 @@ type SessionLifecycleRecord struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
-// SessionLifecycleRecordOriginKind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+// SessionLifecycleRecordOriginKind The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
 type SessionLifecycleRecordOriginKind string
 
 // SessionLifecycleRecordOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
