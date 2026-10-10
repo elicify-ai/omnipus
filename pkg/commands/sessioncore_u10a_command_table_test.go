@@ -20,8 +20,9 @@ import (
 //   - DEL-05 (clearCommand old /new action + hidden /clear alias; old /agents
 //     selector/list action), DEL-06 (deprecated /start /show /list /switch
 //     /check; /channel alias/support).
-//   - X3 interim (PLAN §12/§15): "/clear is absent from the table until U10b
-//     ships the real /clear. No interim hybrid /clear."
+//   - X3 interim (PLAN §12/§15): the U10a cut removed /clear from the table
+//     until U10b shipped the real /clear. U10b has now shipped it (FR-030),
+//     so /clear is a canonical survivor again — it is NOT in the retired list.
 //
 // Every name below is a NEGATIVE case: the table must not offer it. The
 // canonical survivors are asserted separately as the positive control (B).
@@ -30,9 +31,12 @@ import (
 // The spec's capability row names them "Deleted everywhere, no alias"; the
 // palette (SPA) and the typed/server dispatch must agree (FR-031), so the
 // registry/executor must not resolve any of them.
+//
+// /clear is deliberately absent from this list: U10b restored it as a real
+// canonical command (FR-030/031, founder ruling 2026-10-09). It is asserted as
+// a canonical survivor below instead.
 var retiredCommandTableNames = []string{
 	"new",     // DEL-05 — the old /new action (U10b re-adds only /clear)
-	"clear",   // DEL-05 + X3 — /clear removed until U10b; currently a /new alias
 	"agents",  // DEL-05 — old selector/list action; replaced by /switch-agent
 	"start",   // DEL-06
 	"show",    // DEL-06
@@ -45,9 +49,9 @@ var retiredCommandTableNames = []string{
 
 // canonicalCommandTableNames are the survivors the capability table keeps.
 // They must remain resolvable — this is the canonical positive control (B) that
-// proves the cut did not over-delete.
+// proves the cut did not over-delete. /clear is included: U10b shipped it.
 var canonicalCommandTableNames = []string{
-	"help", "model", "skills", "channels", "status", "config", "tasks",
+	"help", "model", "clear", "skills", "channels", "status", "config", "tasks",
 	"cancel", "stop", "stop-redirect", "remember", "recall", "retrospective",
 	"goal", "loop",
 }
@@ -129,9 +133,9 @@ func TestSessionCoreU10a_CanonicalSurvivorsPresent(t *testing.T) {
 // ruling of 2026-10-09 on its own: "/new is RETIRED — the server must not
 // expose it as a web command; starting an extra chat is the local 'New chat'
 // action." RED on the pre-cut code, where the table still defines /new (with a
-// /clear alias). The /clear replacement's own semantics are asserted at the
-// mechanism level (pkg/memory clear-mechanism test), not by table presence
-// (X3 interim).
+// /clear alias). Since U10b, /clear is a canonical table entry in its own right
+// (asserted by canonicalCommandTableNames); its semantics are additionally
+// asserted at the mechanism level (pkg/memory clear-mechanism test).
 func TestSessionCoreU10a_NewRetiredFromServerCommandTable(t *testing.T) {
 	reg := NewRegistry(BuiltinDefinitions())
 	if def, found := reg.Lookup("new"); found {

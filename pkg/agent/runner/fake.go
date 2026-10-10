@@ -41,11 +41,34 @@ func NewFakeRunner() *FakeRunner {
 }
 
 // Run records the options and returns the internal event channel.
+//
+// Contract (mirrors the real drivers): cancelling the Run context ends the run
+// and CLOSES the stream. The real drivers derive a child context from ctx
+// (`exec.CommandContext(runCtx, …)`), so a cancel kills the CLI process,
+// cmd.Wait() returns and the parser goroutine closes the event channel. A fake
+// that left its stream open on ctx cancel let a cancelled caller block forever
+// waiting for a close that never came (see the processTaskDirect external-CLI
+// timeout test); it now honours the same contract.
 func (f *FakeRunner) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent, error) {
 	f.mu.Lock()
 	f.runOpts = append(f.runOpts, opts)
 	f.mu.Unlock()
+	f.watchCancel(ctx)
 	return f.eventCh, nil
+}
+
+// watchCancel ends the fake run when ctx is cancelled. A nil Done channel
+// (context.Background/TODO) has nothing to watch — no goroutine is started, so
+// a background-context run cannot leak a watcher goroutine blocked on <-nil.
+func (f *FakeRunner) watchCancel(ctx context.Context) {
+	done := ctx.Done()
+	if done == nil {
+		return
+	}
+	go func() {
+		<-done
+		f.Cancel()
+	}()
 }
 
 // Decide records the decision (tests can verify it was received).
@@ -85,12 +108,14 @@ func (f *FakeRunner) Input(text string) error {
 }
 
 // Resume records the runID (and any delivered instruction) and returns the
-// same event channel.
+// same event channel. Like Run, it honours the ctx-cancel-ends-the-stream
+// contract (the real drivers' Resume re-enters the same Run implementation).
 func (f *FakeRunner) Resume(ctx context.Context, runID string, instruction ...string) (<-chan RunEvent, error) {
 	f.mu.Lock()
 	f.resumeIDs = append(f.resumeIDs, runID)
 	f.resumeInputs = append(f.resumeInputs, resumeInstruction(instruction))
 	f.mu.Unlock()
+	f.watchCancel(ctx)
 	return f.eventCh, nil
 }
 

@@ -26,9 +26,13 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // Self-delegation is an ORDINARY edge: the SAME caller→self delegation is
@@ -135,5 +139,122 @@ func TestSessionCoreU5a_ExternalCLIWorkerCannotCreateHelpers(t *testing.T) {
 	//    kind), even though the extworker→extworker self-edge exists.
 	if d := extCaller(ctxWS(testWS, 0), "extworker"); d == nil {
 		t.Fatal("control: an external-CLI caller must be refused for an explicit self-target too")
+	}
+}
+
+// registeredDelegateTool returns the *tools.DelegateTool the production wiring
+// registered for agentID (loop_wire.go::registerDelegationTools), so a test can
+// drive the REAL tool — including its injected external-CLI caller classifier —
+// rather than a hand-built one.
+func registeredDelegateTool(t *testing.T, al *AgentLoop, agentID string) *tools.DelegateTool {
+	t.Helper()
+	inst, ok := al.GetRegistry().GetAgent(agentID)
+	if !ok || inst == nil {
+		t.Fatalf("agent %q not in registry after loop init", agentID)
+	}
+	raw, ok := inst.Tools.Get("delegate")
+	if !ok {
+		t.Fatalf("registered delegate tool missing for %q (ADR-091 D1)", agentID)
+	}
+	tool, ok := raw.(*tools.DelegateTool)
+	if !ok {
+		t.Fatalf("registered delegate tool type = %T, want *tools.DelegateTool", raw)
+	}
+	return tool
+}
+
+// countLifecycleRecords returns the number of durable lifecycle records — the
+// observable proof that a launch admitted (or did not admit) a child.
+func countLifecycleRecords(t *testing.T, al *AgentLoop) int {
+	t.Helper()
+	store := al.GetSessionLifecycleStore()
+	if store == nil {
+		return 0
+	}
+	recs, err := store.List(session.LifecycleFilter{})
+	if err != nil {
+		t.Fatalf("list lifecycle records: %v", err)
+	}
+	return len(recs)
+}
+
+// TestSessionCoreU5a_ExternalCLIWorkerCannotCreateHelpers_RegisteredDelegate
+// closes the F3 gap the unit test above leaves open: that test supplies its own
+// CallerIsExternalCLI callback, so it proves the injected BRANCH, not the
+// production WIRING (a mutant that removes the classifier from
+// loop_wire.go::registerDelegationTools survives it). This test drives the REAL
+// registered delegate tool for an agent whose REGISTRY entry is external-CLI
+// (Subagents.Executor kind "external-cli"), so the classifier must be wired for
+// it to pass.
+//
+// Oracle (FR-016 / BDD-05.3): a registered external-CLI worker's delegate tool
+// refuses to create a helper even when a valid caller→target edge exists and
+// admits no child; the SAME graph permits a native caller, so the guard is a
+// caller property, not a blanket deny.
+func TestSessionCoreU5a_ExternalCLIWorkerCannotCreateHelpers_RegisteredDelegate(t *testing.T) {
+	const wsID = "01JXU5AREGISTEREDDELEGATE001"
+	seedWorkspaceGraph(t, wsID, true, []graphEdge{
+		edge("extworker", "mia", []string{"background"}, nil),
+		edge("extworker", "extworker", []string{"background"}, nil),
+		edge("mia", "extworker", []string{"background"}, nil),
+	})
+
+	cfg := minimalTestConfig(t)
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
+	cfg.Agents.Defaults.MaxTokens = 4096
+	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
+		ID: "extworker", Name: "External Worker", Type: config.AgentTypeWorker, Home: t.TempDir(),
+		Subagents: &config.SubagentsConfig{
+			Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
+		},
+	})
+
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	al, err := NewAgentLoop(cfg, msgBus, &mockProvider{})
+	if err != nil {
+		t.Fatalf("NewAgentLoop: %v", err)
+	}
+	t.Cleanup(al.Close)
+
+	// Instrument precondition: the REGISTRY (the authority the production
+	// resolver reads) classifies extworker external and mia native. If this
+	// fails, the test below would be measuring nothing.
+	reg := al.GetRegistry()
+	if !reg.IsExternalCLI("extworker") {
+		t.Fatal("precondition: registry must classify extworker as external CLI (Subagents.Executor kind ready)")
+	}
+	if reg.IsExternalCLI("mia") {
+		t.Fatal("precondition: mia must be classified native")
+	}
+
+	ctx := ctxWS(wsID, 0)
+
+	// 1. External-CLI caller through the REAL registered tool → refused, even
+	//    with a valid caller→target edge.
+	res := registeredDelegateTool(t, al, "extworker").Execute(ctx, map[string]any{
+		"action": "run", "agent_id": "mia", "task": "do work",
+	})
+	if res == nil || !res.IsError {
+		t.Fatalf("registered external-CLI delegate call must be refused, got %+v", res)
+	}
+	if !strings.Contains(res.ForLLM, "cannot create Omnipus helpers") ||
+		!strings.Contains(res.ForLLM, "FR-016") {
+		t.Fatalf("refusal must be the FR-016 external-CLI caller guard through the real wiring, got: %s", res.ForLLM)
+	}
+
+	// 2. No child was admitted for the refused call.
+	if got := countLifecycleRecords(t, al); got != 0 {
+		t.Fatalf("a refused external-CLI delegation must admit no child; found %d lifecycle record(s)", got)
+	}
+
+	// 3. Native caller control: the SAME graph lets a native caller delegate TO
+	//    the external-CLI agent, so the refusal above is the CALLER guard and not
+	//    a blanket deny that would pass this test vacuously.
+	resNat := registeredDelegateTool(t, al, "mia").Execute(ctx, map[string]any{
+		"action": "run", "agent_id": "extworker", "task": "do work",
+	})
+	if resNat != nil && strings.Contains(resNat.ForLLM, "cannot create Omnipus helpers") {
+		t.Fatalf("a native caller must not hit the FR-016 external-CLI caller guard: %s", resNat.ForLLM)
 	}
 }
