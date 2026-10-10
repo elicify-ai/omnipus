@@ -12,8 +12,10 @@ import type { ChatMessage } from '@/store/chat'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import type { ChatParticipant } from '@/lib/api/generated/asyncapi-types'
 
-const AGENTS = [{ id: 'agent-ava', name: 'Ava' }]
-const WORKSPACES = [{ id: 'ws-main', name: 'Main' }]
+const { AGENTS, WORKSPACES } = vi.hoisted(() => ({
+  AGENTS: [{ id: 'agent-ava', name: 'Ava' }],
+  WORKSPACES: [{ id: 'ws-main', name: 'Main' }],
+}))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()

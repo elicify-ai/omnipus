@@ -26,15 +26,19 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import type { ChatParticipant } from '@/lib/api/generated/asyncapi-types'
 
 // ── Query fixtures (served to every useQuery by key) ──────────────────────────
+// vi.hoisted: the vi.mock factories below run before the module body, so the
+// fixtures they serve must be hoisted with them.
 
-const AGENTS = [
-  { id: 'agent-ava', name: 'Ava' },
-  { id: 'agent-mia', name: 'Mia' },
-]
-const WORKSPACES = [
-  { id: 'ws-main', name: 'Main' },
-  { id: 'ws-atlas', name: 'Atlas' },
-]
+const { AGENTS, WORKSPACES } = vi.hoisted(() => ({
+  AGENTS: [
+    { id: 'agent-ava', name: 'Ava' },
+    { id: 'agent-mia', name: 'Mia' },
+  ],
+  WORKSPACES: [
+    { id: 'ws-main', name: 'Main' },
+    { id: 'ws-atlas', name: 'Atlas' },
+  ],
+}))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
