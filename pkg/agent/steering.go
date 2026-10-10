@@ -605,6 +605,12 @@ func (al *AgentLoop) ReviveStoppedSessionAsRedirect(ctx context.Context, session
 // closes.
 var reviveAfterAvailabilityTestHook func(sessionID string)
 
+// reviveBeforeReservationTestHook is the matching test-only seam fired after the
+// revival's own lifecycle read and before the external-conversation reservation,
+// so a test can fail the reservation's later reads (NEW-8). Always nil in
+// production; never set outside a _test.go file.
+var reviveBeforeReservationTestHook func(sessionID string)
+
 // reviveStoppedSession is ReviveStoppedSession's body. asRedirect is true only
 // for the /stop-redirect delivery (RedirectSteeredSession's waiter and the
 // stopped-helper branch of RedirectSessionTurn): the instruction is then
@@ -656,6 +662,9 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	// step, and the hold lasts until the revived turn begins (or the revival
 	// fails below), so a completion still unwinding cannot release the driver
 	// between this check and the dispatch.
+	if reviveBeforeReservationTestHook != nil {
+		reviveBeforeReservationTestHook(sessionID)
+	}
 	externalHold, availErr := al.reserveExternalConversation(sessionID, rec)
 	if availErr != nil {
 		return false, &curatedTurnError{text: fmt.Sprintf("steer: revive %q: %s", sessionID, availErr.Error())}
