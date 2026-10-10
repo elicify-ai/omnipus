@@ -3,6 +3,7 @@ import { useSessionStore } from '@/store/session'
 import { useChatStore } from '@/store/chat'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
+import { supersedeNavigationIntent } from '@/store/session/workspaceEntryFlow'
 import type { Agent, Session, Workspace } from '@/lib/api'
 
 export interface UseSelectSessionOptions {
@@ -26,7 +27,8 @@ export interface UseSelectSessionOptions {
 /**
  * Reusable session-selection logic.
  *
- * 1. Resolves `agentId = session.active_agent_id ?? session.agent_id`.
+ * 1. Resolves `agentId = session.agent_id` — the immutable owner. `active_agent_id`
+ *    is who last spoke, not where the next message goes (FR-009).
  * 2. If the session's `workspace_id` belongs to a different *existing* workspace,
  *    switches the active workspace before attaching.
  * 3. For a session with a KNOWN workspace (the currently-active one, or one
@@ -109,7 +111,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
   }
 
   return function selectSession(session: Session) {
-    const agentId = session.active_agent_id ?? session.agent_id
+    const agentId = session.agent_id ?? undefined
 
     const existingWorkspaceIds = new Set(workspaces.map((w) => w.id))
     const sessionWsId = session.workspace_id
@@ -117,14 +119,16 @@ export function useSelectSession(options: UseSelectSessionOptions) {
       sessionWsId && existingWorkspaceIds.has(sessionWsId) ? sessionWsId : null
 
     if (knownWorkspaceId && knownWorkspaceId !== activeWorkspaceId) {
-      // Different existing workspace — switch to it before attaching. The
-      // workspace container's enterWorkspaceChat preserves an already-active
-      // session, so it will NOT reset the one we just attached.
+      // Switch and attach together. A failed send rolls the workspace back so
+      // the displayed session, the owner, and the pointer stay one tuple.
+      const previousWorkspaceId = activeWorkspaceId
       setActiveWorkspaceId(knownWorkspaceId)
       if (!attachAndSeed(session, agentId)) {
+        if (previousWorkspaceId !== knownWorkspaceId) setActiveWorkspaceId(previousWorkspaceId)
         reportAttachFailure()
         return
       }
+      supersedeNavigationIntent()
       onSelected?.(session)
       onClose()
       void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId } })
@@ -141,6 +145,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
         reportAttachFailure()
         return
       }
+      supersedeNavigationIntent()
       onSelected?.(session)
       onClose()
       void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId } })

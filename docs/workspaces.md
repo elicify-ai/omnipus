@@ -4,13 +4,19 @@ A workspace is the container your work happens in. The chats, the tasks and thei
 
 ## What it is
 
+The main-chat destinations and attention cues on this page require the matching server update. If they are unavailable, follow the unavailable notice and **Retry**; Omnipus does not guess a main chat from recent conversations.
+
 Everything you do in Omnipus happens inside a workspace:
 
-- **Chats.** Every conversation belongs to a workspace. The sidebar lists your workspaces, and each one expands to show its own chats.
+- **Chats.** Every conversation belongs to a workspace. The sidebar lists your workspaces, and under each name it lists that workspace's main agents (Admin appears only on the default workspace). Choose an agent to open that pair's main chat, not whichever chat was most recently active. **Past sessions** opens earlier chats for that workspace and that agent, with both filters shown so you can remove one. **New chat** on the same row starts an extra chat with that agent and leaves the main chat in place. An amber dot on a collapsed workspace means one or more of its main chats need you; the text beside the dot says how many. If the main chats are identified but that count cannot be known, the sidebar says **Attention unavailable** and offers **Retry** instead of showing zero. If the main-chat IDs are missing, it says **Main chat unavailable** with **Retry** instead.
 - **Work items.** Tasks, plans, and the calendar of scheduled and repeating work are per workspace.
 - **Files.** A workspace holds its own library of files and notes.
 - **Team.** Each workspace picks its own agents, and sets its own rules for who may hand work to whom.
 - **Memory and instructions.** What the team remembers, and the written instructions every agent on the workspace follows, belong to the workspace.
+
+Opening a workspace restores the conversation this browser last opened there, when that conversation still belongs to the workspace. Otherwise it opens Ava's main chat. The workspace switch arrow in Sessions follows this same restore rule; it does not start an extra chat or erase your remembered conversation. Chat shows **Restoring your conversation…** while it decides. If the remembered conversation is visible in the loaded list, it still opens when loading the workspace details fails. If loading the conversation list fails, or workspace details fail when needed to find Ava's main chat, a warning says **Could not restore your last conversation. Retry to try again.** and offers **Retry**, which tries that choice again. Repeated blocked attempts reuse an identical warning already on screen rather than stacking copies; **Retry** on that reused warning checks the workspace you are now trying to enter. The open chat stays; Omnipus does not switch to Ava. Sending is off while the target chat is being checked. If loading or attaching the target chat fails, sending stays off and the message box also offers **Retry**, which checks that target workspace again rather than only reconnecting the old chat. When there is no remembered conversation and Ava's main chat cannot be identified, the message box says **This chat is unavailable right now**, **Retry** tries again, and sending is turned off.
+
+Admin is listed under the default workspace even when Admin is not on the team. Workers are not listed. The agent list refreshes when you expand a workspace, when you select its name, and when you return to this browser tab. The visibility-change refresh runs when this tab becomes visible. You do not need to reload the page. If that list fails before any agents have loaded, an expanded workspace says **Could not load team** and offers **Retry**. If an earlier list is still held, that list stays.
 
 On a fresh install, Omnipus creates one workspace for you, named **My Workspace**, with Mia, Jim, Ava, Planner, Researcher and General Purpose on the team. Admin remains available as the standalone operator without team membership. It is the default workspace: it is where Omnipus sends you when no other workspace is chosen, and it cannot be archived or deleted.
 
@@ -68,9 +74,7 @@ If Team is already visible and refreshing the workspace fails, the editor stays 
 
 1. Open the workspace's **Team** panel. Each agent on the team appears as a node in a picture.
 2. To grow the team, click **Add agent** and pick from your agents. Membership saves on its own; the indicator in the header shows when it has saved.
-   If you added an agent in another tab or window, opening the agent picker in this chat refreshes both the agent list and this workspace's team so a newly added ready-to-chat member can appear. Returning to this chat's tab also refreshes the lists used by the picker and the `@` menu; you do not need to reload the page. Once a nonempty team has loaded, both lists offer its ready-to-chat agents, not ordinary agents from outside this workspace's team. Workers and draft agents are not offered, while a ready Admin can appear without team membership. If the workspace/team refresh fails, Chat can be replaced by **Failed to load workspace. Check your connection and try again.** Select **Retry** there.
-
-   If refreshing the agent list fails, the picker shows "Could not refresh the agent list — showing the last known agents." and keeps the cached choices available. Choose Retry in the picker, using the mouse or keyboard, to refresh the agent list without closing the menu. The notice remains visible while Retry is pending and clears only when agent discovery succeeds.
+   If you added an agent in another tab or window, return to this tab or expand the workspace in the sidebar. The agent list and this workspace's membership refresh without a page reload. The message box has no agent picker and no `@` menu. If loading workspaces fails, the workspace view is replaced by **Failed to load workspace. Check your connection and try again.** Select **Retry** there.
 3. To trust one agent to delegate to another, drag from the small gold dot on the first agent's node onto the second node. A line appears between them. That line is the trust.
 4. Click the line to tune it with the settings in the table below.
 5. To take trust away, delete the line. Removing an agent from the team removes every line touching it.

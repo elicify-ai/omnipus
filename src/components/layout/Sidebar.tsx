@@ -31,10 +31,9 @@ import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents, logout } from '@/lib/api'
 import { logError } from '@/lib/telemetry'
-import type { Workspace, Session } from '@/lib/api'
-import { useSessionStore } from '@/store/session'
-import { useSelectSession } from '@/components/chat/useSelectSession'
-import { SessionTree, SessionExpandToggle, useSessionForest, type SessionTreeFlatRow } from '@/components/sessions/SessionTree'
+import type { Workspace } from '@/lib/api'
+import { WorkspaceAgentList } from './sidebar/WorkspaceAgentList'
+import type { RosterState } from './sidebar/workspaceRoster'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -195,7 +194,7 @@ export function Sidebar() {
   // includeVerifier opt-in exists on the signature (UsageScreen uses it)
   // but is intentionally omitted here, so this stays the excluded default
   // by construction — do not add it.
-  const { data: allSessions = [], isError: sessionsError } = useQuery({
+  const { data: allSessions = [] } = useQuery({
     queryKey: ['sessions'],
     queryFn: () => fetchSessions(),
     staleTime: 15_000,
@@ -203,23 +202,15 @@ export function Sidebar() {
     // keep a mounted row fresh after that last signal.
     refetchInterval: isVisible ? 15_000 : false,
   })
-  const { data: agents = [] } = useQuery({
+  const agentsQuery = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     staleTime: 30_000,
   })
-
-  // Currently-active session — for the sidebar's simplified title-only rows.
-  const activeSessionId = useSessionStore((s) => s.activeSessionId)
-
-  // Reusable session-selection logic (attach WS + navigate + close sidebar).
-  const selectSession = useSelectSession({
-    agents,
-    workspaces: projects,
-    onClose: () => {
-      if (!effectivelyPinned) close()
-    },
-  })
+  const agents = agentsQuery.data ?? []
+  const rosterState: RosterState = agentsQuery.isError
+    ? (agentsQuery.data ? 'failed-stale-cache' : 'failed-no-cache')
+    : 'fresh'
 
   // Workspace accordion expansion state. Seeded with the active workspace so
   // the one the user is already in opens without an extra click; the lazy
@@ -545,140 +536,26 @@ export function Sidebar() {
             </div>
           )}
 
-          {/* Workspace list — accordion: click name navigates, click chevron expands sessions */}
-          {!projectsLoading && visibleProjects
-            .map((project) => {
-            const isActive = activeWorkspaceId === project.id
-            const isExpanded = expandedWorkspaceIds.has(project.id)
-            // ADR-057 FR-093 (US-19, operator decision 1 — NESTED UNDER
-            // PARENT, not the `verifier` hidden-with-a-flag precedent): the
-            // `maxVisible` budget below MUST be spent on ROOT sessions only,
-            // so a wide delegation fan-out (e.g. 24 children) can never evict
-            // the parent chat itself. Delegate children (`parent_session_id`
-            // set) are never top-level rows — they render nested under their
-            // real parent via WorkspaceSessionTree below, fetched on expand.
-            //
-            // `allSessions` (fetchSessions() with no opts, above) already IS
-            // the server's roots-only page — FR-091's orphan clause
-            // (pkg/agent/loop.go's u9FilterSessionHierarchy) returns a
-            // session as a root when it has no parent OR its declared parent
-            // no longer resolves, and it does NOT null out that stale
-            // `parent_session_id` field on the wire. A prior version of this
-            // filter re-checked `!s.parent_session_id` here as a defensive
-            // measure, which actively broke that orphan promotion: an
-            // orphaned session (parent deleted) still carries its old
-            // parent_session_id, so it was silently re-excluded from every
-            // workspace — permanently invisible even though the server
-            // correctly classified it as a root. Trust the server contract
-            // instead of re-deriving root-ness from a field that doesn't
-            // reliably indicate it once a parent can be deleted.
-            const workspaceSessions = allSessions
-              .filter((s) => s.workspace_id === project.id)
-              .sort((a, b) => {
-                // Heartbeat sessions on top, then recent-first
-                if (a.type === 'heartbeat' && b.type !== 'heartbeat') return -1
-                if (b.type === 'heartbeat' && a.type !== 'heartbeat') return 1
-                return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-              })
-            const maxVisible = 9
-            const visibleSessions = workspaceSessions.slice(0, maxVisible)
-            return (
-              <div key={project.id}>
-                <div
-                  className={cn(
-                    'flex items-center gap-[var(--space-2)] w-full px-[var(--space-3)] py-[var(--space-2)] mx-0 text-[length:var(--type-body-compact-size)] transition-colors text-left',
-                    isActive
-                      ? 'text-[var(--color-accent)] font-medium'
-                      : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
-                  )}
-                >
-                  <Button
-                    variant="ghost"
-                    onClick={() => {
-                      setActiveWorkspaceId(project.id)
-                      navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
-                      if (!effectivelyPinned) close()
-                    }}
-                    aria-current={isActive ? 'page' : undefined}
-                    className={cn(
-                      'h-auto flex-1 min-w-0 justify-start gap-[var(--space-2)] p-0 text-left font-[var(--font-weight-regular)] hover:bg-transparent',
-                      isActive
-                        ? 'text-[var(--color-accent)] font-medium hover:text-[var(--color-accent)]'
-                        : 'text-[var(--color-secondary)] hover:text-[var(--color-secondary)]',
-                    )}
-                  >
-                    {/* One icon for every workspace (icon-consistency pass,
-                        2026-09-07: Buildings, the same glyph every other
-                        surface — Library virtual root, workspace tab bar —
-                        now uses for "workspace"); the ACTIVE workspace keeps
-                        its icon too — gold + text styling mark it, not a
-                        pulsing dot swap. */}
-                    <Buildings
-                      size={14}
-                      weight={isActive ? 'fill' : 'regular'}
-                      className={cn('flex-shrink-0', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]')}
-                    />
-                    <span className="flex-1 truncate">{project.name}</span>
-                  </Button>
-                  <IconButton
-                    onClick={(e) => { e.stopPropagation(); toggleWorkspaceExpansion(project.id) }}
-                    aria-expanded={isExpanded}
-                    aria-label={isExpanded ? `Collapse ${project.name} sessions` : `Expand ${project.name} sessions`}
-                    className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] -m-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
-                  >
-                    {isExpanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
-                  </IconButton>
-                </div>
-                {isExpanded && (
-                  /* Hierarchy via a connector rail (border-l) instead of deep
-                     pl-8 indentation — communicates "children of the workspace"
-                     by connectedness while reclaiming ~14px of row width. */
-                  <div className="pb-[var(--space-1)] ml-[var(--space-3)] border-l border-[var(--color-border)]">
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        setActiveWorkspaceId(project.id)
-                        useSessionStore.getState().startNewSession()
-                        navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
-                        if (!effectivelyPinned) close()
-                      }}
-                      className="h-auto w-full justify-start gap-[var(--space-2)] pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
-                    >
-                      <Plus size={12} /> New chat
-                    </Button>
-                    {sessionsError ? (
-                      <p className="pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)]">Could not load sessions</p>
-                    ) : workspaceSessions.length === 0 ? (
-                      <p className="pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-60">No sessions yet</p>
-                    ) : (
-                      // Pure navigation rows — manage lives behind "More…".
-                      // ADR-057 US-19/FR-093: renders a TREE, not a flat list
-                      // — a root session with delegated children (child_count
-                      // > 0) gets an expand chevron; its children are fetched
-                      // a page at a time only once the user expands it
-                      // (WorkspaceSessionTree -> useSessionForest), never
-                      // loaded or counted against maxVisible up front.
-                      <WorkspaceSessionTree
-                        rootSessions={visibleSessions}
-                        activeSessionId={activeSessionId}
-                        selectSession={selectSession}
-                      />
-                    )}
-                    {/* Always the last entry — opens the session search pre-filtered to this workspace */}
-                    {workspaceSessions.length > 0 && (
-                      <Button
-                        variant="ghost"
-                        onClick={() => useUiStore.getState().openSearchModal(project.id)}
-                        className="h-auto w-full justify-start gap-[var(--space-1)] pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-transparent"
-                      >
-                        More…
-                      </Button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+          {/* Workspace list — name opens the workspace; chevron toggles the attention cue. Agent rows replace the old session accordion. */}
+          {!projectsLoading && (
+            <WorkspaceAgentList
+              projects={visibleProjects}
+              expandedIds={expandedWorkspaceIds}
+              activeId={activeWorkspaceId}
+              agents={agents}
+              rosterState={rosterState}
+              sessions={allSessions}
+              onToggle={toggleWorkspaceExpansion}
+              onOpen={(project) => {
+                setActiveWorkspaceId(project.id)
+                navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
+                if (!effectivelyPinned) close()
+              }}
+              onOverlayClose={() => {
+                if (!effectivelyPinned) close()
+              }}
+            />
+          )}
 
           {/* Show more / less toggle */}
           {!projectsLoading && hasMore && (
@@ -948,201 +825,6 @@ export function Sidebar() {
           />
         )}
       </AnimatePresence>
-    </>
-  )
-}
-
-// ── ADR-057 US-19/W16f: the workspace accordion's session TREE ───────────────
-//
-// Root sessions (already filtered + sorted + maxVisible-sliced by the
-// caller) rendered as a forest: a session with delegated children
-// (`child_count > 0`) gets an expand chevron; its children are fetched a
-// page at a time — never up front — only once the user expands it
-// (`useSessionForest`, SessionTree.tsx). Not virtualized: the sidebar's
-// visible-root budget already bounds the DOM (≤ 9 roots), unlike SearchModal
-// (FR-094), which can render far more nodes and virtualizes.
-function WorkspaceSessionTree({
-  rootSessions,
-  activeSessionId,
-  selectSession,
-}: {
-  rootSessions: Session[]
-  activeSessionId: string | null
-  selectSession: (session: Session) => void
-}) {
-  const {
-    tree,
-    expandedIds,
-    toggleExpand,
-    isLoadingChildren,
-    isErrorChildren,
-    hasMoreChildren,
-    loadMoreChildren,
-  } = useSessionForest(rootSessions)
-
-  return (
-    <SessionTree
-      nodes={tree}
-      expandedIds={expandedIds}
-      renderRow={(row) => (
-        <SidebarSessionRow
-          row={row}
-          isActive={row.node.session.id === activeSessionId}
-          isLoading={isLoadingChildren(row.node.session.id)}
-          isError={isErrorChildren(row.node.session.id)}
-          hasMore={hasMoreChildren(row.node.session.id)}
-          onToggleExpand={() => toggleExpand(row.node.session.id)}
-          onLoadMore={() => loadMoreChildren(row.node.session.id)}
-          onSelect={() => selectSession(row.node.session)}
-        />
-      )}
-    />
-  )
-}
-
-// ADR-20260928 MAJ-009/T26 — the row's lifecycle label, straight from the
-// wire Session.lifecycle_state (already the 6-value display projection; the
-// server collapses queued/running→working, needs_input→waiting_for_answer,
-// completed→done; a restart-cut-off session arrives as interrupted — founder
-// decision 2026-10-06, a session does not fail). F0929-2 vocabulary plus
-// interrupted, rendered verbatim. A session with NO
-// lifecycle_state (no lifecycle record) gets no label at all — never a
-// guess from coarse `status` (a stopped helper has status 'active',
-// lifecycle_state 'stopped'). Colors are state semantics, not decoration:
-// error for stopped/failed, warning for waiting, accent for working,
-// muted for done and interrupted — held as static literal classes at the use site below
-// (the design-system scanners verify tokenized class literals and refuse a
-// dynamic class lookup they cannot see through).
-const LIFECYCLE_LABELS: Record<NonNullable<Session['lifecycle_state']>, string> = {
-  working: 'Working',
-  waiting_for_answer: 'Waiting for answer',
-  done: 'Done',
-  failed: 'Failed',
-  stopped: 'Stopped',
-  interrupted: 'Interrupted',
-}
-
-function SidebarSessionRow({
-  row,
-  isActive,
-  isLoading,
-  isError,
-  hasMore,
-  onToggleExpand,
-  onLoadMore,
-  onSelect,
-}: {
-  row: SessionTreeFlatRow
-  isActive: boolean
-  isLoading: boolean
-  isError: boolean
-  /** True iff this node's children are loaded but the server has more (child_count > loaded count). */
-  hasMore: boolean
-  onToggleExpand: () => void
-  onLoadMore: () => void
-  onSelect: () => void
-}) {
-  const { node, depth, hasChildren, isExpanded, childrenEmpty } = row
-  const session = node.session
-  const title = session.title || 'Untitled'
-  // Base 12px is --space-2-5 (already on the registered token scale). The
-  // legacy per-level step was 14px, a 14px-root Tailwind value D10 maps to
-  // the nearest closed-scale step, 16px (--space-3) -- see
-  // docs/internal/design/evidence/c1-execution-record.md's tree-indent row.
-  return (
-    <>
-      <div className="flex items-center pr-[var(--space-3)]" style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3))' } as import('react').CSSProperties}>
-        {hasChildren ? (
-          <SessionExpandToggle
-            expanded={isExpanded}
-            onToggle={onToggleExpand}
-            loading={isLoading}
-            error={isError}
-            expandLabel={`Expand ${title} delegated sessions`}
-            collapseLabel={`Collapse ${title} delegated sessions`}
-          />
-        ) : (
-          <span className="w-[var(--space-3)] shrink-0" aria-hidden="true" />
-        )}
-        <Button
-          variant="ghost"
-          onClick={onSelect}
-          aria-current={isActive ? 'page' : undefined}
-          className={cn(
-            'h-auto flex-1 min-w-0 justify-start gap-[var(--space-1)] py-[var(--space-1)] pl-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-left',
-            isActive
-              ? 'text-[var(--color-accent)] font-medium hover:bg-transparent hover:text-[var(--color-accent)]'
-              : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
-          )}
-        >
-          {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
-          <span className="flex-1 truncate">{title}</span>
-          {/* ADR-20260928 MAJ-009/T26: exact lifecycle_state label (six
-              states: F0929-2 plus interrupted, founder 2026-10-06) — absent lifecycle_state renders nothing. A
-              stopped row also shows its stop_note.cause, the lasting
-              who/when/why (closed vocabulary: stop/redirect_pause/
-              cascade/restart/timeout), rendered verbatim. */}
-          {session.lifecycle_state && LIFECYCLE_LABELS[session.lifecycle_state] && (
-            <span
-              className={cn(
-                'flex-shrink-0 text-[length:var(--type-caption-size)] leading-none',
-                session.lifecycle_state === 'failed' || session.lifecycle_state === 'stopped'
-                  ? 'text-[var(--color-error)]'
-                  : session.lifecycle_state === 'waiting_for_answer'
-                    ? 'text-[var(--color-warning)]'
-                    : session.lifecycle_state === 'working'
-                      ? 'text-[var(--color-accent)]'
-                      : 'text-[var(--color-muted)]',
-              )}
-            >
-              {/* Leading real space: the label is its own word in the row's
-                  text ("…Row 1 Done", never "…Row 1Done") — the six-state
-                  vocabulary is the contract, word-separated. */}
-              {' '}
-              {LIFECYCLE_LABELS[session.lifecycle_state]}
-              {session.lifecycle_state === 'stopped' && session.stop_note && (
-                <span className="text-[var(--color-muted)]"> · {session.stop_note.cause}</span>
-              )}
-            </span>
-          )}
-          {session.type === 'heartbeat' && (
-            <span className="text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
-          )}
-          {hasChildren && (
-            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] flex-shrink-0" aria-hidden="true">
-              {session.child_count}
-            </span>
-          )}
-        </Button>
-      </div>
-      {/* childrenEmpty: expanded, fetched, and the fetch came back with zero
-          rows despite child_count > 0 — a stale/incorrect server count must
-          not render as an open toggle with nothing beneath it and no
-          explanation. */}
-      {childrenEmpty && (
-        <p
-          className="py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-70"
-          style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + var(--space-3))' } as import('react').CSSProperties}
-        >
-          No delegated sessions found
-        </p>
-      )}
-      {/* hasMore: this node has additional children pages beyond what's
-          currently loaded (ADR-057 FR-092 continued paging) — the
-          child_count badge above can report a total larger than what's
-          rendered; this is the explicit "load the rest" affordance rather
-          than silently capping the fan-out at one page. */}
-      {isExpanded && hasMore && (
-        <Button
-          variant="link"
-          onClick={onLoadMore}
-          disabled={isLoading}
-          style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + var(--space-3))' } as import('react').CSSProperties}
-          className="h-auto gap-[var(--space-1)] pl-0 py-[var(--space-1)] pr-[var(--space-3)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] disabled:no-underline"
-        >
-          {isLoading ? 'Loading…' : 'Load more'}
-        </Button>
-      )}
     </>
   )
 }

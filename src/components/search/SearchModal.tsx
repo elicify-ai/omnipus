@@ -63,6 +63,11 @@ export function SearchModal() {
   const open = useUiStore((s) => s.searchModalOpen)
   const close = useUiStore((s) => s.closeSearchModal)
   const wsFilter = useUiStore((s) => s.searchModalWorkspaceFilter)
+  const agentFilter = useUiStore((s) => s.searchModalAgentFilter)
+  // TWO MODES, one panel (see ui.ts's doc comment on searchModalMode):
+  // 'sessions' (/sessions + sidebar search + Past sessions) uses the session
+  // overview and optional workspace/owner filters. 'workspaces' (/workspace)
+  // lists ALL workspaces, starts groups collapsed, and switches on Enter.
   const mode = useUiStore((s) => s.searchModalMode)
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -196,6 +201,11 @@ export function SearchModal() {
     setSuppressedAutoIds((prev) => { const next = new Set(prev); next.delete(id); return next })
   }, [effectiveExpandedIds])
 
+  // FR-004: a modal workspace switch uses the same exact remembered-chat /
+  // validated Ava entry as the workspace name, not the + New chat action.
+  // Switch the workspace before entry so a successful attach persists the
+  // target descriptor under the right key; a failed restore retains the
+  // committed chat and exposes Retry without erasing either saved pointer.
   const handleSwitchWorkspace = useCallback((ws: Workspace) => {
     if (ws.id === useWorkspacesStore.getState().activeWorkspaceId) {
       void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: ws.id } })
@@ -203,7 +213,7 @@ export function SearchModal() {
       return
     }
     useWorkspacesStore.getState().setActiveWorkspaceId(ws.id)
-    useSessionStore.getState().startNewSession()
+    void useSessionStore.getState().enterWorkspaceChat(ws.id)
     void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: ws.id } })
     close()
   }, [close, navigate])
@@ -230,7 +240,7 @@ export function SearchModal() {
   const bucketByAgent = useCallback((sess: Session[]): AgentGroup[] => {
     const buckets = new Map<string, Session[]>()
     for (const session of sess) {
-      const agentId = session.active_agent_id ?? session.agent_id ?? 'unknown'
+      const agentId = session.agent_id ?? 'unknown'
       const existing = buckets.get(agentId)
       if (existing) existing.push(session)
       else buckets.set(agentId, [session])
@@ -246,8 +256,11 @@ export function SearchModal() {
 
   const groups = useMemo<WsGroup[]>(() => {
     const query = debouncedSearch.trim().toLowerCase()
-    const roots = mode === 'sessions' && wsFilter
-      ? overview.roots.filter((session) => session.workspace_id === wsFilter)
+    const roots = mode === 'sessions'
+      ? overview.roots.filter((session) =>
+          (!wsFilter || session.workspace_id === wsFilter) &&
+          (!agentFilter || session.agent_id === agentFilter),
+        )
       : overview.roots
     if (mode === 'workspaces') {
       const byWorkspace = new Map<string, Session[]>()
@@ -285,7 +298,7 @@ export function SearchModal() {
       return new Date(b.agentGroups[0]?.sessions[0]?.updated_at ?? '').getTime() - new Date(a.agentGroups[0]?.sessions[0]?.updated_at ?? '').getTime()
     })
     return result
-  }, [overview.roots, workspaces, debouncedSearch, wsFilter, mode, bucketByAgent, wsMap])
+  }, [overview.roots, workspaces, debouncedSearch, wsFilter, agentFilter, mode, bucketByAgent, wsMap])
 
   const total = mode === 'workspaces' ? groups.length : groups.reduce((count, group) => count + group.totalCount, 0)
   const loading = sLoading || wLoading
@@ -305,8 +318,8 @@ export function SearchModal() {
   const [highlightIndex, setHighlightIndex] = useState(0)
   const [activationId, setActivationId] = useState<string | null>(null)
   const [announcement, setAnnouncement] = useState('')
-  const filterKey = `${mode}|${debouncedSearch}|${fromDate}|${toDate}|${wsFilter ?? ''}|${statusFilter}`
-  useEffect(() => { setHighlightIndex(0) }, [debouncedSearch, fromDate, toDate, wsFilter, mode, groups.length])
+  const filterKey = `${mode}|${debouncedSearch}|${fromDate}|${toDate}|${wsFilter ?? ''}|${agentFilter ?? ''}|${statusFilter}`
+  useEffect(() => { setHighlightIndex(0) }, [debouncedSearch, fromDate, toDate, wsFilter, agentFilter, mode, groups.length])
   useEffect(() => {
     if (mode !== 'sessions') return
     const visible = flatIds
@@ -382,6 +395,14 @@ export function SearchModal() {
               <span className="ml-[var(--space-1)] inline-flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-secondary)]">
                 {workspaces.find((workspace) => workspace.id === wsFilter)?.name ?? 'Filtered'}
                 <IconButton onClick={() => useUiStore.setState({ searchModalWorkspaceFilter: null })} className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]" aria-label="Clear workspace filter">
+                  <X size={10} />
+                </IconButton>
+              </span>
+            )}
+            {mode === 'sessions' && agentFilter && (
+              <span className="ml-[var(--space-1)] inline-flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-secondary)]">
+                {agents.find((agent) => agent.id === agentFilter)?.name ?? agentFilter}
+                <IconButton onClick={() => useUiStore.getState().setSearchModalAgentFilter(null)} className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]" aria-label="Clear agent filter">
                   <X size={10} />
                 </IconButton>
               </span>
@@ -488,7 +509,7 @@ export function SearchModal() {
               {mode === 'workspaces' ? (
                 <p>No workspaces found{debouncedSearch ? ` for "${debouncedSearch}"` : ''}.</p>
               ) : (
-                <p>{statusFilter === 'running' ? 'No running sessions' : 'No sessions found'}{wsFilter ? ' in this workspace' : ''}{debouncedSearch ? ` for "${debouncedSearch}"` : ''}.</p>
+                <p>{statusFilter === 'running' ? 'No running sessions' : 'No sessions found'}{wsFilter ? ' in this workspace' : ''}{agentFilter ? ' for this agent' : ''}{debouncedSearch ? ` for "${debouncedSearch}"` : ''}.</p>
               )}
               {mode === 'workspaces' ? (
                 debouncedSearch && (
@@ -496,10 +517,10 @@ export function SearchModal() {
                     Clear filter
                   </Button>
                 )
-              ) : (wsFilter || debouncedSearch || fromDate || toDate || statusFilter !== 'all') && (
+              ) : (wsFilter || agentFilter || debouncedSearch || fromDate || toDate || statusFilter !== 'all') && (
                 <Button
                   variant="link"
-                  onClick={() => { setSearchText(''); setFromDate(''); setToDate(''); setStatusFilter('all'); useUiStore.setState({ searchModalWorkspaceFilter: null }) }}
+                  onClick={() => { setSearchText(''); setFromDate(''); setToDate(''); setStatusFilter('all'); useUiStore.setState({ searchModalWorkspaceFilter: null, searchModalAgentFilter: null }) }}
                   className="mt-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)]"
                 >
                   Clear all filters

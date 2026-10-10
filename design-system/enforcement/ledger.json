@@ -5774,6 +5774,11 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
+      "path": "src/components/layout/Sidebar.agentRows.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
       "path": "src/components/layout/Sidebar.focus-trap.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."

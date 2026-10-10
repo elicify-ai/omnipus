@@ -11,11 +11,13 @@
  *
  *   skip-link=1 (AppShell.tsx, see AppShell.test.tsx)
  *   → chat input=2 (this file)
- *   → agent=3 (this file, via the tabIndex prop ChatScreen passes to AgentPicker)
  *   → model=4 (this file, via the tabIndex prop ChatScreen passes to ModelPicker)
  *   → attach=5 (this file)
  *   → send=6 (this file)
  *   → browser=7 (ChatControls.tsx, see ChatControls.test.tsx)
+ *
+ * Slot 3 was the agent picker. That control is gone (FR-007). The remaining
+ * indexes are not renumbered.
  *
  * A well-meaning cleanup (renumbering, dropping a tabIndex, or reordering
  * controls) should fail one of these class/attribute-level assertions rather
@@ -23,12 +25,10 @@
  * repo for structural/positional contracts (see AgentPicker.test.tsx,
  * Sidebar.m5.test.tsx for precedent).
  *
- * AgentPicker/ModelPicker are stubbed here (not their real implementations —
- * their own internal behavior is covered by composer/AgentPicker.test.tsx and
- * composer/ModelPicker.test.tsx) to a thin pass-through that echoes the
- * `tabIndex` prop it was called with, so this test asserts the CONTRACT
- * ("ChatScreen passes tabIndex=3/4 to these components") without dragging in
- * their agents/workspaces query plumbing.
+ * ModelPicker is stubbed here (not its real implementation) to a thin
+ * pass-through that echoes the `tabIndex` prop it was called with, so this
+ * test asserts the CONTRACT ("ChatScreen passes tabIndex=4") without dragging
+ * in its query plumbing. There is no agent picker in the ring.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -159,14 +159,8 @@ vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
-// AgentPicker/ModelPicker: thin pass-throughs that echo the `tabIndex` prop
-// ChatScreen calls them with, onto a testid'd node — this is the structural
-// contract under test, not the pickers' own internal behavior (covered
-// elsewhere, see the file header comment).
-vi.mock('./composer/AgentPicker', () => ({
-  AgentPicker: ({ tabIndex }: { tabIndex?: number }) =>
-    React.createElement('div', { 'data-testid': 'agent-picker-mock', tabIndex }),
-}))
+// ModelPicker: thin pass-through that echoes the `tabIndex` prop ChatScreen
+// calls it with, onto a testid'd node.
 vi.mock('./composer/ModelPicker', () => ({
   ModelPicker: ({ tabIndex }: { tabIndex?: number }) =>
     React.createElement('div', { 'data-testid': 'model-picker-mock', tabIndex }),
@@ -206,9 +200,10 @@ describe('OmnipusComposer — composer tab ring (post-renumber structural guard)
     expect(screen.getByTestId('chat-input')).toHaveAttribute('tabindex', '2')
   })
 
-  it('AgentPicker is invoked with tabIndex=3', () => {
+  it('does not mount an agent picker', () => {
     render(<OmnipusComposer />)
-    expect(screen.getByTestId('agent-picker-mock')).toHaveAttribute('tabindex', '3')
+    expect(screen.queryByTestId('agent-picker-trigger')).toBeNull()
+    expect(screen.queryByTestId('agent-picker-mock')).toBeNull()
   })
 
   it('ModelPicker is invoked with tabIndex=4', () => {
@@ -226,15 +221,14 @@ describe('OmnipusComposer — composer tab ring (post-renumber structural guard)
     expect(screen.getByTestId('chat-send')).toHaveAttribute('tabindex', '6')
   })
 
-  it('the ring is strictly ordered 2 < 3 < 4 < 5 < 6 across the five composer controls', () => {
+  it('the ring is ordered 2, 4, 5, 6 across the remaining composer controls', () => {
     render(<OmnipusComposer />)
     const order = [
       Number(screen.getByTestId('chat-input').getAttribute('tabindex')),
-      Number(screen.getByTestId('agent-picker-mock').getAttribute('tabindex')),
       Number(screen.getByTestId('model-picker-mock').getAttribute('tabindex')),
       Number(screen.getByTestId('add-attachment').getAttribute('tabindex')),
       Number(screen.getByTestId('chat-send').getAttribute('tabindex')),
     ]
-    expect(order).toEqual([2, 3, 4, 5, 6])
+    expect(order).toEqual([2, 4, 5, 6])
   })
 })

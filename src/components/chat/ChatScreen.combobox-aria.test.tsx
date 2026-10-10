@@ -155,7 +155,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -229,13 +228,12 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
     expect(input).not.toHaveAttribute('aria-activedescendant')
   })
 
-  // F3 (test hardening, gate 6): the fixture has 5 commands (the two
-  // synthetic client-only entries /sessions + /workspace, then clear/help/
-  // cancel) then 2 skills sorted alphabetically (Code Review, Web Research)
-  // — 7 rows total, indices 0-6, with the commands→skills SECTION boundary
-  // falling between index 4 and index 5. Cycling ArrowDown across that
-  // boundary is exactly the case a per-section (rather than global)
-  // highlight bug would miss.
+  // Founder X3: the fixture's clear/help/cancel rows are all listed after the
+  // two existing local search actions /resume + /workspace, followed by two
+  // alphabetically sorted skills. Thus 2 + 3 + 2 = 7 options, indices 0-6;
+  // the commands→skills SECTION boundary falls between indices 4 and 5.
+  // Cycling ArrowDown across that boundary is exactly the case a per-section
+  // (rather than global) highlight bug would miss (F3, test-hardening gate 6).
   // Session-search enhancement: "/workspace" is a second synthetic
   // client-only command (useSlashMenu.ts's allCommands), inserted
   // immediately after "/sessions" — shifts every subsequent index by one from
@@ -247,6 +245,9 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
 
     const initialOptions = screen.getAllByRole('option')
     expect(initialOptions).toHaveLength(7)
+    expect(initialOptions.map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
+      '/resume', '/workspace', '/clear', '/help', '/cancel', '/code-review', '/web-research',
+    ])
     // Option ids must be unique — a duplicate id would make getElementById
     // resolve to the WRONG row (the first match) without any test noticing,
     // silently invalidating every activedescendant assertion below.
@@ -272,11 +273,11 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
 
     // Step through indices 1-4 — still inside the Commands section.
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 1: /workspace
-    assertActivedescendantMatchesSelectedRow()
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/workspace')
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 2: /clear
-    assertActivedescendantMatchesSelectedRow()
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/clear')
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 3: /help
-    assertActivedescendantMatchesSelectedRow()
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/help')
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 4: /cancel — last Commands row
     expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/cancel')
 
@@ -295,39 +296,17 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
   })
 })
 
-describe('Composer combobox ARIA — "@" mention mode (F3 hardening: same contract as "/")', () => {
-  it('the "@" agent-mention menu carries the identical combobox ARIA contract — role=combobox on the textarea, role=listbox on the menu, role=option rows, and a matching aria-activedescendant', () => {
+describe('Composer combobox ARIA — a leading @ does not open a menu (FR-007)', () => {
+  it('typing @ does not expand the combobox or mount agent rows', () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('chat-input')
 
     act(() => { fireEvent.change(input, { target: { value: '@' } }) })
 
-    expect(input).toHaveAttribute('role', 'combobox')
-    expect(input).toHaveAttribute('aria-expanded', 'true')
-    expect(input).toHaveAttribute('aria-controls', 'composer-slash-menu')
-
-    const menu = screen.getByTestId('slash-menu')
-    expect(menu).toHaveAttribute('role', 'listbox')
-    expect(menu).toHaveAttribute('id', 'composer-slash-menu')
-
-    // Fixture: 2 chat-eligible agents (Alpha, Bravo) — see mockAgents above.
-    const options = screen.getAllByRole('option')
-    expect(options).toHaveLength(2)
-    for (const option of options) {
-      expect(option).toHaveAttribute('tabindex', '-1')
-      expect(option.id).toMatch(/^composer-option-\d+$/)
-    }
-
-    expect(input).toHaveAttribute('aria-activedescendant', 'composer-option-0')
-    expect(document.getElementById('composer-option-0')).toHaveAttribute('aria-selected', 'true')
-    expect(document.getElementById('composer-option-0')?.textContent).toContain('Alpha')
-
-    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
-    expect(input).toHaveAttribute('aria-activedescendant', 'composer-option-1')
-    expect(document.getElementById('composer-option-1')).toHaveAttribute('aria-selected', 'true')
-    expect(document.getElementById('composer-option-1')?.textContent).toContain('Bravo')
-    // The previously-highlighted row is no longer selected.
-    expect(document.getElementById('composer-option-0')).toHaveAttribute('aria-selected', 'false')
+    expect(input).not.toHaveAttribute('aria-expanded', 'true')
+    expect(screen.queryByTestId('slash-menu')).toBeNull()
+    expect(screen.queryByTestId('agent-mention-item')).toBeNull()
+    expect(screen.queryByText('@Alpha')).toBeNull()
   })
 })
 

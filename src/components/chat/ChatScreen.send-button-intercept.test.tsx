@@ -156,7 +156,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -185,11 +184,11 @@ function resetStores() {
 
 beforeEach(() => {
   resetStores()
-  mockComposerSend.mockClear()
+  mockComposerSend.mockReset()
 })
 
 describe('Send-button click — client-command interception (bugfixes3 deferred item 1)', () => {
-  it('typing "/clear" (a client command) and clicking Send runs the command locally — nothing is sent', async () => {
+  it('typing "/clear" and clicking Send does not start a new chat', async () => {
     const realStartNewSession = useSessionStore.getState().startNewSession
     const startNewSession = vi.fn()
     act(() => { useSessionStore.setState({ startNewSession }) })
@@ -199,11 +198,17 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
     // nullish) — mirrors ChatScreen.agents-command.test.tsx's own
     // send-path-interception test, which does the same for the Enter path.
     const { useComposerRuntime } = await import('@assistant-ui/react')
+    let composerText = '/clear'
+    const sentTexts: string[] = []
+    // Observe text at the actual send callback. setText updates live state so
+    // a client rewrite before sending cannot masquerade as an unchanged send.
+    mockComposerSend.mockImplementation(() => { sentTexts.push(composerText) })
     ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
-      getState: () => ({ text: '/clear' }),
-      setText: vi.fn(),
+      getState: () => ({ text: composerText }),
+      setText: vi.fn((text: string) => { composerText = text }),
       addAttachment: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
     })
 
     try {
@@ -214,12 +219,10 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
       act(() => { fireEvent.change(input, { target: { value: '/clear' } }) })
       act(() => { fireEvent.click(sendButton) })
 
-      // The client command ran locally (runClientCommand's 'clear' branch
-      // calls startNewSession — see useSlashMenu.ts).
-      expect(startNewSession).toHaveBeenCalledTimes(1)
-      // The internal composer.send() callback must NOT have run — the
-      // literal text "/clear" was never dispatched as a chat message.
-      expect(mockComposerSend).not.toHaveBeenCalled()
+      // Founder X3: /clear is server-owned, not a client new-chat command.
+      expect(startNewSession).not.toHaveBeenCalled()
+      expect(mockComposerSend).toHaveBeenCalledTimes(1)
+      expect(sentTexts).toEqual(['/clear'])
     } finally {
       act(() => { useSessionStore.setState({ startNewSession: realStartNewSession }) })
     }
@@ -270,6 +273,9 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
     const messages = useChatStore.getState().messages
     expect(messages).toHaveLength(1)
     expect(messages[0].role).toBe('system')
+    expect(messages[0].content).toContain('/help')
     expect(messages[0].content).toContain('/clear')
+    expect(messages[0].content).not.toContain('/new')
+    expect(messages[0].content).not.toContain('switch agents')
   })
 })

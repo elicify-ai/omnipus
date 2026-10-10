@@ -39,8 +39,11 @@ interface UiStore {
   // icon, "More…", /sessions) stays source-compatible with zero changes.
   searchModalOpen: boolean
   searchModalWorkspaceFilter: string | null
+  /** Agent id for Past sessions. Null means every agent. */
+  searchModalAgentFilter: string | null
   searchModalMode: 'sessions' | 'workspaces'
-  openSearchModal: (workspaceId?: string) => void
+  openSearchModal: (workspaceId?: string, agentId?: string) => void
+  setSearchModalAgentFilter: (agentId: string | null) => void
   openWorkspaceSwitcher: () => void
   closeSearchModal: () => void
   /**
@@ -194,18 +197,35 @@ const toastTimers = new Map<string, ReturnType<typeof setTimeout>>()
 export const useUiStore = create<UiStore>((set, get) => ({
   searchModalOpen: false,
   searchModalWorkspaceFilter: null,
+  searchModalAgentFilter: null,
   searchModalMode: 'sessions',
-  openSearchModal: (workspaceId?: string) =>
-    set({ searchModalOpen: true, searchModalWorkspaceFilter: workspaceId ?? null, searchModalMode: 'sessions' }),
+  openSearchModal: (workspaceId?: string, agentId?: string) =>
+    set({
+      searchModalOpen: true,
+      searchModalWorkspaceFilter: workspaceId ?? null,
+      searchModalAgentFilter: agentId ?? null,
+      searchModalMode: 'sessions',
+    }),
+  setSearchModalAgentFilter: (agentId) => set({ searchModalAgentFilter: agentId }),
   openWorkspaceSwitcher: () =>
-    set({ searchModalOpen: true, searchModalWorkspaceFilter: null, searchModalMode: 'workspaces' }),
+    set({
+      searchModalOpen: true,
+      searchModalWorkspaceFilter: null,
+      searchModalAgentFilter: null,
+      searchModalMode: 'workspaces',
+    }),
   // Reset the mode back to 'sessions' on every close so a prior /workspace
   // open can't leak into the next open via the sidebar search icon or
   // /sessions (both of which go through openSearchModal, which already sets
   // 'sessions' explicitly — this reset is the belt-and-braces default for
   // any other close path, e.g. Escape/outside-click, which don't call
-  // openSearchModal at all).
-  closeSearchModal: () => set({ searchModalOpen: false, searchModalWorkspaceFilter: null, searchModalMode: 'sessions' }),
+  // openSearchModal at all). The agent filter resets with it.
+  closeSearchModal: () => set({
+    searchModalOpen: false,
+    searchModalWorkspaceFilter: null,
+    searchModalAgentFilter: null,
+    searchModalMode: 'sessions',
+  }),
   activityPanelRequest: null,
   requestActivityPanel: (sessionId) => set({ activityPanelRequest: sessionId }),
   consumeActivityPanelRequest: (sessionId) => {

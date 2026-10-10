@@ -16,7 +16,7 @@ import { useWorkspacesStore } from './workspacesStore'
 // D7/D8, as retained by the founder's "middle way" ruling.
 // T4 bypasses confirmation and checks only subsequent user bubbles. T10 checks
 // a successful attach of an unanswered chat, not transport/replay failures or
-// old-attempt correlation after /new. This pack adds those observable outcomes.
+// old-attempt correlation after abandoning a chat. This pack adds those outcomes.
 // Real: store/actions, frame reducers, reconnect helper, and user-message row.
 // Replaced edges: socket sender and clock. Query invalidation remains real.
 // Fixtures preserve whitespace, ordered media and explicit false Auto (D7).
@@ -250,14 +250,30 @@ const LATE_FRAMES: { label: string; frame: InboundFrame; discoversSavedChat: boo
 ]
 
 describe('#1090 red5 — first-message state and correlation gaps', () => {
-  it('D8: accepting /new synchronously clears the old pending bucket and recovery request, making old Retry inert', () => {
+  it('D8 / FR-005: confirming + New chat clears the old pending bucket and recovery request, making old Retry inert', () => {
     const sender = connectGapSender()
     sendFirst(sender)
     dropAndReconnect(sender)
 
-    // The composer confirmation is tested separately. This action is the
-    // accepted "Start a new chat" decision, not a replacement for its UI test.
+    // Wave-2 FR-005: startNewSession is the guarded + New chat action.
+    // Typed /new is server-owned; it no longer dispatches this local action.
+    // Opening the confirmation must retain the original delivery. Only the
+    // accepted choice below may release its shared slot (the original D8 intent).
+    const oldBucket = structuredClone(useChatStore.getState().sessionsById.__pending)
+    const oldRequest = structuredClone(useChatStore.getState().pendingFirstSend)
     act(() => useSessionStore.getState().startNewSession())
+    expect(useSessionStore.getState().newChatPrompt).toStrictEqual({
+      action: 'prompt', mainSessionId: '', clientMessageId: OLD_ID, started: false,
+    })
+    expect(useSessionStore.getState().activeSessionId, 'FR-005: prompting does not leave the pending chat').toBe('__pending')
+    expect(useChatStore.getState().sessionsById.__pending, 'FR-005: prompting preserves the complete pending bucket')
+      .toStrictEqual(oldBucket)
+    expect(useChatStore.getState().pendingFirstSend, 'FR-005: prompting preserves the exact recovery request')
+      .toStrictEqual(oldRequest)
+    expect(sender.send.mock.calls.map(([frame]) => frame), 'FR-005: prompting must not transmit or retry')
+      .toStrictEqual([ORIGINAL_FRAME])
+    act(() => useSessionStore.getState().startNewSession({ choice: 'confirm', clientMessageId: OLD_ID }))
+    expect(useSessionStore.getState().newChatPrompt, 'FR-005: accepted confirmation closes the prompt').toBeNull()
 
     expect(useSessionStore.getState().activeSessionId, 'D8: foreground is now the new empty chat').toBeNull()
     expect(users(), 'D8: explicitly discarded message no longer occupies the foreground').toStrictEqual([])
@@ -269,12 +285,13 @@ describe('#1090 red5 — first-message state and correlation gaps', () => {
       .toStrictEqual([ORIGINAL_FRAME])
   })
 
-  it.each(LATE_FRAMES)('D8: late old $label cannot change the new pending chat', ({ frame, discoversSavedChat }) => {
+  it.each(LATE_FRAMES)('D8: late old $label after confirmed + New chat cannot change the new pending chat', ({ frame, discoversSavedChat }) => {
     const sender = connectGapSender()
     sendFirst(sender)
     dropAndReconnect(sender)
     act(() => {
-      useSessionStore.getState().startNewSession()
+      // FR-005: this fixture is the accepted + New chat decision, not /new.
+      useSessionStore.getState().startNewSession({ choice: 'confirm', clientMessageId: OLD_ID })
       useChatStore.getState().sendMessage(NEW_CONTENT, { clientMessageId: NEW_ID })
     })
     expect(users(), 'fixture: shared pending slot belongs only to the new message')

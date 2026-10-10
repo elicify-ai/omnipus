@@ -18,6 +18,7 @@ import { applySnapshotHistoryWipe, cursorFromTerminalFrame } from '../cursor'
 import { replayErrorRetryAttempts, replayErrorRetryTimers } from '../runtime-state'
 import type { ChatMessage, ChatStore, SessionChatState } from '../types'
 import { finishRecoveredFirstSend } from './first-send-frames'
+import { acknowledgeShownCatchUp, noteServerAttentionFrame } from '@/store/session/foregroundAck'
 
 type Frame = Parameters<ChatStore['handleFrame']>[0]
 interface CatchUpFrameContext {
@@ -65,6 +66,7 @@ export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: C
       // was interrupted, so an orphaned last user message there must NOT
       // be treated as unanswered.
       const snapshotFrame = frame as SessionSnapshotFrame
+      noteServerAttentionFrame(targetSid, snapshotFrame)
       withBucket(targetSid, (b) => {
         const wiped = applySnapshotHistoryWipe(b)
         return { ...wiped, snapshotWasBootMismatch: snapshotFrame.reason === 'boot_mismatch' }
@@ -194,6 +196,7 @@ export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: C
         draft.snapshotWasBootMismatch = undefined
       }))
       finishRecoveredFirstSend({ set, get, withBucket }, targetSid)
+      acknowledgeShownCatchUp(targetSid)
       return true
     }
 

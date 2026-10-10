@@ -6604,6 +6604,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/FeedKindLabel.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/GoalCommandMarker.tsx",
       "lane": 3
     },
@@ -6672,12 +6676,12 @@
       "lane": 3
     },
     {
-      "source": "src/components/chat/UntrustedChildText.tsx",
+      "source": "src/components/chat/UnavailableChatNotice.tsx",
       "lane": 3
     },
     {
-      "source": "src/components/chat/composer/AgentPicker.tsx",
-      "lane": 5
+      "source": "src/components/chat/UntrustedChildText.tsx",
+      "lane": 3
     },
     {
       "source": "src/components/chat/composer/AutoApprovePicker.tsx",
@@ -6841,6 +6845,26 @@
     },
     {
       "source": "src/components/layout/appShellViewport.ts",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/SidebarAgentIcon.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/WorkspaceAgentList.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/attentionCue.ts",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/pairExtra.ts",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/workspaceRoster.ts",
       "lane": 7
     },
     {

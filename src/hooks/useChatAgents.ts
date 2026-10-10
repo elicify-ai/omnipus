@@ -1,7 +1,8 @@
-// useChatAgents — shared agent-list query + scoping used by BOTH the
-// AgentPicker dropdown (composer/AgentPicker.tsx) and the `@` mention menu
-// (useSlashMenu.ts's mention mode). Extracted so the two surfaces share ONE
-// `['agents']` react-query cache entry and apply IDENTICAL scoping
+// useChatAgents — shared agent-list query + scoping. The composer agent
+// picker and the `@` mention menu are gone (FR-007). The remaining production
+// caller is useWorkspaceSetupKickoff. The query and the scoping stay so that
+// caller and the hook's own tests keep one definition: ONE
+// `['agents']` react-query cache entry and IDENTICAL scoping
 // (ready-to-chat status, worker exclusion, active workspace's core_team,
 // plus the ADR-090 Admin standalone-operator exemption from TEAM scoping)
 // instead of two hand-rolled copies of the same filter drifting apart.
@@ -11,11 +12,10 @@
 // — so React Query dedupes both callers into a single network request
 // instead of issuing it twice per render tree.
 //
-// Deliberately does NOT own picker-only concerns: auto-select-first-agent,
-// the agentSelectorOpen latch reset, and the error/all-draft branch UI all
-// stay in AgentPicker, which is the sole side-effect writer to the session
-// store on mount — a second writer here would race it. It does read the
-// open flag below, only as the moment to refresh team membership.
+// Does not write the session store. The old picker auto-selected the first
+// ready agent on mount; that effect is gone with the picker (the store lane
+// owns what a blank composer does next). This hook still refreshes the team
+// list when agentSelectorOpen flips on, which /agents still sets.
 
 import { useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
