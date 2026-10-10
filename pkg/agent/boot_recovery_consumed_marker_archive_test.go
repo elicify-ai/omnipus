@@ -177,12 +177,12 @@ func TestBoot_ConsumedMarkerWithArchivedInstruction_StaysAcknowledgedWithoutRede
 	// Instrument check: the archive write must read back from the child
 	// archive recovery's accepted-drain oracle reads — a silently swallowed
 	// append would leave this control's premise unrepresented.
-	snap, err := h.sessions.SnapshotWindow(context.Background(), child)
+	snap, err := h.sessions.WindowView(context.Background(), child)
 	if err != nil {
 		t.Fatalf("SnapshotWindow archived instruction: %v", err)
 	}
 	archivedVisible := false
-	for _, line := range snap.Archive {
+	for _, line := range viewArchived(snap) {
 		if line.Role == "user" && line.Content == "A delegated session is asking: choose" {
 			archivedVisible = true
 			break

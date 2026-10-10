@@ -480,7 +480,7 @@ func TestTaskRunNeverEndsStuckWorking(t *testing.T) {
 // refused with the barrier error.
 func TestBoardTaskRunStop_IsNotRefused(t *testing.T) {
 	f := newTaskStopFixture(t, taskFrontExecute, false, "a board answer that never arrives")
-	meta, err := f.al.GetAgentStore(taskStopWorkerID).NewSession(session.SessionTypeTask, "system", taskStopWorkerID)
+	meta, err := f.al.GetSessionStore().NewSession(session.SessionTypeTask, "system", taskStopWorkerID)
 	require.NoError(t, err)
 	done := make(chan error, 1)
 	f.al.ExecuteBoardTask(taskStopWorkerID, "board-task-1", meta.ID, "do the board work", func(_ string, runErr error) { done <- runErr })

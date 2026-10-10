@@ -210,7 +210,7 @@ func TestMetTaskGoalLeavesRealHistoryOnRerun(t *testing.T) {
 		t.Fatal("goal_claim is not registered on the working agent")
 	}
 	state := &taskRunState{claimWatermark: time.Now().UTC().Add(-time.Second)}
-	b6ClaimMetAndPersist(t, claimTool, al.GetAgentStore(tk.AgentID), sid, "history-claim", "exporter merged")
+	b6ClaimMetAndPersist(t, claimTool, al.GetSessionStore(), sid, "history-claim", "exporter merged")
 	if step, _, _ := al.taskExecutor.finishRunTurn(context.Background(), running, sid, "Exporter merged.", nil, "", nil, state); step != runStepEnded {
 		t.Fatalf("arrange: the upheld claim must end the run, got step %v", step)
 	}
@@ -773,7 +773,7 @@ func TestTaskGoalActivationFailureIsLoud(t *testing.T) {
 			"The task now runs with NO goal loop and the caller cannot tell")
 	}
 
-	sessStore := al.GetAgentStore(tk.AgentID)
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
 		t.Fatal("the agent's session store must exist")
 	}

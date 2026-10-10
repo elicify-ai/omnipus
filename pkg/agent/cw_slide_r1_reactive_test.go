@@ -95,10 +95,10 @@ func TestCWSlideR1_RejectionHalvesNewestSourceRunesExactly(t *testing.T) {
 			require.Equal(t, archive, h.archive(t), "Unicode full source remains archived verbatim")
 			last := cwR1Result(t, cwR1Messages(t, requests[2]), "halve-first")
 			h.cfg.Context.BuiltinSuccessCap = 150_000 // Changed admission policy cannot inflate an exact pressure limit.
-			reopened, err := memory.NewJSONLStore(h.dir)
+			reopened, err := session.NewUnifiedStore(h.dir)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, reopened.Close()) })
-			h.agent.Sessions = session.NewJSONLBackend(reopened)
+			h.agent.Sessions = reopened
 			reloaded := h.al.assembleMessages(context.Background(), h.turn(ts.userMessage), h.agent.Sessions.GetHistory(h.key), "", nil, nil)
 			require.Equal(t, last, cwR1Result(t, reloaded, "halve-first"), "exact partial pressure bytes survive policy change and a real store reload")
 		})

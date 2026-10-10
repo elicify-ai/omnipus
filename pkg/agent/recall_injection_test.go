@@ -161,7 +161,7 @@ const recallInjectionSessionKey = "recall-injection-session"
 
 func newRecallInjectionTaskSession(t *testing.T, al *AgentLoop, agent *AgentInstance) string {
 	t.Helper()
-	sessionStore := al.GetAgentStore(agent.ID)
+	sessionStore := al.GetSessionStore()
 	require.NotNil(t, sessionStore, "test setup: executing agent must have a session store")
 	meta, err := sessionStore.NewSession(session.SessionTypeTask, "system", agent.ID)
 	require.NoError(t, err)

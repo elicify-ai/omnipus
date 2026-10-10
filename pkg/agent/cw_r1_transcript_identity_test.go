@@ -191,7 +191,7 @@ func TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress(t *testing.T) {
 				"FR-006: the aborted tail's bytes must stay in the archive")
 			require.Equal(t, archived, h.archive(t)[:len(archived)],
 				"abort must not rewrite the retained prefix")
-			snapAfter, snapErr := h.store.SnapshotWindow(context.Background(), h.key)
+			snapAfter, snapErr := h.store.WindowView(context.Background(), h.key)
 			require.NoError(t, snapErr)
 			require.Equal(t, initialSkip, snapAfter.State.Skip, "abort restores turn-start Skip")
 			require.Equal(t, initialSet, h.store.Projection(h.key).Entries, "abort restores the original projection set")

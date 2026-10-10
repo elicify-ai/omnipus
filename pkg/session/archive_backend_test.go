@@ -29,17 +29,27 @@ func newTestBackend(t *testing.T) *archiveBackend {
 func userMsg(s string) providers.Message { return providers.Message{Role: "user", Content: s} }
 func asstMsg(s string) providers.Message { return providers.Message{Role: "assistant", Content: s} }
 
+// appendModelMsg appends one model message through the checked model seam (the
+// dense AppendWindowMessage the callers migrated off is deleted, DEL-12) and
+// returns the bounded view after the append.
+func appendModelMsg(b *archiveBackend, ctx context.Context, key string, msg providers.Message) (WindowView, error) {
+	_, view, err := b.AppendModelMessage(ctx, key, ModelAppend{
+		Message: msg, ViewMembership: ViewMembershipModel, Source: EntrySource{Kind: sourceKindForRole(msg.Role)},
+	})
+	return view, err
+}
+
 // Append then read: a simple history round-trips through the archive.
 func TestArchiveBackend_AppendAndGetHistory(t *testing.T) {
 	b := newTestBackend(t)
 	const key = "sess-1"
 	ctx := context.Background()
 
-	snap, err := b.AppendWindowMessage(ctx, key, userMsg("hello"))
+	snap, err := appendModelMsg(b, ctx, key, userMsg("hello"))
 	require.NoError(t, err)
 	require.Equal(t, 1, snap.State.Count, "append must advance the archive cursor")
 
-	_, err = b.AppendWindowMessage(ctx, key, asstMsg("hi there"))
+	_, err = appendModelMsg(b, ctx, key, asstMsg("hi there"))
 	require.NoError(t, err)
 
 	got := b.GetHistory(key)
@@ -56,12 +66,12 @@ func TestArchiveBackend_SnapshotShape(t *testing.T) {
 	for _, m := range []providers.Message{userMsg("m1"), asstMsg("m2"), userMsg("m3")} {
 		require.NoError(t, b.appendMessage(key, m))
 	}
-	snap, err := b.SnapshotWindow(ctx, key)
+	snap, err := b.WindowView(ctx, key)
 	require.NoError(t, err)
 	require.Equal(t, 3, snap.State.Count)
 	require.Equal(t, 0, snap.State.Skip)
-	require.Len(t, snap.Archive, 3)
-	require.Equal(t, "m1", snap.Archive[0].Message.Content)
+	require.Len(t, snap.Live, 3)
+	require.Equal(t, "m1", snap.Live[0].Message.Content)
 }
 
 // FR-006: RollbackWindow must RESTORE the turn-start view and NEVER rewrite
@@ -73,7 +83,7 @@ func TestArchiveBackend_RollbackIsNonDestructive(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, b.appendMessage(key, userMsg("m1")))
 	require.NoError(t, b.appendMessage(key, asstMsg("m2")))
-	snap, err := b.SnapshotWindow(ctx, key)
+	snap, err := b.WindowView(ctx, key)
 	require.NoError(t, err)
 	require.Equal(t, 2, snap.State.Count, "instrument control: snapshot sees 2 lines")
 
@@ -114,7 +124,7 @@ func TestArchiveBackend_CommitWindowTrimKeepsLastInTheWindow(t *testing.T) {
 	for _, m := range []providers.Message{userMsg("m1"), asstMsg("m2"), userMsg("m3"), asstMsg("m4")} {
 		require.NoError(t, b.appendMessage(key, m))
 	}
-	snap, err := b.SnapshotWindow(ctx, key)
+	snap, err := b.WindowView(ctx, key)
 	require.NoError(t, err)
 	before := snap.State
 	after := before
@@ -204,7 +214,7 @@ func TestArchiveBackend_ScanEvictedArchive(t *testing.T) {
 	for _, m := range []providers.Message{userMsg("m1"), asstMsg("m2"), userMsg("m3")} {
 		require.NoError(t, b.appendMessage(key, m))
 	}
-	snap, err := b.SnapshotWindow(ctx, key)
+	snap, err := b.WindowView(ctx, key)
 	require.NoError(t, err)
 	before := snap.State
 	after := before

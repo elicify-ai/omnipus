@@ -1,0 +1,50 @@
+package agent
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"io"
+
+	"github.com/elicify-ai/omnipus/pkg/memory"
+	"github.com/elicify-ai/omnipus/pkg/session"
+)
+
+// viewArchived flattens a WindowView's live slots into the ArchivedMessage
+// slice the dense WindowSnapshot.Archive used to expose, so a fixture that
+// inspects archived role/content keeps its assertion unchanged after DEL-12 /
+// DEL-10 deleted the dense snapshot API.
+func viewArchived(v session.WindowView) []memory.ArchivedMessage {
+	out := make([]memory.ArchivedMessage, 0, len(v.Live))
+	for _, s := range v.Live {
+		out = append(out, memory.ArchivedMessage{Message: s.Message, TS: s.TS})
+	}
+	return out
+}
+
+// scanJSONLRangeFixture is the test-local replacement for the deleted
+// memory.ScanJSONLRange (session-core DEL-10): it streams newline-framed JSONL
+// records from r over [from,to], decoding each into memory.ArchivedMessage, and
+// honours ctx cancellation between records.
+func scanJSONLRangeFixture(ctx context.Context, r io.Reader, from, to int, fn func(idx int, raw []byte, msg memory.ArchivedMessage) error) error {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), memory.EncodedLineBound)
+	idx := 0
+	for sc.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		raw := sc.Bytes()
+		if idx >= from && idx <= to {
+			var msg memory.ArchivedMessage
+			if err := json.Unmarshal(raw, &msg); err != nil {
+				return err
+			}
+			if err := fn(idx, append([]byte(nil), raw...), msg); err != nil {
+				return err
+			}
+		}
+		idx++
+	}
+	return sc.Err()
+}

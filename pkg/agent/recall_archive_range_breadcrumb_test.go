@@ -35,7 +35,7 @@ func cwRangeBreadcrumbs(t *testing.T) {
 					t.Fatalf("persist actual Skip: %v", err)
 				}
 				cwAssertPersistedSkip(t, path, skip, len(lines))
-				backend := session.NewJSONLBackend(store)
+				backend := store
 				live := backend.GetHistory(key)
 				if len(live) != len(lines)-skip {
 					t.Fatalf("fixture actual live count: want %d got %d", len(lines)-skip, len(live))
@@ -81,7 +81,7 @@ func cwRangeBreadcrumbs(t *testing.T) {
 			t.Fatal(err)
 		}
 		cwAssertPersistedSkip(t, path, 2*pairs, len(lines))
-		backend := session.NewJSONLBackend(store)
+		backend := store
 		crumb := cwAssembledBreadcrumb(t, backend, key, backend.GetHistory(key))
 		cwAssertBreadcrumbRange(t, crumb, 0, 2*pairs-1)
 		if n := utf8.RuneCountInString(crumb); n > breadcrumbTokenCap*breadcrumbCharsPerToken {

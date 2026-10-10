@@ -378,12 +378,12 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 	// archive recovery's accepted-drain oracle reads — a silently swallowed
 	// append would leave the fixture asserting the very crash-gap shape it
 	// exists to rule out.
-	snap, err := h.sessions.SnapshotWindow(context.Background(), child)
+	snap, err := h.sessions.WindowView(context.Background(), child)
 	if err != nil {
 		t.Fatalf("SnapshotWindow archived handback instruction: %v", err)
 	}
 	archivedVisible := false
-	for _, line := range snap.Archive {
+	for _, line := range viewArchived(snap) {
 		if line.Role == "user" && line.Content == deliverySummary(consumedHandback) {
 			archivedVisible = true
 			break

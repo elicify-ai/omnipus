@@ -35,11 +35,11 @@ func orphanACFirstRecovery(t *testing.T) {
 	cleaned := RecoverOrphanedToolCalls(h.agent.Sessions, h.key, nil)
 	assert.Equal(t, want, cleaned, "R1: real recovery must not strip unrelated controls following the canceled declaration")
 	after := orphanACSnapshot(t, h)
-	require.Len(t, after.Archive, 4, "one durable cancellation record, no invented tool result")
-	require.Equal(t, before.Archive, after.Archive[:3], "all original records remain byte-for-field intact")
-	require.Equal(t, "system", after.Archive[3].Role, "marker is a system record")
+	require.Len(t, viewArchived(after), 4, "one durable cancellation record, no invented tool result")
+	require.Equal(t, viewArchived(before), viewArchived(after)[:3], "all original records remain byte-for-field intact")
+	require.Equal(t, "system", viewArchived(after)[3].Role, "marker is a system record")
 	var marker map[string]any
-	require.NoError(t, json.Unmarshal([]byte(after.Archive[3].Content), &marker))
+	require.NoError(t, json.Unmarshal([]byte(viewArchived(after)[3].Content), &marker))
 	require.Equal(t, map[string]any{"type": "turn_canceled_restart", "reason": "ungraceful_shutdown_recovery", "tool_call_id": "first-orphan"}, marker, "existing cancellation shape is sufficient")
 	require.Equal(t, before.State.Skip, after.State.Skip, "recovery is not cursor eviction")
 	require.Equal(t, before.State.AnchorLine, after.State.AnchorLine, "recovery is not an anchor replacement")
@@ -68,7 +68,7 @@ func orphanACReload(t *testing.T) {
 	orphanACReopen(t, h)
 	wantLines := []int{0, 4, 5, 6, 7, 8}
 	out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, wantLines...))
-	require.Equal(t, []int{-1, 0, 4, 5, 6, 7, 8}, mapWindowMessages(session.WindowViewFromSnapshot(orphanACSnapshot(t, h)), out, -1, 0), "R2: reloaded view uses the original decoded archive addresses")
+	require.Equal(t, []int{-1, 0, 4, 5, 6, 7, 8}, mapWindowMessages(orphanACSnapshot(t, h), out, -1, 0), "R2: reloaded view uses the original decoded archive addresses")
 	require.NoError(t, validateWindowGroups(out), "only complete surviving groups reach validation")
 	orphanACAssertUnchanged(t, h, before, bytes)
 }
@@ -94,7 +94,7 @@ func orphanACLaterTurn(t *testing.T) {
 	out := orphanACAssemble(t, h, h.turn(""), h.agent.Sessions.GetHistory(h.key))
 	assert.Equal(t, want, out[1:], "R3: later assembly neither resurrects the old orphan nor erases a genuinely live incomplete group")
 	candidate := append([]providers.Message{{Role: "system", Content: "independent pinned envelope"}}, want...)
-	require.Equal(t, []int{-1, 0, 3, 4, 5, 6, 7}, mapWindowMessages(session.WindowViewFromSnapshot(before), candidate, -1, 0), "R3: every later archived slot has its own original address, including in-flight declarations")
+	require.Equal(t, []int{-1, 0, 3, 4, 5, 6, 7}, mapWindowMessages(before, candidate, -1, 0), "R3: every later archived slot has its own original address, including in-flight declarations")
 	orphanACAssertRejectedBeforeSend(t, h, h.turn(""), candidate, "context request: incomplete or invalid tool-result group at message 6")
 	orphanACAssertUnchanged(t, h, before, bytes)
 }
@@ -125,11 +125,11 @@ func orphanACTrimPrefix(t *testing.T) {
 	wantState := before.State.Clone()
 	wantState.Skip = 3 // Original address of the second user, not compacted position 1.
 	assert.Equal(t, wantState, after.State, "R4a: only the legal original-index Skip advances")
-	require.Equal(t, before.Archive, after.Archive, "trim keeps all raw records for recall")
+	require.Equal(t, viewArchived(before), viewArchived(after), "trim keeps all raw records for recall")
 	require.Equal(t, bytes, orphanACArchiveBytes(t, h), "forced trim does not rewrite the archive")
 	orphanACReopen(t, h)
 	out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, 3, 4, 5, 6, 7, 8, 9))
-	require.Equal(t, []int{-1, 3, 4, 5, 6, 7, 8, 9}, mapWindowMessages(session.WindowViewFromSnapshot(orphanACSnapshot(t, h)), out, -1, 0), "cut and reload preserve exact original addresses")
+	require.Equal(t, []int{-1, 3, 4, 5, 6, 7, 8, 9}, mapWindowMessages(orphanACSnapshot(t, h), out, -1, 0), "cut and reload preserve exact original addresses")
 }
 
 func orphanACTrimSuffix(t *testing.T) {
@@ -157,9 +157,9 @@ func orphanACTrimSuffix(t *testing.T) {
 	wantState := before.State.Clone()
 	wantState.Skip = 2
 	assert.Equal(t, wantState, after.State, "first legal cut is original address 2; cancellation grants no extra Skip movement")
-	require.Equal(t, before.Archive, after.Archive)
+	require.Equal(t, viewArchived(before), viewArchived(after))
 	require.Equal(t, bytes, orphanACArchiveBytes(t, h))
 	orphanACReopen(t, h)
 	out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, 2, 5, 6, 7, 8))
-	require.Equal(t, []int{-1, 2, 5, 6, 7, 8}, mapWindowMessages(session.WindowViewFromSnapshot(orphanACSnapshot(t, h)), out, -1, 0), "R4b: retained raw canceled slots never poison subsequent alignment")
+	require.Equal(t, []int{-1, 2, 5, 6, 7, 8}, mapWindowMessages(orphanACSnapshot(t, h), out, -1, 0), "R4b: retained raw canceled slots never poison subsequent alignment")
 }

@@ -281,17 +281,10 @@ func provisioningTaskOnDisk(t *testing.T, f *provisioningFixture) *task.Task {
 	return &persisted
 }
 
-func installProvisioningMissingStore(t *testing.T, f *provisioningFixture) {
-	t.Helper()
-	realStore := f.loop.GetAgentStore(f.task.AgentID)
-	require.NotNil(t, realStore, "missing-store fixture starts with a working UnifiedStore")
-	require.NoError(t, realStore.Close(), "close the replaced store's background flusher")
-	// Use a real context-only backend, not a fake GetAgentStore. It lacks
-	// UnifiedMeta provisioning. Real events, durable run records and logs make
-	// launched run bodies observable even when native work stops before an edge.
-	f.worker.Sessions = session.NewSessionManager(filepath.Join(t.TempDir(), "context-only"))
-	require.Nil(t, f.loop.GetAgentStore(f.task.AgentID), "the arranged agent must lack a UnifiedStore")
-}
+// installProvisioningMissingStore is DELETED (session-core DEL-10): with ONE
+// shared store there is no longer an agent that "lacks a UnifiedStore", so the
+// context-only SessionManager refusal scenario cannot be built (architect
+// DEL-10 table). The surviving refusal proof is the real NewSession write fault.
 
 type provisioningWriteFault struct {
 	base  string
@@ -301,7 +294,7 @@ type provisioningWriteFault struct {
 
 func installProvisioningWriteFault(t *testing.T, f *provisioningFixture) provisioningWriteFault {
 	t.Helper()
-	store := f.loop.GetAgentStore(f.task.AgentID)
+	store := f.loop.GetSessionStore()
 	require.NotNil(t, store, "write-fault fixture must use the real NewSession implementation")
 	base := store.BaseDir()
 	backup := base + ".provisioning-backup"
@@ -412,31 +405,24 @@ func assertProvisioningNoWork(t *testing.T, f *provisioningFixture) {
 	t.Logf("joined task receipt: status=%s session=%q result=%q", joined.Status, joined.SessionID, joined.Result)
 }
 
-func checkProvisioningP1Refusal(t *testing.T, external, writeFault bool) {
+func checkProvisioningP1Refusal(t *testing.T, external bool) {
 	t.Helper()
 	f := newProvisioningFixture(t, external, false)
 	defer f.unblock()
-	var fault provisioningWriteFault
-	if writeFault {
-		fault = installProvisioningWriteFault(t, f)
-	} else {
-		installProvisioningMissingStore(t, f)
-	}
+	// The only buildable refusal now is the real NewSession write fault
+	// (session-core DEL-10: one shared store, no missing-store agent).
+	fault := installProvisioningWriteFault(t, f)
 
-	// Exercise the owner helper too, without replacing it. Neither failure
-	// may be presented as successful empty-session creation.
+	// Exercise the owner helper too, without replacing it. The failure must
+	// never be presented as successful empty-session creation.
 	helperID, helperErr := f.executor.createTaskSessionSync(f.task)
 	assert.Equal(t, "", helperID, "P1 helper must return no session on a provisioning refusal")
-	assert.Error(t, helperErr, "P1 helper must report missing storage or real NewSession failure, never empty success")
-	if writeFault {
-		assertProvisioningWriteCause(t, helperErr, fault, "P1 helper")
-	}
+	assert.Error(t, helperErr, "P1 helper must report the real NewSession failure, never empty success")
+	assertProvisioningWriteCause(t, helperErr, fault, "P1 helper")
 
 	dispatchErr := f.executor.ExecuteTask(context.Background(), f.task.ID, nil)
 	assert.Error(t, dispatchErr, "P1 ExecuteTask must abort and return the provisioning error, never launch session-less work")
-	if writeFault {
-		assertProvisioningWriteCause(t, dispatchErr, fault, "P1 ExecuteTask")
-	}
+	assertProvisioningWriteCause(t, dispatchErr, fault, "P1 ExecuteTask")
 	persisted := provisioningTaskOnDisk(t, f)
 	assert.Equal(t, task.StatusFailed, persisted.Status, "P1 claimed task must be durably Failed when ExecuteTask returns")
 	assert.Equal(t, "", persisted.SessionID, "P1 provisioning failure must not bind a synthetic session ID")
@@ -447,20 +433,6 @@ func checkProvisioningP1Refusal(t *testing.T, external, writeFault bool) {
 	assertProvisioningNoWork(t, f)
 	assert.Equal(t, task.StatusFailed, provisioningTaskOnDisk(t, f).Status,
 		"P1 persisted Failed must still hold after any wrongly launched work has been joined")
-}
-
-func checkProvisioningP2Refusal(t *testing.T, external bool) {
-	t.Helper()
-	f := newProvisioningFixture(t, external, true)
-	defer f.unblock()
-	installProvisioningMissingStore(t, f)
-	sessionID, dispatchErr := f.executor.StartTaskNow(context.Background(), f.task.ID)
-	assert.Error(t, dispatchErr, "P2 StartTaskNow must abort missing-store provisioning, never return empty success")
-	assert.Equal(t, "", sessionID, "P2 StartTaskNow must return an EXACTLY empty session ID on provisioning refusal")
-	assert.Equal(t, "", provisioningTaskOnDisk(t, f).SessionID, "P2 refusal must not persist a synthetic session binding")
-	assertProvisioningReservationsReleased(t, f)
-	t.Logf("P2 return receipt: session=%q error=%v", sessionID, dispatchErr)
-	assertProvisioningNoWork(t, f)
 }
 
 func checkProvisioningInstruments(t *testing.T, external, manual bool) {
@@ -481,7 +453,7 @@ func checkProvisioningInstruments(t *testing.T, external, manual bool) {
 	if manual {
 		assert.Equal(t, persisted.SessionID, returnedID, "manual control must return the persisted real session ID")
 	}
-	meta, err := f.loop.GetAgentStore(f.task.AgentID).GetMeta(persisted.SessionID)
+	meta, err := f.loop.GetSessionStore().GetMeta(persisted.SessionID)
 	require.NoError(t, err, "control must prove that persisted session metadata really exists")
 	assert.Equal(t, session.SessionTypeTask, meta.Type, "control must provision task-session metadata")
 	waitProvisioningDispatchDone(t, f)
@@ -530,14 +502,8 @@ func TestTaskProvisioningStopsBeforeWork(t *testing.T) {
 		name     string
 		external bool
 	}{{"native", false}, {"external", true}} {
-		t.Run("P1_missing_store_"+worker.name+"_returns_error_and_persists_failed_without_work", func(t *testing.T) {
-			checkProvisioningP1Refusal(t, worker.external, false)
-		})
 		t.Run("P1_write_failure_"+worker.name+"_preserves_cause_and_persists_failed_without_work", func(t *testing.T) {
-			checkProvisioningP1Refusal(t, worker.external, true)
-		})
-		t.Run("P2_missing_store_"+worker.name+"_returns_error_empty_session_and_releases_without_work", func(t *testing.T) {
-			checkProvisioningP2Refusal(t, worker.external)
+			checkProvisioningP1Refusal(t, worker.external)
 		})
 	}
 }

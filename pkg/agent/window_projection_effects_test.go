@@ -48,8 +48,8 @@ func TestCommitWindowProjections_TranscriptUndoFailure_PropagatesNotSwallowed(t 
 	snap0, err := store.AppendWindowMessage(ctx, key, toolMsg)
 	require.NoError(t, err, "seed: AppendWindowMessage(tool result)")
 	require.Equal(t, 2, snap0.State.Count, "precondition: the assistant call and its result are archived")
-	require.Len(t, snap0.Archive, 2)
-	require.Equal(t, "tool", snap0.Archive[1].Role)
+	require.Len(t, viewArchived(snap0), 2)
+	require.Equal(t, "tool", viewArchived(snap0)[1].Role)
 
 	// transcriptSessionID deliberately names a session that was NEVER
 	// created via NewSession/AppendTranscript — its transcript.jsonl does
@@ -78,7 +78,7 @@ func TestCommitWindowProjections_TranscriptUndoFailure_PropagatesNotSwallowed(t 
 
 	p := &windowCheckpoint{
 		ts:       ts,
-		snapshot: session.WindowViewFromSnapshot(snap0),
+		snapshot: snap0,
 		state:    newState,
 		messages: []providers.Message{toolMsg},
 		lines:    []int{1},
@@ -93,7 +93,7 @@ func TestCommitWindowProjections_TranscriptUndoFailure_PropagatesNotSwallowed(t 
 	// The undo itself must actually have run and succeeded: the window
 	// metadata reverts to the pre-checkpoint snapshot, not stay stuck on
 	// the half-applied `after` state.
-	final, err := store.SnapshotWindow(ctx, key)
+	final, err := store.WindowView(ctx, key)
 	require.NoError(t, err, "SnapshotWindow after failed commit")
 	_, stillEmptied := final.State.Projection.Entries[projKey]
 	require.False(t, stillEmptied,

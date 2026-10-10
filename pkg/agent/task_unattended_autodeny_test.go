@@ -192,7 +192,7 @@ func TestProcessTaskDirect_UnattendedAllowedTool_StillRuns(t *testing.T) {
 		WithToolCall("dangerous_tool", `{}`).
 		WithText("wrote the report")
 	mia := registerAgent(t, al, home, "mia", prov, false)
-	sessionStore := al.GetAgentStore(mia.ID)
+	sessionStore := al.GetSessionStore()
 	require.NotNil(t, sessionStore, "test setup: executing agent must have a session store")
 	taskSession, err := sessionStore.NewSession(session.SessionTypeTask, "system", mia.ID)
 	require.NoError(t, err)

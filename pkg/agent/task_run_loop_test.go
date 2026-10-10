@@ -194,7 +194,7 @@ func TestTaskRun_ThirdFailedAttemptEndsFailedWithReason(t *testing.T) {
 	}
 
 	rec := waitForGoalState(t, tk.ID, generated.GoalStateExhausted)
-	store := al.GetAgentStore(tk.AgentID)
+	store := al.GetSessionStore()
 	waitForGoalOutcomeEntry(t, store, final.SessionID)
 	requireOneGoalOutcome(t, store, final.SessionID, rec.GoalID)
 	runs, err := al.taskStore.ListRuns(tk.ID)
@@ -270,7 +270,7 @@ func TestTaskRun_EachAdjudicationEmitsOneVerdictForItsRunSession(t *testing.T) {
 			perSession, firstRun, restarted)
 	}
 
-	store := al.GetAgentStore(tk.AgentID)
+	store := al.GetSessionStore()
 	for sid, want := range map[string]int{firstRun: 2, restarted: 1} {
 		entries, rerr := store.ReadTranscript(sid)
 		if rerr != nil {
@@ -334,7 +334,7 @@ func TestTaskRun_BlockedEndsFailedWithoutAttemptJudgeOrRestart(t *testing.T) {
 		rec.LatestClaim.Evidence != reason {
 		t.Errorf("latest claim = %+v, want blocked with the worker's own reason %q as evidence", rec.LatestClaim, reason)
 	}
-	store := al.GetAgentStore(tk.AgentID)
+	store := al.GetSessionStore()
 	waitForGoalOutcomeEntry(t, store, final.SessionID)
 	e := requireOneGoalOutcome(t, store, final.SessionID, rec.GoalID)
 	if e.GoalOutcome.Ending != generated.GoalOutcomeEndingOther {
@@ -373,7 +373,7 @@ func TestTaskRun_WaitingOnUserEndsFailedWithOneOutcomeLine(t *testing.T) {
 		rec.LatestClaim.Evidence != reason {
 		t.Errorf("latest claim = %+v, want waiting_on_user with the worker's own question %q as evidence", rec.LatestClaim, reason)
 	}
-	store := al.GetAgentStore(tk.AgentID)
+	store := al.GetSessionStore()
 	waitForGoalOutcomeEntry(t, store, final.SessionID)
 	e := requireOneGoalOutcome(t, store, final.SessionID, rec.GoalID)
 	if !strings.Contains(e.Content, reason) {

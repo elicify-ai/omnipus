@@ -316,7 +316,7 @@ func TestVerifierWindowFeed_GoalScope_ReturnsEmptyWhenNoSessionID(t *testing.T) 
 func TestVerifierWindowFeed_GoalScope_ReadsSessionTail(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
 		t.Fatal("native-agent must have a UnifiedStore session store")
 	}
@@ -351,7 +351,7 @@ func TestVerifierWindowFeed_GoalScope_ReadsSessionTail(t *testing.T) {
 func TestVerifierWindowFeed_TaskScope_ReadsSessionTail(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
 		t.Fatal("native-agent must have a UnifiedStore session store")
 	}

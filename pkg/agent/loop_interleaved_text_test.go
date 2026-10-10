@@ -93,7 +93,7 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 
 	// -----------------------------------------------------------------------
 	// Arrange: session that carries a transcript store.
-	// ProcessScheduled uses GetAgentStore(ownerAgentID) as the transcript store.
+	// ProcessScheduled uses GetSessionStore() as the transcript store.
 	// NewScheduledSession creates the session under the shared store which
 	// ProcessScheduled's ResolveSessionStore can find.
 	// -----------------------------------------------------------------------

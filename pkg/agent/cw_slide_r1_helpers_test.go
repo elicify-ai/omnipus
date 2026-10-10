@@ -53,7 +53,7 @@ func cwR1New(t *testing.T, window int) *cwR1Harness {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 	dir := filepath.Join(home, "context")
-	store, err := memory.NewJSONLStore(dir)
+	store, err := session.NewUnifiedStore(dir)
 	require.NoError(t, err, "real JSONL fixture must open")
 	t.Cleanup(func() { require.NoError(t, store.Close(), "close real store") })
 	msgBus := bus.NewMessageBus()
@@ -68,7 +68,7 @@ func cwR1New(t *testing.T, window int) *cwR1Harness {
 	agent := &AgentInstance{
 		ID: "r1", Name: "R1", Home: home, Model: "scripted-model",
 		ContextWindow: window, MaxTokens: 256, MaxIterations: 30,
-		ContextBuilder: cb, Sessions: session.NewJSONLBackend(store),
+		ContextBuilder: cb, Sessions: store,
 		Tools: tools.NewToolRegistry(),
 	}
 	return &cwR1Harness{

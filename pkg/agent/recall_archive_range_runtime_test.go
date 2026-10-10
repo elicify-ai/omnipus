@@ -319,7 +319,7 @@ func cwRangeCancellation(t *testing.T) {
 				page := archiveRangePage{offset: 0, limit: 1}
 				var committed []string
 				callbacks := 0
-				err := memory.ScanJSONLRange(ctx, io.MultiReader(inputs...), 0, recordCount-1,
+				err := scanJSONLRangeFixture(ctx, io.MultiReader(inputs...), 0, recordCount-1,
 					func(idx int, raw []byte, msg memory.ArchivedMessage) error {
 						callbacks++
 						if idx != callbacks-1 || idx < 0 || idx >= recordCount {

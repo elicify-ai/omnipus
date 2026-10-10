@@ -24,7 +24,7 @@ import (
 // the real runBootSweep entry point.
 func TestBootSweep_RestartInterruptedSession_ReportsInterruptedNotFailed(t *testing.T) {
 	al, agentID := newMetaReconcileTestAgentLoop(t)
-	store := al.GetAgentStore(agentID)
+	store := al.GetSessionStore()
 	if store == nil {
 		t.Fatal("GetAgentStore returned nil — test harness misconfigured")
 	}

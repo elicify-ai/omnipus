@@ -71,9 +71,9 @@ func TestCompleteTask_EmptyAnswerFailsAndDeliversBeforeLifecycleTerminal(t *test
 
 func TestWriteJudgeVerdictTranscript_EmitsLiveEventWithTaskSessionID(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	sessionID := u26FreshTaskSession(t, store, "native-agent")
 	tk := &task.Task{
@@ -141,9 +141,9 @@ func TestWriteJudgeVerdictTranscript_NonexistentSession_NoLiveEvent(t *testing.T
 // not_met, and one evidence entry per judged criterion.
 func TestWriteJudgeVerdictTranscript_NotMet_DeliversGoalStatusUpward(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	sessionID := u26FreshTaskSession(t, store, "native-agent")
 
@@ -227,9 +227,9 @@ func TestWriteJudgeVerdictTranscript_NotMet_DeliversGoalStatusUpward(t *testing.
 // not an inferred handback-only success.
 func TestWriteJudgeVerdictTranscript_Met_DeliversGoalStatus(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	sessionID := u26FreshTaskSession(t, store, "native-agent")
 

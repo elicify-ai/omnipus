@@ -87,10 +87,10 @@ func TestCWSlideR1_NewestSlotsReachMarkOnlyAndReloadExactly(t *testing.T) {
 			// upward. Neither a reload nor a changed policy may inflate pressure.
 			h.cfg.Context.BuiltinSuccessCap = 200_000
 			h.cfg.Context.BuiltinFailureCap = 200_000
-			reopened, err := memory.NewJSONLStore(h.dir)
+			reopened, err := session.NewUnifiedStore(h.dir)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, reopened.Close()) })
-			h.agent.Sessions = session.NewJSONLBackend(reopened)
+			h.agent.Sessions = reopened
 			reload := h.al.assembleMessages(context.Background(), h.turn(user.Content), h.agent.Sessions.GetHistory(h.key), "", nil, nil)
 			require.Equal(t, projected, cwR1Result(t, reload, "newest"), "SC-010: live == reloaded exact pressure bytes and slots")
 			r, p := cwR1OpenAI(t, 0)
@@ -145,10 +145,10 @@ func TestCWSlideR1_AnchorIsOriginalVerbatimArchiveLine(t *testing.T) {
 	require.Equal(t, requestTokens(without, nil)+estimateMessageTokens(anchor), requestTokens(out, nil),
 		"the one verbatim user/media anchor is counted once")
 
-	reopened, err := memory.NewJSONLStore(h.dir)
+	reopened, err := session.NewUnifiedStore(h.dir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
-	h.agent.Sessions = session.NewJSONLBackend(reopened)
+	h.agent.Sessions = reopened
 	reloaded := h.agent.Sessions.GetHistory(h.key)
 	cwR1AssertAnchor(t, reloaded, archive[0].Message)
 	require.Equal(t, out, reloaded, "original identity/anchor survives storage-only reload, without a supplied user copy")

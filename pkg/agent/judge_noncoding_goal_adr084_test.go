@@ -52,7 +52,7 @@ func TestNonCodingGoal_EmailCriterion_DecidedAtTierOne(t *testing.T) {
 	// via the task's own SessionID) with the send_email call that is this
 	// goal's only real evidence — tier 1, a by-product of work already
 	// done, never re-run.
-	workerStore := al.GetAgentStore("native-agent")
+	workerStore := al.GetSessionStore()
 	if workerStore == nil {
 		t.Fatal("no session store for native-agent")
 	}

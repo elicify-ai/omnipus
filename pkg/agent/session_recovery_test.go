@@ -38,10 +38,19 @@ import (
 )
 
 // newTestSessionStoreRecovery creates a session store in a temp directory.
-func newTestSessionStoreRecovery(t *testing.T) session.SessionStore {
+func newTestSessionStoreRecovery(t *testing.T) *session.UnifiedStore {
 	t.Helper()
-	dir := t.TempDir()
-	return session.NewSessionManager(dir)
+	return recoveryStore(t, t.TempDir())
+}
+
+// recoveryStore opens the one shared session store (session-core DEL-10:
+// SessionManager is deleted) over dir.
+func recoveryStore(t *testing.T, dir string) *session.UnifiedStore {
+	t.Helper()
+	store, err := session.NewUnifiedStore(dir)
+	require.NoError(t, err, "NewUnifiedStore")
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
 // newTestAuditLoggerRecovery creates a file-based audit logger in a temp dir.
@@ -245,7 +254,7 @@ func TestRecovery_FindOrphans_MultipleOrphans(t *testing.T) {
 // Traces to: tool-registry-redesign-spec.md FR-069 / FR-088 and architect Option A.
 func TestRecovery_StripOrphanedTurn_RemovesOrphanedAssistant(t *testing.T) {
 	storage := t.TempDir()
-	store := session.NewSessionManager(storage)
+	store := recoveryStore(t, storage)
 	const sessionKey = "test-public-orphaned-turn"
 	history := buildOrphanedHistory("tc-001", "exec")
 	// Name is an in-memory convenience field; seed the canonical persisted form.
@@ -265,7 +274,7 @@ func TestRecovery_StripOrphanedTurn_RemovesOrphanedAssistant(t *testing.T) {
 
 	// Reopen from disk: a cleaned context is not permission to erase the archive
 	// or to treat an in-memory-only cancellation as durable recovery.
-	persisted := session.NewSessionManager(storage).GetHistory(sessionKey)
+	persisted := recoveryStore(t, storage).GetHistory(sessionKey)
 	require.Len(t, persisted, len(history)+1, "recovery appends exactly one cancellation to the original persisted transcript")
 	assert.Equal(t, history, persisted[:len(history)], "the orphaned assistant remains archived, unchanged")
 	assert.Equal(t, "system", persisted[len(history)].Role, "cancellation is a system record")
@@ -295,7 +304,7 @@ func TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			storage := t.TempDir()
-			store := session.NewSessionManager(storage)
+			store := recoveryStore(t, storage)
 			const sessionKey = "test-public-recovery-no-op"
 			history := tc.history
 			for _, msg := range history {
@@ -308,7 +317,7 @@ func TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls(t *testing.T) {
 				"history with no tool_calls in last assistant message must be unchanged")
 			assert.Equal(t, history, cleaned, "every message and field survives when no call is unresolved")
 			assert.Equal(t, history, store.GetHistory(sessionKey), "no-op recovery appends no in-memory cancellation")
-			assert.Equal(t, history, session.NewSessionManager(storage).GetHistory(sessionKey), "no-op recovery changes no persisted message")
+			assert.Equal(t, history, recoveryStore(t, storage).GetHistory(sessionKey), "no-op recovery changes no persisted message")
 		})
 	}
 }
@@ -336,7 +345,7 @@ func TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls(t *testing.T) {
 // return reaches the provider.
 func TestRecovery_RecoverOrphaned_ExistingMarkerNoNewOrphan_CleanViewNoNewRecord(t *testing.T) {
 	storage := t.TempDir()
-	store := session.NewSessionManager(storage)
+	store := recoveryStore(t, storage)
 	// Fixture property, not an oracle: the audited scenario is the
 	// no-checkpoint fallback path. Fails loudly if the store ever grows
 	// checkpoint support and this leaf silently stops covering that path.
@@ -376,7 +385,7 @@ func TestRecovery_RecoverOrphaned_ExistingMarkerNoNewOrphan_CleanViewNoNewRecord
 	// Idempotency: no new cancellation record in memory or on disk.
 	require.Equal(t, before, store.GetHistory(sessionKey),
 		"recovery appends no in-memory record when the marker already exists and no orphan exists")
-	persisted := session.NewSessionManager(storage).GetHistory(sessionKey)
+	persisted := recoveryStore(t, storage).GetHistory(sessionKey)
 	require.Equal(t, before, persisted,
 		"recovery leaves the persisted transcript unchanged (same messages, no duplicate cancellation)")
 	markers := 0

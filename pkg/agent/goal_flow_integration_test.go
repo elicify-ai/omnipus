@@ -177,12 +177,12 @@ func newSlowFirstCommitSessions(t *testing.T, base session.SessionStore, delay t
 	return &slowFirstCommitSessions{SessionStore: base, inner: inner, delay: delay}
 }
 
-func (s *slowFirstCommitSessions) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (memory.WindowSnapshot, error) {
+func (s *slowFirstCommitSessions) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (session.WindowView, error) {
 	return s.inner.AppendWindowMessage(ctx, key, msg)
 }
 
-func (s *slowFirstCommitSessions) SnapshotWindow(ctx context.Context, key string) (memory.WindowSnapshot, error) {
-	return s.inner.SnapshotWindow(ctx, key)
+func (s *slowFirstCommitSessions) WindowView(ctx context.Context, key string) (session.WindowView, error) {
+	return s.inner.WindowView(ctx, key)
 }
 
 func (s *slowFirstCommitSessions) CommitWindow(ctx context.Context, key string, before, after memory.WindowState) error {

@@ -108,7 +108,7 @@ func (s *cwRangeSink) dropRecallSpan(key, _ string) {
 func cwRangeStore(t *testing.T, key string, lines ...string) (*memory.JSONLStore, string) {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := memory.NewJSONLStore(dir)
+	store, err := session.NewUnifiedStore(dir)
 	if err != nil {
 		t.Fatalf("fixture store: %v", err)
 	}
@@ -713,7 +713,7 @@ func cwRangeNextRequestDataOnly(t *testing.T) {
 	}
 	// Direct invocation bypasses task dispatch, which creates the transcript
 	// session synchronously. Seeding context history does not mint that session.
-	transcriptStore := al.GetAgentStore(agent.ID)
+	transcriptStore := al.GetSessionStore()
 	if transcriptStore == nil {
 		t.Fatal("fixture must have an agent transcript store")
 	}

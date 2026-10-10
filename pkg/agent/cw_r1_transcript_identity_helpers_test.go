@@ -290,9 +290,9 @@ func (h *cwIdentityHarness) project(t *testing.T, ts *turnState, rec cwIdentityR
 	h.al.activeTurnStates.Store(h.key, ts)
 	defer h.al.activeTurnStates.Delete(h.key)
 
-	snap, err := h.store.SnapshotWindow(context.Background(), h.key)
+	snap, err := h.store.WindowView(context.Background(), h.key)
 	require.NoError(t, err)
-	msgs, lines := memory.WindowHistory(snap)
+	msgs, lines := snap.History()
 	idx := -1
 	for i, line := range lines {
 		if line == rec.key.ArchiveLine {
@@ -302,8 +302,8 @@ func (h *cwIdentityHarness) project(t *testing.T, ts *turnState, rec cwIdentityR
 	}
 	require.GreaterOrEqual(t, idx, 0, "project target must be mapped into the current window")
 
-	full := snap.Archive[rec.key.ArchiveLine].Content
-	turn := turnNumberForArchiveLine(denseArchive(snap.Archive), rec.key.ArchiveLine)
+	full := viewArchived(snap)[rec.key.ArchiveLine].Content
+	turn := turnNumberForArchiveLine(denseArchive(viewArchived(snap)), rec.key.ArchiveLine)
 	computedMark, err := buildRecallMark("emptied", identityProjectionTool, rec.key.ToolCallID, rec.key.ArchiveLine, full, turn)
 	require.NoError(t, err)
 
@@ -316,7 +316,7 @@ func (h *cwIdentityHarness) project(t *testing.T, ts *turnState, rec cwIdentityR
 	// exact SourceRunes entry, which never happens here — every capped
 	// admission in this pack persists its exact kept amount at admission
 	// time (admitResultWindow sets after.Projection.SourceRunes[key]).
-	pc := projectionContext{archive: denseArchive(snap.Archive), sourceRunes: snap.State.Projection.SourceRunes}
+	pc := projectionContext{archive: denseArchive(viewArchived(snap)), sourceRunes: snap.State.Projection.SourceRunes}
 	projected, err := projectMessagesChecked(msgs, func(i int) int { return lines[i] }, snap.State.Projection.Entries, pc)
 	require.NoError(t, err)
 

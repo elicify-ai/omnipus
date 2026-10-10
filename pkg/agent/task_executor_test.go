@@ -28,7 +28,7 @@ import (
 // fake channel is registered under that name.
 func TestProcessTaskDirect_MediaToolDelivery_StampsWorkspaceID(t *testing.T) {
 	al, defaultAgent, webchatChannel, _ := newMediaWorkspaceIDTestLoop(t, "webchat")
-	sessionStore := al.GetAgentStore(defaultAgent.ID)
+	sessionStore := al.GetSessionStore()
 	require.NotNil(t, sessionStore, "test setup: executing agent must have a session store")
 	taskSession, err := sessionStore.NewSession(session.SessionTypeTask, "system", defaultAgent.ID)
 	require.NoError(t, err)
@@ -335,9 +335,9 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 	fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
 	fr.Cancel() // closes the event channel so drainExternalRun's loop actually exits
 
-	sessStore := al.GetAgentStore("ext-agent")
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
-		t.Fatal("GetAgentStore(\"ext-agent\") returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 
 	deadline := time.Now().Add(asyncTaskPollTimeout)
