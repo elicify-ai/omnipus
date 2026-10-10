@@ -11,14 +11,14 @@
 # guard's observed exit code for each.
 #
 # Covers:
-#   1. A clean fixture with exactly 3 OperatorPrompt=true sites and 6
+#   1. A clean fixture with exactly 2 OperatorPrompt=true sites and 7
 #      PublishInbound call sites — exits 0.
-#   2. A FOURTH OperatorPrompt=true site planted — CAUGHT (exit 1).
-#   3. Only 2 OperatorPrompt=true sites (one removed) — CAUGHT (exit 1).
+#   2. A THIRD OperatorPrompt=true site planted — CAUGHT (exit 1).
+#   3. Only 1 OperatorPrompt=true site (one removed) — CAUGHT (exit 1).
 #   4. OperatorPrompt=true mentioned only inside a `//` comment — NOT counted
-#      (does not change the 3/6 verdict).
+#      (does not change the 2/7 verdict).
 #   5. OperatorPrompt=true inside a _test.go file — NOT counted.
-#   6. A SEVENTH PublishInbound call site planted — CAUGHT (exit 1).
+#   6. An EIGHTH PublishInbound call site planted — CAUGHT (exit 1).
 #   7. The PublishInbound func DEFINITION line itself (no leading dot) is
 #      NEVER counted as a call site.
 #   8. A tree missing the required pkg/ directory — exits 2, never a silent
@@ -74,7 +74,7 @@ assert_contains() {
   fi
 }
 
-# A clean, minimal 3-site/6-call fixture, reused as the base for every test.
+# A clean, minimal 2-site/7-call fixture, reused as the base for every test.
 plant_clean_baseline() {
   setup_fixture "pkg/gateway/websocket.go" '
 package gateway
@@ -88,16 +88,18 @@ func handle(h *WSHandler, msg bus.InboundMessage) {
 	}
 }
 '
-  setup_fixture "pkg/gateway/sse.go" '
-package gateway
+  setup_fixture "pkg/agent/address_router.go" '
+package agent
 
-func handleSSE(h *WSHandler, msg bus.InboundMessage) {
-	msg = bus.InboundMessage{
-		OperatorPrompt: true,
-	}
-	if err := h.msgBus.PublishInbound(r.Context(), msg); err != nil {
+func (al *AgentLoop) routeA(ctx context.Context, msg bus.InboundMessage) {
+	if err := al.bus.PublishInbound(ctx, msg); err != nil {
 		return
 	}
+}
+
+func (al *AgentLoop) routeB(ctx context.Context, msg bus.InboundMessage) {
+	err := al.bus.PublishInbound(ctx, msg)
+	_ = err
 }
 '
   setup_fixture "pkg/channels/base.go" '
@@ -147,7 +149,7 @@ func (mb *MessageBus) PublishInbound(ctx context.Context, msg InboundMessage) er
 echo "=== check-operator-prompt-sites self-test (ADR-085 BROWSER-FR-029/FR-029a) ==="
 echo ""
 
-echo "Test 1: a clean 3-site/6-call fixture exits 0"
+echo "Test 1: a clean 2-site/7-call fixture exits 0"
 setup_skeleton
 plant_clean_baseline
 OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
@@ -157,7 +159,7 @@ assert_exit_code "clean-exit" 0 "$EXIT_CODE"
 assert_contains "clean-ok" "OK:" "$OUTPUT"
 
 echo ""
-echo "Test 2: a FOURTH OperatorPrompt=true site is caught"
+echo "Test 2: a THIRD OperatorPrompt=true site is caught"
 setup_skeleton
 plant_clean_baseline
 setup_fixture "pkg/agent/rogue_release.go" '
@@ -174,10 +176,10 @@ EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "fourth-site-exit" 1 "$EXIT_CODE"
 assert_contains "fourth-site-finding" "rogue_release.go" "$OUTPUT"
-assert_contains "fourth-site-count" "4 site(s)" "$OUTPUT"
+assert_contains "fourth-site-count" "3 site(s)" "$OUTPUT"
 
 echo ""
-echo "Test 3: only 2 OperatorPrompt=true sites (one removed) is caught"
+echo "Test 3: only 1 OperatorPrompt=true site (one removed) is caught"
 setup_skeleton
 plant_clean_baseline
 setup_fixture "pkg/channels/base.go" '
@@ -194,7 +196,7 @@ OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
 EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "missing-site-exit" 1 "$EXIT_CODE"
-assert_contains "missing-site-count" "2 site(s)" "$OUTPUT"
+assert_contains "missing-site-count" "1 site(s)" "$OUTPUT"
 
 echo ""
 echo "Test 4: OperatorPrompt=true mentioned only in a // comment is not counted"
@@ -203,14 +205,14 @@ plant_clean_baseline
 setup_fixture "pkg/agent/prose.go" '
 package agent
 
-// A fourth site would read OperatorPrompt: true here, but this is prose.
+// A third site would read OperatorPrompt: true here, but this is prose.
 func noop() {}
 '
 OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
 EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "comment-only-exit" 0 "$EXIT_CODE"
-assert_contains "comment-only-count" "3 site(s)" "$OUTPUT"
+assert_contains "comment-only-count" "2 site(s)" "$OUTPUT"
 
 echo ""
 echo "Test 5: OperatorPrompt=true inside a _test.go file is not counted"
@@ -228,10 +230,10 @@ OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
 EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "test-file-exit" 0 "$EXIT_CODE"
-assert_contains "test-file-count" "3 site(s)" "$OUTPUT"
+assert_contains "test-file-count" "2 site(s)" "$OUTPUT"
 
 echo ""
-echo "Test 6: a SEVENTH PublishInbound call site is caught"
+echo "Test 6: an EIGHTH PublishInbound call site is caught"
 setup_skeleton
 plant_clean_baseline
 setup_fixture "pkg/agent/rogue_publish.go" '
@@ -246,7 +248,7 @@ EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "seventh-call-exit" 1 "$EXIT_CODE"
 assert_contains "seventh-call-finding" "rogue_publish.go" "$OUTPUT"
-assert_contains "seventh-call-count" "7" "$OUTPUT"
+assert_contains "seventh-call-count" "8" "$OUTPUT"
 
 echo ""
 echo "Test 7: the PublishInbound func definition itself is never counted"

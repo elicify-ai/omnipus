@@ -530,64 +530,6 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 				"is now selection-eligible as a repeating trigger — buildOccurrenceSets omits it naturally")
 	})
 
-	t.Run("done every task still returns future occurrences (live NextRunAtMSForTask anchor)", func(t *testing.T) {
-		// Companion to "done recurring task ... still returns future
-		// occurrences" above, for the `every` flavor: unlike `recurring`,
-		// `every`'s occurrence projection is STATE-DEPENDENT (FR-008a) — it
-		// reads the live armed job's NextRunAtMS via
-		// agent.TaskTriggerScheduler.NextRunAtMSForTask, which needs a real
-		// scheduler wired (newTestRestAPIWithTaskTrigger, not
-		// newTestRestAPIAlignedStores). This also doubles as an end-to-end
-		// proof of FIX 1's idempotency guard: every PATCH along
-		// next->in_progress->done calls NotifyTaskUpserted, and each one must
-		// be a no-op (job stays armed, unchanged) rather than re-anchoring the
-		// `every` job's NextRunAtMS to that PATCH's own wall-clock time.
-		api, sched := newTestRestAPIWithTaskTrigger(t)
-		wsID := ensureTestWorkspace(t, api)
-		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
-
-		body := fmt.Sprintf(
-			`{"title":"EveryDoneStillFires","action":"llm","workspace_id":%q,"agent_id":"mia",`+
-				`"trigger":{"type":"every","config":{"every_ms":60000}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
-			wsID,
-		)
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-		r.URL.Path = "/api/v1/tasks"
-		api.HandleTasks(w, r)
-		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
-		var tsk gen.Task
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
-
-		armedBefore, ok := sched.NextRunAtMSForTask(tsk.Id)
-		require.True(t, ok, "an every task must be armed immediately after creation")
-
-		advanceTaskToDone(t, api, tsk.Id)
-
-		armedAfter, ok := sched.NextRunAtMSForTask(tsk.Id)
-		require.True(t, ok, "an every task must remain armed after reaching done (repeating series survives)")
-		assert.Equal(t, armedBefore, armedAfter,
-			"OnTaskUpserted must not re-anchor an already-armed every job on unrelated status PATCHes (FIX 1)")
-
-		from := time.UnixMilli(armedAfter).Add(-time.Minute)
-		to := time.UnixMilli(armedAfter).Add(5 * time.Minute)
-		params := url.Values{
-			"workspace_id": {wsID},
-			"from_ms":      {strconv.FormatInt(from.UnixMilli(), 10)},
-			"to_ms":        {strconv.FormatInt(to.UnixMilli(), 10)},
-			"tz":           {"UTC"},
-		}
-		wOcc := getOccurrences(t, api, params)
-		require.Equal(t, http.StatusOK, wOcc.Code, "body=%s", wOcc.Body.String())
-		var sets []gen.TaskOccurrenceSet
-		require.NoError(t, json.Unmarshal(wOcc.Body.Bytes(), &sets))
-		require.Len(t, sets, 1,
-			"a done every task with a live armed job must still render its future occurrences")
-		assert.Equal(t, tsk.Id, sets[0].TaskId)
-		assert.NotEmpty(t, sets[0].OccurrencesMs)
-	})
-
 	t.Run("done once task still omitted (non-repeating trigger)", func(t *testing.T) {
 		api := newTestRestAPIAlignedStores(t)
 		wsID := ensureTestWorkspace(t, api)

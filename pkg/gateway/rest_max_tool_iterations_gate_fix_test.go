@@ -234,7 +234,17 @@ func TestGateFix_LoweringReadFailures_Are500(t *testing.T) {
 	}
 }
 
-// Item 4: rollback_incomplete carries the original failure in details.cause.
+// Item 4: rollback_incomplete carries a FIXED cause class in details.cause,
+// never the raw storage error text.
+//
+// Leak round 6 (developer 2, work/session-core-mainfix-20261010): the raw I/O
+// error used to be echoed in details.cause. The product now answers with fixed
+// text and keeps the cause in the server log. This oracle therefore asserts
+// the fixed text, the rollback-failure signal, and the ABSENCE of the injected
+// cause text from the whole response.
+//
+// EXPECTED RED until developer 2's product fix merges: this branch runs against
+// the pre-fix product, so the absence assertion fails by design.
 func TestGateFix_RollbackIncomplete_CarriesCause(t *testing.T) {
 	api := newLimitAPI(t, 300,
 		config.AgentConfig{ID: "agent-a", Name: "A", MaxToolIterations: 250},
@@ -248,7 +258,23 @@ func TestGateFix_RollbackIncomplete_CarriesCause(t *testing.T) {
 	require.NotNil(t, e.Code)
 	assert.Equal(t, "max_tool_iterations_rollback_incomplete", *e.Code)
 	require.NotNil(t, e.Details)
-	assert.Equal(t, errInjectedIO.Error(), (*e.Details)["cause"])
+
+	// The rollback-failure signal: details.cause still names the cause class.
+	cause, ok := (*e.Details)["cause"]
+	require.True(t, ok, "rollback_incomplete must still name its cause class in details.cause")
+	fixed, _ := cause.(string)
+	require.NotEmpty(t, fixed, "details.cause must be a fixed, non-empty cause class")
+
+	// The fixed text: the product's own fixed write-failure class, not the raw
+	// error. (If developer 2 pins a different literal, this one line changes.)
+	assert.Equal(t, configWriteFailure(errInjectedIO).Error(), fixed,
+		"details.cause must be the fixed cause class, not the raw error text")
+
+	// The leak: the injected storage error text must reach the client NOWHERE.
+	assert.NotContains(t, fixed, errInjectedIO.Error(),
+		"details.cause leaked the raw storage error text")
+	assert.NotContains(t, w.Body.String(), errInjectedIO.Error(),
+		"the response body leaked the raw storage error text")
 }
 
 // Item 5: a committed save whose reload fails is 500

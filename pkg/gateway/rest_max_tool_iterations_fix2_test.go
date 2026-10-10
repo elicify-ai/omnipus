@@ -136,18 +136,23 @@ func TestUpdateConfig_UnicodeFoldBypass_GatewayBlockedPaths(t *testing.T) {
 	}
 }
 
-// Kelvin sign: the brief asks for a K-variant "where a blocked key has a k".
-// No entry of blockedPaths contains a "k" today (sandbox, credentials,
-// security, gateway.users, gateway.dev_mode_bypass, agents.list,
-// agents.defaults.max_tool_iterations[_env_imported]). This test pins that
-// premise so the day a k-bearing path is blocked, it fails loudly and a
-// Kelvin twin must be written — instead of the gap staying silent.
-func TestBlockedPaths_KelvinVariantPremise_NoBlockedPathHasK(t *testing.T) {
+// Kelvin sign: a blocked key containing a "k" needs a Kelvin-sign (U+212A)
+// bypass twin in TestUpdateConfig_UnicodeFoldBypass_Refused, because U+212A
+// folds to "k" under the JSON key folding matchBlockedPath applies.
+// workspace_seed_defaults (session-core C-DELEGATE, FR-014/015) is the one
+// blocked path carrying a "k"; its twin is pinned in
+// TestUpdateConfig_UnicodeFoldBypass_Refused. This test fails loudly the day
+// another k-bearing path is blocked without one.
+func TestBlockedPaths_KelvinVariantPremise_KPathsHaveTwin(t *testing.T) {
 	require.NotEmpty(t, blockedPaths, "instrument: the blocked list is readable")
+	var kPaths []string
 	for _, bp := range blockedPaths {
-		assert.NotContains(t, strings.ToLower(string(bp)), "k",
-			"%s contains a k: add a Kelvin-sign (U+212A) bypass twin to TestUpdateConfig_UnicodeFoldBypass_* for it", bp)
+		if strings.Contains(strings.ToLower(string(bp)), "k") {
+			kPaths = append(kPaths, string(bp))
+		}
 	}
+	assert.Equal(t, []string{"workspace_seed_defaults"}, kPaths,
+		"exactly one blocked path carries a k; a new k-bearing blocked path needs a Kelvin-sign (U+212A) twin in TestUpdateConfig_UnicodeFoldBypass_Refused")
 }
 
 // ---------------------------------------------------------------------------
