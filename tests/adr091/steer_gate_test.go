@@ -67,6 +67,10 @@ func newSteerFixture(t *testing.T, provider providers.LLMProvider, runLoop bool)
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 	writeGateWorkspace(t, home)
+	// The U5a launch gate resolves the is_default workspace's delegation graph
+	// for this fixture's launches; writeGateWorkspace's record is not
+	// is_default, so seed the one the gate actually consults.
+	seedADR091DelegationGraph(t, home, []string{gateAgentID})
 
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
