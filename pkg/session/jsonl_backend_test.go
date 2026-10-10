@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -64,13 +65,16 @@ func TestJSONLBackend_AddFullMessage(t *testing.T) {
 	}
 }
 
-func TestJSONLBackend_TruncateAndSave(t *testing.T) {
+// Window trimming now advances Skip through CommitWindow; the in-place
+// TruncateHistory rewrite and the SetHistory first-fill primitive are deleted
+// (session-core DEL-12). The surviving assertions are kept unchanged.
+func TestJSONLBackend_CommitWindowTrimAndSave(t *testing.T) {
 	b := newBackend(t)
 
 	for i := 0; i < 10; i++ {
 		b.AddMessage("s1", "user", fmt.Sprintf("msg %d", i))
 	}
-	b.TruncateHistory("s1", 3)
+	commitSkip(t, b, "s1", 7)
 
 	history := b.GetHistory("s1")
 	if len(history) != 3 {
@@ -90,33 +94,6 @@ func TestJSONLBackend_TruncateAndSave(t *testing.T) {
 	history = b.GetHistory("s1")
 	if len(history) != 3 {
 		t.Fatalf("after save: got %d, want 3", len(history))
-	}
-}
-
-// TestJSONLBackend_SetHistory — SetHistory is a first-fill primitive
-// (ADR-066 FR-047): it fills an empty session, and a second call on the
-// now non-empty archive is refused (logged, fire-and-forget) leaving the
-// archive exactly as the first fill left it.
-func TestJSONLBackend_SetHistory(t *testing.T) {
-	b := newBackend(t)
-
-	b.SetHistory("s1", []providers.Message{
-		{Role: "user", Content: "new1"},
-		{Role: "assistant", Content: "new2"},
-	})
-
-	history := b.GetHistory("s1")
-	if len(history) != 2 {
-		t.Fatalf("got %d, want 2", len(history))
-	}
-	if history[0].Content != "new1" {
-		t.Errorf("got %q, want %q", history[0].Content, "new1")
-	}
-
-	b.SetHistory("s1", []providers.Message{{Role: "user", Content: "rewrite"}})
-	history = b.GetHistory("s1")
-	if len(history) != 2 || history[0].Content != "new1" {
-		t.Errorf("non-empty archive was rewritten: %+v", history)
 	}
 }
 
@@ -150,16 +127,16 @@ func TestJSONLBackend_SessionIsolation(t *testing.T) {
 
 func TestJSONLBackend_TrimFlow(t *testing.T) {
 	// Simulates the real window-trim flow in the agent loop:
-	// TruncateHistory → Save.
-	// Save is now a no-op (FR-005: Compact removed from Save path) — the
-	// live window is still readable via GetHistory after TruncateHistory.
+	// CommitWindow (advance Skip) → Save.
+	// Save is a no-op (FR-005: Compact removed from Save path) — the
+	// live window is still readable via GetHistory after the CommitWindow.
 	b := newBackend(t)
 
 	for i := 0; i < 20; i++ {
 		b.AddMessage("s1", "user", fmt.Sprintf("msg %d", i))
 	}
 
-	b.TruncateHistory("s1", 4)
+	commitSkip(t, b, "s1", 16)
 	if err := b.Save("s1"); err != nil {
 		t.Fatal(err)
 	}
@@ -170,5 +147,22 @@ func TestJSONLBackend_TrimFlow(t *testing.T) {
 	}
 	if history[0].Content != "msg 16" {
 		t.Errorf("first message = %q, want %q", history[0].Content, "msg 16")
+	}
+}
+
+// commitSkip advances a JSONLBackend session's window cursor to skip, the
+// replacement for the deleted TruncateHistory call: a real, non-destructive
+// checkpoint (the earlier lines stay on disk for recall, FR-005).
+func commitSkip(t *testing.T, b *session.JSONLBackend, key string, skip int) {
+	t.Helper()
+	ctx := context.Background()
+	snap, err := b.SnapshotWindow(ctx, key)
+	if err != nil {
+		t.Fatalf("SnapshotWindow: %v", err)
+	}
+	after := snap.State
+	after.Skip = skip
+	if err := b.CommitWindow(ctx, key, snap.State, after); err != nil {
+		t.Fatalf("CommitWindow: %v", err)
 	}
 }

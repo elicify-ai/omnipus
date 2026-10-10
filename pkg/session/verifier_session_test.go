@@ -39,8 +39,14 @@ func TestSessionTypeVerifier_IsValid(t *testing.T) {
 // TestNewVerifierSession_StampsTypeAndOwner verifies that a freshly created
 // verifier session is stamped Type=SessionTypeVerifier and owned by the
 // supplied verifier agent id (e.g. the Judge System Agent), matching
-// NewHeartbeatSession/NewScheduledSession's AgentID/AgentIDs/ActiveAgentID
-// stamping convention.
+// NewHeartbeatSession/NewScheduledSession's AgentID/AgentIDs stamping
+// convention.
+//
+// session-core U1 / DEL-11: a freshly created session records NO
+// ActiveAgentID — it is the mutable HANDOVER owner and stays empty until
+// something genuinely switches the session's active agent (see
+// SessionMeta.PostLoad and createSessionLocked). The owner is the immutable
+// AgentID, which is what this assertion now pins.
 func TestNewVerifierSession_StampsTypeAndOwner(t *testing.T) {
 	store := newTestStore(t)
 
@@ -52,7 +58,7 @@ func TestNewVerifierSession_StampsTypeAndOwner(t *testing.T) {
 
 	assert.Equal(t, SessionTypeVerifier, meta.Type, "type must be verifier")
 	assert.Equal(t, judgeID, meta.AgentID, "AgentID must be the verifier agent")
-	assert.Equal(t, judgeID, meta.ActiveAgentID, "ActiveAgentID must be the verifier agent")
+	assert.Empty(t, meta.ActiveAgentID, "a freshly created session carries no handover owner (DEL-11)")
 	assert.Equal(t, []string{judgeID}, meta.AgentIDs, "AgentIDs must be [judgeID]")
 	assert.NotEmpty(t, meta.ID, "session must have a non-empty ID")
 }

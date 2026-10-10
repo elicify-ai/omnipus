@@ -989,47 +989,42 @@ func TestSetMeta_WriteFailureDoesNotCorruptCache(t *testing.T) {
 	assert.Equal(t, originalTitle, diskMeta.Title, "disk meta.json must be unchanged by the failed write")
 }
 
-// TestUpdateToolCallProjections_BatchRewriteAndRevert covers the transcript
-// half of ADR-066 FR-022 (T066-12): the D5 emptying pass marks several tool
-// calls `emptied` in ONE rewrite, each record's `result` becomes the
-// projected content (the recall mark), the previous state comes back so an
-// aborted turn can put the transcript back, and an id that matches nothing
-// is skipped without failing the batch.
-func TestUpdateToolCallProjections_BatchRewriteAndRevert(t *testing.T) {
+// TestProjectToolCalls_BatchIsAtomicAndLeavesSiblingsUntouched (was
+// TestUpdateToolCallProjections_BatchRewriteAndRevert) covers the transcript
+// half of ADR-066 FR-022 (T066-12) on the append-only effect design (D5): a
+// projection batch is ONE appended effect that changes only the named calls'
+// projected state and text, a sibling call on the same entry and a call's
+// status stay untouched, the text replaces Error when a failed call carries no
+// Result (the design's applyProjectionText rule), and a retract restores the
+// exact original.
+func TestProjectToolCalls_BatchIsAtomicAndLeavesSiblingsUntouched(t *testing.T) {
 	store := newTestStore(t)
 
 	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
 	require.NoError(t, err)
 	sid := meta.ID
 
-	require.NoError(t, store.AppendTranscript(sid, TranscriptEntry{
+	e1, err := store.AppendTranscriptAddressed(sid, TranscriptEntry{
 		ID: "e1", Type: EntryTypeToolCall, AgentID: "jim",
 		ToolCalls: []ToolCall{
 			{ID: "c1", Tool: "bash", Status: "success", Result: map[string]any{"text": "full one"}},
 		},
-	}))
-	require.NoError(t, store.AppendTranscript(sid, TranscriptEntry{
+	})
+	require.NoError(t, err)
+	e2, err := store.AppendTranscriptAddressed(sid, TranscriptEntry{
 		ID: "e2", Type: EntryTypeToolCall, AgentID: "jim",
 		ToolCalls: []ToolCall{
 			{ID: "c2", Tool: "read_file", Status: "error", Error: "boom"}, // Result nil: reason lives in Error
 			{ID: "c3", Tool: "read_file", Status: "success", Result: map[string]any{"text": "full three"}},
 		},
-	}))
-
-	prev, err := store.UpdateToolCallProjections(sid, []ToolCallProjectionUpdate{
-		{ToolCallID: "c1", ContentState: "emptied", Result: map[string]any{"text": "[mark c1]"}},
-		{ToolCallID: "c2", ContentState: "emptied", Result: map[string]any{"text": "[mark c2]"}},
-		{ToolCallID: "missing", ContentState: "emptied", Result: map[string]any{"text": "never"}},
 	})
 	require.NoError(t, err)
-	require.Len(t, prev, 2, "one previous-state row per record that was found; the unknown id is skipped")
-	prevByID := map[ToolCallID]ToolCallProjectionUpdate{}
-	for _, p := range prev {
-		prevByID[p.ToolCallID] = p
-	}
-	assert.Equal(t, "", prevByID["c1"].ContentState)
-	assert.Equal(t, "full one", prevByID["c1"].Result["text"])
-	assert.Nil(t, prevByID["c2"].Result, "a failed call's previous Result is nil — must round-trip as nil")
+
+	effect, err := store.ProjectToolCalls(sid, []ToolCallProjectionEdit{
+		{Target: e1, ToolCallID: "c1", ContentState: "emptied", Text: "[mark c1]"},
+		{Target: e2, ToolCallID: "c2", ContentState: "emptied", Text: "[mark c2]"},
+	})
+	require.NoError(t, err)
 
 	entries, err := store.ReadTranscript(sid)
 	require.NoError(t, err)
@@ -1038,25 +1033,27 @@ func TestUpdateToolCallProjections_BatchRewriteAndRevert(t *testing.T) {
 	assert.Equal(t, "[mark c1]", entries[0].ToolCalls[0].Result["text"])
 	assert.Equal(t, "success", entries[0].ToolCalls[0].Status, "status untouched")
 	assert.Equal(t, "emptied", entries[1].ToolCalls[0].ContentState)
-	assert.Equal(t, "[mark c2]", entries[1].ToolCalls[0].Result["text"])
-	assert.Equal(t, "boom", entries[1].ToolCalls[0].Error, "error text untouched")
+	// c2 carried no Result and is an error: the projected text replaces Error
+	// (ARCHITECT-ANSWER-U2-EFFECTS section 2, effect-pass "Projections").
+	assert.Equal(t, "[mark c2]", entries[1].ToolCalls[0].Error)
+	assert.Nil(t, entries[1].ToolCalls[0].Result)
 	assert.Equal(t, "", entries[1].ToolCalls[1].ContentState, "sibling on the same entry untouched")
 	assert.Equal(t, "full three", entries[1].ToolCalls[1].Result["text"])
 
-	// Revert by feeding the previous rows back (restoreSession's path).
-	_, err = store.UpdateToolCallProjections(sid, prev)
+	// Retract restores the exact pre-effect value (restoreSession's path).
+	_, err = store.RetractToolCallEffects(sid, []ArchiveAddress{effect})
 	require.NoError(t, err)
 	entries, err = store.ReadTranscript(sid)
 	require.NoError(t, err)
-	assert.Equal(t, "", entries[0].ToolCalls[0].ContentState)
+	assert.Empty(t, entries[0].ToolCalls[0].ContentState)
 	assert.Equal(t, "full one", entries[0].ToolCalls[0].Result["text"])
-	assert.Equal(t, "", entries[1].ToolCalls[0].ContentState)
-	assert.Nil(t, entries[1].ToolCalls[0].Result, "nil Result CLEARS the field on this method")
+	assert.Empty(t, entries[1].ToolCalls[0].ContentState)
+	assert.Equal(t, "boom", entries[1].ToolCalls[0].Error, "retract restores the original error")
+	assert.Nil(t, entries[1].ToolCalls[0].Result)
 
-	// Empty batch is a no-op, not an error.
-	prev, err = store.UpdateToolCallProjections(sid, nil)
-	require.NoError(t, err)
-	assert.Nil(t, prev)
+	// An empty batch is refused, not a silent no-op (the batch is one record).
+	_, err = store.ProjectToolCalls(sid, nil)
+	require.Error(t, err)
 }
 
 // --- SwitchAgent tests ---
@@ -1169,25 +1166,26 @@ func TestSwitchAgent_AgentIDs_NoDuplicates(t *testing.T) {
 	}
 }
 
-// --- MarkLastEntryTruncated tests ---
+// --- cancel truncation, derived on read (effects design D8 / FR-006) ---
 
-// TestMarkLastEntryTruncated_FlagsLastAssistantEntry verifies the core invariant of FR-14:
-// after calling MarkLastEntryTruncated, the last assistant transcript entry has
-// Truncated==true while all other fields are preserved unchanged.
+// TestCancelTruncation_DerivedOnReadFlagsTheTurnsLastAssistantEntry verifies the
+// FR-14 invariant on the append-only design: a canceled turn appends one
+// turn_canceled record right after its last assistant entry, and ReadTranscript
+// derives Truncated=true / TruncationReason="cancelled" from that record, with
+// every other field of the entry preserved unchanged. This replaces the old
+// MarkLastEntryTruncated in-place rewrite (deleted, DEL-12): the assertions are
+// the same and stronger, because nothing on disk is rewritten (FR-006).
 //
-// BDD: Given a session with one assistant transcript entry with a known turnID,
-// When MarkLastEntryTruncated is called with that session's ID and turnID,
-// Then ReadTranscript returns the entry with Truncated==true and all other fields intact.
-//
-// Traces to: pkg/session/unified.go MarkLastEntryTruncated (FR-14, H2)
-func TestMarkLastEntryTruncated_FlagsLastAssistantEntry(t *testing.T) {
+// The turn-scoping, no-assistant, and existing-reason cases are covered by
+// cancel_truncation_derive_test.go (S1's ported oracle).
+func TestCancelTruncation_DerivedOnReadFlagsTheTurnsLastAssistantEntry(t *testing.T) {
 	store := newTestStore(t)
 
 	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
 	require.NoError(t, err)
 	sessionID := meta.ID
 
-	// Append an assistant entry with a known turn ID.
+	// The assistant entry with a known turn ID.
 	entry := TranscriptEntry{
 		ID:      "entry-001",
 		Type:    EntryTypeMessage,
@@ -1198,532 +1196,38 @@ func TestMarkLastEntryTruncated_FlagsLastAssistantEntry(t *testing.T) {
 	}
 	require.NoError(t, store.AppendTranscript(sessionID, entry))
 
-	// Call MarkLastEntryTruncated with the turn ID.
-	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "turn-001", "cancelled"))
+	// The cancel: one turn_canceled record appended right after the entry.
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
+		ID: sessionID + "_canceled", Type: EntryTypeTurnCancelled, TurnID: "turn-001",
+		CancelMethod: "graceful", Timestamp: time.Now().UTC(),
+	}))
 
-	// Read back and assert Truncated==true and other fields preserved.
 	entries, err := store.ReadTranscript(sessionID)
 	require.NoError(t, err)
-	require.Len(t, entries, 1, "must have exactly one entry")
 
-	got := entries[0]
-	assert.True(t, got.Truncated, "Truncated must be true after MarkLastEntryTruncated")
-	assert.Equal(t, "entry-001", got.ID, "ID must be preserved")
+	var got *TranscriptEntry
+	for i := range entries {
+		if entries[i].ID == "entry-001" {
+			got = &entries[i]
+		}
+	}
+	require.NotNil(t, got, "the assistant entry must still be present")
+
+	assert.True(t, got.Truncated, "the canceled turn's last assistant entry reads as truncated")
+	assert.Equal(t, "cancelled", got.TruncationReason)
 	assert.Equal(t, EntryTypeMessage, got.Type, "Type must be preserved")
 	assert.Equal(t, "assistant", got.Role, "Role must be preserved")
 	assert.Equal(t, "Hello from the assistant", got.Content, "Content must be preserved")
 	assert.Equal(t, "test-agent", got.AgentID, "AgentID must be preserved")
 }
 
-// TestMarkLastEntryTruncated_TrailingNewlineSurvivesSubsequentAppend is the
-// MarkLastEntryTruncated counterpart to
-// TestUpdateToolCallStatus_TrailingNewlineSurvivesSubsequentAppend: this
-// rewrite path shares the exact same "no trailing newline on last line" bug
-// pattern and must be verified independently, since a fix to one function
-// does not guarantee the sibling function (which duplicates the same
-// rebuild-the-file logic) was fixed too.
-//
-// Negative-test discipline: this test was confirmed to FAIL against the
-// pre-fix MarkLastEntryTruncated before the fix was applied.
-func TestMarkLastEntryTruncated_TrailingNewlineSurvivesSubsequentAppend(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-	sessionID := meta.ID
-
-	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
-		ID:      "entry-001",
-		Type:    EntryTypeMessage,
-		Role:    "assistant",
-		Content: "Partial response before cancel",
-		AgentID: "test-agent",
-		TurnID:  "turn-001",
-	}))
-
-	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "turn-001", "cancelled"))
-
-	transcriptPath := filepath.Join(store.baseDir, sessionID, "transcript.jsonl")
-	raw, err := os.ReadFile(transcriptPath)
-	require.NoError(t, err)
-	require.True(t, len(raw) > 0 && raw[len(raw)-1] == '\n',
-		"MarkLastEntryTruncated's rewritten transcript file must end with a trailing "+
-			"newline; got %q", raw)
-
-	// A follow-up turn appends a new assistant entry after the cancel.
-	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
-		ID:      "entry-002",
-		Type:    EntryTypeMessage,
-		Role:    "assistant",
-		Content: "New turn after the cancel",
-		AgentID: "test-agent",
-		TurnID:  "turn-002",
-	}))
-
-	entries, err := store.ReadTranscript(sessionID)
-	require.NoError(t, err)
-	require.Len(t, entries, 2,
-		"both the truncated entry AND the subsequently appended assistant entry must "+
-			"survive — neither may be silently dropped by a newline-corrupted line")
-	assert.True(t, entries[0].Truncated)
-	assert.Equal(t, "New turn after the cancel", entries[1].Content)
-}
-
-// TestMarkLastEntryTruncated_NoAssistantEntryIsNoOp verifies that calling
-// MarkLastEntryTruncated on a session with no assistant entries (only user
-// entries or an empty transcript) is a no-op — nil error, no file mutation.
-//
-// BDD: Given a session with only user transcript entries,
-// When MarkLastEntryTruncated is called,
-// Then nil is returned and entries are unchanged (Truncated remains false).
-//
-// Traces to: pkg/session/unified.go MarkLastEntryTruncated — no-assistant-entry path (FR-14)
-func TestMarkLastEntryTruncated_NoAssistantEntryIsNoOp(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-	sessionID := meta.ID
-
-	// Append a user entry (no assistant entries).
-	userEntry := TranscriptEntry{
-		ID:      "user-001",
-		Type:    EntryTypeMessage,
-		Role:    "user",
-		Content: "A user message",
-		AgentID: "test-agent",
-	}
-	require.NoError(t, store.AppendTranscript(sessionID, userEntry))
-
-	// MarkLastEntryTruncated must return nil.
-	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "", "cancelled"))
-
-	// Entries must be unchanged.
-	entries, err := store.ReadTranscript(sessionID)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.False(t, entries[0].Truncated, "user entry must not have Truncated set")
-
-	// Also verify the empty-transcript case (fresh session with no appended entries).
-	metaEmpty, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-	require.NoError(t, store.MarkLastEntryTruncated(metaEmpty.ID, "", "cancelled"),
-		"MarkLastEntryTruncated on empty transcript must be a no-op")
-}
-
-// TestMarkLastEntryTruncated_DoesNotTouchContextStore verifies the FR-14a invariant:
-// MarkLastEntryTruncated only mutates transcript.jsonl; context.jsonl is never
-// touched. This is T9's key invariant from the cancel spec.
-//
-// BDD: Given a session whose context.jsonl contains an assistant message,
-// When MarkLastEntryTruncated is called,
-// Then transcript.jsonl's last assistant entry has Truncated==true,
-// AND context.jsonl is byte-for-byte identical to before the call.
-//
-// Traces to: pkg/session/unified.go MarkLastEntryTruncated (FR-14a / T9)
-func TestMarkLastEntryTruncated_DoesNotTouchContextStore(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-	sessionID := meta.ID
-
-	// Write an assistant entry to transcript.jsonl via AppendTranscript.
-	transcriptEntry := TranscriptEntry{
-		ID:      "transcript-001",
-		Type:    EntryTypeMessage,
-		Role:    "assistant",
-		Content: "assistant partial content",
-		AgentID: "test-agent",
-	}
-	require.NoError(t, store.AppendTranscript(sessionID, transcriptEntry))
-
-	// Write a message to context.jsonl via the SessionStore interface.
-	// AddMessage appends role/content to context.jsonl through the JSONL backend.
-	store.AddMessage(sessionID, "assistant", "context store assistant content")
-
-	// Snapshot context.jsonl before the call.
-	contextPath := filepath.Join(store.BaseDir(), ".context", sessionID+".jsonl")
-	contextBefore, readErr := os.ReadFile(contextPath)
-	require.NoError(t, readErr, "context.jsonl must exist after AddMessage")
-
-	// Call MarkLastEntryTruncated (empty turnID = backward-compat path).
-	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "", "cancelled"))
-
-	// Assert transcript.jsonl has Truncated==true on the assistant entry.
-	entries, err := store.ReadTranscript(sessionID)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.True(t, entries[0].Truncated, "transcript.jsonl assistant entry must have Truncated==true")
-
-	// Assert context.jsonl is byte-for-byte unchanged.
-	contextAfter, readErr := os.ReadFile(contextPath)
-	require.NoError(t, readErr, "context.jsonl must still be readable after MarkLastEntryTruncated")
-	assert.Equal(t, string(contextBefore), string(contextAfter),
-		"context.jsonl must not be mutated by MarkLastEntryTruncated (FR-14a / T9)")
-}
-
-// TestMarkLastEntryTruncated_DoesNotMutatePreviousTurnEntry verifies the H2 invariant:
-// MarkLastEntryTruncated with a specific turnID must only flag entries belonging
-// to that turn and must NOT touch assistant entries from other turns.
-//
-// BDD: Given a session with two assistant entries with different turnIDs (T1 and T2),
-// When MarkLastEntryTruncated is called with turnID="T1",
-// Then only the T1 entry has Truncated==true; the T2 entry is unchanged.
-//
-// Traces to: pkg/session/unified.go MarkLastEntryTruncated (H2 / turn-scoped truncation)
-func TestMarkLastEntryTruncated_DoesNotMutatePreviousTurnEntry(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-	sid := meta.ID
-
-	// Write assistant entry for turn T1.
-	require.NoError(t, store.AppendTranscript(sid, TranscriptEntry{
-		ID:      "asst-T1",
-		Type:    EntryTypeMessage,
-		Role:    "assistant",
-		Content: "Response from turn T1",
-		AgentID: "test-agent",
-		TurnID:  "T1",
-	}))
-	// Write assistant entry for turn T2 (the "current" turn at cancel time).
-	require.NoError(t, store.AppendTranscript(sid, TranscriptEntry{
-		ID:      "asst-T2",
-		Type:    EntryTypeMessage,
-		Role:    "assistant",
-		Content: "Partial response from turn T2",
-		AgentID: "test-agent",
-		TurnID:  "T2",
-	}))
-
-	// Cancel arrives for T1 only (e.g., a delayed cancel for a previous turn).
-	require.NoError(t, store.MarkLastEntryTruncated(sid, "T1", "cancelled"))
-
-	entries, err := store.ReadTranscript(sid)
-	require.NoError(t, err)
-	require.Len(t, entries, 2)
-
-	// Find by TurnID.
-	var t1, t2 *TranscriptEntry
-	for i := range entries {
-		switch entries[i].TurnID {
-		case "T1":
-			t1 = &entries[i]
-		case "T2":
-			t2 = &entries[i]
-		}
-	}
-	require.NotNil(t, t1, "T1 entry must exist")
-	require.NotNil(t, t2, "T2 entry must exist")
-	assert.True(t, t1.Truncated, "T1 entry must be marked truncated")
-	assert.False(t, t2.Truncated, "T2 entry must NOT be marked truncated by a T1 cancel")
-}
-
-// TestMarkLastEntryTruncated_PersistsReason verifies ADR-087 D2: the reason
-// argument is written to disk as truncation_reason on the rewritten entry.
-//
-// BDD: Given an assistant entry for turn "turn-001",
-// When MarkLastEntryTruncated(sessionID, "turn-001", "max_output_tokens") is called,
-// Then the rewritten JSONL line contains "truncation_reason":"max_output_tokens"
-// AND ReadTranscript's TruncationReason field reflects the same value.
-//
-// Traces to: pkg/session/unified.go MarkLastEntryTruncated (ADR-087 D2)
-func TestMarkLastEntryTruncated_PersistsReason(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-	sessionID := meta.ID
-
-	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
-		ID:      "entry-001",
-		Type:    EntryTypeMessage,
-		Role:    "assistant",
-		Content: "Truncated by the output cap",
-		AgentID: "test-agent",
-		TurnID:  "turn-001",
-	}))
-
-	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "turn-001", "max_output_tokens"))
-
-	transcriptPath := filepath.Join(store.baseDir, sessionID, "transcript.jsonl")
-	raw, err := os.ReadFile(transcriptPath)
-	require.NoError(t, err)
-	assert.Contains(t, string(raw), `"truncation_reason":"max_output_tokens"`,
-		"rewritten JSONL line must carry the persisted reason")
-
-	entries, err := store.ReadTranscript(sessionID)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.True(t, entries[0].Truncated)
-	assert.Equal(t, "max_output_tokens", entries[0].TruncationReason)
-}
-
-// TestMarkLastEntryTruncated_RejectsUnknownReason verifies MarkLastEntryTruncated
-// fails loud on a reason outside the ADR-087 D2 enum, and never writes it —
-// the on-disk entry is left byte-identical to before the rejected call.
-//
-// BDD: Given an assistant entry for turn "turn-001",
-// When MarkLastEntryTruncated(sessionID, "turn-001", "bogus") is called,
-// Then an error is returned AND the transcript file is unchanged.
-//
-// Traces to: pkg/session/unified.go MarkLastEntryTruncated (ADR-087 D2)
-func TestMarkLastEntryTruncated_RejectsUnknownReason(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-	sessionID := meta.ID
-
-	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
-		ID:      "entry-001",
-		Type:    EntryTypeMessage,
-		Role:    "assistant",
-		Content: "Untouched content",
-		AgentID: "test-agent",
-		TurnID:  "turn-001",
-	}))
-
-	transcriptPath := filepath.Join(store.baseDir, sessionID, "transcript.jsonl")
-	before, err := os.ReadFile(transcriptPath)
-	require.NoError(t, err)
-
-	err = store.MarkLastEntryTruncated(sessionID, "turn-001", "bogus")
-	require.Error(t, err, "an unrecognized reason must be rejected")
-
-	after, err := os.ReadFile(transcriptPath)
-	require.NoError(t, err)
-	assert.Equal(t, string(before), string(after),
-		"a rejected reason must leave the transcript file byte-identical")
-
-	entries, err := store.ReadTranscript(sessionID)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.False(t, entries[0].Truncated, "entry must not be flagged truncated on a rejected reason")
-	assert.Empty(t, entries[0].TruncationReason)
-}
-
 // --- UpdateToolCallStatus tests (Wave 3 fix 5b) ---
 
-// TestUpdateToolCallStatus_RewritesMatchingToolCall verifies the core invariant
-// of fix 5b: after calling UpdateToolCallStatus with a ToolCall.ID that exists in
-// the transcript, ReadTranscript returns that ToolCall with the new Status and
-// DurationMS while every other field (Tool, Parameters, Result, ...) is preserved.
-//
-// This simulates the ASYNC delegation scenario: the spawning "delegate" tool call
-// is first persisted with a placeholder ack (Status="success", DurationMS=0, per
-// tools.AsyncResult), then corrected once the real sub-turn finishes.
-//
-// BDD: Given a transcript entry carrying a ToolCall with ID "c1" and a placeholder
-//
-//	Status/DurationMS,
-//	When UpdateToolCallStatus is called for "c1" with the real status/duration,
-//	Then ReadTranscript returns "c1" with the updated Status/DurationMS and all
-//	other fields unchanged.
-//
-// Traces to: pkg/session/unified.go UpdateToolCallStatus (Wave 3 fix 5b)
-func TestUpdateToolCallStatus_RewritesMatchingToolCall(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-	sessionID := meta.ID
-
-	// Simulate the async delegation "ack" record loop.go's standard tool-completion
-	// path writes immediately after DelegateTool.executeAsync returns AsyncResult.
-	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
-		ID:      "c1",
-		Type:    EntryTypeToolCall,
-		AgentID: "jim",
-		ToolCalls: []ToolCall{
-			{
-				ID:         "c1",
-				Tool:       "delegate",
-				Status:     "success",
-				DurationMS: 0,
-				Parameters: map[string]any{"task": "audit go files"},
-			},
-		},
-	}))
-
-	// The sub-turn actually finishes later with a real status/duration.
-	found, updateErr := store.UpdateToolCallStatus(sessionID, "c1", "success", 4210)
-	require.NoError(t, updateErr)
-	assert.True(t, found, "the matching tool-call entry must be found")
-
-	entries, err := store.ReadTranscript(sessionID)
-	require.NoError(t, err)
-	require.Len(t, entries, 1, "must have exactly one entry")
-
-	require.Len(t, entries[0].ToolCalls, 1)
-	got := entries[0].ToolCalls[0]
-	assert.Equal(t, ToolCallID("c1"), got.ID, "ID must be preserved")
-	assert.Equal(t, "delegate", got.Tool, "Tool must be preserved")
-	assert.Equal(t, "success", got.Status, "Status must be updated to the real terminal status")
-	assert.EqualValues(t, 4210, got.DurationMS, "DurationMS must be updated to the real wall-clock duration")
-	assert.Equal(t, "audit go files", got.Parameters["task"], "Parameters must be preserved")
-}
-
-// TestUpdateToolCallStatus_FlipsToError verifies UpdateToolCallStatus can move a
-// ToolCall from a placeholder "success" to a real "error" status — the mirror
-// case of the success-preserved test, proving the function does not hardcode a
-// bias toward either terminal value.
-func TestUpdateToolCallStatus_FlipsToError(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-	sessionID := meta.ID
-
-	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
-		ID:      "c2",
-		Type:    EntryTypeToolCall,
-		AgentID: "jim",
-		ToolCalls: []ToolCall{
-			{ID: "c2", Tool: "delegate", Status: "success", DurationMS: 0},
-		},
-	}))
-
-	found, updateErr := store.UpdateToolCallStatus(sessionID, "c2", "error", 987)
-	require.NoError(t, updateErr)
-	assert.True(t, found, "the matching tool-call entry must be found")
-
-	entries, err := store.ReadTranscript(sessionID)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	require.Len(t, entries[0].ToolCalls, 1)
-	got := entries[0].ToolCalls[0]
-	assert.Equal(t, "error", got.Status)
-	assert.EqualValues(t, 987, got.DurationMS)
-}
-
-// TestUpdateToolCallStatus_NoMatchIsNoOp verifies that calling UpdateToolCallStatus
-// with a ToolCall.ID that does not exist in the transcript is a no-op: nil error,
-// and every existing entry is byte-for-byte unchanged.
-//
-// This is the expected outcome for SYNCHRONOUS delegation (DelegateTool.
-// executeSync): spawnSubTurn blocks until the child finishes, so at the moment
-// EventKindSubTurnEnd fires the spawning tool call's own record has not been
-// appended to the transcript yet.
-//
-// Traces to: pkg/session/unified.go UpdateToolCallStatus doc comment (Wave 3 fix 5b)
-func TestUpdateToolCallStatus_NoMatchIsNoOp(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-	sessionID := meta.ID
-
-	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
-		ID:      "c3",
-		Type:    EntryTypeToolCall,
-		AgentID: "jim",
-		ToolCalls: []ToolCall{
-			{ID: "c3", Tool: "read_file", Status: "success", DurationMS: 12},
-		},
-	}))
-
-	found, err := store.UpdateToolCallStatus(sessionID, "does-not-exist", "success", 999)
-	require.NoError(t, err, "no matching ToolCall.ID must be a no-op, not an error")
-	assert.False(t, found, "no matching ToolCall.ID must report found=false")
-
-	entries, err := store.ReadTranscript(sessionID)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	require.Len(t, entries[0].ToolCalls, 1)
-	got := entries[0].ToolCalls[0]
-	assert.Equal(t, "success", got.Status, "unrelated entry must be unchanged")
-	assert.EqualValues(t, 12, got.DurationMS, "unrelated entry must be unchanged")
-}
-
-// TestUpdateToolCallStatus_EmptyTranscriptIsNoOp verifies that calling
-// UpdateToolCallStatus on a session with no transcript file yet is a no-op
-// (nil error), mirroring MarkLastEntryTruncated's os.IsNotExist handling.
-func TestUpdateToolCallStatus_EmptyTranscriptIsNoOp(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
-	require.NoError(t, err)
-	sessionID := meta.ID
-
-	found, err := store.UpdateToolCallStatus(sessionID, "c1", "error", 100)
-	assert.NoError(t, err, "no transcript file yet must be a no-op, not an error")
-	assert.False(t, found, "no transcript file yet must report found=false")
-}
-
-// TestUpdateToolCallStatus_TrailingNewlineSurvivesSubsequentAppend is the
-// dedicated regression test for the real-world data-loss bug found by live
-// verification: UpdateToolCallStatus's read-mutate-rewrite previously
-// omitted the trailing newline on the rewritten file's last line. The VERY
-// NEXT AppendTranscript call (exactly the sequence Wave 3 fix 5b's
-// UpdateToolCallStatus call, immediately followed by fix 5d's
-// AsyncNotifier-delivered result, produces in production) then concatenated
-// its record directly onto that line, producing invalid JSON that
-// ReadTranscript's line parser could not parse — silently dropping BOTH the
-// rewritten entry AND the newly appended one.
-//
-// Unlike TestUpdateToolCallStatus_RewritesMatchingToolCall (which reads
-// immediately after the rewrite and therefore could never observe this bug),
-// this test performs the full rewrite-THEN-append-THEN-read sequence.
-//
-// Negative-test discipline: this test was confirmed to FAIL against the
-// pre-fix UpdateToolCallStatus (which built the rewritten file without a
-// trailing newline on the last line) before the fix was applied — see the
-// delivery report for the byte-level repro output.
-func TestUpdateToolCallStatus_TrailingNewlineSurvivesSubsequentAppend(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "jim")
-	require.NoError(t, err)
-	sessionID := meta.ID
-
-	// 1. The spawning delegate tool call's placeholder ack.
-	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
-		ID:      "c1",
-		Type:    EntryTypeToolCall,
-		AgentID: "jim",
-		ToolCalls: []ToolCall{
-			{ID: "c1", Tool: "delegate", Status: "success", DurationMS: 0},
-		},
-	}))
-
-	// 2. The sub-turn's real terminal status/duration corrects the placeholder
-	// (fix 5b) — this is the rewrite that must terminate with a newline.
-	found, updateErr := store.UpdateToolCallStatus(sessionID, "c1", "success", 4210)
-	require.NoError(t, updateErr)
-	require.True(t, found)
-
-	// Assert the raw file bytes on disk actually end in a newline — the
-	// precise mechanism, not just the end-to-end symptom.
-	transcriptPath := filepath.Join(store.baseDir, sessionID, "transcript.jsonl")
-	raw, err := os.ReadFile(transcriptPath)
-	require.NoError(t, err)
-	require.True(t, len(raw) > 0 && raw[len(raw)-1] == '\n',
-		"UpdateToolCallStatus's rewritten transcript file must end with a trailing "+
-			"newline; got %q", raw)
-
-	// 3. The delegate's async result lands as a new assistant entry (fix 5d) —
-	// this is the append that, pre-fix, would corrupt onto the rewritten line.
-	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
-		ID:      "c2",
-		Role:    "assistant",
-		AgentID: "ray",
-		Content: "Ray's delegated narration.",
-	}))
-
-	entries, err := store.ReadTranscript(sessionID)
-	require.NoError(t, err)
-	require.Len(t, entries, 2,
-		"both the corrected tool-call entry AND the subsequently appended assistant "+
-			"entry must survive — neither may be silently dropped by a newline-corrupted line")
-	assert.Equal(t, "success", entries[0].ToolCalls[0].Status)
-	assert.EqualValues(t, 4210, entries[0].ToolCalls[0].DurationMS)
-	assert.Equal(t, "Ray's delegated narration.", entries[1].Content)
-	assert.Equal(t, "ray", entries[1].AgentID)
-}
-
+// UpdateToolCallStatus / UpdateToolCallStatusAndResult were deleted as dead
+// code with the in-place rewrite surface (DEL-12; ARCHITECT-ANSWER-U2-EFFECTS
+// section 3, R3b "Delete as dead code"). The terminal-status correction they
+// guarded is now SettleToolCall, covered by the effect tests
+// (transcript_effects_test.go: settle, if_status guard, last-writer-wins).
 // --- G2: External CLI sub-turn scope guard ---
 
 // TestAppendTranscript_G2_ExternalCLITurn_ZeroTokens verifies that an assistant entry

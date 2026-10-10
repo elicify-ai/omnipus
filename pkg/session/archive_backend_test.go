@@ -80,7 +80,7 @@ func TestArchiveBackend_RollbackIsNonDestructive(t *testing.T) {
 	require.NoError(t, b.appendMessage(key, userMsg("m3")))
 	require.NoError(t, b.appendMessage(key, asstMsg("m4")))
 
-	rawPath := filepath.Join(b.baseDir, key, "u2archive", "current.jsonl")
+	rawPath := filepath.Join(b.baseDir, key, "transcript.jsonl")
 	before, err := os.ReadFile(rawPath)
 	require.NoError(t, err)
 
@@ -103,33 +103,37 @@ func TestArchiveBackend_RollbackIsNonDestructive(t *testing.T) {
 	require.Len(t, all, 4, "the aborted bytes stay on disk for recall")
 }
 
-// TruncateHistory keeps only the last N messages.
-func TestArchiveBackend_TruncateKeepsLast(t *testing.T) {
+// The window-trim flow keeps only the last N messages in the LIVE window by
+// advancing Skip (CommitWindow), and never deletes the earlier lines — they
+// stay on disk for recall. Supersedes the old TruncateHistory call: that
+// in-place rewrite API is deleted (DEL-12), the invariant is unchanged.
+func TestArchiveBackend_CommitWindowTrimKeepsLastInTheWindow(t *testing.T) {
 	b := newTestBackend(t)
 	const key = "sess-1"
+	ctx := context.Background()
 	for _, m := range []providers.Message{userMsg("m1"), asstMsg("m2"), userMsg("m3"), asstMsg("m4")} {
 		require.NoError(t, b.appendMessage(key, m))
 	}
-	b.TruncateHistory(key, 2)
+	snap, err := b.SnapshotWindow(ctx, key)
+	require.NoError(t, err)
+	before := snap.State
+	after := before
+	after.Skip = 2
+	require.NoError(t, b.CommitWindow(ctx, key, before, after))
+
 	got := b.GetHistory(key)
 	require.Len(t, got, 2)
 	require.Equal(t, "m3", got[0].Content)
 	require.Equal(t, "m4", got[1].Content)
+
+	all, err := b.ReadArchive(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, all, 4, "the trimmed prefix stays on disk for recall (FR-006)")
 }
 
-// FR-047: SetHistory fills an EMPTY archive and refuses a non-empty one.
-func TestArchiveBackend_SetHistoryFirstFillOnly(t *testing.T) {
-	b := newTestBackend(t)
-	const key = "sess-1"
-	b.SetHistory(key, []providers.Message{userMsg("a"), asstMsg("b")})
-	require.Len(t, b.GetHistory(key), 2)
-
-	// Second fill is refused: the history is unchanged.
-	b.SetHistory(key, []providers.Message{userMsg("X")})
-	got := b.GetHistory(key)
-	require.Len(t, got, 2, "SetHistory must refuse a non-empty archive")
-	require.Equal(t, "a", got[0].Content)
-}
+// FR-047/SetHistory is deleted with the legacy model-store surface (DEL-10/12);
+// its "first fill only" invariant is superseded by the append-only archive, so
+// the old TestArchiveBackend_SetHistoryFirstFillOnly has no new-path equivalent.
 
 // Projection state round-trips and survives a fresh backend over the same dir.
 func TestArchiveBackend_ProjectionRoundTripPersists(t *testing.T) {
@@ -138,12 +142,10 @@ func TestArchiveBackend_ProjectionRoundTripPersists(t *testing.T) {
 	require.NoError(t, b.appendMessage(key, asstMsg("m1")))
 	pk := memory.ProjectionKey{ToolCallID: "call_0", ArchiveLine: 0}
 	b.SetProjectionState(key, pk, memory.ProjectionEmptied)
-	b.MarkHydrated(key)
 
 	fresh := newArchiveBackend(b.baseDir)
 	pm := fresh.Projection(key)
 	require.Equal(t, memory.ProjectionEmptied, pm.Entries[pk])
-	require.True(t, pm.Hydrated)
 }
 
 // Negative control (slice 5b): the raw-range recall boundary yields ONLY the
@@ -183,7 +185,7 @@ func TestArchiveBackend_RawRecallExcludesEveryPrivateField(t *testing.T) {
 	require.Equal(t, 2, seen)
 
 	// Byte-exact: the emitted raw value equals the stored model_message literal.
-	rawFile, ferr := os.ReadFile(filepath.Join(base, key, "u2archive", "current.jsonl"))
+	rawFile, ferr := os.ReadFile(filepath.Join(base, key, "transcript.jsonl"))
 	require.NoError(t, ferr)
 	stored := literalModelMessage([]byte(strings.SplitN(string(rawFile), "\n", 2)[0]))
 	var emitted []byte
@@ -202,7 +204,12 @@ func TestArchiveBackend_ScanEvictedArchive(t *testing.T) {
 	for _, m := range []providers.Message{userMsg("m1"), asstMsg("m2"), userMsg("m3")} {
 		require.NoError(t, b.appendMessage(key, m))
 	}
-	b.TruncateHistory(key, 1) // Skip advances to 2
+	snap, err := b.SnapshotWindow(ctx, key)
+	require.NoError(t, err)
+	before := snap.State
+	after := before
+	after.Skip = 2 // advance Skip to 2, as the window trim does
+	require.NoError(t, b.CommitWindow(ctx, key, before, after))
 
 	var idxs []int
 	skip, err := b.ScanEvictedArchive(ctx, key, func(idx int, _ []byte, _ memory.ArchivedMessage) error {
@@ -252,8 +259,8 @@ func TestArchiveBackend_RoutingKeyResolvesToOwningSession(t *testing.T) {
 	const routing = "agent:mia:session:sess-owner-1"
 	require.NoError(t, b.appendMessage(routing, userMsg("hi")))
 
-	require.DirExists(t, filepath.Join(b.baseDir, "sess-owner-1", "u2archive"),
-		"the archive lands under the owning session directory")
+	require.FileExists(t, filepath.Join(b.baseDir, "sess-owner-1", "transcript.jsonl"),
+		"the archive lands at the owning session's transcript path")
 	_, err := os.Stat(filepath.Join(b.baseDir, "agent:mia:session:sess-owner-1"))
 	require.True(t, os.IsNotExist(err), "no stray routing-key directory is created")
 	require.Len(t, b.GetHistory(routing), 1, "reads through the routing key resolve to the same store")
@@ -268,10 +275,10 @@ func TestUnifiedStore_DeleteSessionRemovesModelArchive(t *testing.T) {
 	t.Cleanup(func() { _ = us.Close() })
 	const id = "sess-del"
 	us.AddMessage("agent:mia:session:"+id, "user", "hello")
-	archiveDir := filepath.Join(base, id, "u2archive")
-	require.DirExists(t, archiveDir)
+	archivePath := filepath.Join(base, id, "transcript.jsonl")
+	require.FileExists(t, archivePath)
 
 	require.NoError(t, us.DeleteSession(id))
-	_, err = os.Stat(archiveDir)
+	_, err = os.Stat(archivePath)
 	require.True(t, os.IsNotExist(err), "the model archive is removed with the session")
 }
