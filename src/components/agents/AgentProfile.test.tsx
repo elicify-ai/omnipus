@@ -3140,7 +3140,7 @@ describe('AgentProfile — Default-agent toggle visibility (field matrix, W2c)',
 // than accidentally inheriting the built-in locks.
 describe('AgentProfile — unlocked Main agent: interactive identity fields render (isLocked regression guard, W2c)', () => {
   it('renders editable figure, role and colour choices instead of the legacy icon picker (W1-6)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#3B82F6', icon: 'Chat' })
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#3B82F6' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
     expectEditableIdentityChoices(screen.getByRole('tabpanel', { name: 'Basics' }))

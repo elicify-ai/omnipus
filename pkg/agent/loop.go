@@ -43,6 +43,13 @@ import (
 )
 
 type AgentLoop struct {
+	// connLanes holds the per-chat serial lanes of bound connector input that
+	// is waiting behind a voice note being transcribed (connector_lane.go).
+	connLanes   sync.Mutex
+	connLaneMap map[string]*connectorLane
+	// admitDispatchHook, when set, replaces admitAndDispatch (tests only).
+	admitDispatchHook func(context.Context, bus.InboundMessage)
+
 	// Core dependencies
 	bus      *bus.MessageBus
 	cfg      *config.Config
@@ -903,18 +910,12 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				continue
 			}
 
-			// A bound connector voice message is transcribed BEFORE its size gate
-			// and any write (U8 r2 F5), which can take seconds: it is admitted off
-			// the dispatch loop so one slow transcription never stalls every
-			// channel. All other input is admitted inline, in arrival order.
-			if al.boundAudioNeedsTranscription(msg) && al.beginActiveRequest() {
-				go func(m bus.InboundMessage) {
-					defer al.endActiveRequest()
-					al.admitAndDispatch(runCtx, m)
-				}(msg)
-				continue
-			}
-			al.admitAndDispatch(runCtx, msg)
+			// Bound connector input is admitted per chat in strict arrival order
+			// (see routeBoundConnectorInput): a voice note is transcribed before
+			// its size gate and any write (U8 r2 F5), which can take seconds, so
+			// it runs off the dispatch loop - and anything the same chat sends
+			// meanwhile waits behind it, while other chats keep flowing.
+			al.routeBoundConnectorInput(runCtx, msg)
 		}
 	}
 }

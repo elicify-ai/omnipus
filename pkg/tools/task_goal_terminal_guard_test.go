@@ -83,7 +83,6 @@ var knownStatusWriters = []statusWriter{
 	{where: "pkg/gateway.taskPatch.buildPatch", mustHook: true},
 	{where: "pkg/gateway.restAPI.reconcileStuckTasks", mustHook: true},
 	{where: "pkg/tools.taskUpdateToolExecute.buildPatchFields", mustHook: true},
-	{where: "pkg/sysagent/tools.taskUpdateToolExecute.buildPatch", mustHook: true},
 
 	// ---- the one classified exemption that REACHES a terminal status -----
 	// MAJ-003/D8.10 (sub-agent control-plane ADR): a user Stop is not an

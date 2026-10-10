@@ -48,10 +48,6 @@ func TestIdentityFields_LockedOnBuiltInsAndHiddenEditableOnCustom(t *testing.T) 
 		}
 	})
 
-	t.Run("icon stays protected on a built-in", func(t *testing.T) {
-		assertProtected(t, ValidateFields(ordinary, []string{"icon"}))
-	})
-
 	t.Run("figure is not confused with an unknown field", func(t *testing.T) {
 		err := ValidateFields(custom, []string{"figure"})
 		var fe *FieldError

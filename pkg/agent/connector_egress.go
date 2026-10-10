@@ -85,8 +85,13 @@ func (al *AgentLoop) refuseMainConnectorDefaultSend(ctx context.Context, channel
 		Sender:    bus.SenderInfo{CanonicalID: "reply-refusal:" + sessionID},
 		Content:   text + " Your last reply was not delivered to anyone outside this conversation.",
 		SessionID: sessionID,
-		Metadata:  map[string]string{"agent_id": agentID, "reply_refusal_note": "1"},
-		// Not UserInitiated: it must never revive a stopped main.
+		// A server-generated note carries no human authority. It reuses the
+		// owner-wake marker (ownerWakeMetadataKey): reviveInboundIsHumanTurn
+		// rejects it and prepareOrdinaryExecution admits it as the non-human
+		// owner-wake principal, which can start the next round of a finished
+		// chat but never continues a stopped one (security review
+		// OPSITE-connector_egress). Never UserInitiated, never OperatorPrompt.
+		Metadata: map[string]string{"agent_id": agentID, "reply_refusal_note": "1", ownerWakeMetadataKey: "1"},
 	}); err != nil {
 		logger.WarnCF("agent", "could not prompt the agent to address its senders",
 			map[string]any{"session_id": sessionID, "error": err.Error()})

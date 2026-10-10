@@ -4,7 +4,7 @@
  *
  * Spec: docs/internal/specs/calendar-recurrence-redesign-spec.md
  *   - "Occurrence expansion endpoint" (wire shape, bucketing, caps, tz authority)
- *   - FR-008 / FR-008a (endpoint contract, `every_ms` projection)
+ *   - FR-008 / FR-008a (endpoint contract)
  *   - Operations & Rollback → Observability commitments (the two client counters)
  *
  * Calls `GET /api/v1/tasks/occurrences?workspace_id&from_ms&to_ms&tz`, passing

@@ -159,7 +159,7 @@ describe('wizard Advanced — Max tool calls per turn (US-3 AS-2, D14)', () => {
   // edits and the query-client-free render the wizard steps rely on.
   function renderAdvanced(initialType: WizardSubmitPayload['type']) {
     const setField = vi.fn()
-    const payload = { type: initialType, name: '', description: '', color: '#3B82F6', model: '', soul: '' } as WizardSubmitPayload
+    const payload = { type: initialType, name: '', description: '', color: '', model: '', soul: '' } as WizardSubmitPayload
     render(<Advanced payload={payload} setField={setField} initialType={initialType} />)
     fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
     return setField

@@ -8,7 +8,7 @@
 import type { TaskTrigger } from '@/lib/api'
 import { parseRruleString, summarizeRecurrence } from '@/lib/calendar/recurrence'
 
-export type TriggerKind = TaskTrigger['type'] // 'manual' | 'once' | 'every' | 'recurring'
+export type TriggerKind = TaskTrigger['type'] // 'manual' | 'once' | 'recurring'
 
 /**
  * Build a TaskTrigger from a kind + config, dropping empty/undefined config keys.
@@ -16,12 +16,10 @@ export type TriggerKind = TaskTrigger['type'] // 'manual' | 'once' | 'every' | '
  */
 export function buildTrigger(
   type: TriggerKind,
-  config: { at_ms?: number; every_ms?: number; cron_expr?: string },
+  config: { at_ms?: number },
 ): TaskTrigger {
-  const clean: Record<string, number | string> = {}
+  const clean: Record<string, number> = {}
   if (config.at_ms != null) clean.at_ms = config.at_ms
-  if (config.every_ms != null) clean.every_ms = config.every_ms
-  if (config.cron_expr) clean.cron_expr = config.cron_expr
   return { type, config: clean }
 }
 
@@ -83,7 +81,7 @@ export function dateToDatetimeLocal(date: Date | null): string {
 }
 
 /**
- * Whether a trigger is a repeat-rule trigger (`every`/`recurring`). NARROWER
+ * Whether a trigger is a repeat-rule trigger (`recurring`). NARROWER
  * than the calendar-only boundary (see `isScheduledTrigger` below, which is
  * the one Board/List — and, as of the 2026-08-07 operator ruling,
  * TaskDetailPanel's editing gate too — actually use) — this predicate is now
@@ -98,12 +96,12 @@ export function dateToDatetimeLocal(date: Date | null): string {
  * `Task`) so callers can use it inline as `isRecurringTrigger(t.trigger)`.
  */
 export function isRecurringTrigger(trigger?: TaskTrigger | null): trigger is TaskTrigger {
-  return trigger?.type === 'every' || trigger?.type === 'recurring'
+  return trigger?.type === 'recurring'
 }
 
 /**
  * Whether a trigger carries ANY schedule — a concrete one-shot instant
- * (`once`), a fixed interval (`every`), or a repeat rule (`recurring`).
+ * (`once`) or a repeat rule (`recurring`).
  * Superset of `isRecurringTrigger` (adds `once`). Board and List exclude
  * every task whose trigger matches this predicate — schedule-bearing tasks
  * live exclusively on the workspace calendar (operator ruling 2026-08-07:
@@ -114,22 +112,21 @@ export function isRecurringTrigger(trigger?: TaskTrigger | null): trigger is Tas
  * gate — can call it inline as `isScheduledTrigger(t.trigger)`.
  */
 export function isScheduledTrigger(trigger?: TaskTrigger | null): trigger is TaskTrigger {
-  return trigger?.type === 'once' || trigger?.type === 'every' || trigger?.type === 'recurring'
+  return trigger?.type === 'once' || trigger?.type === 'recurring'
 }
 
 /**
  * Defensive, read-only plain-English summary for a schedule-bearing trigger
- * (`once`/`every`/`recurring` — FR-023, broadened by the 2026-08-07 operator
+ * (`once`/`recurring` — FR-023, broadened by the 2026-08-07 operator
  * ruling to cover `once` too, superseding the `364d00b2`-era judgment that
  * kept `once` inline-editable). Used ONLY by the generic TaskDetailPanel's
  * calendar-redirect guard — normally unreachable since Board/List exclude
  * every schedule-bearing task (`isScheduledTrigger` above), reachable only
  * via stale cache, a race, or navigation into the panel from a dependency
  * chip / subtask row / search result. Deliberately never includes
- * `cron_expr` or `rrule` — no raw cron/rule string is ever displayed outside
+ * the rule string — no raw cron/rule string is ever displayed outside
  * the calendar editor (D8/D9). NOT the same as `triggerSummary` below, which
- * is a general-purpose label that DOES surface the raw cron string and must
- * not be reused for this guard.
+ * is a general-purpose label and must not be reused for this guard.
  */
 export function scheduledTriggerSummary(trigger: TaskTrigger): string {
   if (trigger.type === 'once') {
@@ -137,14 +134,6 @@ export function scheduledTriggerSummary(trigger: TaskTrigger): string {
     return typeof at === 'number'
       ? `Runs once — ${new Date(at).toLocaleString()}`
       : 'Runs once (time not yet set)'
-  }
-  if (trigger.type === 'every') {
-    const ms = trigger.config?.every_ms
-    if (typeof ms === 'number' && ms > 0) {
-      const minutes = Math.round(ms / 60_000)
-      return `Repeats every ${minutes} minute${minutes === 1 ? '' : 's'}`
-    }
-    return 'Repeats on a fixed interval'
   }
   // FR-023: a real plain-English summary of the actual rule, not a generic
   // placeholder — mirrors the calendar editor's own summarizeRecurrence, but
@@ -167,12 +156,6 @@ export function triggerSummary(trigger?: TaskTrigger | null): string {
     const at = trigger.config?.at_ms
     return `Once — ${at ? new Date(at).toLocaleString() : '(time unset)'}`
   }
-  if (trigger.type === 'every') {
-    const ms = trigger.config?.every_ms
-    return `Every ${ms ? Math.round(ms / 60_000) + 'm' : '(interval unset)'}`
-  }
-  if (trigger.type === 'recurring') {
-    return `Recurring — ${trigger.config?.cron_expr ?? '(no cron)'}`
-  }
+  if (trigger.type === 'recurring') return 'Recurring'
   return 'Manual (drag to run)'
 }
