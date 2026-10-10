@@ -115,8 +115,11 @@ func skipIfNoBrowser(t *testing.T) {
 }
 
 // requireBrowserOrFail is skipIfNoBrowser's counterpart for MEASUREMENT
-// GATES: it resolves a real Chrome the same three ways skipIfNoBrowser does,
-// but when none can be obtained it calls t.Fatalf — it NEVER calls t.Skip.
+// GATES: it first honors OMNIPUS_BROWSER_TEST_CHROME, the exact executable
+// provided by CI's declared setup-chrome dependency. A declared but unusable
+// path is fatal, with NO fallback to a different browser. When no path is
+// declared, local runs retain skipIfNoBrowser's three resolution sources.
+// When no browser can be obtained it calls t.Fatalf — it NEVER calls t.Skip.
 // It returns the resolved executable path so the caller can pin
 // BrowserConfig.ExecPath to the exact binary that was proven to run.
 //
@@ -154,6 +157,19 @@ func skipIfNoBrowser(t *testing.T) {
 // test whose whole job is to launch real Chrome.
 func requireBrowserOrFail(t *testing.T) string {
 	t.Helper()
+
+	// CI pins setup-chrome's chrome-path output, not a name found on PATH.
+	// LookupEnv deliberately distinguishes an absent local override from an
+	// empty action output: the latter must fail rather than measure a fallback.
+	if path, declared := os.LookupEnv("OMNIPUS_BROWSER_TEST_CHROME"); declared {
+		if path == "" || !filepath.IsAbs(path) {
+			t.Fatal("requireBrowserOrFail: OMNIPUS_BROWSER_TEST_CHROME must be a non-empty absolute path; refusing browser fallback")
+		}
+		if output, err := exec.Command(path, "--version").CombinedOutput(); err != nil {
+			t.Fatalf("requireBrowserOrFail: declared Chrome --version failed at %q: %v\n%s\nRefusing browser fallback.", path, err, output)
+		}
+		return path
+	}
 
 	// Source 1: $PATH, probed with --version (an Ubuntu snap stub resolves
 	// but exits 1 — see skipIfNoBrowser's note).
@@ -615,10 +631,11 @@ func spikeLaunchChrome(t *testing.T, label, execPath, extDir string) (*BrowserCo
 func TestSpike_CaptureAgainstSecondChrome(t *testing.T) {
 	// The gate belongs to the browser-e2e job, which installs a real Chrome via
 	// browser-actions/setup-chrome. The plain "Tests" job does not: it runs
-	// `go test ./...` on a runner whose only browser is /usr/bin/chromium-browser,
-	// a system build that never completes the CDP liveness probe over a pipe —
-	// so the gate failed there with "context deadline exceeded" while PASSING in
-	// the job that owns it (OK:true, VideoTracks:1, ReadyState:live).
+	// `go test ./...` on a runner with a system /usr/bin/chromium-browser,
+	// not the job's declared Chrome. That system build has timed out on the CDP
+	// pipe liveness probe, but has also passed in browser-e2e. CI now pins
+	// setup-chrome's exact executable through OMNIPUS_BROWSER_TEST_CHROME;
+	// successful --version probes on unrelated PATH browsers are not enough.
 	//
 	// Skipping OUTSIDE its own job is not the "a skipped gate is a failed gate"
 	// hole requireBrowserOrFail exists to close. That rule is about the gate
