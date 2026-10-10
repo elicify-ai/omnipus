@@ -30,6 +30,12 @@ export const MessageFrameBase = z
     client_message_id: z.string().min(1).max(128).optional(),
     content: z.string().max(5242880),
     session_id: z.string().min(1).max(255).optional(),
+    recipient: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .strict().optional(),
     agent_id: z.string().min(1).max(128).optional(),
     media: z.array(z.string().min(1).max(256)).max(16).optional(),
     auto_approve: z.boolean().nullable().optional(),
@@ -122,6 +128,7 @@ export const TokenFrame = z
     session_id: z.string().min(1).max(255),
     content: z.string().max(65536),
     agent_id: z.string().optional(),
+    reply_to_message_id: z.string().min(1).optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
     goal_id: z.string().optional(),
@@ -412,6 +419,7 @@ export const ReplayMessageFrame = z
     content: z.string(),
     role: z.enum(["user", "assistant", "system", "turn_canceled"]),
     id: z.string().optional(),
+    reply_to_message_id: z.string().min(1).optional(),
     timestamp: z.string().optional(),
     agent_id: z.string().optional(),
     model: z.string().max(256).optional(),

@@ -28,6 +28,12 @@ properties:
       Agent that produced this token. Identifies the origin agent for
       background/delegated sub-turns, where the client's active-agent
       session state would otherwise guess incorrectly.
+  reply_to_message_id:
+    type: string
+    minLength: 1
+    description: >
+      Present only on a guest reply (session-core FR-027): the message_id of
+      the admitted request this answer addresses. Same value as on replay.
   turn_id:
     type: string
     description: >-

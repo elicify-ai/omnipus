@@ -63,6 +63,12 @@ properties:
   agent_id:
     type: string
     description: Agent that produced this message (assistant messages only).
+  reply_to_message_id:
+    type: string
+    minLength: 1
+    description: >
+      Present only on a guest reply (session-core FR-027): the message_id of
+      the admitted request this entry answers.
   model:
     type: string
     description: >

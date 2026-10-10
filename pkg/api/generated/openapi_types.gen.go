@@ -20714,6 +20714,9 @@ type Message struct {
 	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
 	Model *string `json:"model,omitempty"`
 
+	// ReplyToMessageId Present only on a guest reply (session-core FR-027): the message_id of the admitted request this entry answers. The guest author is the existing agent_id. Same value live and on replay.
+	ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
+
 	// Role Author role. Absent on compaction entries.
 	Role *MessageRole `json:"role,omitempty"`
 
@@ -24293,6 +24296,9 @@ type SessionDetail struct {
 
 		// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
 		Model *string `json:"model,omitempty"`
+
+		// ReplyToMessageId Present only on a guest reply (session-core FR-027): the message_id of the admitted request this entry answers. The guest author is the existing agent_id. Same value live and on replay.
+		ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
 
 		// Role Author role. Absent on compaction entries.
 		Role *SessionDetailMessagesRole `json:"role,omitempty"`

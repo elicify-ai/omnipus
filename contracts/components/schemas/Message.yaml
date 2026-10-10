@@ -131,6 +131,15 @@ properties:
     type: string
     description: ID of the agent that produced this entry (FR-002). Always present.
     example: "jim"
+  reply_to_message_id:
+    type: string
+    minLength: 1
+    readOnly: true
+    description: >
+      Present only on a guest reply (session-core FR-027): the message_id of
+      the admitted request this entry answers. The guest author is the
+      existing agent_id. Same value live and on replay.
+    example: "msg_01HXYZ"
   messages_compacted:
     type: integer
     description: Number of messages compacted (present only on compaction entries).
