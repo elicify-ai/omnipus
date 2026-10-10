@@ -156,13 +156,8 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 			}
 		}
 	}
-	// Finding 2 fix (ADR-091 seven-reviewer gate, 2026-09): rec.SteeredBy.
-	// ToolExclusions is set by the delegate tool, persisted, exposed on the
-	// wire, and asserted by a serialisation test — but was never actually
-	// READ here. pkg/tools/registry.go's own CloneExcept doc comment
-	// claimed it was "applied from the record at reconstruction"; this file
-	// contained no such code, so a delegated child could call switch_agent,
-	// which D2 and the long-standing identity rule forbid. turnAgent is
+	// rec.SteeredBy.ToolExclusions is persisted, exposed on the wire, and
+	// applied here at reconstruction. turnAgent is
 	// agentInst unchanged when there is nothing to exclude (the overwhelming
 	// common case), so every existing non-excluding path is byte-identical
 	// to before.
@@ -195,7 +190,7 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 
 // agentInstanceWithToolExclusions returns an independent *AgentInstance
 // whose Tools registry has excluded names removed (pkg/tools/registry.go's
-// ToolRegistry.CloneExcept — switch_agent today, FR-H-006), leaving base
+// ToolRegistry.CloneExcept), leaving base
 // itself, and every OTHER session currently running that same shared agent,
 // untouched. base.Tools is a pointer SHARED by every session that runs this
 // agent (AgentRegistry.GetAgent returns the same *AgentInstance to every

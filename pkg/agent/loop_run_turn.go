@@ -173,13 +173,13 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = withTurnState(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts)
 	// SEC-15: Inject agent ID so audit entries carry the agent identity.
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithAgentID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.agent.ID)
-	// Inject session key so switch_agent can address the session.
+	// Inject the session key so tools can address the session.
 	if rc.rx.rr.rq.ri.rf.rt.ts.sessionKey == "" {
-		logger.WarnCF("agent", "runTurn: sessionKey is empty — switch_agent tool will not work",
+		logger.WarnCF("agent", "runTurn: sessionKey is empty — session-addressed tools will not work",
 			map[string]any{"agent_id": rc.rx.rr.rq.ri.rf.rt.ts.agentID, "chat_id": rc.rx.rr.rq.ri.rf.rt.ts.chatID})
 	}
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithSessionKey(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.sessionKey)
-	// Inject the actual session ID (directory name) for the switch_agent tool.
+	// Inject the actual session ID (directory name) for session-addressed tools.
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTranscriptSessionID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID)

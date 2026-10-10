@@ -35,8 +35,7 @@ var ErrDispatchCapReached = errors.New("task_executor: global dispatch cap reach
 // ADR-057, AppendTranscript silently minted an orphan session directory for
 // exactly this case and returned nil, so a lost task/goal transcript write
 // was indistinguishable from a successful one. Mirrors pkg/agent/turn.go's
-// transcriptWriteFailures (U3) and pkg/tools/handoff.go's
-// handoffTranscriptWriteFailures (U22) — a package-local counter scoped to
+// transcriptWriteFailures (U3) — a package-local counter scoped to
 // this unit's own call sites, never a shared cross-package counter.
 var taskGoalTranscriptWriteFailures atomic.Uint64
 

@@ -69,15 +69,16 @@ func TestGetOrCreateScheduledSession_GetsExisting(t *testing.T) {
 	first, err := store.GetOrCreateScheduledSession(id, "mia")
 	require.NoError(t, err)
 
-	// Simulate a human switching the active agent on this session.
-	require.NoError(t, store.SwitchAgent(id, "max"))
+	// Simulate a human touching this session (retitling it).
+	touched := "touched by a human"
+	require.NoError(t, store.SetMeta(id, MetaPatch{Title: &touched}))
 
 	// Second get-or-create with a DIFFERENT requested owner must NOT recreate
 	// or reset the session — it returns what is on disk.
 	second, err := store.GetOrCreateScheduledSession(id, "mia")
 	require.NoError(t, err)
 	assert.Equal(t, first.ID, second.ID)
-	assert.Equal(t, "max", second.ActiveAgentID, "existing session must not be clobbered")
+	assert.Equal(t, touched, second.Title, "existing session must not be clobbered")
 	assert.Equal(t, SessionTypeScheduled, second.Type)
 
 	// Only one session directory should exist.

@@ -108,7 +108,6 @@ type AgentLoop struct {
 	// already deleted (see websocket_replay.go's replay-derived liveness
 	// comment near streamReplay) — these fields had no reader or writer
 	// left anywhere in the repo.
-	sessionActiveAgent sync.Map // key: "session:"+sessionID (string), value: agentID (string); set by handoff, cleared on agent deletion
 	// postFinishRevivalMu / postFinishRevival mark a session whose
 	// SPECIFIC generation was JUST created by a post-finish revival
 	// (issue #1020 round-4 correction). The key is the NEW generation
@@ -122,20 +121,6 @@ type AgentLoop struct {
 	// parent-facing text was triggered by a late steer.
 	postFinishRevivalMu sync.Mutex
 	postFinishRevival   map[string]int
-	// lastSwitchToDefault records, per session, whether the most recent
-	// switch_agent call was a return-to-default (tools.HandoffEvent.ToDefault)
-	// rather than a named-agent hand-off. It exists so the WS agent_switched
-	// frame builder (pkg/gateway/websocket.go) can report the tool's own
-	// intent instead of re-deriving "was this a return to default" after the
-	// fact by comparing the resulting active agent id against the configured
-	// default agent id — a comparison that misreports an explicit
-	// switch_agent(target:"<id>") that happens to name the current default
-	// agent as a return-to-default. Populated by onHandoffFrontend
-	// synchronously, before the matching ToolExecEnd event is emitted, so the
-	// WS handler always observes the value it needs; read once via
-	// GetLastSwitchToDefault (LoadAndDelete — one-shot per switch).
-	// key: "session:"+sessionID (string), value: bool.
-	lastSwitchToDefault sync.Map
 
 	// Turn tracking
 	turnSeq        atomic.Uint64
@@ -575,8 +560,7 @@ type AgentLoop struct {
 	// manifest optimization (cfg.Tools.Manifest.Compressed) for each
 	// (agent, session) bucket. Key: manifestBucketKey(agentID, transcriptID,
 	// sessionKey) — ADR-071 D3 §4.6 narrowed this from a session-only key so
-	// a switch_agent mid-session no longer lets the incoming agent inherit
-	// the outgoing agent's loaded Tier 3 tools. Value: map[string]bool (tool
+	// the key stays per-agent. Value: map[string]bool (tool
 	// name → loaded). Protected by loadedToolsMu. A new bucket lazily creates
 	// a fresh set on first load; entries are evicted by forgetSession's
 	// suffix sweep on CloseSession (transcript sessions). Only populated when
@@ -1447,8 +1431,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 // human message path:
 //
 //   - It pins ownerAgentID directly via runAgentLoop — it does NOT consult
-//     routing or the sessionActiveAgent handoff map, so a human switching agents
-//     in this session cannot hijack the scheduled run, and a missing/disabled
+//     routing, so a missing/disabled
 //     owner is a hard error (never a default-agent fallback, the core #264 bug).
 //   - It passes the concrete sessionID as TranscriptSessionID so the turn
 //     registers under it (GetActiveTurnHookForSession matches by
@@ -1816,21 +1799,6 @@ func (al *AgentLoop) runAgentLoop(
 	// Seed nested task depth; ordinary root turns keep depth zero.
 	if opts.InitialDelegationDepth > 0 {
 		ts.depth = opts.InitialDelegationDepth
-	}
-	// Bug 1 fix: wire a resolver so appendToolCallTranscript (and event payloads)
-	// use the runtime-current active agent rather than the turn's starting agent.
-	// After a handoff, sessionActiveAgent reflects the new agent; tool_call entries
-	// produced in the same turn will carry the correct post-handoff agent_id.
-	if opts.TranscriptSessionID != "" {
-		resolverKey := "session:" + opts.TranscriptSessionID
-		ts.activeAgentResolver = func() string {
-			if v, ok := al.sessionActiveAgent.Load(resolverKey); ok {
-				if id, ok := v.(string); ok && id != "" {
-					return id
-				}
-			}
-			return ""
-		}
 	}
 	result, err := al.runTurn(ctx, ts)
 	// Snapshot the result for test observability (lastTurnResult field).

@@ -90,9 +90,8 @@ func ToolDelegateSessionID(ctx context.Context) string {
 // the durable record on every later action — ADR-091 deleted the in-process
 // DelegateTaskState this classification used to be stamped on.
 //
-// Satisfied by *agent.AgentRegistry; defined as an interface here (mirroring
-// AgentRegistryReader in handoff.go) to avoid an import cycle
-// (tools -> agent -> tools).
+// Satisfied by *agent.AgentRegistry; defined as an interface here to avoid
+// an import cycle (tools -> agent -> tools).
 type DelegateAgentRegistry interface {
 	// IsExternalCLI reports whether agentID resolves to dispatch kind
 	// "external-cli" (subagent_3p). Returns false (native) for an unknown or
@@ -102,9 +101,8 @@ type DelegateAgentRegistry interface {
 
 // DelegateSessionStore is the subset of *session.UnifiedStore DelegateTool
 // needs to read back a running native task's own transcript entries for
-// action:"status" (W2). Defined as an interface (mirroring
-// HandoffSessionStore in handoff.go) to decouple from the concrete store
-// type.
+// action:"status" (W2). Defined as an interface to decouple from the
+// concrete store type.
 type DelegateSessionStore interface {
 	// ReadTranscript returns all transcript entries for the session.
 	ReadTranscript(sessionID string) ([]session.TranscriptEntry, error)
@@ -183,8 +181,7 @@ type DelegateTool struct {
 	// getAgentRegistry, when set, resolves the live agent registry used to
 	// classify a delegation target as native or external-CLI at
 	// task-creation time (W2). Called at task-creation time (not
-	// construction time) so hot reloads are reflected automatically,
-	// mirroring NewHandoffTool's getRegistry closure pattern. A nil/unset
+	// construction time) so hot reloads are reflected automatically. A nil/unset
 	// resolver leaves every task's Is3P at its zero value (false — treated
 	// as native), matching the pre-W2 behavior for anyone who doesn't wire
 	// it (e.g. this file's existing unit tests).

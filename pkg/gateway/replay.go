@@ -208,26 +208,6 @@ func streamReplay(
 			if err2 := emitFrame(sr.msgFrame); err2 != nil {
 				return framesEmitted, err2
 			}
-
-			// Bug 2 fix: for handoff and return_to_default system entries, emit
-			// a typed agent_switched frame so the SPA can render the agent
-			// transition visually rather than treating it as plain chat text.
-			// HandoffTool writes AgentID = target; ReturnToDefaultTool writes
-			// AgentID = returning agent (not target), so we only emit the switch
-			// frame for entries whose content starts with "Handoff:" and where
-			// the entry carries the target agent ID.
-			if entry.Type == session.EntryTypeSystem && entry.AgentID != "" &&
-				strings.HasPrefix(entry.Content, "Handoff:") {
-				switchF := generated.AgentSwitchedFrame{
-					Type:      string(generated.WsFrameTypeAgentSwitched),
-					SessionId: sr.sessionID,
-				}
-				agentIDCopy := entry.AgentID
-				switchF.AgentId = &agentIDCopy
-				if err2 := emitFrame(switchF); err2 != nil {
-					return framesEmitted, err2
-				}
-			}
 		}
 
 		// FR-I-001: emit tool_call_start + tool_call_result for each ToolCall.

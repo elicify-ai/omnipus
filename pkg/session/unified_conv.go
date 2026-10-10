@@ -257,12 +257,10 @@ func convNormalizeSavedChatDirs(baseDir string) error {
 // existing type means the chat is already current and must NOT be rewritten
 // (spec CONV / Completion).
 //
-// The retired handover "active_agent_id" is deliberately NOT a trigger: it is
-// still a LIVE field on current sessions — the handoff tool's SwitchAgent
-// (unified_write.go) writes it and the runtime resolves the owner through it —
-// so treating its presence as "pre-cutover" would strip a real handover on
-// every boot. It is dropped only as PART of converting a genuinely pre-cutover
-// chat, where keeping "agent_id" as the immutable owner is the requirement.
+// The retired handover "active_agent_id" is deliberately NOT a trigger: its
+// presence alone does not make a chat pre-cutover. It is dropped only as PART
+// of converting a genuinely pre-cutover chat, where keeping "agent_id" as the
+// immutable owner is the requirement.
 func convNeedsNormalization(f u5IdentityFile) bool {
 	return f.Type == ""
 }

@@ -64,7 +64,7 @@ var fullManifestToolNames = map[string]struct{}{
 	"list_tasks": {}, "message_parent": {}, "plan_correct": {}, "read_file": {},
 	"recall_conversation": {}, "recall_memory": {}, "remember": {}, "search_web": {},
 	"send_file": {}, "send_message": {}, "set_goal": {}, "set_todos": {},
-	"stop_plan": {}, "switch_agent": {}, "update_task": {}, "write_file": {},
+	"stop_plan": {}, "update_task": {}, "write_file": {},
 }
 
 // infraManifestToolNames is the set of infrastructure tools that are always

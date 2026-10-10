@@ -1373,7 +1373,7 @@ func (ad *agentDeleteToolExecute) respond() *tools.ToolResult {
 // pkg/session's SessionMeta doc comment — PostLoad-backfilled from the
 // legacy AgentID on every disk read, so this check is safe even against
 // pre-v2 sessions). A session with MORE than one agent in AgentIDs (a
-// conversation another agent also participated in, e.g. via SwitchAgent) is
+// conversation another agent also participated in) is
 // deliberately left COMPLETELY untouched rather than partially edited:
 // there is no supported primitive to remove a single id from AgentIDs
 // (session.MetaPatch has no AgentIDs field), and hand-rolling a direct

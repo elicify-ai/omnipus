@@ -4,7 +4,6 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -161,7 +160,7 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 // pending_ask.go) — it is no longer "the single invalidation/update point
 // for every mutation path" (that whole-document funnel is exactly what
 // FR-084/Alternative-F forbids; see the doc comments above metaCache and
-// readMetaLocked). This file's OWN five mutation paths (createSessionLocked,
+// readMetaLocked). This file's OWN four mutation paths (createSessionLocked,
 // SetMeta, AppendTranscript, NewChannelSession) call the
 // targeted writers DIRECTLY and never reach this function.
 //

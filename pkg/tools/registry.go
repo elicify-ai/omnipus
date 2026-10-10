@@ -1,6 +1,6 @@
 // Package tools implements the Tool interface, the central ToolRegistry, and
 // the full catalog of builtin tools available to Omnipus agents — the
-// unified bash tool (ADR-036), delegate/switch_agent (agent-to-agent
+// unified bash tool (ADR-036), delegate (agent-to-agent
 // delegation, ADR-071 D4), filesystem, session, web, memory, messaging,
 // skills, and MCP-backed tools.
 // ToolRegistry (this file) is the single registration/dispatch point every
@@ -887,10 +887,9 @@ const (
 	// since both tools are now the same "delegate" registration.
 	//
 	// REVERSED (ADR-040, 2026-07-12): this constant is no longer applied when
-	// a steered child session is launched — the launcher carries only the
-	// switch_agent exclusion on LaunchRequest.ToolExclusions, so the child's
-	// registry is built from the record's own exclusions rather than a blanket
-	// CloneExcept. FR-H-006's registry-level "one level only for general
+	// a steered child session is launched — the child's registry is built from
+	// the record's own exclusions (LaunchRequest.ToolExclusions) rather than a
+	// blanket CloneExcept. FR-H-006's registry-level "one level only for general
 	// subagents" block pre-empted the per-workspace delegation trust-graph
 	// (ADR-037) from ever running for nested delegation, silently overriding
 	// an operator's explicit, wired, unrestricted trust edge. Nested
@@ -902,13 +901,6 @@ const (
 	// legitimately needs to omit `delegate` from a cloned registry; it is
 	// simply no longer applied unconditionally to every steered child session.
 	ExcludedDelegate ExcludedTool = "delegate"
-	// ExcludedSwitchAgent is the agent-switch tool. Excluded from child
-	// registries to prevent sub-turns from hijacking the active agent
-	// session (FR-H-006). Renamed from ExcludedHandoff (ADR-071 D4, which
-	// merged hand_off + return_to_default into switch_agent) — the constant
-	// identity tracks the tool it excludes, matching ExcludedDelegate's
-	// naming convention.
-	ExcludedSwitchAgent ExcludedTool = "switch_agent"
 )
 
 // CloneExcept creates an independent copy of the registry omitting the named tools.
@@ -916,28 +908,18 @@ const (
 // certain tools. The version counter is reset to 0 in the clone as it is a new
 // independent registry.
 //
-// Production no longer constructs a child registry through a wholesale,
-// unconditional CloneExcept applied to every steered child the way it once
-// did: a steered child's tool exclusion is carried on LaunchRequest.
-// ToolExclusions (the switch_agent exclusion, set by the delegate tool,
-// req.ToolExclusions → LifecycleRecord.SteeredBy.ToolExclusions,
+// Production does not construct a child registry through a wholesale,
+// unconditional CloneExcept applied to every steered child: a steered child's
+// tool exclusion is carried on LaunchRequest.ToolExclusions
+// (req.ToolExclusions -> LifecycleRecord.SteeredBy.ToolExclusions,
 // steer_launcher.go) and applied ONE call at reconstruction —
 // pkg/agent/steer_reconstruct.go's agentInstanceWithToolExclusions, called
 // from reconstructSteeredTurn whenever SteeredBy.ToolExclusions is
-// non-empty. (Finding 2, ADR-091 seven-reviewer gate, 2026-09: this comment
-// previously claimed the wiring above already existed while
-// steer_reconstruct.go contained no such code at all — a delegated child
-// could call switch_agent, which D2 and the long-standing identity rule
-// forbid, and the false claim here was actively stopping the next reader
-// from noticing the gap. It is fixed now; this comment describes the
-// current, real call site.) A child must never be able to hijack the
-// active agent session via switch_agent, but CAN delegate onward to a
-// grandchild, governed instead by the per-workspace delegation
-// trust-graph's mode/depth gate. This reverses the prior "a child sub-turn
-// must never be able to delegate to a grandchild" rule that used to live here:
-// see ADR-040 (docs/internal/architecture/ADR-040-fr-h-006-nested-delegation-reversal.md)
-// for the full root-cause and rationale. ExcludedDelegate is unaffected as a
-// CloneExcept primitive — see its own doc comment above.
+// non-empty. A child CAN delegate onward to a grandchild, governed by the
+// per-workspace delegation trust-graph's mode/depth gate (ADR-040,
+// docs/internal/architecture/ADR-040-fr-h-006-nested-delegation-reversal.md).
+// ExcludedDelegate is unaffected as a CloneExcept primitive — see its own
+// doc comment above.
 //
 // Existence check: each ExcludedTool name is validated against the base registry.
 // If a named tool is absent, slog.Warn is emitted and processing continues — this

@@ -1192,30 +1192,8 @@ func TestUpdateAgent_SoulChange_RegistryReloadCompletesBeforeResponse(t *testing
 			"pre-update state")
 }
 
-// TestUpdateAgent_RejectsReservedDefaultName verifies updateAgent 400s on a
-// name of "default", case-insensitively, for an existing agent.
-func TestUpdateAgent_RejectsReservedDefaultName(t *testing.T) {
-	for _, name := range []string{"default", "Default", "DEFAULT"} {
-		t.Run("name="+name, func(t *testing.T) {
-			api := buildExecutorTestAPI(t)
-
-			body := `{"name":"` + name + `"}`
-			w := httptest.NewRecorder()
-			r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
-			r.Header.Set("Content-Type", "application/json")
-			api.updateAgent(w, r, "test-agent")
-
-			require.Equal(t, http.StatusBadRequest, w.Code,
-				"update to reserved name %q must be rejected 400, got body: %s", name, w.Body.String())
-			assert.Contains(t, w.Body.String(), "reserved",
-				"error body must explain the name is reserved")
-		})
-	}
-}
-
-// TestUpdateAgent_AllowsOrdinaryNameChange is the negative control — an
-// ordinary name update must still succeed, proving the reserved-name check
-// does not over-fire.
+// TestUpdateAgent_AllowsOrdinaryNameChange verifies an ordinary name update
+// succeeds.
 func TestUpdateAgent_AllowsOrdinaryNameChange(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
