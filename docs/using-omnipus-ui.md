@@ -116,7 +116,7 @@ Your own messages sit on the right with no name. Every other message in the conv
 
 Names are plain text. A name that contains characters that look like formatting shows them exactly as written, never styled.
 
-When an agent answers someone — for example a reply that goes back out to a message that arrived on Telegram — the reply shows **Ava → Alice · Telegram** above the text: who answered, and who it went to. If a reply records where it went without a name, it shows **Ava → reply** instead. The tool card for the send that produced such a reply is hidden in the conversation, because the reply itself already shows what was sent and to whom.
+When an agent answers someone — for example a reply that goes back out to a message that arrived on Telegram — the reply shows **Ava → Alice · Telegram** above the text: who answered, and who it went to. If a reply records only that it was a reply, without who it went to, it shows **Ava → reply** instead. The tool card for the send that produced such a reply is hidden from the conversation, because the reply itself already shows what was sent and to whom; while that answer is still streaming in live, the card can remain until the reply finishes.
 
 A failure or refusal routed to an existing chat appears in that conversation, including when no reply has started. It does not turn into an app-wide connection banner when you open another conversation or start a new chat. Connection and routing-protocol failures remain separate app-wide problems.
 
