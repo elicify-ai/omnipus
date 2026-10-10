@@ -725,7 +725,7 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("rest: save config", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 
@@ -759,7 +759,7 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Error("rest: save config for token rotation", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 	// Persistence succeeded. Reload so the in-memory config picks up the new token.
@@ -773,7 +773,7 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 	// until some unrelated reload happened to run.
 	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("config reload after token rotation failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("token saved but reload failed: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "token saved but reload failed", err)
 		return
 	}
 	jsonOK(w, gen.RotateTokenResponse{Token: newToken})

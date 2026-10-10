@@ -197,7 +197,7 @@ func (a *restAPI) getUserContext(w http.ResponseWriter) {
 	_, content, err := config.ReadUserProfile()
 	if err != nil {
 		slog.Error("rest: read USER.md", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read USER.md: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read USER.md", err)
 		return
 	}
 	jsonOK(w, gen.UserContextResponse{Content: content})
@@ -214,12 +214,12 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 	userMDPath := config.UserProfilePath()
 	if err := os.MkdirAll(filepath.Dir(userMDPath), 0o700); err != nil {
 		slog.Error("rest: create USER.md parent", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not write USER.md", err)
 		return
 	}
 	if err := fileutil.WriteFileAtomic(userMDPath, []byte(req.Content), 0o600); err != nil {
 		slog.Error("rest: write USER.md", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not write USER.md", err)
 		return
 	}
 	jsonOK(w, gen.UserContextResponse(req))
@@ -373,7 +373,7 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 		if a.onboardingMgr != nil {
 			if err := a.onboardingMgr.CompleteOnboarding(); err != nil {
 				slog.Error("rest: could not persist onboarding completion", "error", err)
-				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save onboarding state: %v", err))
+				jsonServerFailure(w, http.StatusInternalServerError, "could not save onboarding state", err)
 				return
 			}
 		}
