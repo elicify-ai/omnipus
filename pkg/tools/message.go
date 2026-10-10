@@ -44,6 +44,11 @@ type MessageTool struct {
 	// posture.
 	steerAudience steer.AudienceResolver
 	steerObserver steer.BoundaryObserver
+
+	// peerRouter / replyRouter serve the peer and reply forms (U8,
+	// message_address.go). Nil leaves each form refused, never defaulted.
+	peerRouter  PeerRouter
+	replyRouter ReplyRouter
 }
 
 func NewMessageTool() *MessageTool {
@@ -99,6 +104,20 @@ func (t *MessageTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional: target chat/user ID",
 			},
+			"reply_to": map[string]any{
+				"type": "string",
+				"description": "Optional: the id of a request you were sent. Answers that request through its " +
+					"source; cannot be combined with channel, chat_id, workspace_id or agent_id.",
+			},
+			"workspace_id": map[string]any{
+				"type": "string",
+				"description": "Optional: with agent_id, the recipient pair for a peer request. Defaults to " +
+					"your current workspace when omitted.",
+			},
+			"agent_id": map[string]any{
+				"type":        "string",
+				"description": "Optional: with workspace_id, the recipient agent for a peer request.",
+			},
 		},
 		"required": []string{"content"},
 	}
@@ -123,6 +142,10 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	content, ok := args["content"].(string)
 	if !ok {
 		return &ToolResult{ForLLM: "content is required", IsError: true}
+	}
+
+	if result, handled := t.executeAddressedForm(ctx, content, args); handled {
+		return result
 	}
 
 	// The ACTING agent — never the session's original agent and never a
