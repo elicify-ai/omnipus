@@ -118,6 +118,37 @@ type Authorization struct {
 	RemainingDepth int               `json:"remaining_depth"`
 }
 
+// InitiatedBy records that a run was started by an agent's own action
+// (run_task, execute_plan) and what that start left it allowed: the initiator,
+// the run's chain depth (initiator depth + 1), and the onward depth budget the
+// delegation edge permitted. It is the carrier the launcher and the
+// authorizer read when this run later delegates or starts further work.
+// Disk-only; never on the wire.
+type InitiatedBy struct {
+	AgentID       string        `json:"agent_id"`
+	SessionID     string        `json:"session_id,omitempty"`
+	Depth         int           `json:"depth"`
+	Authorization Authorization `json:"authorization"`
+}
+
+// OnwardBudget is the tightest onward delegation budget this session inherited:
+// the minimum over its steering edge's and its initiator's RemainingDepth.
+// ok is false when neither is set.
+func (r *LifecycleRecord) OnwardBudget() (budget int, ok bool) {
+	if r == nil {
+		return 0, false
+	}
+	if r.SteeredBy != nil {
+		budget, ok = r.SteeredBy.Authorization.RemainingDepth, true
+	}
+	if r.InitiatedBy != nil {
+		if rd := r.InitiatedBy.Authorization.RemainingDepth; !ok || rd < budget {
+			budget, ok = rd, true
+		}
+	}
+	return budget, ok
+}
+
 // Limits is the creator-set resource ceiling on a steered session's
 // lifetime across re-entries (I-1 SteeredBy.Limits).
 type Limits struct {

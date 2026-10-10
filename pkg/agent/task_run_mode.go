@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -91,10 +92,13 @@ func (te *TaskExecutor) assigneeMain(t *task.Task) (string, bool, error) {
 // captureRunRecipients is the FR-019 capture: the starter agent's eligible main
 // (when an agent started the run) and the assignee's eligible main, in that
 // order, deduplicated. The creator is never used. A person, a Calendar fire,
-// the queue drain, a plan or a dependency contribute no starter. An address
-// whose read fails or that is not eligible is omitted (ERROR logged for a read
-// failure) and nothing is substituted.
-func (te *TaskExecutor) captureRunRecipients(ctx context.Context, t *task.Task) []string {
+// the queue drain or a dependency contribute no starter. The starter is the
+// agent recorded as the run's authorized initiator (never read from ctx: a task
+// run re-stamps ctx with the assignee, so "who is calling" there is wrong), so
+// "starter" and "initiator" are the same fact. An address whose read fails or
+// that is not eligible is omitted (ERROR logged for a read failure) and nothing
+// is substituted.
+func (te *TaskExecutor) captureRunRecipients(ctx context.Context, t *task.Task, initiatedBy *session.InitiatedBy) []string {
 	if te == nil || te.mainResolver == nil || t == nil {
 		return nil
 	}
@@ -125,7 +129,9 @@ func (te *TaskExecutor) captureRunRecipients(ctx context.Context, t *task.Task) 
 	if starterWorkspace == "" {
 		starterWorkspace = t.WorkspaceID
 	}
-	lookup("starter", starterWorkspace, strings.TrimSpace(tools.ToolAgentID(ctx)))
+	if initiatedBy != nil {
+		lookup("starter", starterWorkspace, strings.TrimSpace(initiatedBy.AgentID))
+	}
 	lookup("assignee", t.WorkspaceID, t.AgentID)
 	return out
 }
@@ -150,7 +156,7 @@ func runRecipientsFrom(ctx context.Context) []string {
 // main (the steering session), bound to the task, with its run opened under the
 // captured recipients before the child is dispatched. Returns the child's
 // session id. A dispatch failure closes the opened run as failed.
-func (te *TaskExecutor) launchMainTaskRun(ctx context.Context, t *task.Task, occurrenceMs *int64, kind task.RunKind) (string, error) {
+func (te *TaskExecutor) launchMainTaskRun(ctx context.Context, t *task.Task, occurrenceMs *int64, kind task.RunKind, initiatedBy *session.InitiatedBy) (string, error) {
 	if te == nil || te.launcher == nil {
 		return "", errors.New("task_executor: no session launcher configured")
 	}
@@ -161,7 +167,7 @@ func (te *TaskExecutor) launchMainTaskRun(ctx context.Context, t *task.Task, occ
 	if !ok {
 		return "", fmt.Errorf("task_executor: assignee %q has no eligible main in workspace %q", t.AgentID, t.WorkspaceID)
 	}
-	recipients := te.captureRunRecipients(ctx, t)
+	recipients := te.captureRunRecipients(ctx, t, initiatedBy)
 
 	launched, err := te.launcher.Launch(ctx, steer.LaunchRequest{
 		SteeringSessionID: mainID,
@@ -170,6 +176,7 @@ func (te *TaskExecutor) launchMainTaskRun(ctx context.Context, t *task.Task, occ
 		Task:              te.buildPrompt(t),
 		Origin:            steer.Origin{Kind: steer.OriginKindTask, CallID: t.OriginCallID, TaskID: t.ID},
 		PlanID:            t.PlanID,
+		Initiator:         initiatedBy,
 	})
 	if err != nil {
 		return "", te.mapLaunchRefusal(t, mainID, "launch", err)

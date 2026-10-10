@@ -282,6 +282,11 @@ type Patch struct {
 	// OwnerSessionID sets Plan.OwnerSessionID (ADR-053 m-3/FR-147 — named
 	// plan<->owner-session linkage).
 	OwnerSessionID *string
+	// InitiatedBy sets Plan.InitiatedBy. Double pointer (like Bounds): outer
+	// nil = unchanged; *outer nil = clear it (a person approved or played the
+	// plan and their action carries the authority); *outer non-nil = the agent
+	// whose execute_plan approved it.
+	InitiatedBy **task.Initiator
 
 	// --- supervision state (ADR-055/FR-050) ---
 	//
@@ -469,6 +474,9 @@ func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, bool, error) {
 	}
 	if su.patch.OwnerSessionID != nil {
 		su.p.OwnerSessionID = *su.patch.OwnerSessionID
+	}
+	if su.patch.InitiatedBy != nil {
+		su.p.InitiatedBy = *su.patch.InitiatedBy
 	}
 	if err := applySupervisionPatch(su.p, su.patch); err != nil {
 		return nil, true, err
