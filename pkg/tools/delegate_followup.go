@@ -34,7 +34,7 @@ type refusalTexter interface{ RefusalText() string }
 // reads a fixed sentence, the gateway log keeps the cause, and the cause stays
 // reachable through errors.Is/As on the result's error.
 func controlFailure(action, fixed string, cause error) *ToolResult {
-	slog.Warn("delegate: "+action+" failed; the caller was given a fixed sentence", "error", cause)
+	slog.Error("delegate: "+action+" failed; the caller was given a fixed sentence", "error", cause)
 	return ErrorResult("delegate: " + action + ": " + fixed).WithError(cause)
 }
 

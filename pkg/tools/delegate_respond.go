@@ -17,6 +17,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -77,8 +78,8 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 		// memory, so a repeat respond in this process is refused too.
 		return NewToolResult(result.ForLLM + fmt.Sprintf(
 			"\nThe answer WAS delivered — do not send it again; use delegate(action=\"steer\", session_id=%q, text=...) for any follow-up. "+
-				"It could not be recorded as answered (%v), so after a restart this question may still show as open.",
-			dt.sessionID, err))
+				"It could not be recorded as answered, so after a restart this question may still show as open.",
+			dt.sessionID))
 	}
 	return result
 }
@@ -105,7 +106,7 @@ func (dt *delegateToolExecuteRespond) checkCorrelation() *ToolResult {
 	}
 	lookup, err := store.ReserveAnswer(dt.rec.SteeringSessionID(), dt.sessionID, dt.correlationID)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: resolve correlation_id: %v", err)).WithError(err)
+		return controlFailure("respond", "resolve correlation_id failed: the message inbox could not be read right now; retry shortly", err)
 	}
 	dt.answers = store
 	switch lookup.State {
@@ -162,7 +163,7 @@ func (dt *delegateToolExecuteRespond) validateAndLoad() (*ToolResult, bool) {
 
 	rec, lerr := dt.t.lifecycle.Load(dt.sessionID)
 	if lerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: %v", lerr)), true
+		return lifecycleLoadFailure("respond", dt.sessionID, lerr), true
 	}
 	dt.rec = rec
 	by, verr := dt.t.verifyCallerPrincipal(dt.ctx, rec)
@@ -200,7 +201,10 @@ func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
 	}
 	if _, derr := deliverer.DeliverExternalCLIInstruction(dt.ctx, dt.sessionID, dt.rec.AgentID,
 		providers.Message{Role: "user", Content: dt.text}, dt.correlationID); derr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: not_steerable: %v", derr)).WithError(derr), true
+		if text, shown := displayableCause(derr); shown {
+			return ErrorResult("delegate: respond: not_steerable: " + text).WithError(derr), true
+		}
+		return controlFailure("respond", fmt.Sprintf("not_steerable: the answer for session %s could not be delivered right now; retry shortly", dt.sessionID), derr), true
 	}
 	return dt.acknowledgedRespond("Answer delivered to the external CLI conversation by interrupt + resume."), true
 }
@@ -230,7 +234,7 @@ func (dt *delegateToolExecuteRespond) deliverNative() *ToolResult {
 		}
 		revived, rerr := reviver.ReviveStoppedSession(dt.ctx, dt.sessionID, dt.by, dt.instruction)
 		if rerr != nil {
-			return ErrorResult(fmt.Sprintf("delegate: respond: resume session %s: %v", dt.sessionID, rerr)).WithError(rerr)
+			return reviveFailure("respond", dt.sessionID, rerr)
 		}
 		if !revived {
 			return ErrorResult(fmt.Sprintf("delegate: respond: session %s could not be resumed", dt.sessionID))
@@ -276,7 +280,7 @@ func (dt *delegateToolExecuteRespond) deliverNative() *ToolResult {
 			return session.ErrLifecycleNotFound
 		}
 		if cur.Terminal() {
-			return fmt.Errorf("session %s is terminal (%s) and cannot be responded to", dt.sessionID, cur.State)
+			return &followupRefusal{fmt.Sprintf("session %s is terminal (%s) and cannot be responded to", dt.sessionID, cur.State)}
 		}
 		if cur.State == session.LifecycleStopped {
 			stoppedInRace = true
@@ -284,12 +288,16 @@ func (dt *delegateToolExecuteRespond) deliverNative() *ToolResult {
 			return nil
 		}
 		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
-			return fmt.Errorf("session %s is stopping (a stop is in flight for its current generation); retry the respond once it has stopped", dt.sessionID)
+			return &followupRefusal{fmt.Sprintf("session %s is stopping (a stop is in flight for its current generation); retry the respond once it has stopped", dt.sessionID)}
 		}
 		dt.rec = cur
 		return nil
 	}); merr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: %v", merr))
+		var refusal *followupRefusal
+		if errors.As(merr, &refusal) {
+			return ErrorResult("delegate: respond: " + refusal.text).WithError(merr)
+		}
+		return lifecycleLoadFailure("respond", dt.sessionID, merr)
 	}
 
 	if stoppedInRace {
@@ -299,7 +307,7 @@ func (dt *delegateToolExecuteRespond) deliverNative() *ToolResult {
 		}
 		revived, rerr := reviver.ReviveStoppedSession(dt.ctx, dt.sessionID, dt.by, dt.instruction)
 		if rerr != nil {
-			return ErrorResult(fmt.Sprintf("delegate: respond: resume session %s: %v", dt.sessionID, rerr)).WithError(rerr)
+			return reviveFailure("respond", dt.sessionID, rerr)
 		}
 		if !revived {
 			return ErrorResult(fmt.Sprintf("delegate: respond: session %s could not be resumed", dt.sessionID))
@@ -313,7 +321,10 @@ func (dt *delegateToolExecuteRespond) deliverNative() *ToolResult {
 	_, serr, postFinish := enqueueSteeringWithStatus(dt.t.steering, dt.sessionID, dt.rec.AgentID,
 		providers.Message{Role: "user", Content: dt.text}, dt.correlationID)
 	if serr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: %v", serr)).WithError(serr)
+		if text, shown := displayableCause(serr); shown {
+			return ErrorResult("delegate: respond: " + text).WithError(serr)
+		}
+		return controlFailure("respond", fmt.Sprintf("the answer for session %s could not be queued right now; retry shortly", dt.sessionID), serr)
 	}
 	if postFinish {
 		// The answer landed in the closing hand-off's transition buffer: the
