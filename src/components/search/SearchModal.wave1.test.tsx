@@ -233,7 +233,7 @@ describe('Sessions view — Running filter and queued', () => {
   })
 })
 
-describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
+describe('Sessions view — hierarchy', () => {
   it('nests a helper under its parent even when only the helper title matches', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchSessions).mockResolvedValue([
@@ -389,7 +389,9 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
     expect(screen.getByTestId('session-status-control').textContent).toBe('Queued')
     expect(within(sessionRow('control')).queryByText(/background commands/)).not.toBeInTheDocument()
   })
+})
 
+describe('Sessions view — fold, shell count, tokens', () => {
   it('folds nine consecutive identical helpers and keeps each original Open', async () => {
     const user = userEvent.setup()
     const parent = makeSession({ id: 'p', title: 'Parent chat' })
