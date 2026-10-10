@@ -337,7 +337,7 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 			if err != nil && wc != nil {
 				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 					Type: string(generated.WsFrameTypeError), SessionId: &sid,
-					Message: fmt.Sprintf("Stop for session %s could not finish; required storage or notice publication failed. Retry after storage is repaired.", sid),
+					Message: "Stop could not finish; required storage or notice publication failed. Retry after storage is repaired.",
 				})
 			}
 		},
@@ -433,7 +433,7 @@ func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll 
 			"session_id", sessionID, "error", err)
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "cancel failed: " + err.Error(),
+			Message: "cancel failed: the Stop request could not be completed. Details are in the server log.",
 		})
 		return
 	}

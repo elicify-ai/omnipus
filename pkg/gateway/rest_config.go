@@ -692,7 +692,7 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		if fpErr != nil {
 			// The on-disk config no longer decodes into config.Config;
 			// no baseline to compare against — refuse rather than guess.
-			return &requestRefusalError{msg: "config.json agents section does not decode: " + fpErr.Error()}
+			return fmt.Errorf("stored agents section does not decode: %w", fpErr)
 		}
 		for k, v := range updates {
 			var parsed any
