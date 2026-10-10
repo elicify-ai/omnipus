@@ -185,7 +185,8 @@ function startToolSearch(callId: string, messageId: string): void {
     status: 'running',
   })
   expect(bucket.toolCallOrder, 'start frame must register this call exactly once').toEqual([callId])
-  expect(bucket.toolCallOwnerMessageId[callId], 'running call must belong to the seeded reply').toBe(messageId)
+  expect(bucket.toolCallOwnerMessageId, 'the owner map must exist after a start frame').toBeDefined()
+  expect(bucket.toolCallOwnerMessageId?.[callId], 'running call must belong to the seeded reply').toBe(messageId)
   expect(bucket.messageOrder, 'start frame must not create a different reply').toEqual([messageId])
   expect(bucket.messagesById[messageId].content).toBe('')
   expect(bucket.messagesById[messageId].isStreaming).toBe(true)
