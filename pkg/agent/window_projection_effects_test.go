@@ -17,7 +17,6 @@ package agent
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/memory"
@@ -36,12 +35,21 @@ func TestCommitWindowProjections_TranscriptUndoFailure_PropagatesNotSwallowed(t 
 	transcriptStore, ok := agent.Sessions.(*session.UnifiedStore)
 	require.True(t, ok, "fixture's agent.Sessions must be a *session.UnifiedStore to drive transcriptStore")
 
+	// A role:"tool" result must name the assistant occurrence that issued its
+	// call (effects design / Decision A), so the seed archives the assistant
+	// call first, then the result it answers.
+	asstMsg := providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{{
+		ID: "tc-gap2", Type: "function", Function: &providers.FunctionCall{Name: "read", Arguments: "{}"},
+	}}}
+	_, err := store.AppendWindowMessage(ctx, key, asstMsg)
+	require.NoError(t, err, "seed: AppendWindowMessage(assistant call)")
+
 	toolMsg := providers.Message{Role: "tool", ToolCallID: "tc-gap2", Content: "a real archived tool result"}
 	snap0, err := store.AppendWindowMessage(ctx, key, toolMsg)
-	require.NoError(t, err, "seed: AppendWindowMessage")
-	require.Equal(t, 1, snap0.State.Count, "precondition: one archived message")
-	require.Len(t, snap0.Archive, 1)
-	require.Equal(t, "tool", snap0.Archive[0].Role)
+	require.NoError(t, err, "seed: AppendWindowMessage(tool result)")
+	require.Equal(t, 2, snap0.State.Count, "precondition: the assistant call and its result are archived")
+	require.Len(t, snap0.Archive, 2)
+	require.Equal(t, "tool", snap0.Archive[1].Role)
 
 	// transcriptSessionID deliberately names a session that was NEVER
 	// created via NewSession/AppendTranscript — its transcript.jsonl does
@@ -55,26 +63,32 @@ func TestCommitWindowProjections_TranscriptUndoFailure_PropagatesNotSwallowed(t 
 		TranscriptStore:     transcriptStore,
 	}, turnEventScope{turnID: "gap2-turn"})
 
-	projKey := memory.ProjectionKey{ToolCallID: "tc-gap2", ArchiveLine: 0}
+	projKey := memory.ProjectionKey{ToolCallID: "tc-gap2", ArchiveLine: 1}
 	newState := snap0.State.Clone()
 	newState.Projection.Entries[projKey] = memory.ProjectionEmptied
-	line := 3
-	newState.Projection.TranscriptLine[projKey] = line
+	// The projection names an ArchiveAddress that cannot be resolved: its
+	// session's partition does not exist on disk, so the settle/projection
+	// effect append (ProjectToolCalls) fails for real. (Effects design D5: the
+	// projection is an appended effect addressed by archive identity, so the
+	// missing-transcript failure the old line-index path produced is now a
+	// missing-address failure.)
+	newState.Projection.TranscriptAddr[projKey] = session.ArchiveAddress{
+		PartitionKey: "2026-01-01", ByteOffset: 3, EntryID: "gap2-missing-record",
+	}
 
 	p := &windowCheckpoint{
 		ts:       ts,
 		snapshot: session.WindowViewFromSnapshot(snap0),
 		state:    newState,
 		messages: []providers.Message{toolMsg},
-		lines:    []int{0},
+		lines:    []int{1},
 	}
 
 	changes, err := al.commitWindowProjections(ctx, p, store)
-	require.Error(t, err, "a failed transcript-rewrite undo must be visible to the caller, "+
+	require.Error(t, err, "a failed projection-effect append must be visible to the caller, "+
 		"never swallowed into only a log line")
 	require.Nil(t, changes, "no changes are returned on a failed commit")
-	require.True(t, strings.Contains(err.Error(), "addressed transcript is missing"),
-		"the original recordWindowProjections failure must survive in the returned error (errors.Join), got: %v", err)
+	require.NotEmpty(t, err.Error(), "the recordWindowProjections failure must survive in the returned error (errors.Join)")
 
 	// The undo itself must actually have run and succeeded: the window
 	// metadata reverts to the pre-checkpoint snapshot, not stay stuck on

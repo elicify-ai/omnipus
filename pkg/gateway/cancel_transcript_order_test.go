@@ -3,16 +3,20 @@
 // fix-pass re-verification: pkg/agent/loop.go's runTurn deferred
 // finalizeStreamer (which writes the assistant transcript entry via
 // wsStreamer.Finalize) BEFORE ts.Finish(false) (whose onCancelFinish
-// callback writes the turn_canceled entry and calls
-// MarkLastEntryTruncated) — Go's LIFO defer order made Finish's callback
-// run FIRST, so on a real mid-stream cancel the assistant entry did not
-// exist yet when MarkLastEntryTruncated ran (silently finding nothing to
-// flag) and the on-disk order was user -> turn_canceled -> assistant
-// instead of user -> assistant -> turn_canceled. The frontend's replay
-// correlation (which processes frames in on-disk order) then always missed
-// the assistant message, logging chatTurnCanceledNoMatch on every reload
-// after a mid-stream cancel — live-reproduced with a real browser before
-// the fix, confirmed absent after it.
+// callback appends the turn_canceled entry) — Go's LIFO defer order made
+// Finish's callback run FIRST, so on a real mid-stream cancel the assistant
+// entry did not exist yet when the cancel record was written and the
+// on-disk order was user -> turn_canceled -> assistant instead of
+// user -> assistant -> turn_canceled. The frontend's replay correlation
+// (which processes frames in on-disk order) then always missed the assistant
+// message, logging chatTurnCanceledNoMatch on every reload after a
+// mid-stream cancel — live-reproduced with a real browser before the fix,
+// confirmed absent after it.
+//
+// session-core U2 effects design D8 keeps this order load-bearing: the
+// truncation is now DERIVED on read from the turn_canceled record, so a
+// cancel record written before its assistant entry would truncate the wrong
+// (or no) entry.
 
 package gateway
 
@@ -193,7 +197,6 @@ func TestRunTurn_CancelMidStream_TranscriptOrderAssistantBeforeTurnCanceled(t *t
 
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
 	assistantIdx, cancelIdx := -1, -1
-	var assistantTruncated bool
 	for i, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -202,7 +205,6 @@ func TestRunTurn_CancelMidStream_TranscriptOrderAssistantBeforeTurnCanceled(t *t
 		require.NoErrorf(t, json.Unmarshal([]byte(line), &entry), "line %d must be valid JSON: %q", i, line)
 		if entry.Role == "assistant" && assistantIdx == -1 {
 			assistantIdx = i
-			assistantTruncated = entry.Truncated
 		}
 		if entry.Type == session.EntryTypeTurnCancelled && cancelIdx == -1 {
 			cancelIdx = i
@@ -212,13 +214,28 @@ func TestRunTurn_CancelMidStream_TranscriptOrderAssistantBeforeTurnCanceled(t *t
 	require.GreaterOrEqualf(t, assistantIdx, 0, "an assistant entry must exist in transcript.jsonl; lines: %v", lines)
 	require.GreaterOrEqualf(t, cancelIdx, 0, "a turn_canceled entry must exist in transcript.jsonl; lines: %v", lines)
 	assert.Less(t, assistantIdx, cancelIdx,
-		"the assistant entry must be written BEFORE the turn_canceled entry on disk — otherwise "+
-			"MarkLastEntryTruncated cannot find it to flag (it hasn't been written yet when the "+
-			"cancel callback runs), and the frontend's turn_canceled -> assistant-message replay "+
-			"correlation (which processes frames in this same on-disk order) always misses, since "+
-			"it sees the turn_canceled frame before the assistant message it needs to correlate")
+		"the assistant entry must be written BEFORE the turn_canceled entry on disk — the truncation is "+
+			"DERIVED on read from the later turn_canceled record (effects design D8), so the physical order "+
+			"is load-bearing; and the frontend's turn_canceled -> assistant-message replay correlation "+
+			"(which processes frames in this same on-disk order) always misses otherwise, since it sees the "+
+			"turn_canceled frame before the assistant message it needs to correlate")
+
+	// D8: the raw line does not carry `truncated` — the reader derives it from
+	// the turn_canceled record, so read it through the merge.
+	merged, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err, "the merged transcript must read")
+	assistantTruncated := false
+	foundAssistant := false
+	for _, e := range merged {
+		if e.Role == "assistant" {
+			assistantTruncated = e.Truncated
+			foundAssistant = true
+			break
+		}
+	}
+	require.True(t, foundAssistant, "the merged transcript must contain the assistant entry")
 	assert.True(t, assistantTruncated,
-		"the assistant entry must be flagged Truncated=true by MarkLastEntryTruncated — this only "+
-			"succeeds when the entry already exists in the transcript at the moment the cancel "+
-			"callback runs, i.e. when the ordering above is correct")
+		"the assistant entry must read as Truncated=true — derived from the turn_canceled record, which "+
+			"only succeeds when the entry already exists in the transcript before the cancel record is "+
+			"appended, i.e. when the ordering above is correct")
 }

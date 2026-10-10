@@ -775,7 +775,14 @@ func TestChokePoint_ProducerListByGrep(t *testing.T) {
 	calls := directCalls + indirectCalls
 	assert.GreaterOrEqual(t, calls, 10, "loop.go: success path + seven denied sites + skipped site + the T066-15 argument-refusal site (FR-016) = at least 10 choke-point calls (direct admitToolResult, or via the admitAndCheckpoint wrapper)")
 
-	for _, fname := range []string{"attach_hydrate.go", "recall_conversation.go"} {
+	// The producer list is the set of production files that build a role:"tool"
+	// payload through the choke point's cap. session-core U2 (DEL-12 /
+	// ARCHITECT-ANSWER-CUTOVER-SLICE4.md Q4) deleted attach_hydrate.go with the
+	// hydration surface, so its entry is removed; recall_conversation.go remains
+	// the live producer that must actually CALL projectToolResult. Adding a NEW
+	// producer file here is the intended response to a new call site — an
+	// unlisted producer is caught by scanChokePointBypasses above.
+	for _, fname := range []string{"recall_conversation.go"} {
 		assert.True(t, fileCallsFunction(t, fname, "projectToolResult"),
 			"%s must actually CALL the choke point's cap (projectToolResult), not merely mention it", fname)
 	}

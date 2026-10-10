@@ -24,9 +24,10 @@ import (
 //
 // Given an agent archive with lines (21 user / 53 assistant / 36 tool, Skip
 // advanced by a trim), when the WS attach_session path runs twice for that
-// session, then the archive file is byte-identical and meta.skip is unchanged.
-// Before D5.5 every attach rebuilt the archive from the transcript via
-// SetHistory — dropping every tool line and resetting skip to 0.
+// session, then the archive file is byte-identical and the window cursor is
+// unchanged. The hydration step this used to guard is deleted (DEL-12); the
+// archive now lives at the transcript path under the owning session id, and
+// opening a session rewrites nothing (FR-006).
 func TestAttach_TwiceArchiveByteIdentical(t *testing.T) {
 	const agentID = "mia"
 	handler, _, al := newTestWSHandlerWithAgent(t, agentID)
@@ -76,12 +77,14 @@ func TestAttach_TwiceArchiveByteIdentical(t *testing.T) {
 	require.Equal(t, 21, user)
 	require.Equal(t, 53, assistant)
 	require.Equal(t, 36, tool)
-	ag.Sessions.TruncateHistory(key, 40)
+	gwTruncateWindowTo(t, ag.Sessions, key, 40)
 	require.NoError(t, ag.Sessions.Save(key))
 
-	archivePath := filepath.Join(ag.Home, "sessions", ".context",
-		strings.NewReplacer(":", "_", "/", "_", "\\", "_").Replace(key)+".jsonl")
-	metaPath := strings.TrimSuffix(archivePath, ".jsonl") + ".meta.json"
+	// The one archive lives at the transcript path of the owning session (the
+	// routing key embeds it: agent:<id>:session:<sid>).
+	sessionDir := filepath.Join(ag.Home, "sessions", meta.ID)
+	archivePath := filepath.Join(sessionDir, "transcript.jsonl")
+	metaPath := filepath.Join(sessionDir, "backend_meta.json")
 	bytesBefore, err := os.ReadFile(archivePath)
 	require.NoError(t, err)
 	require.Equal(t, 110, strings.Count(string(bytesBefore), "\n"))
@@ -109,10 +112,38 @@ func TestAttach_TwiceArchiveByteIdentical(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(bytesBefore), string(bytesAfter),
 		"attaching twice must leave the archive byte-identical (FR-045)")
-	assert.Equal(t, skipBefore, readSkip(t, metaPath), "attach must not move meta.skip")
-	assert.False(t, ag.Sessions.Projection(key).Hydrated,
-		"a skipped hydration must not flag the archive as hydrated")
+	assert.Equal(t, skipBefore, readSkip(t, metaPath), "attach must not move the window cursor")
 	assert.Len(t, ag.Sessions.GetHistory(key), 40, "window unchanged")
+}
+
+// gwTruncateWindowTo keeps only the last keepLast live messages by moving the
+// window start with one compare-and-set commit — the replacement for the
+// deleted TruncateHistory (DEL-12): no archive byte changes.
+func gwTruncateWindowTo(t *testing.T, store session.SessionStore, key string, keepLast int) {
+	t.Helper()
+	cw, ok := store.(session.ContextWindowStore)
+	require.True(t, ok, "the session store supports the checkpoint seam")
+	ctx := context.Background()
+	view, err := cw.WindowView(ctx, key)
+	require.NoError(t, err)
+	after := view.State.Clone()
+	if keepLast <= 0 {
+		after.Skip = after.Count
+	} else if effective := after.Count - after.Skip; keepLast < effective {
+		after.Skip = after.Count - keepLast
+	}
+	for k := range after.Projection.Entries {
+		if k.ArchiveLine < after.Skip {
+			delete(after.Projection.Entries, k)
+			delete(after.Projection.SourceRunes, k)
+		}
+	}
+	for k := range after.Projection.TranscriptAddr {
+		if k.ArchiveLine < after.Skip {
+			delete(after.Projection.TranscriptAddr, k)
+		}
+	}
+	require.NoError(t, cw.CommitWindow(ctx, key, view.State, after))
 }
 
 func readSkip(t *testing.T, metaPath string) int {

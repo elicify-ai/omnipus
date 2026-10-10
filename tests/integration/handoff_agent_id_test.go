@@ -327,6 +327,13 @@ func readTranscriptDirect(t *testing.T, gw *testutil.TestGateway, sessionID stri
 			t.Logf("readTranscriptDirect: skipping malformed line: %v", err)
 			continue
 		}
+		// session-core U2 (effects design D1/D4): chat, model and effect records
+		// share ONE file set, so a raw read must filter to chat records — a
+		// model record also carries an agent_id and would otherwise be counted
+		// as a chat entry.
+		if entry.ViewMembership == session.ViewMembershipModel || entry.Type == session.EntryTypeToolCallEffect {
+			continue
+		}
 		entries = append(entries, entry)
 	}
 	return entries

@@ -63,9 +63,6 @@ func TestSessionMeta_ProjectionStateCompositeKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetProjection: %v", err)
 	}
-	if pm.Hydrated {
-		t.Errorf("hydrated = true, want false on a never-hydrated archive")
-	}
 	want := ProjectionSet{
 		{ToolCallID: "call_0", ArchiveLine: 0}: ProjectionEmptied,
 		{ToolCallID: "call_0", ArchiveLine: 3}: ProjectionCapped,
@@ -124,21 +121,10 @@ func TestSessionMeta_ProjectionStateCompositeKey(t *testing.T) {
 		t.Errorf("invalid writes changed the set: %v", pm.Entries)
 	}
 
-	// Hydrated is a one-way flag persisted beside the set (FR-019 meta half,
-	// read by T066-14's recall-by-id answer).
-	if err = reopened.MarkHydrated(ctx, key); err != nil {
-		t.Fatalf("MarkHydrated: %v", err)
-	}
-	pm, err = reopened.GetProjection(ctx, key)
-	if err != nil {
-		t.Fatalf("GetProjection: %v", err)
-	}
-	if !pm.Hydrated {
-		t.Error("hydrated = false after MarkHydrated")
-	}
-	if len(pm.Entries) != 2 {
-		t.Errorf("MarkHydrated changed the set: %v", pm.Entries)
-	}
+	// The ProjectionMeta.Hydrated one-way flag and JSONLStore.MarkHydrated are
+	// DELETED with the model-content store surface (session-core DEL-10/DEL-12;
+	// the recall refusal is now keyed on a record's model_origin == conv_rebuilt,
+	// CONV-P A). There is no flag left to assert here.
 }
 
 // TestRollbackWindow_RestoresTurnStartProjectionSet — spec test 16 (B-24,
