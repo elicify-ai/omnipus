@@ -88,6 +88,10 @@ func newSteeringQueue() *steeringQueue {
 	}
 }
 
+// errSteeringQueueFull is the refusal for a scope already holding MaxQueueSize
+// items; its text is already a plain, publishable sentence.
+var errSteeringQueueFull = errors.New("steering queue is full")
+
 var errSteeringScopeClosed = errors.New("steering session finished; use follow_up to continue it")
 
 // normalizeSteeringScope trims a resolved session/routing scope. FR-009 /
@@ -145,7 +149,7 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 			}
 		} else if len(transition.finishingItems) >= MaxQueueSize {
 			sq.mu.Unlock()
-			return false, fmt.Errorf("steering queue is full")
+			return false, errSteeringQueueFull
 		}
 		transition.finishingItems = append(transition.finishingItems, item)
 		sq.mu.Unlock()
@@ -171,7 +175,7 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 		}
 	} else if len(queue) >= MaxQueueSize {
 		sq.mu.Unlock()
-		return false, fmt.Errorf("steering queue is full")
+		return false, errSteeringQueueFull
 	}
 	sq.queues[scope] = append(queue, item)
 	sq.mu.Unlock()
@@ -806,7 +810,7 @@ func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction st
 // the item joined the main queue as before.
 func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error) {
 	resolved, _, err := al.enqueueDelegateSteer(scope, agentID, msg, correlationID)
-	return resolved, err
+	return resolved, curateSteerRefusal(scope, err)
 }
 
 // EnqueueSteeringMessageWithStatus is the rich return shape the round-4
@@ -825,7 +829,8 @@ func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers
 // assertion (see delegate_followup.go's enqueueSteeringWithStatus), mirroring
 // steerReviver's parallel-capability pattern.
 func (al *AgentLoop) EnqueueSteeringMessageWithStatus(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
-	return al.enqueueDelegateSteer(scope, agentID, msg, correlationID)
+	resolved, status, err := al.enqueueDelegateSteer(scope, agentID, msg, correlationID)
+	return resolved, status, curateSteerRefusal(scope, err)
 }
 
 // enqueueDelegateSteer is the delegate steer/respond enqueue (the exported
