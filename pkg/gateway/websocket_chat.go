@@ -295,18 +295,19 @@ func (h *WSHandler) handleChatMessageToRecipient(
 		}
 	}()
 
+	if hcm.recipient != nil {
+		// The request goes to the recipient's main; the owner's own turn is not
+		// started. The user's message is saved in the owning chat INSIDE the
+		// admission, after the final receiver authorization (U8 r4 F12).
+		hcm.admitRecipientRequest()
+		return
+	}
+
 	if hcm.prepareMessage() {
 		return
 	}
 	if hcm.transcriptPersisted {
 		hcm.sendMessageStatus("received")
-	}
-
-	if hcm.recipient != nil {
-		// The user's message is saved in the owning chat; the request goes to
-		// the recipient's main. The owner's own turn is not started.
-		hcm.admitRecipientRequest()
-		return
 	}
 
 	hcm.buildInboundMessage()

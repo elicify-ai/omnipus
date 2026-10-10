@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -60,15 +61,6 @@ func (h *WSHandler) refuseRecipient(ctx context.Context, sessionID string, setup
 			"agent_id", to.AgentID, "error", err)
 		return "that agent cannot be reached from here right now", false
 	}
-	// F12: authorization is settled ONE MORE time, with any newly required Ask put
-	// to the person, immediately before the caller saves and echoes the source
-	// message. A denial or revocation here leaves the source history untouched.
-	approved, err = h.agentLoop.SettleRecipientAdmission(ctx, to, sessionID, approved)
-	if err != nil {
-		logsafeWarn("ws: recipient refused at settlement", "session_id", sessionID, "workspace_id", to.WorkspaceID,
-			"agent_id", to.AgentID, "error", err)
-		return "that agent cannot be reached from here right now", false
-	}
 	return "", approved
 }
 
@@ -80,13 +72,22 @@ func (h *WSHandler) refuseRecipient(ctx context.Context, sessionID string, setup
 func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 	owner := addressing.Pair{}
 	ownerAgent := hcm.targetAgentID
-	meta, metaErr := hcm.store.GetMeta(hcm.sessionID)
+	// The source is saved only inside AdmitRequest's BeforeCommit, so until then
+	// the session is the one the frame names (a recipient needs an existing chat).
+	srcID := hcm.frameSessionID
+	var meta *session.UnifiedMeta
+	var metaErr error
+	if srcStore := hcm.h.resolveSessionStore(srcID); srcStore != nil {
+		meta, metaErr = srcStore.GetMeta(srcID)
+	} else {
+		metaErr = errors.New("source session store not found")
+	}
 	if metaErr != nil || meta == nil {
 		// The source chat's owner cannot be read, so no capture can name it:
 		// fail closed rather than record an empty owner that skips the
 		// return-time binding check.
-		logsafeWarn("ws: could not read the source chat to bind the request", "session_id", hcm.sessionID, "error", metaErr)
-		sid := hcm.sessionID
+		logsafeWarn("ws: could not read the source chat to bind the request", "session_id", srcID, "error", metaErr)
+		sid := srcID
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:      string(generated.WsFrameTypeError),
 			Message:   "the request could not be delivered to that agent",
@@ -115,13 +116,28 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 		Source: addressing.Source{
 			Kind:      addressing.SourceConversation,
 			Owner:     owner,
-			SessionID: hcm.sessionID,
+			SessionID: srcID,
 		},
 		AskApproved: hcm.recipientAskApproved,
+		// U8 r4 F12: every receiver authorization decision (including a late
+		// Ask and its approval wait) is finished before this runs; only then is
+		// the user's message saved and echoed, then the receiver's side written.
+		BeforeCommit: func() error {
+			if hcm.prepareMessage() {
+				return errRecipientSourceRefused // prepareMessage already told the sender why
+			}
+			if hcm.transcriptPersisted {
+				hcm.sendMessageStatus("received")
+			}
+			return nil
+		},
 	})
+	if errors.Is(err, errRecipientSourceRefused) {
+		return
+	}
 	if err != nil {
-		logsafeWarn("ws: could not deliver the request to the recipient", "session_id", hcm.sessionID, "error", err)
-		sid := hcm.sessionID
+		logsafeWarn("ws: could not deliver the request to the recipient", "session_id", srcID, "error", err)
+		sid := srcID
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:      string(generated.WsFrameTypeError),
 			Message:   "the request could not be delivered to that agent",
@@ -131,6 +147,10 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 	}
 	hcm.admitted = true
 }
+
+// errRecipientSourceRefused marks a BeforeCommit abort whose user-facing error
+// the source preparation has already sent.
+var errRecipientSourceRefused = errors.New("recipient request: source message refused")
 
 func principalOf(hcm *wsHandlerHandleChatMessage) string {
 	if hcm.wc == nil {
