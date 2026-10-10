@@ -45,6 +45,12 @@ import (
 // id.
 func u6SeedStoppedMain(t *testing.T, al *AgentLoop, ws, agentID string) string {
 	t.Helper()
+	// The launch path reads the steering session's unified meta (its owner
+	// agent), so the main must exist as a unified session too, not just as a
+	// lifecycle record. GetOrCreateMainSession is the only creator.
+	if _, err := al.GetSessionStore().GetOrCreateMainSession(ws, agentID); err != nil {
+		t.Fatalf("GetOrCreateMainSession(%q, %q): %v", ws, agentID, err)
+	}
 	mainID, err := session.MainSessionID(ws, agentID)
 	if err != nil {
 		t.Fatalf("MainSessionID(%q, %q): %v", ws, agentID, err)
@@ -73,9 +79,8 @@ func u6SeedStoppedMain(t *testing.T, al *AgentLoop, ws, agentID string) string {
 // stopped main is admitted as a real child of that main, and the main's own
 // record is untouched (never revived, never written, never dispatched).
 //
-// RED today: launchSteered's stopped-parent guard refuses the launch with
-// steer.ErrSteeringStopped before any child is minted, so res.SessionID is
-// empty — the exemption does not exist yet.
+// The FR-018 exemption now lives in steer_launcher.go::isMainTaskChildLaunch,
+// read by launchSteered's stopped-parent guard.
 func TestU6_FR018_TaskOriginMainChildAdmittedUnderStoppedMain(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
