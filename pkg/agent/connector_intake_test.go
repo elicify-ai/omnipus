@@ -212,3 +212,103 @@ func (d *errDeps) PublishSessionError(sid, msg string) {
 	d.errors = append(d.errors, msg)
 	d.sessions = append(d.sessions, sid)
 }
+
+// D3 (architect participant answer): a connector reply shows as a chat-only
+// reply entry AFTER the send was queued.
+func TestReply_Connector_AppendsChatOnlyReplyEntryAfterQueue(t *testing.T) {
+	f := newAddrFixture(t)
+	errs := &errDeps{publishingDeps: publishingDeps{fakeAddressDeps: fakeAddressDeps{eligible: f.deps.eligible}}}
+	f.al.SetAddressDeps(errs)
+	sid := putConnectorCapture(t, f, "q1")
+	// The capture's source session (ann-main in this fixture) is where the
+	// reply entry belongs; it must exist for the mirror to be saved.
+	src, err := f.al.GetSessionStore().NewSession(session.SessionTypeChat, "telegram", "ann")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _, _ := f.al.RequestLedger().Get(sid, "q1")
+	c.Source.SessionID = src.ID
+	if err := f.al.RequestLedger().Put(c); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.r.Reply(context.Background(), f.replyReq(sid, "q1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := addrDrainOutbound(f.bus); !ok {
+		t.Fatal("the send was not queued")
+	}
+	entries, _ := f.al.GetSessionStore().ReadTranscript(src.ID)
+	var e *session.TranscriptEntry
+	for i := range entries {
+		if entries[i].ReplyToMessageID == "q1" {
+			e = &entries[i]
+		}
+	}
+	if e == nil {
+		t.Fatalf("no reply entry in the main: %+v", entries)
+	}
+	if e.Role != "assistant" || e.AgentID != addrReceiver || e.Content != "the answer" || e.ViewMembership != session.ViewMembershipChat {
+		t.Fatalf("entry = %+v; want assistant, responder, content, chat-only", e)
+	}
+	// Recipient label comes from the capture (Sender.CanonicalID only here, so no
+	// label can be built): never from the model.
+	if e.ReplyToParticipant != nil {
+		t.Fatalf("participant invented without a displayable captured sender: %+v", e.ReplyToParticipant)
+	}
+	if len(errs.published) != 0 || len(errs.errors) != 0 {
+		t.Fatalf("unexpected publishes %v %v", errs.published, errs.errors)
+	}
+}
+
+func TestReply_Connector_CaptureSenderGivesTheRecipientLabel(t *testing.T) {
+	f := boundConnFixture(t)
+	msg := connMsg("chat-1", "hello")
+	msg.Sender.DisplayName = "Alice"
+	if r, err := f.al.admitBoundConnectorInput(&msg); r != "" || err != nil {
+		t.Fatal(r, err)
+	}
+	mainID := msg.SessionID
+	if _, err := f.r.Reply(context.Background(), f.replyReq(mainID, msg.TranscriptEntryID)); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := f.al.GetSessionStore().ReadTranscript(mainID)
+	last := entries[len(entries)-1]
+	p := last.ReplyToParticipant
+	if p == nil || p.DisplayName != "Alice" || *p.Source != "telegram" || last.ReplyToMessageID != msg.TranscriptEntryID {
+		t.Fatalf("reply entry = %+v", last)
+	}
+}
+
+func TestReply_Connector_QueueFailure_NoEntryAndToolError(t *testing.T) {
+	f := newAddrFixture(t)
+	sid := putConnectorCapture(t, f, "q1")
+	f.bus.Close()
+	if _, err := f.r.Reply(context.Background(), f.replyReq(sid, "q1")); err == nil {
+		t.Fatal("want the tool error when the send could not be queued")
+	}
+	entries, _ := f.al.GetSessionStore().ReadTranscript(sid)
+	for _, e := range entries {
+		if e.ReplyToMessageID != "" {
+			t.Fatalf("a reply entry was written for an unsent reply: %+v", e)
+		}
+	}
+}
+
+func TestReply_Connector_AppendFailure_ErrorFrameNotToolError(t *testing.T) {
+	f := newAddrFixture(t)
+	errs := &errDeps{publishingDeps: publishingDeps{fakeAddressDeps: fakeAddressDeps{eligible: f.deps.eligible}}}
+	f.al.SetAddressDeps(errs)
+	sid := putConnectorCapture(t, f, "q1")
+	// Make the append fail after the send: the session directory's transcript
+	// cannot be written once the session is deleted from under the router.
+	f.al.mirrorFailHook = func() { _ = f.al.GetSessionStore().DeleteSession(sid) }
+	if _, err := f.r.Reply(context.Background(), f.replyReq(sid, "q1")); err != nil {
+		t.Fatalf("an unsaved mirror must not become a tool error (it invites a double send): %v", err)
+	}
+	if _, ok := addrDrainOutbound(f.bus); !ok {
+		t.Fatal("the send must stay queued")
+	}
+	if len(errs.errors) != 1 || !strings.Contains(errs.errors[0], "not saved") {
+		t.Fatalf("errors = %v", errs.errors)
+	}
+}

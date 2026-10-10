@@ -111,6 +111,9 @@ type AgentLoop struct {
 	// (address_router.go).
 	addressDeps   atomic.Pointer[AddressDeps]
 	requestLedger atomic.Pointer[ledgerHolder]
+	// mirrorFailHook is a test seam run just before the connector-reply mirror
+	// append (nil in production).
+	mirrorFailHook func()
 	// postFinishRevivalMu / postFinishRevival mark a session whose
 	// SPECIFIC generation was JUST created by a post-finish revival
 	// (issue #1020 round-4 correction). The key is the NEW generation

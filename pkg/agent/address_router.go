@@ -382,6 +382,7 @@ func (al *AgentLoop) replyViaConnector(ctx context.Context, c addressing.Capture
 	if err := al.bus.PublishOutbound(pubCtx, msg); err != nil {
 		return tools.ReplyReceipt{}, fmt.Errorf("the reply could not be queued: %w", err)
 	}
+	al.mirrorConnectorReply(c, responder, req.Content)
 	return tools.ReplyReceipt{Destination: "the original conversation on " + c.Source.InstanceID}, nil
 }
 
@@ -504,3 +505,48 @@ func (al *AgentLoop) DiscardRequest(receiverSessionID, requestID string) error {
 
 // NewAddressRouter returns the router tools hold. Exported for wiring tests.
 func (al *AgentLoop) NewAddressRouter() AddressRouter { return AddressRouter{al: al} }
+
+// mirrorConnectorReply writes the visible reply entry for a connector answer
+// AFTER it was queued (architect D3): a chat-only assistant entry carrying
+// reply_to_message_id and reply_to_participant (from the capture, never from
+// the model), shown live through the guest-reply path. It is chat-only because
+// the model already holds the text in its send_message call; a "both" entry
+// would put the reply into the model window twice. The bubble means "accepted
+// for sending", not "delivered". If the append fails the send is NOT undone and
+// no tool error is returned (that invites a double send): the failure is
+// logged and shown once as an error frame.
+func (al *AgentLoop) mirrorConnectorReply(c addressing.Capture, responder addressing.Pair, content string) {
+	store := al.GetSessionStore()
+	entry := session.TranscriptEntry{
+		ID:                 uuid.New().String(),
+		Role:               "assistant",
+		AgentID:            responder.AgentID,
+		Content:            content,
+		Timestamp:          time.Now().UTC(),
+		ViewMembership:     session.ViewMembershipChat,
+		ReplyToMessageID:   c.RequestID,
+		ReplyToParticipant: participantFromSender(c.Sender, al.agentDisplayName),
+	}
+	if al.mirrorFailHook != nil {
+		al.mirrorFailHook()
+	}
+	var err error
+	if store == nil {
+		err = errors.New("session store unavailable")
+	} else {
+		err = store.AppendTranscriptStrict(c.Source.SessionID, entry)
+	}
+	if err != nil {
+		logger.WarnCF("agent", "connector reply was sent but could not be saved in the chat",
+			map[string]any{"request_id": c.RequestID, "session_id": c.Source.SessionID, "error": err.Error()})
+		if deps := al.loadAddressDeps(); deps != nil {
+			if p, ok := deps.(sessionErrorPublisher); ok {
+				p.PublishSessionError(c.Source.SessionID, "Sent, but not saved in this chat.")
+			}
+		}
+		return
+	}
+	if deps := al.loadAddressDeps(); deps != nil {
+		deps.PublishGuestReply(c.Source.SessionID, entry)
+	}
+}
