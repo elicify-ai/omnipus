@@ -104,6 +104,32 @@ describe('E.1 installed-app Expand stays in this window', () => {
   })
 })
 
+describe('E.2 standalone Expand settles late', () => {
+  it('a navigation that settles after Back re-docked the panel does not close that dock', async () => {
+    displayMode('standalone')
+    usePanelShellStore.getState().openPanel('library', context)
+    const { router, expand } = await renderSource()
+    // Force the timing: the route change is committed and visible, but the
+    // router only reports the navigation as finished when we say so.
+    let settle!: () => void
+    const navigate = router.navigate.bind(router)
+    vi.spyOn(router, 'navigate').mockImplementation(async (options) => {
+      await navigate(options)
+      await new Promise<void>((resolve) => { settle = resolve })
+    })
+    let expanded!: ReturnType<typeof expand>
+    await act(async () => { expanded = expand() })
+    await waitFor(() => expect(router.state.location.pathname).toBe('/panel/library'))
+    // The user already pressed Back on the full-screen route: it re-docks the panel.
+    await act(async () => { usePanelShellStore.getState().openPanel('library', context) })
+    await act(async () => {
+      settle()
+      await expect(expanded).resolves.toBe('opened')
+    })
+    expect(usePanelShellStore.getState().activePanel).toEqual({ id: 'library', context })
+  })
+})
+
 describe('E.3 standalone Expand leaves only after the Library/Mail guard', () => {
   it.each(['library', 'mail'] as const)('%s cancellation preserves the dock and route', async (id) => {
     displayMode('standalone')
