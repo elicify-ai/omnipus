@@ -29,21 +29,23 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 const agents = [
   {
+    figure: 'Omnipus', role: 'general',
     id: 'agent-chat-1',
     name: 'Chat Agent',
     type: 'core',
     status: 'active',
     description: 'Chat agent',
-    color: '#ff0000',
+    color: '#9CA3AF',
     icon: null,
   },
   {
+    figure: 'Omnipus', role: 'general',
     id: 'agent-task-1',
     name: 'Task Agent',
     type: 'custom',
     status: 'active',
     description: 'Task agent',
-    color: '#00ff00',
+    color: '#9CA3AF',
     icon: null,
   },
 ] as unknown as Agent[]

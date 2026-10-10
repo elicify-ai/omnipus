@@ -141,7 +141,7 @@ async function openMessageAndCompose(mode: 'reply' | 'reply_all'): Promise<void>
 describe('MailComposeDialog reply context (C10: F5/F6 panel half)', () => {
   beforeEach(() => {
     for (const fn of [fetchAgents, fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchMailMessage, fetchMailReplyContext, fetchMailSummary, sendMailMessage]) fn.mockReset()
-    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])

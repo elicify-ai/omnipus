@@ -58,8 +58,8 @@ describe('Mail panel mailbox ownership labels', () => {
     fetchMailSummary.mockReset()
 
     fetchAgents.mockResolvedValue([
-      { id: 'agent', name: 'Mia' },
-      { id: 'alice', name: 'Ava' },
+      { figure: 'Omnipus', role: 'general', id: 'agent', name: 'Mia' },
+      { figure: 'Omnipus', role: 'general', id: 'alice', name: 'Ava' },
     ])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'agent', workspace_id: 'ws-1', enabled: true, configured: true, username: 'agent@test.local' },

@@ -39,7 +39,7 @@ async function openEditor() {
 describe('Draft editor docked height (F6)', () => {
   beforeEach(() => {
     sessionStorage.clear()
-    fetchAgents.mockReset().mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockReset().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockReset().mockResolvedValue([{ agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' }])
     fetchMailFolders.mockReset().mockResolvedValue({ folders: [{ slug: 'drafts', display_name: 'Drafts', total: 1, unread_count: null }] })
     fetchMailMessages.mockReset().mockResolvedValue({ messages: [draft], truncated: false, next_before_uid: null })

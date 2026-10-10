@@ -163,7 +163,7 @@ const agents: Agent[] = [{
   figure: 'Robot', role: 'general',
   status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50,
   max_tool_iterations_source: 'global', max_tool_iterations_override_ignored: false,
-  memory_enabled: true, needs_model: false,
+  memory_enabled: true, needs_model: false, figure: 'Omnipus', role: 'general',
 }]
 
 function makeClient() {

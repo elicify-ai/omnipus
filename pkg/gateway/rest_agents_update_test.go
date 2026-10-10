@@ -149,7 +149,7 @@ func TestUpdateAgent_JudgeOtherIdentityFieldsStillForbidden(t *testing.T) {
 	}{
 		{"name", `{"name":"Rogue Judge"}`},
 		{"description", `{"description":"a rewritten description"}`},
-		{"color", `{"color":"#ff0000"}`},
+		{"color", `{"color":"#3B82F6"}`},
 		{"skills", `{"skills":["some-skill"]}`},
 	}
 	for _, tc := range cases {
@@ -497,12 +497,15 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 	t.Run("native Subagent", func(t *testing.T) {
 		api := buildExecutorTestAPI(t)
 		id := createNativeSubagent(t, api)
-		validPatch := `{"model":"test-model","max_tool_iterations":8,"color":"#d4af37","description":"updated worker"}`
+		validPatch := `{"model":"test-model","max_tool_iterations":8,"color":"#FB923C","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
 		assert.Equal(t, http.StatusOK, w.Code, "valid worker patch must be accepted; body: %s", w.Body.String())
+		saved, err := agentstore.New(api.homePath).Get(id)
+		require.NoError(t, err)
+		assert.Equal(t, "#FB923C", saved.Color, "a palette hex is stored as given")
 	})
 
 	t.Run("subagent_3p", func(t *testing.T) {
@@ -512,12 +515,15 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		// forbidden on a subagent_3p PUT (agent_field_rules.go
 		// subagent3pForbiddenUpdateFields, extended in W2a). See
 		// TestUpdateAgent_Subagent3p_ForbiddenFields for the 400 case.
-		validPatch := `{"model":"test-model","color":"#d4af37","description":"updated worker"}`
+		validPatch := `{"model":"test-model","color":"#FB923C","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
 		assert.Equal(t, http.StatusOK, w.Code, "valid subagent_3p patch must be accepted; body: %s", w.Body.String())
+		saved, err := agentstore.New(api.homePath).Get(id)
+		require.NoError(t, err)
+		assert.Equal(t, "#FB923C", saved.Color, "a palette hex is stored as given")
 	})
 }
 
@@ -639,7 +645,7 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 	//    current display-only value used by the presence-rejection cases.
 	w1 := httptest.NewRecorder()
 	r1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
-		strings.NewReader(`{"color":"#FF0000"}`))
+		strings.NewReader(`{"color":"#3B82F6"}`))
 	r1.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w1, r1)
 	require.Equal(t, http.StatusOK, w1.Code, "establishing PUT body: %s", w1.Body.String())
@@ -653,9 +659,9 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 		name string
 		body string
 	}{
-		{name: "stale timestamp", body: fmt.Sprintf(`{"color":"#00FF00","updated_at":%q}`, "2000-01-01T00:00:00Z")},
-		{name: "current timestamp", body: fmt.Sprintf(`{"color":"#0000FF","updated_at":%q}`, currentUpdatedAt)},
-		{name: "null", body: `{"color":"#00FFFF","updated_at":null}`},
+		{name: "stale timestamp", body: fmt.Sprintf(`{"color":"#38BDF8","updated_at":%q}`, "2000-01-01T00:00:00Z")},
+		{name: "current timestamp", body: fmt.Sprintf(`{"color":"#22D3EE","updated_at":%q}`, currentUpdatedAt)},
+		{name: "null", body: `{"color":"#818CF8","updated_at":null}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
@@ -672,6 +678,9 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 			require.NoError(t, readErr)
 			assert.Equal(t, beforeRejectedWrites.Revision, after.Revision, "rejection must be zero-write")
 			assert.Equal(t, currentUpdatedAt, agentUpdatedAtFromConfig(t, api, "test-agent"))
+			saved, colorErr := agentstore.New(api.homePath).Get("test-agent")
+			require.NoError(t, colorErr)
+			assert.Equal(t, "#3B82F6", saved.Color, "rejected updated_at must not apply the colour")
 		})
 	}
 }
@@ -788,7 +797,7 @@ func TestUpdateAgent_ConcurrentDeleteRace_Returns404NotPhantom200(t *testing.T) 
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(`{"revision":"`+strings.Repeat("0", 64)+`","color":"#123456"}`))
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(`{"revision":"`+strings.Repeat("0", 64)+`","color":"#3B82F6"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 

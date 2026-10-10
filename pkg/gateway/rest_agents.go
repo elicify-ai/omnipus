@@ -411,7 +411,11 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
 		// absent when this session has no LifecycleRecord — same producer
 		// listSessions/getSession use (computeSessionLifecycle, rest_sessions.go).
-		s.LifecycleState, s.StopNote = computeSessionLifecycle(lifecycleStore, m.ID, a.agentLoop.CurrentBootEpoch())
+		if err := attachSessionRuntimeFields(&s, lifecycleStore, m.ID, a.agentLoop.CurrentBootEpoch()); err != nil {
+			logsafeError("rest: list agent sessions: lifecycle read failed", "session_id", m.ID, "error", err)
+			jsonErr(w, http.StatusInternalServerError, "session lifecycle unavailable")
+			return
+		}
 		genSessions = append(genSessions, s)
 	}
 	jsonOK(w, genSessions)
@@ -634,6 +638,15 @@ func applyAgentOverrides(ag *gen.Agent, defaults *config.AgentDefaults, ac *conf
 }
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
+// applyStoredAgentIdentity copies figure, role, and colour onto the wire
+// agent. Empty or non-enum stored values emit the defaults and are not written.
+func applyStoredAgentIdentity(ag *gen.Agent, ac config.AgentConfig) {
+	fig, role, color := coreagent.WireIdentity(ac.Figure, ac.Role, ac.Color)
+	ag.Figure = fig
+	ag.Role = role
+	ag.Color = &color
+}
+
 func buildAgentDefaults(cfg *config.Config) gen.Agent {
 	ag := gen.Agent{
 		TimeoutSeconds: cfg.Agents.Defaults.TimeoutSeconds,
@@ -693,10 +706,8 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		if ac.Description != "" {
 			ag.Description = &ac.Description
 		}
-		if ac.Color != "" {
-			c := gen.AgentColor(ac.Color)
-			ag.Color = &c
-		}
+		applyStoredAgentIdentity(&ag, ac)
+
 		ag.Type = coreagent.ToWireType(ac)
 		ag.Locked = ac.Locked
 		applyAgentEditableFields(&ag, ac)
@@ -771,10 +782,8 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			if ac.Description != "" {
 				ag.Description = &ac.Description
 			}
-			if ac.Color != "" {
-				c := gen.AgentColor(ac.Color)
-				ag.Color = &c
-			}
+			applyStoredAgentIdentity(&ag, ac)
+
 			ag.Type = coreagent.ToWireType(ac)
 			ag.Locked = ac.Locked
 			applyAgentEditableFields(&ag, ac)

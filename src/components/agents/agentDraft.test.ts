@@ -19,6 +19,8 @@ const baseline = {
   max_tool_iterations_override_ignored: false,
   memory_enabled: true,
   needs_model: false,
+  figure: 'Omnipus',
+  role: 'general',
   skills: ['plan'],
   editable_fields: [
     { name: 'name', editable: false, reason: 'Built-in identity is fixed.' },

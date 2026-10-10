@@ -84,6 +84,8 @@ const baseAgent: Agent = {
   max_tool_iterations_override_ignored: false,
   rate_limits: { use_global_defaults: true },
   memory_enabled: true,
+  figure: 'Omnipus',
+  role: 'general',
 }
 
 function makeClient() {

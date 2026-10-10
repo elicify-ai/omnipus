@@ -55,6 +55,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
       {
+        figure: 'Omnipus', role: 'general',
         id: 'mia',
         name: 'Mia',
         type: 'core',
@@ -63,6 +64,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
         description: 'Assistant',
       },
       {
+        figure: 'Omnipus', role: 'general',
         id: 'jim',
         name: 'Jim',
         type: 'core',

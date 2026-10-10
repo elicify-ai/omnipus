@@ -11,6 +11,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/stretchr/testify/require"
 )
 
 // TestComputeSessionLifecycle_RestartInterruptedIsInterruptedNotFailed pins the
@@ -38,7 +39,8 @@ func TestComputeSessionLifecycle_RestartInterruptedIsInterruptedNotFailed(t *tes
 		}
 	}
 	for _, c := range cases {
-		state, _ := computeSessionLifecycle(ls, c.id)
+		state, _, _, err := computeSessionLifecycle(ls, c.id)
+		require.NoError(t, err)
 		if state == nil {
 			t.Fatalf("%s: lifecycle_state absent, want %q", c.id, c.want)
 		}

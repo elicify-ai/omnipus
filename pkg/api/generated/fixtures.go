@@ -732,8 +732,6 @@ func FixtureAgent_Edge() Agent {
 		Id:             "custom-" + repeatStr("y", 36),
 		Name:           "Unicode Agent 🤖",
 		Type:           AgentTypeMain,
-		Figure:         AgentFigureOmnipus,
-		Role:           AgentRoleGeneral,
 		Locked:         false,
 		Status:         AgentStatusDraft,
 		Soul:           "",
@@ -741,6 +739,10 @@ func FixtureAgent_Edge() Agent {
 		// #904: the effective limit's lower bound is 1 (Agent.yaml minimum).
 		MaxToolIterations:       1,
 		MaxToolIterationsSource: MaxToolIterationsSourceGlobal,
+		// figure and role are required on the wire. The edge case is the
+		// unicode name and the numeric bounds, not a missing identity.
+		Figure: AgentFigureOmnipus,
+		Role:   AgentRoleGeneral,
 	}
 }
 

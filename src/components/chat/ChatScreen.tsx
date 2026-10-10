@@ -16,24 +16,23 @@ import {
 import {
   ArrowCounterClockwise,
   User,
-  Robot,
   PaperPlaneRight,
   Stop,
   Copy,
   Check,
-  ListChecks,
   Plus,
   File,
   Lightning,
 } from '@phosphor-icons/react'
-import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
-import { IconRenderer } from '@/components/shared/IconRenderer'
+import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { GenericToolCall } from './tools/GenericToolCall'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { renderHistoricalToolCall } from './tools/HistoricalToolCallBlock'
 import { classifySetGoalCall } from './tools/SetGoalToolUI'
 import { formatErrorDetail } from '@/lib/llm-error'
+import { FeedKindLabel } from './FeedKindLabel'
+import { UnavailableChatNotice } from './UnavailableChatNotice'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ProviderRetryIndicator } from './ProviderRetryIndicator'
 import { ProviderFallbackNoteLine } from './ProviderFallbackNoteLine'
@@ -42,7 +41,6 @@ import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
-import { AgentPicker } from './composer/AgentPicker'
 import { ModelPicker } from './composer/ModelPicker'
 import { AutoApprovePicker } from './composer/AutoApprovePicker'
 import { TokenCounter } from './composer/TokenCounter'
@@ -52,7 +50,6 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
-import { findFirstSendMessage, getPendingFirstSend } from '@/store/chat/first-send'
 import { pendingRedirectSids } from '@/store/chat/runtime-state'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
@@ -60,6 +57,7 @@ import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -80,10 +78,18 @@ import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
-import type { SlashCommand, Skill, Agent } from '@/lib/api'
+import type { SlashCommand, Skill } from '@/lib/api'
+import {
+  AgentStatusIndicator,
+  IDLE_STATUS_TEXT,
+  feedMarkLabel,
+  showsFeedMark,
+  useReplySlotPhase,
+} from './AgentStatusIndicator'
+import { useChatAgents } from './useChatAgents'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
 import { ComposerMediaLibraryButton, LibraryAttachmentChips } from './ComposerMediaLibrary'
-import { cn, initialOf } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
 import { useSlashMenu, SECTION_CAP } from '@/hooks/useSlashMenu'
@@ -328,41 +334,6 @@ function SystemMessage() {
   )
 }
 
-// Animated thinking indicator with rotating status messages. The first
-// shown phrase is always 'Thinking…' (deterministic opening beat); every
-// tick after that picks a random phrase from the pool, never immediately
-// repeating the one just shown. A caller (InlineThinkingIndicator) can
-// override the rotation entirely with a stable, context-specific `label`
-// — e.g. naming the hidden tool currently running — via ThinkingIndicator's
-// `label` prop.
-const THINKING_MESSAGES = [
-  'Thinking…',
-  'Working on it…',
-  'Composing a response…',
-  'Processing your request…',
-  'Analyzing…',
-  'Considering the details…',
-  'Piecing it together…',
-  'Reasoning it through…',
-  'Working through this…',
-  'Gathering my thoughts…',
-  'Figuring out the approach…',
-  'Reviewing the context…',
-  'Drafting a response…',
-  'Making sense of it…',
-  'Weighing the options…',
-]
-
-/** Picks a random phrase from THINKING_MESSAGES that differs from `current` — never an immediate repeat. */
-function pickNextThinkingPhrase(current: string): string {
-  if (THINKING_MESSAGES.length <= 1) return THINKING_MESSAGES[0]
-  let next = current
-  while (next === current) {
-    next = THINKING_MESSAGES[Math.floor(Math.random() * THINKING_MESSAGES.length)]
-  }
-  return next
-}
-
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content
 // in VirtualAssistantMessageRow (historical/replay render path). Mirrors
 // MessageItem.tsx's cap (live render path) so live and replay show the same
@@ -427,8 +398,8 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
 }
 
 // `deriveDelegateThinkingLabel` stays deleted. A hidden `delegate` call
-// (every action, unless verbose chat is on) has no specific thinking label
-// and falls through to the generic rotating pool, same as a status poll.
+// (every action, unless verbose chat is on) has no tool-specific label.
+// Its running status still selects Working, with the generic working copy.
 
 /**
  * Finds the LAST tool-call part in a live message's `content` whose live
@@ -437,12 +408,12 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
  * — only when that call is hidden from the thread per toolVisibility.ts's
  * shouldRenderToolCall — derives a specific, stable label for it.
  *
- * Returns null (generic rotating pool applies) when: the tool is visible
- * (its own chip already shows progress), it's a hidden `delegate` call
- * (no specific label — the event line carries that), it's ToolSearch, or
- * any other hidden tool with no specific-label rule, or nothing is
- * currently running. Defensive: never throws — an unexpected
- * message/part shape falls back to the generic pool via the null return,
+ * Returns null when: the tool is visible (its own chip already shows progress),
+ * it's a hidden `delegate` call (no specific label — the event line carries
+ * that), it's ToolSearch, any other hidden tool with no specific-label rule,
+ * or nothing is currently running. This selects copy only, not the phase:
+ * runningToolNamesFromLiveContent supplies the correlated execution signal. Defensive: never throws — an unexpected
+ * message/part shape supplies no specific copy via the null return,
  * exactly like "nothing found".
  */
 function deriveHiddenRunningToolLabel(
@@ -472,7 +443,26 @@ function deriveHiddenRunningToolLabel(
       if (toolName === 'bash') {
         return deriveBashThinkingLabel(args)
       }
-      return null // ToolSearch, any delegate action, or any other hidden tool with no rule — generic pool.
+      return null // ToolSearch, any delegate action, or another hidden tool without specific copy.
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Plain/replay twin of deriveHiddenRunningToolLabel. The virtual row has no AssistantUI parts. */
+function derivePositionedHiddenRunningLabel(
+  calls: readonly { tool: string; params?: Record<string, unknown>; status?: string }[],
+  verboseChatEnabled: boolean,
+): string | null {
+  try {
+    for (let i = calls.length - 1; i >= 0; i--) {
+      const call = calls[i]
+      if (!call || call.status !== 'running') continue
+      if (shouldRenderToolCall(call.tool, call.params, verboseChatEnabled, false)) return null
+      if (call.tool === 'bash') return deriveBashThinkingLabel(call.params)
+      return null
     }
     return null
   } catch {
@@ -516,53 +506,35 @@ function messageGoalIdFromAssistantUi(message: {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
-/** Extracts the tool names of currently-`running` tool-call parts from a
- * LIVE AssistantUI message's `content` array — the same shape
- * deriveHiddenRunningToolLabel scans, but collecting every running name
- * (there's normally at most one) rather than stopping at the first hidden
- * one. Never throws; an unexpected shape yields an empty array. */
+/** One execution discriminator for both the live and plain/replay reply slots.
+ * Visibility and label selection must not change whether a tool is running. */
+function runningToolNamesForReply(
+  calls: readonly Pick<PositionedToolCall, 'tool' | 'status'>[],
+): string[] {
+  return calls.filter((call) => call.status === 'running').map((call) => call.tool)
+}
+
+/** Adapts live AssistantUI parts to the same execution records used by replay.
+ * Status comes from the store record correlated by toolCallId; an unexpected
+ * content shape yields no calls, not a guessed execution phase. */
 function runningToolNamesFromLiveContent(
   content: unknown,
-  storeToolCalls: Record<string, { status?: string }>,
+  storeToolCalls: Record<string, Pick<PositionedToolCall, 'status'>>,
 ): string[] {
   if (!Array.isArray(content)) return []
-  const names: string[] = []
+  const calls: Pick<PositionedToolCall, 'tool' | 'status'>[] = []
   try {
     for (const part of content) {
       const p = part as { type?: string; toolCallId?: string; toolName?: string } | undefined
       if (!p || p.type !== 'tool-call') continue
       if (typeof p.toolCallId !== 'string' || typeof p.toolName !== 'string') continue
-      if (storeToolCalls[p.toolCallId]?.status === 'running') names.push(p.toolName)
+      const call = storeToolCalls[p.toolCallId]
+      if (call) calls.push({ tool: p.toolName, status: call.status })
     }
   } catch {
     return []
   }
-  return names
-}
-
-function ThinkingIndicator({ label }: { label?: string | null } = {}) {
-  const [rotatingPhrase, setRotatingPhrase] = useState<string>(THINKING_MESSAGES[0])
-
-  useEffect(() => {
-    if (label) return // a stable context-specific label overrides rotation entirely.
-    const interval = setInterval(() => {
-      setRotatingPhrase((prev) => pickNextThinkingPhrase(prev))
-    }, 2000)
-    return () => clearInterval(interval)
-  }, [label])
-
-  const displayText = label ?? rotatingPhrase
-
-  return (
-    <span className="text-[var(--color-muted)] italic flex items-center gap-[var(--space-2)] py-[var(--space-1)]">
-      <span className="flex gap-[var(--space-1)]">
-        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '0ms' }} />
-        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '150ms' }} />
-        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '300ms' }} />
-      </span>
-      <span className="text-[length:var(--type-utility-xs-size)] transition-opacity duration-300">{displayText}</span>
-    </span>
-  )
+  return runningToolNamesForReply(calls)
 }
 
 // Custom text renderer with streaming cursor.
@@ -594,21 +566,13 @@ function AssistantTextPart() {
   )
 }
 
-// Shows thinking dots inside the assistant message while it is still running.
-// Stays visible the entire turn — including between tool-call steps after some
-// text has streamed — so the user always knows the agent is still working.
-// Uses useMessage() for reactive state (not getState() which is a snapshot).
-//
-// Context-aware: when the current in-progress step is a HIDDEN tool call
-// (ToolSearch, background bash, any delegate action — see toolVisibility.ts)
-// whose tool-call part is present in message.content but rendered invisible,
-// this shows a specific, stable label for it (e.g. "Running the test suite…")
-// instead of the generic rotating pool — see deriveHiddenRunningToolLabel
-// above. Every delegate action is hidden in the non-verbose thread (spec D2);
-// the grey event line is that surface, and a running delegate call has no
-// specific label of its own here. Verbose chat shows every delegate badge,
-// so the call is already visible and this label is not used.
-function InlineThinkingIndicator() {
+// Inline status for the live streaming bubble. Actual correlated tool status
+// selects Working; label rules stay the same (a goal phrase wins over hidden
+// tool copy). Only a model-response phase uses the rotating thinking phrases.
+// The mark replaces the bouncing dots. Not mounted for a settled row —
+// that row draws Idle itself. The mark suspends until the agent record
+// arrives so the figure is in the same paint as the phrase.
+function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
   const message = useMessage()
   const isRunning = message.status?.type === 'running'
   const storeToolCalls = useChatStore((s) => s.toolCalls)
@@ -623,15 +587,51 @@ function InlineThinkingIndicator() {
   // goalId) is neutral.
   const goalPills = useChatStore((s) => s.goalPills)
   const goalId = messageGoalIdFromAssistantUi(message)
-
-  if (!isRunning) return null
-
   const goalRecordEmpty = isGoalRecordEmpty(goalId, goalPills)
+  const runningToolNames = runningToolNamesFromLiveContent(message.content, storeToolCalls)
   const goalLabel = goalRecordEmpty
-    ? deriveGoalAwareThinkingLabel(runningToolNamesFromLiveContent(message.content, storeToolCalls), true)
+    ? deriveGoalAwareThinkingLabel(runningToolNames, true)
     : null
-  const label = goalLabel ?? deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled)
-  return <ThinkingIndicator label={label} />
+  const toolLabel = deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled)
+  const phase = useReplySlotPhase({
+    streaming: isRunning,
+    hasRunningTool: runningToolNames.length > 0,
+    toolLabel,
+    goalLabel,
+    idleEligible: false,
+  })
+
+  if (!showsFeedMark(phase)) return null
+  const label = feedMarkLabel(phase)
+  return (
+    <React.Suspense
+      fallback={<AgentStatusIndicator phase={phase.kind} label={label} />}
+    >
+      <ResolvedAgentMark agentId={agentId} phase={phase.kind} label={label} />
+    </React.Suspense>
+  )
+}
+
+function ResolvedAgentMark({
+  agentId,
+  phase,
+  label,
+}: {
+  agentId: string | null
+  phase: 'thinking' | 'working' | 'waiting' | 'unavailable'
+  label: string | null
+}) {
+  const agents = useChatAgents()
+  const agent = agents.find((item) => item.id === agentId)
+  return (
+    <AgentStatusIndicator
+      phase={phase}
+      label={label}
+      figure={agent?.figure}
+      role={agent?.role}
+      color={agent?.color}
+    />
+  )
 }
 
 // Fallback tool UI for tools without a registered makeAssistantToolUI component.
@@ -911,30 +911,10 @@ function wouldToolCallBeVisible(
 // directly) and in the child's own session, opened via its
 // `childSessionId`.
 
-// Bug 2 (UAT, ADR-040 browser-panel round): renders the agent the CALLER
-// already resolved per-message (`message.agentId ?? activeAgentId`), passed in
-// as `agent`. It must NOT re-derive from the live activeAgentId — otherwise
-// switching the agent picker mid-turn would instantly repaint the currently
-// streaming bubble's avatar to the newly-picked agent while its (correctly
-// per-message-scoped) name label kept the original: a live, user-visible
-// mismatch that only self-corrected on reload. Taking the resolved agent as a
-// prop keeps a single source of truth between the label and the avatar.
-function AssistantMessageAvatar({ agent }: { agent?: Agent }) {
-  return (
-    <div
-      className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
-      style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
-      title={agent?.name}
-    >
-      {agent?.icon ? (
-        <IconRenderer icon={agent.icon} size={14} />
-      ) : (
-        <Robot size={14} weight="bold" />
-      )}
-    </div>
-  )
-}
-
+// Bug 2 (UAT, ADR-040): the name label is the per-message agent
+// (`message.agentId ?? activeAgentId`), never the picker selection. The
+// avatar column is gone (names-only bubbles). The label's title keeps that
+// same identity so a mid-turn picker change cannot repaint the row.
 
 // ── Standalone message row components (virtualizer) ──────────────────────────
 // Render ChatMessage from props (no AssistantUI context) for use by the virtualizer.
@@ -1169,6 +1149,13 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // association (no goalId) is neutral.
   const goalPills = useChatStore((s) => s.goalPills)
   const goalRecordEmpty = isGoalRecordEmpty(message.goalId, goalPills)
+  const isLastAssistant = useChatStore((s) => {
+    const list = s.messages
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i]?.role === 'assistant') return list[i]?.id === message.id
+    }
+    return false
+  })
 
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
@@ -1267,12 +1254,21 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // InlineThinkingIndicator, applied to the historical/virtualized "still
   // streaming" placeholder (PlainMessageList renders an in-flight message
   // through THIS row too — see the D-fix comment on hasContent above).
+  const runningToolNames = runningToolNamesForReply(positionedToolCalls)
   const emptyPlaceholderLabel = goalRecordEmpty
-    ? deriveGoalAwareThinkingLabel(
-        positionedToolCalls.filter((tc) => tc.status === 'running').map((tc) => tc.tool),
-        true,
-      )
+    ? deriveGoalAwareThinkingLabel(runningToolNames, true)
     : null
+  const positionedToolLabel = derivePositionedHiddenRunningLabel(positionedToolCalls, verboseChatEnabled)
+  const replyPhase = useReplySlotPhase({
+    streaming: !!message.isStreaming,
+    hasRunningTool: runningToolNames.length > 0,
+    toolLabel: positionedToolLabel,
+    goalLabel: emptyPlaceholderLabel,
+    idleEligible: isLastAssistant && !message.isStreaming,
+  })
+  const showMark =
+    showsFeedMark(replyPhase) &&
+    (showEmptyPlaceholder || replyPhase.kind === 'waiting' || replyPhase.kind === 'unavailable')
 
   return (
     <div
@@ -1282,25 +1278,31 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
       data-status="complete"
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
-      <div
-        className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
-        style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
-        title={agent?.name}
-      >
-        {agent?.icon ? (
-          <IconRenderer icon={agent.icon} size={14} />
-        ) : (
-          <Robot size={14} weight="bold" />
-        )}
-      </div>
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
-          <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-            {agentDisplayName}
+          <span className="inline-flex items-center gap-[var(--space-2)]">
+            <span
+              data-testid="agent-label"
+              title={agentDisplayName}
+              className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+            >
+              {agentDisplayName}
+            </span>
+            {replyPhase.kind === 'idle' && (
+              <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{IDLE_STATUS_TEXT}</span>
+            )}
           </span>
         )}
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
-          {showEmptyPlaceholder && <ThinkingIndicator label={emptyPlaceholderLabel} />}
+          {showMark && showsFeedMark(replyPhase) && (
+            <AgentStatusIndicator
+              phase={replyPhase.kind}
+              label={feedMarkLabel(replyPhase)}
+              figure={agent?.figure}
+              role={agent?.role}
+              color={agent?.color}
+            />
+          )}
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
             <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-2)]">
@@ -1839,16 +1841,21 @@ function AssistantMessage() {
       data-status={message.status?.type ?? 'complete'}
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
-      <AssistantMessageAvatar agent={agent} />
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
-          <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{agentDisplayName}</span>
+          <span
+            data-testid="agent-label"
+            title={agentDisplayName}
+            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+          >
+            {agentDisplayName}
+          </span>
         )}
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
           {showEmptyPlaceholder ? (
-            // Nothing has streamed in yet — show only the thinking indicator,
+            // Nothing has streamed in yet — show only the status mark,
             // not an empty text bubble + Copy affordance (D-fix).
-            <InlineThinkingIndicator />
+            <InlineThinkingIndicator agentId={messageAgentId ?? null} />
           ) : isTerminalEmpty ? (
             // Terminal-empty variant (D-fix): the turn is over and there is
             // still nothing to show. Render nothing rather than an empty
@@ -1875,12 +1882,12 @@ function AssistantMessage() {
                   },
                 }}
               />
-              {/* Trailing thinking indicator — sits at the bottom of the bubble
+              {/* Trailing status mark — sits at the bottom of the bubble
                   while the turn is running so the user always sees a "still
                   working" cue at the position where the next text/tool will
                   appear. Once a token streams in, the streamed text renders
                   above the indicator and pushes it further down. */}
-              <InlineThinkingIndicator />
+              <InlineThinkingIndicator agentId={messageAgentId ?? null} />
             </>
           )}
         </div>
@@ -1981,16 +1988,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const cancelStream = useChatStore((s) => s.cancelStream)
   const appendMessage = useChatStore((s) => s.appendMessage)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
-  const startNewSession = useSessionStore((s) => s.startNewSession)
-  const [abandonFirstSend, setAbandonFirstSend] = useState<{ clientMessageId: string; workspaceId: string | null } | null>(null)
-  const requestNewSession = useCallback(() => {
-    const pending = getPendingFirstSend(useChatStore.getState())
-    if (pending && !pending.sessionId && useSessionStore.getState().activeSessionId === '__pending') {
-      setAbandonFirstSend({ clientMessageId: pending.clientMessageId, workspaceId: pending.workspaceId })
-    } else {
-      startNewSession()
-    }
-  }, [startNewSession])
   const composerRuntime = useComposerRuntime()
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
@@ -2014,13 +2011,13 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // window (isConnected:false with reconnectPhase still null — "Connecting to
   // gateway..."), leaves the composer disabled; see tests/e2e/chat.spec.ts "(f)
   // queue-on-disconnect" and ChatScreen.outbound-queue.test.tsx for regression coverage.
-  // askuserquestion-tool-spec v3 US-1 S1: the composer is LOCKED while an
-  // AskUserQuestion card is pending — free-form answering happens through
-  // the card, never the chat box; Cancel (always present on the card)
-  // unlocks. Terminal cards (answered/cancelled) release the lock.
+  // AskUserQuestion v3 US-1 S1: pending locks free-form answers to the card; its Cancel remains available, and answered/cancelled states release the lock.
   const askLocked = useChatStore((s) => s.pendingAsk?.status === 'pending')
+  const entryWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
+  const chatUnavailable = useSessionStore((state) => workspaceEntryBlocksSend(state, entryWorkspaceId))
 
   const inputEnabled =
+    !chatUnavailable &&
     !agentRemoved &&
     !isReplaying &&
     !askLocked &&
@@ -2047,7 +2044,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // path to diverge from paste, so gating the button/drag-drop on
   // isStreaming was just an inconsistent affordance (paste allowed it, the
   // button forbade the identical action) rather than a real safety gate.
-  const attachDisabled = !isConnected || isReplaying || reconnectPhase === 'gave_up' || agentRemoved
+  const attachDisabled = !isConnected || isReplaying || reconnectPhase === 'gave_up' || agentRemoved || chatUnavailable
 
   // The 3 previously-tangled composer concerns (slash/skill palette, file
   // upload incl. harmful-file confirm, stop/cancel state machine) each own
@@ -2122,7 +2119,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     inputEnabled,
     composerRuntime,
     appendMessage,
-    startNewSession: requestNewSession,
     // /stop is one Stop-button activation; /cancel stays immediate tree.
     activateStop: cancelState.cancelUnconditional,
     cancelIfStreaming: cancelState.cancelAllTreeScoped,
@@ -2141,7 +2137,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // purpose so the two can't drift apart).
   const hasMenuContent =
     slashMenu.slashItems.length > 0 ||
-    (slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode)
+    (slashMenu.commandsError && !slashMenu.isSkillsFilter)
 
   // Deferred item 2: single source of truth for "the menu is actually
   // mounted right now" — reused by the render gate below, the combobox
@@ -2178,12 +2174,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // truth for the currently-active capped section's overflow state, shared
   // by the VISIBLE "+N more" footer row below AND its sr-only announcement
   // mirror (menuFooterAnnouncement) — computed once so the two can never say
-  // different things. Only one capped section can be showing a footer at a
-  // time: "/" mode caps skills (commands has no cap), "@" mode caps agents,
-  // and the two triggers are mutually exclusive by construction (see
-  // useSlashMenu.ts's file header), so `isMentionMode` alone picks the right
-  // count.
-  const activeSectionHiddenCount = slashMenu.isMentionMode ? slashMenu.agentsHiddenCount : slashMenu.skillsHiddenCount
+  // different things. Only skills are capped (commands has no cap). The "@"
+  // agent menu is gone (FR-007).
+  const activeSectionHiddenCount = slashMenu.skillsHiddenCount
   // Cap-footer copy (gate 2 LOW): in the "/skills" special-filter state (D9
   // — exact input "/skills" shows every skill, capped, ignoring "skills"
   // itself as a filter string), "keep typing to narrow" is impossible advice
@@ -2422,21 +2415,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       onDragLeave={attachDisabled ? undefined : fileUpload.onDragLeave}
       onDrop={attachDisabled ? undefined : fileUpload.onDrop}
     >
-      {/* a11y HIGH: "@" mention-selection announcement. Selecting an agent
-          via "@" silently empties the composer and silently changes where
-          the next message routes — zero non-visual feedback for a
-          screen-reader user. Mirrors the sr-only aria-live pattern in
-          ChatScreen (see the message-list's own `aria-live="polite"`
-          region near the top of the ChatScreen component) so a mention
-          selection reads the same way a new assistant response does.
-          Content-change-triggers-announcement: re-selecting the SAME agent
-          leaves the text unchanged, so it does not re-announce (see
-          useSlashMenu.ts's mentionAnnouncement doc comment) — acceptable,
-          nothing actually changed. */}
-      <div aria-live="polite" aria-atomic="true" className="sr-only" data-testid="agent-mention-announcement">
-        {slashMenu.mentionAnnouncement && <span>Now chatting with {slashMenu.mentionAnnouncement}</span>}
-      </div>
-
+      <UnavailableChatNotice />
       {/* SR gap (gate 4 MODERATE): the "Commands unavailable" error row
           inside the listbox below is deliberately `role="presentation"` —
           excluded from the listbox's accessible option children (see that
@@ -2456,7 +2435,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           `aria-atomic="true"`, matching the pattern above explicitly for
           clarity. */}
       <div role="status" aria-atomic="true" className="sr-only" data-testid="slash-menu-status">
-        {menuIsRendered && slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
+        {menuIsRendered && slashMenu.commandsError && !slashMenu.isSkillsFilter && (
           <span>Commands unavailable</span>
         )}
         {menuIsRendered && menuFooterAnnouncement && <span>{menuFooterAnnouncement}</span>}
@@ -2469,14 +2448,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       )}
 
 
-      {/* Slash command + skills + "@" agent-mention partitioned dropdown
-          (FR-005). One container/list renders three different sections
-          depending on the trigger: "/" opens Commands+Skills, "@" opens
-          Agents (see useSlashMenu.ts's isMentionMode) — the two triggers
-          are mutually exclusive by construction, so `slashItems` is always
-          either [commands, skills] or [agents], never a mix (J.4
-          correction, bugfixes3 sign-off — this comment previously only
-          mentioned the "/" side).
+      {/* Slash command + skills dropdown (FR-005). "/" opens Commands+Skills.
+          The "@" agent menu is gone (FR-007): a leading "@" does not open
+          this list and does not switch the agent.
           F6: unified slashItems.map() — emits a section header on each section
           transition, making the `section` field load-bearing and removing the
           duplicate render blocks + the off-by-one `globalIndex` variable.
@@ -2503,7 +2477,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           data-testid="slash-menu"
           id="composer-slash-menu"
           role="listbox"
-          aria-label="Commands, skills and agents"
+          aria-label="Commands and skills"
           // max-h + scroll: the menu opens UPWARD from the composer, so a tall
           // list (many commands + skills) pushed its top rows above the
           // viewport. 40dvh caps it to the visible area; overflow-y scrolls.
@@ -2515,19 +2489,13 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               the whole Commands section there, so an error row would be a
               non-sequitur). Muted styling matches SearchModal's own
               query-error row (src/components/search/SearchModal.tsx).
-              Fix 1: also hidden in "@" mention mode — a commands-fetch
-              error has nothing to do with the agent-mention menu, and this
-              render gate must match useSlashMenu's own shouldShowSlash
-              fallback (useSlashMenu.ts), which already excludes
-              isMentionMode from the "keep the menu open on error" carve-out.
-              Without this clause the row leaked into the "@" menu whenever
-              the commands query happened to be erroring, even though the
-              "@" menu has nothing to do with commands.
+              Hidden during the "/skills" filter only. The "@" mention menu
+              this row used to stay out of is gone (FR-007).
               Deferred item 2: `role="presentation"` — this row is
               informational text, not a selectable listbox option; without
               this it would silently pollute the `listbox`'s accessible
               children with a non-option row. */}
-          {slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
+          {slashMenu.commandsError && !slashMenu.isSkillsFilter && (
             <div
               data-testid="slash-commands-error"
               role="presentation"
@@ -2546,9 +2514,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // Only skills/agents are capped (commands has no cap — see
             // useSlashMenu.ts) — 0 for commands, so the footer simply never
             // renders there.
-            const sectionHiddenCount =
-              item.section === 'skills' ? slashMenu.skillsHiddenCount :
-              item.section === 'agents' ? slashMenu.agentsHiddenCount : 0
+            const sectionHiddenCount = item.section === 'skills' ? slashMenu.skillsHiddenCount : 0
             return (
               <React.Fragment key={item.key}>
                 {isFirstInSection && (
@@ -2560,7 +2526,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                         ? 'border-b border-[var(--color-border)]'
                         : 'border-t border-[var(--color-border)]',
                     )}>
-                    {item.section === 'commands' ? 'Commands' : item.section === 'skills' ? 'Skills' : 'Agents'}
+                    {item.section === 'commands' ? 'Commands' : 'Skills'}
                   </div>
                 )}
                 <button
@@ -2584,10 +2550,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   // textarea's own onKeyDown → slashMenu.handleKeyDown) —
                   // neither depends on this button ever receiving focus.
                   tabIndex={-1}
-                  // "@" mention menu rows only — mirrors the slash-command/skill
-                  // rows' shared markup exactly, so this testid is additive
-                  // rather than a fork of the row.
-                  data-testid={item.section === 'agents' ? 'agent-mention-item' : undefined}
                   // Fix 11: semantic highlight marker — lets a test assert the
                   // highlighted row without depending on the visual class
                   // string below (which stays purely presentational; `undefined`
@@ -2609,29 +2571,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   }}
                   onMouseEnter={() => slashMenu.onHoverItem(globalIndex)}
                 >
-                  {/* Agent rows only — same avatar-dot markup as AgentPicker's
-                      DropdownMenuItem rows (composer/AgentPicker.tsx) so the
-                      mention menu and the picker dropdown read as the same
-                      "agent row" everywhere in the composer.
-                      Fix 9: aria-hidden — the initial/icon is decorative; the
-                      row BUTTON's accessible name should come from the label/
-                      description text, not this dot's text content. Initial is
-                      derived from `item.agentName` (astral-safe via
-                      `initialOf`), not `label.charAt(1)` — the old approach
-                      assumed `label` was always "@" + exactly one BMP
-                      character, which breaks for a name whose first character
-                      is outside the BMP (e.g. an emoji). */}
-                  {item.section === 'agents' && (
-                    <div
-                      aria-hidden="true"
-                      className="w-5 h-5 rounded-full flex items-center justify-center text-[length:var(--type-caption-size)] font-bold shrink-0"
-                      style={{ backgroundColor: item.agentColor ?? 'var(--color-surface-3)' }}
-                    >
-                      {item.agentIcon
-                        ? <IconRenderer icon={item.agentIcon} size={11} />
-                        : initialOf(item.agentName ?? '')}
-                    </div>
-                  )}
                   {/* Fixed-width label column so descriptions align across rows
                       (a two-column table, not per-row flow). 9.5rem fits the
                       longest current label; truncate guards outliers. */}
@@ -2643,10 +2582,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                     <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
                       {item.argumentHint}
                     </span>
-                  )}
-                  {/* Mirrors AgentPicker's "active" marker (composer/AgentPicker.tsx) */}
-                  {item.section === 'agents' && item.isActiveAgent && (
-                    <span className="ml-auto shrink-0 text-[var(--color-success)] text-[length:var(--type-caption-size)]">active</span>
                   )}
                 </button>
                 {/* Deferred item 3: "+N more" footer — rendered right after
@@ -2698,9 +2633,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         className="flex items-center gap-[var(--space-1)] min-w-0 overflow-x-auto px-[var(--space-1)] py-[var(--space-1)]"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
       >
-        {/* Agent → model. Attach lives INSIDE the input card (leading the
-            textarea, ChatGPT/Claude-style) — it was visually lost up here. */}
-        <AgentPicker disabled={agentRemoved} tabIndex={3} />
+        {/* Model. The agent picker is gone (FR-007). Attach lives INSIDE the
+            input card (leading the textarea). */}
         <ModelPicker disabled={agentRemoved} tabIndex={4} />
         {/* ADR-092: per-chat Auto-approve quick switch. Deliberately NO
             explicit tabIndex — the closed 1-8 composer ring documented
@@ -2746,7 +2680,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // would misleadingly suggest Enter/Send still route through here
             // while a turn is running.
             // Send-path interception: if the typed text is exactly a client-delivery
-            // slash command (e.g. "/new", "/help", "/model", "/cancel"), handle it
+            // local slash command (for example "/help", "/model", or
+            // "/cancel"). /new and /clear are sent to the server.
             // locally and prevent it from reaching the backend. This converges the
             // typed+Enter path with the palette selection path.
             if (slashMenu.interceptClientCommand()) {
@@ -2758,12 +2693,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // WITHOUT firing the textarea's onChange (no synthetic change
             // event is dispatched for the runtime-driven clear), so
             // `slashMenu.inputValue` — which only updates via onInputChange —
-            // kept the just-sent text (e.g. "@mia hello everyone") even
-            // though the visible textarea was now empty. A subsequent
-            // ArrowDown in the (visually empty) textarea then read the STALE
-            // "@..." mirror, reopened the full agent-mention menu, and Enter
-            // silently switched the active agent with no text on screen to
-            // explain why. Only reached here when the send actually
+            // kept the just-sent text even though the visible textarea was
+            // now empty. A subsequent ArrowDown then read that stale mirror
+            // and reopened the slash menu. The "@" agent menu this used to
+            // reopen is gone (FR-007). Only reached here when the send actually
             // proceeded (neither the isStreaming guard nor
             // interceptClientCommand() intercepted it above), so this can't
             // clear the mirror out from under a blocked/intercepted send.
@@ -3092,25 +3025,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         <ActivityBar />
       </div>
 
-      <ConfirmDialog
-        open={abandonFirstSend !== null}
-        onOpenChange={(open) => { if (!open) setAbandonFirstSend(null) }}
-        title="Start a new chat?"
-        description="Delivery not confirmed. Copy your message before starting a new chat."
-        cancelLabel="Keep this chat"
-        confirmLabel="Start a new chat"
-        emphasis="cancel"
-        onConfirm={() => {
-          const selected = useSessionStore.getState().activeSessionId
-          const bucket = selected ? useChatStore.getState().sessionsById[selected] : undefined
-          const stillSelected = abandonFirstSend
-            && (useWorkspacesStore.getState().activeWorkspaceId || null) === abandonFirstSend.workspaceId
-            && findFirstSendMessage(bucket, abandonFirstSend.clientMessageId)
-          setAbandonFirstSend(null)
-          if (stillSelected) startNewSession()
-        }}
-      />
-
       {/* Harmful-file upload double-confirm — replaces the native window.confirm pair.
           Stage 1 warns and lists the flagged files; stage 2 is the second
           confirmation. Files are only attached after the user confirms stage 2.
@@ -3170,7 +3084,7 @@ function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
           <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">
             {hasAgent
               ? 'Your agent is ready. Start a conversation below.'
-              : 'Select an agent in the session bar to get started.'}
+              : 'Select an agent in the sidebar list to get started.'}
           </p>
         </div>
       </div>
@@ -3193,8 +3107,6 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const loopStatus = useChatStore((s) => s.loopStatus ?? null)
   const setMessages = useChatStore((s) => s.setMessages)
   const mergeJudgeVerdictHistory = useChatStore((s) => s.mergeJudgeVerdictHistory)
-  const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
-  const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
   // For the ARIA live region: track the last assistant message id for screen reader announcements.
   // Select the pre-derived single id from the store (companion to `messagesById`)
   // rather than subscribing to the whole `messages` array + reversing/scanning it per
@@ -3366,15 +3278,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         </div>
       )}
 
-      {/* Task session banner — shown when viewing a task execution transcript */}
-      {attachedSessionType === 'task' && (
-        <div className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-[var(--space-2)]">
-          <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
-          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
-            Task: {attachedTaskTitle ?? 'Task Execution'}
-          </span>
-        </div>
-      )}
+      {/* Above-feed kind. FeedKindLabel also keeps the old Task: line when no descriptor matches. */}
+      <FeedKindLabel />
 
       {/* History fetch error */}
       {historyError ? (

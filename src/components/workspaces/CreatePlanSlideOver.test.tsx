@@ -29,7 +29,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
-      { id: 'jim', name: 'Jim', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim', type: 'core', default: false },
     ]),
     fetchWorkspaceDelegation: vi.fn().mockRejectedValue(new Error('not mocked')),
     createPlan: vi.fn(),

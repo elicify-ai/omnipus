@@ -267,11 +267,15 @@ components:
         `sessions` is this page's rows: root sessions by default, that
         node's direct children when parent_session_id is supplied, or every
         session (roots and subordinates) when flat=true (FR-104).
-        `partial_errors` composes with paging: a page in which one agent's
-        sessions could not be read still returns its healthy rows, still
-        returns next_cursor, and populates partial_errors — an unreadable
-        source contributes zero rows and does not halt the page or
-        invalidate the cursor (FR-098).
+        `partial_errors` composes with paging: a page whose merge hit a
+        failing legacy per-agent store still returns its healthy rows,
+        still returns next_cursor, and populates partial_errors — a failing
+        store contributes zero rows and does not halt the page or
+        invalidate the cursor (FR-098). This is also the page's general
+        degradation channel: an unexpected per-session lifecycle-journal
+        read failure keeps the row, omits lifecycle_state, stop_note, and
+        execution (never null), and appends a sanitized session-scoped token.
+        A missing lifecycle record is normal and contributes no token.
       type: object
       required:
       - sessions
@@ -292,9 +296,17 @@ components:
           items:
             type: string
           description: >
-            Opaque error tokens (agent ID + sanitized reason) from any
-            source that could not be read during this page's merge. Present
-            only when at least one source failed.
+            General page-degradation channel. Distinguishable opaque tokens:
+            agent=<id>: session_list_failed for a store enumeration failure;
+            session=<id>: lifecycle_read_unavailable for an unexpected
+            per-session lifecycle-journal read failure. No filesystem paths
+            or underlying error details are exposed. An unreadable journal
+            keeps its session row but omits lifecycle_state, stop_note, and
+            execution, never sending null or inventing a state. A missing
+            lifecycle record (ErrLifecycleNotFound) is normal, not degradation.
+            Present only when at least one degradation occurred; omitted when
+            empty. Rows and next_cursor remain valid, so clients can warn that
+            the list or runtime state is incomplete and offer Retry.
     SessionCreateRequest:
       $ref: ./components/schemas/SessionCreateRequest.yaml
     SessionRenameRequest:
@@ -2858,7 +2870,7 @@ paths:
     get:
       operationId: listSessions
       summary: List sessions across all agents
-      description: 'Returns root sessions (parent_session_id == "") visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate ("delegate") sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat=true (FR-104). Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the page still returns its healthy rows plus a populated partial_errors and a valid next_cursor (FR-098). Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed, and are never counted in child_count unless it is passed.
+      description: 'Returns root sessions (parent_session_id == "") visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate ("delegate") sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat=true (FR-104). Supports optional filtering by agent_id and type. When an agent store fails to enumerate sessions, or a session lifecycle journal unexpectedly fails to load, the page still returns its available rows plus distinguishable sanitized partial_errors and a valid next_cursor (FR-098; NAV-WAVE1 SF-2). An unreadable journal keeps its row with lifecycle_state, stop_note, and execution omitted, never null. A missing lifecycle record is normal and adds no token. Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed, and are never counted in child_count unless it is passed.
 
         '
       tags:
@@ -2947,7 +2959,7 @@ paths:
         example: 0
       responses:
         '200':
-          description: 'A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node''s direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one source could not be read during the merge; the page''s rows and next_cursor stay valid regardless (FR-098).
+          description: 'A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node''s direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one degradation occurred: a store enumeration failure or an unexpected per-session lifecycle-journal read failure. These use agent-scoped session_list_failed and session-scoped lifecycle_read_unavailable tokens respectively. Unreadable-journal rows remain, with lifecycle_state, stop_note, and execution omitted, never null; a missing record adds no token. The page''s rows and next_cursor stay valid regardless (FR-098; NAV-WAVE1 SF-2).
 
             '
           content:

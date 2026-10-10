@@ -67,7 +67,7 @@ The Telegram channel receives messages via long polling (30-second timeout) usin
 
 ## Built-in Commands
 
-At startup Telegram registers Omnipus's built-in bot commands automatically via `CommandRegistrarCapable`. Registration retries in the background with exponential backoff if the Telegram API is temporarily unavailable. The registered commands are:
+At startup Telegram registers Omnipus's built-in bot commands automatically via `CommandRegistrarCapable`. Registration retries in the background after increasing delays if the Telegram API is temporarily unavailable. The installed server supplies the command list; use `/help` for its current commands rather than an older fixed list. Hidden commands and aliases are not registered in Telegram's menu. A command whose name Telegram cannot display, such as `/stop-redirect`, can still work when typed if the server supports it.
 
 | Command | Purpose |
 | --- | --- |

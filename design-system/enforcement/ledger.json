@@ -2553,6 +2553,27 @@
     },
     {
       "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.tsx",
+      "syntax": "AgentStatusIndicator#svg-attribute.color<-color",
+      "reason": "Identity ink. The chat indicator passes the responding agent's palette colour into AgentIcon, which paints it as currentColor on the figure. The hex is governed identity data (ADR-20261007, design-system rule 6), not chrome. The component does not choose a colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "ResolvedAgentMark#svg-attribute.color<-agent?.color",
+      "reason": "Identity ink on the live reply mark. ResolvedAgentMark reads the responding agent's color and passes it to AgentIcon. Governed identity data, not a design-system chrome colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "VirtualAssistantMessageRow#svg-attribute.color<-agent?.color",
+      "reason": "Identity ink on the plain and replay reply mark. The row passes the message's own agent color into AgentIcon. Governed identity data, not a design-system chrome colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
       "path": "src/components/chat/MediaActionToolbar.tsx",
       "syntax": "MediaActionToolbar#className",
       "reason": "Category: caller pass-through — migration plan §5 founder decision 2026-09-19. Source: dist/design-system-baseline/cli-lanes/fanout/L6/registry-draft.json. Registrable once scripts/design-system/codemod-classname-passthrough.mjs's template-join transform is applied to MediaActionToolbar.tsx (verified dist/design-system-baseline/cli-lanes/fanout/L6/validate-e2e.log): before, ts-colors/unsupported \"className\"; after, ts-colors/extension-boundary \"MediaActionToolbar#className\". The shipped codemod wraps `containerClasses` in its own template shell to reproduce pre-rewrite scanning depth with zero new findings.",
@@ -4996,6 +5017,104 @@
       "syntax": "RunningIndicator#className",
       "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
       "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "AgentProfile#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — W1-6 edit-header identity preview forwards the draft colour unchanged to AgentIcon. If the optional response colour is absent, the preview alone uses generated AgentColor option 9 (Grey); it does not write that fallback into the draft or claim the edit is saved. Figure and role use the same selected draft as the visible pickers.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.tsx",
+      "syntax": "AgentIcon#dom-style.color<-color",
+      "reason": "Category: user-authored colours — identity palette ink. AgentIcon writes dom-style.color directly from its color prop, the pure kit's AgentIconColor palette union. lib/agentIdentity.ts checks exact bidirectional conformance to generated AgentColor without pulling application contracts into the package. The prop is read unchanged (no lookup, no mix). Ink stays currentColor and fully opaque. Mask cutouts are not paint attributes.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.stories.tsx",
+      "syntax": "renderAgentIcon#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — story ink is the last generated AgentColor option (Grey), not a handwritten hex. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "Swatch#dom-style.backgroundColor<-hex",
+      "reason": "Category: user-authored colours — a palette swatch fills itself from its own hex argument, one of the ten generated AgentColor options. The argument is read unchanged.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "IdentityPreview#svg-attribute.color<-color",
+      "reason": "Category: user-authored colours — the live identity preview forwards its color argument unchanged to AgentIcon. The value is a palette hex chosen in the same form.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/CreateAgentModal.tsx",
+      "syntax": "identityOnCreate#dom-style.color<-payload.color",
+      "reason": "Category: user-authored colours — create sends payload.color only after it has been checked against the generated AgentColor options. The field is the wire color, read unchanged.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/CreateAgentWizard.tsx",
+      "syntax": "initialPayload#dom-style.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — a new agent's untouched colour is Grey, the last generated AgentColor option, which is also the server default.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/wizard/Step1Identity.tsx",
+      "syntax": "Step1Identity#svg-attribute.color<-payload.color",
+      "reason": "Category: user-authored colours — the create step forwards the form's color field unchanged into the live preview. The field is a palette hex.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconAzure#svg-attribute.color<-AgentColor.options[0]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Azure, the first generated AgentColor option, from the named function iconAzure. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconCyan#svg-attribute.color<-AgentColor.options[2]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Cyan, generated AgentColor option 2, from the named function iconCyan. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconViolet#svg-attribute.color<-AgentColor.options[4]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Violet, generated AgentColor option 4, from the named function iconViolet. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconOrange#svg-attribute.color<-AgentColor.options[8]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Orange, generated AgentColor option 8, from the named function iconOrange. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconGrey#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Grey, the last generated AgentColor option, from the named function iconGrey. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentProfile.wave1.test.tsx",
+      "syntax": "lockedMia#dom-style.color<-AgentColor.options[0]",
+      "reason": "Category: user-authored colours — the locked built-in fixture sets Mia's colour to Azure, the first generated AgentColor option, inside the named function lockedMia. The index is a numeric literal. The field is the wire color.",
+      "owner": "user-authored colours exception registry"
     }
   ],
   "reviewedBoundaries": [
@@ -5651,6 +5770,11 @@
     },
     {
       "path": "src/components/layout/ScreenHeader.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/layout/Sidebar.agentRows.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },

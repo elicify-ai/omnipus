@@ -17,6 +17,7 @@ import {
   type TeamEditState,
 } from './teamGraphModel'
 import type { Agent } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 
 // React Flow only PAINTS edge paths once nodes are measured, which jsdom never
 // does (the ResizeObserver stub in beforeAll is a no-op, so nodes stay
@@ -101,21 +102,19 @@ beforeAll(() => {
 })
 
 function agent(id: string, over: Partial<Agent> = {}): Agent {
-  return {
+  return makeAgent({
     id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
     type: 'Main',
     locked: false,
     status: 'active',
     soul: '',
-    heartbeat: '',
-    instructions: '',
     timeout_seconds: 60,
     max_tool_iterations: 10,
-    heartbeat_enabled: false,
-    heartbeat_interval: 0,
+    figure: 'Omnipus',
+    role: 'general',
     ...over,
-  } as Agent
+  })
 }
 
 const AGENTS: Agent[] = [

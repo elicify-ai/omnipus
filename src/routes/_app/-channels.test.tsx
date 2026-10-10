@@ -293,8 +293,8 @@ function renderChannelConfigPanel(channelId: string) {
   const client = makeQueryClient()
   client.setQueryData(['channel-routing', channelId], { default_agent_id: undefined })
   client.setQueryData(['agents'], [
-    { id: 'mia', name: 'Mia' },
-    { id: 'jim', name: 'Jim' },
+    { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' },
+    { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim' },
   ])
   client.setQueryData(['channel-config', channelId], {})
 
@@ -318,8 +318,8 @@ describe('ChannelConfigPanel — Routing section', () => {
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia' } as never,
-      { id: 'jim', name: 'Jim' } as never,
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' } as never,
+      { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim' } as never,
     ])
     vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: 'mia' })
@@ -363,7 +363,7 @@ describe('ChannelConfigPanel — Routing section', () => {
     // Persistence test: pre-seeded routing with "mia" causes SmartSelect to show "Mia".
     const client = makeQueryClient()
     client.setQueryData(['channel-routing', 'telegram'], { default_agent_id: 'mia' })
-    client.setQueryData(['agents'], [{ id: 'mia', name: 'Mia' }, { id: 'jim', name: 'Jim' }])
+    client.setQueryData(['agents'], [{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }, { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim' }])
     client.setQueryData(['channel-config', 'telegram'], {})
 
     render(

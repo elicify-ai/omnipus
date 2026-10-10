@@ -657,7 +657,13 @@ type AgentConfig struct {
 	// Distinct from the global VoiceConfig engine settings.
 	// Schema-pinned; not yet active (TTS delivery, tracked #306).
 	Voice string `json:"voice,omitempty"`
-	// Color is the hex color code for this agent's avatar in the UI (e.g. "#22C55E").
+	// Figure is the agent mark body: Robot, Man, Woman, or Omnipus.
+	// Empty until create or boot migration fills it.
+	Figure string `json:"figure,omitempty"`
+	// Role is the curated role slug (the badge). Not the legacy Icon.
+	// Empty until create or boot migration fills it.
+	Role string `json:"role,omitempty"`
+	// Color is an identity-palette hex. Boot rewrites older hexes once.
 	Color string `json:"color,omitempty"`
 	// Type classifies the agent. Empty defaults to AgentTypeCustom for stored agents;
 	// use ResolveType() to get the effective type.

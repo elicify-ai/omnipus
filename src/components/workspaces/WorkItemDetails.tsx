@@ -70,7 +70,7 @@ function UpdatedTime({ value }: { value: string }) {
   return <time dateTime={value}>{Number.isNaN(date.getTime()) ? 'Unavailable' : date.toLocaleString()}</time>
 }
 
-export function TaskDetailsPopover({ task, plans = [], agents = [], onOpenTask }: { task: Task; plans?: Plan[]; agents?: (Pick<Agent, 'id'> & Partial<Pick<Agent, 'name' | 'color'>>)[]; onOpenTask: () => void }) {
+export function TaskDetailsPopover({ task, plans = [], agents = [], onOpenTask }: { task: Task; plans?: Plan[]; agents?: (Pick<Agent, 'id'> & Partial<Pick<Agent, 'name'>>)[]; onOpenTask: () => void }) {
   const agent = task.agent_name ?? agents.find((value) => value.id === task.agent_id)?.name ?? task.agent_id ?? 'Unassigned'
   const plan = plans.find((value) => value.id === task.plan_id)?.title ?? task.plan_id ?? 'Unplanned'
   const owningPlan = plans.find((value) => value.id === task.plan_id)

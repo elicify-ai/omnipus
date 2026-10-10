@@ -15,6 +15,9 @@ vi.mock('@/store/session', () => ({
   registerChatResetForReplay: vi.fn(),
   registerChatClearPendingAutoApprove: vi.fn(),
   registerChatAbandonPendingFirstSend: vi.fn(),
+  // Wave-2's + New chat guard registers this getter when chat.ts loads.
+  // Token seeding does not use the guard, but the module must still collect.
+  registerReadPendingFirstSend: vi.fn(),
   registerSyncChatForeground: vi.fn(),
   // #823 catch-up redesign (BE-DESIGN.md §6.1) — chat.ts registers this at
   // module load; a mock missing it crashes the import (see registerGetSessionCursor's

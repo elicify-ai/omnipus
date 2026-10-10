@@ -146,7 +146,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -197,10 +196,11 @@ describe('Slash menu — commands query error (LOW S8)', () => {
     expect(status).toHaveAttribute('role', 'status')
     expect(status).toHaveTextContent('Commands unavailable')
 
-    // The synthetic client-only /resume command comes from useSlashMenu
+    // The synthetic client-only /sessions command comes from useSlashMenu
     // itself, not the errored backend list, so it still renders alongside
     // the error row.
-    expect(screen.getByText('/resume')).toBeInTheDocument()
+    expect(screen.getByText('/sessions')).toBeInTheDocument()
+    expect(screen.queryByText('/resume')).not.toBeInTheDocument()
 
     // The skills query is independent and still succeeded.
     expect(screen.getByText('/web-research')).toBeInTheDocument()
@@ -210,7 +210,7 @@ describe('Slash menu — commands query error (LOW S8)', () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
-    // "/zzz" matches neither the synthetic /resume command nor web-research.
+    // "/zzz" matches neither the synthetic /sessions command nor web-research.
     act(() => { fireEvent.change(input, { target: { value: '/zzz' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
@@ -234,16 +234,13 @@ describe('Slash menu — commands query error (LOW S8)', () => {
   // `!isMentionMode` clause useSlashMenu's own shouldShowSlash fallback
   // already applies. A commands-fetch error has nothing to do with the "@"
   // agent-mention menu, so the row must never appear there.
-  it('the error row does NOT leak into the "@" agent-mention menu', async () => {
+  it('typing @ does not open a menu, so the commands-error row is not shown', async () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
     act(() => { fireEvent.change(input, { target: { value: '@' } }) })
 
-    // The "@" menu itself opens (one scoped agent, Mia)...
-    expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
-    expect(screen.getByText('@Mia')).toBeInTheDocument()
-    // ...but the commands-error row must not appear alongside it.
+    expect(screen.queryByTestId('slash-menu')).not.toBeInTheDocument()
     expect(screen.queryByTestId('slash-commands-error')).not.toBeInTheDocument()
     expect(screen.queryByText('Commands unavailable')).not.toBeInTheDocument()
   })

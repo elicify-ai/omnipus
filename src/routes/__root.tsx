@@ -1,6 +1,6 @@
 import { createRootRoute, Outlet, Link } from '@tanstack/react-router'
 import { House } from '@phosphor-icons/react'
-import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
+import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
 
 // US-4: Branded 404 empty state with mascot and back-to-chat link
 function NotFoundPage() {

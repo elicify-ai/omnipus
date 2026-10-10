@@ -4,25 +4,20 @@
 // ~862-line body (Wave 3 structural refactor) — behavior is unchanged, only
 // ownership moved.
 //
-// Also owns the `@` agent-mention menu — a second leading-character trigger
-// that reuses this hook's plumbing rather than living in a parallel hook,
-// because this hook is already the single owner of the composer's text
-// mirror AND the menu's keyboard nav; a second hook would need to duplicate
-// both (and would race this one for the mirror) to add its own trigger. The
-// two triggers are mutually exclusive by construction — `inputValue` cannot
-// simultaneously start with "/" and "@" — so `slashItems` simply swaps its
-// source list depending on which (if either) fired.
+// A leading "@" does not open a menu and does not switch the agent (FR-007).
+// `isMentionMode` stays false and `mentionAnnouncement` stays null so callers
+// that still read those fields observe the cutover instead of a missing
+// property.
 //
 // Owns the composer's text mirror (`inputValue`) — AssistantUI's
 // `composerRuntime` is the actual source of truth for what gets sent, but
 // this hook needs a React-reactive copy of the current text to: gate
-// whether the menu should be showing (`inputValue.startsWith('/')` or
-// `startsWith('@')`), decide whether the ghost-text overlay should render,
-// and filter the palette. Every place that needs to change the composer's
-// text (selecting a command/skill/agent, running a client command, the
-// plain onChange handler) goes through this hook's actions so
-// `composerRuntime.setText(...)` and the local mirror never drift apart —
-// see each action below.
+// whether the menu should be showing (`inputValue.startsWith('/')`),
+// decide whether the ghost-text overlay should render, and filter the
+// palette. Every place that needs to change the composer's text (selecting
+// a command or skill, running a client command, the plain onChange handler)
+// goes through this hook's actions so `composerRuntime.setText(...)` and
+// the local mirror never drift apart — see each action below.
 //
 // The `/cancel` client command needs to drive the Stop button's visual
 // state, which is owned by the sibling `useCancelState` hook — the caller
@@ -38,11 +33,10 @@ import type { ComposerRuntime } from '@assistant-ui/react'
 import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { generateId } from '@/lib/constants'
 import { fetchCommands, fetchSkills } from '@/lib/api'
-import type { SlashCommand, Skill, Agent } from '@/lib/api'
+import type { SlashCommand, Skill } from '@/lib/api'
 import type { ChatMessage } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
-import { useChatAgents } from '@/hooks/useChatAgents'
 import { logDiagnostic } from '@/lib/telemetry'
 
 // ── Slash/skill/agent palette item shape ─────────────────────────────────────
@@ -78,7 +72,6 @@ export interface UseSlashMenuParams {
   inputEnabled: boolean
   composerRuntime: ComposerRuntime
   appendMessage: (message: ChatMessage) => void
-  startNewSession: () => void
   /** `/stop` is one existing Stop/Esc activation, including its 3 s confirmation window. */
   activateStop: () => void
   /**
@@ -125,7 +118,7 @@ export interface UseSlashMenuResult {
   slashItems: SlashItem[]
   /**
    * True when `fetchCommands('web')` errored. The palette still renders
-   * (the synthetic client-only `/resume` entry and any skills survive), but
+   * (the synthetic client-only `/sessions` entry and any skills survive), but
    * every backend-served command is silently missing — the caller should
    * surface a "Commands unavailable" row rather than letting the gap pass
    * unnoticed. `shouldShowSlash` accounts for this: it stays true even when
@@ -135,7 +128,11 @@ export interface UseSlashMenuResult {
   commandsError: boolean
   /** D9: true when the input is exactly "/skills" — Commands section (and its error row) are hidden while this filter is active. */
   isSkillsFilter: boolean
-  /** True when the input starts with "@" (leading position, same gate as the slash trigger) — `slashItems` is agent rows only while this is true. */
+  /**
+   * Always false. A leading "@" no longer opens an agent menu or switches
+   * the active agent (FR-007). Kept on the result so callers observe the
+   * cutover instead of a missing field.
+   */
   isMentionMode: boolean
   /**
    * Deferred item 3: how many MATCHING skills exist beyond the 8-row cap
@@ -146,27 +143,9 @@ export interface UseSlashMenuResult {
    * there's more to narrow toward instead of assuming those 8 are everything.
    */
   skillsHiddenCount: number
-  /** Deferred item 3: the "@" mention menu's own version of `skillsHiddenCount` — how many matching agents exist beyond the 8-row cap. */
+  /** Always 0. The "@" agent menu is gone (FR-007), so nothing is hidden past a cap. */
   agentsHiddenCount: number
-  /**
-   * Fix 2 (a11y HIGH): the just-selected agent's display name, set the
-   * instant `selectMentionAgent` fires — null before any selection has
-   * happened this session, AND reset to null whenever `activeAgentId`
-   * changes through a path OTHER than a mention selection (e.g. the
-   * AgentPicker dropdown) — see the Fix B reconciliation effect declared
-   * right after `activeAgentId` below. The composer silently empties and
-   * routing silently changes on a mention selection, which was zero
-   * non-visual feedback for a screen-reader user; the caller renders this
-   * in an sr-only `aria-live="polite"` element so the switch is announced.
-   * Re-selecting the SAME agent twice in a row with no external switch in
-   * between leaves this string unchanged (no state transition), so the
-   * live region does not re-announce — nothing actually changed. But once
-   * an external switch has cleared it back to null, re-selecting that SAME
-   * agent via "@" IS a real `null -> name` transition and DOES announce —
-   * the reconciliation effect exists specifically so that case isn't
-   * silently swallowed, and so a stale "Now chatting with X" string can't
-   * linger in the a11y tree describing a switch that already moved on.
-   */
+  /** Always null. "@" no longer switches the agent, so there is nothing to announce (FR-007). */
   mentionAnnouncement: string | null
   /** True when the ghost-text overlay should render (value is exactly `/<skillId> ` right after that skill was selected from the menu). */
   showGhostText: boolean
@@ -192,11 +171,11 @@ export interface UseSlashMenuResult {
   handleKeyDown: (e: ReactKeyboardEvent) => void
   /**
    * Send-path interception: if the composer's current text is exactly a
-   * client-delivery slash command (e.g. "/new", or its legacy alias
-   * "/clear"), runs it locally and returns true — caller must
+   * client-delivery slash command, runs it locally and returns true — caller must
    * preventDefault() so the message never reaches the backend. Makes typing
-   * "/new"+Enter (or "/clear"+Enter) behave identically to selecting it
-   * from the palette.
+   * the command and pressing Enter behave identically to selecting it
+   * from the palette. `/new` and `/clear` are server commands: this returns
+   * false for them so the text is sent, and it never starts a chat.
    *
    * ALSO returns true — WITHOUT running anything — for any "/"-prefixed text
    * submitted while the command list's first fetch is still in flight. The
@@ -318,9 +297,9 @@ function rankByFilter<T>(items: T[], filter: string, getRank: (item: T, lowerFil
 // closed over are now passed explicitly as `deps`.
 // runClientCommand — shared handler for client-delivery slash commands.
 // Called both from palette selection (executeSlashCommand) and from the
-// send-path interception so that typing "/new"+Enter (or its legacy
-// alias "/clear"+Enter) converges with selecting /new from the palette —
-// both run client-side, never reaching the backend.
+// send-path interception so that typing a local command and pressing Enter
+// converges with selecting it from the palette. `/new` and `/clear` are not
+// local commands: the server table decides, and both paths send them.
 //
 // `argument` carries the text after an argument-bearing client command's
 // label (D9 "/stop-redirect <instruction>"), already trimmed of the
@@ -330,9 +309,18 @@ function rankByFilter<T>(items: T[], filter: string, getRank: (item: T, lowerFil
 // Returns true when the command was handled (caller must NOT send the
 // text), false when the name is not a known client command (caller
 // should fall through to inserting as text — Issue 3 fallback).
+// The server command table owns /new and /clear, including a row whose
+// alias is the other name. The SPA lists whatever the server returns and
+// sends those two; it does not run them and does not hide them.
+const SERVER_RUN_COMMAND_NAMES = new Set(['new', 'clear'])
+
+function isServerRunCommand(command: SlashCommand): boolean {
+  if (SERVER_RUN_COMMAND_NAMES.has(command.name.toLowerCase())) return true
+  return (command.aliases ?? []).some((alias) => SERVER_RUN_COMMAND_NAMES.has(alias.toLowerCase()))
+}
+
 interface ClientCommandDeps {
   allCommands: SlashCommand[]
-  startNewSession: UseSlashMenuParams['startNewSession']
   appendMessage: UseSlashMenuParams['appendMessage']
   activateStop: UseSlashMenuParams['activateStop']
   cancelIfStreaming: UseSlashMenuParams['cancelIfStreaming']
@@ -343,21 +331,17 @@ interface ClientCommandDeps {
 }
 
 function runClientSlashCommand(name: string, argument: string, deps: ClientCommandDeps): boolean {
-  const { allCommands, startNewSession, appendMessage, activateStop, cancelIfStreaming, sendRedirectFrame, composerRuntime, setInputValue, setSlashOpen } = deps
-  if (name === 'new' || name === 'clear') {
-    // Renamed /clear → /new (the palette advertises /new; 'clear' survives
-    // as a hidden backend alias for CLI/channel muscle memory). Starts a
-    // new conversation (startNewSession), not just a local wipe.
-    startNewSession()
-    return true
-  }
+  const { allCommands, appendMessage, activateStop, cancelIfStreaming, sendRedirectFrame, composerRuntime, setInputValue, setSlashOpen } = deps
+  // /new and /clear are not handled here. Selecting or typing them sends the
+  // server command. This function never starts a chat for those names.
 
   if (name === 'help') {
-    // US-4/AC-2: build the help text from the fetched command list.
+    // US-4/AC-2: help text is the command list the server returned, plus the
+    // web-only entries. No tip about "@". /new and /clear appear only then.
     const helpLines = allCommands
       .map((c) => `- \`${c.label}\` — ${c.description}`)
       .join('\n')
-    const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Type **@** at the start of the input to switch agents\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
+    const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
     appendMessage({
       id: generateId(),
       role: 'system',
@@ -380,7 +364,8 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
   }
 
   if (name === 'agents') {
-    // Open the agent selector in the composer card (composer/AgentPicker.tsx) via the ui store flag.
+    // /agents still sets the ui flag. The composer picker that used to open
+    // on it is gone (FR-007); nothing in the composer reads the flag.
     useUiStore.getState().setAgentSelectorOpen(true)
     return true
   }
@@ -467,15 +452,15 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
     return true
   }
 
-  if (name === 'resume') {
-    // Web-only: open the cross-workspace session search modal to pick a
-    // session to resume — same single instance the sidebar icon opens.
+  if (name === 'sessions') {
+    // Web-only: open the Sessions view to pick a session — same single
+    // instance the sidebar icon opens. /resume is not an alias (FR-007).
     useUiStore.getState().openSearchModal()
     return true
   }
 
   if (name === 'workspace') {
-    // Web-only: open the SAME SearchModal instance /resume opens, but in
+    // Web-only: open the SAME SearchModal instance /sessions opens, but in
     // its 'workspaces' mode — ALL workspaces listed, ArrowUp/Down walks
     // workspace headers, Enter switches (SearchModal's handleSwitchWorkspace,
     // same as clicking a group header's switch arrow), not a dedicated
@@ -497,7 +482,6 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     inputEnabled,
     composerRuntime,
     appendMessage,
-    startNewSession,
     activateStop,
     cancelIfStreaming,
     sendRedirectFrame,
@@ -537,17 +521,6 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // Same ref-mirror rationale as ghostSkillIdRef, for the command ghost pair.
   const ghostCommandLabelRef = useRef(ghostCommandLabel)
   ghostCommandLabelRef.current = ghostCommandLabel
-  // Fix 2: last-announced mention selection — see mentionAnnouncement's doc
-  // comment on UseSlashMenuResult.
-  const [mentionAnnouncement, setMentionAnnouncement] = useState<string | null>(null)
-  // Fix B (bugfixes3 sign-off) — the id of the agent THIS hook last
-  // announced via selectMentionAgent (set there, synchronously, alongside
-  // `setMentionAnnouncement`). The reconciliation effect below (watching
-  // `activeAgentId`) compares against this to tell "activeAgentId changed
-  // because of a mention selection" (ref already matches — leave the
-  // announcement alone) apart from "activeAgentId changed via some OTHER
-  // surface, e.g. AgentPicker" (ref is stale — clear the announcement).
-  const lastAnnouncedAgentIdRef = useRef<string | null>(null)
 
   // #472 root-cause fix (trace-evidenced slash-menu self-close race) — the
   // pending timer id `onInputBlur` schedules below (setTimeout(closeSlash,
@@ -616,10 +589,10 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // Merge frontend-only client commands with the backend-served list so the
   // synthetic entries participate in palette filtering, /help, and the
   // send-path interception identically to a real backend command.
-  // /resume is web-client-only: opens the cross-workspace session search
-  // modal (the same one the sidebar search icon opens) in its default
-  // 'sessions' mode to resume a session.
-  // /workspace is a second web-client-only entry, next to /resume: opens the
+  // /sessions is web-client-only: opens the Sessions view (the same one the
+  // sidebar search icon opens) in its default 'sessions' mode. There is no
+  // /resume alias — a typed /resume does not resolve here.
+  // /workspace is a second web-client-only entry, next to /sessions: opens the
   // SAME SearchModal instance but in its 'workspaces' mode (openWorkspaceSwitcher,
   // ui store) — ALL workspaces listed, session groups collapsed by default,
   // ArrowUp/Down walks workspace headers, Enter switches (SearchModal
@@ -629,9 +602,9 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // client-only name/delivery.
   const allCommands: SlashCommand[] = [
     {
-      name: 'resume',
-      label: '/resume',
-      description: 'Resume a session — search across all workspaces',
+      name: 'sessions',
+      label: '/sessions',
+      description: 'Open Sessions — search across all workspaces',
       delivery: 'client',
       available_while_streaming: true,
     },
@@ -654,25 +627,6 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     staleTime: 60_000,
     enabled: inputEnabled,
   })
-
-  // "@" agent-mention trigger — shares this hook's text mirror + keyboard
-  // nav (see file header). `chatAgents` reuses AgentPicker's exact
-  // status/worker/core_team scoping via useChatAgents so the mention menu
-  // never offers an agent the picker itself wouldn't.
-  const { chatAgents } = useChatAgents()
-  // Fix 5: reactive slice, not a whole-store subscription. `useSessionStore()`
-  // (no selector) re-rendered this hook — and therefore the whole composer —
-  // on ANY write to the session store, including ones this hook doesn't
-  // care about (e.g. attachedTaskTitle churn from an unrelated deep-link).
-  // Only `activeAgentId` needs to be reactive here (it drives the
-  // `isActiveAgent` marker recomputed on every render); `activeSessionId`
-  // and `setActiveSession` are read fresh from `.getState()` at write time
-  // inside `selectMentionAgent` below — the same "fresh-state-in-write-path"
-  // pattern AgentPicker's own auto-select effect documents (composer/
-  // AgentPicker.tsx) — which also closes the stale-closure window where a
-  // captured `activeSessionId` could be stale by the time the user actually
-  // selects an agent.
-  const activeAgentId = useSessionStore((s) => s.activeAgentId)
 
   // Fix A (bugfixes3 sign-off — resolves a reviewer split on whether the
   // Send BUTTON's click path goes through ComposerPrimitive.Root's
@@ -733,46 +687,14 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       // field changes before any further keystroke) and is left alone here
       // — fixing it is out of this task's scope (a close race, not a
       // reopen race) and not evidenced in the #472 trace.
-      if (runtimeText.startsWith('/') || runtimeText.startsWith('@')) {
+      if (runtimeText.startsWith('/')) {
         setSlashOpen(true)
       } else {
         closeSlash()
       }
     })
-     
-  }, [composerRuntime])
 
-  // Fix B (bugfixes3 sign-off) — reconciliation for `mentionAnnouncement`.
-  // It was never cleared, so an agent switch made through a DIFFERENT
-  // surface (e.g. AgentPicker) left a STALE "Now chatting with X" string
-  // sitting in the a11y live region describing a switch that didn't happen
-  // through "@" — false state, not just a visual no-op. It also meant
-  // re-selecting the SAME agent via "@" a second time, after switching away
-  // and back through that other surface, silently no-op'd: mentionAnnouncement
-  // still held that agent's name from the FIRST selection, so the second
-  // `selectMentionAgent` call set the identical string again and React's
-  // setState bailed (no transition, no re-announce) even though the user
-  // just made a fresh selection worth announcing. Clearing on any
-  // externally-driven `activeAgentId` change fixes both: the stale text is
-  // removed, and the NEXT mention selection of that agent becomes a real
-  // `null -> name` transition that DOES announce.
-  //
-  // #472 investigation note: this effect was named as a candidate for the
-  // slash-menu self-close race (a fresh "@"/"/" palette vanishing without
-  // user input). Confirmed it is NOT one: its only write is
-  // `setMentionAnnouncement`, which never touches `slashOpen`/`closeSlash`
-  // directly or indirectly (it does not call anything that reaches the
-  // composerRuntime either). Pinned by the "ruled-out suspects" tests in
-  // useSlashMenu.test.ts. If this effect is ever extended to reach into
-  // slash-menu state, gate that on an explicit reason (e.g. "an agent switch
-  // mid-menu should close it"), never on this settle alone — an
-  // `activeAgentId` resolving from `null` on mount/auto-select is exactly
-  // the kind of no-user-input settle this race class is about.
-  useEffect(() => {
-    if (activeAgentId !== lastAnnouncedAgentIdRef.current) {
-      setMentionAnnouncement(null)
-    }
-  }, [activeAgentId])
+  }, [composerRuntime])
 
   // FR-005: partitioned slash menu — Commands + Skills sections. Triggered
   // when input starts with "/" (no old skill-arg gate).
@@ -781,16 +703,11 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     return inputValue.slice(1).toLowerCase() // the text after "/"
   })()
 
-  // Mirrors menuFilter for the "@" trigger — leading position only, same
-  // isReplaying/inputEnabled gate. "hello @x" must NOT trigger: only a
-  // leading "@" (index 0 of the raw input) opens the mention menu.
-  const mentionFilter = (() => {
-    if (!inputValue.startsWith('@') || isReplaying || !inputEnabled) return null
-    return inputValue.slice(1).toLowerCase() // the text after "@"
-  })()
-
   const isSkillsFilter = menuFilter === 'skills'
-  const isMentionMode = mentionFilter !== null
+  // FR-007: a leading "@" is ordinary text. Never an agent menu.
+  const isMentionMode = false
+  const agentsHiddenCount = 0
+  const mentionAnnouncement = null
 
   // Commands section — hidden when typing "/skills" (D9)
   //
@@ -864,63 +781,12 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     }
   })
 
-  // Agent section — the "@" mention menu's sole content. Mirrors the
-  // skills filter's matching convention (case-insensitive prefix-then-
-  // substring; empty filter ⇒ every scoped chat agent).
-  //
-  // Fix 7: NAME only — no id clause. User-created agent ids are UUIDs (or
-  // otherwise arbitrary), so matching against `id` too surfaced agents into
-  // "@a" whose UUID happened to contain an "a" but whose visible name had
-  // nothing to do with what was typed — noise unrelated to the label the
-  // user is actually reading in the menu. (Deferred item 4 extends this
-  // from prefix-only to prefix-then-substring, still name-only — a
-  // divergent-id fixture in useSlashMenu.test.ts pins that the id itself
-  // still never matches, by either rank.)
-  //
-  // Deferred item 3: sorted by name (localeCompare) BEFORE ranking/capping —
-  // same rationale as skills above.
-  const effectiveActiveAgentId = activeAgentId || chatAgents[0]?.id
-  // Perf (gate 5 LOW): same fix as sortedSkills above — memoized on
-  // `chatAgents` identity so this sort runs once per agents-list change
-  // (react-query refetch / workspace-scope change), not once per composer
-  // keystroke.
-  const sortedAgents = useMemo(
-    () => [...chatAgents].sort((a, b) => a.name.localeCompare(b.name)),
-    [chatAgents],
-  )
-  const matchedAgents: Agent[] = (() => {
-    if (mentionFilter === null) return []
-    return rankByFilter(sortedAgents, mentionFilter, (a, lf) => matchRank(a.name, lf))
-  })()
-  // Deferred item 3: overflow count for the "@" menu's own "+N more" footer.
-  const agentsHiddenCount = Math.max(0, matchedAgents.length - SECTION_CAP)
-  const agentItems: SlashItem[] = matchedAgents.slice(0, SECTION_CAP).map((agent) => ({
-    key: agent.id,
-    label: `@${agent.name}`,
-    description: agent.description || agent.model || '',
-    section: 'agents' as const,
-    agentColor: agent.color ?? undefined,
-    agentName: agent.name,
-    isActiveAgent: agent.id === effectiveActiveAgentId,
-    onSelect: () => selectMentionAgent(agent),
-  }))
-
-  // Unified list for keyboard nav. The "/" and "@" triggers are mutually
-  // exclusive (inputValue can't start with both characters at once), so
-  // mention mode simply swaps in agentItems as the whole list rather than
-  // concatenating — commands/skills never mix with agent rows.
-  const slashItems: SlashItem[] = isMentionMode
-    ? agentItems
-    : [...visibleCommandItems, ...visibleSkillMenuItems]
+  const slashItems: SlashItem[] = [...visibleCommandItems, ...visibleSkillMenuItems]
   // LOW S8: keep the menu open on a commands-query error even when it would
   // otherwise have zero items (e.g. no skills match either) — the caller's
   // "Commands unavailable" row needs somewhere to render. `menuFilter !==
   // null` reuses the same gate (starts with "/", not replaying, enabled) so
-  // this never opens the menu for reasons unrelated to a "/" being typed —
-  // in particular, it must NOT fire in mention mode: a commands-fetch error
-  // has nothing to do with "@" and must not force that menu open when zero
-  // agents match. `slashItems.length > 0` alone already covers "agents
-  // matched" for mention mode, since agentItems IS slashItems there.
+  // this never opens the menu for reasons unrelated to a "/" being typed.
   const shouldShowSlash =
     (slashItems.length > 0 || (commandsError && menuFilter !== null)) && !isReplaying && inputEnabled
 
@@ -953,7 +819,6 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   function runClientCommand(name: string, argument = ''): boolean {
     return runClientSlashCommand(name, argument, {
       allCommands,
-      startNewSession,
       appendMessage,
       activateStop,
       cancelIfStreaming,
@@ -994,6 +859,15 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
 
     if (!def) {
       // Unknown label (shouldn't happen with API-driven palette, but be safe).
+      return
+    }
+
+    // /new and /clear belong to the server table. Selecting one sends that
+    // label; it does not run locally and does not start a chat.
+    if (isServerRunCommand(def)) {
+      composerRuntime.setText(def.label)
+      setInputValue(def.label)
+      composerRuntime.send()
       return
     }
 
@@ -1049,46 +923,15 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     closeSlash()
   }
 
-  // selectMentionAgent — called when the user selects an agent from the "@"
-  // mention menu (Enter or click). Same contract as AgentPicker's
-  // handleAgentSelect (src/components/chat/composer/AgentPicker.tsx): an
-  // EXPLICIT user choice, recorded via `selectAgent` (precedence rule 2 —
-  // see src/store/session.ts's AGENT PRECEDENCE RULE) so a session attach
-  // landing afterwards cannot silently re-point the composer at the
-  // session's own agent. `selectAgent` leaves activeSessionId untouched by
-  // construction, which is what the old `setActiveSession(activeSessionId,
-  // …)` call was manually reproducing.
-  // Unlike completeSkillName, the `@query` text is fully cleared (not left
-  // as `@name `) — the mention is a one-shot agent switch, not something the
-  // user continues typing after.
-  //
-  // Fix 5: reads the store fresh via `.getState()` rather than closing over
-  // render-time values — this is the write path, so the freshest state wins
-  // (matches AgentPicker's own documented pattern).
-  function selectMentionAgent(agent: Agent) {
-    useSessionStore.getState().selectAgent(agent.id, agent.type ?? null)
-    composerRuntime.setText('')
-    setInputValue('')
-    closeSlash()
-    // Fix 2: announce the switch for screen-reader users — see
-    // mentionAnnouncement's doc comment on UseSlashMenuResult. Fix B: track
-    // the id THIS selection announced so the reconciliation effect (right
-    // after `activeAgentId`, above) can tell this activeAgentId change
-    // apart from one driven by a different surface (e.g. AgentPicker).
-    lastAnnouncedAgentIdRef.current = agent.id
-    setMentionAnnouncement(agent.name)
-  }
-
   // Send-path interception: before AssistantUI's onNew fires, check if the
-  // trimmed input is exactly a client-delivery slash command (e.g.
-  // "/new", or its legacy alias "/clear"). If it is, run it locally and
-  // prevent the message from reaching the backend. This makes typing
-  // "/new"+Enter (or "/clear"+Enter) behave identically to palette
-  // selection.
+  // trimmed input is exactly a client-delivery slash command. If it is, run
+  // it locally and prevent the message from reaching the backend. `/new` and
+  // `/clear` are server commands, so typing them is not a local command and
+  // the text is sent.
   //
   // Deliberately NOT wrapped in useCallback: it (transitively, via
-  // runClientCommand) closes over appendMessage/startNewSession/
-  // cancelAllTreeScoped, none of which are guaranteed referentially stable
+  // runClientCommand) closes over appendMessage/cancelAllTreeScoped,
+  // neither of which is guaranteed referentially stable
   // across renders (cancelAllTreeScoped's dependencies rebind whenever
   // isStreaming toggles — see useCancelState). None of this hook's
   // returned functions are consumed by a memoized child or an effect
@@ -1113,7 +956,11 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     const exact = allCommands.find(
       (c) => c.delivery === 'client' && (c.label.toLowerCase() === trimmedLower || c.aliases?.some((a) => a.toLowerCase() === typedNameLower)),
     )
-    if (exact) return { command: exact, argument: '' }
+    if (exact) {
+      // Server-owned /new and /clear are ordinary messages, not local commands.
+      if (isServerRunCommand(exact)) return null
+      return { command: exact, argument: '' }
+    }
     // D9: an argument-bearing client command — the command's label followed
     // by whitespace, the remainder being the instruction ("/stop-redirect
     // focus on the failing tests"). Matched only against the canonical
@@ -1124,7 +971,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     // followed by text ("/new foo", "/cancel foo") is NOT a command match;
     // it stays whatever it always was (the readiness gate / not-a-command).
     const withArg = allCommands.find((c) => {
-      if (c.delivery !== 'client' || !c.argument_hint) return false
+      if (c.delivery !== 'client' || !c.argument_hint || isServerRunCommand(c)) return false
       const labelLower = c.label.toLowerCase()
       if (!trimmedLower.startsWith(labelLower)) return false
       const rest = trimmed.slice(c.label.length)
@@ -1252,12 +1099,9 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       setGhostCommandLabel(null)
       setGhostCommandArgumentHint(null)
     }
-    // Leading "/" opens the command/skill palette, leading "@" opens the
-    // agent-mention menu — mid-text "@" (e.g. "hello @x") must NOT trigger,
-    // hence startsWith rather than includes. Every keystroke re-runs this
-    // (including the first character after "@"), so the second typed
-    // character already filters — there is no separate "arm" step.
-    if (val.startsWith('/') || val.startsWith('@')) {
+    // Leading "/" opens the command/skill palette. A leading "@" does not
+    // (FR-007) — it is ordinary composer text and must not open this menu.
+    if (val.startsWith('/')) {
       setSlashOpen(true)
     } else {
       closeSlash()

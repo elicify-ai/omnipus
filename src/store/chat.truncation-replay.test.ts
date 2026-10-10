@@ -1,9 +1,10 @@
 // ADR-087 (Truncation is an outcome, not a silence) — WP F, §7.2 layer 6:
 // the WS-replay reducer (`case 'replay_message'`) must carry
 // `truncated`/`truncation_reason` from a `ReplayMessageFrame` onto the
-// resulting `ChatMessage`, applying the same D2 legacy-default rule
-// (absent reason on a truncated entry means 'cancelled') the cold-load
-// path (`rawToMessage`, src/lib/api.test.ts) applies.
+// resulting `ChatMessage`, applying the same rule the cold-load
+// path (`rawToMessage`, src/lib/api.test.ts) applies — DEL-F36: the reason
+// is explicit on the wire; an absent reason on a truncated entry stays
+// absent, none is invented.
 //
 // Harness pattern (handleFrame + act) mirrored from
 // chat.replay-coalesce.test.ts.
@@ -62,7 +63,12 @@ describe('chat store — replay_message truncation plumbing (ADR-087 D2)', () =>
     expect(msg!.truncationReason).toBe('max_output_tokens')
   })
 
-  it('legacy rule: truncated:true with no wire reason replays as truncationReason:"cancelled"', () => {
+  it('DEL-F36: truncated:true with no wire reason replays as truncated with NO truncationReason (none invented)', () => {
+    // DEL-F36 (docs/internal/specs/session-core-spec.md) deleted the legacy
+    // `reason ?? 'cancelled'` default: an absent reason on a truncated entry
+    // stays absent — no reason is invented for an unexplained truncated
+    // entry. The assertion is exact and inverts the deleted rule, so
+    // re-introducing any default reason turns this test red.
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'replay_message',
@@ -76,7 +82,7 @@ describe('chat store — replay_message truncation plumbing (ADR-087 D2)', () =>
     const msg = useChatStore.getState().messages.find((m) => m.role === 'assistant')
     expect(msg).toBeDefined()
     expect(msg!.truncated).toBe(true)
-    expect(msg!.truncationReason).toBe('cancelled')
+    expect(msg!.truncationReason).toBeUndefined()
   })
 
   it('a non-truncated replay_message frame leaves truncated/truncationReason unset', () => {

@@ -119,7 +119,9 @@ type CoreAgent struct {
 	Name        string // Display name (e.g., "Jim")
 	Subtitle    string // Role subtitle (e.g., "General Purpose")
 	Description string // One-line description
-	Color       string // Hex color for avatar (e.g., "#22C55E")
+	Figure      string // Mark body: Robot, Man, Woman, or Omnipus
+	Role        string // Curated role slug (the badge, not Icon)
+	Color       string // Canonical palette hex
 }
 
 // All returns every seeded agent in display order: the 4 base agents (Mia first,
@@ -281,7 +283,9 @@ func Jim() *CoreAgent {
 		Subtitle: "Planner & Orchestrator",
 		Description: "Your planning hub — decomposes complex goals into a task DAG, " +
 			"delegates to the right specialists, tracks progress, and drives work to completion.",
-		Color: "#22C55E",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#22D3EE",
 	}
 }
 
@@ -293,7 +297,9 @@ func Ava() *CoreAgent {
 		Subtitle: "Builder",
 		Description: "Configures agents, teams and skills, including models, tool permissions and connector assignments. " +
 			"Reviews one combined proposal with you before applying changes and checking the result.",
-		Color: "#D4AF37",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#FB923C",
 	}
 }
 
@@ -305,17 +311,27 @@ func Mia() *CoreAgent {
 		Subtitle: "Assistant",
 		Description: "Your friendly everyday assistant — guides you through Omnipus, " +
 			"answers questions, and connects you with the right specialist when needed.",
-		Color: "#3B82F6",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#3B82F6",
 	}
 }
 
 // Admin returns the chat-capable operator role. Admin configures the harness;
 // it is a core runtime identity, not a hidden system agent.
+//
+// Visible roster colours (All, the set TestCoreAgentMetadataDifferentiation
+// checks) are distinct: Mia Azure #3B82F6, Jim Cyan #22D3EE, Ava Orange
+// #FB923C, Admin Pink #F472B6, Planner Sky #38BDF8, Researcher Violet
+// #A78BFA, General Purpose Grey #9CA3AF. Admin is Pink so it does not share
+// Ava's Orange. Hidden Judge (Azure) and Plan Supervisor (Cyan) are not in
+// All() and are outside that check.
 func Admin() *CoreAgent {
 	return &CoreAgent{
 		ID: IDAdmin, Name: "Admin", Subtitle: "Operator",
 		Description: "Configures connectors, providers, channels, diagnostics, and document dependencies.",
-		Color:       "#F97316",
+		Figure:      DefaultFigure, Role: string(generated.AgentRoleSecurity),
+		Color: "#F472B6",
 	}
 }
 
@@ -331,7 +347,9 @@ func Worker() *CoreAgent {
 		Subtitle: "General Purpose",
 		Description: "General-purpose sub-agent worker — executes one delegated task at a time, " +
 			"does the work, and returns a concise result. Not a chat persona; invoked via delegation.",
-		Color: "#6B7280",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#9CA3AF",
 	}
 }
 
@@ -346,7 +364,9 @@ func Planner() *CoreAgent {
 		Subtitle: "Planning Specialist",
 		Description: "Builds a structured plan from the goal and available context. " +
 			"Uses permitted delegation to gather additional evidence when needed. Invoked via delegation; not a chat persona.",
-		Color: "#0EA5E9",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#38BDF8",
 	}
 }
 
@@ -359,6 +379,8 @@ func Researcher() *CoreAgent {
 		Subtitle: "Research Specialist",
 		Description: "Researches external sources — the web and fetched documents — and " +
 			"synthesizes findings with citations. Invoked via delegation; not a chat persona.",
-		Color: "#8B5CF6",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#A78BFA",
 	}
 }

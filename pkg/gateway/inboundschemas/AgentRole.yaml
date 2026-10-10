@@ -1,7 +1,11 @@
 type: string
+nullable: false
 description: >
   Curated role slug. The badge shown with the agent's avatar.
   Labels and the five groups are not on the wire.
+  JSON null is not an identity value. On PUT, omission retains the stored value;
+  an explicit null or any other invalid supplied value rejects the whole update
+  with HTTP 400 before any write.
 enum:
   - writer
   - designer

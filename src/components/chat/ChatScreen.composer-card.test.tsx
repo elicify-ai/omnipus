@@ -135,18 +135,9 @@ vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 
-// The point of THIS file: stub the three composer sub-components to
-// non-null SENTINELS (not null, unlike every other ChatScreen test file) so
-// we can assert the composer layout mounts all of its slots in the right
-// places (context row above the card, input inside, pills below). The
-// AgentPicker/ModelPicker stubs also surface the `disabled` prop via
-// data-disabled so the agentRemoved read-only-passthrough test below can
-// assert on it without needing the real components.
-vi.mock('./composer/AgentPicker', () => ({
-  AgentPicker: ({ disabled }: { disabled?: boolean }) => (
-    <div data-testid="agent-picker-stub" data-disabled={disabled ? 'true' : 'false'} />
-  ),
-}))
+// Stub the composer sub-components to non-null sentinels so this file can
+// assert layout. The model picker stub surfaces `disabled`. The agent picker
+// is gone (FR-007).
 vi.mock('./composer/ModelPicker', () => ({
   ModelPicker: ({ disabled }: { disabled?: boolean }) => (
     <div data-testid="model-picker-stub" data-disabled={disabled ? 'true' : 'false'} />
@@ -209,7 +200,9 @@ describe('OmnipusComposer — composer layout contract (bare context row · card
     // document order BEFORE the card. These are the assertions that catch a
     // deleted, relocated-into-card, or reordered-below-card slot: every
     // other ChatScreen test file stubs the sub-components to null.
-    for (const id of ['agent-picker-stub', 'model-picker-stub', 'token-counter-stub']) {
+    expect(screen.queryByTestId('agent-picker-stub')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('agent-picker-trigger')).not.toBeInTheDocument()
+    for (const id of ['model-picker-stub', 'token-counter-stub']) {
       const slot = screen.getByTestId(id)
       expect(slot).toBeInTheDocument()
       expect(withinCard.queryByTestId(id)).not.toBeInTheDocument()
@@ -246,11 +239,11 @@ describe('OmnipusComposer — composer layout contract (bare context row · card
     expect(screen.queryByText(/agents can make mistakes/i)).not.toBeInTheDocument()
   })
 
-  it('disables the attach control and passes disabled=true through to both pickers when agentRemoved', async () => {
+  it('disables the attach control and passes disabled=true through to the model picker when agentRemoved', async () => {
     render(<OmnipusComposer agentRemoved />)
 
     expect(screen.getByTestId('add-attachment')).toBeDisabled()
-    expect(screen.getByTestId('agent-picker-stub').getAttribute('data-disabled')).toBe('true')
+    expect(screen.queryByTestId('agent-picker-trigger')).not.toBeInTheDocument()
     expect(screen.getByTestId('model-picker-stub').getAttribute('data-disabled')).toBe('true')
   })
 })

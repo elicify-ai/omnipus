@@ -131,7 +131,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -176,7 +175,7 @@ describe('Empty menu shell (Fix E, bugfixes3 sign-off)', () => {
     expect(screen.queryByText('Commands unavailable')).not.toBeInTheDocument()
   })
 
-  it('regression guard: a bare "/" under the SAME commands error still renders the container (error row + synthetic /resume)', async () => {
+  it('regression guard: a bare "/" under the SAME commands error still renders the container (error row + synthetic /sessions)', async () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
@@ -185,11 +184,12 @@ describe('Empty menu shell (Fix E, bugfixes3 sign-off)', () => {
 
     // Outside the "/skills" filter, the error row's own condition
     // (`!isSkillsFilter`) is satisfied, so the container has real content
-    // (the error row, plus the synthetic client-only /resume command) and
+    // (the error row, plus the synthetic client-only /sessions command) and
     // must still render — proving Fix E's extra gate did not accidentally
     // hide a menu that legitimately has something to show.
     expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
     expect(screen.getByTestId('slash-commands-error')).toBeInTheDocument()
-    expect(screen.getByText('/resume')).toBeInTheDocument()
+    expect(screen.getByText('/sessions')).toBeInTheDocument()
+    expect(screen.queryByText('/resume')).not.toBeInTheDocument()
   })
 })

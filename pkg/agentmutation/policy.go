@@ -25,16 +25,16 @@ func (e *FieldError) Error() string {
 }
 
 var knownFields = map[string]struct{}{
-	"name": {}, "description": {}, "color": {}, "type": {}, "locked": {}, "soul": {},
+	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "soul": {},
 	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "model": {}, "provider": {},
 	"fallback_models": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {},
 	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {}, "cli_path": {},
 }
 
 var alwaysImmutable = map[string]struct{}{"type": {}, "locked": {}}
-var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "color": {}, "type": {}, "locked": {}, "soul": {}, "executor": {}}
+var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "soul": {}, "executor": {}}
 var hiddenProtected = map[string]struct{}{
-	"name": {}, "description": {}, "color": {}, "type": {}, "locked": {}, "skills": {}, "mcp_servers": {},
+	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "skills": {}, "mcp_servers": {},
 	"tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {}, "executor": {}, "default": {}, "voice": {},
 }
 var externalUnsupported = map[string]struct{}{
@@ -55,7 +55,7 @@ type FieldDescriptor struct {
 	Reason   string
 }
 
-var describedFields = []string{"name", "description", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "default", "voice", "type"}
+var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "default", "voice", "type"}
 
 // FieldDescriptors reports which fields may be changed on agent.
 func FieldDescriptors(agent config.AgentConfig) []FieldDescriptor {
