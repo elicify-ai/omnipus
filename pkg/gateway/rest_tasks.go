@@ -756,6 +756,24 @@ func (a *restAPI) handleTaskSubtasks(w http.ResponseWriter, parentID string) {
 	jsonOK(w, out)
 }
 
+// copyTaskCreateOrderingFields copies the plain optional plan-ordering and
+// labelling fields of a create request (write_set, stream, is_join, tags) onto
+// the new task. They need no validation beyond the wire schema.
+func copyTaskCreateOrderingFields(t *task.Task, req *gen.TaskCreateRequest) {
+	if req.WriteSet != nil {
+		t.WriteSet = *req.WriteSet
+	}
+	if req.Stream != nil {
+		t.Stream = *req.Stream
+	}
+	if req.IsJoin != nil {
+		t.IsJoin = *req.IsJoin
+	}
+	if req.Tags != nil {
+		t.Tags = *req.Tags
+	}
+}
+
 // handleTaskCreate handles POST /api/v1/tasks → 201 Created. The task always
 // lands in `inbox` (Detail #8); status is never a create-time field.
 func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
@@ -846,18 +864,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		t.PlanID = *req.PlanId
 	}
-	if req.WriteSet != nil {
-		t.WriteSet = *req.WriteSet
-	}
-	if req.Stream != nil {
-		t.Stream = *req.Stream
-	}
-	if req.IsJoin != nil {
-		t.IsJoin = *req.IsJoin
-	}
-	if req.Tags != nil {
-		t.Tags = *req.Tags
-	}
+	copyTaskCreateOrderingFields(t, &req)
 	// GOAL-FR-021/FR-047/GOAL-MV-6/D-C: creating a task through the API or
 	// the interface requires at least one acceptance criterion AND at least
 	// one definition-of-done item — naming explicitly which is missing.
@@ -1106,6 +1113,37 @@ func (tp *taskPatch) validate() bool {
 	return false
 }
 
+// buildTimingPatch translates the request's trigger and due-date fields into
+// the patch. It reports true, with the response already written, when the
+// trigger carries a removed key (every_ms, cron_expr).
+func (tp *taskPatch) buildTimingPatch() bool {
+	if tp.req.Trigger != nil {
+		if msg := legacyTimingKeysMessage(tp.req.Trigger.Config.AdditionalProperties); msg != "" {
+			jsonErr(tp.w, http.StatusBadRequest, msg)
+			return true
+		}
+		tr := buildTrigger(
+			string(tp.req.Trigger.Type),
+			tp.req.Trigger.Config.AtMs,
+			tp.req.Trigger.Config.Rrule,
+			tp.req.Trigger.Config.DtstartMs,
+			tp.req.Trigger.Config.Tz,
+		)
+		tp.patch.Trigger = &tr
+	}
+	if tp.req.Due != nil {
+		due := tp.req.Due.UTC().Format(time.RFC3339)
+		tp.patch.Due = &due
+	} else if tp.req.ClearDue != nil && *tp.req.ClearDue {
+		// clear_due unambiguously clears the stored due date. Ignored when `due`
+		// is set to a value (the value wins). The store applies *patch.Due
+		// verbatim, so an empty string clears Task.Due (which omits when empty).
+		empty := ""
+		tp.patch.Due = &empty
+	}
+	return false
+}
+
 // buildPatch translates the request's fields into a task.Patch.
 func (tp *taskPatch) buildPatch() bool {
 	tp.patch = task.Patch{}
@@ -1177,29 +1215,8 @@ func (tp *taskPatch) buildPatch() bool {
 	// reflecting the first call's write even though both calls' own writes
 	// were correctly serialized by the store's per-task lock).
 
-	if tp.req.Trigger != nil {
-		if msg := legacyTimingKeysMessage(tp.req.Trigger.Config.AdditionalProperties); msg != "" {
-			jsonErr(tp.w, http.StatusBadRequest, msg)
-			return true
-		}
-		tr := buildTrigger(
-			string(tp.req.Trigger.Type),
-			tp.req.Trigger.Config.AtMs,
-			tp.req.Trigger.Config.Rrule,
-			tp.req.Trigger.Config.DtstartMs,
-			tp.req.Trigger.Config.Tz,
-		)
-		tp.patch.Trigger = &tr
-	}
-	if tp.req.Due != nil {
-		due := tp.req.Due.UTC().Format(time.RFC3339)
-		tp.patch.Due = &due
-	} else if tp.req.ClearDue != nil && *tp.req.ClearDue {
-		// clear_due unambiguously clears the stored due date. Ignored when `due`
-		// is set to a value (the value wins). The store applies *patch.Due
-		// verbatim, so an empty string clears Task.Due (which omits when empty).
-		empty := ""
-		tp.patch.Due = &empty
+	if tp.buildTimingPatch() {
+		return true
 	}
 	if tp.req.PlanId != nil {
 		if *tp.req.PlanId != "" {
@@ -1607,11 +1624,19 @@ func (tp *taskPatch) launchIfStarted() bool {
 			slog.Warn("rest: StartTaskNow failed",
 				"id", tp.id, "agent_id", tp.updated.AgentID, "prior_status", tp.preUpdateStatus,
 				"failed_disposition_preserved", failedDisposition, "error", startErr)
-			if httpStatus == http.StatusConflict {
-				// The two 409 classes (dispatch cap, plan state) are fixed
-				// domain errors with no storage detail.
+			switch {
+			case errors.Is(startErr, agent.ErrPlanStateUnresolvable):
+				// Not a conflict: the server could not READ the plan's state,
+				// and the wrapped cause carries the plan file's path. Fixed
+				// text, the cause is already logged above.
+				jsonServerFailure(tp.w, http.StatusInternalServerError,
+					"the task's plan state could not be verified", startErr)
+			case httpStatus == http.StatusConflict:
+				// The remaining 409 classes (dispatch cap, plan not
+				// executing) are domain errors built from fixed text, ids and
+				// the plan's state.
 				jsonErr(tp.w, httpStatus, startErr.Error())
-			} else {
+			default:
 				jsonErr(tp.w, httpStatus, "the task could not be started. Check the agent and try again; details are in the server log.")
 			}
 			return true

@@ -1270,6 +1270,25 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, bool, error) {
 	return nil, false, nil
 }
 
+// applyAttemptFields validates and applies the attempt-limit patch fields
+// (max_attempts, attempt_count).
+func (su *storeUpdateLocked) applyAttemptFields() error {
+	if su.patch.MaxAttempts != nil {
+		newMax := *su.patch.MaxAttempts
+		if newMax != nil && *newMax < 1 {
+			return verr("max_attempts must be at least 1")
+		}
+		su.t.MaxAttempts = newMax
+	}
+	if su.patch.AttemptCount != nil {
+		if *su.patch.AttemptCount < 0 {
+			return verr("attempt_count must not be negative")
+		}
+		su.t.AttemptCount = *su.patch.AttemptCount
+	}
+	return nil
+}
+
 // applyRemainingFields validates and applies the remaining independent patch fields.
 func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 	if su.patch.Initiator != nil {
@@ -1362,18 +1381,8 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 	if su.patch.IsJoin != nil {
 		su.t.IsJoin = *su.patch.IsJoin
 	}
-	if su.patch.MaxAttempts != nil {
-		newMax := *su.patch.MaxAttempts
-		if newMax != nil && *newMax < 1 {
-			return nil, true, verr("max_attempts must be at least 1")
-		}
-		su.t.MaxAttempts = newMax
-	}
-	if su.patch.AttemptCount != nil {
-		if *su.patch.AttemptCount < 0 {
-			return nil, true, verr("attempt_count must not be negative")
-		}
-		su.t.AttemptCount = *su.patch.AttemptCount
+	if err := su.applyAttemptFields(); err != nil {
+		return nil, true, err
 	}
 	if su.patch.ResumeFromCommit != nil {
 		su.t.ResumeFromCommit = *su.patch.ResumeFromCommit

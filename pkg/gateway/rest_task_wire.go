@@ -167,6 +167,31 @@ type wireTodo = struct {
 	Text   string              `json:"text"`
 }
 
+// setWireListFields copies a task's list-valued fields (blocked_by, todos,
+// write_set, tags) onto its wire form. Each is omitted when empty and copied,
+// never aliased.
+func setWireListFields(out *gen.Task, t task.Task) {
+	if len(t.BlockedBy) > 0 {
+		bb := append([]string{}, t.BlockedBy...)
+		out.BlockedBy = &bb
+	}
+	if len(t.Todos) > 0 {
+		todos := make([]wireTodo, 0, len(t.Todos))
+		for _, td := range t.Todos {
+			todos = append(todos, wireTodo{Text: td.Text, Status: gen.TaskTodosStatus(td.Status)})
+		}
+		out.Todos = &todos
+	}
+	if len(t.WriteSet) > 0 {
+		ws := append([]string{}, t.WriteSet...)
+		out.WriteSet = &ws
+	}
+	if len(t.Tags) > 0 {
+		tags := append([]string{}, t.Tags...)
+		out.Tags = &tags
+	}
+}
+
 // toWireTask converts an internal task.Task to the generated wire type, filling
 // the read-time agent_name and rollup fields from the registry / store. idx is
 // an optional shared rollupIndex (see its doc comment) for batch callers; pass
@@ -218,36 +243,18 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 			out.AgentName = ptr(name)
 		}
 	}
-	if len(t.BlockedBy) > 0 {
-		bb := append([]string{}, t.BlockedBy...)
-		out.BlockedBy = &bb
-	}
-	if len(t.Todos) > 0 {
-		todos := make([]wireTodo, 0, len(t.Todos))
-		for _, td := range t.Todos {
-			todos = append(todos, wireTodo{Text: td.Text, Status: gen.TaskTodosStatus(td.Status)})
-		}
-		out.Todos = &todos
-	}
+	setWireListFields(&out, t)
 	if t.ParentTaskID != "" {
 		out.ParentTaskId = ptr(t.ParentTaskID)
 	}
 	if t.PlanID != "" {
 		out.PlanId = ptr(t.PlanID)
 	}
-	if len(t.WriteSet) > 0 {
-		ws := append([]string{}, t.WriteSet...)
-		out.WriteSet = &ws
-	}
 	if t.Stream != "" {
 		out.Stream = ptr(t.Stream)
 	}
 	if t.IsJoin {
 		out.IsJoin = ptr(t.IsJoin)
-	}
-	if len(t.Tags) > 0 {
-		tags := append([]string{}, t.Tags...)
-		out.Tags = &tags
 	}
 	// GOAL-FR-003/FR-029/FR-048 (ADR-086 D5): BOTH judged lists — criteria
 	// and Definition of Done — live on the task's paired goal record and the

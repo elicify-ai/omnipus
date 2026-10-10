@@ -40,6 +40,48 @@ func setAgentModelProvider(ag *gen.Agent, model *config.AgentModelConfig) {
 
 // --- Agents ---
 
+// handleAgentSlotCarveOut serves the static routes that occupy the agentID slot
+// of /api/v1/agents/{id}, reporting whether it handled the request:
+//   - GET  executor-defaults    — static reference data;
+//   - POST executor-preview     — stateless real-command preview
+//     (rest_executor_preview.go), body-driven and agent-agnostic so it works
+//     from the create wizard where no agent id exists yet;
+//   - POST executor-smoke-test  — runs a bounded, real test prompt through an
+//     external-CLI worker (rest_executor_smoketest.go); it spends real tokens
+//     and enforces its own rate limit and in-flight cap inline, since it shares
+//     this route's registration-time auth wrapping.
+//
+// They are matched as if they were the {id} value, so they are carved out of
+// the agent-ID namespace rather than being sub-resource reservations like
+// sessions/runner/tools/mailboxes, which are checked only after agentID has
+// been split off and validated. An agent created with one of these literal IDs
+// would become unreachable via GET /api/v1/agents/{id}; agent IDs are always
+// uuid.New().String(), so the practical risk is low, but do not copy this
+// pattern casually for a future static route under /agents/.
+func (a *restAPI) handleAgentSlotCarveOut(w http.ResponseWriter, r *http.Request, agentID, subPath string) bool {
+	if subPath != "" {
+		return false
+	}
+	var method string
+	var serve func()
+	switch agentID {
+	case "executor-defaults":
+		method, serve = http.MethodGet, func() { a.listExecutorDefaults(w) }
+	case "executor-preview":
+		method, serve = http.MethodPost, func() { a.postAgentsExecutorPreview(w, r) }
+	case "executor-smoke-test":
+		method, serve = http.MethodPost, func() { a.postAgentsExecutorSmokeTest(w, r) }
+	default:
+		return false
+	}
+	if r.Method != method {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return true
+	}
+	serve()
+	return true
+}
+
 // HandleAgents handles /api/v1/agents (list + create), /api/v1/agents/{id} (detail),
 // and /api/v1/agents/{id}/sessions (sessions for agent).
 func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
@@ -57,64 +99,9 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// GET /api/v1/agents/executor-defaults — static reference data (agent-system-
-	// fixes-2 ghost-text bug fix). This reservation is structurally different
-	// from the "sessions"/"runner"/"tools"/"mailboxes" sub-path guards below:
-	// those reserve a VERB-SUFFIX position that is only checked AFTER agentID
-	// has already been split off and validated (so they can never collide with
-	// a real agent ID, only with a same-named sub-resource segment). This guard
-	// instead claims the agentID SLOT ITSELF — "executor-defaults" is matched
-	// as if it were the {id} value before any agent lookup happens, so it is a
-	// static path segment carved out of the agent-ID namespace, not a
-	// sub-resource reservation. createAgent/updateAgent do not reject this
-	// literal ID, so if an agent were ever created with it, that agent would
-	// become permanently unreachable via GET /api/v1/agents/{id} (shadowed by
-	// this branch). Practical risk is low — agent IDs are always
-	// uuid.New().String(), never operator-chosen — but this is a narrower,
-	// more fragile precedent than the sub-path guards below and should not be
-	// copied casually for a future static route under /agents/.
-	if agentID == "executor-defaults" && subPath == "" {
-		if r.Method != http.MethodGet {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.listExecutorDefaults(w)
-		return
-	}
-
-	// POST /api/v1/agents/executor-preview — stateless real-command preview
-	// (rest_executor_preview.go). Same agentID-SLOT carve-out pattern as
-	// executor-defaults immediately above (see that block's comment for why
-	// this is structurally different from the sessions/runner/tools/mailboxes
-	// sub-path guards below). Body-driven and agent-agnostic — mirrors POST
-	// /system/cli-validate — so it works both from the create wizard, where no
-	// agent id exists yet, and from an existing agent's edit form.
-	if agentID == "executor-preview" && subPath == "" {
-		if r.Method != http.MethodPost {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.postAgentsExecutorPreview(w, r)
-		return
-	}
-
-	// POST /api/v1/agents/executor-smoke-test — actually RUN a bounded, real
-	// test prompt through an external-CLI worker's real dispatch path
-	// (rest_executor_smoketest.go). Same agentID-SLOT carve-out pattern as
-	// executor-preview/executor-defaults immediately above. Unlike those two
-	// (stateless computation only, no spawn), this endpoint DOES spend real
-	// model tokens and DOES run a real, authenticated subprocess — it
-	// enforces its own dedicated rate limit (smokeTestLimiter) and per-caller
-	// in-flight cap (smokeTestInflight) inline, since it shares this route's
-	// registration-time auth wrapping (api.withAuth(api.HandleAgents), same
-	// create-parity as executor-preview) rather than getting its own
-	// dedicated top-level route like /system/cli-validate does.
-	if agentID == "executor-smoke-test" && subPath == "" {
-		if r.Method != http.MethodPost {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.postAgentsExecutorSmokeTest(w, r)
+	// Static routes that claim the agentID slot itself are served before any
+	// agent lookup (see handleAgentSlotCarveOut).
+	if a.handleAgentSlotCarveOut(w, r, agentID, subPath) {
 		return
 	}
 

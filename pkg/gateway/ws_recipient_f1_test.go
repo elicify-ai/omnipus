@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,5 +163,106 @@ func TestRecipient_DeniedLateAskLeavesSourceHistoryUntouched(t *testing.T) {
 		t.Error("the receiver's main was created for a denied request")
 	}
 	for i := drainWC(); i > 0; i-- { // the only frame allowed is the error
+	}
+}
+
+// ---- U8 r4 F12/F13 ----
+
+// userMessageEchoes counts user_message frames queued to a connection.
+func userMessageEchoes(wc *wsConn) int {
+	n := 0
+	for {
+		select {
+		case b := <-wc.sendCh:
+			if strings.Contains(string(b), `"type":"user_message"`) {
+				n++
+			}
+		default:
+			return n
+		}
+	}
+}
+
+// F12 (all late denials): the receiver policy is tightened to Ask at the Nth
+// membership read, whichever decision that read belongs to, and the person
+// DENIES. Whenever a denial happened, the source history, the echo, the
+// receiver's main and the inbound request must all be untouched.
+func TestRecipient_EveryLateDeniedAskLeavesNoSourceEffects(t *testing.T) {
+	for n := 2; n <= 4; n++ {
+		t.Run(fmt.Sprintf("tighten at membership read %d", n), func(t *testing.T) {
+			h, b, deps := newRecipientHandler(t)
+			wc := makeTestConn()
+			sid := mintOwnerChat(t, h, b, wc)
+			inst, ok := h.agentLoop.GetRegistry().GetAgent("ray")
+			require.True(t, ok)
+			hd := &wsHookDeps{recipientDeps: deps}
+			h.agentLoop.SetAddressDeps(hd)
+			asks := 0
+			h.agentLoop.SetToolApprover(denyApprover{calls: &asks})
+			hd.mu.Lock()
+			hd.onEligible = func(read int) {
+				if read == n {
+					inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"send_message": config.ToolPolicyAsk}})
+				}
+			}
+			hd.mu.Unlock()
+			store := h.agentLoop.ResolveSessionStore(sid)
+			before, err := store.ReadTranscript(sid)
+			require.NoError(t, err)
+			userMessageEchoes(wc) // drain the owner chat's own frames
+			to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
+
+			h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray late ask", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+
+			after, err := store.ReadTranscript(sid)
+			require.NoError(t, err)
+			echoes := userMessageEchoes(wc)
+			_, started := nextInbound(t, b, 300*time.Millisecond)
+			mainID, _ := session.MainSessionID(to.WorkspaceID, to.AgentID)
+			_, mainErr := store.GetMeta(mainID)
+			if asks > 0 { // a denial happened: nothing may have happened anywhere
+				assert.Len(t, after, len(before), "a denied Ask must not leave the request saved in the source chat")
+				assert.Zero(t, echoes, "a denied Ask must not echo the request")
+				assert.False(t, started, "no request may be published after a denial")
+				assert.Error(t, mainErr, "the receiver's main must not exist after a denial")
+			} else { // no Ask was reached at this read: the request is admitted normally
+				assert.True(t, started, "an unasked request must be admitted")
+			}
+		})
+	}
+}
+
+// F13: an approval receipt exists only if an approval/grant actually occurred.
+// The receiver policy flips to Ask right after the first admission policy read;
+// with an approver that DENIES, a request may be admitted only if the final
+// admission itself read Allow, never on a flag manufactured from a later sample.
+func TestRecipient_NoApprovalIsAssertedWithoutOne(t *testing.T) {
+	for flipAfter := 1; flipAfter <= 3; flipAfter++ {
+		t.Run(fmt.Sprintf("tighten after policy read %d", flipAfter), func(t *testing.T) {
+			h, b, _ := newRecipientHandler(t)
+			wc := makeTestConn()
+			sid := mintOwnerChat(t, h, b, wc)
+			inst, ok := h.agentLoop.GetRegistry().GetAgent("ray")
+			require.True(t, ok)
+			asks := 0
+			h.agentLoop.SetToolApprover(denyApprover{calls: &asks})
+			var reads []string
+			h.agentLoop.SetPolicyReadHookForTest(func(p string) {
+				reads = append(reads, p)
+				if len(reads) == flipAfter {
+					inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"send_message": config.ToolPolicyAsk}})
+				}
+			})
+			to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
+
+			h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray x", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+
+			_, started := nextInbound(t, b, 400*time.Millisecond)
+			if started && asks == 0 {
+				require.NotEmpty(t, reads)
+				assert.Equal(t, string(config.ToolPolicyAllow), reads[len(reads)-1],
+					"admitted without an approver call although the final policy read the request was decided on was %v", reads)
+			}
+		})
 	}
 }

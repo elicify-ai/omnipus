@@ -115,6 +115,9 @@ type AgentLoop struct {
 	// mirrorFailHook is a test seam run just before the connector-reply mirror
 	// append (nil in production).
 	mirrorFailHook func()
+	// policyReadHook is a test seam run with the result of every receiver
+	// send_message policy read (nil in production).
+	policyReadHook func(policy string)
 	// postFinishRevivalMu / postFinishRevival mark a session whose
 	// SPECIFIC generation was JUST created by a post-finish revival
 	// (issue #1020 round-4 correction). The key is the NEW generation
