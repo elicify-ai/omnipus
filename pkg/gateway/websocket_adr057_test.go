@@ -98,9 +98,9 @@ func TestU11ApprovalCancel_SingleIDMissesDescendant_SetFormReaches(t *testing.T)
 	}
 
 	// --- GREEN: the descendant-set composition buildCancelHooks's
-	// CancelPendingApprovals closure now performs (u11CollectDescendantSessionIDs
+	// CancelPendingApprovals closure now performs (agent.CollectDescendantSessionIDs
 	// + cancelAllPendingForSessions), exactly as wired in websocket.go.
-	sessionIDs := append([]string{root}, u11CollectDescendantSessionIDs(ls, root)...)
+	sessionIDs := append([]string{root}, collectDescendantsForTest(t, ls, root)...)
 	if n := r.cancelAllPendingForSessions(sessionIDs, "session canceled"); n != 1 {
 		t.Fatalf("GREEN: FR-032 descendant-set cancel must match the child's entry; "+
 			"matched %d, want 1 (target set %v)", n, sessionIDs)

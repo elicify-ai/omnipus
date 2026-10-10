@@ -731,14 +731,18 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 	// deleting anything, over the DURABLE lifecycle store — every delegation,
 	// live or not, has a LifecycleRecord (User Story 4), so this walk is
 	// authoritative independent of turn liveness and survives a restart.
-	// Reuses U11's already-tested u11CollectDescendantSessionIDs (same
-	// package, pkg/gateway/websocket.go), which walks U13's SteeringSessionID
-	// index (pkg/session/lifecycle.go) exactly as the cancel/approval-cascade
-	// paths do — this handler does not reimplement the walk. A nil lifecycle
-	// store (no delegation store wired — most webchat-only installs never
-	// mint one) degrades to zero descendants, matching that helper's
-	// documented nil-store behavior.
-	descendantIDs := u11CollectDescendantSessionIDs(a.agentLoop.GetSessionLifecycleStore(), id)
+	// Uses the one shared collector, agent.CollectDescendantSessionIDs, which
+	// walks the SteeringSessionID index (pkg/session/lifecycle.go) exactly as
+	// the cancel/approval-cascade paths do — this handler does not reimplement
+	// the walk. A nil lifecycle store (no delegation store wired — most
+	// webchat-only installs never mint one) degrades to zero descendants. A walk
+	// error is logged: the descendants found before the failure are still
+	// cleaned up, and the log says the set is incomplete.
+	descendantIDs, walkErr := agent.CollectDescendantSessionIDs(a.agentLoop.GetSessionLifecycleStore(), id)
+	if walkErr != nil {
+		slog.Warn("rest: delete session: descendant walk failed partway through — the cleanup set is INCOMPLETE",
+			"session_id", id, "error", walkErr)
+	}
 
 	if err := store.DeleteSession(id); err != nil {
 		slog.Error("rest: delete session", "session_id", id, "error", err)

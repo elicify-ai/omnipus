@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -451,8 +452,19 @@ func TestHandleCancel_FiredImmediately_NoLatchExpiredFalseAlarm(t *testing.T) {
 		"sanity check: the ordinary Fired:true cancel path must still work")
 }
 
+// collectDescendantsForTest is the walk under test: the one shared collector,
+// with its returned error checked (safe to call from a goroutine).
+func collectDescendantsForTest(t *testing.T, ls *session.LifecycleStore, rootID string) []string {
+	t.Helper()
+	got, err := agent.CollectDescendantSessionIDs(ls, rootID)
+	if err != nil {
+		t.Errorf("CollectDescendantSessionIDs(%q): %v", rootID, err)
+	}
+	return got
+}
+
 // TestU11CollectDescendantSessionIDs_MultiLevelWalk proves
-// u11CollectDescendantSessionIDs walks the FULL subtree — a grandchild two
+// agent.CollectDescendantSessionIDs walks the FULL subtree — a grandchild two
 // delegation levels deep, not just direct children — over a REAL on-disk
 // LifecycleStore. This is the mechanism BDD-19 names ("the parent index
 // makes the walk cost proportional to descendants") and the exact gap FR-032
@@ -472,7 +484,7 @@ func TestU11CollectDescendantSessionIDs_MultiLevelWalk(t *testing.T) {
 	u11PersistLifecycleChild(t, ls, grandchild, child)
 	u11PersistLifecycleChild(t, ls, sibling, other)
 
-	got := u11CollectDescendantSessionIDs(ls, root)
+	got := collectDescendantsForTest(t, ls, root)
 
 	// Positive lower bound (binding rule 4) BEFORE the exclusion check below.
 	if len(got) < 2 {
@@ -511,11 +523,11 @@ func TestU11CollectDescendantSessionIDs_MultiLevelWalk(t *testing.T) {
 // cancelAllPendingForSession's documented single-id behavior instead of
 // crashing a Stop click.
 func TestU11CollectDescendantSessionIDs_NilStoreAndEmptyRoot(t *testing.T) {
-	if got := u11CollectDescendantSessionIDs(nil, "sess_u11_whatever"); len(got) != 0 {
+	if got := collectDescendantsForTest(t, nil, "sess_u11_whatever"); len(got) != 0 {
 		t.Errorf("a nil store must yield zero descendants, got %v", got)
 	}
 	ls := session.NewLifecycleStore(t.TempDir())
-	if got := u11CollectDescendantSessionIDs(ls, ""); len(got) != 0 {
+	if got := collectDescendantsForTest(t, ls, ""); len(got) != 0 {
 		t.Errorf("an empty root id must yield zero descendants, got %v", got)
 	}
 }
@@ -536,7 +548,7 @@ func TestU11CollectDescendantSessionIDs_CyclicParentIndexTerminates(t *testing.T
 	u11PersistLifecycleChild(t, ls, b, a) // b's parent is a — the cycle
 
 	done := make(chan []string, 1)
-	go func() { done <- u11CollectDescendantSessionIDs(ls, a) }()
+	go func() { done <- collectDescendantsForTest(t, ls, a) }()
 	select {
 	case got := <-done:
 		// From a: children-of-a == {b}; from b: children-of-b == {a}, already
@@ -545,6 +557,6 @@ func TestU11CollectDescendantSessionIDs_CyclicParentIndexTerminates(t *testing.T
 			t.Errorf("cyclic walk from %q must terminate with exactly [%q], got %v", a, b, got)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("u11CollectDescendantSessionIDs did not terminate over a cyclic SteeringSessionID chain")
+		t.Fatal("CollectDescendantSessionIDs did not terminate over a cyclic SteeringSessionID chain")
 	}
 }
