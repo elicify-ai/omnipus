@@ -226,11 +226,18 @@ export function proseCriterion(text: string): Criterion {
  * `createMainAgent` with no `builtinPolicies` override is seeded fully
  * deny-by-default, so a check would fail closed on every member regardless of
  * its command (see checkCriterion's own doc comment).
+ *
+ * The wording must be CHECKABLE from the evidence the member Judge is given:
+ * the worker's completion claim and the session transcript window
+ * (pkg/agent/judge.go::buildJudgeUserContent). It must NOT point at the task
+ * record: `task.result` is written only after a met verdict
+ * (task_run_loop.go::adjudicateRunClaim), so at judging time that record
+ * cannot yet hold the reply and a strict Judge loops on "unmet".
  */
 export function defaultMemberDoD(label: string): Criterion[] {
   return [
     proseCriterion(
-      `the assignee ran the "${label}" task to completion and left its reply on the task record`,
+      `the assignee ran the "${label}" task to completion and gave a reply, which appears in the worker's completion claim and in the session transcript window`,
     ),
   ]
 }
