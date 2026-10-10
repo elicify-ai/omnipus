@@ -1758,6 +1758,56 @@ func (tu *taskUpdateToolExecute) validateAndLoad() (*ToolResult, bool) {
 	return nil, false
 }
 
+// applyReassignment handles an update_task agent_id change: it applies only
+// when the new agent differs from the current assignee, and then routes the
+// reassignment through the delegation gate and records the initiator.
+// Reassignment is re-delegation: when the new agent
+// differs from the current assignee, route it through the SAME delegation-
+// policy gate task_create uses (FR-6.2). A no-op reassign (same agent) needs
+// no gate. Mirrors TaskCreateTool.Execute's denial shape.
+func (tu *taskUpdateToolExecute) applyReassignment() (*ToolResult, bool) {
+	agentID, ok := tu.args["agent_id"].(string)
+	if !ok || agentID == "" || agentID == tu.existing.AgentID {
+		return nil, false
+	}
+	// FR-048/BDD-08.6: a task living in ANOTHER workspace is not this
+	// caller's to assign, re-assign, or otherwise arm for execution — that
+	// is the receiver-local pickup the target workspace's own team owns.
+	// Refused BEFORE any write. A caller whose turn carries no workspace
+	// (the pre-merge behaviour) is unaffected.
+	if ownWS := strings.TrimSpace(ToolWorkspaceID(tu.ctx)); ownWS != "" &&
+		tu.existing.WorkspaceID != "" && tu.existing.WorkspaceID != ownWS {
+		return ErrorResult(fmt.Sprintf(
+			"task %q is in workspace %q, not your current workspace %q — a task delivered to another "+
+				"workspace cannot be assigned for execution from here; its team picks it up locally (FR-048)",
+			tu.taskID, tu.existing.WorkspaceID, ownWS)), true
+	}
+	// FAIL CLOSED, not open, when no checker is wired — same rationale as
+	// TaskCreateTool.Execute above: an unwired deny-checker is a
+	// configuration error, never a permission grant. Do NOT "simplify"
+	// this back to fail-open.
+	if tu.t.delegationDeny != nil {
+		if denial := tu.t.delegationDeny(tu.ctx, agentID); denial != nil {
+			return DelegationDeniedResult("update_task", denial), true
+		}
+	} else {
+		slog.Error("update_task: no delegation-deny checker installed — denying by default",
+			"caller_id", tu.callerID, "target_agent_id", agentID)
+		return DelegationDeniedResult("update_task", &DelegationDenial{
+			Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
+			Policy:        DenyTrustSet,
+			TargetAgentID: agentID,
+		}), true
+	}
+	tu.patch.AgentID = &agentID
+	if tu.t.initiatorFn != nil {
+		ini := tu.t.initiatorFn(tu.ctx)
+		tu.patch.Initiator = &ini
+	}
+	tu.updatedFields = append(tu.updatedFields, "agent_id")
+	return nil, false
+}
+
 // buildPatchFields translates mutable status, result, metadata, dependency, and plan fields into the task patch.
 func (tu *taskUpdateToolExecute) buildPatchFields() (*ToolResult, bool) {
 	tu.patch = task.Patch{}
@@ -1852,46 +1902,9 @@ func (tu *taskUpdateToolExecute) buildPatchFields() (*ToolResult, bool) {
 		tu.updatedFields = append(tu.updatedFields, "due")
 	}
 
-	// agent_id (reassign). Reassignment is re-delegation: when the new agent
-	// differs from the current assignee, route it through the SAME delegation-
-	// policy gate task_create uses (FR-6.2). A no-op reassign (same agent) needs
-	// no gate. Mirrors TaskCreateTool.Execute's denial shape.
-	if agentID, ok := tu.args["agent_id"].(string); ok && agentID != "" && agentID != tu.existing.AgentID {
-		// FR-048/BDD-08.6: a task living in ANOTHER workspace is not this
-		// caller's to assign, re-assign, or otherwise arm for execution — that
-		// is the receiver-local pickup the target workspace's own team owns.
-		// Refused BEFORE any write. A caller whose turn carries no workspace
-		// (the pre-merge behaviour) is unaffected.
-		if ownWS := strings.TrimSpace(ToolWorkspaceID(tu.ctx)); ownWS != "" &&
-			tu.existing.WorkspaceID != "" && tu.existing.WorkspaceID != ownWS {
-			return ErrorResult(fmt.Sprintf(
-				"task %q is in workspace %q, not your current workspace %q — a task delivered to another "+
-					"workspace cannot be assigned for execution from here; its team picks it up locally (FR-048)",
-				tu.taskID, tu.existing.WorkspaceID, ownWS)), true
-		}
-		// FAIL CLOSED, not open, when no checker is wired — same rationale as
-		// TaskCreateTool.Execute above: an unwired deny-checker is a
-		// configuration error, never a permission grant. Do NOT "simplify"
-		// this back to fail-open.
-		if tu.t.delegationDeny != nil {
-			if denial := tu.t.delegationDeny(tu.ctx, agentID); denial != nil {
-				return DelegationDeniedResult("update_task", denial), true
-			}
-		} else {
-			slog.Error("update_task: no delegation-deny checker installed — denying by default",
-				"caller_id", tu.callerID, "target_agent_id", agentID)
-			return DelegationDeniedResult("update_task", &DelegationDenial{
-				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
-				Policy:        DenyTrustSet,
-				TargetAgentID: agentID,
-			}), true
-		}
-		tu.patch.AgentID = &agentID
-		if tu.t.initiatorFn != nil {
-			ini := tu.t.initiatorFn(tu.ctx)
-			tu.patch.Initiator = &ini
-		}
-		tu.updatedFields = append(tu.updatedFields, "agent_id")
+	// agent_id (reassign): see applyReassignment.
+	if res, stop := tu.applyReassignment(); stop {
+		return res, true
 	}
 
 	// blocked_by (replaces the list). Cross-workspace guard at the tool layer
