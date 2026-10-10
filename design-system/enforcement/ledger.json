@@ -5166,6 +5166,34 @@
       "syntax": "lockedMia#dom-style.color<-AgentColor.options[0]",
       "reason": "Category: user-authored colours \u2014 the locked built-in fixture sets Mia's colour to Azure, the first generated AgentColor option, inside the named function lockedMia. The index is a numeric literal. The field is the wire color.",
       "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "AgentLookPicker#svg-attribute.color<-color",
+      "reason": "Category: user-authored colours \u2014 migration plan \u00a75 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): AgentLookPicker draws the preview and the five Look thumbnails with `ink = color ?? AgentColor.options[9]`, where `color` is the component's own prop carrying the agent's chosen colour (a value of the generated AgentColor enum, the ten founder-approved agent colours) passed unchanged into AgentIcon's svg colour \u2014 governed agent data, not design-system chrome (SKILL.md rule 6).",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "AgentLookPicker#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours \u2014 migration plan \u00a75 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): the fallback when no colour is chosen yet is AgentColor.options[9] (#9CA3AF, the documented create-default agent colour, docs/agents.md), taken from the generated AgentColor enum and passed unchanged into AgentIcon's svg colour \u2014 governed agent data, not chrome.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentMark.tsx",
+      "syntax": "AgentMark#dom-style.color<-agent?.color",
+      "reason": "Category: user-authored colours \u2014 migration plan \u00a75 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): AgentMark passes `agent?.color` \u2014 the agent's user-chosen colour from the loaded Agent (generated AgentColor enum) \u2014 unchanged to AgentIcon, which paints the figure with it. The same governed flow AgentCard#dom-style.backgroundColor<-agent.color was registered for before the one-mark sweep.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentMark.tsx",
+      "syntax": "AgentMark#dom-style.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours \u2014 migration plan \u00a75 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): the founder-chosen fallback for an agent that is not loaded is the Omnipus figure in AgentColor.options[9] (#9CA3AF, the documented create-default colour), from the generated AgentColor enum, passed unchanged to AgentIcon \u2014 governed agent data, not chrome.",
+      "owner": "user-authored colours exception registry"
     }
   ],
   "reviewedBoundaries": [

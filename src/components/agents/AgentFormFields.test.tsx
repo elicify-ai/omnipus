@@ -249,7 +249,7 @@ describe('AgentLookPicker — pick by picture (founder 2026-10-10)', () => {
   it('locks each field independently when its built-in lock is set', () => {
     // Oracle: docs/agents.md "Built-in identity is locked" — the role badge,
     // look, and colour choices remain visible but cannot be changed, per field.
-    renderLookPicker({ disabled: { figure: true, role: true, color: true } })
+    renderLookPicker({ figureLocked: true, roleLocked: true, colorLocked: true })
     expect(screen.getByRole('combobox', { name: 'Role badge' })).toBeDisabled()
     for (const figure of FIGURE_ORDER) {
       expect(screen.getByTestId(`avatar-figure-${figure}`)).toBeDisabled()
@@ -262,7 +262,7 @@ describe('AgentLookPicker — pick by picture (founder 2026-10-10)', () => {
 
   it('colour stays clickable while the figure row and role badge are locked', async () => {
     // Per-field locks: only the locked fields are disabled, never the editor.
-    const { onColorChange } = await renderLookPicker({ disabled: { figure: true } })
+    const { onColorChange } = await renderLookPicker({ figureLocked: true })
     expect(screen.getByTestId('avatar-figure-Man')).toBeDisabled()
     expect(screen.getByRole('combobox', { name: 'Role badge' })).toBeEnabled()
     fireEvent.click(screen.getByTestId('avatar-color-Orange'))

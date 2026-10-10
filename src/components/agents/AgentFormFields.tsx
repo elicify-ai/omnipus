@@ -353,8 +353,10 @@ export interface AgentLookPickerProps {
   onFigureChange: (figure: AgentFigure) => void
   onRoleChange: (role: AgentRole) => void
   onColorChange: (color: string) => void
-  /** Built-in identity locks, per field (from the server's field descriptors). */
-  disabled?: { figure?: boolean; role?: boolean; color?: boolean }
+  /** Built-in identity locks, one per field (from the server's field descriptors). */
+  figureLocked?: boolean
+  roleLocked?: boolean
+  colorLocked?: boolean
   /** Draw the big live preview. Off where a header already previews the mark. */
   showPreview?: boolean
   /** Prefix for test ids, e.g. `wizard` or `avatar`. */
@@ -378,7 +380,9 @@ export function AgentLookPicker({
   onFigureChange,
   onRoleChange,
   onColorChange,
-  disabled = {},
+  figureLocked = false,
+  roleLocked = false,
+  colorLocked = false,
   showPreview = true,
   testIdPrefix = 'avatar',
 }: AgentLookPickerProps) {
@@ -397,7 +401,7 @@ export function AgentLookPicker({
             <SmartSelect
               value={role}
               onValueChange={(next) => onRoleChange(next as AgentRole)}
-              disabled={disabled.role}
+              disabled={roleLocked}
               ariaLabel="Role badge"
               items={ROLE_VOCABULARY.map((row) => ({
                 value: row.slug,
@@ -418,7 +422,7 @@ export function AgentLookPicker({
               type="button"
               variant={figure === option ? 'default' : 'outline'}
               size="sm"
-              disabled={disabled.figure}
+              disabled={figureLocked}
               aria-pressed={figure === option}
               aria-label={option}
               title={option}
@@ -436,7 +440,7 @@ export function AgentLookPicker({
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Colour</p>
         <AvatarColorPicker
           value={color}
-          disabled={disabled.color}
+          disabled={colorLocked}
           onChange={onColorChange}
           testIdPrefix={`${testIdPrefix}-color`}
         />

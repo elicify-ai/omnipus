@@ -1421,11 +1421,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 figure={selectedFigure}
                 role={selectedRole}
                 color={selectedColor}
-                disabled={{
-                  figure: !isFieldEditable('figure'),
-                  role: !isFieldEditable('role'),
-                  color: !isFieldEditable('color'),
-                }}
+                figureLocked={!isFieldEditable('figure')}
+                roleLocked={!isFieldEditable('role')}
+                colorLocked={!isFieldEditable('color')}
                 onFigureChange={(figure) => { markDirty(); setSelectedFigure(figure) }}
                 onRoleChange={(role) => { markDirty(); setSelectedRole(role) }}
                 onColorChange={(color) => { markDirty(); setSelectedColor(color) }}
