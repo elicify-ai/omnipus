@@ -1088,7 +1088,7 @@ func (te *TaskExecutor) taskVerdictStillApplicable(taskID string) bool {
 func (te *TaskExecutor) retryAuthority(t *task.Task, sessionID string) (*task.Initiator, error) {
 	ls := te.getLifecycleStore()
 	if ls == nil {
-		return nil, nil
+		return nil, nil //nolint:nilnil // No lifecycle store wired means no recorded initiator, not an error.
 	}
 	if sessionID == "" {
 		return nil, fmt.Errorf("the failed run has no session to read its authority from")
@@ -1098,7 +1098,7 @@ func (te *TaskExecutor) retryAuthority(t *task.Task, sessionID string) (*task.In
 		return nil, fmt.Errorf("load lifecycle record %q: %w", sessionID, err)
 	}
 	if rec.InitiatedBy == nil {
-		return nil, nil
+		return nil, nil //nolint:nilnil // The record was read and no agent started the run, not an error.
 	}
 	effective, _ := rec.OnwardBudget()
 	inherited := effective + 1 // authorizeInitiatedRun spends one hop of what it is given

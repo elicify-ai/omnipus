@@ -280,7 +280,7 @@ func (dt *delegateToolExecuteRespond) deliverNative() *ToolResult {
 			return session.ErrLifecycleNotFound
 		}
 		if cur.Terminal() {
-			return &followupRefusal{fmt.Sprintf("session %s is terminal (%s) and cannot be responded to", dt.sessionID, cur.State)}
+			return &followupRefusalError{fmt.Sprintf("session %s is terminal (%s) and cannot be responded to", dt.sessionID, cur.State)}
 		}
 		if cur.State == session.LifecycleStopped {
 			stoppedInRace = true
@@ -288,12 +288,12 @@ func (dt *delegateToolExecuteRespond) deliverNative() *ToolResult {
 			return nil
 		}
 		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
-			return &followupRefusal{fmt.Sprintf("session %s is stopping (a stop is in flight for its current generation); retry the respond once it has stopped", dt.sessionID)}
+			return &followupRefusalError{fmt.Sprintf("session %s is stopping (a stop is in flight for its current generation); retry the respond once it has stopped", dt.sessionID)}
 		}
 		dt.rec = cur
 		return nil
 	}); merr != nil {
-		var refusal *followupRefusal
+		var refusal *followupRefusalError
 		if errors.As(merr, &refusal) {
 			return ErrorResult("delegate: respond: " + refusal.text).WithError(merr)
 		}

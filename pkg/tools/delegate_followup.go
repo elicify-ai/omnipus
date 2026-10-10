@@ -15,13 +15,13 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// followupRefusal is a refusal sentence authored in this file (a race the
+// followupRefusalError is a refusal sentence authored in this file (a race the
 // caller can act on). It is the only error text from a lifecycle Mutate that
 // may reach the calling agent as written; every other Mutate error is
 // store-level and is replaced by a fixed sentence.
-type followupRefusal struct{ text string }
+type followupRefusalError struct{ text string }
 
-func (e *followupRefusal) Error() string { return e.text }
+func (e *followupRefusalError) Error() string { return e.text }
 
 // refusalTexter is implemented by an error whose text was authored for a
 // person or model to read (the agent package's curated revival refusals), so
@@ -304,7 +304,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		// plain Load and this lock-protected re-read; their strings are
 		// refusals for those races alone.
 		if cur.Terminal() {
-			return &followupRefusal{fmt.Sprintf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)}
+			return &followupRefusalError{fmt.Sprintf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)}
 		}
 		if cur.State == session.LifecycleStopped {
 			stoppedInRace = true
@@ -312,12 +312,12 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 			return nil
 		}
 		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
-			return &followupRefusal{fmt.Sprintf("session %s is stopping (a stop is in flight for its current generation); retry the steer once it has stopped", sessionID)}
+			return &followupRefusalError{fmt.Sprintf("session %s is stopping (a stop is in flight for its current generation); retry the steer once it has stopped", sessionID)}
 		}
 		rec = cur
 		return nil
 	}); merr != nil {
-		var refusal *followupRefusal
+		var refusal *followupRefusalError
 		if errors.As(merr, &refusal) {
 			return ErrorResult("delegate: steer: " + refusal.text).WithError(merr)
 		}
