@@ -265,10 +265,10 @@ components:
         `sessions` is this page's rows: root sessions by default, that
         node's direct children when parent_session_id is supplied, or every
         session (roots and subordinates) when flat=true (FR-104).
-        `partial_errors` composes with paging: a page whose merge hit a
-        failing legacy per-agent store still returns its healthy rows,
-        still returns next_cursor, and populates partial_errors — a failing
-        store contributes zero rows and does not halt the page or
+        `partial_errors` composes with paging: a page in which one agent's
+        sessions could not be read still returns its healthy rows, still
+        returns next_cursor, and populates partial_errors — an unreadable
+        source contributes zero rows and does not halt the page or
         invalidate the cursor (FR-098).
       type: object
       required:
@@ -291,8 +291,8 @@ components:
             type: string
           description: >
             Opaque error tokens (agent ID + sanitized reason) from any
-            store that failed during this page's merge. Present only when
-            at least one store failed.
+            source that could not be read during this page's merge. Present
+            only when at least one source failed.
     SessionCreateRequest:
       $ref: ./components/schemas/SessionCreateRequest.yaml
     SessionRenameRequest:
@@ -2943,7 +2943,7 @@ paths:
         example: 0
       responses:
         '200':
-          description: 'A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node''s direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one store failed during the merge; the page''s rows and next_cursor stay valid regardless (FR-098).
+          description: 'A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node''s direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one source could not be read during the merge; the page''s rows and next_cursor stay valid regardless (FR-098).
 
             '
           content:

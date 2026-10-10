@@ -61,15 +61,6 @@ properties:
   color:
     $ref: './AgentColor.yaml'
     x-go-type: AgentColor
-  icon:
-    type: string
-    maxLength: 50
-    description: >
-      Legacy Phosphor catalog name (for example "Robot", "lightbulb").
-      Not the role and not the figure. Identity rendering uses `figure`,
-      `role`, and `color`. Kept so surfaces that still draw a Phosphor
-      icon do not break. Omitted when the agent has none.
-    example: ChartBar
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
   fallback_models:

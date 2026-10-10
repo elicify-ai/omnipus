@@ -4564,7 +4564,7 @@ export interface components {
         };
         /**
          * SessionPage
-         * @description Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
+         * @description Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page in which one agent's sessions could not be read still returns its healthy rows, still returns next_cursor, and populates partial_errors — an unreadable source contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
          */
         SessionPage: {
             sessions: components["schemas"]["Session"][];
@@ -4573,7 +4573,7 @@ export interface components {
              * @example 20
              */
             next_cursor?: string;
-            /** @description Opaque error tokens (agent ID + sanitized reason) from any store that failed during this page's merge. Present only when at least one store failed. */
+            /** @description Opaque error tokens (agent ID + sanitized reason) from any source that could not be read during this page's merge. Present only when at least one source failed. */
             partial_errors?: string[];
         };
         /** @description Body for POST /sessions. Creates a new session for an agent. */
@@ -4758,7 +4758,7 @@ export interface components {
              */
             tool: string;
             /**
-             * @description Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+             * @description Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
              * @example success
              * @enum {string}
              */
@@ -8303,7 +8303,7 @@ export interface components {
          */
         AgentFigure: "Robot" | "Man" | "Woman" | "Omnipus";
         /**
-         * @description Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire.
+         * @description Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire.
          * @example general
          * @enum {string}
          */
@@ -8347,11 +8347,6 @@ export interface components {
             figure: components["schemas"]["AgentFigure"];
             role: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /**
-             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-             * @example Robot
-             */
-            icon?: string;
             /**
              * @description Model slug used for LLM calls (resolved from defaults when not explicitly set on the agent). With the O3 two-field model, this is the bare model slug (e.g. "google/gemini-2.5-flash"); routing is keyed by the explicit `provider` field. A legacy combined slug ("openrouter/google/gemini-2.5-flash") is split into {model, provider} by the config-load migration. Never inferred at call time once `provider` is set.
              * @example google/gemini-2.5-flash
@@ -8657,11 +8652,6 @@ export interface components {
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /**
-             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-             * @example ChartBar
-             */
-            icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
@@ -8748,11 +8738,6 @@ export interface components {
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /**
-             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-             * @example ChartBar
-             */
-            icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
@@ -8831,11 +8816,6 @@ export interface components {
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /**
-             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-             * @example ChartBar
-             */
-            icon?: string;
             /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
             rate_limits?: {
                 /**
@@ -8921,11 +8901,6 @@ export interface components {
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /**
-             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-             * @example Robot
-             */
-            icon?: string;
             /**
              * @description Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
@@ -11128,7 +11103,7 @@ export interface components {
              */
             available_while_streaming?: boolean;
             /**
-             * @description How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+             * @description How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /model, /skills) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame, where the server executes it (e.g. /status, /channels). Only meaningful for web-surfaced commands; defaults to "agent".
              * @example client
              * @enum {string}
              */
@@ -18541,7 +18516,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node's direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one store failed during the merge; the page's rows and next_cursor stay valid regardless (FR-098). */
+            /** @description A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node's direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one source could not be read during the merge; the page's rows and next_cursor stay valid regardless (FR-098). */
             200: {
                 headers: {
                     [name: string]: unknown;
