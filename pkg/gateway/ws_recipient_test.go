@@ -39,13 +39,20 @@ func (d *recipientDeps) PublishGuestReply(_ string, e session.TranscriptEntry) {
 
 func newRecipientHandler(t *testing.T) (*WSHandler, *bus.MessageBus, *recipientDeps) {
 	t.Helper()
+	return newRecipientHandlerWith(t)
+}
+
+// newRecipientHandlerWith is newRecipientHandler plus extra registered agents
+// that allow send_message (so only the address, not the policy, can refuse).
+func newRecipientHandlerWith(t *testing.T, extra ...string) (*WSHandler, *bus.MessageBus, *recipientDeps) {
+	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	msgBus := bus.NewMessageBus()
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: t.TempDir(), DefaultModel: config.DefaultModel{Model: "m"}, MaxTokens: 4096},
-			List:     []config.AgentConfig{{ID: "ann"}, {ID: "ray"}},
+			List:     append([]config.AgentConfig{{ID: "ann"}, {ID: "ray"}}, extraAgents(extra)...),
 		},
 	}
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
@@ -56,7 +63,20 @@ func newRecipientHandler(t *testing.T) (*WSHandler, *bus.MessageBus, *recipientD
 	inst, ok := al.GetRegistry().GetAgent("ray")
 	require.True(t, ok)
 	inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"send_message": config.ToolPolicyAllow}})
+	for _, id := range extra {
+		x, found := al.GetRegistry().GetAgent(id)
+		require.True(t, found)
+		x.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"send_message": config.ToolPolicyAllow}})
+	}
 	return handler, msgBus, deps
+}
+
+func extraAgents(ids []string) []config.AgentConfig {
+	out := make([]config.AgentConfig, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, config.AgentConfig{ID: id})
+	}
+	return out
 }
 
 func nextInbound(t *testing.T, b *bus.MessageBus, wait time.Duration) (bus.InboundMessage, bool) {
@@ -178,3 +198,28 @@ func TestRecipient_RefusalsAdmitNothingAndSaveNoMessage(t *testing.T) {
 }
 
 var _ agent.AddressDeps = (*recipientDeps)(nil)
+
+// F7: a pair whose components are each valid but whose computed main id is over
+// the 255-byte limit is refused BEFORE the user's message is saved.
+func TestRecipient_OverlongComputedAddressRefusedBeforeSave(t *testing.T) {
+	longAgent := strings.Repeat("a", 128)
+	h, b, deps := newRecipientHandlerWith(t, longAgent)
+	wc := makeTestConn()
+	sid := mintOwnerChat(t, h, b, wc)
+	to := addressing.Pair{WorkspaceID: strings.Repeat("w", 128), AgentID: longAgent}
+	require.NoError(t, to.Validate(), "setup: each component is within its own bound")
+	_, idErr := session.MainSessionID(to.WorkspaceID, to.AgentID)
+	require.Error(t, idErr, "setup: the computed id must be over the limit")
+	deps.eligible[to.WorkspaceID+"/"+to.AgentID] = true
+
+	store := h.agentLoop.ResolveSessionStore(sid)
+	before, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@long do it", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+
+	_, started := nextInbound(t, b, 300*time.Millisecond)
+	assert.False(t, started)
+	after, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	assert.Len(t, after, len(before), "the source message must not be saved for an unaddressable recipient")
+}
