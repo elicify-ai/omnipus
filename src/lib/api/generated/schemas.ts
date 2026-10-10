@@ -4018,6 +4018,18 @@ export const ConfigurationMutationState: z.ZodType<ConfigurationMutationState> =
     error_stage: z.string().optional(),
     message: z.string().optional(),
   });
+export const AgentActivityRun = z.object({
+  run_id: z.string().min(1),
+  task_id: z.string().min(1),
+  task_title: z.string(),
+  kind: z.enum(["task", "scheduled"]),
+  mode: z.enum(["main", "isolated"]),
+  state: z.enum(["running", "queued", "waiting"]),
+  role: z.enum(["assignee", "recipient"]),
+  agent_id: z.string().min(1),
+  session_id: z.string().optional(),
+  started_at: z.string().datetime({ offset: true }),
+});
 export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
   .object({
     name: z.string(),
@@ -7870,6 +7882,44 @@ Includes session_start events from all agent stores and task lifecycle events.
         status: 500,
         description: `Storage failed; reports actual saved state.`,
         schema: ConfigurationMutationState,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/agents/:id/activity-runs",
+    alias: "listAgentActivityRuns",
+    description: `Returns the OPEN task/scheduler runs where the agent is the assignee or one of the run&#x27;s captured recipients (session-core FR-033), newest first. Each run carries its own session id for the Open control. An agent with no open run gets an empty array.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "workspace_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+    ],
+    response: z.array(AgentActivityRun),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
       },
     ],
   },

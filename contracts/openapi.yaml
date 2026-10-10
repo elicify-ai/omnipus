@@ -246,6 +246,8 @@ components:
       $ref: ./components/schemas/ProbeProviderResponse.yaml
     Session:
       $ref: ./components/schemas/Session.yaml
+    AgentActivityRun:
+      $ref: ./components/schemas/AgentActivityRun.yaml
     SessionStats:
       $ref: ./components/schemas/SessionStats.yaml
     SessionDetail:
@@ -3436,6 +3438,46 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Session'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /agents/{id}/activity-runs:
+    get:
+      operationId: listAgentActivityRuns
+      summary: List the open task and scheduler runs an agent should see in Activity
+      description: 'Returns the OPEN task/scheduler runs where the agent is the assignee or one of the run''s captured recipients (session-core FR-033), newest first. Each run carries its own session id for the Open control. An agent with no open run gets an empty array.
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+        example: jim
+      - name: workspace_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Restrict to runs of tasks in this workspace.
+      responses:
+        '200':
+          description: Open runs for this agent.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentActivityRun'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
