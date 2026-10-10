@@ -50,7 +50,7 @@ const (
 	perTaskInstantCap = 500
 
 	// perTaskIterationBudget is the total number of occurrences an
-	// IRREGULAR (BY*-modified rrule, or any cron_expr) trigger may walk
+	// IRREGULAR (BY*-modified rrule) trigger may walk
 	// per task per request in overview (bucketed) mode, counting every
 	// occurrence enumerated to build a DayBucket's count as well as any
 	// destined for occurrences_ms (spec: "counting bucket enumeration").

@@ -1067,20 +1067,20 @@ func FixtureTask_Edge() Task {
 		CreatedAt:   createdAt,
 		UpdatedAt:   createdAt,
 	}
-	cron := "0 9 * * MON"
+	rrule, dtstart, tz := "FREQ=WEEKLY;BYDAY=MO", int64(1784624400000), "Europe/Berlin"
 	t.Trigger = &struct {
 		Config Task_Trigger_Config `json:"config"`
 		Type   TaskTriggerType     `json:"type"`
 	}{Type: TaskTriggerType("recurring")}
-	t.Trigger.Config.CronExpr = &cron
+	t.Trigger.Config.Rrule, t.Trigger.Config.DtstartMs, t.Trigger.Config.Tz = &rrule, &dtstart, &tz
 	return t
 }
 
 // FixtureTaskTrigger_Populated — a recurring time trigger.
 func FixtureTaskTrigger_Populated() TaskTrigger {
-	cron := "0 9 * * MON"
+	rrule, dtstart, tz := "FREQ=WEEKLY;BYDAY=MO", int64(1784624400000), "Europe/Berlin"
 	tr := TaskTrigger{Type: TaskTriggerType("recurring")}
-	tr.Config.CronExpr = &cron
+	tr.Config.Rrule, tr.Config.DtstartMs, tr.Config.Tz = &rrule, &dtstart, &tz
 	return tr
 }
 
