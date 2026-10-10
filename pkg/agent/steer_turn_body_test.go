@@ -70,6 +70,9 @@ func newDelegateDispatchLoop(t *testing.T, provider providers.LLMProvider) *Agen
 	seedWorkspaceGraph(t, "01JXDISPATCHSEC000000000001", true, []graphEdge{
 		edge(testDefaultAgentID, delegateExtCLIAgentID, nil, nil),
 		edge(testDefaultAgentID, delegateNativeWorkerAgentID, nil, nil),
+		// A self-delegation is an ORDINARY edge (FR-014): the launch-to-mia
+		// tests need the caller→caller self-edge, exactly like any other target.
+		edge(testDefaultAgentID, testDefaultAgentID, nil, nil),
 	})
 	tmpDir := filepath.Join(t.TempDir(), "home")
 	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
