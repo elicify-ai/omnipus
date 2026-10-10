@@ -15876,11 +15876,11 @@ type ContextSettings struct {
 
 // ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the valid interval): any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
 type ContextSettingsUpdate struct {
-	BuiltinFailureCap    *int                    `json:"builtin_failure_cap,omitempty"`
-	BuiltinSuccessCap    *int                    `json:"builtin_success_cap,omitempty"`
-	DefaultContextWindow *int                    `json:"default_context_window,omitempty"`
-	IngestBoundBytes     *int                    `json:"ingest_bound_bytes,omitempty"`
-	McpResultCap         *int                    `json:"mcp_result_cap,omitempty"`
+	BuiltinFailureCap    *int `json:"builtin_failure_cap,omitempty"`
+	BuiltinSuccessCap    *int `json:"builtin_success_cap,omitempty"`
+	DefaultContextWindow *int `json:"default_context_window,omitempty"`
+	IngestBoundBytes     *int `json:"ingest_bound_bytes,omitempty"`
+	McpResultCap         *int `json:"mcp_result_cap,omitempty"`
 	ModelOverrides       *[]ContextModelOverride `json:"model_overrides,omitempty"`
 
 	// ToolResultShareFraction Finite fraction of the resolved model window W: 0 < f ≤ 1; numeric 1 is valid. Omitted means unchanged, not reset to the fresh default 0.5. The wire carries a fraction, not a percentage (12.5% is 0.125).
@@ -16188,17 +16188,17 @@ type DelegateRespondAction struct {
 // DelegateRespondActionAction defines model for DelegateRespondAction.Action.
 type DelegateRespondActionAction string
 
-// DelegateRespondResponse Response to `delegate` `action: respond` (ADR-053 §5.1). Native: acknowledgement only (the answer routes into the child's warm-resumed turn). 3P: a new corrective session was spawned (D5) — see `corrective_session` for its identity.
+// DelegateRespondResponse Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn; an external-CLI answer reaches the same CLI conversation by interrupt and resume, or is refused. No corrective session is created, so `corrective_session` is never set.
 type DelegateRespondResponse struct {
 	// Acknowledged True when the response was accepted and routed by `correlation_id`.
 	Acknowledged bool `json:"acknowledged"`
 
-	// CorrectiveSession Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
+	// CorrectiveSession Response shape for a `delegate` action that publishes a child session (`run`). No action creates a replacement session for an existing child: resume and respond continue the same child (an external-CLI child continues the same CLI conversation or the action is refused).
 	CorrectiveSession *struct {
 		// Generation The generation this response corresponds to.
 		Generation int `json:"generation"`
 
-		// Is3p True when this session dispatches via an external CLI runner.
+		// Is3p True when this session dispatches via an external CLI runner. Taken from the classification persisted at launch, not re-read from a mutable registry.
 		Is3p bool `json:"is_3p"`
 
 		// QueuePosition 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
@@ -16207,7 +16207,7 @@ type DelegateRespondResponse struct {
 		// ResumedFrom The prior session id this generation resumed from, when applicable.
 		ResumedFrom *string `json:"resumed_from,omitempty"`
 
-		// SessionId The child session id. For a native `follow_up`, equals the input `session_id` (warm resume, same session, new generation). For a 3P `follow_up`/`respond`, a NEW session id (cold respawn, D5).
+		// SessionId The id of the newly published child session.
 		SessionId string `json:"session_id"`
 
 		// State The newly-spawned/resumed session's initial lifecycle state.
@@ -16232,7 +16232,7 @@ type DelegateResumeAction struct {
 // DelegateResumeActionAction defines model for DelegateResumeAction.Action.
 type DelegateResumeActionAction string
 
-// DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
+// DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. A native child can always be steered at its next tool boundary — there is no launch-profile choice gating it (see ADR-053 Amendment). An external-CLI child is steered by interrupting its subprocess and resuming the same CLI conversation, and only while a CLI run is in flight; otherwise steering is refused as not_steerable.
 type DelegateRunAction struct {
 	Action DelegateRunActionAction `json:"action"`
 
@@ -16824,12 +16824,12 @@ type DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance string
 // DelegateRunActionGoalTerminalHistoryVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type DelegateRunActionGoalTerminalHistoryVerdictScope string
 
-// DelegateSessionResponse Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
+// DelegateSessionResponse Response shape for a `delegate` action that publishes a child session (`run`). No action creates a replacement session for an existing child: resume and respond continue the same child (an external-CLI child continues the same CLI conversation or the action is refused).
 type DelegateSessionResponse struct {
 	// Generation The generation this response corresponds to.
 	Generation int `json:"generation"`
 
-	// Is3p True when this session dispatches via an external CLI runner.
+	// Is3p True when this session dispatches via an external CLI runner. Taken from the classification persisted at launch, not re-read from a mutable registry.
 	Is3p bool `json:"is_3p"`
 
 	// QueuePosition 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
@@ -16838,7 +16838,7 @@ type DelegateSessionResponse struct {
 	// ResumedFrom The prior session id this generation resumed from, when applicable.
 	ResumedFrom *string `json:"resumed_from,omitempty"`
 
-	// SessionId The child session id. For a native `follow_up`, equals the input `session_id` (warm resume, same session, new generation). For a 3P `follow_up`/`respond`, a NEW session id (cold respawn, D5).
+	// SessionId The id of the newly published child session.
 	SessionId string `json:"session_id"`
 
 	// State The newly-spawned/resumed session's initial lifecycle state.
@@ -17230,7 +17230,7 @@ type EntitlementResponse struct {
 	Cached bool `json:"cached"`
 
 	// CheckedAt When the live listing call was made (the cached result keeps the original time).
-	CheckedAt time.Time          `json:"checked_at"`
+	CheckedAt time.Time `json:"checked_at"`
 	Models    []EntitlementModel `json:"models"`
 }
 
@@ -22667,8 +22667,8 @@ type ProviderDeleteRequest struct {
 // ProviderDeleteResponse Response of DELETE /api/v1/providers/{id} (ADR-068 FR-010). deleted is true on success (HTTP 200); on a failed step the server responds 500 with deleted false and a retryable state. dependents lists every reference that was cleared (agent primaries cleared, fallback entries removed) — nothing is re-pointed silently. There is no Undo: the stored key is gone.
 type ProviderDeleteResponse struct {
 	// DefaultChanged True when new_default was applied before the removal.
-	DefaultChanged bool                `json:"default_changed"`
-	Deleted        bool                `json:"deleted"`
+	DefaultChanged bool `json:"default_changed"`
+	Deleted        bool `json:"deleted"`
 	Dependents     []ProviderDependent `json:"dependents"`
 
 	// NewDefault Body for PUT /api/v1/providers/default-model (ADR-068 FR-018): exactly the (provider, model) pair. The provider must be configured and connected or signed_in (400 naming the field otherwise); the model must be in the served catalog for that provider, except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persisted as agents.defaults.default_model under the config lock; takes effect on the next turn after a reload.
@@ -22734,7 +22734,7 @@ type ProviderValidation struct {
 type ProvidersCatalog struct {
 	// DefaultResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
 	DefaultResizeLimits CatalogResizeLimits `json:"default_resize_limits"`
-	Providers           []CatalogProvider   `json:"providers"`
+	Providers []CatalogProvider `json:"providers"`
 
 	// SchemaVersion Document schema version. Only "2.0.0" is accepted on load (FR-001).
 	SchemaVersion ProvidersCatalogSchemaVersion `json:"schema_version"`
@@ -24045,7 +24045,7 @@ type Session struct {
 	// Model LLM model name used in this session (may be empty for legacy sessions).
 	Model *string `json:"model,omitempty"`
 
-	// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
+	// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read. An omitted value means unknown (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
 	NeedsAttention *bool `json:"needs_attention,omitempty"`
 
 	// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
@@ -24607,7 +24607,7 @@ type SessionDetail struct {
 		// Model LLM model name used in this session (may be empty for legacy sessions).
 		Model *string `json:"model,omitempty"`
 
-		// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
+		// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read. An omitted value means unknown (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
 		NeedsAttention *bool `json:"needs_attention,omitempty"`
 
 		// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
@@ -28285,7 +28285,7 @@ type Workspace struct {
 
 	// MemberConfigs Per-member (agentId → config) settings for this workspace, keyed by agent ID. Absent when no member has a config (empty map). Carries heartbeat settings and the server-computed read-only main_session_id; it does NOT carry a session address for the heartbeat — a heartbeat runs in the member's computed main session, and the retired per-member session_id is no longer part of this shape.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
-	Message       *string                           `json:"message,omitempty"`
+	Message *string `json:"message,omitempty"`
 
 	// Mounts Named write-grants on real local folders (FR-5, ADR-063 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
 	Mounts *[]struct {
@@ -28367,9 +28367,9 @@ type WorkspaceDelegation struct {
 	DefaultDepth int `json:"default_depth"`
 
 	// Edges The directed delegation edges. May be empty (no delegation configured). Deduplicated by (from_agent, to_agent) at write time — last writer wins.
-	Edges      []WorkspaceDelegationEdge `json:"edges"`
-	ErrorStage *string                   `json:"error_stage,omitempty"`
-	Message    *string                   `json:"message,omitempty"`
+	Edges []WorkspaceDelegationEdge `json:"edges"`
+	ErrorStage *string `json:"error_stage,omitempty"`
+	Message    *string `json:"message,omitempty"`
 
 	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
 	PersistenceStatus *WorkspaceDelegationPersistenceStatus `json:"persistence_status,omitempty"`
@@ -28521,9 +28521,9 @@ type WorkspaceUpdateRequest struct {
 
 	// MemberConfigs Per-member (agentId → config) settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. main_session_id is server-owned and read-only: a value sent here is ignored, and the server always reprojects its own computed main session id. There is no client-supplied session address of any kind.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
-	Name          *string                           `json:"name,omitempty"`
-	PinOrder      *int                              `json:"pin_order,omitempty"`
-	Pinned        *bool                             `json:"pinned,omitempty"`
+	Name     *string `json:"name,omitempty"`
+	PinOrder *int    `json:"pin_order,omitempty"`
+	Pinned   *bool   `json:"pinned,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
