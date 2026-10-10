@@ -44,19 +44,216 @@ export async function waitForConnected(page: Page, opts?: { timeout?: number }):
 export const sendButton = (page: Page) =>
   page.locator('button[aria-label="Send message"]').first();
 
+// ── Sidebar agent rows (navigation redesign; session-core-spec FR-029) ─────
+//
+// Ground truth (src/components/layout/sidebar/WorkspaceAgentList.tsx):
+//   - Workspace disclosure IconButton — aria-label `Show <name> agents` when
+//     folded / `Hide <name> agents` when expanded, with aria-expanded
+//     (WorkspaceAgentList.tsx:213). Agent rows render ONLY while expanded
+//     (isExpanded && rows.map, WorkspaceAgentList.tsx:254).
+//   - Agent row — div role="group" aria-label="<Agent name>" with
+//     data-selected (WorkspaceAgentList.tsx:347); its main button carries
+//     aria-current="true" exactly when the row is the selected chat
+//     (WorkspaceAgentList.tsx:355). Clicking it opens that agent's MAIN chat
+//     in that workspace (openMain → selectSession, FR-029 "Row click /
+//     switch-agent MUST navigate eligible main"). There is no in-chat agent
+//     switching: the composer AgentPicker was deleted outright (nav commit
+//     e84ac0532 "remove the composer agent picker";
+//     src/components/chat/ChatScreen.pickerRemoval.test.tsx pins its
+//     absence), so `agentPicker` is gone from this file.
+//   - "New chat with <Agent name>" icon button on the row
+//     (WorkspaceAgentList.tsx:299,379) — the ONLY new-chat path (FR-029
+//     "only agent-row New chat creates extra MAIN chat"; FR-031 deleted
+//     "/new" outright and forbids the SPA from sending it).
+//
+// The sidebar is CLOSED by default (src/store/sidebar.ts isOpen:false,
+// isPinned:false) and renders nav[aria-label="Main navigation"] only while
+// open (Sidebar.tsx:375), so every helper below first opens it the way a
+// user does: the header hamburger, aria-label "Show sidebar"
+// (SidebarShowButton.tsx:32).
+
+/** escapeRegExp — embedded in locator name patterns below. */
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
- * Agent picker button — rendered inside the composer card's context row
- * (src/components/chat/composer/AgentPicker.tsx), not the workspace top-bar
- * banner, with data-testid="agent-picker-trigger". The button shows only the
- * agent name (e.g. "Jim", "Mia") — NOT the old "Name — Tagline" format.
- *
- * Ground truth: composer/AgentPicker.tsx DropdownMenuTrigger > Button carries
- * data-testid="agent-picker-trigger". Scoped directly by testid (no banner
- * ancestor) — the composer card renders below the banner, so a
- * getByRole('banner') scope would never match it.
+ * The seeded default workspace's display name — ensureDefaultWorkspace seeds
+ * exactly one workspace named "My Workspace" (pkg/gateway/rest_workspaces.go:584).
+ * E2E gateways are fresh-seeded, so helpers that take no workspace argument
+ * resolve rows against this one. Pass the name explicitly for any other
+ * workspace (its disclosure button is labelled from the workspace's own name).
  */
-export const agentPicker = (page: Page) =>
-  page.locator('[data-testid="agent-picker-trigger"]');
+export const DEFAULT_WORKSPACE_NAME = 'My Workspace';
+
+/**
+ * The workspace disclosure button (chevron) for one workspace — the only
+ * control that folds/unfolds its agent roster
+ * (WorkspaceAgentList.tsx:207-217). The name alternates between
+ * "Show <name> agents" (folded) and "Hide <name> agents" (expanded), so the
+ * pattern matches either state and `aria-expanded` carries the truth.
+ */
+export const workspaceDisclosureButton = (page: Page, workspace: string) =>
+  page
+    .getByRole('button', {
+      name: new RegExp(`^(?:Show|Hide) ${escapeRegExp(workspace)} agents$`),
+    });
+
+/**
+ * The currently-selected agent row — the one group in the sidebar whose
+ * data-selected is "true" (WorkspaceAgentList.tsx:347; only agent rows carry
+ * data-selected). Selected means: this workspace is active AND this agent owns
+ * the selected chat (WorkspaceAgentList.tsx:296-297) — the user-visible
+ * replacement for reading the deleted composer picker's label.
+ */
+export const selectedAgentRow = (page: Page) =>
+  page.locator('nav[aria-label="Main navigation"] [role="group"][data-selected="true"]');
+
+/**
+ * Open the sidebar if it is closed. No-op when it is already open (the nav is
+ * only mounted while open — Sidebar.tsx:375), so this is cheap to call
+ * unconditionally. Returns once the nav is visible.
+ */
+export async function openSidebar(page: Page): Promise<void> {
+  const nav = page.locator('nav[aria-label="Main navigation"]');
+  if (!(await nav.isVisible())) {
+    await page.getByRole('button', { name: 'Show sidebar', exact: true }).click();
+  }
+  await nav.waitFor({ state: 'visible', timeout: 15_000 });
+}
+
+/**
+ * Locate an agent row's group (role="group" aria-label="<Agent name>"),
+ * expanding the workspace's roster first when it is folded. The workspace
+ * defaults to the seeded default workspace (DEFAULT_WORKSPACE_NAME).
+ *
+ * The row group is the same locator the component's own vitest tests use
+ * (WorkspaceAgentList.newChat.test.tsx:235), and name matching follows
+ * getByRole's case-insensitive rules — pass a workspace when two workspaces
+ * hold same-named agents.
+ */
+export async function agentRowGroup(
+  page: Page,
+  name: string | RegExp,
+  workspace: string = DEFAULT_WORKSPACE_NAME,
+  opts: { rowTimeoutMs?: number } = {},
+) {
+  await openSidebar(page);
+  const disclosure = workspaceDisclosureButton(page, workspace);
+  await disclosure.waitFor({ state: 'visible', timeout: 15_000 });
+  if ((await disclosure.getAttribute('aria-expanded')) === 'false') {
+    await disclosure.click();
+  }
+  const row = page
+    .getByRole('group', { name: workspace, exact: true })
+    .getByRole('group', { name });
+  await row.waitFor({ state: 'visible', timeout: opts.rowTimeoutMs ?? 15_000 });
+  return row;
+}
+
+/**
+ * Switch the active chat to an agent by clicking its sidebar row — the
+ * current user flow for "choose an agent" (FR-029 row click navigates the
+ * eligible main chat; the composer AgentPicker and routing-agent-select are
+ * RETIRED surfaces, removed by nav commit e84ac0532, and there is no in-chat
+ * handover).
+ *
+ * Asserts the switch took effect through the row's own user-visible state:
+ * its main button carries aria-current="true" exactly when the row is the
+ * selected chat (WorkspaceAgentList.tsx:355) — never through a deleted
+ * picker label.
+ *
+ * Does NOT clear dialog overlays. Calling dismissStaleDialogOverlay from here
+ * put an Escape keypress in the path of all 11 specs that select an agent, and
+ * turned E2E — ui-browser flaky on release 585b70b1b (green at d81bcb1ec) — a
+ * shard whose specs open legitimate dialogs. A spec that needs the overlay
+ * cleared calls dismissStaleDialogOverlay itself, before selecting.
+ */
+export const selectAgent = async (
+  page: Page,
+  name: string | RegExp = /Jim/i,
+  workspace: string = DEFAULT_WORKSPACE_NAME,
+) => {
+  const row = await agentRowGroup(page, name, workspace);
+  // The row strip's first button is the row's MAIN action (WorkspaceAgentList
+  // .tsx:348-387: main button, then "Past sessions with X", then "New chat
+  // with X" — an order the component's own vitest tests pin).
+  const mainButton = row.locator('.sidebar-agent-row button').first();
+  await mainButton.click();
+  // Assert the switch took effect (see the doc comment): the row's main
+  // button is aria-current exactly while this agent owns the selected chat.
+  await expect(mainButton).toHaveAttribute('aria-current', 'true', { timeout: 5_000 });
+};
+
+/**
+ * Start a new chat via the agent row's "New chat with <Agent name>" icon
+ * button — the ONLY new-chat path left (FR-029; FR-031 deleted "/new" from
+ * the command table and the SPA must not send it: typing it now shows a
+ * refusal and sends nothing, src/hooks/useSlashMenu.ts RETIRED_COMMAND_NAMES).
+ * The old header "New Chat" button and the /new palette route this helper
+ * used to drive are both gone.
+ *
+ * Which row: `name`/`workspace` pick one explicitly; with no name, the
+ * CURRENTLY SELECTED row is used when one exists (the old /new kept the
+ * active agent — this preserves that contract), falling back to the first
+ * row of the workspace roster (deterministic core_team order).
+ *
+ * When the current first message has no known chat id, the SPA raises the
+ * "Start a new chat?" confirm dialog (extraChatGuard.decideNewChat — an
+ * unconfirmed send must not be silently abandoned; src/components/layout/
+ * sidebar/WorkspaceAgentList.tsx:394-403). A user who wants a fresh chat
+ * confirms it, so this helper clicks "Start a new chat" whenever the dialog
+ * appears and is a no-op when it does not.
+ *
+ * The new chat binds lazily: like the /new it replaces, the session id is
+ * minted on the first sent message (beginPairExtra → startNewSession —
+ * src/components/layout/sidebar/pairExtra.ts), so specs that identify the
+ * turn's session by diffing OMNIPUS_HOME/sessions keep working unchanged.
+ * Returns once the dialog question is settled; callers assert the empty
+ * thread themselves (assistantMessages toHaveCount(0)).
+ */
+export const startNewChat = async (
+  page: Page,
+  name?: string | RegExp,
+  workspace: string = DEFAULT_WORKSPACE_NAME,
+) => {
+  let row: Locator;
+  if (name !== undefined) {
+    row = await agentRowGroup(page, name, workspace);
+  } else {
+    await openSidebar(page);
+    row = selectedAgentRow(page);
+    if ((await row.count()) === 0) {
+      row = page
+        .getByRole('group', { name: workspace, exact: true })
+        .getByRole('group')
+        .first();
+    }
+  }
+  const agentName = await row.getAttribute('aria-label');
+  if (!agentName) {
+    throw new Error(
+      'startNewChat: could not resolve an agent row to click — no "New chat with …" ' +
+        `label could be derived (name=${String(name)})`,
+    );
+  }
+  // The row's icon actions are hover-revealed (agent-row.css: opacity 0 until
+  // the row is hovered/focused/selected) — hover first, the way a user does.
+  await row.locator('.sidebar-agent-row').hover();
+  await row
+    .getByRole('button', { name: new RegExp(`^New chat with ${escapeRegExp(agentName)}$`) })
+    .click();
+
+  // Confirm dialog — only when an unconfirmed first send is pending; confirm
+  // it (the caller asked for a FRESH chat) and wait for the question to
+  // settle. When no dialog ever appears this resolves immediately.
+  const dialog = page.getByRole('alertdialog', { name: 'Start a new chat?' });
+  try {
+    await dialog.waitFor({ state: 'visible', timeout: 3_000 });
+  } catch {
+    return; // no unconfirmed send — the extra chat started directly
+  }
+  await dialog.getByRole('button', { name: 'Start a new chat', exact: true }).click();
+  await expect(dialog).toHaveCount(0, { timeout: 10_000 });
+};
 
 /**
  * Completed assistant messages — only counts messages whose data-status is not
@@ -98,65 +295,13 @@ export const navLink = (page: Page, href: string) =>
 export const agentCards = (page: Page) =>
   page.locator('button[aria-label^="View agent "]');
 
-/**
- * New-chat button — rendered in the header banner with accessible name "New Chat".
- * Ground truth confirmed via Playwright MCP: button "New Chat" (not title="New chat").
- *
- * STALE as of the workspace top-bar redesign — kept only so existing callers
- * that already defensively guard on `.isVisible().catch(() => false)` keep
- * compiling. The header no longer has a "New Chat" button at all
- * (src/components/chat/ChatControls.tsx: "New Chat was removed from the
- * header — three paths for one action was redundant... It lives where the
- * user already is: the sidebar's per-workspace 'New chat' row and the /new
- * slash command."). For new code, use `startNewChat` below instead — it
- * drives the actual replacement mechanism.
- */
-export const newChatButton = (page: Page) =>
-  page.getByRole('banner').getByRole('button', { name: 'New Chat' });
-
-/**
- * Start a new chat via the "/new" client-delivery slash command — the
- * replacement for the removed header "New Chat" button (see `newChatButton`
- * doc comment above for the ground truth citation).
- *
- * Typing "/new" then Enter is intercepted client-side (src/hooks/useSlashMenu.ts:
- * `interceptClientCommand` / `runClientCommand('new')` both call
- * `startNewSession()`), converging with selecting "/new" from the slash palette.
- * This is the most direct E2E-reachable equivalent of the old header button — no
- * need to navigate the sidebar's per-workspace accordion to reach its own
- * "New chat" row.
- *
- * IMPORTANT — two things here are load-bearing; do not "simplify" them back:
- *
- *  1. `pressSequentially`, NOT `fill`. `fill` sets the value without firing the
- *     input events the composer listens to, so the slash palette never opens and
- *     the command is never recognised as one. T22 in cancel-cross-channel.spec.ts
- *     already types rather than fills for this reason.
- *  2. We wait for the palette entry before submitting. The interception looks the
- *     command up in the list fetched by GET /api/v1/commands?surface=web; a miss
- *     while that request is still in flight used to fall through and send "/new"
- *     to the backend AS A CHAT MESSAGE. Observed in CI: the fetch was issued at
- *     t=3424ms and Enter pressed at t=3660ms, 236ms later — the backend answered
- *     it as a server-side command, minting a session bound to the wrong agent and
- *     failing the test 150s later on an unrelated assertion.
- *
- * The SPA now holds an early slash command until the list resolves (5157e378),
- * so (2) is belt-and-braces — but it keeps this helper honest against the real
- * user path rather than depending on that guard.
- */
-export const startNewChat = async (page: Page) => {
-  const input = chatInput(page);
-  await input.click();
-  await input.pressSequentially('/new');
-  // The palette entry appearing proves the command list has loaded and "/new"
-  // resolved against it, so Enter cannot escape to the backend as chat.
-  await page
-    .getByRole('option', { name: /new/i })
-    .or(page.locator('[data-testid="slash-menu"]').getByText('/new'))
-    .first()
-    .waitFor({ state: 'visible', timeout: 10_000 });
-  await input.press('Enter');
-};
+// The retired `newChatButton` (header banner "New Chat") and the former
+// /new-palette `startNewChat` were deleted here — both drove surfaces the
+// navigation redesign removed. Citations: header button removed (ChatControls
+// .tsx), "/new" deleted outright by session-core-spec FR-031 (founder WC-1,
+// 2026-10-09; the SPA must not send it), extra-chat creation is the agent-row
+// "New chat" action per FR-029. The current `startNewChat` above is the
+// replacement.
 
 /**
  * Session token/cost counter — moved out of the header banner into the
@@ -335,32 +480,14 @@ export const dismissStaleDialogOverlay = async (page: Page): Promise<string[]> =
   return dismissedDialogTexts;
 };
 
-/**
- * Switch the active chat agent via the composer's agent picker.
- *
- * Delegate-dependent E2E specs must run against a general-purpose task agent
- * (default: Jim) rather than the default agent Mia: Mia's "guide" persona makes
- * the model REFUSE to emit `delegate` ("My role is to explain… not to delegate
- * to subagents"), so delegate-expecting assertions never see a SubagentBlock.
- *
- * Reuses the established picker pattern from chat.spec.ts (open menu →
- * click menuitem → assert the picker label updated).
- *
- * Does NOT clear dialog overlays. Calling dismissStaleDialogOverlay from here
- * put an Escape keypress in the path of all 11 specs that select an agent, and
- * turned E2E — ui-browser flaky on release 585b70b1b (green at d81bcb1ec) — a
- * shard whose specs open legitimate dialogs. A spec that needs the overlay
- * cleared calls dismissStaleDialogOverlay itself, before selecting.
- */
-export const selectAgent = async (page: Page, name: string | RegExp = /Jim/i) => {
-  const picker = agentPicker(page);
-  await picker.waitFor({ state: 'visible', timeout: 15_000 });
-  await picker.click();
-  await page.getByRole('menuitem', { name }).click();
-  // Assert the picker label updated so we know the switch took effect.
-  // AgentPicker shows only the agent name (no em-dash tagline).
-  await expect(picker).toContainText(name, { timeout: 5_000 });
-};
+// The former picker-based `selectAgent` was deleted with the composer
+// AgentPicker it drove (nav commit e84ac0532; ChatScreen.pickerRemoval
+// .test.tsx pins the picker's absence; FR-029 "No in-chat handover"). The
+// current sidebar-row `selectAgent` above is the replacement; its
+// "Delegate-dependent E2E specs must run against a general-purpose task agent
+// (default: Jim) rather than the default agent Mia" rationale carries over
+// unchanged — Mia's "guide" persona refuses to emit `delegate`, so
+// delegate-expecting specs still select Jim, now by clicking his row.
 
 /**
  * Mid-run safety net for ADR-092 approval cards (PR #965's denyToolApproval,

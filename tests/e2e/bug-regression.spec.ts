@@ -24,7 +24,7 @@ import { test } from './fixtures/console-errors'
 import {
   chatInput,
   assistantMessages,
-  newChatButton,
+  startNewChat,
   waitForConnected,
   dismissStaleDialogOverlay,
 } from './fixtures/selectors'
@@ -202,17 +202,14 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       const input2 = chatInput(page2)
       await expect(input2).toBeVisible({ timeout: 15_000 })
 
-      // Click New Chat on both to get fresh sessions.
-      const newChat1 = newChatButton(page)
-      const newChat2 = newChatButton(page2)
-      if (await newChat1.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await newChat1.click()
-        await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-      }
-      if (await newChat2.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await newChat2.click()
-        await expect(assistantMessages(page2)).toHaveCount(0, { timeout: 10_000 })
-      }
+      // Fresh chats on both tabs — the agent row's "New chat with <Agent>"
+      // action is the only new-chat path (FR-029; FR-031 deleted "/new"; the
+      // old defensive newChatButton guard below was a no-op since the header
+      // button was removed, so these restore the intended fresh-session setup).
+      await startNewChat(page)
+      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
+      await startNewChat(page2)
+      await expect(assistantMessages(page2)).toHaveCount(0, { timeout: 10_000 })
 
       // Send messages on both tabs nearly simultaneously. Dismiss first
       // (BOTH tabs): a retry attempt's fresh page rehydrates any approval the
@@ -392,12 +389,9 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       const input = chatInput(page)
       await expect(input).toBeVisible({ timeout: 15_000 })
 
-      // Get a fresh session.
-      const newChat = newChatButton(page)
-      if (await newChat.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await newChat.click()
-        await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-      }
+      // Get a fresh session (agent-row "New chat" action — FR-029/FR-031).
+      await startNewChat(page)
+      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
 
       // Send a message and wait for reply. Dismiss first: a retry attempt's
       // fresh page rehydrates any approval the failed attempt left pending
@@ -462,11 +456,9 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       const input = chatInput(page)
       await expect(input).toBeVisible({ timeout: 15_000 })
 
-      const newChat = newChatButton(page)
-      if (await newChat.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await newChat.click()
-        await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-      }
+      // Fresh session (agent-row "New chat" action — FR-029/FR-031).
+      await startNewChat(page)
+      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
 
       // Turn 1. Dismiss first: a retry attempt's fresh page rehydrates any
       // approval the failed attempt left pending (session_state frame on

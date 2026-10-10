@@ -3,7 +3,7 @@ import * as path from 'path';
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, agentPicker, assistantMessages, selectAgent } from './fixtures/selectors';
+import { chatInput, assistantMessages, selectAgent } from './fixtures/selectors';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -116,7 +116,7 @@ test(
     // so it must sum every step's own worst-case timeout, INCLUDING the
     // waitForTurnFullyDone leg added below for the browser_navigate ->
     // browser_screenshot two-tool-call race):
-    //   Agent picker + Jim selection + input visibility ................ ~35s
+    //   Sidebar agent selection + input visibility ..................... ~35s
     //   assistantMessages toHaveCount ceiling ........................... 180s
     //   waitForTurnFullyDone: gapMs(8s) + follow-up-call ceiling(180s) .. 188s
     //   mediaImg toBeVisible ceiling ...................................... 90s
@@ -134,14 +134,9 @@ test(
     // hands browser tasks off rather than executing them, so she is the wrong
     // agent for a "do it now" screenshot. (Ray, the Scout, also has the browser
     // tools — either doer works; Jim is the canonical generalist.)
-    const picker = agentPicker(page);
-    await expect(picker).toBeVisible({ timeout: 15_000 });
-    await picker.click();
-
-    // Find Jim in the dropdown items (Radix DropdownMenuItem)
-    const jimItem = page.locator('[role="menuitem"]').filter({ hasText: /jim/i }).first();
-    await expect(jimItem).toBeVisible({ timeout: 10_000 });
-    await jimItem.click();
+    // Sidebar row click is the only agent switch since the composer
+    // AgentPicker was removed (nav commit e84ac0532; FR-029 no in-chat handover).
+    await selectAgent(page, /Jim/i);
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 10_000 });
