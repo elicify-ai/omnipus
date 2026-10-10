@@ -76,9 +76,13 @@ func reviveFailure(action, sessionID string, cause error) *ToolResult {
 	return controlFailure(action, fmt.Sprintf("session %s could not be revived right now; retry shortly", sessionID), cause)
 }
 
-// checkSteerCaps enforces the steer/respond body-size cap (16 KiB default)
-// and per-target-session rate cap (6/min default) — ADR-053 §Contract
-// Surface "Caps". Returns a clear, typed error naming the exceeded cap;
+// checkSteerCaps enforces the steer/respond body-size cap (65,536 bytes by
+// default, session.DefaultSteerBodyBytes) and the per-target-session rate cap
+// (60 per minute by default, session.DefaultSteerRatePerMinute) — ADR-053
+// §Contract Surface "Caps", defaults per session-core C-LIMIT. The rate window
+// is keyed by target session_id on THIS tool instance, and each agent has its
+// own DelegateTool (pkg/agent/loop_wire.go::registerDelegationTools), so the
+// effective limit is per sending agent per target. Returns a clear, typed error naming the exceeded cap;
 // callers surface it as a tool error (never-silent-drop applies to
 // parent->child delivery too — a rejected steer must be visible to the
 // PARENT, not silently dropped).
