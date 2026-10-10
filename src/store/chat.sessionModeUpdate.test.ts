@@ -247,8 +247,13 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
     // switch keeps showing it while the ack is in flight.
     expect(useChatStore.getState().pendingAutoApproveChoice).toBe(true)
 
+    // The gateway echoes the initiating message's client_message_id on this
+    // ack (pkg/gateway/websocket_first_message.go::acknowledgeNewSession) —
+    // DEL-F21/F22 made that echo the only correlated receipt for an ordinary
+    // first send, so the fixture carries it (mockSend captured it on send).
+    const mintedCid = (mockSend.mock.calls[0][0] as { client_message_id?: string }).client_message_id
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_1' })
+      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_1', client_message_id: mintedCid })
     })
 
     // No second frame goes out — session_started never triggers a
@@ -293,10 +298,13 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
         expect.objectContaining({ type: 'message', content: 'hello', auto_approve: true }),
       )
 
-      // 3) The server's session_started ack arrives. Nothing further is
-      //    sent — the choice was already in the server's hands on frame 1.
+      // 3) The server's session_started ack arrives (echoing the first
+      //    message's client_message_id — DEL-F21/F22's only correlated
+      //    receipt; pkg/gateway/websocket_first_message.go). Nothing further
+      //    is sent — the choice was already in the server's hands on frame 1.
+      const founderProofCid = (mockSend.mock.calls[0][0] as { client_message_id?: string }).client_message_id
       act(() => {
-        useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_founder_proof' })
+        useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_founder_proof', client_message_id: founderProofCid })
       })
       expect(mockSend).toHaveBeenCalledTimes(1)
       expect(useChatStore.getState().pendingAutoApproveChoice).toBeNull()
@@ -336,8 +344,9 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
     expect(mockSend).toHaveBeenCalledTimes(1)
     expect(mockSend.mock.calls[0][0]).toMatchObject({ type: 'message', auto_approve: false })
 
+    const falseChoiceCid = (mockSend.mock.calls[0][0] as { client_message_id?: string }).client_message_id
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_2' })
+      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_2', client_message_id: falseChoiceCid })
     })
 
     expect(mockSend).toHaveBeenCalledTimes(1)
@@ -361,8 +370,9 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
     expect(mockSend).toHaveBeenCalledTimes(1)
     expect(mockSend.mock.calls[0][0]).not.toHaveProperty('auto_approve')
 
+    const noChoiceCid = (mockSend.mock.calls[0][0] as { client_message_id?: string }).client_message_id
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_3' })
+      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_3', client_message_id: noChoiceCid })
     })
 
     expect(mockSend).toHaveBeenCalledTimes(1)

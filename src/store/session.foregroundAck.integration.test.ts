@@ -18,6 +18,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session } from '@/lib/api'
+import { queryClient } from '@/lib/queryClient'
 import { useSessionStore } from './session'
 import { useChatStore } from './chat'
 import { useConnectionStore } from './connection'
@@ -69,8 +70,17 @@ const hidden = { value: false }
 const originalHidden = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden')
   ?? Object.getOwnPropertyDescriptor(document, 'hidden')
 
+/**
+ * Sessions this scenario's SPA has "loaded". FR-047: the acknowledgement now
+ * reads the real loaded roster metadata (the ['sessions'] list) for the
+ * session instead of acknowledging a bare id, so show() seeds that list from
+ * here. This harness's seam mock still decides mainness/attention, exactly
+ * as before — no assertion below changed.
+ */
+const loadedSessions: Session[] = []
+
 function session(id: string, agentId = 'mia'): Session {
-  return {
+  const built: Session = {
     id,
     agent_id: agentId,
     title: id,
@@ -80,10 +90,14 @@ function session(id: string, agentId = 'mia'): Session {
     message_count: 0,
     workspace_id: 'operations',
   }
+  loadedSessions.push(built)
+  return built
 }
 
 function resetAll() {
   hidden.value = false
+  loadedSessions.length = 0
+  queryClient.removeQueries({ queryKey: ['sessions'] })
   seam.mains.clear()
   seam.attention.clear()
   seam.attentionBoundOfFrame.mockClear()
@@ -126,6 +140,10 @@ function acks(send: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
 }
 
 function show(sessionId: string) {
+  // By catch_up_complete the real SPA's roster has loaded (Sidebar's
+  // ['sessions'] query) — seed this scenario's loaded list there, where the
+  // acknowledgement reads it. The seam mock above still judges the session.
+  queryClient.setQueryData(['sessions'], [...loadedSessions])
   useChatStore.getState().handleFrame({
     type: 'catch_up_complete',
     session_id: sessionId,
@@ -163,8 +181,8 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
     const main = session('main-a')
     seam.mains.add(main.id)
     seam.attention.set(main.id, 'on')
-    deliverBound(main.id, 1)
     useSessionStore.getState().attachToSession(main.id, 'chat', main.title, main.agent_id)
+    deliverBound(main.id, 1)
     show(main.id)
 
     expect(acks(send)).toEqual([
@@ -188,8 +206,8 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
     const main = session('main-a')
     seam.mains.add(main.id)
     seam.attention.set(main.id, 'on')
-    deliverBound(main.id, 1)
     useSessionStore.getState().attachToSession(main.id, 'chat', main.title, main.agent_id)
+    deliverBound(main.id, 1)
     show(main.id)
     deliverBound(main.id, 2)
     show(main.id)
@@ -202,8 +220,8 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
     const main = session('main-a')
     seam.mains.add(main.id)
     seam.attention.set(main.id, 'on')
-    deliverBound(main.id)
     useSessionStore.getState().attachToSession(main.id, 'chat', main.title, main.agent_id)
+    deliverBound(main.id)
     show(main.id)
 
     expect(acks(send)).toEqual([])
@@ -245,14 +263,14 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
     seam.mains.add(winner.id)
     seam.attention.set(first.id, 'on')
     seam.attention.set(winner.id, 'on')
-    deliverBound(first.id, 11)
     useSessionStore.getState().attachToSession(first.id, 'chat', first.title, first.agent_id)
-    deliverBound(winner.id, 20)
+    deliverBound(first.id, 11)
     useSessionStore.getState().attachToSession(winner.id, 'chat', winner.title, winner.agent_id)
+    deliverBound(winner.id, 20)
     show(first.id)
     show(winner.id)
-    deliverBound(first.id, 12)
     useSessionStore.getState().attachToSession(first.id, 'chat', first.title, first.agent_id)
+    deliverBound(first.id, 12)
     show(first.id)
 
     expect(acks(send).map((frame) => ({
@@ -273,17 +291,17 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
     seam.mains.add(shown.id)
     seam.attention.set(unknownMain.id, 'unknown')
     seam.attention.set(shown.id, 'on')
-    deliverBound(unknownMain.id, 4)
     useSessionStore.getState().attachToSession(unknownMain.id, 'chat', unknownMain.title, unknownMain.agent_id)
+    deliverBound(unknownMain.id, 4)
     show(unknownMain.id)
-    deliverBound(helper.id, 5)
     useSessionStore.getState().attachToSession(helper.id, 'chat', helper.title, helper.agent_id)
+    deliverBound(helper.id, 5)
     show(helper.id)
-    deliverBound(shown.id, 7)
     send.mockReturnValueOnce(false)
     useSessionStore.getState().attachToSession(shown.id, 'chat', shown.title, shown.agent_id)
     send.mockReturnValue(true)
     useSessionStore.getState().attachToSession(shown.id, 'chat', shown.title, shown.agent_id)
+    deliverBound(shown.id, 7)
     show(shown.id)
 
     expect(acks(send).map((frame) => ({
@@ -299,8 +317,8 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
     const main = session('main-a')
     seam.mains.add(main.id)
     seam.attention.set(main.id, 'on')
-    deliverBound(main.id, 1)
     useSessionStore.getState().attachToSession(main.id, 'chat', main.title, main.agent_id)
+    deliverBound(main.id, 1)
     show(main.id)
     hidden.value = true
     deliverBound(main.id, 2)

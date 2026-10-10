@@ -1,10 +1,12 @@
 /**
  * The only reader of session-core main / needs_attention / ack fields.
  *
- * The generated wire fields exist (contract regenerated) and are read here and
- * nowhere else: Session.type = "main", Session.needs_attention,
- * WorkspaceMemberConfig.main_session_id, AttachSessionFrame.ack_attention and
- * AttachSessionFrame.attention_bound. This file does not parse raw JSON and
+ * The generated wire fields exist (contract regenerated) and are handled here
+ * and nowhere else: Session.type = "main", Session.needs_attention,
+ * WorkspaceMemberConfig.main_session_id, SessionStateFrame.attention_bound
+ * (the server frame the bound is read from), and the acknowledging
+ * AttachSessionFrame's ack_attention/attention_bound, which attachAckFields
+ * produces. This file does not parse raw JSON and
  * does not declare a look-alike wire type. A missing or unusable value is
  * unavailable (undefined / false / 'unknown' / an empty object), never a
  * guessed main id, never a fabricated off, and never an acknowledgement:
@@ -13,7 +15,7 @@
  * keeps calling these functions.
  */
 import type { Session as WireSession, Workspace as WireWorkspace, WorkspaceMemberConfig } from '@/lib/api/generated/openapi-types'
-import type { AttachSessionFrame } from '@/lib/api/generated/asyncapi-types'
+import type { SessionStateFrame } from '@/lib/api/generated/asyncapi-types'
 
 /** Validated main session id for a workspace member, or unavailable. */
 export function mainSessionIdOfMember(member: unknown): string | undefined {
@@ -53,12 +55,15 @@ export function sessionAttention(session: unknown): 'on' | 'off' | 'unknown' {
 }
 
 /**
- * Integer attention bound on a server snapshot or attach frame, or unavailable.
- * Only a true integer is a bound; a string — even a numeric one — and a
- * missing value are unavailable. Never a client-invented bound.
+ * Integer attention bound on a server frame — the attach answer's
+ * SessionStateFrame, which carries the bound for both the incremental
+ * catch-up and the full snapshot — or unavailable. Only a true integer is a
+ * bound; a string — even a numeric one — and a missing value are
+ * unavailable. Never a client-invented bound, and never read off the
+ * client-sent AttachSessionFrame.
  */
 export function attentionBoundOfFrame(frame: unknown): number | undefined {
-  const bound = (frame as AttachSessionFrame | null | undefined)?.attention_bound
+  const bound = (frame as SessionStateFrame | null | undefined)?.attention_bound
   return Number.isInteger(bound) ? bound : undefined
 }
 

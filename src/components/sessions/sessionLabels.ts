@@ -55,15 +55,15 @@ function stoppedText(session: Session): string {
   return `Stopped · ${STOP_CAUSE_WORDS[cause]}`
 }
 
-/** Real kind. delegate is Helper. Never the old "HB" abbreviation. */
+/** Real kind. delegate is Helper, main is Main chat (FR-002). Never the old "HB" abbreviation. */
 export function sessionKindLabel(type: Session['type']): string {
   switch (type) {
     case 'delegate':
       return 'Helper'
     case 'channel':
       return 'Channel'
-    case 'heartbeat':
-      return 'Heartbeat'
+    case 'main':
+      return 'Main chat'
     case 'chat':
       return 'Chat'
     case 'task':
