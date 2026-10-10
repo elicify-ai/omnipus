@@ -17,7 +17,10 @@ import { useSessionStore } from '@/store/session'
 import { makeAgent } from '@/test/factories'
 
 const mockCommands = [
-  { name: 'new', label: '/new', description: 'Start a new conversation', delivery: 'client', available_while_streaming: false, aliases: ['clear'] },
+  // Canonical server table (WC-1, U10a/U10b): /new is retired and absent;
+  // /clear is the server-owned replacement (DeliveryAgent — the SPA sends
+  // the label and the server executes it).
+  { name: 'clear', label: '/clear', description: "Clear this chat's context; the transcript is kept", delivery: 'agent', available_while_streaming: false },
   { name: 'help', label: '/help', description: 'Show available commands', delivery: 'client', available_while_streaming: false },
   { name: 'model', label: '/model', description: 'Change the chat model', delivery: 'client', available_while_streaming: false },
   { name: 'agents', label: '/agents', description: 'Open agent selector', delivery: 'client', available_while_streaming: false },
@@ -226,13 +229,14 @@ describe('useSlashMenu — gating', () => {
     // client-only entry, inserted immediately after "/sessions" in
     // useSlashMenu's allCommands (both web-client-only synthetic commands
     // sit together ahead of every backend-served command).
-    // Founder X3: the server returned /new, so it is listed. clear is only an
-    // alias on that row, not a second server command, so it is not its own key.
+    // The server's table is listed verbatim. /clear is the server-owned
+    // replacement row; /new is retired (WC-1) and is never listed — not by
+    // the server, and never invented by the SPA.
     expect(result.current.slashItems.map((i) => i.key)).toEqual([
-      '/sessions', '/workspace', '/new', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'code-review', 'web-research',
+      '/sessions', '/workspace', '/clear', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'code-review', 'web-research',
     ])
     expect(result.current.slashItems.map((i) => i.key)).not.toContain('/resume')
-    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/clear')
+    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/new')
   })
 })
 
@@ -321,15 +325,16 @@ describe('useSlashMenu — prefix filtering', () => {
     expect(result.current.shouldShowSlash).toBe(false)
   })
 
-  it('lists the server /new command and does not invent a /clear row from its alias', () => {
+  it('lists the server /clear command and never invents a /new row', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/clear'))
+    expect(result.current.slashItems.map((i) => i.key)).toContain('/clear')
+    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/new')
     act(() => result.current.onInputChange('/new'))
-    expect(result.current.slashItems.map((i) => i.key)).toContain('/new')
-    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/clear')
-    act(() => result.current.onInputChange('/cl'))
-    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/clear')
-    // Founder X3: aliases are not separate server rows. No command or skill
-    // matches /cl in this fixture, so even an unrelated /help row is a defect.
+    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/new')
+    // The retired /new has no server row and no alias left. No command or
+    // skill matches /new in this fixture, so even an unrelated /help row is
+    // a defect.
     expect(result.current.slashItems).toHaveLength(0)
   })
 })
@@ -374,7 +379,7 @@ describe('useSlashMenu — keyboard navigation', () => {
     // Highlight /help by its command label, not a fixed ArrowDown count.
     // /help's handler appends a local message and does not touch the ui store
     // the way /resume and /workspace do. The server command table (founder X3)
-    // decides list order — /new sits ahead of /help — so two ArrowDown presses
+    // decides list order — /clear sits ahead of /help — so two ArrowDown presses
     // are not an oracle for "/help".
     const helpIndex = result.current.slashItems.findIndex((i) => i.key === '/help')
     expect(helpIndex, 'fixture lists /help').toBeGreaterThanOrEqual(0)
@@ -412,7 +417,7 @@ describe('useSlashMenu — keyboard navigation', () => {
 })
 
 describe('useSlashMenu — client command dispatch', () => {
-  it('lists /new, and selecting it sends the server command without starting a session', () => {
+  it('lists /clear, and selecting it sends the server command without starting a session', () => {
     let text = ''
     const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
     const composerRuntime = {
@@ -424,13 +429,13 @@ describe('useSlashMenu — client command dispatch', () => {
     } as unknown as ComposerRuntime
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
     act(() => result.current.onInputChange('/'))
-    const item = result.current.slashItems.find((i) => i.key === '/new')
-    expect(item, 'the server returned /new').toBeDefined()
-    expect(result.current.slashItems.find((i) => i.key === '/clear')).toBeUndefined()
+    const item = result.current.slashItems.find((i) => i.key === '/clear')
+    expect(item, 'the server returned /clear').toBeDefined()
+    expect(result.current.slashItems.find((i) => i.key === '/new')).toBeUndefined()
     act(() => item!.onSelect())
     expect(startNewSession).not.toHaveBeenCalled()
     expect(composerRuntime.send).toHaveBeenCalledTimes(1)
-    expect(text.trim()).toBe('/new')
+    expect(text.trim()).toBe('/clear')
   })
 
   it('/help appends a system message built from the command list', () => {
@@ -443,11 +448,12 @@ describe('useSlashMenu — client command dispatch', () => {
     const msg = appendMessage.mock.calls[0][0]
     expect(msg.role).toBe('system')
     expect(msg.content).toContain('/help')
-    expect(msg.content).toContain('/new')
+    expect(msg.content).toContain('/clear')
     // FR-007: /help prints the renamed command and must not keep /resume as an alias.
     expect(msg.content).toContain('/sessions')
     expect(msg.content).not.toContain('/resume')
-    expect(msg.content).not.toContain('/clear')
+    // WC-1: the retired /new is gone from the table, so /help cannot list it.
+    expect(msg.content).not.toContain('/new')
     expect(msg.content).not.toContain('switch agents')
   })
 
@@ -738,7 +744,10 @@ describe('useSlashMenu — agent-delivery command argument_hint ghost text (SD-C
 })
 
 describe('useSlashMenu — interceptClientCommand (send-path)', () => {
-  it.each(['/new', '/clear', '/NEW', '/Clear'])(
+  // (The retired /new is covered by useSlashMenu.clear.test.ts: it IS taken
+  // responsibility for — refused visibly, never sent. /clear in both cases
+  // passes through to the wire.)
+  it.each(['/clear', '/Clear'])(
     'does not intercept %s or start a session',
     (typed) => {
       const composerRuntime = makeComposerRuntime(typed)
@@ -801,7 +810,9 @@ describe('useSlashMenu — interceptClientCommand (send-path)', () => {
 // The outcome these tests lock: a "/"-prefixed submit in that window is NEVER
 // dispatched as chat, and nothing the user typed is dropped either.
 describe('useSlashMenu — interceptClientCommand readiness gate (commands still loading)', () => {
-  it.each(['/new', '/clear'])(
+  // (A held /new is refused outright by the WC-1 retirement guard — see
+  // useSlashMenu.clear.test.ts. /clear is delivered once the list lands.)
+  it.each(['/clear'])(
     'a held %s is delivered as an ordinary message once the list lands, and never starts a session',
     (typed) => {
       commandsQueryIsLoading = true
@@ -820,7 +831,7 @@ describe('useSlashMenu — interceptClientCommand readiness gate (commands still
       commandsQueryIsLoading = false
       act(() => { rerender() })
 
-      // /new and /clear are not client commands. The held text is sent.
+      // /clear is not a client command. The held text is sent.
       expect(startNewSession).not.toHaveBeenCalled()
       expect(composerRuntime.send).toHaveBeenCalledTimes(1)
       expect(composerRuntime.setText).not.toHaveBeenCalledWith('')

@@ -174,8 +174,10 @@ export interface UseSlashMenuResult {
    * client-delivery slash command, runs it locally and returns true — caller must
    * preventDefault() so the message never reaches the backend. Makes typing
    * the command and pressing Enter behave identically to selecting it
-   * from the palette. `/new` and `/clear` are server commands: this returns
-   * false for them so the text is sent, and it never starts a chat.
+   * from the palette. `/clear` is a server command (FR-030/031): this returns
+   * false for it so the text is sent, and it never starts a chat. A retired
+   * `/new` submit returns true after a visible refusal — the SPA must not
+   * send it (WC-1) and must not swallow it.
    *
    * ALSO returns true — WITHOUT running anything — for any "/"-prefixed text
    * submitted while the command list's first fetch is still in flight. The
@@ -298,8 +300,8 @@ function rankByFilter<T>(items: T[], filter: string, getRank: (item: T, lowerFil
 // runClientCommand — shared handler for client-delivery slash commands.
 // Called both from palette selection (executeSlashCommand) and from the
 // send-path interception so that typing a local command and pressing Enter
-// converges with selecting it from the palette. `/new` and `/clear` are not
-// local commands: the server table decides, and both paths send them.
+// converges with selecting it from the palette. `/clear` is not a local
+// command: the server table decides, and both paths send it.
 //
 // `argument` carries the text after an argument-bearing client command's
 // label (D9 "/stop-redirect <instruction>"), already trimmed of the
@@ -309,14 +311,86 @@ function rankByFilter<T>(items: T[], filter: string, getRank: (item: T, lowerFil
 // Returns true when the command was handled (caller must NOT send the
 // text), false when the name is not a known client command (caller
 // should fall through to inserting as text — Issue 3 fallback).
-// The server command table owns /new and /clear, including a row whose
-// alias is the other name. The SPA lists whatever the server returns and
-// sends those two; it does not run them and does not hide them.
-const SERVER_RUN_COMMAND_NAMES = new Set(['new', 'clear'])
+// The server command table owns /clear (FR-030/031, U10b — DeliveryAgent:
+// the server executes it from the message text, one handler for palette,
+// typed and channel use). The SPA lists whatever the server returns and
+// sends /clear verbatim; it does not run it and does not start a chat
+// for it.
+const SERVER_RUN_COMMAND_NAMES = new Set(['clear'])
 
 function isServerRunCommand(command: SlashCommand): boolean {
   if (SERVER_RUN_COMMAND_NAMES.has(command.name.toLowerCase())) return true
   return (command.aliases ?? []).some((alias) => SERVER_RUN_COMMAND_NAMES.has(alias.toLowerCase()))
+}
+
+// WC-1 (founder, 2026-10-09): /new is retired. The server does not register
+// or expose it (no hidden alias), the SPA MUST NOT send it to the server,
+// and starting an extra chat is the local agent-row New chat action (FR-031).
+// A typed /new therefore cannot be sent (forbidden), cannot start a session
+// (the retired behavior), and must not be silently swallowed — so it is
+// refused here: the composer is cleared and a visible system reply names
+// both replacements.
+const RETIRED_COMMAND_NAMES = new Set(['new'])
+
+const NEW_RETIREMENT_REPLY =
+  "/new no longer exists. Start an extra chat with the agent row's New chat action, or use /clear to clear this chat's context — the conversation and its history are kept."
+
+/** True when a trimmed composer text invokes a retired command ('/new', any case, bare or with trailing text). */
+function isRetiredCommandSubmit(trimmed: string): boolean {
+  const lowered = trimmed.toLowerCase()
+  for (const name of RETIRED_COMMAND_NAMES) {
+    if (lowered === `/${name}` || lowered.startsWith(`/${name} `)) return true
+  }
+  return false
+}
+
+function refuseRetiredCommand(appendMessage: (message: ChatMessage) => void): void {
+  appendMessage({
+    id: generateId(),
+    role: 'system',
+    content: NEW_RETIREMENT_REPLY,
+    timestamp: new Date().toISOString(),
+    status: 'done',
+  })
+}
+
+// Merge frontend-only client commands with the backend-served list so the
+// synthetic entries participate in palette filtering, /help, and the
+// send-path interception identically to a real backend command.
+// /sessions is web-client-only: opens the Sessions view (the same one the
+// sidebar search icon opens) in its default 'sessions' mode. There is no
+// /resume alias — a typed /resume does not resolve here.
+// /workspace is a second web-client-only entry, next to /sessions: opens the
+// SAME SearchModal instance but in its 'workspaces' mode (openWorkspaceSwitcher,
+// ui store) — ALL workspaces listed, session groups collapsed by default,
+// ArrowUp/Down walks workspace headers, Enter switches (SearchModal
+// WorkspaceHeader's switch arrow / handleSwitchWorkspace). Session-search
+// enhancement, user-approved. Note: a hidden BACKEND command literally
+// named "switch" exists — unrelated, untouched; this entry is a distinct
+// client-only name/delivery.
+//
+// Extracted out of the hook body (pure relocation, 2026-10-10 — same move
+// runClientSlashCommand made) so the hook function stays within its
+// grandfathered function-size budget; the list it builds is byte-identical.
+const SYNTHETIC_WEB_COMMANDS: SlashCommand[] = [
+  {
+    name: 'sessions',
+    label: '/sessions',
+    description: 'Open Sessions — search across all workspaces',
+    delivery: 'client',
+    available_while_streaming: true,
+  },
+  {
+    name: 'workspace',
+    label: '/workspace',
+    description: 'Switch workspace — arrows to pick, Enter to switch',
+    delivery: 'client',
+    available_while_streaming: true,
+  },
+]
+
+function withSyntheticWebCommands(serverCommands: SlashCommand[]): SlashCommand[] {
+  return [...SYNTHETIC_WEB_COMMANDS, ...serverCommands]
 }
 
 interface ClientCommandDeps {
@@ -332,12 +406,13 @@ interface ClientCommandDeps {
 
 function runClientSlashCommand(name: string, argument: string, deps: ClientCommandDeps): boolean {
   const { allCommands, appendMessage, activateStop, cancelIfStreaming, sendRedirectFrame, composerRuntime, setInputValue, setSlashOpen } = deps
-  // /new and /clear are not handled here. Selecting or typing them sends the
-  // server command. This function never starts a chat for those names.
+  // /clear is not handled here (and /new — retired — is refused before this
+  // function is ever reached). Selecting or typing /clear sends the server
+  // command; this function never starts a chat for it.
 
   if (name === 'help') {
     // US-4/AC-2: help text is the command list the server returned, plus the
-    // web-only entries. No tip about "@". /new and /clear appear only then.
+    // web-only entries. No tip about "@". /clear appears only then.
     const helpLines = allCommands
       .map((c) => `- \`${c.label}\` — ${c.description}`)
       .join('\n')
@@ -586,37 +661,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     enabled: inputEnabled,
   })
 
-  // Merge frontend-only client commands with the backend-served list so the
-  // synthetic entries participate in palette filtering, /help, and the
-  // send-path interception identically to a real backend command.
-  // /sessions is web-client-only: opens the Sessions view (the same one the
-  // sidebar search icon opens) in its default 'sessions' mode. There is no
-  // /resume alias — a typed /resume does not resolve here.
-  // /workspace is a second web-client-only entry, next to /sessions: opens the
-  // SAME SearchModal instance but in its 'workspaces' mode (openWorkspaceSwitcher,
-  // ui store) — ALL workspaces listed, session groups collapsed by default,
-  // ArrowUp/Down walks workspace headers, Enter switches (SearchModal
-  // WorkspaceHeader's switch arrow / handleSwitchWorkspace). Session-search
-  // enhancement, user-approved. Note: a hidden BACKEND command literally
-  // named "switch" exists — unrelated, untouched; this entry is a distinct
-  // client-only name/delivery.
-  const allCommands: SlashCommand[] = [
-    {
-      name: 'sessions',
-      label: '/sessions',
-      description: 'Open Sessions — search across all workspaces',
-      delivery: 'client',
-      available_while_streaming: true,
-    },
-    {
-      name: 'workspace',
-      label: '/workspace',
-      description: 'Switch workspace — arrows to pick, Enter to switch',
-      delivery: 'client',
-      available_while_streaming: true,
-    },
-    ...commands,
-  ]
+  const allCommands: SlashCommand[] = withSyntheticWebCommands(commands)
 
   // Skills query: always enabled when input is enabled (not gated on
   // skill-arg mode). staleTime of 60s matches the commands query — skills
@@ -717,7 +762,11 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // skills/agents there is no cap to make a stable pre-sort load-bearing).
   const visibleCommandItems: SlashItem[] = (() => {
     if (menuFilter === null || isSkillsFilter) return []
-    const all = rankByFilter(allCommands, menuFilter, (cmd, lf) => matchRank(cmd.label.slice(1), lf))
+    // WC-1: a retired command (/new) is never offered, even against a stale
+    // server that still lists it — the SPA filters it from the palette the
+    // same way the compliant server's table already omits it.
+    const listed = allCommands.filter((cmd) => !RETIRED_COMMAND_NAMES.has(cmd.name.toLowerCase()))
+    const all = rankByFilter(listed, menuFilter, (cmd, lf) => matchRank(cmd.label.slice(1), lf))
     const filtered = isStreaming ? all.filter((cmd) => cmd.available_while_streaming === true) : all
     return filtered.map((cmd) => ({
       key: cmd.label,
@@ -862,8 +911,17 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       return
     }
 
-    // /new and /clear belong to the server table. Selecting one sends that
-    // label; it does not run locally and does not start a chat.
+    // WC-1: /new is retired — a stale server table listing it must not put a
+    // sendable row here either. Refuse visibly; never run, never send.
+    if (RETIRED_COMMAND_NAMES.has(def.name.toLowerCase())) {
+      composerRuntime.setText('')
+      setInputValue('')
+      refuseRetiredCommand(appendMessage)
+      return
+    }
+
+    // /clear belongs to the server table. Selecting it sends that label; it
+    // does not run locally and does not start a chat.
     if (isServerRunCommand(def)) {
       composerRuntime.setText(def.label)
       setInputValue(def.label)
@@ -957,18 +1015,18 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       (c) => c.delivery === 'client' && (c.label.toLowerCase() === trimmedLower || c.aliases?.some((a) => a.toLowerCase() === typedNameLower)),
     )
     if (exact) {
-      // Server-owned /new and /clear are ordinary messages, not local commands.
+      // Server-owned /clear is an ordinary message, not a local command.
       if (isServerRunCommand(exact)) return null
       return { command: exact, argument: '' }
     }
     // D9: an argument-bearing client command — the command's label followed
     // by whitespace, the remainder being the instruction ("/stop-redirect
     // focus on the failing tests"). Matched only against the canonical
-    // label: client-delivery commands carry no aliases (D9/F-20 — the exact
-    // alias set is {clear} on /new, which is argument-less), so an
+    // label: client-delivery commands carry no aliases (D9/F-20; the old
+    // {clear}-alias row was retired with /new in WC-1), so an
     // alias-with-argument grammar would be an invention. Restricted to
     // commands that DECLARE an argument_hint — a bare client command
-    // followed by text ("/new foo", "/cancel foo") is NOT a command match;
+    // followed by text ("/cancel foo") is NOT a command match;
     // it stays whatever it always was (the readiness gate / not-a-command).
     const withArg = allCommands.find((c) => {
       if (c.delivery !== 'client' || !c.argument_hint || isServerRunCommand(c)) return false
@@ -995,6 +1053,17 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     const currentText = composerRuntime.getState().text ?? inputValue
     const trimmed = currentText.trim()
     if (!trimmed.startsWith('/')) return false
+    // WC-1: a retired command is refused before anything else — it must
+    // never reach the wire (the SPA MUST NOT send /new), never start a
+    // session (the retired behavior), and never be silently swallowed.
+    // Unconditional on the command list's load state: the retirement is a
+    // founder ruling, not a table row this client would have to fetch first.
+    if (isRetiredCommandSubmit(trimmed)) {
+      composerRuntime.setText('')
+      setInputValue('')
+      refuseRetiredCommand(appendMessage)
+      return true
+    }
     const resolved = resolveClientCommand(trimmed)
     if (!resolved) {
       // READINESS GATE. A miss means one of two very different things, and
