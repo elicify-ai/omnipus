@@ -951,13 +951,16 @@ type Patch struct {
 	// itself a legal target value, not a "no clear" sentinel).
 	CancelReason *CancelReason
 	AgentID      *string
-	Priority     *int
-	BlockedBy    *[]string
-	Todos        *[]Todo
-	Trigger      **Trigger // double pointer: outer nil = unchanged, *outer nil = clear
-	Due          *string
-	PlanID       *string
-	Tags         *[]string
+	// Initiator sets Task.Initiator (double pointer): outer nil = unchanged,
+	// *outer nil = clear, *outer non-nil = set.
+	Initiator **Initiator
+	Priority  *int
+	BlockedBy *[]string
+	Todos     *[]Todo
+	Trigger   **Trigger // double pointer: outer nil = unchanged, *outer nil = clear
+	Due       *string
+	PlanID    *string
+	Tags      *[]string
 	// Criteria replaces Task.Criteria atomically, same as every other Patch
 	// field. ADR-086 D5/GOAL-FR-029/FR-030 names this write path as a
 	// consumer to re-point onto the task's paired goal record (pkg/goal) —
@@ -1316,6 +1319,9 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, bool, error) {
 
 // applyRemainingFields validates and applies the remaining independent patch fields.
 func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
+	if su.patch.Initiator != nil {
+		su.t.Initiator = *su.patch.Initiator
+	}
 	if su.patch.AgentID != nil {
 		su.t.AgentID = *su.patch.AgentID
 	}

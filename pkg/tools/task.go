@@ -475,6 +475,9 @@ type TaskCreateTool struct {
 	// delegateCheck fallback, which was only ever consulted when this was nil —
 	// never happened in production wiring).
 	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
+	// initiatorFn names the calling agent and the budget its session inherited;
+	// see SetInitiatorFn.
+	initiatorFn func(ctx context.Context) *task.Initiator
 	// onCreate, when non-nil, is invoked after a task is successfully created so
 	// the caller can emit a task_status_changed event.
 	onCreate func(*task.Task)
@@ -528,6 +531,13 @@ func (t *TaskCreateTool) SetHome(home string) {
 // default rather than a hardcoded constant.
 func (t *TaskCreateTool) SetMaxDelegationDepth(bound int) {
 	t.maxDelegationDepth = bound
+}
+
+// SetInitiatorFn installs the producer of the calling agent's task.Initiator,
+// stored on every task this tool creates so later automatic starts are
+// authorized against it. Unwired stores none (a task a person created).
+func (t *TaskCreateTool) SetInitiatorFn(fn func(ctx context.Context) *task.Initiator) {
+	t.initiatorFn = fn
 }
 
 // SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2).
@@ -1257,6 +1267,9 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 		DelegationDepth: tc.childDepth,
 		Criteria:        tc.criteria,
 	}
+	if tc.t.initiatorFn != nil {
+		tc.entity.Initiator = tc.t.initiatorFn(tc.ctx)
+	}
 
 	// Propagate the originating channel so completed tasks can route results back.
 	if channel := ToolChannel(tc.ctx); channel != "" && channel != "webchat" {
@@ -1377,7 +1390,10 @@ type TaskUpdateTool struct {
 	// fallback). Reassignment is re-delegation, so it routes through the
 	// SAME gate task_create uses.
 	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
-	onComplete     func(*task.Task)
+	// initiatorFn names the calling agent and the budget its session inherited;
+	// see SetInitiatorFn.
+	initiatorFn func(ctx context.Context) *task.Initiator
+	onComplete  func(*task.Task)
 	// goalMaxRoundsFn mirrors TaskCreateTool.goalMaxRoundsFn (wired by
 	// pkg/agent/loop.go alongside it). It is consulted only when update_task must CREATE a goal
 	// record that did not exist before (a legacy task getting criteria/dod
@@ -1402,6 +1418,12 @@ func (t *TaskUpdateTool) SetGoalMaxRoundsFn(fn func() int) {
 // SetOnComplete sets the callback invoked when a task reaches a terminal status.
 func (t *TaskUpdateTool) SetOnComplete(fn func(*task.Task)) {
 	t.onComplete = fn
+}
+
+// SetInitiatorFn installs the producer of the calling agent's task.Initiator,
+// stored when this tool reassigns a task to another agent.
+func (t *TaskUpdateTool) SetInitiatorFn(fn func(ctx context.Context) *task.Initiator) {
+	t.initiatorFn = fn
 }
 
 // SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2)
@@ -1865,6 +1887,10 @@ func (tu *taskUpdateToolExecute) buildPatchFields() (*ToolResult, bool) {
 			}), true
 		}
 		tu.patch.AgentID = &agentID
+		if tu.t.initiatorFn != nil {
+			ini := tu.t.initiatorFn(tu.ctx)
+			tu.patch.Initiator = &ini
+		}
 		tu.updatedFields = append(tu.updatedFields, "agent_id")
 	}
 

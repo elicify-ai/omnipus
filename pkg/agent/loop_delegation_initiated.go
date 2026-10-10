@@ -48,6 +48,19 @@ func delegationBudget(edgeDepth *int, globalMaxDepth, chainDepth int, inherited 
 func (al *AgentLoop) authorizeInitiatedRun(
 	ctx context.Context, ini task.Initiator, assigneeAgentID, taskWorkspaceID string,
 ) (*session.InitiatedBy, *tools.DelegationDenial) {
+	return al.authorizeInitiatedRunFor(ctx, ini, assigneeAgentID, taskWorkspaceID, false)
+}
+
+// authorizeInitiatedRunFor is authorizeInitiatedRun with the ONE exemption the
+// founder allowed (ruling F13): an AUTOMATIC start (queue, dependency unblock,
+// retry) of a task whose stored initiator is the assignee itself does not need
+// the self-edge, because the agent may create tasks for itself without one and
+// the queue may then run them. selfStoredExempt is true only on that route; the
+// onward budget is still computed and carried, and a direct run_task of one's
+// own task still needs the self-edge (it passes false).
+func (al *AgentLoop) authorizeInitiatedRunFor(
+	ctx context.Context, ini task.Initiator, assigneeAgentID, taskWorkspaceID string, selfStoredExempt bool,
+) (*session.InitiatedBy, *tools.DelegationDenial) {
 	deny := func(policy tools.DelegationDenyReason, reason string) (*session.InitiatedBy, *tools.DelegationDenial) {
 		return nil, &tools.DelegationDenial{Reason: reason, Policy: policy, TargetAgentID: assigneeAgentID}
 	}
@@ -64,27 +77,33 @@ func (al *AgentLoop) authorizeInitiatedRun(
 		globalMax = limit
 	}
 
-	var exists []func(string) bool
-	if probe := agentExistsChecker(al.GetRegistry()); probe != nil {
-		exists = []func(string) bool{probe}
-	}
-	edge, denial := findDelegationEdge(tools.WithWorkspaceID(ctx, taskWorkspaceID), ini.AgentID, assigneeAgentID,
-		config.DelegationModeTask, exists...)
-	if denial != nil {
-		return nil, denial
-	}
-	if denial := enforceEdgeModeAndDepthAt(edge, ini.AgentID, assigneeAgentID, config.DelegationModeTask,
-		globalMax, ini.Depth); denial != nil {
-		return nil, denial
+	var edgeDepth *int
+	if !(selfStoredExempt && ini.AgentID == assigneeAgentID) {
+		var exists []func(string) bool
+		if probe := agentExistsChecker(al.GetRegistry()); probe != nil {
+			exists = []func(string) bool{probe}
+		}
+		edge, denial := findDelegationEdge(tools.WithWorkspaceID(ctx, taskWorkspaceID), ini.AgentID, assigneeAgentID,
+			config.DelegationModeTask, exists...)
+		if denial != nil {
+			return nil, denial
+		}
+		if denial := enforceEdgeModeAndDepthAt(edge, ini.AgentID, assigneeAgentID, config.DelegationModeTask,
+			globalMax, ini.Depth); denial != nil {
+			return nil, denial
+		}
+		edgeDepth = edge.Depth
 	}
 
-	var inherited *int
+	// The tightest onward budget the initiator inherited: its session's record
+	// when that still exists, and the budget kept on the work item itself.
+	inherited := ini.Inherited
 	if ini.SessionID != "" {
 		if ls := al.GetSessionLifecycleStore(); ls != nil {
 			rec, err := ls.Load(ini.SessionID)
 			switch {
 			case err == nil:
-				if b, ok := rec.OnwardBudget(); ok {
+				if b, ok := rec.OnwardBudget(); ok && (inherited == nil || b < *inherited) {
 					inherited = &b
 				}
 			case errors.Is(err, session.ErrLifecycleNotFound):
@@ -98,7 +117,7 @@ func (al *AgentLoop) authorizeInitiatedRun(
 			}
 		}
 	}
-	remaining := delegationBudget(edge.Depth, globalMax, ini.Depth, inherited)
+	remaining := delegationBudget(edgeDepth, globalMax, ini.Depth, inherited)
 	if remaining <= 0 {
 		return deny(tools.DenyDepth, fmt.Sprintf(
 			"no onward delegation budget is left for agent %q to start work for %q", ini.AgentID, assigneeAgentID))
@@ -119,9 +138,21 @@ func (al *AgentLoop) authorizeInitiatedRun(
 // a value read back from ctx, which a task run re-stamps with the assignee. The
 // session and depth come from the acting turn.
 func (al *AgentLoop) initiatorFor(ctx context.Context, agentID string) *task.Initiator {
-	return &task.Initiator{
+	ini := &task.Initiator{
 		AgentID:   agentID,
 		SessionID: tools.ToolTranscriptSessionID(ctx),
 		Depth:     currentDelegationDepth(ctx),
 	}
+	// Keep the acting session's inherited onward budget on the initiator, so
+	// work that is created now and started later (task create/assign) cannot
+	// exceed it. An unreadable record is not "unrestricted": the authorizer
+	// re-reads it by SessionID and fails closed.
+	if ls := al.GetSessionLifecycleStore(); ls != nil && ini.SessionID != "" {
+		if rec, err := ls.Load(ini.SessionID); err == nil {
+			if b, ok := rec.OnwardBudget(); ok {
+				ini.Inherited = &b
+			}
+		}
+	}
+	return ini
 }
