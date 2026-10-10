@@ -1,25 +1,25 @@
 // approval_transcript_adr057_test.go — ADR-057 U22 (W3b, FR-099, BDD-109,
-// test #113): the transcript MUTATE path's silent-failure fix.
+// test #113): the transcript SETTLE path's silent-failure fix, ported to the
+// append-only effect design (session-core U2 effects design D5; ARCHITECT-
+// ANSWER-U2-EFFECTS.md section 3, "keep the FR-099 miss counter, fed by
+// SettleToolCall errors").
 //
-// mutateToolCallInTranscript (approval_transcript.go) used to return a bare
-// `false` for two distinct failure shapes — "session not found" (no
-// transcript.jsonl on disk) and "entry not found" (the session exists but no
-// tool_call entry matches callID/expectStatus) — with zero operator-visible
-// signal for either. This is the read-modify-write twin of AC-1's silent
-// APPEND fix (U2/U5's AppendTranscriptStrict), on the MUTATE side. FR-099
-// requires each case to surface as a counter increment (transcriptMutateMissed
-// / TranscriptMutateMissed()) plus a WARN naming the session id and call id,
-// distinguishable between the two cases.
+// The rewrite-in-place helper mutateToolCallInTranscript was deleted with the
+// in-place rewrite surface (DEL-12). Its role is now mutateToolCall, which
+// exploits the turn's own remembered call record (an ArchiveAddress) to append
+// a settle effect. FR-099's requirement is unchanged: each of the two failure
+// shapes — "session not found" and "entry not found" — must surface as a
+// counter increment (transcriptMutateMissed / TranscriptMutateMissed()) plus a
+// WARN naming the session id and call id, distinguishable between the two.
 //
-// Per binding rule 5, this is a NEW file (mutateToolCallInTranscript's other
-// tests live in the pre-existing approval_transcript_test.go, which this
-// file does not touch). Per binding rule 6, the one new package-level helper
-// this file adds is prefixed u22.
+// Per binding rule 6, the one package-level helper this file adds is prefixed
+// u22.
 
 package agent
 
 import (
 	"log/slog"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,27 +38,42 @@ func u22CaptureLogs(t *testing.T) *raceFreeLogBuffer {
 	return captureDefaultSlog(t, slog.LevelWarn)
 }
 
-// TestTranscriptMutate_MissingSessionIsLoggedAndCounted is TDD plan test
-// #113, tracing to BDD-109. It covers FR-099's two named failure shapes in
-// one run, plus a positive-control third case (binding rule 4's lower
+// u22SettleHarness is a minimal turn state over a real store the settle path
+// can be driven through.
+func u22SettleHarness(t *testing.T, store *session.UnifiedStore, sessionID string) *turnState {
+	t.Helper()
+	agent := &AgentInstance{ID: "u22", Sessions: store}
+	return newTurnState(agent, processOptions{
+		SessionKey: "agent:u22:session:" + sessionID, TranscriptSessionID: sessionID, TranscriptStore: store,
+	}, turnEventScope{turnID: "u22"})
+}
+
+// TestTranscriptMutate_MissingSessionOrTargetIsLoggedAndCounted is TDD plan
+// test #113, tracing to BDD-109. It covers FR-099's two named failure shapes
+// in one run, plus a positive-control third case (binding rule 4's lower
 // bound) proving the counter is not simply free-running.
-func TestTranscriptMutate_MissingSessionIsLoggedAndCounted(t *testing.T) {
-	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
+func TestTranscriptMutate_MissingSessionOrTargetIsLoggedAndCounted(t *testing.T) {
+	store, err := session.NewUnifiedStore(filepath.Join(t.TempDir(), "sessions"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 
 	noopMutate := func(tc *session.ToolCall) { tc.Status = "settled" }
 
-	t.Run("session not found — no meta.json, no transcript.jsonl", func(t *testing.T) {
+	t.Run("session not found — the remembered target's session does not exist", func(t *testing.T) {
+		const missingSessionID = "sess_never_created_u22"
+		const callID = session.ToolCallID("call_u22_missing_session")
+		ts := u22SettleHarness(t, store, missingSessionID)
+		// The turn remembers a record whose address names a session that never
+		// existed, so the settle's own read fails and the stat distinguishes it.
+		ts.rememberCallRecord(session.ToolCall{ID: callID, Status: "pending"},
+			session.ArchiveAddress{PartitionKey: "2026-01-01", ByteOffset: 0, EntryID: "missing-record"})
+
 		before := TranscriptMutateMissed()
 		logs := u22CaptureLogs(t)
 
-		const missingSessionID = "sess_never_created_u22"
-		const callID = session.ToolCallID("call_u22_missing_session")
+		got := mutateToolCall(ts, callID, "pending", noopMutate)
 
-		got := mutateToolCallInTranscript(store, missingSessionID, callID, "pending", noopMutate)
-
-		assert.False(t, got, "mutating a session that was never created must still report no-op via false")
+		assert.False(t, got, "settling a call whose session is gone must report no-op via false")
 
 		after := TranscriptMutateMissed()
 		assert.Equal(t, before+1, after,
@@ -71,28 +86,18 @@ func TestTranscriptMutate_MissingSessionIsLoggedAndCounted(t *testing.T) {
 		}
 	})
 
-	t.Run("entry not found — session exists, no matching tool_call entry", func(t *testing.T) {
+	t.Run("entry not found — the turn remembers no record for the call", func(t *testing.T) {
 		meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
 		require.NoError(t, err)
-
-		// Seed the transcript with an UNRELATED tool_call entry so the file
-		// genuinely exists and is genuinely searched — proving this is the
-		// "entry not found" branch, not an accidental re-hit of "session
-		// not found".
-		require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
-			Type: session.EntryTypeToolCall,
-			ToolCalls: []session.ToolCall{
-				{ID: "call_u22_unrelated", Status: "pending"},
-			},
-		}))
+		ts := u22SettleHarness(t, store, meta.ID)
 
 		before := TranscriptMutateMissed()
 		logs := u22CaptureLogs(t)
 
 		const missingCallID = session.ToolCallID("call_u22_does_not_exist")
-		got := mutateToolCallInTranscript(store, meta.ID, missingCallID, "pending", noopMutate)
+		got := mutateToolCall(ts, missingCallID, "pending", noopMutate)
 
-		assert.False(t, got, "mutating a callID with no matching entry must still report no-op via false")
+		assert.False(t, got, "settling a call the turn never recorded must report no-op via false")
 
 		after := TranscriptMutateMissed()
 		assert.Equal(t, before+1, after,
@@ -111,19 +116,23 @@ func TestTranscriptMutate_MissingSessionIsLoggedAndCounted(t *testing.T) {
 		meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
 		require.NoError(t, err)
 		const callID = session.ToolCallID("call_u22_real_match")
-		require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
+		addr, err := store.AppendTranscriptAddressed(meta.ID, session.TranscriptEntry{
 			Type: session.EntryTypeToolCall,
 			ToolCalls: []session.ToolCall{
 				{ID: callID, Status: "pending"},
 			},
-		}))
+		})
+		require.NoError(t, err)
+
+		ts := u22SettleHarness(t, store, meta.ID)
+		ts.rememberCallRecord(session.ToolCall{ID: callID, Status: "pending"}, addr)
 
 		before := TranscriptMutateMissed()
 
-		got := mutateToolCallInTranscript(store, meta.ID, callID, "pending", noopMutate)
+		got := mutateToolCall(ts, callID, "pending", noopMutate)
 
 		assert.True(t, got, "binding rule 4: a real match must succeed (true) — proves the false "+
-			"assertions above are meaningful failures, not an artifact of mutateToolCallInTranscript always returning false")
+			"assertions above are meaningful failures, not an artifact of mutateToolCall always returning false")
 		assert.Equal(t, before, TranscriptMutateMissed(),
 			"a successful mutate must NOT increment the missed-counter")
 
@@ -137,6 +146,6 @@ func TestTranscriptMutate_MissingSessionIsLoggedAndCounted(t *testing.T) {
 				}
 			}
 		}
-		assert.Equal(t, "settled", settledStatus, "the real match must actually be mutated in place")
+		assert.Equal(t, "settled", settledStatus, "the real match must actually be settled in the merged transcript")
 	})
 }

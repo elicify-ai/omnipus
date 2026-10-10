@@ -6,16 +6,12 @@ package agent
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -84,7 +80,7 @@ func TestProcessMessage_NewestUserMessageReachesModelOnce(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHydrateTestHarness(t, "once-agent")
+			h := newAttachHarness(t, "once-agent")
 			seedTestWorkspaceMembershipForIDs(t, []string{h.agentID})
 			rec := &userRecordingProvider{}
 			h.ag.mu.Lock()
@@ -140,9 +136,9 @@ func TestProcessMessage_NewestUserMessageReachesModelOnce(t *testing.T) {
 }
 
 // newestOnceHarness is a harness whose agent can run real turns against rec.
-func newestOnceHarness(t *testing.T) (*hydrateTestHarness, *userRecordingProvider) {
+func newestOnceHarness(t *testing.T) (*attachHarness, *userRecordingProvider) {
 	t.Helper()
-	h := newHydrateTestHarness(t, "once-agent")
+	h := newAttachHarness(t, "once-agent")
 	seedTestWorkspaceMembershipForIDs(t, []string{h.agentID})
 	rec := &userRecordingProvider{}
 	h.ag.mu.Lock()
@@ -154,7 +150,7 @@ func newestOnceHarness(t *testing.T) (*hydrateTestHarness, *userRecordingProvide
 
 // sendWebchat mimics the websocket handler: record the user entry, then run
 // the turn through processMessage.
-func sendWebchat(t *testing.T, h *hydrateTestHarness, content string) {
+func sendWebchat(t *testing.T, h *attachHarness, content string) {
 	t.Helper()
 	id := "entry-" + strings.ReplaceAll(content, " ", "-") + "-" + time.Now().UTC().Format("150405.000000000")
 	h.append(t, session.TranscriptEntry{
@@ -165,7 +161,7 @@ func sendWebchat(t *testing.T, h *hydrateTestHarness, content string) {
 
 // runTurnFor runs one turn through processMessage; entryID is the transcript
 // entry the inbound path wrote for this message ("" when none was written).
-func runTurnFor(t *testing.T, h *hydrateTestHarness, channel, content, entryID string) {
+func runTurnFor(t *testing.T, h *attachHarness, channel, content, entryID string) {
 	t.Helper()
 	if _, _, err := h.al.processMessage(context.Background(), bus.InboundMessage{
 		Channel:           channel,
@@ -189,87 +185,18 @@ func lastRequest(t *testing.T, rec *userRecordingProvider) []providers.Message {
 	return reqs[len(reqs)-1]
 }
 
-// (a) The same words sent twice on purpose, the earlier one answered: the
-// rebuild must keep the earlier message and the model must also see the
-// current one — two "yes" in total, in order.
-func TestProcessMessage_SameTextTwice_PreviousAnswered_BothKept(t *testing.T) {
-	h, rec := newestOnceHarness(t)
-	now := time.Now().UTC()
-	h.append(t,
-		session.TranscriptEntry{ID: "e1", Role: "user", Content: "yes", AgentID: h.agentID, Timestamp: now},
-		session.TranscriptEntry{ID: "e2", Role: "assistant", Content: "answered-first", AgentID: h.agentID, Timestamp: now.Add(time.Second)},
-		session.TranscriptEntry{ID: "e3", Role: "user", Content: "yes", AgentID: h.agentID, Timestamp: now.Add(2 * time.Second)},
-	)
-	runTurnFor(t, h, "webchat", "yes", "e3")
-	req := lastRequest(t, rec)
-	if n := countUserContent(req, "yes"); n != 2 {
-		t.Fatalf("want the earlier and the current \"yes\" (2), got %d; request=%+v", n, req)
-	}
-	if !strings.Contains(joinContents(req), "answered-first") {
-		t.Fatalf("the earlier answer was dropped; request=%+v", req)
-	}
-}
-
-// (b) The previous identical message is still unanswered and the current one
-// arrives on a channel (which records its own entry): both are kept.
-func TestProcessMessage_SameTextTwice_PreviousUnanswered_ChannelTurn_BothKept(t *testing.T) {
-	h, rec := newestOnceHarness(t)
-	h.append(t, session.TranscriptEntry{
-		ID: "prev", Role: "user", Content: "ping", AgentID: h.agentID, Timestamp: time.Now().UTC().Add(-time.Minute),
-	})
-	runTurnFor(t, h, "telegram", "ping", "")
-	req := lastRequest(t, rec)
-	if n := countUserContent(req, "ping"); n != 2 {
-		t.Fatalf("want the unanswered earlier \"ping\" and the current one (2), got %d; request=%+v", n, req)
-	}
-}
-
-// (c) The current message's transcript write failed (channel path; the write
-// is warn-only): no identity exists, so nothing is dropped — the earlier
-// identical message stays — and the model still sees the current message once.
-func TestProcessMessage_CurrentWriteFailed_NothingDroppedModelSeesCurrentOnce(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("needs POSIX directory permissions enforced for a non-root user")
-	}
-	h, rec := newestOnceHarness(t)
-	h.append(t, session.TranscriptEntry{
-		ID: "prev", Role: "user", Content: "ok", AgentID: h.agentID, Timestamp: time.Now().UTC().Add(-time.Minute),
-	})
-	dir := filepath.Join(os.Getenv("OMNIPUS_HOME"), "sessions", h.transcriptID)
-	// Make the session's transcript files read-only so the next append fails.
-	var locked []string
-	if err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() && strings.HasSuffix(path, ".jsonl") {
-			locked = append(locked, path)
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("walk %s: %v", dir, err)
-	}
-	if len(locked) == 0 {
-		t.Fatalf("no transcript file found under %s", dir)
-	}
-	for _, f := range locked {
-		if err := os.Chmod(f, 0o400); err != nil {
-			t.Fatalf("chmod %s: %v", f, err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(f, 0o600) })
-	}
-	// Instrument check: the write really fails.
-	if err := h.store.AppendTranscript(h.transcriptID, session.TranscriptEntry{
-		ID: "probe", Role: "user", Content: "probe", AgentID: h.agentID, Timestamp: time.Now().UTC(),
-	}); err == nil {
-		t.Skip("directory permissions did not make the transcript write fail on this filesystem")
-	}
-	runTurnFor(t, h, "telegram", "ok", "")
-	req := lastRequest(t, rec)
-	if n := countUserContent(req, "ok"); n != 2 {
-		t.Fatalf("want the earlier \"ok\" kept plus the current one (2), got %d; request=%+v", n, req)
-	}
-}
+// (Superseded: TestProcessMessage_SameTextTwice_PreviousAnswered_BothKept,
+// _PreviousUnanswered_ChannelTurn_BothKept, _CurrentWriteFailed_NothingDropped
+// ModelSeesCurrentOnce and _ReplyToEarlierLandsAfterQueuedUser_Kept were DELETED
+// with the runtime transcript->model rebuild (session-core DEL-10/DEL-12;
+// ARCHITECT-ANSWER-CUTOVER-SLICE4.md Q4 and ARCHITECT-ANSWER-U2-EFFECTS.md D1/D4).
+// They asserted that an EARLIER chat row a turn never ran is rebuilt into the
+// model window from the transcript. The model window is now the one addressed
+// archive, and only a turn appends to it, so an earlier un-turned row is not
+// re-sent. The surviving consume-once invariant (T15) is retained by
+// TestProcessMessage_NewestUserMessageReachesModelOnce,
+// _QueuedMessages_NotSentBeforeTheirTurn and _NewestUserMessageOnce_AfterRestartEmptyWindow,
+// which all pass. Reported to the dispatcher as a behavioural change.
 
 // (d) Two queued messages A then B, both already written: at A's turn the
 // model sees A once and B not at all; at B's turn it sees both, each once.
@@ -365,7 +292,7 @@ func TestProcessMessage_NewestUserMessageOnce_LiveWindowAndAfterClear(t *testing
 func TestProcessMessage_NewestUserMessageOnce_AfterRestartEmptyWindow(t *testing.T) {
 	h, rec := newestOnceHarness(t)
 	sendWebchat(t, h, "turn one")
-	h.ag.Sessions.TruncateHistory(h.key(), 0)
+	truncateWindowTo(t, h.ag.Sessions, h.key(), 0)
 	if got := h.ag.Sessions.GetHistory(h.key()); len(got) != 0 {
 		t.Fatalf("precondition: window must be empty, got %d messages", len(got))
 	}
@@ -377,88 +304,15 @@ func TestProcessMessage_NewestUserMessageOnce_AfterRestartEmptyWindow(t *testing
 	}
 }
 
-func entryIDs(entries []session.TranscriptEntry) []string {
-	out := make([]string, len(entries))
-	for i := range entries {
-		out[i] = entries[i].ID
-	}
-	return out
-}
+// TestCutAtCurrentEntry_{IDMissing_DropsNothingAndWarns, EmptyID_DropsNothingQuietly,
+// KeepsNonUserAfterCurrent_DropsLaterUsers} and their entryIDs helper were DELETED
+// with the hydration-only currentEntryID cut helper (session-core DEL-12;
+// ARCHITECT-ANSWER-CUTOVER-SLICE4.md Q4: "Unit tests of the hydration-only
+// currentEntryID cut helper; the consume-once behaviour they guarded is
+// covered by the ported TestProcessMessage_* cases").
 
-// (i) An id that is set but absent from the transcript drops nothing and
-// logs a WARN.
-func TestCutAtCurrentEntry_IDMissing_DropsNothingAndWarns(t *testing.T) {
-	readLog := captureLogFile(t, logger.WARN)
-	entries := []session.TranscriptEntry{
-		{ID: "e1", Role: "user", Content: "one"},
-		{ID: "e2", Role: "assistant", Content: "two"},
-	}
-	got := cutAtCurrentEntry(entries, "no-such-id", "sess-1")
-	if want := []string{"e1", "e2"}; !equalStrings(entryIDs(got), want) {
-		t.Fatalf("entries = %v, want %v", entryIDs(got), want)
-	}
-	if log := readLog(); !strings.Contains(log, "current user entry not found in transcript") ||
-		!strings.Contains(log, "no-such-id") {
-		t.Fatalf("expected the WARN naming the missing id, log was:\n%s", log)
-	}
-}
-
-// An empty id is the "nothing was written" case: no drop and no WARN.
-func TestCutAtCurrentEntry_EmptyID_DropsNothingQuietly(t *testing.T) {
-	readLog := captureLogFile(t, logger.WARN)
-	entries := []session.TranscriptEntry{{ID: "e1", Role: "user", Content: "one"}}
-	got := cutAtCurrentEntry(entries, "", "sess-1")
-	if !equalStrings(entryIDs(got), []string{"e1"}) {
-		t.Fatalf("entries = %v, want [e1]", entryIDs(got))
-	}
-	if log := readLog(); strings.Contains(log, "current user entry not found") {
-		t.Fatalf("empty id must not WARN, log was:\n%s", log)
-	}
-}
-
-// (ii) and N1: entries after the current one are cut only when they are user
-// entries. A non-user entry after it (here an assistant reply to an earlier
-// message that landed after a queued later user entry, plus a tool_call) is
-// kept.
-func TestCutAtCurrentEntry_KeepsNonUserAfterCurrent_DropsLaterUsers(t *testing.T) {
-	entries := []session.TranscriptEntry{
-		{ID: "a", Role: "user", Content: "A"},
-		{ID: "b", Role: "user", Content: "B"},
-		{ID: "reply-a", Role: "assistant", Content: "reply to A"},
-		{ID: "tool-a", Type: session.EntryTypeToolCall},
-		{ID: "c", Role: "user", Content: "C"},
-	}
-	// At B's turn: B (current) and C (later user) go; A and A's reply stay.
-	got := cutAtCurrentEntry(entries, "b", "sess-1")
-	if want := []string{"a", "reply-a", "tool-a"}; !equalStrings(entryIDs(got), want) {
-		t.Fatalf("entries = %v, want %v", entryIDs(got), want)
-	}
-	// At A's turn: A goes, later user entries B and C go, non-user kept.
-	got = cutAtCurrentEntry(entries, "a", "sess-1")
-	if want := []string{"reply-a", "tool-a"}; !equalStrings(entryIDs(got), want) {
-		t.Fatalf("entries = %v, want %v", entryIDs(got), want)
-	}
-}
-
-// N1 end to end: order A, B, reply-to-A in the transcript; at B's turn with an
-// empty window the model sees A, A's reply and B once each.
-func TestProcessMessage_ReplyToEarlierLandsAfterQueuedUser_Kept(t *testing.T) {
-	h, rec := newestOnceHarness(t)
-	now := time.Now().UTC()
-	h.append(t,
-		session.TranscriptEntry{ID: "n1a", Role: "user", Content: "N1-A-4410", AgentID: h.agentID, Timestamp: now},
-		session.TranscriptEntry{ID: "n1b", Role: "user", Content: "N1-B-4411", AgentID: h.agentID, Timestamp: now.Add(time.Second)},
-		session.TranscriptEntry{ID: "n1r", Role: "assistant", Content: "N1-REPLY-TO-A", AgentID: h.agentID, Timestamp: now.Add(2 * time.Second)},
-	)
-	runTurnFor(t, h, "webchat", "N1-B-4411", "n1b")
-	req := lastRequest(t, rec)
-	if a, b := countUserContent(req, "N1-A-4410"), countUserContent(req, "N1-B-4411"); a != 1 || b != 1 {
-		t.Fatalf("A=%d (want 1), B=%d (want 1); request=%+v", a, b, req)
-	}
-	if !strings.Contains(joinContents(req), "N1-REPLY-TO-A") {
-		t.Fatalf("the reply to A was lost; request=%+v", req)
-	}
-}
+// (TestProcessMessage_ReplyToEarlierLandsAfterQueuedUser_Kept removed above; see the
+// deletion note.)
 
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {

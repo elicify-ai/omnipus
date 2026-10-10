@@ -436,7 +436,7 @@ func TestWorkspaceHeartbeat_FirstFireResolvesTheMain(t *testing.T) {
 		"the workspace stamp must survive to the fired turn's session meta")
 
 	// Nothing was created in the legacy per-agent store.
-	legacyStore := api.agentLoop.GetAgentStore(agentID)
+	legacyStore := api.agentLoop.GetSessionStore()
 	require.NotNil(t, legacyStore)
 	legacySessions, err := legacyStore.ListSessions()
 	require.NoError(t, err)

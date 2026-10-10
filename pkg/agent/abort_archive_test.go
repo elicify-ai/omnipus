@@ -145,7 +145,7 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk)
 	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
 	require.True(t, supportsWindow)
-	snapshot, snapshotErr := store.SnapshotWindow(context.Background(), sk)
+	snapshot, snapshotErr := store.WindowView(context.Background(), sk)
 	require.NoError(t, snapshotErr)
 	start := snapshot.State.Clone()
 
@@ -299,7 +299,7 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk)
 	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
 	require.True(t, supportsWindow)
-	snapshot, snapshotErr := store.SnapshotWindow(context.Background(), sk)
+	snapshot, snapshotErr := store.WindowView(context.Background(), sk)
 	require.NoError(t, snapshotErr)
 	start := snapshot.State.Clone()
 
@@ -583,7 +583,7 @@ func TestAbortPath_MidTurnEviction_HardAbort(t *testing.T) {
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk) // = 12 (bytes unchanged)
 	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
 	require.True(t, supportsWindow)
-	snapshot, snapshotErr := store.SnapshotWindow(context.Background(), sk)
+	snapshot, snapshotErr := store.WindowView(context.Background(), sk)
 	require.NoError(t, snapshotErr)
 	start := snapshot.State.Clone()
 	require.Equal(t, 4, start.Skip, "turn-start Skip must be 4")
@@ -692,7 +692,7 @@ func TestAbortPath_MidTurnEviction_RestoreSession(t *testing.T) {
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk) // 12
 	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
 	require.True(t, supportsWindow)
-	snapshot, snapshotErr := store.SnapshotWindow(context.Background(), sk)
+	snapshot, snapshotErr := store.WindowView(context.Background(), sk)
 	require.NoError(t, snapshotErr)
 	start := snapshot.State.Clone()
 	require.Equal(t, 4, start.Skip, "turn-start Skip derivation: 12 archive lines - 8 visible = 4")

@@ -426,7 +426,7 @@ func TestRunTurn_AbortRestoresTurnStartTriple(t *testing.T) {
 	assert.Len(t, archiveAfter, len(archiveA)+7, "FR-006: abort preserves the appended bytes")
 	cwAfter, ok := h.agent.Sessions.(session.ContextWindowStore)
 	require.True(t, ok)
-	snapAfter, err := cwAfter.SnapshotWindow(context.Background(), h.sessionKey)
+	snapAfter, err := cwAfter.WindowView(context.Background(), h.sessionKey)
 	require.NoError(t, err)
 	assert.Equal(t, ts.initialWindow.Skip, snapAfter.State.Skip, "Skip back to the turn-start value")
 	assert.Equal(t, setA, h.agent.Sessions.Projection(h.sessionKey).Entries,

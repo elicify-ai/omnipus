@@ -1065,7 +1065,7 @@ func TestDeleteSession_CascadeDeletesUploads_PerAgentStore(t *testing.T) {
 // ClearAll returns (3, nil).
 //
 // Traces to: pkg/session/unified.go ClearAll (lines 835-869)
-func TestClearAll_RemovesSessionsContextAndUploads(t *testing.T) {
+func TestClearAll_RemovesSessionsAndUploads(t *testing.T) {
 	store, home := newTestStoreWithHome(t)
 
 	meta1, err := store.NewSession(SessionTypeChat, "", "agent-a")
@@ -1076,19 +1076,12 @@ func TestClearAll_RemovesSessionsContextAndUploads(t *testing.T) {
 	require.NoError(t, err)
 	allMetas := []*UnifiedMeta{meta1, meta2, meta3}
 
-	// Fake message files inside each session directory (beyond meta.json).
+	// A message file inside each session directory (beyond meta.json).
 	for _, m := range allMetas {
 		dir := filepath.Join(store.BaseDir(), m.ID)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "transcript.jsonl"),
 			[]byte(`{"role":"user","content":"hi"}`+"\n"), 0o600))
 	}
-
-	// meta1 gets a matching .context/<id>.jsonl file via the SessionStore
-	// interface (AddMessage writes through to the JSONL backend).
-	store.AddMessage(meta1.ID, "user", "hello from context store")
-	contextFile := filepath.Join(store.BaseDir(), ".context", meta1.ID+".jsonl")
-	_, statErr := os.Stat(contextFile)
-	require.NoError(t, statErr, "precondition: context file for meta1 must exist")
 
 	// meta2 gets a matching uploads/<id>/ directory.
 	uploadsDir := filepath.Join(home, "uploads", meta2.ID)
@@ -1109,70 +1102,19 @@ func TestClearAll_RemovesSessionsContextAndUploads(t *testing.T) {
 	assert.Equal(t, 3, removed, "ClearAll must report exactly 3 removed sessions")
 
 	for _, m := range allMetas {
-		_, statErr = os.Stat(filepath.Join(store.BaseDir(), m.ID))
+		_, statErr := os.Stat(filepath.Join(store.BaseDir(), m.ID))
 		assert.True(t, errors.Is(statErr, os.ErrNotExist), "session dir for %s must be removed", m.ID)
 	}
 
-	_, statErr = os.Stat(contextFile)
-	assert.True(t, errors.Is(statErr, os.ErrNotExist), "meta1's .context/<id>.jsonl must be removed")
-
-	_, statErr = os.Stat(uploadsDir)
+	_, statErr := os.Stat(uploadsDir)
 	assert.True(t, errors.Is(statErr, os.ErrNotExist), "meta2's uploads/<id>/ dir must be removed")
 }
 
-// TestClearAll_PreservesContextDirItself verifies the exact skip condition in
-// ClearAll's loop (`!entry.IsDir() || entry.Name() == ".context"`): the
-// .context directory ITSELF must survive ClearAll even though every session's
-// individual .context/<id>.jsonl file underneath it is removed, and any
-// unrelated file left inside .context (not matching a removed session ID)
-// must be left untouched.
-//
-// BDD: Given a store whose .context directory contains both a file matching
-// a live session ID and an unrelated stray file, When ClearAll is called,
-// Then the .context directory still exists, the matching file is gone, and
-// the stray unrelated file is untouched.
-//
-// Traces to: pkg/session/unified.go ClearAll — `entry.Name() == ".context"`
-// skip condition (line ~850)
-func TestClearAll_PreservesContextDirItself(t *testing.T) {
-	store, _ := newTestStoreWithHome(t)
-
-	meta1, err := store.NewSession(SessionTypeChat, "", "agent-a")
-	require.NoError(t, err)
-
-	store.AddMessage(meta1.ID, "user", "hi")
-	contextDir := filepath.Join(store.BaseDir(), ".context")
-
-	// An unrelated stray file inside .context that does not match any
-	// session ID being removed.
-	strayFile := filepath.Join(contextDir, "unrelated-leftover.jsonl")
-	require.NoError(t, os.WriteFile(strayFile, []byte(`{"stray":"data"}`+"\n"), 0o600))
-
-	// Precondition: .context exists as a directory.
-	info, statErr := os.Stat(contextDir)
-	require.NoError(t, statErr, "precondition: .context dir must exist")
-	require.True(t, info.IsDir(), "precondition: .context must be a directory")
-
-	removed, err := store.ClearAll()
-	require.NoError(t, err)
-	assert.Equal(t, 1, removed)
-
-	// .context directory itself must still exist.
-	info, statErr = os.Stat(contextDir)
-	require.NoError(t, statErr, ".context directory must survive ClearAll")
-	assert.True(t, info.IsDir(), ".context must still be a directory after ClearAll")
-
-	// The matching context file for the removed session must be gone.
-	matchingFile := filepath.Join(contextDir, meta1.ID+".jsonl")
-	_, statErr = os.Stat(matchingFile)
-	assert.True(t, errors.Is(statErr, os.ErrNotExist), "matching context file for removed session must be gone")
-
-	// The unrelated stray file must be untouched.
-	strayData, readErr := os.ReadFile(strayFile)
-	require.NoError(t, readErr, "unrelated stray file inside .context must not be removed")
-	assert.Equal(t, `{"stray":"data"}`+"\n", string(strayData),
-		"unrelated stray file content must be untouched by ClearAll")
-}
+// The `.context/<id>.jsonl` half of the old ClearAll test (and its own
+// TestClearAll_PreservesContextDirItself) is deleted with the `.context`
+// model-content backend (session-core DEL-10/DEL-12): normal construction
+// neither creates nor reads `.context`, so there is no per-session context
+// file to remove and no `.context` directory to preserve.
 
 // TestClearAll_EmptyOrAlreadyClearedStore_NoOp verifies ClearAll is a safe
 // no-op — returning (0, nil), never an error — both on a brand-new store that

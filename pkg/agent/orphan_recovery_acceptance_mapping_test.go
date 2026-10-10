@@ -11,7 +11,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func orphanACTestMapping(t *testing.T) {
@@ -56,11 +55,11 @@ func orphanACMapEphemeral(t *testing.T) {
 	candidate = append(candidate, providers.Message{Role: "user", Content: "not yet archived current request"})
 	original := cwR1Clone(t, candidate)
 	want := []int{-1, 0, -1, -1, 3, 5, 6, 7, 8, 9, 10, 11, 12, -1}
-	require.Equal(t, want, mapWindowMessages(session.WindowViewFromSnapshot(before), candidate, 2, 2), "M1: explicit recall span cannot steal an archive slot; removed group cannot stall later alignment")
+	require.Equal(t, want, mapWindowMessages(before, candidate, 2, 2), "M1: explicit recall span cannot steal an archive slot; removed group cannot stall later alignment")
 	require.Equal(t, original, candidate, "mapping is read-only, including nested declarations and media")
 	orphanACAssertUnchanged(t, h, before, bytes)
 	// Generic memory selection must remain raw; recovery belongs to the agent.
-	selected, lines := memory.WindowHistory(before)
+	selected, lines := before.History()
 	require.Equal(t, raw, selected, "agent recovery must not change generic WindowHistory semantics")
 	require.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, lines)
 }
@@ -137,9 +136,9 @@ func orphanACCursorBoundaries(t *testing.T) {
 			before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
 			candidate := append([]providers.Message{{Role: "system", Content: "independent pinned envelope"}}, orphanACPick(raw, tc.lines...)...)
 			want := append([]int{-1}, tc.lines...)
-			require.Equal(t, want, mapWindowMessages(session.WindowViewFromSnapshot(before), candidate, -1, 0), "M3: full-archive cancellation binding precedes paired suffix/anchor filtering")
+			require.Equal(t, want, mapWindowMessages(before, candidate, -1, 0), "M3: full-archive cancellation binding precedes paired suffix/anchor filtering")
 			out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, tc.lines...))
-			require.Equal(t, want, mapWindowMessages(session.WindowViewFromSnapshot(before), out, -1, 0), "assembly preserves exactly the same original addresses")
+			require.Equal(t, want, mapWindowMessages(before, out, -1, 0), "assembly preserves exactly the same original addresses")
 			orphanACAssertUnchanged(t, h, before, bytes)
 		})
 	}

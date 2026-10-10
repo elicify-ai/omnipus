@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -107,6 +105,20 @@ func (h *cwIdentityHarness) addArchive(t *testing.T, msg providers.Message) {
 	require.Equal(t, msg, got[h.archiveLines-1].Message, "the full input must be archived at the next physical line")
 }
 
+// addAssistantCall archives an assistant tool-call message through the turn's
+// OWN window seam, so the turn remembers the exact archive address that issued
+// each call (effects design step 2, turnState.recordCallIssuers). A tool result
+// admitted later names that issuer; without it the admission is refused.
+func (h *cwIdentityHarness) addAssistantCall(t *testing.T, ts *turnState, msg providers.Message) {
+	t.Helper()
+	if _, err := ts.appendWindowMessage(msg, windowProducerAssistant); err != nil {
+		t.Fatalf("append assistant call: %v", err)
+	}
+	h.archiveLines++
+	got := h.archive(t)
+	require.Equal(t, msg, got[h.archiveLines-1].Message, "the assistant call must be archived at the next physical line")
+}
+
 // Only the real method's calling shape is bridged so this RED pack compiles
 // before and after the ADR's internal append-return change. Neither branch
 // supplies a fake result or replaces any production method.
@@ -153,7 +165,7 @@ func (h *cwIdentityHarness) record(
 	require.NoError(t, err)
 	// Name/Arguments are non-persisted convenience fields. Use the canonical
 	// function envelope, retaining the exact archive round-trip assertion.
-	h.addArchive(t, providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{
+	h.addAssistantCall(t, ts, providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{
 		{ID: string(tc.ID), Function: &providers.FunctionCall{Name: tc.Tool, Arguments: string(args)}},
 	}})
 	// The index is derived from the fixture's explicit writes, not an ID scan.
@@ -278,9 +290,9 @@ func (h *cwIdentityHarness) project(t *testing.T, ts *turnState, rec cwIdentityR
 	h.al.activeTurnStates.Store(h.key, ts)
 	defer h.al.activeTurnStates.Delete(h.key)
 
-	snap, err := h.store.SnapshotWindow(context.Background(), h.key)
+	snap, err := h.store.WindowView(context.Background(), h.key)
 	require.NoError(t, err)
-	msgs, lines := memory.WindowHistory(snap)
+	msgs, lines := snap.History()
 	idx := -1
 	for i, line := range lines {
 		if line == rec.key.ArchiveLine {
@@ -290,8 +302,8 @@ func (h *cwIdentityHarness) project(t *testing.T, ts *turnState, rec cwIdentityR
 	}
 	require.GreaterOrEqual(t, idx, 0, "project target must be mapped into the current window")
 
-	full := snap.Archive[rec.key.ArchiveLine].Content
-	turn := turnNumberForArchiveLine(denseArchive(snap.Archive), rec.key.ArchiveLine)
+	full := viewArchived(snap)[rec.key.ArchiveLine].Content
+	turn := turnNumberForArchiveLine(denseArchive(viewArchived(snap)), rec.key.ArchiveLine)
 	computedMark, err := buildRecallMark("emptied", identityProjectionTool, rec.key.ToolCallID, rec.key.ArchiveLine, full, turn)
 	require.NoError(t, err)
 
@@ -304,7 +316,7 @@ func (h *cwIdentityHarness) project(t *testing.T, ts *turnState, rec cwIdentityR
 	// exact SourceRunes entry, which never happens here — every capped
 	// admission in this pack persists its exact kept amount at admission
 	// time (admitResultWindow sets after.Projection.SourceRunes[key]).
-	pc := projectionContext{archive: denseArchive(snap.Archive), sourceRunes: snap.State.Projection.SourceRunes}
+	pc := projectionContext{archive: denseArchive(viewArchived(snap)), sourceRunes: snap.State.Projection.SourceRunes}
 	projected, err := projectMessagesChecked(msgs, func(i int) int { return lines[i] }, snap.State.Projection.Entries, pc)
 	require.NoError(t, err)
 
@@ -353,25 +365,31 @@ func (h *cwIdentityHarness) projectOK(t *testing.T, ts *turnState, rec cwIdentit
 	return mark
 }
 
-func cwIdentityTranscriptLines(t *testing.T, pm memory.ProjectionMeta) map[memory.ProjectionKey]int {
+// cwIdentityTranscriptAddrs is the ADR-066 §12 identity as the U2 design now
+// carries it: ProjectionMeta.TranscriptAddr maps each projection key to the
+// ArchiveAddress of the chat record it projects (effects design D5 / the
+// cutover-slice-4 "Deleted from the interfaces" row replaced the line index
+// with the address).
+func cwIdentityTranscriptAddrs(t *testing.T, pm memory.ProjectionMeta) map[memory.ProjectionKey]memory.RecordAddress {
 	t.Helper()
-	field := reflect.ValueOf(pm).FieldByName("TranscriptLine")
-	if !field.IsValid() {
-		t.Fatal("BLOCKED: ProjectionMeta.TranscriptLine map[ProjectionKey]int not implemented — required by ADR-066 §12 correction 2026-10-01")
-	}
-	lines, ok := field.Interface().(map[memory.ProjectionKey]int)
-	require.True(t, ok, "the independent ADR requires map[ProjectionKey]int, not an ID-only index")
-	return lines
+	return pm.TranscriptAddr
 }
 
+// assertLines proves every recorded result — full or projected — retains a
+// complete transcript address in the persisted projection. The address, not a
+// physical row index, is what an effect names, so a complete address is the
+// new form of "retains its actual transcript identity".
 func (h *cwIdentityHarness) assertLines(t *testing.T, records ...cwIdentityRecorded) {
 	t.Helper()
-	want := make(map[memory.ProjectionKey]int, len(records))
+	got := cwIdentityTranscriptAddrs(t, h.store.Projection(h.key))
+	require.Len(t, got, len(records), "every recorded result must retain its transcript address")
 	for _, rec := range records {
-		want[rec.key] = rec.line
+		addr, ok := got[rec.key]
+		require.True(t, ok, "recorded result %s must retain its transcript address", rec.key.ToolCallID)
+		require.NotEmpty(t, addr.EntryID, "the retained address must be complete (entry id)")
+		require.NotEmpty(t, addr.PartitionKey, "the retained address must be complete (partition key)")
+		require.GreaterOrEqual(t, addr.ByteOffset, int64(0), "the retained address must be complete (byte offset)")
 	}
-	require.Equal(t, want, cwIdentityTranscriptLines(t, h.store.Projection(h.key)),
-		"every recorded result, full or projected, must retain its actual transcript line")
 }
 
 func (h *cwIdentityHarness) reopen(t *testing.T) {
@@ -383,29 +401,26 @@ func (h *cwIdentityHarness) reopen(t *testing.T) {
 	h.agent.Sessions = store
 }
 
-func cwIdentityAddressedUpdate(
-	t *testing.T, id session.ToolCallID, line int, state string, result map[string]any,
-) session.ToolCallProjectionUpdate {
+// capAddressed drives the real addressed projection seam (ProjectToolCalls):
+// it caps rec's own transcript record by the ArchiveAddress the projection
+// carries, never by a newest-same-ID guess. It returns the effect's address.
+func (h *cwIdentityHarness) capAddressed(t *testing.T, rec cwIdentityRecorded, text string) session.ArchiveAddress {
 	t.Helper()
-	u := session.ToolCallProjectionUpdate{ToolCallID: id, ContentState: state, Result: result}
-	field := reflect.ValueOf(&u).Elem().FieldByName("TranscriptLine")
-	if !field.IsValid() {
-		t.Fatal("BLOCKED: ToolCallProjectionUpdate.TranscriptLine not implemented — required by ADR-066 §12 correction 2026-10-01")
-	}
-	require.Equal(t, reflect.TypeOf((*int)(nil)), field.Type(), "nil distinguishes unknown from known index zero")
-	field.Set(reflect.ValueOf(&line))
-	return u
+	addr, ok := h.store.Projection(h.key).TranscriptAddr[rec.key]
+	require.True(t, ok, "the recorded result must carry a transcript address to project")
+	effect, err := h.store.ProjectToolCalls(h.sessionID, []session.ToolCallProjectionEdit{{
+		Target: addr, ToolCallID: session.ToolCallID(rec.key.ToolCallID), ContentState: "capped", Text: text,
+	}})
+	require.NoError(t, err)
+	return effect
 }
 
-func cwIdentityAssertUndoAddress(t *testing.T, previous []session.ToolCallProjectionUpdate, line int) {
+// cwIdentityAssertProjectionEffect asserts a committed projection returned a
+// complete effect address — that address is what a retract names to undo the
+// projection (effects design D5), replacing the old *int undo row.
+func cwIdentityAssertProjectionEffect(t *testing.T, effect session.ArchiveAddress) {
 	t.Helper()
-	require.NotEmpty(t, previous, "a successful projection must return the addressed row's undo record")
-	field := reflect.ValueOf(previous[len(previous)-1]).FieldByName("TranscriptLine")
-	if !field.IsValid() {
-		t.Fatal("BLOCKED: projection undo does not carry TranscriptLine — required by ADR-066 §12 correction 2026-10-01")
-	}
-	address, ok := field.Interface().(*int)
-	require.True(t, ok, "undo must use the same *int address contract")
-	require.NotNil(t, address, "an addressed update must not become a bare-ID undo")
-	assert.Equal(t, line, *address, "undo must target the original row, not the newer duplicate")
+	require.NotEmpty(t, effect.EntryID, "a successful projection must return its effect's address")
+	require.NotEmpty(t, effect.PartitionKey, "the effect address must be complete (partition key)")
+	require.GreaterOrEqual(t, effect.ByteOffset, int64(0), "the effect address must be complete (byte offset)")
 }

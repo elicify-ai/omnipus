@@ -52,7 +52,7 @@ func TestAppendWindowMessage_PropagatesStoreError_NotSwallowed(t *testing.T) {
 	// No corruption: the message was never actually admitted.
 	store, ok := agent.Sessions.(session.ContextWindowStore)
 	require.True(t, ok)
-	snap, snapErr := store.SnapshotWindow(context.Background(), key)
+	snap, snapErr := store.WindowView(context.Background(), key)
 	require.NoError(t, snapErr)
 	require.Zero(t, snap.State.Count, "a failed append must leave the archive untouched")
 }

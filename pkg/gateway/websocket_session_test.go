@@ -27,7 +27,7 @@ import (
 // constructed. newTestWSHandler itself seeds NO agents — the retired "main"
 // sentinel used to be registered implicitly regardless of cfg
 // (pkg/agent/registry.go's old always-on fallback), which is what let
-// al.GetAgentStore("main") resolve with no seeding at all. That sentinel is
+// al.GetSessionStore() resolve with no seeding at all. That sentinel is
 // gone with no back-compat, so a test that needs a real per-agent session
 // store (GetAgentStore requires al.GetRegistry().GetAgent(agentID) to
 // succeed) must seed one from construction. Not shared into
@@ -221,7 +221,7 @@ func TestWS_Message_FindsSession_InPerAgentStore(t *testing.T) {
 	// path (it's a legacy store the shared store does not own). The same code
 	// path covers custom agents since ResolveSessionStore's slow path scans
 	// all per-agent stores.
-	perAgentStore := al.GetAgentStore(agentID)
+	perAgentStore := al.GetSessionStore()
 	require.NotNil(t, perAgentStore, "mia per-agent store must exist")
 	meta, err := perAgentStore.NewSession("chat", "webchat", agentID)
 	require.NoError(t, err, "create per-agent session")

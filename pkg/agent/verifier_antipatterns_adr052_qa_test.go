@@ -151,7 +151,7 @@ func TestVerifierAntiPatterns(t *testing.T) {
 		}
 
 		al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-		store := al.GetAgentStore("native-agent")
+		store := al.GetSessionStore()
 		if store == nil {
 			t.Fatal("native-agent must have a session store")
 		}
@@ -275,7 +275,7 @@ func TestVerifierAntiPatterns(t *testing.T) {
 		// that says the opposite of the truth and confirming it changes
 		// nothing.
 		al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-		store := al.GetAgentStore("native-agent")
+		store := al.GetSessionStore()
 		if store == nil {
 			t.Fatal("native-agent must have a session store")
 		}

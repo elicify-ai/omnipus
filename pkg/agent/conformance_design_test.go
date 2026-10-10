@@ -833,7 +833,7 @@ func lintMember(id string, blockedBy, writeSet []string) task.Task {
 func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	taskStore := GetTaskStore(al)
-	sessStore := al.GetAgentStore("native-agent")
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
 		t.Fatal("native-agent session store not available")
 	}

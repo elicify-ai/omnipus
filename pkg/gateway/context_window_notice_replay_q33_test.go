@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ const q33DurableNoticeJSON = `{
   "type": "context_window_notice",
   "role": "system",
   "content": "The context budget was reduced before retrying this turn.",
+  "view_membership": "chat",
   "timestamp": "2026-09-30T12:34:56.123456789Z",
   "agent_id": "jim",
   "turn_id": "q33-original-turn",
@@ -47,7 +49,13 @@ func q33SeedDurableNotice(t *testing.T, store *session.UnifiedStore, sessionID, 
 		"the fixture must decode into the landed generated Message contract")
 	require.NotNil(t, want.ContextWindowNotice, "the seed must contain the spec's required notice payload")
 	want.ContextWindowNotice.Kind = generated.MessageContextWindowNoticeKind(kind)
-	require.NoError(t, fileutil.AppendJSONL(filepath.Join(store.BaseDir(), sessionID, "transcript.jsonl"), want),
+	// session-core U2 (effects design D4/D11): the archive carries no reader
+	// default for view_membership, so the raw fixture must state it as "chat".
+	// The line is written verbatim (json.RawMessage) so the classified kind
+	// override lands without a TranscriptEntry conversion dropping it.
+	line := strings.Replace(q33DurableNoticeJSON,
+		`"kind": "provider_retry"`, `"kind": "`+string(want.ContextWindowNotice.Kind)+`"`, 1)
+	require.NoError(t, fileutil.AppendJSONL(filepath.Join(store.BaseDir(), sessionID, "transcript.jsonl"), json.RawMessage(line)),
 		"seed the actual durable transcript with the complete classified wire record")
 	return want
 }

@@ -50,7 +50,7 @@ func t3WaitForTerminal(t *testing.T, al *AgentLoop, taskID string, expectedDispa
 			if got.SessionID == "" {
 				return got
 			}
-			sessStore := al.GetAgentStore(got.AgentID)
+			sessStore := al.GetSessionStore()
 			if sessStore == nil {
 				return got
 			}

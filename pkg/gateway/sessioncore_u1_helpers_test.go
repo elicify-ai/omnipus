@@ -215,8 +215,8 @@ func (e *u1Env) u1StoreDirs(t *testing.T) []string {
 		dirs = append(dirs, s.BaseDir())
 	}
 	add(e.api.agentLoop.GetSessionStore())
-	for _, id := range e.agentIDs {
-		add(e.api.agentLoop.GetAgentStore(id))
+	for range e.agentIDs {
+		add(e.api.agentLoop.GetSessionStore())
 	}
 	return dirs
 }

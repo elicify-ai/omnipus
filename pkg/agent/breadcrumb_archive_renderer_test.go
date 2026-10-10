@@ -244,3 +244,19 @@ func crumbOf(t *testing.T, archive []memory.ArchivedMessage, skip int) string {
 	}
 	return crumb
 }
+
+// cwAssertBreadcrumbPointer asserts the breadcrumb renders an exact addressed
+// pointer (tool_call_id AND archive_line together) for callID at line. It moved
+// here when recall_archive_range_breadcrumb_test.go's raw-JSONL fixture was
+// deleted (session-core DEL-10).
+func cwAssertBreadcrumbPointer(t *testing.T, text, callID string, line int) {
+	t.Helper()
+	normalized := strings.ReplaceAll(text, "\"", "")
+	id := `tool_call_id\s*[:=]\s*` + regexp.QuoteMeta(callID) + `\b`
+	address := `archive_line\s*[:=]\s*` + strconv.Itoa(line) + `\b`
+	forward := regexp.MustCompile(id + `[^\n]{0,100}` + address)
+	reverse := regexp.MustCompile(address + `[^\n]{0,100}` + id)
+	if !forward.MatchString(normalized) && !reverse.MatchString(normalized) {
+		t.Fatalf("breadcrumb must include exact addressed pointer (tool_call_id=%s, archive_line=%d): %q", callID, line, text)
+	}
+}

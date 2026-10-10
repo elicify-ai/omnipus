@@ -371,19 +371,19 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 	// marker. Without this line the fixture is the crash gap and the
 	// handback is legitimately re-woken.
 	archived := providers.Message{Role: "user", Content: deliverySummary(consumedHandback)}
-	if _, err := h.sessions.AppendWindowMessage(context.Background(), child, archived); err != nil {
+	if _, err := appendWindowMsg(h.sessions, context.Background(), child, archived); err != nil {
 		t.Fatalf("AppendWindowMessage archived handback instruction: %v", err)
 	}
 	// Instrument check: the archive write must read back from the child
 	// archive recovery's accepted-drain oracle reads — a silently swallowed
 	// append would leave the fixture asserting the very crash-gap shape it
 	// exists to rule out.
-	snap, err := h.sessions.SnapshotWindow(context.Background(), child)
+	snap, err := h.sessions.WindowView(context.Background(), child)
 	if err != nil {
 		t.Fatalf("SnapshotWindow archived handback instruction: %v", err)
 	}
 	archivedVisible := false
-	for _, line := range snap.Archive {
+	for _, line := range viewArchived(snap) {
 		if line.Role == "user" && line.Content == deliverySummary(consumedHandback) {
 			archivedVisible = true
 			break

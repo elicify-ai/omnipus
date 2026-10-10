@@ -41,7 +41,7 @@ func mustChildSession(t *testing.T, store *session.UnifiedStore, parentID string
 // the root is excluded.
 func TestScopeWithDescendants_TaskScope_IncludesMultiDepthDescendants(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
 		t.Fatal("native-agent must have a UnifiedStore session store")
 	}
@@ -87,7 +87,7 @@ func TestScopeWithDescendants_TaskScope_IncludesMultiDepthDescendants(t *testing
 // condition, PLUS its descendant.
 func TestScopeWithDescendants_GoalScope_IncludesDescendant(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
 		t.Fatal("native-agent must have a UnifiedStore session store")
 	}
@@ -117,7 +117,7 @@ func TestScopeWithDescendants_GoalScope_IncludesDescendant(t *testing.T) {
 // just the members themselves.
 func TestScopeWithDescendants_PlanScope_UnionsEachMembersDescendants(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
 		t.Fatal("native-agent must have a UnifiedStore session store")
 	}

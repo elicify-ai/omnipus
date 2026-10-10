@@ -101,7 +101,7 @@ func TestDeleteSession_MainGuard(t *testing.T) {
 	t.Run("normal chat session is deletable", func(t *testing.T) {
 		api3, _ := buildHeartbeatTestAPI(t)
 		const agent3 = "mia"
-		store3 := api3.agentLoop.GetAgentStore(agent3)
+		store3 := api3.agentLoop.GetSessionStore()
 		require.NotNil(t, store3)
 		chatMeta, err := store3.NewSession("chat", "webchat", agent3)
 		require.NoError(t, err)

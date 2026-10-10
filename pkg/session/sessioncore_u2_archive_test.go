@@ -78,10 +78,18 @@ func TestSessionCoreU2_ArchiveIsDayPartitionedNotOneMonolithicFile(t *testing.T)
 
 	day1 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	day2 := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+
+	// Decision B / effects design D1: rollover is by the SERVER's append UTC
+	// day, never an entry's own timestamp — so the server day is injected, and
+	// both entries deliberately carry the SAME timestamp to prove the entry
+	// timestamp is not the roller.
+	now := day1
+	setArchiveDay(store, &now)
 	require.NoError(t, store.AppendTranscript(meta.ID, TranscriptEntry{
 		ID: "a", Role: "user", Content: "day one", AgentID: "mia", Timestamp: day1}))
+	now = day2
 	require.NoError(t, store.AppendTranscript(meta.ID, TranscriptEntry{
-		ID: "b", Role: "assistant", Content: "day two", AgentID: "mia", Timestamp: day2}))
+		ID: "b", Role: "assistant", Content: "day two", AgentID: "mia", Timestamp: day1}))
 
 	// Control: both entries are actually in the archive (the append worked).
 	msgs, err := store.ReadTranscript(meta.ID)
@@ -96,12 +104,11 @@ func TestSessionCoreU2_ArchiveIsDayPartitionedNotOneMonolithicFile(t *testing.T)
 		if e.IsDir() {
 			continue
 		}
-		name := e.Name()
-		if strings.HasSuffix(name, ".jsonl") && name != "provenance.jsonl" {
+		if strings.HasSuffix(e.Name(), ".jsonl") {
 			dataFiles++
 		}
 	}
 	require.GreaterOrEqual(t, dataFiles, 2,
-		"FR-005: two distinct UTC days must land in day files; found %d archive data file(s) in %s — a single monolithic archive cannot give a bounded cross-day window read",
+		"FR-005: two distinct server UTC days must land in day files; found %d archive data file(s) in %s — a single monolithic archive cannot give a bounded cross-day window read",
 		dataFiles, dir)
 }
