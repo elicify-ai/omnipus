@@ -967,7 +967,11 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 	if a.agentLoop == nil {
 		return ""
 	}
-	res, err := a.agentLoop.StopSession(r.Context(), agent.StopRequest{
+	stop := a.agentLoop.StopSession
+	if a.stopSession != nil {
+		stop = a.stopSession
+	}
+	res, err := stop(r.Context(), agent.StopRequest{
 		SessionID: id,
 		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: actorUsername(r)},
 		Channel:   "web",
@@ -978,6 +982,12 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 	}
 	if res.RootErr != nil {
 		return "Stop before delete failed; nothing was deleted: " + res.RootErr.Error()
+	}
+	// A background shell the tree Stop could not kill would outlive its deleted
+	// row (FR-022: tree Stop kills them), so it refuses the delete visibly.
+	if res.BackgroundFailed != 0 {
+		return fmt.Sprintf("Stop before delete could not terminate %d background command(s); nothing was deleted",
+			res.BackgroundFailed)
 	}
 	// Option A: only something still running refuses the delete. A session
 	// whose stop already landed (stopped or terminal record) is not running,
