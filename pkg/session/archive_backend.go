@@ -243,30 +243,6 @@ func (b *archiveBackend) Close() error { return nil }
 
 // --- ContextWindowStore ---
 
-// AppendWindowMessage is the dense-snapshot append the callers migrate off
-// (step 2); it appends through the same checked seam as AppendModelMessage.
-func (b *archiveBackend) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (memory.WindowSnapshot, error) {
-	if err := ctx.Err(); err != nil {
-		return memory.WindowSnapshot{}, err
-	}
-	if err := b.appendMessage(key, msg); err != nil {
-		return memory.WindowSnapshot{}, err
-	}
-	return b.SnapshotWindow(ctx, key)
-}
-
-// SnapshotWindow is the dense lifetime snapshot the callers migrate off (steps
-// 3-5). It reads every model slot through the ordinal index.
-func (b *archiveBackend) SnapshotWindow(ctx context.Context, key string) (memory.WindowSnapshot, error) {
-	if err := ctx.Err(); err != nil {
-		return memory.WindowSnapshot{}, err
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.snapshotLocked(key)
-}
-
-// CommitWindow performs one compare-and-set metadata write.
 func (b *archiveBackend) CommitWindow(ctx context.Context, key string, before, after memory.WindowState) error {
 	return b.commitWindow(ctx, key, before, after, false)
 }
@@ -750,44 +726,6 @@ func (b *archiveBackend) leadLocked(store *ArchiveDayStore, skip int) ([]ModelSl
 		out = append(out, slot)
 	}
 	return out, nil
-}
-
-// snapshotLocked builds the DENSE lifetime snapshot (callers migrate off it).
-func (b *archiveBackend) snapshotLocked(key string) (memory.WindowSnapshot, error) {
-	lines, err := b.payloadLinesLocked(key)
-	if err != nil {
-		return memory.WindowSnapshot{}, err
-	}
-	meta, err := b.loadMetaLocked(key)
-	if err != nil {
-		return memory.WindowSnapshot{}, err
-	}
-	archive := make([]memory.ArchivedMessage, len(lines))
-	for i, l := range lines {
-		if archive[i], err = archivedMessage(l); err != nil {
-			return memory.WindowSnapshot{}, err
-		}
-	}
-	if meta.Count != len(archive) {
-		meta.Count = len(archive)
-		if err := b.saveMetaLocked(key, meta); err != nil {
-			return memory.WindowSnapshot{}, err
-		}
-	}
-	if meta.Skip < 0 || meta.Skip > meta.Count {
-		return memory.WindowSnapshot{}, errors.New("archive_backend: invalid context window cursor")
-	}
-	store, err := b.store(key)
-	if err != nil {
-		return memory.WindowSnapshot{}, err
-	}
-	state := memory.WindowState{Skip: meta.Skip, Count: meta.Count, AnchorLine: cloneIntPtr(meta.AnchorLine),
-		Projection: projectionFromMeta(meta)}
-	if err := validateWindowAnchor(store, state); err != nil {
-		return memory.WindowSnapshot{}, err
-	}
-	return memory.WindowSnapshot{State: state, Archive: archive,
-		Retracted: append([]memory.ArchiveSpan(nil), meta.Retracted...)}, nil
 }
 
 // payloadLines enumerates this session's model slots as content lines, in

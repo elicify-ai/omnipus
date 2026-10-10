@@ -742,9 +742,6 @@ func (hcm *wsHandlerHandleChatMessage) resolveSessionStore() bool {
 		}
 	} else {
 		hcm.store = hcm.h.agentLoop.GetSessionStore()
-		if hcm.store == nil {
-			hcm.store = hcm.h.agentLoop.GetAgentStore(hcm.targetAgentID)
-		}
 	}
 
 	if hcm.firstMessage && hcm.store == nil {

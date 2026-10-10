@@ -452,9 +452,9 @@ type AgentLoop struct {
 	sessionLauncher  steer.SessionLauncher
 	steerDepsMu      sync.RWMutex
 
-	// sharedSessionStore is the single UnifiedStore at $OMNIPUS_HOME/sessions/
-	// used for all new sessions (joined session model). Legacy per-agent stores
-	// remain accessible via GetAgentStore for read-only access to old sessions.
+	// sharedSessionStore is the ONE UnifiedStore at $OMNIPUS_HOME/sessions/. Every
+	// session and every agent's model window lives in it; there are no per-agent
+	// stores. Every AgentInstance.Sessions holds this same pointer.
 	sharedSessionStore *session.UnifiedStore
 
 	// askUserRegistry is the gateway-injected AskUserQuestion pending
@@ -701,6 +701,8 @@ type newAgentLoop struct {
 	registry *AgentRegistry
 	al       *AgentLoop
 	homePath string
+	// sharedStore is the ONE session store, opened by initializeConvertedSessions.
+	sharedStore *session.UnifiedStore
 }
 
 // NewAgentLoop constructs an AgentLoop from the given config, message bus, and LLM provider.
@@ -1165,7 +1167,7 @@ func (al *AgentLoop) Close() {
 	// received its first message. Safe to call even when nil (degraded boot,
 	// loop.go's own error-logged "shared session store unavailable" branch).
 	if al.sharedSessionStore != nil {
-		if err := al.sharedSessionStore.Close(); err != nil {
+		if err := releaseSharedSessionStore(al.homePath, al.sharedSessionStore); err != nil {
 			logger.ErrorCF("agent", "Failed to close shared session store",
 				map[string]any{"error": err.Error()})
 		}

@@ -453,17 +453,7 @@ func (al *AgentLoop) goalCompileWindowText(goalSessionID, agentID string) string
 		return ""
 	}
 	budget := al.effectiveGoalCompileWindowTokens()
-	if shared := al.GetSessionStore(); shared != nil {
-		if text := al.sessionWindowText(shared, goalSessionID, budget, nil); text != "" {
-			return text
-		}
-		logger.WarnCF("agent", "goal compile: window empty from the SHARED store — falling back to the legacy per-agent store",
-			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
-	} else {
-		logger.WarnCF("agent", "goal compile: no shared session store — window falling back to the legacy per-agent store",
-			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
-	}
-	store := al.GetAgentStore(agentID)
+	store := al.GetSessionStore()
 	if store == nil {
 		return ""
 	}

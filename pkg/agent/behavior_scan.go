@@ -252,7 +252,7 @@ func (al *AgentLoop) runBehaviorScan(in JudgeCriteriaInput, c task.AcceptanceCri
 	if sessionID == "" || in.AssigneeAgentID == "" {
 		return mechanismBlocked("behavior criterion: no session recorded to scan (unable_to_verify)")
 	}
-	store := al.GetAgentStore(in.AssigneeAgentID)
+	store := al.GetSessionStore()
 	if store == nil {
 		return mechanismBlocked("behavior criterion: no session store for assignee (unable_to_verify)")
 	}

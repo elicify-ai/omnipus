@@ -61,7 +61,7 @@ func (te *TaskExecutor) supersedeTaskSession(agentID, taskSessionID string) {
 	if taskSessionID == "" {
 		return
 	}
-	if sessStore := te.agentLoop.taskSessionStore(taskSessionID, agentID); sessStore != nil {
+	if sessStore := te.agentLoop.GetSessionStore(); sessStore != nil {
 		statusActive := session.StatusActive
 		if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusActive}); setErr != nil {
 			logger.WarnCF("task_executor",
@@ -136,7 +136,7 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 	// own legacy store drops the verdict (AppendTranscriptStrict refuses a
 	// session it does not hold) — after which GET /tasks/{id}/verdicts has
 	// nothing to read back. See AgentLoop.taskSessionStore.
-	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 	if sessStore == nil {
 		return
 	}
@@ -217,7 +217,7 @@ func (te *TaskExecutor) completeTaskWithResult(
 		status = task.StatusFailed
 		result = "empty_answer: the task produced no result"
 	}
-	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 	now := time.Now().UTC().Format(time.RFC3339)
 	final, uerr := te.store.UpdateIfStatus(t.ID, expected, task.Patch{
 		Status:      &status,

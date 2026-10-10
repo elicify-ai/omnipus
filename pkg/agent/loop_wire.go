@@ -1840,7 +1840,7 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	// the SHARED store at $OMNIPUS_HOME/sessions/ (new webchat/channel
 	// sessions), but a task's own session — the exact thing task-scope
 	// verification targets — is created via createTaskSessionSync
-	// (task_executor.go), which writes through al.GetAgentStore(t.AgentID):
+	// (task_executor.go), which writes through al.GetSessionStore():
 	// the ASSIGNEE agent's own per-agent legacy store, a DIFFERENT
 	// directory. A single fixed store can never cover both. agentLoopInspectSessionStore
 	// (below) instead adapts al.ResolveSessionStore — the SAME
@@ -1992,9 +1992,6 @@ func (r agentLoopJobSessionActivityReader) LastActivityBySessionID(
 		stores = append(stores, store)
 	}
 	addStore(r.al.GetSessionStore())
-	for _, agentID := range r.al.GetRegistry().ListAgentIDs() {
-		addStore(r.al.GetAgentStore(agentID))
-	}
 
 	// Mirror ResolveSessionStore's ownership rule without its successful-read
 	// double probe: not-found continues to the next legacy store, while any

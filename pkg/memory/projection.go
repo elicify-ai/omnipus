@@ -1,11 +1,5 @@
 package memory
 
-import (
-	"errors"
-	"fmt"
-	"sort"
-)
-
 // ProjectionState is the per-result projection state recorded in session
 // meta (ADR-066 D4/D5, FR-019). The archive line itself is never modified
 // (ADR-028 append-only); the state tells the projection function how the
@@ -39,12 +33,6 @@ const (
 	// carries only the D5 recall mark.
 	ProjectionEmptied ProjectionState = "emptied"
 )
-
-// ErrArchiveNotEmpty is returned by SetHistory when the session archive
-// already holds at least one line (FR-047, US-15.AC5). Hydration may only
-// fill an empty archive; rewriting an existing one would reset Skip and
-// destroy evicted turns (SC-001).
-var ErrArchiveNotEmpty = errors.New("memory: set history refused: archive is not empty")
 
 // ProjectionKey addresses one archived tool result. The key is composite
 // because tool_call_ids are not unique across a session (B-29b: providers
@@ -96,69 +84,4 @@ type RecordAddress struct {
 	PartitionKey string `json:"partition_key"`
 	ByteOffset   int64  `json:"byte_offset"`
 	EntryID      string `json:"entry_id"`
-}
-
-// validProjectionState reports whether s is one of the two known states.
-func validProjectionState(s ProjectionState) bool {
-	return s == ProjectionCapped || s == ProjectionCappedFailure || s == ProjectionEmptied
-}
-
-// validateProjectionWrite checks a SetProjectionState request.
-func validateProjectionWrite(pk ProjectionKey, state ProjectionState) error {
-	if pk.ToolCallID == "" {
-		return errors.New("memory: projection: empty tool_call_id")
-	}
-	if pk.ArchiveLine < 0 {
-		return fmt.Errorf("memory: projection: negative archive_line %d", pk.ArchiveLine)
-	}
-	if !validProjectionState(state) {
-		return fmt.Errorf("memory: projection: unknown state %q", state)
-	}
-	return nil
-}
-
-// projectionEntry is the on-disk form of one ProjectionSet entry. A JSON
-// object cannot carry a struct map key, so the set is persisted as a
-// slice sorted by (archive_line, tool_call_id) — deterministic bytes so a
-// meta file written twice from the same state is identical.
-type projectionEntry struct {
-	ToolCallID     string          `json:"tool_call_id"`
-	ArchiveLine    int             `json:"archive_line"`
-	State          ProjectionState `json:"state,omitempty"`
-	SourceRunes    *int            `json:"retained_source_runes,omitempty"`
-	TranscriptAddr *RecordAddress  `json:"transcript_addr,omitempty"`
-}
-
-// projectionToEntries flattens a set for persistence.
-func projectionToEntries(p ProjectionSet) []projectionEntry {
-	if len(p) == 0 {
-		return nil
-	}
-	out := make([]projectionEntry, 0, len(p))
-	for k, v := range p {
-		out = append(out, projectionEntry{ToolCallID: k.ToolCallID, ArchiveLine: k.ArchiveLine, State: v})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].ArchiveLine != out[j].ArchiveLine {
-			return out[i].ArchiveLine < out[j].ArchiveLine
-		}
-		return out[i].ToolCallID < out[j].ToolCallID
-	})
-	return out
-}
-
-// projectionFromEntries rebuilds a set from the persisted slice. Entries
-// that fail validation (hand-edited meta, future state values) are dropped
-// rather than poisoning the session: a dropped entry degrades to "full
-// content", which is the safe direction.
-func projectionFromEntries(entries []projectionEntry) ProjectionSet {
-	out := make(ProjectionSet, len(entries))
-	for _, e := range entries {
-		pk := ProjectionKey{ToolCallID: e.ToolCallID, ArchiveLine: e.ArchiveLine}
-		if validateProjectionWrite(pk, e.State) != nil {
-			continue
-		}
-		out[pk] = e.State
-	}
-	return out
 }

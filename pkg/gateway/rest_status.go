@@ -76,10 +76,8 @@ func (a *restAPI) HandleDoctor(w http.ResponseWriter, r *http.Request) {
 				"info":   info,
 			},
 			"session_store": func() map[string]any {
-				for _, id := range a.agentLoop.GetRegistry().ListAgentIDs() {
-					if store := a.agentLoop.GetAgentStore(id); store != nil {
-						return map[string]any{"status": "ok", "available": true}
-					}
+				if a.agentLoop.GetSessionStore() != nil {
+					return map[string]any{"status": "ok", "available": true}
 				}
 				return map[string]any{"status": "degraded", "available": false}
 			}(),

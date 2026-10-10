@@ -849,7 +849,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Validate the agent exists before creating the session.
-	if agentStore := a.agentLoop.GetAgentStore(agentID); agentStore == nil {
+	if _, ok := a.agentLoop.GetRegistry().GetAgent(agentID); !ok {
 		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("agent %q not found", agentID))
 		return
 	}
@@ -862,15 +862,11 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use the shared session store for new sessions (joined session model).
-	// Fall back to the per-agent store if the shared store is unavailable.
+	// Every session lives in the one shared session store.
 	store := a.agentLoop.GetSessionStore()
 	if store == nil {
-		store = a.agentLoop.GetAgentStore(agentID)
-		if store == nil {
-			jsonErr(w, http.StatusInternalServerError, "session store unavailable")
-			return
-		}
+		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
+		return
 	}
 
 	var sessionType session.UnifiedSessionType

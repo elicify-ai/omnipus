@@ -429,17 +429,7 @@ func (al *AgentLoop) goalSessionWindowText(goalSessionID, agentID string) string
 			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
 		return ""
 	}
-	if shared := al.GetSessionStore(); shared != nil {
-		if text := al.sessionWindowText(shared, goalSessionID, al.effectiveVerifierWindowTokens(), nil); text != "" {
-			return text
-		}
-		logger.WarnCF("agent", "verifier: goal window empty from the SHARED store — falling back to the legacy per-agent store",
-			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
-	} else {
-		logger.WarnCF("agent", "verifier: no shared session store — goal window falling back to the legacy per-agent store",
-			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
-	}
-	store := al.GetAgentStore(agentID)
+	store := al.GetSessionStore()
 	if store == nil {
 		return ""
 	}
@@ -477,14 +467,9 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 	// Shared store first (see goalSessionWindowText's STORE RESOLUTION note —
 	// same 2026-09-06 UAT defect class; task sessions are written to the
 	// shared store too), legacy per-agent store as the old-install fallback.
-	if shared := al.GetSessionStore(); shared != nil {
-		if text := al.sessionWindowText(shared, t.SessionID, al.effectiveVerifierWindowTokens(), map[string]any{"task_id": taskID}); text != "" {
-			return text
-		}
-	}
-	store := al.GetAgentStore(assigneeAgentID)
+	store := al.GetSessionStore()
 	if store == nil {
-		logger.WarnCF("agent", "verifier: no session store for assignee agent (task window feed)",
+		logger.WarnCF("agent", "verifier: no session store (task window feed)",
 			map[string]any{"task_id": taskID, "agent_id": assigneeAgentID})
 		return ""
 	}
@@ -722,9 +707,6 @@ func (al *AgentLoop) allSessionsForDescendantWalk(assigneeAgentID string) []*ses
 		}
 	}
 	add(al.GetSessionStore(), "shared")
-	if assigneeAgentID != "" {
-		add(al.GetAgentStore(assigneeAgentID), "per-agent")
-	}
 	return all
 }
 
@@ -803,7 +785,7 @@ func (al *AgentLoop) scopeWithDescendants(assigneeAgentID string, rootIDs []stri
 func (al *AgentLoop) newVerifierSessionChatID(sessionKey, unitID string) string {
 	fallback := "verify:" + sessionKey
 
-	sessStore := al.GetAgentStore(string(coreagent.IDJudge))
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
 		return fallback
 	}
@@ -2049,7 +2031,7 @@ func (al *AgentLoop) dispatchVerifierTurn(
 		DefaultResponse:        defaultResponse,
 		SendResponse:           false,
 		TranscriptSessionID:    chatID,
-		TranscriptStore:        al.GetAgentStore(judgeInst.ID),
+		TranscriptStore:        al.GetSessionStore(),
 		OriginKind:             session.OriginKindVerifier,
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
