@@ -70,9 +70,9 @@ func (al *AgentLoop) goalSessionStoreFor(sessionID string) *session.UnifiedStore
 
 // goalWorkingAgentID resolves the agent that works the goal bound to
 // sessionID: the agent recorded on the goal's route at activation when this
-// process still holds it, else the session's own active agent, else the
-// session's agent (ADR-086 D6 folds goal_route_agent_id into the owner — for a
-// session-owned goal, the session's agent). Every keeper dispatch and every
+// process still holds it, else the session's owner (ADR-086 D6 folds
+// goal_route_agent_id into the owner — for a session-owned goal, the session's
+// immutable agent_id). Every keeper dispatch and every
 // ownership check must use this ONE resolution; an empty result is never a
 // licence to fall through to the default agent.
 func goalWorkingAgentID(sessionID string, store *session.UnifiedStore) (string, error) {
@@ -88,9 +88,6 @@ func goalWorkingAgentID(sessionID string, store *session.UnifiedStore) (string, 
 	}
 	if meta == nil {
 		return "", fmt.Errorf("session %q has no meta", sessionID)
-	}
-	if meta.ActiveAgentID != "" {
-		return meta.ActiveAgentID, nil
 	}
 	if meta.AgentID != "" {
 		return meta.AgentID, nil

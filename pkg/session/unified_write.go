@@ -4,7 +4,6 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -154,58 +153,6 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	return nil
 }
 
-// ErrAlreadyActive is returned by SwitchAgent when the session's ActiveAgentID
-// already matches the requested newAgentID. Callers should treat this as success
-// (idempotent operation).
-var ErrAlreadyActive = errors.New("agent already active on this session")
-
-// SwitchAgent atomically updates the ActiveAgentID on a session.
-// The caller must NOT already hold sessionID's shard (see lockSession) — was:
-// caller must NOT hold us.mu. Returns ErrAlreadyActive if the session
-// is already on newAgentID (idempotent — callers should treat this as success).
-// newAgentID is appended to AgentIDs if not already present.
-func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
-	if err := validateSessionID(sessionID); err != nil {
-		return err
-	}
-	h := us.lockSession(sessionID)
-	defer h.Unlock()
-
-	meta, err := us.readMetaLocked(sessionID)
-	if err != nil {
-		return err
-	}
-	// session-core U1 (DEL-11): a session no longer SEEDS ActiveAgentID at
-	// creation, so an empty value means "no handover has happened" — and the
-	// agent that is active is then the session's immutable owner. Resolving the
-	// current agent that way keeps this method's documented idempotence
-	// contract (switching to the agent that is already active is a no-op that
-	// reports ErrAlreadyActive) instead of silently writing a redundant
-	// handover owner equal to the owner the session already has.
-	current := meta.ActiveAgentID
-	if current == "" {
-		current = meta.AgentID
-	}
-	if current == newAgentID {
-		return ErrAlreadyActive
-	}
-	meta.ActiveAgentID = newAgentID
-
-	found := false
-	for _, id := range meta.AgentIDs {
-		if id == newAgentID {
-			found = true
-			break
-		}
-	}
-	if !found {
-		meta.AgentIDs = append(meta.AgentIDs, newAgentID)
-	}
-	meta.UpdatedAt = time.Now().UTC()
-	// ActiveAgentID/AgentIDs are identity-group fields (FR-053).
-	return us.u5WriteIdentityLocked(sessionID, meta)
-}
-
 // writeMetaLocked is RETAINED, post-W23, as a backward-compatible DISPATCHER
 // over the FR-054/GOAL-FR-005 targeted field-group writers
 // (u5WriteIdentityLocked/u5WriteStatsLocked/u5WriteLoopLocked,
@@ -213,8 +160,8 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 // pending_ask.go) — it is no longer "the single invalidation/update point
 // for every mutation path" (that whole-document funnel is exactly what
 // FR-084/Alternative-F forbids; see the doc comments above metaCache and
-// readMetaLocked). This file's OWN five mutation paths (createSessionLocked,
-// SetMeta, SwitchAgent, AppendTranscript, NewChannelSession) call the
+// readMetaLocked). This file's OWN four mutation paths (createSessionLocked,
+// SetMeta, AppendTranscript, NewChannelSession) call the
 // targeted writers DIRECTLY and never reach this function.
 //
 // It survives only for pkg/session/unified_api.go's two call sites

@@ -35,7 +35,7 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 	commonWork := []string{"read_file", "list_directory", "grep", "list_mounts", "library_list", "library_read", "remember", "recall_memory", "recall_conversation", "send_message", "message_parent", "goal_claim", "read_inbox", "search_email", "read_message", "list_email_attachments", "read_email_attachment", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
 	switch id {
 	case IDMia:
-		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "write_file", "edit_file", "append_file", "search_web", "fetch_url", "switch_agent", "send_file", "create_task", "update_task", "list_tasks", "set_todos", "find_skills")...)
+		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "write_file", "edit_file", "append_file", "search_web", "fetch_url", "send_file", "create_task", "update_task", "list_tasks", "set_todos", "find_skills")...)
 		// environment_setup (ADR-090 ES-FR-01, founder ruling 2026-09-18):
 		// Ask — and the sparse seed RETAINS it as an explicit stored entry
 		// (deliberate posture list in adr090SparseRolePolicies) even though
@@ -56,13 +56,13 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 		// above) rather than silently defaulting to it.
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "browser_upload_file", "environment_setup", "bash")
 	case IDJim:
-		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "switch_agent", "send_file", "create_task", "update_task", "list_tasks", "list_jobs", "set_todos", "delegate", "create_plan", "execute_plan", "stop_plan", "find_skills", "list_skills")...)
+		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "send_file", "create_task", "update_task", "list_tasks", "list_jobs", "set_todos", "delegate", "create_plan", "execute_plan", "stop_plan", "find_skills", "list_skills")...)
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "browser_upload_file")
 	case IDAva:
-		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "switch_agent", "list_agents", "get_agent", "get_agent_tools", "create_agent", "update_agent", "delete_agent", "list_models", "find_skills", "list_skills", "install_skill", "create_skill", "edit_skill", "remove_skill", "list_mcp_servers", "get_workspace", "list_workspaces", "update_workspace")...)
+		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "list_agents", "get_agent", "get_agent_tools", "create_agent", "update_agent", "delete_agent", "list_models", "find_skills", "list_skills", "install_skill", "create_skill", "edit_skill", "remove_skill", "list_mcp_servers", "get_workspace", "list_workspaces", "update_workspace")...)
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount")
 	case IDAdmin:
-		grant(allow, "remember", "recall_memory", "recall_conversation", "AskUserQuestion", "set_goal", "goal_claim", "read_file", "write_file", "edit_file", "append_file", "list_directory", "grep", "list_mounts", "send_message", "switch_agent", "add_mcp_server", "list_mcp_servers", "list_providers", "configure_provider", "test_provider", "list_models", "list_channels", "configure_channel", "enable_channel", "test_channel", "run_doctor", "get_usage")
+		grant(allow, "remember", "recall_memory", "recall_conversation", "AskUserQuestion", "set_goal", "goal_claim", "read_file", "write_file", "edit_file", "append_file", "list_directory", "grep", "list_mounts", "send_message", "add_mcp_server", "list_mcp_servers", "list_providers", "configure_provider", "test_provider", "list_models", "list_channels", "configure_channel", "enable_channel", "test_channel", "run_doctor", "get_usage")
 		grant(allow, "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list")
 		// environment_setup (ADR-090 ES-FR-01): Ask — explicit stored entry
 		// (deliberate posture). Admin's cross-workspace FILESYSTEM authority

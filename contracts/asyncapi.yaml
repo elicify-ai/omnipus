@@ -97,8 +97,6 @@ channels:
         $ref: '#/components/messages/ProviderFallbackNote'
       MediaFrame:
         $ref: '#/components/messages/MediaFrame'
-      AgentSwitchedFrame:
-        $ref: '#/components/messages/AgentSwitchedFrame'
       ToolApprovalRequiredFrame:
         $ref: '#/components/messages/ToolApprovalRequiredFrame'
       ToolApprovalResolvedFrame:
@@ -547,16 +545,6 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/MediaFrame'
-  receiveAgentSwitched:
-    action: receive
-    channel:
-      $ref: '#/channels/chat'
-    summary: 'The active agent for a session changed (switch_agent, ADR-071 D4). The SPA updates the active agent in the
-      session store.
-
-      '
-    messages:
-    - $ref: '#/channels/chat/messages/AgentSwitchedFrame'
   receiveLibraryChanged:
     action: receive
     channel:
@@ -1230,13 +1218,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/MediaFrame'
-    AgentSwitchedFrame:
-      name: AgentSwitchedFrame
-      title: agent_switched
-      summary: Active agent changed (server → client).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/AgentSwitchedFrame'
     ToolApprovalRequiredFrame:
       name: ToolApprovalRequiredFrame
       title: tool_approval_required
@@ -1624,7 +1605,6 @@ components:
       - context_window_notice
       - provider_fallback
       - media
-      - agent_switched
       - tool_approval_required
       - tool_approval_resolved
       - session_state
@@ -4310,42 +4290,6 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/MediaFrame.yaml.
-    AgentSwitchedFrame:
-      title: AgentSwitchedFrame
-      description: >
-        Server → client active agent changed. Session-scoped (registered
-        in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the
-        ADR-057 W5 audit (FR-089).
-      type: object
-      required:
-      - type
-      - session_id
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: agent_switched
-        session_id:
-          type: string
-          minLength: 1
-        agent_id:
-          type: string
-        message:
-          type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see this frame's description.
-        seq:
-          type: integer
-          format: int64
-          minimum: 1
-          description: >-
-            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
-            absent on an unsequenced copy. Keep in sync by hand with
-            contracts/components/schemas/AgentSwitchedFrame.yaml.
     CommandSegmentInfo:
       title: CommandSegmentInfo
       description: >

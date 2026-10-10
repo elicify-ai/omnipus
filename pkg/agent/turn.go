@@ -529,15 +529,6 @@ type turnState struct {
 	// callRecord). A settle or a projection names the address; nothing searches.
 	callRecords sync.Map // session.ToolCallID -> callRecord
 
-	// activeAgentResolver, when non-nil, returns the runtime-current active
-	// agent for this session's transcript. It is set at turn construction for
-	// webchat turns (where sessionActiveAgent tracks post-handoff overrides).
-	// appendToolCallTranscript calls it to tag each entry with the agent that
-	// is currently active rather than the one that started the turn — so
-	// tool_call entries produced after a handoff (same turn, new active agent)
-	// carry the correct agent_id in the transcript.
-	activeAgentResolver func() string
-
 	// denialLedger is ADR-058's per-turn tool-denial state (FR-058-09): an
 	// aggregate count of every denial response handed to the model in this
 	// turn (real or replayed from the quarantine cache), and a map of tools
@@ -1697,19 +1688,10 @@ func (ts *turnState) eventMeta(source, tracePath string) EventMeta {
 	}
 }
 
-// resolveActiveAgentID returns the runtime-current active agent ID for this
-// turn's session. When activeAgentResolver is set (webchat sessions), it
-// reflects post-handoff switches that may have occurred during the turn.
-// Falls back to the turn's starting agent ID for all other sessions.
-//
-// Use this — not ts.agentID — in any event payload or log field that should
-// attribute work to the agent that is currently active in the session.
+// resolveActiveAgentID returns the agent ID to attribute this turn's work to:
+// the turn's own agent (a session has one immutable owner; there is no
+// mid-turn agent switch).
 func (ts *turnState) resolveActiveAgentID() string {
-	if ts.activeAgentResolver != nil {
-		if id := ts.activeAgentResolver(); id != "" {
-			return id
-		}
-	}
 	return ts.agentID
 }
 

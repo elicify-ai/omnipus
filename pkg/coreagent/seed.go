@@ -96,7 +96,7 @@ var allStaticToolNames = []string{
 	// on an override key absent from it.
 	"list_mounts",
 	"search_web", "fetch_url",
-	"send_message", "switch_agent", "send_file",
+	"send_message", "send_file",
 	"find_skills", "install_skill",
 	// Skill (ADR-072 D1): the on-demand skill load/search tool, wired into
 	// this literal alongside ToolSearch below — see its "Structural floor"
@@ -410,7 +410,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 func coreAgentSkills(id CoreAgentID) []string {
 	switch id {
 	case IDMia:
-		return []string{"interview", "handoff", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
+		return []string{"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
 	case IDJim:
 		return []string{"interview", "orchestrate", "plan", "define-goal"}
 	case IDAva:

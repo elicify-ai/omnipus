@@ -59,7 +59,7 @@ func agentExistsChecker(registry *AgentRegistry) func(id string) bool {
 		// establishes this exact "ask the durable entity store, not the
 		// possibly-stale in-memory view" precedent) can be real on disk
 		// before the registry catches up. Without this fallback, a
-		// delegate/switch_agent call landing in that window reports the
+		// delegate call landing in that window reports the
 		// misleading "agent %q does not exist" — masking the actual denial
 		// reason (e.g. a missing trust edge) a UAT run observed when the
 		// target agent, in fact, existed. Best-effort: a store read error

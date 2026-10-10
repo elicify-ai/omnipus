@@ -3,7 +3,6 @@
 // These tests exercise the dedicated headless scheduled-run entry point:
 //   - owner-pinned routing (runs the given owner, never the default);
 //   - missing owner is a hard error (no default-agent fallback);
-//   - the sessionActiveAgent handoff map is never read/written/deleted;
 //   - the per-owner session key namespacing (agent:<owner>:session:<id>);
 //   - ask-policy tool calls are auto-denied (never block for approval);
 //   - a canceled (deadline) run returns a context-derived error promptly;
@@ -90,19 +89,6 @@ type autoApproveApprover struct{ consulted atomic.Bool }
 func (a *autoApproveApprover) RequestApproval(context.Context, PolicyApprovalReq) (bool, string, bool) {
 	a.consulted.Store(true)
 	return true, "auto-approved", false
-}
-
-// snapshotHandoffMap returns a stable copy of the sessionActiveAgent map so a
-// test can assert it is unchanged across a scheduled run.
-func snapshotHandoffMap(al *AgentLoop) map[string]string {
-	out := map[string]string{}
-	al.sessionActiveAgent.Range(func(k, v any) bool {
-		ks, _ := k.(string)
-		vs, _ := v.(string)
-		out[ks] = vs
-		return true
-	})
-	return out
 }
 
 // schedTestLoop builds an AgentLoop with a shared session store wired so
@@ -213,38 +199,6 @@ func TestProcessScheduled_MissingOwner_NoDefaultFallback(t *testing.T) {
 	assert.Contains(t, err.Error(), "owner unavailable")
 	assert.Empty(t, reply)
 	assert.False(t, defProvider.called.Load(), "no default-agent fallback is allowed")
-}
-
-// TestProcessScheduled_DoesNotTouchHandoffMap asserts a scheduled run never
-// reads/writes/deletes the sessionActiveAgent handoff map — a scheduled run must
-// not disturb a human's in-flight agent switch in that session.
-// Traces to: W-1 (J-2), FR-001.
-func TestProcessScheduled_DoesNotTouchHandoffMap(t *testing.T) {
-	al, home := schedTestLoop(t)
-	registerAgent(t, al, home, "mia", testutil.NewScenario().WithText("ok"), false)
-
-	meta, err := al.GetSessionStore().NewScheduledSession("mia")
-	require.NoError(t, err)
-
-	// Seed a human handoff override on the SAME session id, as if a human
-	// switched the active agent to "ray" in this session.
-	handoffKey := "session:" + meta.ID
-	al.sessionActiveAgent.Store(handoffKey, "ray")
-
-	snapshotBefore := snapshotHandoffMap(al)
-
-	_, err = al.ProcessScheduled(
-		context.Background(), "mia", meta.ID, "scheduled work", "scheduled", meta.ID,
-	)
-	require.NoError(t, err)
-
-	snapshotAfter := snapshotHandoffMap(al)
-	assert.Equal(t, snapshotBefore, snapshotAfter,
-		"sessionActiveAgent handoff map must be identical before and after a scheduled run")
-	// The human's override specifically must survive unchanged.
-	v, ok := al.sessionActiveAgent.Load(handoffKey)
-	require.True(t, ok, "human handoff override must not be deleted by a scheduled run")
-	assert.Equal(t, "ray", v)
 }
 
 // TestProcessScheduled_PerOwnerSessionKey asserts the run uses the per-owner

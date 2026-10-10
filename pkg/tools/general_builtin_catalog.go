@@ -114,7 +114,6 @@ func GeneralBuiltinMetadata() []Tool {
 
 	// --- Communication / delegation tools (CategoryCommunication / CategoryDelegation) ---
 	out = append(out, NewMessageTool())
-	out = append(out, NewSwitchAgentTool(nil, nil, nil, nil, nil))
 	out = append(out, NewSendFileTool("", false, 0, nil))
 
 	// --- Skill tools (CategorySkills) ---

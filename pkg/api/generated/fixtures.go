@@ -505,23 +505,6 @@ func FixtureRateLimitFrame_ZeroValue() RateLimitFrame {
 	return RateLimitFrame{}
 }
 
-// AgentSwitchedFrame
-
-func FixtureAgentSwitchedFrame_Populated() AgentSwitchedFrame {
-	agentId := "ava"
-	msg := "Switched to Ava for research task"
-	return AgentSwitchedFrame{
-		Type:      "agent_switched",
-		SessionId: "sess-1",
-		AgentId:   &agentId,
-		Message:   &msg,
-	}
-}
-
-func FixtureAgentSwitchedFrame_ZeroValue() AgentSwitchedFrame {
-	return AgentSwitchedFrame{}
-}
-
 // TaskStatusChangedFrame
 
 func FixtureTaskStatusChangedFrame_Populated() TaskStatusChangedFrame {

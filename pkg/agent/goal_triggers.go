@@ -1527,7 +1527,7 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 	agentInst := resolveGoalAgent(al, s)
 	if agentInst == nil {
 		logger.WarnCF("agent", "goal idle settle: could not resolve agent",
-			map[string]any{"session_id": sessionID, "agent_id": s.ActiveAgentID})
+			map[string]any{"session_id": sessionID, "agent_id": s.AgentID})
 		return
 	}
 
@@ -2204,7 +2204,7 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 // agent id into the goal's owner reference instead of a second copy) — a
 // route rehydrated from the persisted fallback therefore carries only
 // channel/chatID; a cold-boot caller that also needs the agent id falls
-// back to the session's own ActiveAgentID, the same fallback
+// back to the session's owner (agent_id), the same fallback
 // applyGoalMarkerRestate's own anchor call already uses. A route missing on
 // BOTH sides (in-memory AND persisted) WARNs and writes a one-line
 // LatestReason note onto the goal record via goal.RecordRoutingLost (S5)
@@ -2249,7 +2249,7 @@ func (s *goalTriggerState) routeFor(sessionID string) (goalRoute, error) {
 
 // resolveGoalAgent resolves the AgentInstance that runs the goal-bearing
 // session's machine checks (the Judge's AssigneeAgentID). Falls back through
-// ActiveAgentID → first AgentIDs entry → the default agent, mirroring how the
+// the session owner (agent_id) → first AgentIDs entry → the default agent, mirroring how the
 // chat turn itself resolves the active agent. Returns nil if none resolves.
 func resolveGoalAgent(al *AgentLoop, s *session.UnifiedMeta) *AgentInstance {
 	registry := al.GetRegistry()
@@ -2257,7 +2257,7 @@ func resolveGoalAgent(al *AgentLoop, s *session.UnifiedMeta) *AgentInstance {
 		return nil
 	}
 	candidates := make([]string, 0, 1+len(s.AgentIDs))
-	candidates = append(candidates, s.ActiveAgentID)
+	candidates = append(candidates, s.AgentID)
 	candidates = append(candidates, s.AgentIDs...)
 	for _, id := range candidates {
 		if id == "" {

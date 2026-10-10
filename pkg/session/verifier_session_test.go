@@ -52,7 +52,6 @@ func TestNewVerifierSession_StampsTypeAndOwner(t *testing.T) {
 
 	assert.Equal(t, SessionTypeVerifier, meta.Type, "type must be verifier")
 	assert.Equal(t, judgeID, meta.AgentID, "AgentID must be the verifier agent")
-	assert.Equal(t, judgeID, meta.ActiveAgentID, "ActiveAgentID must be the verifier agent")
 	assert.Equal(t, []string{judgeID}, meta.AgentIDs, "AgentIDs must be [judgeID]")
 	assert.NotEmpty(t, meta.ID, "session must have a non-empty ID")
 }

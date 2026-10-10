@@ -8,7 +8,7 @@ import (
 )
 
 func TestADR090_PromptSkillToolReferences_RoleSkillPackagesAreComplete(t *testing.T) {
-	want := []string{"interview", "handoff", "orchestrate", "deep-research", "agent-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team", "mcp-install", "provider-setup", "channel-setup", "doctor", "verify", "inbox-triage"}
+	want := []string{"interview", "orchestrate", "deep-research", "agent-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team", "mcp-install", "provider-setup", "channel-setup", "doctor", "verify", "inbox-triage"}
 	required := []string{"description:", "## Prerequisites", "## Steps", "## Expected output", "## Stop and handoff"}
 	for _, name := range want {
 		data, err := fs.ReadFile(embeddedSkills, embeddedRoot+"/"+name+"/SKILL.md")
