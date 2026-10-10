@@ -1319,7 +1319,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 			slog.Error("rest: channel reload after enable toggle failed",
 				"channel", channelID, "enabled", enabled, "error", err)
 			jsonErr(w, http.StatusInternalServerError,
-				fmt.Sprintf("channel %s saved but failed to %s: %v", channelID, verb, err))
+				fmt.Sprintf("channel %s saved but failed to %s. Details are in the server log.", channelID, verb))
 			return
 		} else if !confirmed {
 			verb := "start"

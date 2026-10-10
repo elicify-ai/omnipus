@@ -966,7 +966,8 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf(
-			"task %q was created but its Definition of Done could not be persisted: %v", t.ID, gErr))
+			"task %q was created but its Definition of Done could not be persisted. "+
+				"Check disk space and permissions, then retry. Details are in the server log.", t.ID))
 		return
 	}
 
@@ -1502,8 +1503,8 @@ func (tp *taskPatch) syncGoalRecord() bool {
 				return true
 			}
 			jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
-				"task %q was updated but its Definition of Done could not be persisted: %v",
-				tp.id, gErr))
+				"task %q was updated but its Definition of Done could not be persisted. "+
+					"Check disk space and permissions, then retry. Details are in the server log.", tp.id))
 			return true
 		}
 	}
@@ -1566,8 +1567,11 @@ func (tp *taskPatch) launchIfStarted() bool {
 		if startErr != nil {
 			fresh, readErr := tp.a.taskStore.Get(tp.id)
 			if readErr != nil {
-				jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
-					"%v; could not read task status before rollback: %v", startErr, readErr))
+				slog.Error("rest: could not read task status before rollback",
+					"id", tp.id, "start_error", startErr, "error", readErr)
+				jsonErr(tp.w, http.StatusInternalServerError,
+					"the task could not be started and its status could not be checked before rollback: "+
+						"server storage failed. Check disk space and permissions, then retry. Details are in the server log.")
 				return true
 			}
 			// A successful executor failure write stores the same cause it returns.
@@ -1578,8 +1582,9 @@ func (tp *taskPatch) launchIfStarted() bool {
 				if _, rErr := tp.a.taskStore.Update(tp.id, revertPatch); rErr != nil {
 					slog.Error("rest: could not revert task status after StartTaskNow failure",
 						"id", tp.id, "revert_to", tp.preUpdateStatus, "error", rErr)
-					jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
-						"%v; could not revert task status: %v", startErr, rErr))
+					jsonErr(tp.w, http.StatusInternalServerError,
+						"the task could not be started and its status could not be reverted: "+
+							"server storage failed. Check disk space and permissions, then retry. Details are in the server log.")
 					return true
 				}
 			}
@@ -1606,7 +1611,13 @@ func (tp *taskPatch) launchIfStarted() bool {
 			slog.Warn("rest: StartTaskNow failed",
 				"id", tp.id, "agent_id", tp.updated.AgentID, "prior_status", tp.preUpdateStatus,
 				"failed_disposition_preserved", failedDisposition, "error", startErr)
-			jsonErr(tp.w, httpStatus, startErr.Error())
+			if httpStatus == http.StatusConflict {
+				// The two 409 classes (dispatch cap, plan state) are fixed
+				// domain errors with no storage detail.
+				jsonErr(tp.w, httpStatus, startErr.Error())
+			} else {
+				jsonErr(tp.w, httpStatus, "the task could not be started. Check the agent and try again; details are in the server log.")
+			}
 			return true
 		}
 		if sessID != "" {
