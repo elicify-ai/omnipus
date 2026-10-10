@@ -11,6 +11,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -560,7 +561,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	redispatchTaskID = te.executeTaskRun(ctx, t, taskSessionID, " (StartTaskNow path)", run, turn)
 }
 
-// processTaskDirectExternalCLI runs a task assigned to a subagent_3p
+// runTaskExternalCLIOnce runs ONE external-CLI invocation of a task assigned to a subagent_3p
 // (external-CLI) worker through runExternalCLISubTurn — the same dispatch
 // machinery task_executor_run.go's dispatchesExternalCLI check and the
 // delegate tool's own dispatch path share for agent-to-agent delegation
@@ -629,11 +630,13 @@ func (te *TaskExecutor) runTaskFromInProgress(
 //     delegate/create_task tools that could populate ts.childTurnIDs, so the
 //     hard-abort child-cascade branch is still unreachable here — that part
 //     of the "no-panic" reasoning is unaffected.
-func (al *AgentLoop) processTaskDirectExternalCLI(
+func (al *AgentLoop) runTaskExternalCLIOnce(
 	ctx context.Context,
 	liveAgent *AgentInstance,
 	prompt, sessionKey, taskChatID string,
 	delegationDepth int,
+	resume bool,
+	out *taskExternalOutcome,
 ) (string, error) {
 	// FIX 1 (7-reviewer gate, data race): liveAgent is the LIVE registry
 	// *AgentInstance (registry.GetAgent, in processTaskDirect above) —
@@ -672,8 +675,16 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 		// turn is registered below under the run's identity so a Stop finds
 		// its barrier and interrupts the external process.
 		executionDisposition: taskExecutionFor(ctx, taskChatID),
+		// FR-032: a continuation after a steer-interrupt delivers the person's
+		// instruction to the SAME native CLI conversation (never a fresh Run).
+		ExternalCLIResume: resume,
 	}
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, sessionKey))
+	if out != nil {
+		// A person's Stop claims the cancel on this turn; a steer delivery
+		// interrupts only the CLI run. Read after the run, so it is exact.
+		defer func() { out.stopped = ts.cancelFired.Load() || ts.hardAbortRequested() }()
+	}
 	if d := opts.executionDisposition; d != nil {
 		ts.generation = d.claim.Generation
 		if identityErr := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); identityErr != nil {
@@ -810,4 +821,65 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 		return result.ForUser, nil
 	}
 	return result.ForLLM, nil
+}
+
+// taskExternalOutcome reports how one external-CLI task invocation ended.
+type taskExternalOutcome struct {
+	// stopped is true when a person's Stop claimed the turn (as opposed to a
+	// steer delivery interrupting the CLI run so it can be resumed).
+	stopped bool
+}
+
+// processTaskDirectExternalCLI runs a task assigned to a subagent_3p
+// (external-CLI) worker. A person's instruction delivered to the live run
+// (FR-032 / FR-043: DeliverExternalCLIInstruction) interrupts the CLI process;
+// this loop then resumes the SAME native conversation with the instruction and
+// returns the run's final answer, so the task's claim, attempts and result rules
+// see one turn. A Stop, or a run the person did not steer, ends exactly as
+// before: the interrupted turn's own outcome is returned and nothing is resumed.
+func (al *AgentLoop) processTaskDirectExternalCLI(
+	ctx context.Context,
+	liveAgent *AgentInstance,
+	prompt, sessionKey, taskChatID string,
+	delegationDepth int,
+) (string, error) {
+	var out taskExternalOutcome
+	resp, err := al.runTaskExternalCLIOnce(ctx, liveAgent, prompt, sessionKey, taskChatID, delegationDepth, false, &out)
+	for ctx.Err() == nil && !out.stopped && al.takeExternalSteerInterrupt(taskChatID) {
+		resumed := false
+		var nextResp string
+		var nextErr error
+		_, contErr := al.continuePendingSteeringWithAgent(ctx, taskChatID, liveAgent,
+			func(_ *AgentInstance, steeringMsgs []providers.Message, _ []string) (string, error) {
+				resumed = true
+				out = taskExternalOutcome{}
+				nextResp, nextErr = al.runTaskExternalCLIOnce(ctx, liveAgent,
+					joinSteeringContent(steeringMsgs), sessionKey, taskChatID, delegationDepth, true, &out)
+				// The instruction reached the CLI (or the resume refused
+				// visibly): the queue item is consumed either way, never restored.
+				return "", nil
+			})
+		if contErr != nil {
+			return "", fmt.Errorf("processTaskDirect: external-cli steer continuation: %w", contErr)
+		}
+		if !resumed {
+			// The queued instruction was superseded (a Stop) before it could be
+			// consumed: the interrupted turn's own outcome stands.
+			return resp, err
+		}
+		resp, err = nextResp, nextErr
+	}
+	return resp, err
+}
+
+// joinSteeringContent is the instruction text of queued steering messages, the
+// same join steeredExternalCLIInput applies for a steered CLI continuation.
+func joinSteeringContent(msgs []providers.Message) string {
+	parts := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		if content := strings.TrimSpace(m.Content); content != "" {
+			parts = append(parts, content)
+		}
+	}
+	return strings.Join(parts, "\n\n")
 }

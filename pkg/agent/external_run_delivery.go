@@ -27,12 +27,12 @@
 // claim; a delivery whose expected claim no longer matches the in-flight run is
 // refused as superseded (BDD-05.6 "no stale delivery").
 //
-// Refusal (N4). A task-origin external run has no consumer that resumes the
-// native conversation after an interrupt — the queued instruction would be
-// orphaned and the task run would simply end cancelled. Such a delivery is
-// refused BEFORE queueing or interrupting, with an actionable message. (The
-// task-side consumer that would resume it is the U10b unit; until it lands this
-// refusal is the honest outcome.)
+// Task runs (FR-032). A task-origin external run is steered the same way: the
+// delivery marks the holder (steerInterrupt) and interrupts the CLI run, and the
+// task loop (processTaskDirectExternalCLI) — not the post-turn drain — consumes
+// the queued instruction and resumes the SAME native conversation inside the one
+// task turn, so the claim, attempts and result rules are untouched. A Stop does
+// not set the mark and supersedes the queue, so it still ends the run.
 package agent
 
 import (
@@ -47,7 +47,7 @@ import (
 // external-CLI child session by interrupt + native-conversation resume
 // (FR-043). It returns the resolved correlation id of the queued instruction on
 // success, or a visible error when there is no live conversation to deliver to
-// (or the target is a task run, or the selected execution was superseded).
+// (or the selected execution was superseded).
 //
 // It lives on *AgentLoop (the production delegate steering sink embeds it) so
 // pkg/tools can reach it through an optional-capability assertion — a test fake
@@ -78,14 +78,15 @@ func (al *AgentLoop) deliverExternalCLIInstruction(
 	if sessionID == "" {
 		return "", fmt.Errorf("external-cli steer: empty session id")
 	}
-	// N4: refuse a task-origin external run BEFORE queueing or interrupting.
-	// Task execution does not consume the steering queue's continuation, so a
-	// queued instruction would be orphaned and the task run would end cancelled.
+	// A task-origin external run is steerable too (FR-032): the task loop
+	// (task_executor_run.go::processTaskDirectExternalCLI) consumes the queued
+	// instruction after the interrupt and resumes the same native conversation.
+	// Only a run the task loop can resume is marked, so the mark can never
+	// outlive a consumer.
+	taskOrigin := false
 	if rec, rerr := al.loadLifecycleRecord(sessionID); rerr == nil && rec != nil &&
 		rec.Origin != nil && rec.Origin.Kind == session.OriginKindTask {
-		return "", fmt.Errorf(
-			"external-cli steer: session %s is running a task; a live instruction cannot be delivered to an external-CLI task run — Stop and Rerun the task, or wait for it to finish",
-			sessionID)
+		taskOrigin = true
 	}
 
 	sess := al.externalRunSessionIfPresent(sessionID)
@@ -118,6 +119,9 @@ func (al *AgentLoop) deliverExternalCLIInstruction(
 	// al.Interrupt(sessionID, …), which resolves whatever turn is current for
 	// the session id and could cancel a newer run. A cancel of an already-ended
 	// run is a harmless no-op; the drain still consumes the queued instruction.
+	if taskOrigin {
+		sess.steerInterrupt = true
+	}
 	if sess.cancelRun != nil {
 		sess.cancelRun()
 	}

@@ -84,14 +84,18 @@ var errExternalWorkspaceChanged = errors.New(
 //     in (N1): a continuation must re-resolve and re-lock THAT workspace, or
 //     refuse.
 type externalCLIRunSession struct {
-	mu          sync.Mutex
-	driver      runner.ExternalAgentRunner
-	started     bool
-	running     bool
-	claim       executionClaim
-	cancelRun   context.CancelFunc
-	workDir     string
-	workspaceID string
+	mu        sync.Mutex
+	driver    runner.ExternalAgentRunner
+	started   bool
+	running   bool
+	claim     executionClaim
+	cancelRun context.CancelFunc
+	// steerInterrupt is set (under mu) by a steer delivery to a TASK-origin run:
+	// the CLI run was interrupted so the task loop can resume it with the queued
+	// instruction. It is consumed once by takeExternalSteerInterrupt.
+	steerInterrupt bool
+	workDir        string
+	workspaceID    string
 }
 
 // externalRunSessionKey resolves the registry key for a run — the child's own
@@ -356,4 +360,19 @@ func (s *externalCLIRunSession) isRunning() bool {
 // live (its instruction would be orphaned with no drain to consume it).
 func (al *AgentLoop) externalRunLive(sessionKey string) bool {
 	return al.externalRunSessionIfPresent(sessionKey).isRunning()
+}
+
+// takeExternalSteerInterrupt reports whether the session's last run was
+// interrupted by a steer delivery (rather than ending on its own or by a Stop),
+// and clears the mark so one delivery resumes exactly once.
+func (al *AgentLoop) takeExternalSteerInterrupt(sessionKey string) bool {
+	sess := al.externalRunSessionIfPresent(sessionKey)
+	if sess == nil {
+		return false
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	was := sess.steerInterrupt
+	sess.steerInterrupt = false
+	return was
 }

@@ -65,14 +65,29 @@ func (al *AgentLoop) pinnedSteeredRecord(sessionID string) *session.LifecycleRec
 // applies through the same queue). A refusal is answered visibly.
 func (al *AgentLoop) deliverHumanHelperInput(msg bus.InboundMessage) bool {
 	rec := al.pinnedSteeredRecord(msg.SessionID)
-	if rec == nil {
-		return false
+	var err error
+	switch {
+	case rec != nil:
+		agentID := strings.TrimSpace(rec.AgentID)
+		if agentID == "" {
+			return false
+		}
+		err = al.enqueueHelperSteeringFromMessage(msg, agentID, rec.Is3P)
+	default:
+		// FR-032: a person typing into the chat of a LIVE external-CLI task run
+		// steers that run (interrupt + native resume, consumed by the task
+		// loop). Any other task chat keeps the ordinary dispatch.
+		taskRec := al.liveExternalTaskRecord(msg.SessionID)
+		if taskRec == nil {
+			return false
+		}
+		_, err = al.DeliverExternalCLIInstruction(context.Background(), msg.SessionID, strings.TrimSpace(taskRec.AgentID),
+			providers.Message{Role: "user", Content: msg.Content, Media: append([]string(nil), msg.Media...)}, "")
+		if err != nil {
+			err = fmt.Errorf("deliver message to external-CLI task run %q: %w", msg.SessionID, err)
+		}
 	}
-	agentID := strings.TrimSpace(rec.AgentID)
-	if agentID == "" {
-		return false
-	}
-	if err := al.enqueueHelperSteeringFromMessage(msg, agentID, rec.Is3P); err != nil {
+	if err != nil {
 		logger.WarnCF("agent", "A message to a helper was not accepted",
 			map[string]any{"session_id": msg.SessionID, "error": err.Error()})
 		replyCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -123,4 +138,32 @@ func (al *AgentLoop) enqueueHelperSteeringFromMessage(msg bus.InboundMessage, ag
 		Role: "user", Content: msg.Content, Media: append([]string(nil), msg.Media...),
 	}, "")
 	return err
+}
+
+// liveExternalTaskRecord returns the lifecycle record of sessionID when it is a
+// task-origin session on an external CLI whose run is in flight right now, else
+// nil. Only a run the task loop can resume qualifies, so a person's message is
+// never queued for a consumer that does not exist.
+func (al *AgentLoop) liveExternalTaskRecord(sessionID string) *session.LifecycleRecord {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	rec, err := al.loadLifecycleRecord(sessionID)
+	if err != nil || rec == nil || !rec.Is3P || rec.Origin == nil || rec.Origin.Kind != session.OriginKindTask {
+		return nil
+	}
+	if strings.TrimSpace(rec.AgentID) == "" {
+		return nil
+	}
+	sess := al.externalRunSessionIfPresent(sessionID)
+	if sess == nil {
+		return nil
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if !sess.running {
+		return nil
+	}
+	return rec
 }
