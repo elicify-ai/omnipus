@@ -987,14 +987,14 @@ func (e *curatedTurnError) Error() string { return e.text }
 // delegate tool's refusal to the calling agent (pkg/tools.refusalTexter).
 func (e *curatedTurnError) RefusalText() string { return e.text }
 
-// authoredRefusal is a refusal whose sentence was written by Omnipus and is
+// authoredRefusalError is a refusal whose sentence was written by Omnipus and is
 // path-free (a session id at most): the delegate tool may show it as written. It
 // is the only other type that carries RefusalText; a wrapped store error never
 // does.
-type authoredRefusal struct{ text string }
+type authoredRefusalError struct{ text string }
 
-func (e *authoredRefusal) Error() string       { return e.text }
-func (e *authoredRefusal) RefusalText() string { return e.text }
+func (e *authoredRefusalError) Error() string       { return e.text }
+func (e *authoredRefusalError) RefusalText() string { return e.text }
 
 // turnErrorUserText is what a person or a model may read about a turn that
 // ended on err: the contract's plain message for err's typed code

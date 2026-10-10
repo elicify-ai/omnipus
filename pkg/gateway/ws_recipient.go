@@ -71,7 +71,7 @@ func (h *WSHandler) refuseRecipient(ctx context.Context, sessionID string, setup
 // human).
 func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 	owner := addressing.Pair{}
-	ownerAgent := hcm.targetAgentID
+	var ownerAgent string
 	// The source is saved only inside AdmitRequest's BeforeCommit, so until then
 	// the session is the one the frame names (a recipient needs an existing chat).
 	srcID := hcm.frameSessionID
