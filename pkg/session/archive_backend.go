@@ -12,25 +12,27 @@
 // JSONLStore: it re-homes the window/projection/rollback algorithms onto the
 // archive (spec Decision D, "not a compatibility backend").
 //
-// ORDINAL MODEL (documented, transitional): the interfaces expose a zero-based
-// `archive_line` ordinal (ProjectionKey.ArchiveLine, WindowState.Skip/Count).
-// An ordinal here is a MODEL-ARCHIVE line: one PAYLOAD record — an ArchiveRecord
-// carrying a ModelMessage — in append order. A body-free model_ref placement is
-// NOT a new line (it resolves to the payload it references), which is what keeps
-// "one placement per source, no duplicate" true. Consecutive unreadable/partial
-// lines are skipped without consuming an ordinal, matching the existing reader.
+// ORDINAL MODEL: the interfaces expose a zero-based `archive_line` ordinal
+// (ProjectionKey.ArchiveLine, WindowState.Skip/Count). An ordinal is assigned per
+// MODEL PLACEMENT, in placement order, and is the stable public recall selector:
+// a payload whose view_membership is model/both takes the next ordinal when it
+// is appended; a model_ref placement takes its own ordinal and resolves to its
+// source payload; a chat-only saved input has none until it is placed. The
+// ordinal -> record mapping lives in the content-free ordinal index
+// (ordinal_index.go), so a window read costs the active window, not the
+// lifetime (FR-005). Unpublished archive records are retained-but-excluded
+// residue: they have no ordinal and no window can reach them.
 //
-// What is NOT done in this slice (deliberately, tracked for later slices):
+// The dense lifetime methods (SnapshotWindow, AppendWindowMessage, ReadArchive,
+// ScanArchive) remain only until their callers move to WindowView /
+// ReadModelSlots (session-core U2 caller-migration steps 2-8); they read through
+// the index, in ordinal order.
 //
-//   - Bounded reads: SnapshotWindow/ReadArchive enumerate the whole archive
-//     (an ordinal needs a full walk). This matches the CURRENT JSONL behaviour;
-//     the FR-005 offset-bounded path is the caller-migration slice.
-//   - Provenance: a payload's EntrySource is minted from the role only; the
-//     admission-time trusted source (FR-008) is wired when the loop's write
-//     callers adopt this backend.
-//   - Raw recall representation: the spec's raw-range amendment (literal
-//     model_message JSON, private fields excluded) is implemented here, but the
-//     recall consumers still move in a later slice.
+//   - Provenance: legacy SessionWriter appends mint EntrySource from the role
+//     only; the explicit AppendModelMessage seam takes the producer's trusted
+//     source and membership.
+//   - Raw recall representation: ScanArchiveRange quotes the literal stored
+//     model_message JSON (spec raw-range amendment), never the whole envelope.
 package session
 
 import (
@@ -153,22 +155,29 @@ type payloadLine struct {
 
 // GetHistory returns the live (post-Skip) window messages.
 func (b *archiveBackend) GetHistory(key string) []providers.Message {
-	snap, err := b.SnapshotWindow(context.Background(), key)
+	view, err := b.WindowView(context.Background(), key)
 	if err != nil {
 		slog.Error("archive_backend: get history", "key", key, "error", err)
 		return []providers.Message{}
 	}
-	msgs, _ := memory.WindowHistory(snap)
+	msgs, _ := view.History()
 	return msgs
 }
 
-// ReadArchive returns the full model archive from line 0, ignoring Skip.
+// ReadArchive returns the full model archive from ordinal 0, ignoring Skip. It
+// is an explicit full read (recall, CONV, tests) — never a per-step read.
 func (b *archiveBackend) ReadArchive(_ context.Context, key string) ([]memory.ArchivedMessage, error) {
 	lines, err := b.payloadLines(key)
 	if err != nil {
 		return nil, err
 	}
-	return archivedMessages(lines)
+	out := make([]memory.ArchivedMessage, len(lines))
+	for i, l := range lines {
+		if out[i], err = archivedMessage(l); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // Projection returns the persisted projection state.
@@ -200,49 +209,56 @@ func (b *archiveBackend) AddFullMessage(sessionKey string, msg providers.Message
 // SetHistory fills an EMPTY model archive; it refuses a non-empty one (FR-047).
 func (b *archiveBackend) SetHistory(key string, history []providers.Message) {
 	b.mu.Lock()
-	lines, err := b.payloadLinesLocked(key)
+	defer b.mu.Unlock()
+	store, err := b.store(key)
 	if err != nil {
-		b.mu.Unlock()
+		slog.Error("archive_backend: set history: open", "key", key, "error", err)
+		return
+	}
+	n, err := store.OrdinalCount()
+	if err != nil {
 		slog.Error("archive_backend: set history: count", "key", key, "error", err)
 		return
 	}
-	if len(lines) > 0 {
-		b.mu.Unlock()
+	if n > 0 {
 		slog.Error("archive_backend: set history refused",
-			"key", key, "error", fmt.Errorf("%w: %q has %d line(s)", memory.ErrArchiveNotEmpty, key, len(lines)))
+			"key", key, "error", fmt.Errorf("%w: %q has %d line(s)", memory.ErrArchiveNotEmpty, key, n))
 		return
 	}
 	meta, err := b.loadMetaLocked(key)
 	if err != nil {
-		b.mu.Unlock()
 		slog.Error("archive_backend: set history: read meta", "key", key, "error", err)
 		return
 	}
 	// Skip is left as-is (FR-047); projection and retracted cannot survive a
 	// first fill.
-	meta.Count = len(history)
 	meta.Projection = nil
 	meta.Retracted = nil
-	if err := b.saveMetaLocked(key, meta); err != nil {
-		b.mu.Unlock()
-		slog.Error("archive_backend: set history: write meta", "key", key, "error", err)
-		return
-	}
 	for _, m := range history {
-		if err := b.appendOneLocked(key, m); err != nil {
-			b.mu.Unlock()
+		if _, err := b.appendLegacyLocked(key, m); err != nil {
 			slog.Error("archive_backend: set history: append", "key", key, "error", err)
 			return
 		}
 	}
-	b.mu.Unlock()
+	if meta.Count, err = store.OrdinalCount(); err != nil {
+		slog.Error("archive_backend: set history: count", "key", key, "error", err)
+		return
+	}
+	if err := b.saveMetaLocked(key, meta); err != nil {
+		slog.Error("archive_backend: set history: write meta", "key", key, "error", err)
+	}
 }
 
 // TruncateHistory keeps only the last keepLast messages (mirrors the JSONL rule).
 func (b *archiveBackend) TruncateHistory(key string, keepLast int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	lines, err := b.payloadLinesLocked(key)
+	store, err := b.store(key)
+	if err != nil {
+		slog.Error("archive_backend: truncate: open", "key", key, "error", err)
+		return
+	}
+	n, err := store.OrdinalCount()
 	if err != nil {
 		slog.Error("archive_backend: truncate: count", "key", key, "error", err)
 		return
@@ -252,7 +268,7 @@ func (b *archiveBackend) TruncateHistory(key string, keepLast int) {
 		slog.Error("archive_backend: truncate: read meta", "key", key, "error", err)
 		return
 	}
-	meta.Count = len(lines)
+	meta.Count = n
 	if meta.Skip < 0 || meta.Skip > meta.Count {
 		slog.Error("archive_backend: truncate: invalid cursor", "key", key, "skip", meta.Skip)
 		return
@@ -323,6 +339,8 @@ func (b *archiveBackend) Close() error { return nil }
 
 // --- ContextWindowStore ---
 
+// AppendWindowMessage is the dense-snapshot append the callers migrate off
+// (step 2); it appends through the same checked seam as AppendModelMessage.
 func (b *archiveBackend) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (memory.WindowSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return memory.WindowSnapshot{}, err
@@ -333,6 +351,8 @@ func (b *archiveBackend) AppendWindowMessage(ctx context.Context, key string, ms
 	return b.SnapshotWindow(ctx, key)
 }
 
+// SnapshotWindow is the dense lifetime snapshot the callers migrate off (steps
+// 3-5). It reads every model slot through the ordinal index.
 func (b *archiveBackend) SnapshotWindow(ctx context.Context, key string) (memory.WindowSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return memory.WindowSnapshot{}, err
@@ -358,7 +378,11 @@ func (b *archiveBackend) commitWindow(ctx context.Context, key string, before, a
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	lines, err := b.payloadLinesLocked(key)
+	store, err := b.store(key)
+	if err != nil {
+		return err
+	}
+	n, err := store.OrdinalCount()
 	if err != nil {
 		return err
 	}
@@ -369,11 +393,11 @@ func (b *archiveBackend) commitWindow(ctx context.Context, key string, before, a
 	if !windowStateEqual(meta, before) {
 		return memory.ErrWindowChanged
 	}
-	if after.Count != before.Count || after.Count != len(lines) || after.Skip < 0 ||
+	if after.Count != before.Count || after.Count != n || after.Skip < 0 ||
 		(!restore && after.Skip < before.Skip) || after.Skip > after.Count {
 		return errors.New("archive_backend: invalid checkpoint cursor")
 	}
-	if err := validateWindowAnchor(after, lines); err != nil {
+	if err := validateWindowAnchor(store, after); err != nil {
 		return err
 	}
 	meta.Skip = after.Skip
@@ -387,16 +411,20 @@ func (b *archiveBackend) commitWindow(ctx context.Context, key string, before, a
 	return nil
 }
 
-// RollbackWindow restores the given turn-start state AND records the appended
-// span it predates as a retained-but-excluded effect (FR-006). It never rewrites
-// the archive: the aborted bytes stay on disk and stay recallable.
+// RollbackWindow restores the given turn-start state AND records the appended span
+// it predates as a retained-but-excluded effect (FR-006). It never rewrites the
+// archive: the aborted bytes stay on disk and stay recallable.
 func (b *archiveBackend) RollbackWindow(ctx context.Context, key string, start memory.WindowState) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	lines, err := b.payloadLinesLocked(key)
+	store, err := b.store(key)
+	if err != nil {
+		return err
+	}
+	n, err := store.OrdinalCount()
 	if err != nil {
 		return err
 	}
@@ -404,36 +432,197 @@ func (b *archiveBackend) RollbackWindow(ctx context.Context, key string, start m
 	if err != nil {
 		return err
 	}
-	if start.Count < 0 || start.Count > len(lines) {
+	if start.Count < 0 || start.Count > n {
 		return errors.New("archive_backend: rollback archive is shorter than snapshot")
 	}
-	meta.Retracted = archiveRetractSpan(meta.Retracted, start.Count, len(lines))
+	meta.Retracted = archiveRetractSpan(meta.Retracted, start.Count, n)
 	meta.Skip = start.Skip
-	meta.Count = len(lines)
+	meta.Count = n
 	meta.AnchorLine = cloneIntPtr(start.AnchorLine)
 	meta.Projection = metaFromProjection(start.Projection)
 	meta.Hydrated = start.Projection.Hydrated
 	return b.saveMetaLocked(key, meta)
 }
 
-// --- extra store surface used by UnifiedStore ---
+// --- bounded window surface (U2 caller-migration step 1) ---
 
-// ScanArchive streams model-archive lines to fn by ordinal, stopping on false.
-func (b *archiveBackend) ScanArchive(ctx context.Context, key string, fn func(idx int, msg memory.ArchivedMessage) bool) error {
-	lines, err := b.payloadLines(key)
+// WindowView builds the bounded snapshot: the window state, the live slots, the
+// anchor and the turn counters. Its cost is the active window plus one anchor
+// read — it never walks the evicted prefix.
+func (b *archiveBackend) WindowView(ctx context.Context, key string) (WindowView, error) {
+	if err := ctx.Err(); err != nil {
+		return WindowView{}, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.viewLocked(key)
+}
+
+// AppendModelMessage is the checked model append: the producer chooses the
+// membership and supplies the trusted source and, for a tool result, the exact
+// address of the assistant record that issued the call. It returns the new slot
+// and the bounded view after the append — no lifetime snapshot, no guessed
+// identity.
+func (b *archiveBackend) AppendModelMessage(ctx context.Context, key string, in ModelAppend) (ModelSlot, WindowView, error) {
+	if err := ctx.Err(); err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	slot, err := b.appendModelLocked(key, in)
+	if err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	view, err := b.viewLocked(key)
+	if err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	return slot, view, nil
+}
+
+// PlaceSavedInput places a saved, chat-only input into model order exactly once
+// by appending a body-free model_ref at the consumption fence (Decision B). The
+// placement takes its own ordinal. A second placement of the same source returns
+// ErrAlreadyConsumed. The caller applies the existing consumption/Stop fence.
+func (b *archiveBackend) PlaceSavedInput(ctx context.Context, key string, source ArchiveAddress) (ModelSlot, WindowView, error) {
+	if err := ctx.Err(); err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	store, err := b.store(key)
+	if err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	meta, err := b.loadMetaLocked(key)
+	if err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	n, err := store.OrdinalCount()
+	if err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	// The already-placed set is derived from the published window rows — no
+	// separate counter or queue. A placement is always inside the window that
+	// consumed it; an evicted source was consumed long before.
+	rows, err := store.readOrdinalRows(clampSkip(meta.Skip, n), n)
+	if err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	for _, row := range rows {
+		if row.Source != nil && *row.Source == source {
+			return ModelSlot{}, WindowView{}, ErrAlreadyConsumed
+		}
+	}
+	src, err := store.ReadAt(source)
+	if err != nil {
+		return ModelSlot{}, WindowView{}, fmt.Errorf("model placement: resolve source: %w", err)
+	}
+	if src.ModelMessage == nil || src.Type == EntryTypeModelRef {
+		return ModelSlot{}, WindowView{}, fmt.Errorf("model placement: source %s is not a payload record", source.EntryID)
+	}
+	if src.ViewMembership != ViewMembershipChat {
+		return ModelSlot{}, WindowView{}, fmt.Errorf(
+			"model placement: source %s is %q membership and already holds its own model slot", source.EntryID, src.ViewMembership)
+	}
+	rec, err := newModelRefRecord(store, source, src)
+	if err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	addr, row, err := store.AppendIndexed(rec)
+	if err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	meta.Count = row.Ordinal + 1
+	if err := b.saveMetaLocked(key, meta); err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	msg, err := DecodeModelPayload(*src.ModelMessage)
+	if err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	view, err := b.viewLocked(key)
+	if err != nil {
+		return ModelSlot{}, WindowView{}, err
+	}
+	return ModelSlot{Ordinal: row.Ordinal, Addr: addr, Message: msg, TS: row.TS, UserTurn: row.UserTurn}, view, nil
+}
+
+// ReadModelSlots streams the slots with ordinals in [from, to] through the
+// ordinal index: the work is the width of the range, never the lifetime. fn
+// receives the slot and the LITERAL stored model_message JSON. A slot whose
+// record cannot be resolved is an error, never a silently short range.
+func (b *archiveBackend) ReadModelSlots(ctx context.Context, key string, from, to int, fn func(ModelSlot, []byte) error) error {
+	if from < 0 || to < from {
+		return fmt.Errorf("archive_backend: archive_range must have 0 <= from <= to, got [%d,%d]", from, to)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	store, err := b.store(key)
 	if err != nil {
 		return err
 	}
-	for i, l := range lines {
+	n, err := store.OrdinalCount()
+	if err != nil {
+		return err
+	}
+	if to >= n {
+		return fmt.Errorf("archive_backend: archive_range [%d,%d] outside available archive records (%d records)", from, to, n)
+	}
+	rows, err := store.readOrdinalRows(from, to+1)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		msg, err := archivedMessage(l)
+		slot, raw, err := loadSlot(store, row)
 		if err != nil {
 			return err
 		}
-		if !fn(i, msg) {
-			return nil
+		if err := fn(slot, raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// --- extra store surface used by UnifiedStore ---
+
+// scanChunk is how many index rows ScanArchive reads at a time.
+const scanChunk = 128
+
+// ScanArchive streams model slots to fn by ordinal, stopping on false. It is an
+// explicit recall read: it walks the index in chunks and loads one slot at a
+// time, never materializing the archive.
+func (b *archiveBackend) ScanArchive(ctx context.Context, key string, fn func(idx int, msg memory.ArchivedMessage) bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	store, err := b.store(key)
+	if err != nil {
+		return err
+	}
+	n, err := store.OrdinalCount()
+	if err != nil {
+		return err
+	}
+	for from := 0; from < n; from += scanChunk {
+		rows, err := store.readOrdinalRows(from, min(n, from+scanChunk))
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			slot, _, err := loadSlot(store, row)
+			if err != nil {
+				return err
+			}
+			if !fn(slot.Ordinal, memory.ArchivedMessage{Message: slot.Message, TS: slot.TS}) {
+				return nil
+			}
 		}
 	}
 	return nil
@@ -443,29 +632,9 @@ func (b *archiveBackend) ScanArchive(ctx context.Context, key string, fn func(id
 // ordinal's private model_message (spec raw-range amendment), never the whole
 // envelope, so source/route/mark fields never leak into recall output.
 func (b *archiveBackend) ScanArchiveRange(ctx context.Context, key string, from, to int, fn func(int, []byte, memory.ArchivedMessage) error) error {
-	if from < 0 || to < from {
-		return fmt.Errorf("archive_backend: archive_range must have 0 <= from <= to, got [%d,%d]", from, to)
-	}
-	lines, err := b.payloadLines(key)
-	if err != nil {
-		return err
-	}
-	if to >= len(lines) {
-		return fmt.Errorf("archive_backend: archive_range [%d,%d] outside available archive records (%d records)", from, to, len(lines))
-	}
-	for i := from; i <= to; i++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		msg, err := archivedMessage(lines[i])
-		if err != nil {
-			return err
-		}
-		if err := fn(i, lines[i].rawModel, msg); err != nil {
-			return err
-		}
-	}
-	return nil
+	return b.ReadModelSlots(ctx, key, from, to, func(slot ModelSlot, raw []byte) error {
+		return fn(slot.Ordinal, raw, memory.ArchivedMessage{Message: slot.Message, TS: slot.TS})
+	})
 }
 
 // ScanEvictedArchive streams the evicted prefix (ordinals below Skip).
@@ -485,42 +654,203 @@ func (b *archiveBackend) ScanEvictedArchive(ctx context.Context, key string, fn 
 	return meta.Skip, nil
 }
 
-// appendMessage appends one payload for a model message.
+// appendMessage appends one legacy SessionWriter message: the role-derived
+// membership and source it has always had, and, for a tool result, the issuing
+// assistant found among the window's rows. The explicit AppendModelMessage seam
+// is the replacement; this stays until every producer has moved to it.
 func (b *archiveBackend) appendMessage(key string, msg providers.Message) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	meta, err := b.loadMetaLocked(key)
-	if err != nil {
-		return err
-	}
-	if err := b.appendOneLocked(key, msg); err != nil {
-		return err
-	}
-	meta.Count++
-	return b.saveMetaLocked(key, meta)
+	_, err := b.appendLegacyLocked(key, msg)
+	return err
 }
 
-// appendOneLocked appends one payload, resolving the producing assistant call
-// for a role "tool" message from the archive itself (the SessionStore write
-// interface does not carry that identity): a tool result carries tool_result_for
-// naming the assistant entry that issued its call. b.mu must be held.
-func (b *archiveBackend) appendOneLocked(key string, msg providers.Message) error {
+func (b *archiveBackend) appendLegacyLocked(key string, msg providers.Message) (ModelSlot, error) {
+	in := ModelAppend{
+		Message:        msg,
+		ViewMembership: viewMembershipForRole(msg.Role),
+		Source:         EntrySource{Kind: sourceKindForRole(msg.Role)},
+	}
+	if msg.Role == "tool" {
+		issuer, err := b.issuerAddrLocked(key, msg.ToolCallID)
+		if err != nil {
+			return ModelSlot{}, err
+		}
+		in.ToolResultFor = &issuer
+	}
+	return b.appendModelLocked(key, in)
+}
+
+// issuerAddrLocked finds the assistant record that issued callID among the
+// window's rows, newest first (providers reuse ids such as call_0 every turn, so
+// the most recent issuer is the producer of a result that follows its call).
+func (b *archiveBackend) issuerAddrLocked(key, callID string) (ArchiveAddress, error) {
 	store, err := b.store(key)
 	if err != nil {
-		return err
+		return ArchiveAddress{}, err
 	}
-	var callIdx map[string]string
-	if msg.Role == "tool" {
-		lines, err := b.payloadLinesLocked(key)
-		if err != nil {
-			return err
+	meta, err := b.loadMetaLocked(key)
+	if err != nil {
+		return ArchiveAddress{}, err
+	}
+	n, err := store.OrdinalCount()
+	if err != nil {
+		return ArchiveAddress{}, err
+	}
+	rows, err := store.readOrdinalRows(clampSkip(meta.Skip, n), n)
+	if err != nil {
+		return ArchiveAddress{}, err
+	}
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].Role != "assistant" {
+			continue
 		}
-		callIdx = assistantCallIndex(lines)
+		for _, id := range rows[i].CallIDs {
+			if id == callID {
+				return rows[i].content(), nil
+			}
+		}
 	}
-	return appendPayload(store, msg, callIdx)
+	return ArchiveAddress{}, fmt.Errorf("archive_backend: tool result %q has no issuing assistant in the window", callID)
 }
 
-// snapshotLocked builds the JSONL-shaped window snapshot from the archive.
+// appendModelLocked appends one checked model message and publishes its ordinal.
+// b.mu must be held.
+func (b *archiveBackend) appendModelLocked(key string, in ModelAppend) (ModelSlot, error) {
+	if err := in.validate(); err != nil {
+		return ModelSlot{}, err
+	}
+	store, err := b.store(key)
+	if err != nil {
+		return ModelSlot{}, err
+	}
+	rec, err := newPayloadRecord(store, in)
+	if err != nil {
+		return ModelSlot{}, err
+	}
+	addr, row, err := store.AppendIndexed(rec)
+	if err != nil {
+		return ModelSlot{}, err
+	}
+	if row == nil {
+		return ModelSlot{}, fmt.Errorf("archive_backend: record %s took no model slot", rec.ID)
+	}
+	meta, err := b.loadMetaLocked(key)
+	if err != nil {
+		return ModelSlot{}, err
+	}
+	meta.Count = row.Ordinal + 1
+	if err := b.saveMetaLocked(key, meta); err != nil {
+		return ModelSlot{}, err
+	}
+	return ModelSlot{Ordinal: row.Ordinal, Addr: addr, Message: in.Message, TS: row.TS, UserTurn: row.UserTurn}, nil
+}
+
+// viewLocked builds the bounded WindowView. b.mu must be held.
+func (b *archiveBackend) viewLocked(key string) (WindowView, error) {
+	store, err := b.store(key)
+	if err != nil {
+		return WindowView{}, err
+	}
+	meta, err := b.loadMetaLocked(key)
+	if err != nil {
+		return WindowView{}, err
+	}
+	n, err := store.OrdinalCount()
+	if err != nil {
+		return WindowView{}, err
+	}
+	if meta.Count != n {
+		meta.Count = n
+		if err := b.saveMetaLocked(key, meta); err != nil {
+			return WindowView{}, err
+		}
+	}
+	if meta.Skip < 0 || meta.Skip > n {
+		return WindowView{}, errors.New("archive_backend: invalid context window cursor")
+	}
+	state := memory.WindowState{Skip: meta.Skip, Count: meta.Count, AnchorLine: cloneIntPtr(meta.AnchorLine),
+		Projection: projectionFromMeta(meta)}
+	if err := validateWindowAnchor(store, state); err != nil {
+		return WindowView{}, err
+	}
+	// Rows from Skip-1 (for the prior user-turn count) to the end.
+	first := meta.Skip
+	if first > 0 {
+		first--
+	}
+	rows, err := store.readOrdinalRows(first, n)
+	if err != nil {
+		return WindowView{}, err
+	}
+	view := WindowView{State: state, Excluded: append([]memory.ArchiveSpan(nil), meta.Retracted...)}
+	if meta.Skip > 0 {
+		view.PriorUserTurns = rows[0].UserTurn
+		rows = rows[1:]
+	}
+	view.turnsAfter = make([]int, 0, len(rows))
+	for _, row := range rows {
+		view.turnsAfter = append(view.turnsAfter, row.UserTurn)
+		if retractedOrdinal(meta.Retracted, row.Ordinal) {
+			continue
+		}
+		slot, _, err := loadSlot(store, row)
+		if err != nil {
+			return WindowView{}, err
+		}
+		view.Live = append(view.Live, slot)
+	}
+	if meta.Skip > 0 {
+		lead, err := b.leadLocked(store, meta.Skip)
+		if err != nil {
+			return WindowView{}, err
+		}
+		view.Lead = lead
+	}
+	if a := meta.AnchorLine; a != nil && !retractedOrdinal(meta.Retracted, *a) {
+		arows, err := store.readOrdinalRows(*a, *a+1)
+		if err != nil {
+			return WindowView{}, err
+		}
+		slot, _, err := loadSlot(store, arows[0])
+		if err != nil {
+			return WindowView{}, err
+		}
+		view.Anchor = &slot
+	}
+	return view, nil
+}
+
+// leadLocked reads the evicted tail an open tool group still owns: the slots
+// directly before skip, back to and including the nearest user or assistant slot
+// (at most leadLimit). The walk uses index rows only; only the slots it keeps are
+// loaded.
+func (b *archiveBackend) leadLocked(store *ArchiveDayStore, skip int) ([]ModelSlot, error) {
+	lo := max(0, skip-leadLimit)
+	rows, err := store.readOrdinalRows(lo, skip)
+	if err != nil {
+		return nil, err
+	}
+	start := 0
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].Role == "user" || rows[i].Role == "assistant" {
+			start = i
+			break
+		}
+	}
+	rows = rows[start:]
+	out := make([]ModelSlot, 0, len(rows))
+	for _, row := range rows {
+		slot, _, err := loadSlot(store, row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, slot)
+	}
+	return out, nil
+}
+
+// snapshotLocked builds the DENSE lifetime snapshot (callers migrate off it).
 func (b *archiveBackend) snapshotLocked(key string) (memory.WindowSnapshot, error) {
 	lines, err := b.payloadLinesLocked(key)
 	if err != nil {
@@ -530,9 +860,11 @@ func (b *archiveBackend) snapshotLocked(key string) (memory.WindowSnapshot, erro
 	if err != nil {
 		return memory.WindowSnapshot{}, err
 	}
-	archive, err := archivedMessages(lines)
-	if err != nil {
-		return memory.WindowSnapshot{}, err
+	archive := make([]memory.ArchivedMessage, len(lines))
+	for i, l := range lines {
+		if archive[i], err = archivedMessage(l); err != nil {
+			return memory.WindowSnapshot{}, err
+		}
 	}
 	if meta.Count != len(archive) {
 		meta.Count = len(archive)
@@ -543,16 +875,21 @@ func (b *archiveBackend) snapshotLocked(key string) (memory.WindowSnapshot, erro
 	if meta.Skip < 0 || meta.Skip > meta.Count {
 		return memory.WindowSnapshot{}, errors.New("archive_backend: invalid context window cursor")
 	}
-	if err := validateWindowAnchor(memory.WindowState{Skip: meta.Skip, Count: meta.Count, AnchorLine: meta.AnchorLine}, lines); err != nil {
+	store, err := b.store(key)
+	if err != nil {
 		return memory.WindowSnapshot{}, err
 	}
 	state := memory.WindowState{Skip: meta.Skip, Count: meta.Count, AnchorLine: cloneIntPtr(meta.AnchorLine),
 		Projection: projectionFromMeta(meta)}
+	if err := validateWindowAnchor(store, state); err != nil {
+		return memory.WindowSnapshot{}, err
+	}
 	return memory.WindowSnapshot{State: state, Archive: archive,
 		Retracted: append([]memory.ArchiveSpan(nil), meta.Retracted...)}, nil
 }
 
-// payloadLines enumerates this session's model-archive lines.
+// payloadLines enumerates this session's model slots as content lines, in
+// ordinal order. It is an explicit full read (recall, tests, the dense snapshot).
 func (b *archiveBackend) payloadLines(key string) ([]payloadLine, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -564,18 +901,60 @@ func (b *archiveBackend) payloadLinesLocked(key string) ([]payloadLine, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []payloadLine
-	err = store.ScanAllLines(func(addr ArchiveAddress, raw []byte, rec ArchiveRecord) bool {
-		if rec.ModelMessage == nil {
-			return true // a body-free model_ref placement is not a new line
-		}
-		out = append(out, payloadLine{addr: addr, rec: rec, rawModel: literalModelMessage(raw)})
-		return true
-	})
+	n, err := store.OrdinalCount()
 	if err != nil {
 		return nil, err
 	}
+	rows, err := store.readOrdinalRows(0, n)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]payloadLine, 0, len(rows))
+	for _, row := range rows {
+		raw, rec, err := store.ReadAtRaw(row.content())
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, payloadLine{addr: row.content(), rec: rec, rawModel: literalModelMessage(raw)})
+	}
 	return out, nil
+}
+
+// loadSlot reads one slot's record (following a model_ref to its source) and
+// decodes its message. raw is the literal stored model_message JSON.
+func loadSlot(store *ArchiveDayStore, row ordinalRow) (ModelSlot, []byte, error) {
+	raw, rec, err := store.ReadAtRaw(row.content())
+	if err != nil {
+		return ModelSlot{}, nil, fmt.Errorf("window: read model slot %d: %w", row.Ordinal, err)
+	}
+	if rec.ModelMessage == nil {
+		return ModelSlot{}, nil, fmt.Errorf("window: model slot %d resolves no payload", row.Ordinal)
+	}
+	msg, err := DecodeModelPayload(*rec.ModelMessage)
+	if err != nil {
+		return ModelSlot{}, nil, fmt.Errorf("window: decode model slot %d: %w", row.Ordinal, err)
+	}
+	return ModelSlot{Ordinal: row.Ordinal, Addr: row.Slot, Message: msg, TS: row.TS, UserTurn: row.UserTurn,
+		Origin: rec.ModelOrigin}, literalModelMessage(raw), nil
+}
+
+func clampSkip(skip, n int) int {
+	if skip < 0 {
+		return 0
+	}
+	if skip > n {
+		return n
+	}
+	return skip
+}
+
+func retractedOrdinal(spans []memory.ArchiveSpan, ordinal int) bool {
+	for _, s := range spans {
+		if ordinal >= s.Start && ordinal < s.End {
+			return true
+		}
+	}
+	return false
 }
 
 // loadMetaLocked reads the backend meta, defaulting to a fresh zero state.
@@ -621,59 +1000,68 @@ func (b *archiveBackend) saveMetaLocked(key string, m archiveBackendMeta) error 
 	return nil
 }
 
-// appendPayload writes one model message as a validated payload envelope. For a
-// role "tool" message it fills tool_result_for from callIdx (the producing
-// assistant entry id keyed by call id); an unmatched result is refused visibly
-// rather than stored as an orphan the archive forbids.
-func appendPayload(store *ArchiveDayStore, msg providers.Message, callIdx map[string]string) error {
-	mp, err := EncodeModelPayload(msg)
+// newPayloadRecord builds one model message as a validated payload envelope from
+// a checked append. For a role "tool" message it resolves the producing assistant
+// record from the producer-supplied address (one bounded read) and refuses an
+// issuer that does not declare the call — an unprovable result is never stored.
+func newPayloadRecord(store *ArchiveDayStore, in ModelAppend) (ArchiveRecord, error) {
+	mp, err := EncodeModelPayload(in.Message)
 	if err != nil {
-		return err
+		return ArchiveRecord{}, err
 	}
 	id, err := newArchivePayloadID()
 	if err != nil {
-		return err
+		return ArchiveRecord{}, err
 	}
+	src := in.Source
 	rec := ArchiveRecord{
 		TranscriptEntry: TranscriptEntry{
-			ID: id, Role: msg.Role, Content: msg.Content,
-			ViewMembership: viewMembershipForRole(msg.Role),
+			ID: id, Role: in.Message.Role, Content: in.Message.Content,
+			ViewMembership: in.ViewMembership,
 			Timestamp:      time.Now().UTC(),
+			AgentID:        in.AgentID,
 		},
 		ModelMessage: &mp,
-		Source:       &EntrySource{Kind: sourceKindForRole(msg.Role)},
+		Source:       &src,
 	}
-	if msg.Role == "tool" {
-		if msg.ToolCallID == "" {
-			return fmt.Errorf("archive_backend: tool result has no tool_call_id")
+	if in.Message.Role == "tool" {
+		issuer, err := store.ReadAt(*in.ToolResultFor)
+		if err != nil {
+			return ArchiveRecord{}, fmt.Errorf("archive_backend: tool result %q: resolve issuing assistant: %w", in.Message.ToolCallID, err)
 		}
-		// Live orphan results are tolerated: the producing assistant occurrence
-		// is left empty (unproven), matching the pre-cutover runtime. A CONVERTED
-		// record never carries an empty producer (CONV refuses unprovable joins).
-		rec.ToolResultFor = &ToolResultFor{AssistantEntryID: callIdx[msg.ToolCallID], ToolCallID: msg.ToolCallID}
+		if issuer.ModelMessage == nil || issuer.ModelMessage.Role != "assistant" || !payloadDeclaresCall(*issuer.ModelMessage, in.Message.ToolCallID) {
+			return ArchiveRecord{}, fmt.Errorf("archive_backend: record %s does not declare tool call %q", in.ToolResultFor.EntryID, in.Message.ToolCallID)
+		}
+		rec.ToolResultFor = &ToolResultFor{AssistantEntryID: issuer.ID, ToolCallID: in.Message.ToolCallID}
 	}
-	_, err = store.Append(rec)
-	return err
+	return rec, nil
 }
 
-// assistantCallIndex maps a tool call id to the entry id of the assistant
-// payload that issued it, from the archive itself. The most recent assistant
-// wins, which is the correct producer for a tool result that immediately
-// follows its call (providers reuse ids such as call_0 every turn).
-func assistantCallIndex(lines []payloadLine) map[string]string {
-	idx := make(map[string]string)
-	for _, l := range lines {
-		mp := l.rec.ModelMessage
-		if mp == nil || len(mp.ToolCalls) == 0 {
-			continue
-		}
-		for _, tc := range mp.ToolCalls {
-			if tc.ID != "" {
-				idx[tc.ID] = l.rec.ID
-			}
+func payloadDeclaresCall(mp ModelPayload, callID string) bool {
+	for _, tc := range mp.ToolCalls {
+		if tc.ID == callID {
+			return true
 		}
 	}
-	return idx
+	return false
+}
+
+// newModelRefRecord builds the body-free model_ref placement of a saved source.
+func newModelRefRecord(store *ArchiveDayStore, source ArchiveAddress, src ArchiveRecord) (ArchiveRecord, error) {
+	effectID, err := newModelRefID()
+	if err != nil {
+		return ArchiveRecord{}, err
+	}
+	return ArchiveRecord{
+		TranscriptEntry: TranscriptEntry{
+			ID:             effectID,
+			Type:           EntryTypeModelRef,
+			ViewMembership: ViewMembershipModel,
+			Timestamp:      store.now().UTC(),
+			AgentID:        src.AgentID,
+		},
+		ModelRef: &ModelRef{EntryID: source.EntryID, PartitionKey: source.PartitionKey, ByteOffset: source.ByteOffset},
+	}, nil
 }
 
 func newArchivePayloadID() (string, error) {
@@ -731,19 +1119,7 @@ func literalModelMessage(rawLine []byte) []byte {
 	return raw
 }
 
-// archivedMessages decodes payload lines into the interface's ArchivedMessage.
-func archivedMessages(lines []payloadLine) ([]memory.ArchivedMessage, error) {
-	out := make([]memory.ArchivedMessage, len(lines))
-	for i, l := range lines {
-		msg, err := archivedMessage(l)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = msg
-	}
-	return out, nil
-}
-
+// archivedMessage decodes one content line into the interface's ArchivedMessage.
 func archivedMessage(l payloadLine) (memory.ArchivedMessage, error) {
 	if l.rec.ModelMessage == nil {
 		return memory.ArchivedMessage{}, fmt.Errorf("archive_backend: line %s carries no model payload", l.addr.EntryID)
@@ -759,16 +1135,21 @@ func archivedMessage(l payloadLine) (memory.ArchivedMessage, error) {
 	return memory.ArchivedMessage{Message: msg, TS: ts}, nil
 }
 
-// validateWindowAnchor mirrors the JSONL anchor rule over payload lines.
-func validateWindowAnchor(state memory.WindowState, lines []payloadLine) error {
+// validateWindowAnchor mirrors the JSONL anchor rule over the ordinal index: the
+// anchor must lie before Skip and name a user message.
+func validateWindowAnchor(store *ArchiveDayStore, state memory.WindowState) error {
 	if state.AnchorLine == nil {
 		return nil
 	}
 	a := *state.AnchorLine
-	if a < 0 || a >= state.Skip || a >= len(lines) {
+	if a < 0 || a >= state.Skip || a >= state.Count {
 		return errors.New("archive_backend: invalid checkpoint user anchor")
 	}
-	if lines[a].rec.ModelMessage == nil || lines[a].rec.ModelMessage.Role != "user" {
+	rows, err := store.readOrdinalRows(a, a+1)
+	if err != nil {
+		return err
+	}
+	if len(rows) != 1 || rows[0].Role != "user" {
 		return errors.New("archive_backend: invalid checkpoint user anchor")
 	}
 	return nil

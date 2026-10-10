@@ -39,25 +39,12 @@ func PlaceModelRef(store *ArchiveDayStore, source ArchiveAddress) (ArchiveAddres
 	if src.Type == EntryTypeModelRef {
 		return ArchiveAddress{}, fmt.Errorf("model placement: source %s is itself a model_ref; references target payload records", source.EntryID)
 	}
-	effectID, err := newModelRefID()
+	rec, err := newModelRefRecord(store, source, src)
 	if err != nil {
 		return ArchiveAddress{}, err
 	}
-	rec := ArchiveRecord{
-		TranscriptEntry: TranscriptEntry{
-			ID:             effectID,
-			Type:           EntryTypeModelRef,
-			ViewMembership: ViewMembershipModel,
-			Timestamp:      store.now().UTC(),
-			AgentID:        src.AgentID,
-		},
-		ModelRef: &ModelRef{
-			EntryID:      source.EntryID,
-			PartitionKey: source.PartitionKey,
-			ByteOffset:   source.ByteOffset,
-		},
-	}
-	return store.Append(rec)
+	addr, _, err := store.AppendIndexed(rec)
+	return addr, err
 }
 
 // newModelRefID mints the server-assigned effect id of a placement record.

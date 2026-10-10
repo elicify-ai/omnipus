@@ -63,6 +63,10 @@ type ArchiveDayStore struct {
 	baseDir   string
 	sessionID string
 	now       func() time.Time
+	// onRead, when set (tests only), observes every archive read: kind "record"
+	// for one addressed read, "scan" for a whole-archive walk. It is how a test
+	// proves a hot path stays proportional to the window (FR-005).
+	onRead func(kind string, addr ArchiveAddress)
 }
 
 // NewArchiveDayStore binds a store to one session directory. The session id must
@@ -92,22 +96,35 @@ func (s *ArchiveDayStore) dir() string {
 // validation, exceeds the encoded bound, or cannot be written returns an error
 // and writes nothing — there is no partial-success append.
 func (s *ArchiveDayStore) Append(rec ArchiveRecord) (ArchiveAddress, error) {
-	if err := rec.Validate(); err != nil {
+	line, err := encodeArchiveLine(rec)
+	if err != nil {
 		return ArchiveAddress{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appendLineLocked(rec.ID, line)
+}
+
+// encodeArchiveLine validates and encodes one envelope; the bound is the whole
+// new envelope, model_message and source included.
+func encodeArchiveLine(rec ArchiveRecord) ([]byte, error) {
+	if err := rec.Validate(); err != nil {
+		return nil, err
 	}
 	line, err := json.Marshal(rec)
 	if err != nil {
-		return ArchiveAddress{}, fmt.Errorf("archive: encode record %s: %w", rec.ID, err)
+		return nil, fmt.Errorf("archive: encode record %s: %w", rec.ID, err)
 	}
-	// The bound is the whole new envelope, model_message and source included.
 	if len(line) > archiveRecordBound {
-		return ArchiveAddress{}, fmt.Errorf("archive: record %s is %d bytes, over the %d-byte envelope bound",
+		return nil, fmt.Errorf("archive: record %s is %d bytes, over the %d-byte envelope bound",
 			rec.ID, len(line), archiveRecordBound)
 	}
+	return line, nil
+}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+// appendLineLocked writes one encoded envelope to the current partition. s.mu
+// must be held.
+func (s *ArchiveDayStore) appendLineLocked(id string, line []byte) (ArchiveAddress, error) {
 	key, path, err := s.partitionForAppendLocked(s.now().UTC().Format(transcriptDayLayout))
 	if err != nil {
 		return ArchiveAddress{}, err
@@ -130,7 +147,7 @@ func (s *ArchiveDayStore) Append(rec ArchiveRecord) (ArchiveAddress, error) {
 	if err := f.Sync(); err != nil {
 		return ArchiveAddress{}, fmt.Errorf("archive: fsync %s: %w", path, err)
 	}
-	return ArchiveAddress{PartitionKey: key, ByteOffset: offset, EntryID: rec.ID}, nil
+	return ArchiveAddress{PartitionKey: key, ByteOffset: offset, EntryID: id}, nil
 }
 
 // ReadAt seeks straight to the addressed record and decodes exactly that one
@@ -139,32 +156,42 @@ func (s *ArchiveDayStore) Append(rec ArchiveRecord) (ArchiveAddress, error) {
 // non-JSON line or an id that does not match the mark is an error, never a
 // silent wrong-record or empty-history result.
 func (s *ArchiveDayStore) ReadAt(addr ArchiveAddress) (ArchiveRecord, error) {
+	_, rec, err := s.ReadAtRaw(addr)
+	return rec, err
+}
+
+// ReadAtRaw is ReadAt plus the record's exact stored line (without the framing
+// newline), so a caller can quote a stored value literally without re-encoding.
+func (s *ArchiveDayStore) ReadAtRaw(addr ArchiveAddress) ([]byte, ArchiveRecord, error) {
 	if addr.EntryID == "" || addr.PartitionKey == "" || addr.ByteOffset < 0 {
-		return ArchiveRecord{}, fmt.Errorf("archive: incomplete address %+v", addr)
+		return nil, ArchiveRecord{}, fmt.Errorf("archive: incomplete address %+v", addr)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.onRead != nil {
+		s.onRead("record", addr)
+	}
 	path, err := s.partitionPathForKeyLocked(addr.PartitionKey)
 	if err != nil {
-		return ArchiveRecord{}, err
+		return nil, ArchiveRecord{}, err
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return ArchiveRecord{}, fmt.Errorf("archive: open partition %s: %w", addr.PartitionKey, err)
+		return nil, ArchiveRecord{}, fmt.Errorf("archive: open partition %s: %w", addr.PartitionKey, err)
 	}
 	defer f.Close()
 	if _, err = f.Seek(addr.ByteOffset, io.SeekStart); err != nil {
-		return ArchiveRecord{}, fmt.Errorf("archive: seek %d in %s: %w", addr.ByteOffset, addr.PartitionKey, err)
+		return nil, ArchiveRecord{}, fmt.Errorf("archive: seek %d in %s: %w", addr.ByteOffset, addr.PartitionKey, err)
 	}
-	rec, err := readArchiveRecordBounded(f)
+	line, rec, err := readArchiveLineBounded(f)
 	if err != nil {
-		return ArchiveRecord{}, fmt.Errorf("archive: read %s@%d: %w", addr.PartitionKey, addr.ByteOffset, err)
+		return nil, ArchiveRecord{}, fmt.Errorf("archive: read %s@%d: %w", addr.PartitionKey, addr.ByteOffset, err)
 	}
 	if rec.ID != addr.EntryID {
-		return ArchiveRecord{}, fmt.Errorf("archive: address %s@%d resolves to record %q, not %q (corrupt or stale mark)",
+		return nil, ArchiveRecord{}, fmt.Errorf("archive: address %s@%d resolves to record %q, not %q (corrupt or stale mark)",
 			addr.PartitionKey, addr.ByteOffset, rec.ID, addr.EntryID)
 	}
-	return rec, nil
+	return line, rec, nil
 }
 
 // ReadAddrs resolves several addresses in order. Each is one bounded seek; the
@@ -286,22 +313,29 @@ func uniqueArchiveRolledPath(dir, key string) string {
 // record is longer than the admission bound (or the offset is corrupt); both
 // are errors.
 func readArchiveRecordBounded(r io.Reader) (ArchiveRecord, error) {
+	_, rec, err := readArchiveLineBounded(r)
+	return rec, err
+}
+
+// readArchiveLineBounded is readArchiveRecordBounded that also returns the
+// record's exact line bytes (framing newline trimmed).
+func readArchiveLineBounded(r io.Reader) ([]byte, ArchiveRecord, error) {
 	br := bufio.NewReaderSize(io.LimitReader(r, int64(archiveRecordBound)+1), 64*1024)
 	line, err := br.ReadBytes('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		return ArchiveRecord{}, err
+		return nil, ArchiveRecord{}, err
 	}
 	truncated := !bytes.HasSuffix(line, []byte{'\n'})
 	line = bytes.TrimSuffix(line, []byte{'\n'})
 	if len(bytes.TrimSpace(line)) == 0 {
-		return ArchiveRecord{}, errors.New("no record at address")
+		return nil, ArchiveRecord{}, errors.New("no record at address")
 	}
 	if truncated {
-		return ArchiveRecord{}, fmt.Errorf("record exceeds the %d-byte bound or is not newline-framed", archiveRecordBound)
+		return nil, ArchiveRecord{}, fmt.Errorf("record exceeds the %d-byte bound or is not newline-framed", archiveRecordBound)
 	}
 	var rec ArchiveRecord
 	if err := json.Unmarshal(line, &rec); err != nil {
-		return ArchiveRecord{}, fmt.Errorf("decode record: %w", err)
+		return nil, ArchiveRecord{}, fmt.Errorf("decode record: %w", err)
 	}
-	return rec, nil
+	return line, rec, nil
 }

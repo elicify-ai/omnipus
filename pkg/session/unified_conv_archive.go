@@ -120,7 +120,7 @@ func convConvertOneLegacyArchive(baseDir, contextDir, base string) error {
 		return err // refusal names the chat and the line; source untouched
 	}
 	for _, rec := range records {
-		if _, err := store.Append(rec); err != nil {
+		if _, _, err := store.AppendIndexed(rec); err != nil {
 			return fmt.Errorf("conversion: saved chat %q: append archive record %s: %w", id, rec.ID, err)
 		}
 	}

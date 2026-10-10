@@ -38,6 +38,9 @@ func (s *ArchiveDayStore) ScanAll(fn func(ArchiveAddress, ArchiveRecord) bool) e
 func (s *ArchiveDayStore) ScanAllLines(fn func(ArchiveAddress, []byte, ArchiveRecord) bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.onRead != nil {
+		s.onRead("scan", ArchiveAddress{})
+	}
 
 	dir := s.dir()
 	entries, err := os.ReadDir(dir)
@@ -84,6 +87,9 @@ func (s *ArchiveDayStore) ScanAllLines(fn func(ArchiveAddress, []byte, ArchiveRe
 }
 
 func (s *ArchiveDayStore) scanAllLocked(fn func(ArchiveAddress, ArchiveRecord) bool) error {
+	if s.onRead != nil {
+		s.onRead("scan", ArchiveAddress{})
+	}
 	dir := s.dir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
