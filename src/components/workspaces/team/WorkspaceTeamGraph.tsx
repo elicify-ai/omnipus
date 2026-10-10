@@ -25,7 +25,6 @@ import {
 import '@xyflow/react/dist/style.css'
 import '../reactflow-theme.css'
 import { Star, Lightning, Trash, Warning, PencilSimple, X, Scales } from '@phosphor-icons/react'
-import { IconRenderer } from '@/components/shared/IconRenderer'
 import { Badge } from '@/components/ui/badge'
 import { IconButton } from '@/components/ui/icon-button'
 import { cn, initialOf } from '@/lib/utils'
@@ -215,11 +214,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             style={{ backgroundColor: model.color ?? 'var(--color-surface-3)' }}
             aria-hidden="true"
           >
-            {model.icon ? (
-              <IconRenderer icon={model.icon} size={16} className="text-[var(--color-secondary)]" />
-            ) : (
-              initial
-            )}
+            {initial}
           </div>
           <div className="min-w-0 flex-1">
             <span className="block truncate font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
@@ -354,11 +349,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
           style={{ backgroundColor: model.color ?? 'var(--color-surface-3)' }}
           aria-hidden="true"
         >
-          {model.icon ? (
-            <IconRenderer icon={model.icon} size={16} className="text-[var(--color-secondary)]" />
-          ) : (
-            initial
-          )}
+          {initial}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-[var(--space-1)]">

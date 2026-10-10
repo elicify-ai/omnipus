@@ -11,7 +11,7 @@
  */
 
 import { motion } from 'framer-motion'
-import { getIconComponent } from '@/lib/agentIcons'
+import { Robot } from '@phosphor-icons/react'
 import type { Agent, Task } from '@/lib/api'
 
 /** A single item from Task['rollup'] */
@@ -45,7 +45,7 @@ function rollupStatusColorVar(status: RollupItem['status']): string {
   }
 }
 
-type RollupAgent = Pick<Agent, 'id'> & Partial<Pick<Agent, 'name' | 'color' | 'icon'>>
+type RollupAgent = Pick<Agent, 'id'> & Partial<Pick<Agent, 'name' | 'color'>>
 
 interface RollupBadgeProps {
   rollup: RollupItem[]
@@ -62,7 +62,6 @@ function agentById(agents: RollupAgent[], agentId: string): RollupAgent | undefi
 function RollupAvatar({ item, agent }: { item: RollupItem; agent: RollupAgent | undefined }) {
   const isLive = item.status === 'in_progress'
   const color = agent?.color ?? rollupStatusColorVar(item.status)
-  const Icon = getIconComponent(agent?.icon)
 
   return (
     <motion.span
@@ -102,7 +101,7 @@ function RollupAvatar({ item, agent }: { item: RollupItem; agent: RollupAgent | 
         borderColor: rollupStatusColorVar(item.status),
       }}
     >
-      <Icon size={10} weight="bold" style={{ color }} />
+      <Robot size={10} weight="bold" style={{ color }} />
     </motion.span>
   )
 }

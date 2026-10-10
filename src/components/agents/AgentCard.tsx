@@ -1,7 +1,6 @@
 import { Circle, Star } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { cn, initialOf } from '@/lib/utils'
@@ -66,13 +65,9 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
             style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
             aria-hidden="true"
           >
-            {agent.icon ? (
-              <IconRenderer icon={agent.icon} size={18} className="text-[var(--color-secondary)]" />
-            ) : (
-              <span className="text-[var(--color-secondary)]">
-                {initialOf(agent.name)}
-              </span>
-            )}
+            <span className="text-[var(--color-secondary)]">
+              {initialOf(agent.name)}
+            </span>
           </div>
 
           {/* Info */}
