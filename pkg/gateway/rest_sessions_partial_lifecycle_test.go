@@ -187,7 +187,7 @@ func TestSessionRuntime_LifecycleReadFailuresPropagate(t *testing.T) {
 			case "detail builder":
 				meta, err := f.api.agentLoop.GetSessionStore().GetMeta(id)
 				require.NoError(t, err)
-				jsonSessionDetail(rec, meta, nil, false, f.ls, f.boot.Current())
+				jsonSessionDetail(rec, meta, nil, false, f.ls, nil, f.boot.Current())
 			}
 			assert.Equal(t, http.StatusInternalServerError, rec.Code, "body: %s", rec.Body.String())
 			assert.Equal(t, map[string]any{"error": "session lifecycle unavailable"}, decodeObject(t, rec.Body.Bytes()))
