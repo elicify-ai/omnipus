@@ -36,8 +36,10 @@ type EligibleInput = {
   isDefaultWorkspace: boolean
   rosterState: 'fresh' | 'failed-no-cache' | 'failed-stale-cache'
   roster: Array<{ agent: ReturnType<typeof makeAgent>; member: WorkspaceMemberConfig }>
-  /** Validated default-workspace Admin, even when Admin is not a member. */
-  adminDefault: { agent: ReturnType<typeof makeAgent>; member: WorkspaceMemberConfig } | null
+  /** Default-workspace Admin: the agent plus the seam-read Admin main id
+   *  (Workspace.admin_main_session_id), or undefined when unavailable.
+   *  Admin is not a member, so there is no member config to read. */
+  adminDefault: { agent: ReturnType<typeof makeAgent>; mainSessionId: string | undefined } | null
   sessions: Session[]
   cachedRows: EligibleRow[]
 }
@@ -145,13 +147,11 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
     const externalMember = member()
     const judgeMember = member()
     const supervisorMember = member()
-    const adminMember = member()
     seam.mains.set(miaMember, 'seam-opaque-mia')
     seam.mains.set(nativeMember, 'seam-opaque-native-must-not-show')
     seam.mains.set(externalMember, 'seam-opaque-external-must-not-show')
     seam.mains.set(judgeMember, 'seam-opaque-judge-must-not-show')
     seam.mains.set(supervisorMember, 'seam-opaque-supervisor-must-not-show')
-    seam.mains.set(adminMember, 'seam-opaque-admin')
     const expected: EligibleResult = {
       status: 'ready',
       retry: false,
@@ -168,7 +168,8 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
       rosterState: 'fresh',
       cachedRows: [],
       sessions: [],
-      adminDefault: { agent: makeAgent({ id: 'admin', name: 'Admin', type: 'core' }), member: adminMember },
+      // Admin's main id rides the default workspace itself (seam-read), not a member config.
+      adminDefault: { agent: makeAgent({ id: 'admin', name: 'Admin', type: 'core' }), mainSessionId: 'seam-opaque-admin' },
       roster: [
         { agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member: miaMember },
         { agent: makeAgent({ id: 'native-worker', name: 'Native worker', type: 'Subagent' }), member: nativeMember },
@@ -197,7 +198,9 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
       rosterState: 'fresh',
       cachedRows: [],
       sessions: [],
-      adminDefault: { agent: makeAgent({ id: 'admin', name: 'Admin', type: 'core' }), member: adminMember },
+      // The seam id exists, but Admin is a default-workspace-only main: a
+      // non-default workspace shows no Admin row, membership or not.
+      adminDefault: { agent: makeAgent({ id: 'admin', name: 'Admin', type: 'core' }), mainSessionId: 'seam-opaque-admin-must-not-show' },
       roster: [
         { agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member: miaMember },
         { agent: makeAgent({ id: 'admin', name: 'Admin', type: 'core' }), member: adminMember },
@@ -414,8 +417,6 @@ describe('eligibleMainAgents failure and missing-ID states (T-01, N01, N10)', ()
   })
 
   it('default-workspace Admin without a seam id is a named gap, not a fabricated Admin main', async () => {
-    const adminMember = member()
-    seam.mains.set(adminMember, undefined)
     const expected: EligibleResult = {
       status: 'unavailable',
       retry: true,
@@ -430,7 +431,10 @@ describe('eligibleMainAgents failure and missing-ID states (T-01, N01, N10)', ()
       cachedRows: [],
       sessions: [],
       roster: [],
-      adminDefault: { agent: makeAgent({ id: 'admin', name: 'Admin', type: 'core' }), member: adminMember },
-    }, expected, 'BDD-12.2 validated main only; FR-038 no fake Admin main')
+      // The seam read found no Workspace.admin_main_session_id on the default
+      // workspace: Admin is listed as missing (unavailable + Retry), and no
+      // main id is built or guessed.
+      adminDefault: { agent: makeAgent({ id: 'admin', name: 'Admin', type: 'core' }), mainSessionId: undefined },
+    }, expected, 'BDD-12.2 validated main only; FR-038 no fake Admin main; ARCHITECT-ANSWER-ADMIN-MAIN-BOUND Q1')
   })
 })

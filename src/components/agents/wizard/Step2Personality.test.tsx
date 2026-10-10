@@ -36,7 +36,6 @@ const BASE_PAYLOAD: WizardSubmitPayload = {
   name: '',
   description: '',
   color: '#ffffff',
-  icon: 'Robot',
   model: '',
   soul: '',
   heartbeat: '',
