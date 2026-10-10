@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -93,13 +95,49 @@ func TestSF1_BootMainFailureIsReportedAndOnDemandOpenIsActionable(t *testing.T) 
 	code, body := sf1GetSessionBody(env, u1MainID(ws, "mia"))
 	assert.NotEqual(t, http.StatusNotFound, code, "an entitled pair with a storage failure is not 'not found'")
 	assert.NotContains(t, body, "session not found")
-	assert.Contains(t, body, "mia", "the message names the agent: %s", body)
+	assert.Contains(t, body, "main chat could not be prepared", "the message says what failed: %s", body)
 	assert.Contains(t, body, "retry", "the message says how to recover: %s", body)
+	sf1AssertNoInternalDetail(t, env, body, ws, "mia")
 
 	// Recovery: the next open re-attempts the creation and succeeds.
 	restore()
 	code, body = sf1GetSessionBody(env, u1MainID(ws, "mia"))
 	assert.Equal(t, http.StatusOK, code, "once storage works the on-demand open creates the main: %s", body)
+}
+
+// sf1AssertNoInternalDetail asserts a client-visible body carries no
+// filesystem path, session-file name, session or identity id, home-directory
+// fragment, or stored owner/workspace value.
+func sf1AssertNoInternalDetail(t *testing.T, env *u1Env, body string, forbidden ...string) {
+	t.Helper()
+	home, _ := os.UserHomeDir()
+	frags := append([]string{
+		env.home, env.store(t).BaseDir(), os.TempDir(), "/Users/", "/var/", "/tmp", "~",
+		"meta.json", ".jsonl", "main-session-", "OMNIPUS_HOME",
+	}, forbidden...)
+	if home != "" {
+		frags = append(frags, home)
+	}
+	for _, f := range frags {
+		if f == "" {
+			continue
+		}
+		assert.NotContains(t, body, f, "the client body must not leak %q: %s", f, body)
+	}
+}
+
+// A stored main whose identity contradicts its pair is also answered with the
+// fixed message only - the stored owner and workspace never reach the client.
+func TestSF1_MismatchedStoredMainLeaksNoStoredIdentity(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JSF1WS0000000000000000G"
+	env.seedWorkspace(t, ws, false, "mia")
+	u1SeedStoredMain(t, env, u1MainID(ws, "mia"), "jim", "some-other-workspace-xyz")
+
+	code, body := sf1GetSessionBody(env, u1MainID(ws, "mia"))
+	assert.Equal(t, http.StatusInternalServerError, code)
+	assert.Contains(t, body, "main chat could not be prepared")
+	sf1AssertNoInternalDetail(t, env, body, ws, "jim", "some-other-workspace-xyz", "mia", "type=")
 }
 
 // A pair that is simply not entitled to a main keeps the plain 404 - the error
@@ -112,27 +150,31 @@ func TestSF1_NonMemberLookupStaysNotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, code, body)
 }
 
-// I1: boot over a saved default and a non-default workspace, an existing main,
-// and a corrupt main beside healthy pairs, twice. The full main set, identity
-// reuse, the corrupt bytes, the healthy creations and an identifying error log
-// are all asserted.
+// I1: boot over a saved default and a non-default workspace, twice. The default
+// team lists a CORRUPT member BEFORE a healthy one, so the test proves creation
+// continues past a failure; the non-default workspace has no main before boot,
+// so boot itself must create it there; one healthy main already exists and must
+// be reused byte-for-byte. The full main set, the preserved corrupt bytes and an
+// identifying error log are asserted.
 func TestBootMains_AcrossSavedWorkspacesWithExistingAndCorruptMains(t *testing.T) {
 	logs := sf1CaptureSlog(t)
 	env := u1NewEnv(t, false)
 	const def, other = "01JSF1DEFAULT00000000000C", "01JSF1OTHERWS000000000000D"
-	env.seedWorkspace(t, def, true, "mia", "jim")
-	env.seedWorkspace(t, other, false, "mia")
+	env.seedWorkspace(t, def, true, "jim", "mia") // jim (corrupt) is listed BEFORE mia (healthy)
+	env.seedWorkspace(t, other, false, "mia", "jim")
 
-	// An existing, healthy main for (other, mia): created before boot.
-	existing, err := env.store(t).GetOrCreateMainSession(other, "mia")
+	// An existing, healthy main for (other, jim): created before boot. Nothing
+	// exists yet for (other, mia) or (def, mia) - boot must create those.
+	existing, err := env.store(t).GetOrCreateMainSession(other, "jim")
 	require.NoError(t, err)
 	existingPath := filepath.Join(env.store(t).BaseDir(), existing.ID, "meta.json")
 	existingBefore, err := os.ReadFile(existingPath)
 	require.NoError(t, err)
+	require.NoDirExists(t, filepath.Join(env.store(t).BaseDir(), u1MainID(other, "mia")),
+		"precondition: the non-default workspace's main must not exist before boot")
 
-	// A corrupt main for (def, jim) beside the healthy (def, mia).
-	corruptID := u1MainID(def, "jim")
-	corruptDir := filepath.Join(env.store(t).BaseDir(), corruptID)
+	// A corrupt main for (def, jim).
+	corruptDir := filepath.Join(env.store(t).BaseDir(), u1MainID(def, "jim"))
 	require.NoError(t, os.MkdirAll(corruptDir, 0o700))
 	corruptBytes := []byte("{not json")
 	corruptPath := filepath.Join(corruptDir, "meta.json")
@@ -141,16 +183,16 @@ func TestBootMains_AcrossSavedWorkspacesWithExistingAndCorruptMains(t *testing.T
 	for boot := 1; boot <= 2; boot++ {
 		env.api.ensureBootMains()
 
-		// The harness seeds its own default workspace; only the two workspaces this
-		// test saved are under assertion.
+		// The harness seeds its own default workspace; only the two workspaces
+		// this test saved are under assertion.
 		var got []string
 		for _, id := range u1Sorted(env.storedOfType(t, "main")) {
 			if strings.HasPrefix(id, "main-session-"+def+"+") || strings.HasPrefix(id, "main-session-"+other+"+") {
 				got = append(got, id)
 			}
 		}
-		want := []string{u1MainID(def, "admin"), u1MainID(def, "mia"), u1MainID(other, "mia")}
-		assert.Equal(t, want, got, "boot %d: exactly Admin's, the healthy default pair and the existing pair; no replacement for the corrupt one", boot)
+		want := []string{u1MainID(def, "admin"), u1MainID(def, "mia"), u1MainID(other, "jim"), u1MainID(other, "mia")}
+		assert.Equal(t, want, got, "boot %d: Admin's, the healthy default member (created AFTER the corrupt one failed), the reused existing main and the main boot created in the non-default workspace; no replacement for the corrupt one", boot)
 
 		after, err := os.ReadFile(existingPath)
 		require.NoError(t, err)
@@ -165,23 +207,53 @@ func TestBootMains_AcrossSavedWorkspacesWithExistingAndCorruptMains(t *testing.T
 		"the corrupt pair is identified by workspace and agent in an error log: %s", out)
 }
 
-// I2: Admin's main address reaches the real workspace JSON response, only on
-// the default workspace and only once the main resolves.
+// I2: Admin's main address reaches the real workspace JSON response - validated
+// against the generated Workspace schema - only on the default workspace and
+// only once the main resolves.
 func TestWorkspaceJSON_AdminMainSessionIDThroughTheRealResponse(t *testing.T) {
 	env := u1NewEnv(t, false)
 	const def, other = "01JSF1DEFAULT00000000000E", "01JSF1OTHERWS000000000000F"
 	env.seedWorkspace(t, def, true, "mia")
 	env.seedWorkspace(t, other, false, "mia")
 
-	_, present := env.getWorkspace(t, def)["admin_main_session_id"]
+	raw := func(id string) ([]byte, map[string]any) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+		r.URL.Path = "/api/v1/workspaces/" + id
+		env.api.HandleWorkspaces(w, r)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &m))
+		return w.Body.Bytes(), m
+	}
+	contractsDir := filepath.Join(filepath.Dir(gatewayTestCallerFile(t)), "..", "..", "contracts", "components", "schemas")
+	compiler := jsonschema.NewCompiler()
+	compiler.UseLoader(newYAMLSchemaLoader(t))
+	schema, err := compiler.Compile("file://" + filepath.Join(contractsDir, "Workspace.yaml"))
+	require.NoError(t, err, "must compile Workspace.yaml")
+	validate := func(body []byte) {
+		var doc any
+		require.NoError(t, json.Unmarshal(body, &doc))
+		assert.NoError(t, schema.Validate(doc), "the workspace response must validate against Workspace.yaml: %s", body)
+	}
+
+	before, m := raw(def)
+	validate(before)
+	_, present := m["admin_main_session_id"]
 	assert.False(t, present, "before the main exists the field is omitted, never a guessed id")
 
 	env.api.ensureBootMains()
 
-	got, ok := env.getWorkspace(t, def)["admin_main_session_id"].(string)
+	body, m := raw(def)
+	validate(body)
+	got, ok := m["admin_main_session_id"].(string)
 	require.True(t, ok, "the default workspace JSON carries admin_main_session_id once Admin's main resolves")
 	assert.Equal(t, u1MainID(def, "admin"), got)
-	_, present = env.getWorkspace(t, other)["admin_main_session_id"]
+	assert.LessOrEqual(t, len(got), 255, "the contract bounds the id at 255")
+	assert.Nil(t, u1MemberConfig(m, "admin"), "no fake membership entry for Admin")
+
+	body, m = raw(other)
+	validate(body)
+	_, present = m["admin_main_session_id"]
 	assert.False(t, present, "a non-default workspace never carries it")
-	assert.Nil(t, u1MemberConfig(env.getWorkspace(t, def), "admin"), "no fake membership entry for Admin")
 }

@@ -33,6 +33,14 @@ import (
 // never a user input error.
 var errNoSessionStore = errors.New("session store unavailable")
 
+// errMainChatNotPrepared is the fixed client-facing text when an entitled pair's
+// main could not be created or trusted. It is deliberately free of paths, file
+// names, session or identity ids and stored owner/workspace values; the real
+// cause is in the server log at error level.
+var errMainChatNotPrepared = errors.New(
+	"This agent's main chat could not be prepared because session storage failed. " +
+		"Check disk space and permissions, then retry. Details are in the server log.")
+
 // mainSessionAccessor is the slice of *agent.AgentLoop this file needs:
 // the live config (agent eligibility) and the shared session store (main
 // get-or-create).
@@ -189,10 +197,10 @@ func (a *restAPI) ensureMainsForTeam(ws storedWorkspace) error {
 //
 // The error return separates "this pair has no main" (false, nil: the caller's
 // 404 is the truth) from "this pair is entitled to a main but it could not be
-// created or trusted" (false, error): the error names what failed and how to
-// recover, so a retry shows something actionable instead of "session not
-// found". It is re-attempted on every call, so a transient storage failure at
-// boot heals on the next open.
+// created or trusted" (false, errMainChatNotPrepared): a fixed, actionable
+// message (the real cause is logged), so a retry shows something useful instead
+// of "session not found". It is re-attempted on every call, so a transient
+// storage failure at boot heals on the next open.
 func (a *restAPI) resolveMainSessionForRead(id string) (bool, error) {
 	wsID, agentID, ok := session.SplitMainSessionID(id)
 	if !ok {
@@ -206,13 +214,12 @@ func (a *restAPI) resolveMainSessionForRead(id string) (bool, error) {
 		return false, nil
 	}
 	if _, err := a.ensureMainSession(wsID, agentID); err != nil {
-		slog.Error("rest: main session lookup refused",
+		// The full contextual error stays in the server log; the client gets a
+		// fixed, actionable message that carries no path, file name, id or
+		// stored identity value.
+		slog.Error("rest: main session could not be prepared on open",
 			"session_id", id, "workspace_id", wsID, "agent_id", agentID, "error", err)
-		return false, fmt.Errorf(
-			"the main chat for agent %q in workspace %q could not be opened: %w. "+
-				"Check that the data folder is writable and has free space, then retry; "+
-				"if a saved main chat with this id is damaged or belongs to another agent, "+
-				"an administrator must repair or remove it", agentID, wsID, err)
+		return false, errMainChatNotPrepared
 	}
 	return true, nil
 }
