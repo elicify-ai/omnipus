@@ -49,8 +49,10 @@ import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Separator } from '@/components/ui/separator'
+import { isClearContextMarker } from '@/lib/clearMarker'
 import { useChatStore } from '@/store/chat'
-import { pendingRedirectSids } from '@/store/chat/runtime-state'
+import { pendingClearRefetches, pendingRedirectSids } from '@/store/chat/runtime-state'
 import { stampToolCallOffset } from '@/store/chat/session'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
@@ -315,6 +317,16 @@ function SystemMessage() {
           message={storeMsg.providerFallbackNote.message}
           pickNewModelHint={storeMsg.providerFallbackNote.pickNewModelHint}
         />
+      </MessagePrimitive.Root>
+    )
+  }
+  // FR-030/031 (U10b): the /clear marker row (see ClearContextDivider and
+  // VirtualSystemMessageRow's identical branch — the two paths must not
+  // drift).
+  if (storeMsg && isClearContextMarker(storeMsg)) {
+    return (
+      <MessagePrimitive.Root className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
+        <ClearContextDivider messageId={storeMsg.id} content={storeMsg.content ?? ''} />
       </MessagePrimitive.Root>
     )
   }
@@ -1021,6 +1033,35 @@ export function VirtualUserMessageRow({
   )
 }
 
+/**
+ * FR-030/031 (U10b): the quiet divider the chat view shows for the ONE
+ * system entry a successful /clear appends server-side ("Conversation
+ * context cleared", type system, role system, view_membership chat —
+ * pkg/agent/clear_session.go). It reads as a separation in the conversation,
+ * never as a message: hairline rules (the catalogued Separator primitive)
+ * flanking the marker text, muted type, no bubble. The live SystemMessage
+ * path and the virtualizer path both route the marker here so the two
+ * surfaces cannot drift.
+ */
+function ClearContextDivider({ messageId, content }: { messageId: string; content: string }) {
+  return (
+    <div
+      data-message-role="system"
+      data-message-id={messageId}
+      data-testid="clear-context-divider"
+      className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)]"
+    >
+      <div className="min-w-0 flex-1">
+        <Separator />
+      </div>
+      <span className="whitespace-nowrap text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{content}</span>
+      <div className="min-w-0 flex-1">
+        <Separator />
+      </div>
+    </div>
+  )
+}
+
 /** Standalone system message row for the virtualizer. */
 function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
   // Operator-reported UX fix, 2026-09-08: see SystemMessage's identical
@@ -1049,6 +1090,14 @@ function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
         />
       </div>
     )
+  }
+  // FR-030/031 (U10b): the ONE chat-view marker entry a successful /clear
+  // appends server-side renders as a quiet divider, not a chat bubble — see
+  // ClearContextDivider. Every OTHER system row keeps the ordinary pill
+  // below: an unknown future marker is never a crash and never a silent
+  // drop.
+  if (isClearContextMarker(message)) {
+    return <ClearContextDivider messageId={message.id} content={message.content ?? ''} />
   }
   return (
     <div
@@ -3284,7 +3333,24 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
       {historyError ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           <p>Could not load messages.</p>
-          <Button variant="outline" size="sm" onClick={() => refetchHistory()}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              // V3 (FR-030/031): when a /clear operation still owes this
+              // session its view, Retry runs ONLY that operation's own
+              // read+apply — it publishes into the history cache on success,
+              // and a competing ordinary refetch could fail afterwards and
+              // undo the recovery (round-3 review N5). No-op when no clear
+              // operation is pending.
+              const sid = activeSessionId
+              if (sid && sid !== '__pending' && pendingClearRefetches[sid]) {
+                useChatStore.getState().retryClearTranscript(sid)
+                return
+              }
+              refetchHistory()
+            }}
+          >
             <ArrowCounterClockwise size={14} /> Retry
           </Button>
         </div>

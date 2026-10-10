@@ -19,6 +19,8 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
+import { isClearCommandText } from '@/lib/clearMarker'
+import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
 import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
@@ -72,6 +74,41 @@ function markUserMessageFailed(draft: { messagesById: Record<string, { status?: 
     um.status = 'error'
     um.deliveryStatus = 'failed'
   }
+}
+
+/** A mid-turn steering send that never reached the gateway: the in-flight
+ * turn is unaffected — only THIS message failed. Mark just the user bubble
+ * as 'error' (Retry affordance) and leave `isStreaming` alone; there is no
+ * assistant placeholder to roll back because a mid-turn steering send never
+ * creates one. ADR-070 §2.1 deliberately does NOT close the pre-steer bubble
+ * here: the backend never received this steer, so it keeps writing into the
+ * SAME original segment exactly as before — closing the bubble would be
+ * actively wrong, not just unnecessary (a real, previously-uncaught gap:
+ * closing it unconditionally alongside the append broke the assertion that
+ * branch's own pre-existing test pins).
+ * Extracted out of sendMessage (pure relocation, 2026-10-10, same move
+ * performResendMessage made) so sendMessage stays within its grandfathered
+ * function-size budget; the behavior is byte-identical. */
+function handleFailedSteerSend(
+  withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void,
+  sessionId: string,
+  userMsgId: string,
+): void {
+  withBucket(sessionId, (b) => produce(b, (draft) => {
+    markUserMessageFailed(draft, userMsgId)
+  }) as Partial<SessionChatState>)
+  useConnectionStore.getState().setConnectionError(
+    'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
+  )
+}
+
+/** FR-030/031 (U10b): a /clear just went out on the wire — record the
+ * transcript re-read the command owes the view (the server's marker entry is
+ * never pushed live). One shared arm for EVERY path that can put a /clear on
+ * the wire: the normal sendMessage branches and the Retry/resend path. A
+ * send that failed never reaches here, so a failed send arms nothing. */
+function armClearRefreshForSend(sessionId: string, clientMessageId: string, get: StoreApi<ChatStore>['getState']): void {
+  armClearRefresh(sessionId, clientMessageId, get().sessionsById[sessionId]?.activeTurnId ?? null)
 }
 
 /** Review finding 17: resends messageId IN PLACE — same id, original
@@ -160,7 +197,12 @@ function performResendMessage(
     useConnectionStore.getState().setConnectionError(
       'Message could not be resent — connection dropped. Your message was kept; press Retry to resend.'
     )
+    return
   }
+  // FR-030/031 (U10b): a Retry that puts a /clear back on the wire arms the
+  // same transcript re-read the original send would have (review round 1,
+  // F3) — the retry IS the send, so the refresh belongs to it.
+  if (isClearCommandText(content)) armClearRefreshForSend(targetSid, messageId, get)
 }
 
 type OutboundLifecycleSlice = Pick<ChatStore,
@@ -482,14 +524,15 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             // just unnecessary (a real, previously-uncaught gap: closing it
             // unconditionally alongside the append broke the assertion this
             // branch's own pre-existing test pins).
-            withBucket(activeSessionId, (b) => produce(b, (draft) => {
-              markUserMessageFailed(draft, userMsg.id)
-            }) as Partial<SessionChatState>)
-            useConnectionStore.getState().setConnectionError(
-              'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
-            )
+            handleFailedSteerSend(withBucket, activeSessionId, userMsg.id)
             return
           }
+
+          // FR-030/031 (U10b): an outgoing /clear arms the transcript
+          // re-read the command owes the view (the server's marker entry is
+          // never pushed live), bound to THIS send so another turn's done
+          // cannot consume it.
+          if (isClearCommandText(content)) armClearRefreshForSend(activeSessionId, clientMessageId, get)
 
           // ADR-070 §2.1: only NOW, once the steer has genuinely reached the
           // gateway, close the assistant bubble that was open at send-time —
@@ -640,6 +683,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           // The attempted turn is over (it never started) — free the next
           // drained message to send, if any.
           maybeDrainNext()
+        } else {
+          // FR-030/031 (U10b): an outgoing /clear arms the transcript
+          // re-read the command owes the view (the server's marker entry is
+          // never pushed live), bound to THIS send so another turn's done
+          // cannot consume it.
+          if (isClearCommandText(content)) armClearRefreshForSend(activeSessionId, clientMessageId, get)
         }
       } else {
         // Kickoff hardening: a workspace-setup kickoff already owns

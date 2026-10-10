@@ -216,6 +216,14 @@ interface MessageBase { // not-wire-format
    */
   agentId?: string
   /**
+   * The generated wire correlation id (`Message.client_message_id`,
+   * #823 catch-up redesign): present on saved user entries that were
+   * persisted with the client-supplied id, forwarded verbatim by
+   * rawToMessage. Absent on entries written before the field existed and
+   * on non-user entries.
+   */
+  clientMessageId?: string
+  /**
    * Per-turn model record (Phase 1, FR-013). Only populated for assistant
    * messages that have a recorded model on the wire. Legacy turns and
    * non-assistant messages leave this undefined. Empty string is treated
@@ -402,6 +410,8 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
   content?: string
   summary?: string
   timestamp: string
+  /** Generated wire correlation id (`Message.client_message_id`) — present on saved user entries. */
+  client_message_id?: string
   tokens?: number
   cost?: number
   status?: 'ok' | 'error' | 'interrupted'
@@ -518,6 +528,11 @@ function rawToMessage(raw: RawMessage): Message {
       tokens: raw.tokens,
       cost: raw.cost,
       agentId: raw.agent_id || undefined,
+      // The generated wire correlation id (`Message.client_message_id`,
+      // present on saved user entries): lets client-side reconcilers match a
+      // server row to the optimistic bubble that was sent under that id
+      // (the /clear transcript re-read's merge does exactly that).
+      clientMessageId: raw.client_message_id,
       status: (baseStatus === 'done' || baseStatus === 'error') ? baseStatus : 'done',
     } satisfies UserMessage
   }
