@@ -402,7 +402,10 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 		got = append(got, bootEnvelope(t, event.Message).MessageID)
 	}
 	slices.Sort(got)
-	if !slices.Equal(got, []string{"handback-open", "question-open"}) {
+	// FR-012: every accepted report kind is wake-eligible, so the unconsumed
+	// progress entry is re-nudged too — only the genuinely delivered
+	// (consumed) handback stays quiet.
+	if !slices.Equal(got, []string{"handback-open", "progress-open", "question-open"}) {
 		t.Fatalf("re-woken = %v", got)
 	}
 	remaining, _, _, err := h.inbox.Drain(parent, child, "", 20)

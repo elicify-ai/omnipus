@@ -61,9 +61,32 @@ func u11RestFixture(t *testing.T) (*restAPI, *session.UnifiedStore, string) {
 	})
 	store := api.agentLoop.GetSessionStore()
 	require.NotNil(t, store, "the shared session store must be wired")
+	// Wire an EMPTY approval registry (no pending approvals). A nil registry
+	// makes needs_attention UNKNOWN by design (founder: never a false "off"),
+	// which would leave every "clean main" case meaningless; an empty registry
+	// lets a clean main resolve to an authoritative false. The nil-registry
+	// case is covered separately by TestSessionCoreU11_NilApprovalRegistryIsUnknown.
+	api.approvalReg = newApprovalRegistryV2(64, 300*time.Second)
 	main, err := store.GetOrCreateMainSession(u11WorkspaceID, u11Agent)
 	require.NoError(t, err, "GetOrCreateMainSession")
 	return api, store, main.ID
+}
+
+// TestSessionCoreU11_NilApprovalRegistryIsUnknown pins the founder's rule that a
+// source which cannot be read never reports a false "off": with no approval
+// registry wired, needs_attention is OMITTED on a clean main (unknown), not
+// false. This is the counterpart to the fixture's empty registry.
+func TestSessionCoreU11_NilApprovalRegistryIsUnknown(t *testing.T) {
+	api, _, mainID := u11RestFixture(t)
+	api.approvalReg = nil // wiring fault: the registry was never installed
+
+	detail := u11GetSessionBody(t, api, mainID)
+	sessionObj, ok := detail["session"].(map[string]any)
+	require.True(t, ok, "detail must carry a session object: %v", detail)
+	_, present := u11NeedsAttention(t, sessionObj)
+	assert.False(t, present,
+		"C-ATTENTION: a nil approval registry leaves needs_attention UNKNOWN (omitted) on a clean main — "+
+			"never a false 'off'")
 }
 
 // u11GetSessionBody GETs /api/v1/sessions/{id} and returns the decoded

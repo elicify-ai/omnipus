@@ -141,7 +141,7 @@ func TestUpdateAgent_LockedCoreAgentSoulStillForbidden(t *testing.T) {
 
 // TestUpdateAgent_JudgeOtherIdentityFieldsStillForbidden verifies that only
 // soul is exempted from the Judge's locked-identity reject-set — name,
-// description, color, icon, and skills all still 403 on a System Agent.
+// description, color, and skills all still 403 on a System Agent.
 func TestUpdateAgent_JudgeOtherIdentityFieldsStillForbidden(t *testing.T) {
 	cases := []struct {
 		name string
@@ -150,7 +150,6 @@ func TestUpdateAgent_JudgeOtherIdentityFieldsStillForbidden(t *testing.T) {
 		{"name", `{"name":"Rogue Judge"}`},
 		{"description", `{"description":"a rewritten description"}`},
 		{"color", `{"color":"#ff0000"}`},
-		{"icon", `{"icon":"skull"}`},
 		{"skills", `{"skills":["some-skill"]}`},
 	}
 	for _, tc := range cases {
@@ -491,14 +490,14 @@ func TestUpdateAgent_AllowsNullVoiceOnWorker(t *testing.T) {
 
 // TestUpdateAgent_Worker_AcceptsValidPatch is the worker-PUT-400 regression: a
 // PUT carrying only fields that ARE valid for a worker (model,
-// color, icon, description — plus max_tool_iterations for a NATIVE Subagent
+// color, description — plus max_tool_iterations for a NATIVE Subagent
 // only) must succeed (200), not 400. Covers both a native Subagent and a
 // subagent_3p.
 func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 	t.Run("native Subagent", func(t *testing.T) {
 		api := buildExecutorTestAPI(t)
 		id := createNativeSubagent(t, api)
-		validPatch := `{"model":"test-model","max_tool_iterations":8,"color":"#d4af37","icon":"robot","description":"updated worker"}`
+		validPatch := `{"model":"test-model","max_tool_iterations":8,"color":"#d4af37","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
@@ -513,7 +512,7 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		// forbidden on a subagent_3p PUT (agent_field_rules.go
 		// subagent3pForbiddenUpdateFields, extended in W2a). See
 		// TestUpdateAgent_Subagent3p_ForbiddenFields for the 400 case.
-		validPatch := `{"model":"test-model","color":"#d4af37","icon":"robot","description":"updated worker"}`
+		validPatch := `{"model":"test-model","color":"#d4af37","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")

@@ -240,34 +240,24 @@ func TestRunDueJobs_ConcurrencyCapQueues(t *testing.T) {
 	}
 }
 
-// TestMigration_NilDefaultSkipsFire verifies that with no default agent, an
-// owner-less job is left empty AND is not fired by the lane (W-8).
-func TestMigration_NilDefaultSkipsFire(t *testing.T) {
+// TestAddJobFull_RefusesOwnerlessJob is DEL-15's creation contract: AddJobFull
+// is the ONLY creation path and requires an explicit, already-authorized owner
+// — the legacy AddJob and the owner-less backfill are deleted, so a job with no
+// AgentID is refused rather than persisted for a later migration.
+func TestAddJobFull_RefusesOwnerlessJob(t *testing.T) {
 	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	cs, _ := newAutonomyService(t, clk)
-	runner := &recordingRunner{}
-	cs.SetRunner(runner)
 
-	if err := cs.startNoLoop(); err != nil {
-		t.Fatalf("Start: %v", err)
+	job, err := cs.AddJobFull(JobSpec{Name: "orphan", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "x"})
+	if err == nil {
+		t.Fatalf("AddJobFull with no AgentID must be refused (DEL-15), got job %+v", job)
 	}
-	defer cs.Stop()
-
-	// Add an owner-less due job (no SetDefaultAgentID).
-	job, err := cs.AddJobFull(JobSpec{Name: "orphan", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "x", AgentID: "u6-test-owner"})
-	if err != nil {
-		t.Fatalf("AddJob: %v", err)
+	if got := len(cs.ListJobs(true)); got != 0 {
+		t.Fatalf("a refused owner-less job must not be persisted, got %d job(s)", got)
 	}
-	if job.AgentID != "" {
-		t.Fatalf("expected empty owner, got %q", job.AgentID)
-	}
-
-	clk.Advance(2 * time.Minute)
-	cs.RunDueJobs(clk.Now())
-	cs.WaitForLane()
-
-	if got := len(runner.calls()); got != 0 {
-		t.Fatalf("owner-less job should be skipped, runner called %d times", got)
+	// A whitespace-only owner is owner-less too.
+	if _, err := cs.AddJobFull(JobSpec{Name: "blank", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, AgentID: "  "}); err == nil {
+		t.Fatal("AddJobFull with a whitespace-only AgentID must be refused (DEL-15)")
 	}
 }
 

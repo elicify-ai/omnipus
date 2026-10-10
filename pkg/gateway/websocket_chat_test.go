@@ -819,6 +819,14 @@ func TestHandleChatMessage_WorkspaceSetupKickoff_MalformedAgentID_RejectsPreCons
 		"the one-time flag must remain intact — the malformed agent_id must be rejected BEFORE the consume")
 }
 
+// TestRestoreWorkspaceSetupPending_RestoresClearedFlag proves the
+// compensation helper directly: given a workspace whose setup_pending was
+// just cleared by a successful consume, restoreWorkspaceSetupPending sets it
+// back to true and persists it. This is the fallback the kickoff downstream
+// failure paths (NewSession, SetMeta, PublishInbound) call when a genuine
+// forced failure at those exact seams is not practical to construct in a unit
+// test (see TestHandleChatMessage_WorkspaceSetupKickoff_PublishFailure_RestoresFlagAndRollsBackSession
+// below for one seam — bus.Close — that IS forceable end-to-end).
 func TestRestoreWorkspaceSetupPending_RestoresClearedFlag(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	handler, _ := newTestWSHandlerForModelName(t, msgBus)

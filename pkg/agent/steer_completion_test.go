@@ -930,12 +930,12 @@ func TestCompletion_WokenDeliveryStaysQuiet(t *testing.T) {
 	}
 }
 
-// TestCompletion_ProgressStoredNotWokenStaysQuiet proves the report is gated
-// on WAKE-ELIGIBILITY, not on the outcome kind. A non-fatal lifecycle notice
-// that is not wake-eligible returning stored_not_woken is the CONTRACT
-// (FR-B-010), not a failure, and must stay silent — otherwise the ERROR
-// stream fills with non-events and stops being read.
-func TestCompletion_NonWakeEligibleStoredNotWokenStaysQuiet(t *testing.T) {
+// TestCompletion_ProgressStoredNotWoken_LoggedAtError (FR-012): progress is
+// wake-eligible now, so a progress entry stored without a wake is a STALL and
+// must be logged at ERROR. The non-wake-eligible kinds this test's predecessor
+// covered (progress/checkpoint) no longer exist among the accepted report
+// kinds.
+func TestCompletion_ProgressStoredNotWoken_LoggedAtError(t *testing.T) {
 	readLog := captureLogFile(t, logger.ERROR)
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -960,8 +960,8 @@ func TestCompletion_NonWakeEligibleStoredNotWokenStaysQuiet(t *testing.T) {
 		Message:        progress,
 	}, parentID, rec.Generation, steer.Delivery{MessageID: rec.SessionID + ":progress", Outcome: steer.DeliveryStoredNotWoken})
 
-	if captured := readLog(); strings.Contains(captured, `"level":"error"`) {
-		t.Fatalf("a non-wake-eligible progress entry stored without a wake produced an ERROR line — that outcome is its contract, not a failure; captured log:\n%s", captured)
+	if captured := readLog(); !strings.Contains(captured, `"level":"error"`) {
+		t.Fatalf("a wake-eligible progress entry stored without a wake produced no ERROR line — under FR-012 that is a stall; captured log:\n%s", captured)
 	}
 }
 

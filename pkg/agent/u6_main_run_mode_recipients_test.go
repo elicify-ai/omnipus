@@ -15,10 +15,12 @@
 //
 //	D-U6.3: func deriveTaskRunMode(t *task.Task, assigneeMainOK bool) taskRunMode
 //	        → taskRunMain | taskRunIsolated | taskRunContinue.
-//	        func (te *TaskExecutor) launchMainTaskRun(ctx, t, occurrenceMs, kind) (string, error)
+//	        func (te *TaskExecutor) launchMainTaskRun(ctx, t, occurrenceMs, kind, initiatedBy) (string, error)
 //	        the MAIN child is a real child of the ASSIGNEE's main (steering session).
-//	D-U6.2: func (te *TaskExecutor) captureRunRecipients(ctx, t) []string
-//	        starter main + assignee main, deduped, creator never used.
+//	D-U6.2: func (te *TaskExecutor) captureRunRecipients(ctx, t, initiatedBy) []string
+//	        starter main + assignee main, deduped, creator never used. The starter
+//	        is the run's authorized initiator (initiator-auth decision), never read
+//	        from ctx: a task run re-stamps ctx with the assignee.
 //	D-U6.1: type MainSessionResolver interface { EligibleMain(ws, agent) (id, ok, err) };
 //	        func (te *TaskExecutor) SetMainSessionResolver(r MainSessionResolver)
 //	        a read error is NEVER "not eligible": for the assignee the run is refused.
@@ -147,25 +149,27 @@ func TestU6_FR019_CaptureRunRecipients(t *testing.T) {
 		ID: "u6-capture-1", AgentID: assignee, WorkspaceID: ws,
 		Status: task.StatusNext, CreatedByAgentID: creator,
 	}
-	// The starter source is the run_task caller's ctx (D-U6.2).
+	// The starter source is the run's authorized initiator, not ctx (D-U6.2 as
+	// amended by the initiator-auth decision): a task run re-stamps ctx with the
+	// assignee, so "who is calling" read from ctx there is wrong.
 	ctx := tools.WithWorkspaceID(tools.WithAgentID(context.Background(), starter), ws)
+	ini := &session.InitiatedBy{AgentID: starter}
 
-	got := te.captureRunRecipients(ctx, tk)
+	got := te.captureRunRecipients(ctx, tk, ini)
 	assert.Equal(t, []string{starterMain, assigneeMain}, got,
 		"FR-019: recipients are [starter main, assignee main], deduped, and never the creator")
 
 	// Equal starter and assignee collapse to one entry (dedupe).
 	res.elig[[2]string{ws, starter}] = assigneeMain
-	deduped := te.captureRunRecipients(ctx, tk)
+	deduped := te.captureRunRecipients(ctx, tk, ini)
 	assert.Equal(t, []string{assigneeMain}, deduped,
 		"FR-019: a starter and assignee that share a main must be deduplicated")
 
-	// A person/scheduler-started run has no starter agent in ctx → only the
-	// assignee's main.
+	// A person/scheduler-started run has no initiator → only the assignee's main.
 	res.elig[[2]string{ws, starter}] = starterMain
-	bare := te.captureRunRecipients(context.Background(), tk)
+	bare := te.captureRunRecipients(context.Background(), tk, nil)
 	assert.Equal(t, []string{assigneeMain}, bare,
-		"FR-019: a run with no starter agent in ctx captures only the assignee's main")
+		"FR-019: a run with no initiator captures only the assignee's main")
 }
 
 // TestU6_FR017_LaunchMainTaskRunSteersUnderAssigneeMain pins D-U6.3's core:
@@ -196,7 +200,7 @@ func TestU6_FR017_LaunchMainTaskRunSteersUnderAssigneeMain(t *testing.T) {
 	require.NoError(t, GetTaskStore(al).Create(tk))
 
 	ctx := tools.WithWorkspaceID(tools.WithAgentID(context.Background(), starter), ws)
-	_, err = te.launchMainTaskRun(ctx, tk, nil, task.RunKindManual)
+	_, err = te.launchMainTaskRun(ctx, tk, nil, task.RunKindManual, nil)
 	require.NoError(t, err)
 
 	req, ok := launcher.last()
@@ -231,7 +235,7 @@ func TestU6_FR019_MainResolverReadErrorRefusesRun(t *testing.T) {
 	require.NoError(t, GetTaskStore(al).Create(tk))
 
 	ctx := tools.WithWorkspaceID(tools.WithAgentID(context.Background(), starter), ws)
-	_, err := te.launchMainTaskRun(ctx, tk, nil, task.RunKindManual)
+	_, err := te.launchMainTaskRun(ctx, tk, nil, task.RunKindManual, nil)
 	assert.Error(t, err,
 		"D-U6.1: a read error from EligibleMain for the ASSIGNEE must refuse the run, never be treated "+
 			"as 'not eligible' (which would silently run ISOLATED)")

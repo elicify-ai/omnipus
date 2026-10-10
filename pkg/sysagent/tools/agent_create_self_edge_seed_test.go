@@ -40,7 +40,6 @@ func TestCreateAgent_InContext_SeedsSelfRow(t *testing.T) {
 		"soul":        "You help.",
 		"model":       "test/model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	})
 	if result.IsError {
 		t.Fatalf("create failed: %s", result.ForLLM)

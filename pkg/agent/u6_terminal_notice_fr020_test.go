@@ -109,12 +109,15 @@ func TestU6_FR020_DeliversHeaderAndResultToEachRecipient(t *testing.T) {
 		msgs, _, _, derr := inbox.Drain(r, "", "", 10)
 		require.NoError(t, derr)
 		require.Len(t, msgs, 1, "FR-020: each captured recipient gets exactly one terminal notice")
-		raw, _ := json.Marshal(msgs[0])
-		body := string(raw)
-		assert.Contains(t, body, `Task run done: "u6 noticed task" (run run-u6-1)`,
-			"FR-020: the notice carries the engine header naming status, title and run id")
-		assert.Contains(t, body, "the full stored result",
-			"FR-020: the notice carries the full stored result")
+		// Compare the DECODED text, not the marshalled JSON: a raw byte search
+		// would have to match JSON-escaped quotes (\"...\"), which is an oracle
+		// on the encoding, not on the notice the recipient reads.
+		hb, aerr := msgs[0].AsSessionMessageHandback()
+		require.NoError(t, aerr, "FR-020: a done task's terminal notice is a final handback")
+		assert.Equal(t,
+			"Task run done: \"u6 noticed task\" (run run-u6-1)\n\nthe full stored result",
+			hb.ResultSoFar,
+			"FR-020: the notice carries the engine header naming status, title and run id, then the full stored result")
 	}
 }
 
