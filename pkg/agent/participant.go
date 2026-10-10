@@ -78,7 +78,7 @@ func participantSource(platform string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(strings.TrimSpace(platform)) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
-			if b.Len() == 0 && !(r >= 'a' && r <= 'z') {
+			if b.Len() == 0 && (r < 'a' || r > 'z') {
 				continue
 			}
 			b.WriteRune(r)

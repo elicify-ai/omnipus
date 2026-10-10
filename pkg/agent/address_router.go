@@ -125,24 +125,24 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	if store == nil || ledger == nil {
 		return "", "", fmt.Errorf("%w: session store unavailable", ErrPeerRefused)
 	}
-	if err := a.Receiver.Validate(); err != nil {
-		return "", "", fmt.Errorf("%w: %v", ErrPeerRefused, err)
+	if err = a.Receiver.Validate(); err != nil {
+		return "", "", fmt.Errorf("%w: %w", ErrPeerRefused, err)
 	}
 	// F1: authorization is read again HERE, after any Ask approval returned and
 	// before the receiver's main, the capture or the entry exist. A membership
 	// or policy change made while approval was pending refuses the request
 	// with nothing written.
-	if err := al.recheckReceiverAdmission(ctx, a.Receiver, a.Source.SessionID, a.AskApproved); err != nil {
+	if err = al.recheckReceiverAdmission(ctx, a.Receiver, a.Source.SessionID, a.AskApproved); err != nil {
 		return "", "", err
 	}
 	if a.BeforeCommit != nil {
-		if err := a.BeforeCommit(); err != nil {
+		if err = a.BeforeCommit(); err != nil {
 			return "", "", err
 		}
 	}
 	meta, err := store.GetOrCreateMainSession(a.Receiver.WorkspaceID, a.Receiver.AgentID)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: receiver main session: %v", ErrPeerRefused, err)
+		return "", "", fmt.Errorf("%w: receiver main session: %w", ErrPeerRefused, err)
 	}
 	receiverSessionID = meta.ID
 	requestID = uuid.New().String()
@@ -158,7 +158,7 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	// Capture first: if the append below fails the capture is discarded; if it
 	// were written second, a request the model can see might be unanswerable.
 	if err := ledger.Put(capture); err != nil {
-		return "", "", fmt.Errorf("%w: %v", ErrPeerRefused, err)
+		return "", "", fmt.Errorf("%w: %w", ErrPeerRefused, err)
 	}
 	entry := session.TranscriptEntry{
 		ID:        requestID,
@@ -175,7 +175,7 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 			logger.WarnCF("agent", "request capture could not be discarded after a failed append",
 				map[string]any{"request_id": requestID, "error": dErr.Error()})
 		}
-		return "", "", fmt.Errorf("%w: could not record the request: %v", ErrPeerRefused, err)
+		return "", "", fmt.Errorf("%w: could not record the request: %w", ErrPeerRefused, err)
 	}
 	al.publishUserEntry(receiverSessionID, entry)
 
@@ -268,11 +268,11 @@ func (al *AgentLoop) checkPeerAdmission(ctx context.Context, receiver addressing
 		return false, fmt.Errorf("%w: peer messaging is not available", ErrPeerRefused)
 	}
 	if err := receiver.Validate(); err != nil {
-		return false, fmt.Errorf("%w: %v", ErrPeerRefused, err)
+		return false, fmt.Errorf("%w: %w", ErrPeerRefused, err)
 	}
 	ok, err := deps.PairEligible(receiver.WorkspaceID, receiver.AgentID)
 	if err != nil {
-		return false, fmt.Errorf("%w: membership could not be read: %v", ErrPeerRefused, err)
+		return false, fmt.Errorf("%w: membership could not be read: %w", ErrPeerRefused, err)
 	}
 	if !ok {
 		return false, fmt.Errorf("%w: %s/%s is not an eligible main (not a current member, a worker, or a system agent)",
@@ -295,7 +295,7 @@ func (al *AgentLoop) recheckReceiverAdmission(ctx context.Context, receiver addr
 	}
 	ok, err := deps.PairEligible(receiver.WorkspaceID, receiver.AgentID)
 	if err != nil {
-		return fmt.Errorf("%w: membership could not be read: %v", ErrPeerRefused, err)
+		return fmt.Errorf("%w: membership could not be read: %w", ErrPeerRefused, err)
 	}
 	if !ok {
 		return fmt.Errorf("%w: %s/%s is no longer an eligible main", ErrPeerRefused, receiver.WorkspaceID, receiver.AgentID)

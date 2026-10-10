@@ -311,6 +311,36 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
     })
   })
 
+  it('a background refetch that CHANGES the roster is adopted without an echo PUT (HF2 recovery)', async () => {
+    // The recovery shape behind the loaded-run Team failures: the server's
+    // own refresh carries a DIFFERENT roster (a teammate joined elsewhere),
+    // the clean-draft editor adopts it — a SERVER-driven change, not a user
+    // edit. The autosave must re-base onto the adopted snapshot; letting the
+    // debounced change-detector see it arms a 500ms PUT of the server's own
+    // state straight back — delegation-flavoured (edges) when workspace and
+    // adoption land together, workspace-flavoured (core_team) when the
+    // adoption's members differ from the workspace context's roster — which
+    // 409s on the stale revision in production and renders a persistent
+    // error alert in the panel.
+    const { client } = renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-node-mia')).toBeInTheDocument())
+
+    act(() => {
+      client.setQueryData<WorkspaceDelegation>(
+        workspacesQueryKeys.delegation('ws-1'),
+        { ...DELEGATION, revision: '3'.repeat(64), team: ['mia', 'jim', 'planner', 'ray'] },
+      )
+    })
+    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+
+    // Past the 500ms debounce: no echo PUT of either flavour.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700))
+    })
+    expect(updateWorkspace).not.toHaveBeenCalled()
+    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
+  })
+
   it('keeps the reviewed revision when a refetch arrives over a dirty draft', async () => {
     const { client } = renderTab()
     await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())

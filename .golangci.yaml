@@ -250,6 +250,14 @@ linters:
           - staticcheck
         path: ^pkg/(providers/azure/provider|tools/web)\.go$
         text: 'ST1005'
+      # ST1005 — errMainChatNotPrepared is the fixed client-facing sentence a
+      # user reads when an agent's main chat could not be prepared (capitalised,
+      # period-terminated prose like the other server-failure texts users read),
+      # not an error string meant for wrapping.
+      - linters:
+          - staticcheck
+        path: ^pkg/gateway/main_session\.go$
+        text: 'ST1005'
       # ST1005 — ValidateDoDDistinct's refusal (GOAL-FR-021/FR-047/FR-048) is
       # read verbatim by end users in the task create/edit dialog (fix wave:
       # task-validation-message-register). It is deliberately two full,

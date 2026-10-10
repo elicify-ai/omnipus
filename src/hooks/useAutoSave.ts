@@ -119,13 +119,28 @@ interface UseAutoSaveOptions<T> {
   onDisabledWithPendingChanges?: (data: T) => void
 }
 
-interface UseAutoSaveResult {
+interface UseAutoSaveResult<T> {
   status: AutoSaveStatus
   error: string | undefined
   /** Timestamp of the last successful save, or undefined if none yet. */
   lastSavedAt: Date | undefined
   /** Call this to trigger an immediate save (no debounce) */
   saveNow: () => void
+  /**
+   * Re-base the autosave onto a SERVER-driven snapshot without saving it.
+   * For consumers whose editable state is adopted from a background refetch
+   * (e.g. WorkspaceTeamTab adopting a clean refetch that carries a changed
+   * roster): the adoption is not a user edit, but it does change the `data`
+   * the hook diffs — without a re-base the debounced change-detector treats
+   * it as an edit and PUTs the server's own state straight back (a
+   * stale-revision echo that 409s in production and, where the CSRF cookie
+   * is absent, renders a persistent save-error alert). Advances both the
+   * "last seen" and the "last persisted" markers to this exact snapshot and
+   * cancels a still-pending debounce for the pre-adoption state. A genuinely
+   * dirty draft must NOT call this — it would mark unsaved user edits as
+   * persisted (callers gate on their own clean-draft condition).
+   */
+  rebaseline: (data: T) => void
   /**
    * True when the live `data` has not yet been durably persisted (deep
    * JSON-compared against the last successfully-saved snapshot). Exposed so
@@ -153,7 +168,7 @@ export function useAutoSave<T>(
   data: T,
   saveFn: (data: T) => Promise<unknown>,
   options?: UseAutoSaveOptions<T>,
-): UseAutoSaveResult {
+): UseAutoSaveResult<T> {
   // Merge note (hotfix/v0.1.1): flushAuthToken was retired hook-wide — the
   // keepalive flush now carries the CSRF double-submit header instead of a
   // bearer token. onSaved is this lineage's draft-ownership callback.
@@ -244,6 +259,20 @@ export function useAutoSave<T>(
 
   const hasPendingChanges = useCallback(() => {
     return JSON.stringify(latestDataRef.current) !== lastSavedJsonRef.current
+  }, [])
+
+  // Server-driven adoption re-base — see the `rebaseline` doc comment on
+  // UseAutoSaveResult. Advances both markers and cancels a pending debounce;
+  // idempotent for a given snapshot (safe from StrictMode's double-invoked
+  // updaters, where the adopt-branch caller invokes it from).
+  const rebaseline = useCallback((data: T) => {
+    const json = JSON.stringify(data)
+    previousJsonRef.current = json
+    lastSavedJsonRef.current = json
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
   }, [])
 
   const doSave = useCallback(async () => {
@@ -611,5 +640,5 @@ export function useAutoSave<T>(
      
   }, [hasPendingChanges])
 
-  return { status, error, lastSavedAt, saveNow: doSave, hasPendingChanges }
+  return { status, error, lastSavedAt, saveNow: doSave, rebaseline, hasPendingChanges }
 }

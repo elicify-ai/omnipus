@@ -513,7 +513,6 @@ func (s *Store) OpenRunForSession(taskID, sessionID string) (*TaskRun, error) {
 		if r.SessionID != sessionID || !r.IsOpen() {
 			continue
 		}
-		r := r
 		if found == nil || r.StartedAt > found.StartedAt {
 			found = &r
 		}

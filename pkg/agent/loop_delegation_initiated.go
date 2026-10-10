@@ -78,7 +78,7 @@ func (al *AgentLoop) authorizeInitiatedRunFor(
 	}
 
 	var edgeDepth *int
-	if !(selfStoredExempt && ini.AgentID == assigneeAgentID) {
+	if !selfStoredExempt || ini.AgentID != assigneeAgentID {
 		var exists []func(string) bool
 		if probe := agentExistsChecker(al.GetRegistry()); probe != nil {
 			exists = []func(string) bool{probe}

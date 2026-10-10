@@ -136,7 +136,7 @@ func (l *Ledger) Resolve(responderSessionID string, responder Pair, requestID st
 		return Capture{}, ErrDiscarded
 	}
 	if err := c.Validate(); err != nil {
-		return Capture{}, fmt.Errorf("%w: %v", ErrUnusableCorrelation, err)
+		return Capture{}, fmt.Errorf("%w: %w", ErrUnusableCorrelation, err)
 	}
 	return c, nil
 }

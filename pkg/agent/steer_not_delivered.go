@@ -75,7 +75,7 @@ func (al *AgentLoop) recordNotDelivered(
 	}); recErr != nil {
 		logger.ErrorCF("agent", "steer: a refused report could not be recorded on the child; the parent is not notified",
 			map[string]any{"session_id": childRec.SessionID, "reason": string(reason), "error": recErr.Error()})
-		return fmt.Errorf("steer: deliver: append: %w; %s: %v", appendErr, session.ParentNotNotifiedMarker, recErr)
+		return fmt.Errorf("steer: deliver: append: %w; %s: %w", appendErr, session.ParentNotNotifiedMarker, recErr)
 	}
 	al.deliverSubagentMessageFrame(ownerKey, childRec, notDeliveredFrameKind,
 		fmt.Sprintf("%s report not delivered: %s", kind, notDeliveredReasonPhrase(reason)), nil, false)

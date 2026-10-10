@@ -120,7 +120,7 @@ func (al *AgentLoop) admitBoundConnectorInputCtx(ctx context.Context, msg *bus.I
 	}
 	eligible, eErr := deps.PairEligible(pair.WorkspaceID, pair.AgentID)
 	if eErr != nil || !eligible {
-		return unroutable, fmt.Errorf("connector intake: %s/%s has no eligible main (%v)", pair.WorkspaceID, pair.AgentID, eErr)
+		return unroutable, fmt.Errorf("connector intake: %s/%s has no eligible main (%w)", pair.WorkspaceID, pair.AgentID, eErr)
 	}
 	// 2b. Expand voice parts so the bounds below see the real turn text.
 	if al.boundAudioNeedsTranscription(*msg) {
