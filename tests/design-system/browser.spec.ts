@@ -131,7 +131,12 @@ async function openStory(page: Page, manifest: Manifest, check: Check) {
     attach()
   }, [...storyErrorEvents])
   await page.goto(`/iframe.html?id=${entry!.id}&viewMode=story`)
-  await expect(page.locator('[data-design-system-config]')).toBeAttached()
+  // goto resolves at the load event, but Storybook mounts the story afterwards by
+  // lazily fetching the story module and its chunks. On a contended CI static
+  // server that waterfall outlasts the 5s default expect timeout (WebKit
+  // slider-reflow, run 38019826826), so wait with the same 30s budget as the
+  // storyFinished wait below instead of racing it with a shorter one.
+  await expect(page.locator('[data-design-system-config]')).toBeAttached({ timeout: 30_000 })
   await page.waitForFunction((storyId) => {
     const state = window as Window & { __designSystemStoryFinished?: { storyId?: string } }
     return state.__designSystemStoryFinished?.storyId === storyId
