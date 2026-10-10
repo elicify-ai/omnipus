@@ -77,10 +77,11 @@ func parseCommandsResponse(t *testing.T, w *httptest.ResponseRecorder) []gen.Sla
 	return cmds
 }
 
-// TestHandleListCommands_Web verifies surface=web returns exactly 11 commands.
+// TestHandleListCommands_Web verifies surface=web returns exactly 12 commands.
 // Post ADR-026 /skill+/use removed; ADR-049 added /goal, /loop; ADR-20260928 D9
 // added /stop, /stop-redirect; U10a (2026-10-09) removed /new and /agents from
-// the table entirely (FR-031), leaving 11 web-surface commands.
+// the table entirely (FR-031); U10b restored /clear (FR-030/031), leaving 12
+// web-surface commands.
 func TestHandleListCommands_Web(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "web", true)
@@ -90,13 +91,14 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 11 {
-		t.Errorf("web: expected 11 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 12 {
+		t.Errorf("web: expected 12 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	wantNames := map[string]bool{
 		"help":          true,
 		"model":         true,
+		"clear":         true, // U10b (FR-030/031) restored /clear as a canonical command
 		"cancel":        true,
 		"stop":          true, // ADR-20260928 D9
 		"stop-redirect": true, // ADR-20260928 D9
@@ -118,8 +120,9 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_CLI verifies surface=cli returns all 15 canonical commands.
-// U10a (2026-10-09) removed /new and /agents from the table entirely (FR-031).
+// TestHandleListCommands_CLI verifies surface=cli returns all 16 canonical commands.
+// U10a (2026-10-09) removed /new and /agents from the table entirely (FR-031);
+// U10b restored /clear (FR-030/031).
 func TestHandleListCommands_CLI(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "cli", true)
@@ -129,13 +132,14 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 15 {
-		t.Errorf("cli: expected 15 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 16 {
+		t.Errorf("cli: expected 16 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	allCanonical := []string{
 		"help",
 		"model",
+		"clear", // U10b (FR-030/031)
 		"cancel",
 		"stop",          // ADR-20260928 D9
 		"stop-redirect", // ADR-20260928 D9
@@ -161,7 +165,8 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_Channel verifies surface=channel returns all 15 commands.
+// TestHandleListCommands_Channel verifies surface=channel returns all 16 commands
+// (U10b restored /clear, FR-030/031).
 func TestHandleListCommands_Channel(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "channel", true)
@@ -171,8 +176,8 @@ func TestHandleListCommands_Channel(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 15 {
-		t.Errorf("channel: expected 15 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 16 {
+		t.Errorf("channel: expected 16 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 }
 
@@ -187,9 +192,9 @@ func TestHandleListCommands_DefaultSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 11 {
+	if len(cmds) != 12 {
 		t.Errorf(
-			"default surface (web): expected 11 commands, got %d: %v",
+			"default surface (web): expected 12 commands, got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -206,9 +211,9 @@ func TestHandleListCommands_UnknownSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 11 {
+	if len(cmds) != 12 {
 		t.Errorf(
-			"unknown surface should default to web (11 cmds), got %d: %v",
+			"unknown surface should default to web (12 cmds), got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -265,6 +270,7 @@ func TestHandleListCommands_DeliveryFields(t *testing.T) {
 		"skills":        true,
 	}
 	agentCmds := map[string]bool{
+		"clear":         true, // U10b (FR-030/031): the server executes /clear
 		"remember":      true,
 		"recall":        true,
 		"retrospective": true,

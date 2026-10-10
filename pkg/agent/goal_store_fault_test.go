@@ -144,16 +144,25 @@ func failGoalRecordWrites(t *testing.T, goalID string) {
 // recover with the same content the agent actually wrote.
 func failTranscriptReads(t *testing.T, store *session.UnifiedStore, sessionID string) (restore func()) {
 	t.Helper()
-	path := filepath.Join(store.BaseDir(), sessionID, "transcript.jsonl")
-	saved, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("failTranscriptReads: transcript not readable where expected (%q): %v", path, err)
+	dir := filepath.Join(store.BaseDir(), sessionID)
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("failTranscriptReads: session dir not readable where expected (%q): %v", dir, err)
 	}
-	if rmErr := os.Remove(path); rmErr != nil {
-		t.Fatalf("failTranscriptReads: remove %q: %v", path, rmErr)
+	moved := dir + ".readfault"
+	if rmErr := os.RemoveAll(moved); rmErr != nil {
+		t.Fatalf("failTranscriptReads: clear %q: %v", moved, rmErr)
 	}
-	if mkErr := os.Mkdir(path, 0o700); mkErr != nil {
-		t.Fatalf("failTranscriptReads: poison %q: %v", path, mkErr)
+	if mvErr := os.Rename(dir, moved); mvErr != nil {
+		t.Fatalf("failTranscriptReads: move %q aside: %v", dir, mvErr)
+	}
+	// A REGULAR FILE where the session directory should be. The day-partition
+	// reader (session/transcript_partition.go::transcriptPartitionPaths) lists
+	// the session directory and SKIPS directories, so the older arrange — a
+	// directory at transcript.jsonl — no longer bites: the reader found no
+	// partitions and returned an empty, error-free result. ENOTDIR is raised
+	// by the kernel regardless of uid, so this arrange still bites for root.
+	if wErr := os.WriteFile(dir, []byte("poisoned session directory"), 0o600); wErr != nil {
+		t.Fatalf("failTranscriptReads: poison %q: %v", dir, wErr)
 	}
 
 	done := false
@@ -162,11 +171,11 @@ func failTranscriptReads(t *testing.T, store *session.UnifiedStore, sessionID st
 			return
 		}
 		done = true
-		if rmErr := os.RemoveAll(path); rmErr != nil {
-			t.Fatalf("failTranscriptReads: un-poison %q: %v", path, rmErr)
+		if rmErr := os.Remove(dir); rmErr != nil {
+			t.Fatalf("failTranscriptReads: un-poison %q: %v", dir, rmErr)
 		}
-		if wErr := os.WriteFile(path, saved, 0o600); wErr != nil {
-			t.Fatalf("failTranscriptReads: restore %q: %v", path, wErr)
+		if mvErr := os.Rename(moved, dir); mvErr != nil {
+			t.Fatalf("failTranscriptReads: restore %q: %v", dir, mvErr)
 		}
 	}
 	t.Cleanup(restore)
@@ -179,10 +188,9 @@ func failTranscriptReads(t *testing.T, store *session.UnifiedStore, sessionID st
 		t.Fatalf("failTranscriptReads: ReadTranscript(%q) still succeeded — the read-fault arrange did not "+
 			"take, so any claim-scan assertion after it would pass for the wrong reason", sessionID)
 	}
-	if !errors.Is(rerr, syscall.EISDIR) {
-		t.Fatalf("failTranscriptReads: the read fault on %q reported %v, want EISDIR. Running as uid %d. "+
-			"A permission-shaped fault does not fire for root and would make this arrange a no-op on CI",
-			sessionID, rerr, os.Geteuid())
+	if errors.Is(rerr, os.ErrNotExist) {
+		t.Fatalf("failTranscriptReads: the read fault on %q reported %v — a not-found read is the "+
+			"'scanned cleanly, nothing there' path, not the fault SF-3 guards", sessionID, rerr)
 	}
 	return restore
 }
@@ -324,10 +332,13 @@ func TestTranscriptReadFaultBitesAndRestores(t *testing.T) {
 		t.Fatalf("running as uid %d: ReadTranscript SUCCEEDED under the read fault (%d entries). SF-3's "+
 			"guard depends on this fault being uid-independent", os.Geteuid(), len(entries))
 	}
-	// Same uid-independence contract as the write fault: read(2) against a
-	// directory is EISDIR for every caller, root included — never EACCES.
-	if !errors.Is(err, syscall.EISDIR) {
-		t.Fatalf("running as uid %d: the transcript read failed with %v, which is not EISDIR. A "+
+	// Same uid-independence contract as the write fault: the kernel raises the
+	// errno for every caller, root included — never EACCES. The arrange now
+	// makes the SESSION DIRECTORY a regular file (see failTranscriptReads),
+	// because the day-partition reader skips directories, so the errno is
+	// ENOTDIR rather than EISDIR.
+	if !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("running as uid %d: the transcript read failed with %v, which is not ENOTDIR. A "+
 			"permission-based read fault does not fire for root", os.Geteuid(), err)
 	}
 	if errors.Is(err, os.ErrPermission) {
