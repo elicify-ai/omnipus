@@ -11314,6 +11314,11 @@ export interface components {
              */
             agent_name?: string;
             /**
+             * @description True forces every run of this work into a fresh independent chat, for either role (session-core FR-017).
+             * @example false
+             */
+            run_isolated?: boolean;
+            /**
              * @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
              * @default 3
              * @example 3
@@ -13618,6 +13623,12 @@ export interface components {
              */
             agent_id?: string;
             /**
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+             * @default false
+             * @example false
+             */
+            run_isolated: boolean;
+            /**
              * @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
              * @default 3
              * @example 3
@@ -13716,6 +13727,11 @@ export interface components {
              * @example Updated task title
              */
             title?: string;
+            /**
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017); false clears it. Omitted leaves it unchanged.
+             * @example false
+             */
+            run_isolated?: boolean;
             /**
              * @description New free-form description.
              * @example Revised notes.
@@ -14080,6 +14096,8 @@ export interface components {
              * @enum {string}
              */
             kind: "scheduled" | "manual";
+            /** @description Session ids captured when this run actually started (FR-019): the starting agent's main and the assignee's main, deduplicated. Never the creator. Fixed for the life of the run. Absent when there is no recipient (a skipped run, or a person/scheduler-started worker run). */
+            readonly recipient_session_ids?: string[];
             /**
              * Format: date-time
              * @description RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
@@ -14633,6 +14651,12 @@ export interface components {
             trigger: components["schemas"]["ScheduleTrigger"];
             message: string;
             /**
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+             * @default false
+             * @example false
+             */
+            run_isolated: boolean;
+            /**
              * @description Default isolated.
              * @enum {string}
              */
@@ -14651,6 +14675,12 @@ export interface components {
             owner_agent_id?: string;
             trigger?: components["schemas"]["ScheduleTrigger"];
             message?: string;
+            /**
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+             * @default false
+             * @example false
+             */
+            run_isolated: boolean;
             /** @enum {string} */
             session_mode?: "isolated" | "continue" | "main";
             timeout_seconds?: number;

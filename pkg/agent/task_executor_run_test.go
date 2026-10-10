@@ -118,7 +118,7 @@ func TestCloseRun_DuplicateCloseAfterAlreadyClosedLogsInfoNotError(t *testing.T)
 	te, store := newTestTaskExecutor(t)
 	taskID := "task-close-dup"
 
-	run, created, oerr := store.OpenRun(taskID, nil, task.RunKindManual, "session-a")
+	run, created, oerr := store.OpenRun(taskID, nil, task.RunKindManual, "session-a", nil)
 	if oerr != nil || !created {
 		t.Fatalf("setup OpenRun: run=%+v created=%v err=%v", run, created, oerr)
 	}

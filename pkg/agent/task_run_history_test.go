@@ -386,7 +386,7 @@ func TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire(t *testing.
 	occMs := int64(1_700_000_000_000)
 	// Simulate a scheduler fire that already opened this occurrence's run a
 	// moment before the user's Run-now click for the exact same occurrence.
-	seeded, created, err := al.taskStore.OpenRun(tk.ID, &occMs, task.RunKindScheduled, "scheduler-session")
+	seeded, created, err := al.taskStore.OpenRun(tk.ID, &occMs, task.RunKindScheduled, "scheduler-session", nil)
 	if err != nil || !created {
 		t.Fatalf("seed OpenRun: created=%v err=%v", created, err)
 	}

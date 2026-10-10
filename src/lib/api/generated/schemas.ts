@@ -1851,6 +1851,7 @@ type Task = {
   agent_id?: string | undefined;
   cancel_reason?: ("stopped_by_user" | null) | undefined;
   agent_name?: string | undefined;
+  run_isolated?: boolean | undefined;
   priority?: number | undefined;
   blocked_by?: Array<string> | undefined;
   todos?: Array<Todo> | undefined;
@@ -2249,6 +2250,7 @@ type TaskCreateRequest = {
   description?: string | undefined;
   action: "llm";
   agent_id?: string | undefined;
+  run_isolated?: boolean | undefined;
   priority?: number | undefined;
   trigger?: TaskTrigger | undefined;
   blocked_by?: Array<string> | undefined;
@@ -2297,6 +2299,7 @@ type AcceptanceCriterionInput = {
 };
 type TaskUpdateRequest = Partial<{
   title: string;
+  run_isolated: boolean;
   description: string;
   prompt: string;
   status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
@@ -2427,6 +2430,7 @@ type ScheduleCreate = {
   owner_agent_id: string;
   trigger: ScheduleTrigger;
   message: string;
+  run_isolated?: boolean | undefined;
   session_mode?: ("isolated" | "continue" | "main") | undefined;
   timeout_seconds?: number | undefined;
   enabled?: boolean | undefined;
@@ -2436,6 +2440,7 @@ type ScheduleUpdate = Partial<{
   owner_agent_id: string;
   trigger: ScheduleTrigger;
   message: string;
+  run_isolated: boolean;
   session_mode: "isolated" | "continue" | "main";
   timeout_seconds: number;
   enabled: boolean;
@@ -5048,6 +5053,7 @@ export const Task: z.ZodType<Task> = z
     agent_id: z.string().optional(),
     cancel_reason: z.literal("stopped_by_user").nullish(),
     agent_name: z.string().optional(),
+    run_isolated: z.boolean().optional(),
     priority: z.number().int().gte(1).lte(5).optional().default(3),
     blocked_by: z.array(z.string()).optional(),
     todos: z.array(Todo).optional(),
@@ -5148,6 +5154,7 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   description: z.string().max(2000).optional(),
   action: z.literal("llm"),
   agent_id: z.string().optional(),
+  run_isolated: z.boolean().optional().default(false),
   priority: z.number().int().gte(1).lte(5).optional().default(3),
   trigger: TaskTrigger.optional(),
   blocked_by: z.array(z.string()).optional(),
@@ -5203,6 +5210,7 @@ export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
 export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
   .object({
     title: z.string().min(1).max(200),
+    run_isolated: z.boolean(),
     description: z.string().max(2000),
     prompt: z.string().max(10000),
     status: z.enum([
@@ -5256,6 +5264,7 @@ export const TaskRun = z.object({
   result: z.string().max(50000).optional(),
   session_id: z.string(),
   kind: z.enum(["scheduled", "manual"]),
+  recipient_session_ids: z.array(z.string().min(1).max(255)).max(2).optional(),
   started_at: z.string().datetime({ offset: true }),
   ended_at: z.string().datetime({ offset: true }).nullable(),
 });
@@ -5374,6 +5383,7 @@ export const ScheduleCreate: z.ZodType<ScheduleCreate> = z.object({
   owner_agent_id: z.string().min(1),
   trigger: ScheduleTrigger,
   message: z.string().min(1),
+  run_isolated: z.boolean().optional().default(false),
   session_mode: z.enum(["isolated", "continue", "main"]).optional(),
   timeout_seconds: z.number().int().gte(0).optional(),
   enabled: z.boolean().optional(),
@@ -5384,6 +5394,7 @@ export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
     owner_agent_id: z.string().min(1),
     trigger: ScheduleTrigger,
     message: z.string().min(1),
+    run_isolated: z.boolean().default(false),
     session_mode: z.enum(["isolated", "continue", "main"]),
     timeout_seconds: z.number().int().gte(0),
     enabled: z.boolean(),

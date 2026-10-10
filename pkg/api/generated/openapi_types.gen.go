@@ -23790,6 +23790,9 @@ type ScheduleCreate struct {
 	Name         string `json:"name"`
 	OwnerAgentId string `json:"owner_agent_id"`
 
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
+
 	// SessionMode Default isolated.
 	SessionMode *ScheduleCreateSessionMode `json:"session_mode,omitempty"`
 
@@ -23982,10 +23985,13 @@ type ScheduleTrigger struct {
 
 // ScheduleUpdate Request body to update a schedule (#264). All fields optional; only provided fields are changed. Changing owner_agent_id is re-authorized.
 type ScheduleUpdate struct {
-	Enabled        *bool                      `json:"enabled,omitempty"`
-	Message        *string                    `json:"message,omitempty"`
-	Name           *string                    `json:"name,omitempty"`
-	OwnerAgentId   *string                    `json:"owner_agent_id,omitempty"`
+	Enabled      *bool   `json:"enabled,omitempty"`
+	Message      *string `json:"message,omitempty"`
+	Name         *string `json:"name,omitempty"`
+	OwnerAgentId *string `json:"owner_agent_id,omitempty"`
+
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+	RunIsolated    *bool                      `json:"run_isolated,omitempty"`
 	SessionMode    *ScheduleUpdateSessionMode `json:"session_mode,omitempty"`
 	TimeoutSeconds *int                       `json:"timeout_seconds,omitempty"`
 
@@ -25942,6 +25948,9 @@ type Task struct {
 		Status TaskRollupStatus `json:"status"`
 	} `json:"rollup,omitempty"`
 
+	// RunIsolated True forces every run of this work into a fresh independent chat, for either role (session-core FR-017).
+	RunIsolated *bool `json:"run_isolated,omitempty"`
+
 	// SessionId Session ID created/linked when the task runs.
 	SessionId *string `json:"session_id,omitempty"`
 
@@ -26248,6 +26257,9 @@ type TaskCreateRequest struct {
 	// Prompt Optional agent prompt for an `llm` action.
 	Prompt *string `json:"prompt,omitempty"`
 
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
+
 	// SourceChannel Originating channel for a delegated task (Detail
 	SourceChannel *string `json:"source_channel,omitempty"`
 
@@ -26453,6 +26465,9 @@ type TaskRun struct {
 
 	// OccurrenceMs The scheduled RRULE instant this run realizes (the calendar join key, Unix epoch milliseconds). Null for an ad-hoc/once/manual run.
 	OccurrenceMs *int64 `json:"occurrence_ms"`
+
+	// RecipientSessionIds Session ids captured when this run actually started (FR-019): the starting agent's main and the assignee's main, deduplicated. Never the creator. Fixed for the life of the run. Absent when there is no recipient (a skipped run, or a person/scheduler-started worker run).
+	RecipientSessionIds *[]string `json:"recipient_session_ids,omitempty"`
 
 	// Result Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
 	Result *string `json:"result,omitempty"`
@@ -26683,6 +26698,9 @@ type TaskUpdateRequest struct {
 
 	// Result Task result or output summary.
 	Result *string `json:"result,omitempty"`
+
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017); false clears it. Omitted leaves it unchanged.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
 
 	// StartedAt When the task started execution.
 	StartedAt *time.Time `json:"started_at,omitempty"`

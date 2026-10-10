@@ -1110,6 +1110,9 @@ func (te *TaskExecutor) emitStatusChanged(t *task.Task, status task.Status) {
 type activeRun struct {
 	runID        string
 	occurrenceMs *int64
+	// recipients are the run's captured recipient sessions (FR-019), read back
+	// from the stored run record; the terminal notice goes to exactly these.
+	recipients []string
 }
 
 // StartTaskNow creates the task session, sets session_id on the task, registers

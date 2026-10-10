@@ -375,8 +375,11 @@ func (te *TaskExecutor) dispatchesExternalCLI(agentID string) bool {
 // for this execution) rather than failing the task dispatch — TaskRun is a
 // purely additive record layer (RD2); a run-history I/O problem must never
 // prevent or fail a real agent execution.
-func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.RunKind, sessionID string) *activeRun {
-	run, _, err := te.store.OpenRun(taskID, occurrenceMs, kind, sessionID)
+//
+// recipients are the run's captured recipient sessions (FR-019), fixed by the
+// first open; omit for a run with none.
+func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.RunKind, sessionID string, recipients ...string) *activeRun {
+	run, _, err := te.store.OpenRun(taskID, occurrenceMs, kind, sessionID, recipients)
 	if err != nil {
 		// M3-log: escalated from Warn to Error — a failed open means no run
 		// will ever be tracked for this execution, and there is no reaper to
@@ -386,7 +389,7 @@ func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.Ru
 		return nil
 	}
 	te.emitRunStatus(taskID, run.RunID, run.OccurrenceMs, task.StatusInProgress)
-	return &activeRun{runID: run.RunID, occurrenceMs: run.OccurrenceMs}
+	return &activeRun{runID: run.RunID, occurrenceMs: run.OccurrenceMs, recipients: run.RecipientSessionIDs}
 }
 
 // closeRun best-effort closes run's TaskRun record with the given terminal
