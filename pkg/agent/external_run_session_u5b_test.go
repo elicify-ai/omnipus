@@ -179,13 +179,23 @@ func TestU5b_N2_NoLiveConversationRefused(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// N4 — a task-origin external run refuses live instructions before queueing.
+// N4 — a task-origin external run ACCEPTS a live instruction (FR-032).
 // ---------------------------------------------------------------------------
 
-// Oracle: a live instruction to an external task run is refused BEFORE it is
-// queued or the run interrupted (the task side has no continuation consumer).
-// Real: deliverExternalCLIInstruction's task-origin guard.
-func TestU5b_N4_TaskOriginDeliveryRefused(t *testing.T) {
+// Oracle: FR-032 — authorized human input in an existing task chat steers the
+// live external run. The delivery is therefore accepted (no refusal), the
+// holder is marked (steerInterrupt) so the task loop resumes the SAME native
+// conversation, and the selected CLI run is interrupted via its own cancel func.
+// Real: deliverExternalCLIInstruction's task-origin branch.
+//
+// History: this test formerly asserted an interim refusal ("the task side has no
+// continuation consumer", FR-043/U5b). U10b supplied that consumer
+// (task_executor_run.go::processTaskDirectExternalCLI), so the same spec element
+// now overturns the refusal into an acceptance. The end-to-end acceptance —
+// resume of the same native conversation with no second Run — is covered by
+// task_external_steer_u10b_test.go::TestU10b_FR032_LiveExternalTaskRun_SteerResumesSameConversation;
+// this test pins the delivery seam itself.
+func TestU5b_N4_TaskOriginDeliveryAccepted(t *testing.T) {
 	al := u5bLoop(t)
 	sessKey := "sess-n4-task"
 	require.NoError(t, al.GetSessionLifecycleStore().Persist(&session.LifecycleRecord{
@@ -198,13 +208,19 @@ func TestU5b_N4_TaskOriginDeliveryRefused(t *testing.T) {
 		AgentID:        "worker",
 		Is3P:           true,
 	}))
-	u5bSeedLiveHolder(t, al, sessKey, 1)
+	sess := u5bSeedLiveHolder(t, al, sessKey, 1)
+	var canceled int
+	sess.mu.Lock()
+	sess.cancelRun = func() { canceled++ }
+	sess.mu.Unlock()
 
-	_, err := al.DeliverExternalCLIInstruction(context.Background(), sessKey, "worker",
+	resolved, err := al.DeliverExternalCLIInstruction(context.Background(), sessKey, "worker",
 		providers.Message{Role: "user", Content: "S"}, "")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "task")
-	require.Contains(t, err.Error(), "Rerun")
+	require.NoError(t, err, "FR-032: a live external task run must accept the instruction")
+	require.NotEmpty(t, resolved, "the accepted delivery returns the resolved correlation id")
+	require.Equal(t, 1, canceled, "the selected CLI run is interrupted via its own cancel func")
+	require.True(t, al.takeExternalSteerInterrupt(sessKey),
+		"the holder is marked so the task loop resumes the same native conversation")
 }
 
 // ---------------------------------------------------------------------------
@@ -444,6 +460,129 @@ func TestU5b_N2_ProcessExitBarrier(t *testing.T) {
 	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "continuation", 30*time.Second); err != nil {
 		t.Fatalf("continuation after interrupt failed: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// F4-task / S1 / N7 REAL-CALL-SITE coverage (U5b CHECK F-02).
+//
+// The helper tests above assert the helper functions directly. These drive the
+// PRODUCTION entry points (processTaskDirect, StartTaskNow, runExternalCLISubTurn)
+// so removing the production invocation of a guard no longer leaves them green.
+// ---------------------------------------------------------------------------
+
+// Oracle (FR-016 / C-DELEGATE Property B, F4 task path): processTaskDirect — the
+// REAL task-dispatch entry point — must refuse a task run whose live executor
+// disagrees with its durable record, BEFORE any driver or provider call.
+// Real: the enforceTaskRunRuntimeInvariant invocation inside processTaskDirect.
+func TestU5b_F4Task_ProcessTaskDirectRefusesRuntimeChange_RealCallSite(t *testing.T) {
+	provider := &countingProvider{}
+	al, _ := newExternalCLITaskTestLoop(t, provider)
+	al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), session.NewLifecycleStore(t.TempDir()))
+	fr, restore := withFakeDriver(t)
+	defer restore()
+
+	const taskChat = "task-u5b-f4-real"
+	// Durable record: launched NATIVE (Is3P=false). The live "ext-agent" of this
+	// harness resolves EXTERNAL-CLI, so the two disagree.
+	require.NoError(t, al.GetSessionLifecycleStore().Persist(&session.LifecycleRecord{
+		SessionID: taskChat, Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		Origin:         &session.Origin{Kind: session.OriginKindTask, TaskID: "task-1"},
+		WorkspaceID:    "ws-1", AgentID: "ext-agent", Is3P: false,
+	}))
+
+	ctx := tools.WithRunningTaskID(context.Background(), "task-1")
+	_, err := al.processTaskDirect(ctx, "ext-agent", "do the task", "task-key", taskChat)
+	require.Error(t, err, "the REAL processTaskDirect call site must refuse a runtime change (F4 task path)")
+	require.ErrorIs(t, err, ErrTaskRunNotDispatched)
+	require.Contains(t, err.Error(), "Rerun the task")
+	require.Empty(t, fr.RecordedRunOpts(), "no external run may start on the refused real call site")
+	require.Zero(t, provider.calls, "no native provider call on the refused real call site")
+}
+
+// Oracle (S1): StartTaskNow — the REAL entry point — must refuse to hand back a
+// bound session whose durable classification was never persisted, or whose task
+// already Failed; it must never return (sessionID, nil) for an unretryable
+// binding. Real: the boundSessionRetryable invocation inside StartTaskNow.
+func TestU5b_S1_StartTaskNowRefusesUnretryableBinding_RealCallSite(t *testing.T) {
+	te, store, _, _ := newStartTaskNowWithRegistry(t)
+	te.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
+
+	// Case 1: bound session, NO durable record → refuse, return no id.
+	noRecord := &task.Task{Title: "t1", Prompt: "p", AgentID: "test-agent", Priority: 3,
+		Action: task.ActionLLM, Status: task.StatusNext, SessionID: "sess-s1-norec", WorkspaceID: "ws-1"}
+	require.NoError(t, store.Create(noRecord))
+	sessID, err := te.StartTaskNow(context.Background(), noRecord.ID)
+	require.Error(t, err, "StartTaskNow must refuse a bound session with no durable record")
+	require.Empty(t, sessID, "no session id may be returned for an unretryable binding")
+	require.Contains(t, err.Error(), "never persisted")
+
+	// Case 2: durable record exists, but the task already Failed → refuse,
+	// naming the recorded failure.
+	ls := te.getLifecycleStore()
+	require.NotNil(t, ls)
+	require.NoError(t, ls.Persist(&session.LifecycleRecord{
+		SessionID: "sess-s1-failed", Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: "test-agent",
+	}))
+	failed := task.StatusFailed
+	failedTask := &task.Task{Title: "t2", Prompt: "p", AgentID: "test-agent", Priority: 3,
+		Action: task.ActionLLM, Status: failed, Result: "persist boom",
+		SessionID: "sess-s1-failed", WorkspaceID: "ws-1"}
+	require.NoError(t, store.Create(failedTask))
+	sessID2, err2 := te.StartTaskNow(context.Background(), failedTask.ID)
+	require.Error(t, err2, "StartTaskNow must refuse a Failed task's binding")
+	require.Empty(t, sessID2, "no session id may be returned for a Failed task's binding")
+	require.Contains(t, err2.Error(), "persist boom")
+}
+
+// Oracle (N5/N7, FR-043): a later entry of a STEERED session must resume-or-refuse
+// — never start a fresh conversation. Real: the production resume-only
+// determination (externalRunResumeOnly) that runExternalCLISubTurn feeds to
+// beginExternalRun. Supplying resumeOnly=true directly (the helper test above)
+// cannot observe that production computation; this drives the real body.
+func TestU5b_N7_SteeredSessionLaterEntryRefusesWithoutDriver_RealDispatch(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+	al, ts := newExternalTestLoop(t, "claude-code", "")
+	ts.agent.MaxIterations = extTestEffectiveLimit
+	// The durable lifecycle store the resume-only determination and the seed
+	// below both read (newExternalTestLoop does not wire it).
+	al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), session.NewLifecycleStore(t.TempDir()))
+
+	sessKey := externalRunSessionKey(ts)
+	// A steered, NON-task durable record → the production determination is true.
+	u5bSeedSteered(t, al, sessKey, ts.agentID, false)
+	require.True(t, al.externalRunResumeOnly(sessKey),
+		"precondition: a steered non-task session must determine resume-only")
+
+	// A factory handing out one DISTINCT driver per construction: its Run/Resume
+	// return an ALREADY-CLOSED stream (so drainExternalRun never blocks) and its
+	// construction count is the observable that a continuation built a second
+	// driver.
+	factory := withRecordingDriverFactory(t)
+
+	// First entry: a genuine first launch Runs fresh.
+	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "first", 30*time.Second); err != nil {
+		t.Fatalf("first steered dispatch: %v", err)
+	}
+	if got := factory.count(); got != 1 {
+		t.Fatalf("the first steered entry must build exactly one driver; built=%d, want 1", got)
+	}
+	// Drop the retained driver so a later entry has nothing to resume (N6).
+	sess := al.externalRunSession(sessKey)
+	sess.mu.Lock()
+	sess.releaseDriverLocked()
+	sess.mu.Unlock()
+
+	// A later entry of a steered session must REFUSE — never a fresh Run. If the
+	// production resume-only computation is dropped (the CHECK's
+	// n7-production-classification-unwired mutant), this call would start a
+	// second fresh Run, build a second driver and return nil error.
+	_, err := runExternalCLISubTurn(context.Background(), al, ts, "second", 30*time.Second)
+	require.ErrorIs(t, err, errExternalResumeUnavailable,
+		"a later steered entry with no retained driver must refuse, never start fresh")
+	require.Equal(t, 1, factory.count(),
+		"the continuation must not build a second driver (a fresh Run would)")
 }
 
 // ---------------------------------------------------------------------------
