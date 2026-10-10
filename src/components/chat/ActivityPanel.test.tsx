@@ -50,7 +50,6 @@ function makeAgentItem(overrides: Partial<AgentActivityItem> = {}): AgentActivit
     agentName: overrides.agentName ?? 'Ray',
     agentType: overrides.agentType ?? 'native',
     agentColor: overrides.agentColor,
-    agentIcon: overrides.agentIcon,
     taskLabel: overrides.taskLabel ?? 'audit files',
     status: overrides.status ?? 'running',
     durationMs: overrides.durationMs,

@@ -5,7 +5,6 @@ import { User, Robot } from '@phosphor-icons/react'
 import { useQuery } from '@tanstack/react-query'
 import { ToolCallBadge } from './ToolCallBadge'
 import { ModelFooter } from './ModelFooter'
-import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { ChatMessage, PositionedToolCall } from '@/store/chat'
 import { useChatStore } from '@/store/chat'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -189,18 +188,13 @@ export function MessageItem({ message }: MessageItemProps) {
       data-message-id={message.id}
       className={cn('group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]', isUser ? 'flex-row-reverse' : undefined)}
     >
-      {/* Avatar — O11 icon attribution: for assistant messages, use the
-          agent's own icon + color when known, rather than a generic Robot.
-          This fixes the "icon misattribution" finding where every assistant
-          message showed the same Robot regardless of which agent spoke. */}
+      {/* Avatar — assistant messages carry the speaking agent's color. */}
       <div
         className={cn('shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[length:var(--type-utility-xs-size)]')}
         style={avatarStyle(isUser, agent?.color)}
       >
         {isUser ? (
           <User size={14} weight="bold" />
-        ) : agent?.icon ? (
-          <IconRenderer icon={agent.icon} size={13} />
         ) : (
           <Robot size={14} weight="bold" />
         )}

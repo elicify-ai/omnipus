@@ -7,6 +7,7 @@ import {
   Clock,
   CloudSlash,
   PauseCircle,
+  Prohibit,
   WifiSlash,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
@@ -18,7 +19,7 @@ import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
 import { dismissRestartNotice, useRestartInterrupted, useRestartNoticeDismissal } from './useRestartInterrupted'
 
-export type UserDeliveryState = 'queued' | 'sending' | 'received' | 'working' | 'failed'
+export type UserDeliveryState = 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded'
 
 const FIRST_SEND_COPY: Record<FirstSendStatus, { label: string; action?: 'Retry' | 'Generate again' }> = {
   sending: { label: 'Sending…' },
@@ -235,11 +236,17 @@ export function UserMessageDeliveryStatus({
           tooltip: `Received by Omnipus. ${agentName} will pick it up after finishing the current step.`,
           icon: <Check size={14} aria-hidden="true" />,
         }
-      : {
-          label: `${agentName} is working on it`,
-          tooltip: `${agentName} is working on this.`,
-          icon: <Checks size={14} aria-hidden="true" />,
-        }
+      : state === 'discarded'
+        ? {
+            label: 'Not delivered',
+            tooltip: `Not delivered. You stopped ${agentName} before it read this message, so it was discarded.`,
+            icon: <Prohibit size={14} aria-hidden="true" />,
+          }
+        : {
+            label: `${agentName} is working on it`,
+            tooltip: `${agentName} is working on this.`,
+            icon: <Checks size={14} aria-hidden="true" />,
+          }
 
   return (
     <div role="status" aria-live="polite" data-testid="user-message-delivery-status" className="flex min-h-8 items-center justify-end">

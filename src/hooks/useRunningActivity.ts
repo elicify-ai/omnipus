@@ -53,7 +53,6 @@ export interface AgentActivityItem {
   agentName: string
   agentType: 'native' | '3p' | 'unknown'
   agentColor?: string
-  agentIcon?: string
   taskLabel: string
   status: ActivityStatus
   durationMs?: number
@@ -295,7 +294,6 @@ interface ResolvedAgent {
   agentName: string
   agentType: 'native' | '3p' | 'unknown'
   agentColor?: string
-  agentIcon?: string
 }
 
 /** Resolve a span's agentId against the reused agents list. Never throws — unknown/missing agentId falls back to 'unknown'. */
@@ -307,7 +305,6 @@ function resolveAgent(agentId: string | undefined, agents: Agent[]): ResolvedAge
     agentName: agent.name,
     agentType: agent.type === 'subagent_3p' ? '3p' : 'native',
     agentColor: agent.color,
-    agentIcon: agent.icon,
   }
 }
 

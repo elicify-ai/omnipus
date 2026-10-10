@@ -7,7 +7,7 @@
 //   - the `handoff` tool call to the pre-exec agent → Mia (source)
 //   - Jim's first greeting to the now-active agent → Jim (target)
 // and replay (pkg/gateway/replay.go) emits these as replay_message + tool_call_*
-// + agent_switched frames, each stamped with that agent_id.
+// frames, each stamped with that agent_id.
 //
 // This test locks the STORE side of that contract: across the full handover
 // replay ordering the per-message authorship and the tool-call placement must
@@ -19,9 +19,8 @@
 //   1. user message
 //   2. replay_message(assistant, "Let me connect you with Jim.", agent_id=mia)  ← narration
 //   3. tool_call_start(handoff, agent_id=mia) / tool_call_result(handoff, agent_id=mia)
-//   4. agent_switched(agent_id=jim)            ← session active agent flips to Jim
-//   5. replay_message(assistant, "Hi, I'm Jim — how can I help?", agent_id=jim) ← greeting
-//   6. done
+//   4. replay_message(assistant, "Hi, I'm Jim — how can I help?", agent_id=jim) ← greeting
+//   5. done
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
@@ -100,13 +99,7 @@ describe('chat store — handover voice attribution (Fix 2)', () => {
         agent_id: 'mia',
         session_id: SID,
       })
-      // 4. session active agent flips to Jim.
-      s.handleFrame({
-        type: 'agent_switched',
-        agent_id: 'jim',
-        session_id: SID,
-      })
-      // 5. Jim's first-person greeting.
+      // 4. Jim's first-person greeting.
       s.handleFrame({
         type: 'replay_message',
         id: 'm-jim-greet',
@@ -116,7 +109,7 @@ describe('chat store — handover voice attribution (Fix 2)', () => {
         timestamp: '2026-06-10T10:00:02Z',
         session_id: SID,
       })
-      // 6. done — bakes any remaining tool calls.
+      // 5. done — bakes any remaining tool calls.
       s.handleFrame({ type: 'done', session_id: SID })
     })
 
@@ -138,8 +131,5 @@ describe('chat store — handover voice attribution (Fix 2)', () => {
     expect(jimGreet).toBeDefined()
     expect(jimGreet!.agentId).toBe('jim')
     expect(jimGreet!.tool_calls?.some((tc) => tc.tool === 'handoff')).toBeFalsy()
-
-    // The active (header/composer) agent ends on Jim — the last-active agent.
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
   })
 })
