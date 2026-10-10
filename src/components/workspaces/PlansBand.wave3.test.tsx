@@ -70,7 +70,7 @@ function makePlan(overrides: Partial<Plan> = {}): Plan {
 // are required Agent wire fields (generated openapi contract) — the fixture
 // carries an agent on the global default cap, not an override.
 const agents: Agent[] = [
-  { revision: '0'.repeat(64), id: 'jim', name: 'Jim', type: 'core', locked: true, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50, max_tool_iterations_source: 'global', max_tool_iterations_override_ignored: false, memory_enabled: true, needs_model: false },
+  { revision: '0'.repeat(64), id: 'jim', name: 'Jim', type: 'core', locked: true, figure: 'Robot', role: 'general', status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50, max_tool_iterations_source: 'global', max_tool_iterations_override_ignored: false, memory_enabled: true, needs_model: false },
 ]
 
 function makeClient() {

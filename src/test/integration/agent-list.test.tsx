@@ -35,6 +35,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import { fetchAgents } from '@/lib/api'
 
 const agentDefaults = {
+  figure: 'Robot' as const,
+  role: 'general' as const,
   revision: '0'.repeat(64),
   soul: '',
   needs_model: false,
@@ -50,10 +52,10 @@ const agentDefaults = {
 }
 
 const mockAgents = [
-  { id: 'mia', name: 'Mia', type: 'core' as const, locked: true, color: '#6366f1', status: 'active' as const, model: 'claude-opus-4-6', description: 'General purpose assistant', ...agentDefaults },
-  { id: 'general-assistant', name: 'General Assistant', type: 'core' as const, locked: false, color: 'green', status: 'active' as const, model: 'claude-sonnet-4-6', description: 'General assistant', ...agentDefaults },
-  { id: 'researcher', name: 'Researcher', type: 'core' as const, locked: false, color: 'blue', status: 'idle' as const, model: 'claude-opus-4-6', description: 'Research specialist', ...agentDefaults },
-  { id: 'content-creator', name: 'Content Creator', type: 'Main' as const, locked: false, color: 'purple', status: 'idle' as const, model: 'claude-sonnet-4-6', description: 'Content writer', ...agentDefaults },
+  { id: 'mia', name: 'Mia', type: 'core' as const, locked: true, color: '#818CF8' as const, status: 'active' as const, model: 'claude-opus-4-6', description: 'General purpose assistant', ...agentDefaults },
+  { id: 'general-assistant', name: 'General Assistant', type: 'core' as const, locked: false, color: '#22D3EE' as const, status: 'active' as const, model: 'claude-sonnet-4-6', description: 'General assistant', ...agentDefaults },
+  { id: 'researcher', name: 'Researcher', type: 'core' as const, locked: false, color: '#3B82F6' as const, status: 'idle' as const, model: 'claude-opus-4-6', description: 'Research specialist', ...agentDefaults },
+  { id: 'content-creator', name: 'Content Creator', type: 'Main' as const, locked: false, color: '#A78BFA' as const, status: 'idle' as const, model: 'claude-sonnet-4-6', description: 'Content writer', ...agentDefaults },
 ]
 
 function makeClient() {

@@ -95,9 +95,9 @@ describe('buildTaskGraph — plan scoping', () => {
 
   it('resolves agent avatar info the same way in plan scope as in the unscoped graph', () => {
     const tasks = [makeTask({ id: 'a', plan_id: 'plan-1', agent_id: 'mia' })]
-    const agents = [{ id: 'mia', name: 'Mia', color: '#d4af37', icon: 'Robot' }]
+    const agents = [{ id: 'mia', name: 'Mia', color: '#3B82F6' as const, icon: 'Robot' }]
     const { nodes } = buildTaskGraph(tasks, agents, { planId: 'plan-1' })
     expect(nodes[0].data.agentName).toBe('Mia')
-    expect(nodes[0].data.agentColor).toBe('#d4af37')
+    expect(nodes[0].data.agentColor).toBe('#3B82F6')
   })
 })

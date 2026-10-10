@@ -89,6 +89,8 @@ const mockCoreAgent: Agent = {
   name: 'General Assistant',
   type: 'core',
   locked: false,
+  figure: 'Robot',
+  role: 'general',
   needs_model: false,
   status: 'active',
   model: 'claude-sonnet-4-6',
@@ -111,6 +113,8 @@ const mockLockedCoreAgent: Agent = {
   name: 'Mia',
   type: 'core',
   locked: true,
+  figure: 'Robot',
+  role: 'general',
   needs_model: false,
   status: 'active',
   model: 'claude-opus-4-6',
@@ -175,6 +179,8 @@ const mockJudgeAgent: Agent = {
   name: 'Judge',
   type: 'system',
   locked: true,
+  figure: 'Robot',
+  role: 'general',
   needs_model: false,
   status: 'active',
   model: 'claude-opus-4-6',
@@ -2974,7 +2980,7 @@ describe('AgentProfile — locked core agent identity fields: visible read-only 
   })
 
   it('shows a static read-only avatar color swatch (not the interactive picker)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, color: '#D4AF37' })
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, color: '#3B82F6' })
     renderProfile('mia')
     await screen.findByText('Mia')
     expect((await screen.findAllByTestId('avatar-color-readonly')).length).toBeGreaterThanOrEqual(1)
@@ -3129,7 +3135,7 @@ describe('AgentProfile — Default-agent toggle visibility (field matrix, W2c)',
 // agent (not just locked core ones) would slip through undetected.
 describe('AgentProfile — unlocked Main agent: interactive identity fields render (isLocked regression guard, W2c)', () => {
   it('renders the interactive avatar color and icon pickers (not the read-only swatch) for an editable Main agent', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#D4AF37' })
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#3B82F6' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
     expect((await screen.findAllByTestId('avatar-color-Forge Gold')).length).toBeGreaterThanOrEqual(1)

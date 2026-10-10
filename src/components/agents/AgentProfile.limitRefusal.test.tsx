@@ -65,6 +65,8 @@ const baseAgent: Agent = {
   name: 'Triage',
   type: 'Main',
   locked: false,
+  figure: 'Robot',
+  role: 'general',
   needs_model: false,
   status: 'active',
   model: 'claude-sonnet-4-6',
