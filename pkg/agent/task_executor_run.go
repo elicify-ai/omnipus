@@ -122,7 +122,7 @@ func (te *TaskExecutor) runTask(
 	// created taskSessionID successfully before launching this goroutine.
 	// Open this execution's TaskRun with that real session — see openRun's
 	// own doc comment for why run-open cannot happen any earlier.
-	run = te.openRun(t.ID, occurrenceMs, kind, taskSessionID)
+	run = te.openRun(t.ID, occurrenceMs, kind, taskSessionID, te.captureRunRecipients(ctx, t)...)
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {
@@ -392,6 +392,17 @@ func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.Ru
 	return &activeRun{runID: run.RunID, occurrenceMs: run.OccurrenceMs, recipients: run.RecipientSessionIDs}
 }
 
+// runForSession picks up the run its dispatcher already opened for taskSessionID
+// (a MAIN or launcher-front run is opened BEFORE dispatch, with its captured
+// recipients) and only opens a manual run when there is none — the
+// StartTaskNow path, whose recipients ride the detached context.
+func (te *TaskExecutor) runForSession(ctx context.Context, t *task.Task, taskSessionID string) *activeRun {
+	if existing, err := te.store.OpenRunForSession(t.ID, taskSessionID); err == nil && existing != nil {
+		return &activeRun{runID: existing.RunID, occurrenceMs: existing.OccurrenceMs, recipients: existing.RecipientSessionIDs}
+	}
+	return te.openRun(t.ID, nil, task.RunKindManual, taskSessionID, runRecipientsFrom(ctx)...)
+}
+
 // closeRun best-effort closes run's TaskRun record with the given terminal
 // status/result (ADR-050 RD5) — a no-op when run is nil (openRun degraded,
 // or this execution never opened one). Called from completeTaskWithResult
@@ -541,7 +552,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	// ADR-050 RD5/RD7 run-open (task-run-history-spec.md §3.2): taskSessionID
 	// was already created and persisted synchronously by the dispatch owner
 	// before this goroutine was launched, so it is available immediately.
-	run = te.openRun(t.ID, nil, task.RunKindManual, taskSessionID)
+	run = te.runForSession(ctx, t, taskSessionID)
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {

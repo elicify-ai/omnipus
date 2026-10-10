@@ -484,7 +484,7 @@ func (l *SteerLauncher) launchSteered(
 			// store invariant text); the tool layer maps it to D5's plain
 			// sentence telling the model a new message resumes the
 			// conversation.
-			if parentRec.Terminal() || parentRec.Stopped() {
+			if (parentRec.Terminal() || parentRec.Stopped()) && !isMainTaskChildLaunch(req) {
 				// Gate SFH#6: a session whose most recent revive attempt itself
 				// failed is a different refusal state from a session that is
 				// merely stopped. The standard D5 sentence tells the user to
@@ -1354,4 +1354,16 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 	}
 	logger.WarnCF("agent", "steer: complete: bounded drain retry exhausted — no queued items remain",
 		map[string]any{"session_id": sessionID, "generation": gen, "attempts": continueDrainMaxRetries})
+}
+
+// isMainTaskChildLaunch is the FR-018 stopped-main exemption: a task-origin
+// launch whose steering session is the TARGET agent's own computed main may be
+// admitted under that main even while it is stopped. The exemption only lets the
+// child be published; it does not revive the main, write its state or dispatch
+// it (zero main-model wake), and the general stopped-parent guard stays for
+// every other launch — delegate helpers, extra-chat helpers, and tasks whose
+// parent is not the target's own main.
+func isMainTaskChildLaunch(req steer.LaunchRequest) bool {
+	_, agent, ok := session.SplitMainSessionID(req.SteeringSessionID)
+	return ok && req.Origin.Kind == steer.OriginKindTask && agent == req.TargetAgentID
 }

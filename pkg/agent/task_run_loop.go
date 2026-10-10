@@ -359,6 +359,7 @@ func (te *TaskExecutor) finishRunTurn(
 					map[string]any{"task_id": t.ID, "error": setErr.Error()})
 			}
 		}
+		te.deliverTaskCompletionUpward(context.Background(), current, run)
 		te.finalizeTaskLifecycle(taskSessionID, current.Status)
 		te.closeRun(t.ID, run, current.Status, current.Result)
 		te.notifySourceChannel(current)

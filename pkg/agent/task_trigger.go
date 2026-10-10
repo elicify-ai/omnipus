@@ -1102,12 +1102,6 @@ func triggerToCronSchedule(tr *task.Trigger, nowMs int64) (cron.CronSchedule, er
 		}
 		return cron.CronSchedule{Kind: "at", AtMS: tr.Config.AtMs}, nil
 
-	case task.TriggerEvery:
-		if tr.Config.EveryMs == nil {
-			return cron.CronSchedule{}, fmt.Errorf("trigger 'every' missing config.every_ms")
-		}
-		return cron.CronSchedule{Kind: "every", EveryMS: tr.Config.EveryMs}, nil
-
 	case task.TriggerRecurring:
 		if tr.Config.Rrule != nil && *tr.Config.Rrule != "" {
 			if tr.Config.DtstartMs == nil {
@@ -1125,10 +1119,10 @@ func triggerToCronSchedule(tr *task.Trigger, nowMs int64) (cron.CronSchedule, er
 			}
 			return cron.CronSchedule{Kind: "at", AtMS: &next}, nil
 		}
-		if tr.Config.CronExpr == nil || *tr.Config.CronExpr == "" {
-			return cron.CronSchedule{}, fmt.Errorf("trigger 'recurring' missing config.cron_expr")
-		}
-		return cron.CronSchedule{Kind: "cron", Expr: *tr.Config.CronExpr}, nil
+		// session-core DEL-19 / FR-017: recurring task timing is RRULE-only. The
+		// legacy cron_expr compatibility adapter is deleted; a recurring trigger
+		// without an rrule is refused, never adapted.
+		return cron.CronSchedule{}, fmt.Errorf("trigger 'recurring' requires config.rrule (cron_expr is no longer supported)")
 
 	default:
 		return cron.CronSchedule{}, fmt.Errorf("unsupported trigger type %q", tr.Type)

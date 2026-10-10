@@ -230,12 +230,17 @@ func (te *TaskExecutor) completeTaskWithResult(
 				"goal-loop: dropping completion outcome — task left its expected status concurrently "+
 					"(Stop landed); the task's own outcome is authoritative",
 				map[string]any{"task_id": t.ID, "expected_status": string(expected), "target_status": string(status)})
-			// M5: close the run here too, with the outcome this function was
-			// asked to write — the Task mirror write was dropped (a concurrent
-			// Stop is authoritative), but run-history has nowhere else to
-			// record this execution's own completion, and there is no reaper
-			// backstop to fall back on if it is left in_progress.
-			te.closeRun(t.ID, run, status, result)
+			// M5 + FR-020/BDD-06.3: the Task mirror write was dropped because a
+			// concurrent Stop (or another writer) ended the task, and THAT
+			// outcome is authoritative. Close the run with it — not with the
+			// late outcome this call was asked to write — and send the one
+			// terminal notice for that authoritative outcome.
+			if cur, getErr := te.store.Get(t.ID); getErr == nil && task.IsTerminal(cur.Status) {
+				te.deliverTaskCompletionUpward(context.Background(), cur, run)
+				te.closeRun(t.ID, run, cur.Status, cur.Result)
+			} else {
+				te.closeRun(t.ID, run, status, result)
+			}
 			return false
 		}
 		// Known, accepted limitation (ADR-043 §3): the task is left stuck at
@@ -266,7 +271,7 @@ func (te *TaskExecutor) completeTaskWithResult(
 	// before making the lifecycle record terminal. Boot recovery can repair a
 	// crash after this point; the reverse order can strand a terminal child
 	// whose result never reached its steering session.
-	te.deliverTaskCompletionUpward(context.Background(), final)
+	te.deliverTaskCompletionUpward(context.Background(), final, run)
 
 	// FR-118/G-13: this is completeTaskWithResult's own terminal write —
 	// mirror it onto the durable lifecycle record (see finalizeTaskLifecycle's
@@ -398,7 +403,9 @@ func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
 // batched behind siblings) + the blocked_by auto-advance (dispatch tasks
 // whose deps are now all done).
 func (te *TaskExecutor) onTaskComplete(t *task.Task) {
-	te.deliverTaskCompletionUpward(context.Background(), t)
+	// A status change made outside a run (update_task) has no run and so no
+	// recipients: nothing is delivered (U6 FR-020).
+	te.deliverTaskCompletionUpward(context.Background(), t, nil)
 	te.onTaskCompleteAfterUpwardDelivery(t)
 }
 
@@ -419,13 +426,36 @@ func (te *TaskExecutor) onTaskCompleteAfterUpwardDelivery(t *task.Task) {
 	te.advanceBlockedTasks(context.Background(), t.ID)
 }
 
-// deliverTaskCompletionUpward routes t's own outcome through the single I-5
-// upward-delivery operation, per child, as each finishes. A `t`
-// whose own session is not steered (an ordinary-root task: human-,
-// schedule- or plan-created) has no steering session to wake, and this is
-// a deliberate no-op for it, not a bug.
-func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task.Task) {
-	if t.SessionID == "" {
+// taskRunNoticeStatus is the status word of a run's terminal notice: done,
+// failed, or stopped (a failed run a person stopped, CancelReason ==
+// stopped_by_user).
+func taskRunNoticeStatus(t *task.Task) string {
+	switch t.Status {
+	case task.StatusDone:
+		return "done"
+	case task.StatusFailed:
+		if t.CancelReason == task.CancelReasonStoppedByUser {
+			return "stopped"
+		}
+		return "failed"
+	}
+	return string(t.Status)
+}
+
+// deliverTaskCompletionUpward sends a run's terminal notice to each of its
+// CAPTURED recipients (session-core U6, FR-020): the authoritative status word
+// and the full stored result under a short engine header
+// `Task run <status>: "<title>" (run <run_id>)`. It reuses the single I-5
+// upward delivery (inbox append, dedupe, wake, stopped-parent retention) with
+// one explicit recipient per call.
+//
+// Each recipient's visibility is checked again at send time (BDD-01.3/06.4): a
+// hidden or removed main is skipped with a log — no wake, no substitute — and
+// the result stays in the task/run view. A nil run (a status change made by
+// update_task, with no run) delivers nothing. Never notified: skipped fires and
+// goal-loop retries, which never reach this function.
+func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task.Task, run *activeRun) {
+	if t == nil || t.SessionID == "" || run == nil || len(run.recipients) == 0 {
 		return
 	}
 	deliverer := te.agentLoop.getUpwardDeliverer()
@@ -433,6 +463,7 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 		return
 	}
 
+	header := fmt.Sprintf("Task run %s: %q (run %s)", taskRunNoticeStatus(t), t.Title, run.runID)
 	var outcome steer.Outcome
 	var sm generated.SessionMessage
 	now := time.Now().UTC()
@@ -442,7 +473,8 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 			outcome = steer.OutcomeEmptyAnswer
 			if err := sm.FromSessionMessageError(generated.SessionMessageError{
 				MessageId: t.ID, SessionId: t.SessionID, CreatedAt: now, Depth: 1,
-				SenderIdentity: t.AgentID, Fatal: true, Text: "empty_answer: the task produced no result",
+				SenderIdentity: t.AgentID, Fatal: true,
+				Text: header + "\n\nempty_answer: the task produced no result",
 			}); err != nil {
 				logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode empty-answer error failed",
 					map[string]any{"task_id": t.ID, "error": err.Error()})
@@ -453,7 +485,7 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 			if err := sm.FromSessionMessageHandback(generated.SessionMessageHandback{
 				MessageId: t.ID, SessionId: t.SessionID, CreatedAt: now, Depth: 1,
 				SenderIdentity: t.AgentID, Mode: generated.SessionMessageHandbackModeFinal,
-				ResultSoFar: t.Result, Artifacts: []string{}, OpenQuestions: []string{},
+				ResultSoFar: header + "\n\n" + t.Result, Artifacts: []string{}, OpenQuestions: []string{},
 			}); err != nil {
 				logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode handback failed",
 					map[string]any{"task_id": t.ID, "error": err.Error()})
@@ -461,42 +493,65 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 			}
 		}
 	case task.StatusFailed:
-		text := "failed: " + t.Result
 		outcome = steer.OutcomeFailed
 		if strings.HasPrefix(t.Result, "empty_answer:") {
 			outcome = steer.OutcomeEmptyAnswer
-			text = t.Result
 		}
 		if err := sm.FromSessionMessageError(generated.SessionMessageError{
 			MessageId: t.ID, SessionId: t.SessionID, CreatedAt: now, Depth: 1,
-			SenderIdentity: t.AgentID, Fatal: true, Text: text,
+			SenderIdentity: t.AgentID, Fatal: true, Text: header + "\n\n" + t.Result,
 		}); err != nil {
 			logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode failed-error failed",
 				map[string]any{"task_id": t.ID, "error": err.Error()})
 			return
 		}
 	default:
-		// Not a terminal outcome this operation covers (e.g. cancelled —
-		// routed through the D8 cascade instead).
+		// Not a terminal outcome this operation covers.
 		return
 	}
 
-	event := steer.UpwardEvent{ChildSessionID: t.SessionID, Outcome: outcome, Message: sm}
-	delivery, err := deliverer.Deliver(ctx, event)
-	if err != nil {
-		logger.WarnCF("task_executor", "deliverTaskCompletionUpward: Deliver failed",
-			map[string]any{"task_id": t.ID, "session_id": t.SessionID, "error": err.Error()})
-		return
+	for _, recipient := range run.recipients {
+		if !te.recipientStillVisible(t, recipient) {
+			continue
+		}
+		event := steer.UpwardEvent{ChildSessionID: t.SessionID, Outcome: outcome, Message: sm, RecipientSessionID: recipient}
+		delivery, err := deliverer.Deliver(ctx, event)
+		if err != nil {
+			logger.WarnCF("task_executor", "deliverTaskCompletionUpward: Deliver failed",
+				map[string]any{"task_id": t.ID, "session_id": t.SessionID, "recipient": recipient, "error": err.Error()})
+			continue
+		}
+		generation := 0
+		if rec, lerr := te.agentLoop.GetSessionLifecycleStore().Load(t.SessionID); lerr == nil && rec != nil {
+			generation = rec.Generation
+		}
+		reportUndeliveredWake("steer: task completion", event, recipient, generation, delivery)
 	}
-	// [ADR-091 fix lane RX-OUTCOME, HIGH] Every outcome that reaches this
-	// point is TERMINAL (the switch above returns for anything else), so a
-	// stored_not_woken here means the task is finished and gone and its
-	// steering session was never told. The parent/generation pair is read
-	// from the child's own lifecycle record rather than the task, because
-	// the task record carries neither — a best-effort read on the
-	// diagnostic path only, never on the success path.
-	parentSessionID, generation := steerDeliveryEdge(te.agentLoop.GetSessionLifecycleStore(), t.SessionID)
-	reportUndeliveredWake("steer: task completion", event, parentSessionID, generation, delivery)
+}
+
+// recipientStillVisible re-checks, at send time, that a captured recipient is
+// still an eligible visible main (BDD-01.3/06.4). A recipient that is no longer
+// eligible, or whose eligibility cannot be read, is skipped and logged: no
+// wake, no substitute.
+func (te *TaskExecutor) recipientStillVisible(t *task.Task, recipient string) bool {
+	workspaceID, agentID, ok := session.SplitMainSessionID(recipient)
+	if !ok || te.mainResolver == nil {
+		logger.WarnCF("task_executor", "run notice skipped: the recipient is not a resolvable main",
+			map[string]any{"task_id": t.ID, "recipient": recipient})
+		return false
+	}
+	id, eligible, err := te.mainResolver.EligibleMain(workspaceID, agentID)
+	if err != nil {
+		logger.ErrorCF("task_executor", "run notice skipped: the recipient's main could not be resolved",
+			map[string]any{"task_id": t.ID, "recipient": recipient, "error": err.Error()})
+		return false
+	}
+	if !eligible || id != recipient {
+		logger.InfoCF("task_executor", "run notice skipped: the recipient is hidden or removed",
+			map[string]any{"task_id": t.ID, "recipient": recipient})
+		return false
+	}
+	return true
 }
 
 // readyBlockedCandidates returns the IDs of all `next` tasks that list
