@@ -16308,17 +16308,17 @@ type DelegateRespondAction struct {
 // DelegateRespondActionAction defines model for DelegateRespondAction.Action.
 type DelegateRespondActionAction string
 
-// DelegateRespondResponse Response to `delegate` `action: respond` (ADR-053 §5.1). Native: acknowledgement only (the answer routes into the child's warm-resumed turn). 3P: a new corrective session was spawned (D5) — see `corrective_session` for its identity.
+// DelegateRespondResponse Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn; an external-CLI answer reaches the same CLI conversation by interrupt and resume, or is refused. No corrective session is created, so `corrective_session` is never set.
 type DelegateRespondResponse struct {
 	// Acknowledged True when the response was accepted and routed by `correlation_id`.
 	Acknowledged bool `json:"acknowledged"`
 
-	// CorrectiveSession Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
+	// CorrectiveSession Response shape for a `delegate` action that publishes a child session (`run`). No action creates a replacement session for an existing child: resume and respond continue the same child (an external-CLI child continues the same CLI conversation or the action is refused).
 	CorrectiveSession *struct {
 		// Generation The generation this response corresponds to.
 		Generation int `json:"generation"`
 
-		// Is3p True when this session dispatches via an external CLI runner.
+		// Is3p True when this session dispatches via an external CLI runner. Taken from the classification persisted at launch, not re-read from a mutable registry.
 		Is3p bool `json:"is_3p"`
 
 		// QueuePosition 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
@@ -16327,7 +16327,7 @@ type DelegateRespondResponse struct {
 		// ResumedFrom The prior session id this generation resumed from, when applicable.
 		ResumedFrom *string `json:"resumed_from,omitempty"`
 
-		// SessionId The child session id. For a native `follow_up`, equals the input `session_id` (warm resume, same session, new generation). For a 3P `follow_up`/`respond`, a NEW session id (cold respawn, D5).
+		// SessionId The id of the newly published child session.
 		SessionId string `json:"session_id"`
 
 		// State The newly-spawned/resumed session's initial lifecycle state.
@@ -16352,7 +16352,7 @@ type DelegateResumeAction struct {
 // DelegateResumeActionAction defines model for DelegateResumeAction.Action.
 type DelegateResumeActionAction string
 
-// DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
+// DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. A native child can always be steered at its next tool boundary — there is no launch-profile choice gating it (see ADR-053 Amendment). An external-CLI child is steered by interrupting its subprocess and resuming the same CLI conversation, and only while a CLI run is in flight; otherwise steering is refused as not_steerable.
 type DelegateRunAction struct {
 	Action DelegateRunActionAction `json:"action"`
 
@@ -16944,12 +16944,12 @@ type DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance string
 // DelegateRunActionGoalTerminalHistoryVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type DelegateRunActionGoalTerminalHistoryVerdictScope string
 
-// DelegateSessionResponse Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
+// DelegateSessionResponse Response shape for a `delegate` action that publishes a child session (`run`). No action creates a replacement session for an existing child: resume and respond continue the same child (an external-CLI child continues the same CLI conversation or the action is refused).
 type DelegateSessionResponse struct {
 	// Generation The generation this response corresponds to.
 	Generation int `json:"generation"`
 
-	// Is3p True when this session dispatches via an external CLI runner.
+	// Is3p True when this session dispatches via an external CLI runner. Taken from the classification persisted at launch, not re-read from a mutable registry.
 	Is3p bool `json:"is_3p"`
 
 	// QueuePosition 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
@@ -16958,7 +16958,7 @@ type DelegateSessionResponse struct {
 	// ResumedFrom The prior session id this generation resumed from, when applicable.
 	ResumedFrom *string `json:"resumed_from,omitempty"`
 
-	// SessionId The child session id. For a native `follow_up`, equals the input `session_id` (warm resume, same session, new generation). For a 3P `follow_up`/`respond`, a NEW session id (cold respawn, D5).
+	// SessionId The id of the newly published child session.
 	SessionId string `json:"session_id"`
 
 	// State The newly-spawned/resumed session's initial lifecycle state.
@@ -24168,7 +24168,7 @@ type Session struct {
 	// Model LLM model name used in this session (may be empty for legacy sessions).
 	Model *string `json:"model,omitempty"`
 
-	// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
+	// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read. An omitted value means unknown (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
 	NeedsAttention *bool `json:"needs_attention,omitempty"`
 
 	// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
@@ -24733,7 +24733,7 @@ type SessionDetail struct {
 		// Model LLM model name used in this session (may be empty for legacy sessions).
 		Model *string `json:"model,omitempty"`
 
-		// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
+		// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read. An omitted value means unknown (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
 		NeedsAttention *bool `json:"needs_attention,omitempty"`
 
 		// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).

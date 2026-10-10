@@ -491,6 +491,8 @@ A dev install replaying old frames that still carry `steering_receipt` must drop
 
 **Amended 2026-10-06 (founder):** the controls below are the same on **web, CLI and channels**, in **root and helper chats**. This replaces the extra control and helper-only redirect design. Authority: founder decision, 2026-10-06.
 
+**Qualification, 2026-10-10 (external-CLI helpers):** the native steering and continuation rules in this document do not describe a helper on an external command-line tool. A live external delegation takes an instruction by interrupting its subprocess and resuming the same retained CLI conversation (a live task run too); with no CLI run in flight the request is refused as `not_steerable`. Its chat's `/stop-redirect` returns `not_steerable` while it is running or stopped, and a finished helper has no turn to replace (Resume guidance is shown). Resume, Respond and a typed message continue the same CLI conversation when it started and the gateway still retains it, run it for the first time if it never started, and otherwise refuse visibly; none of them creates a new worker session. External workers have no `message_parent`, and `delegate redirect` and `clear_goal` are refused. See [Agents guide](../../agents.md)::Workers and delegation.
+
 | Input | Effect in this chat |
 |---|---|
 | Stop click 1 / Esc 1 / `/stop` | Stop **this chat's current turn only** (`scope: session`); helpers keep working. Open a **3 s window**. |

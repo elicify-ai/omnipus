@@ -4411,7 +4411,7 @@ export interface components {
              */
             protected?: boolean;
             /**
-             * @description Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
+             * @description Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read. An omitted value means unknown (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
              * @example false
              */
             readonly needs_attention?: boolean;
@@ -17054,7 +17054,7 @@ export interface components {
         DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateStopAllAction"] | components["schemas"]["DelegateClearGoalAction"] | components["schemas"]["DelegateResumeAction"] | components["schemas"]["DelegateRedirectAction"] | components["schemas"]["DelegatePeekAction"];
         /**
          * DelegateRunAction
-         * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
+         * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. A native child can always be steered at its next tool boundary — there is no launch-profile choice gating it (see ADR-053 Amendment). An external-CLI child is steered by interrupting its subprocess and resuming the same CLI conversation, and only while a CLI run is in flight; otherwise steering is refused as not_steerable.
          */
         DelegateRunAction: {
             /**
@@ -17314,11 +17314,11 @@ export interface components {
         };
         /**
          * DelegateSessionResponse
-         * @description Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
+         * @description Response shape for a `delegate` action that publishes a child session (`run`). No action creates a replacement session for an existing child: resume and respond continue the same child (an external-CLI child continues the same CLI conversation or the action is refused).
          */
         DelegateSessionResponse: {
             /**
-             * @description The child session id. For a native `follow_up`, equals the input `session_id` (warm resume, same session, new generation). For a 3P `follow_up`/`respond`, a NEW session id (cold respawn, D5).
+             * @description The id of the newly published child session.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             session_id: string;
@@ -17338,7 +17338,7 @@ export interface components {
              */
             resumed_from?: string | null;
             /**
-             * @description True when this session dispatches via an external CLI runner.
+             * @description True when this session dispatches via an external CLI runner. Taken from the classification persisted at launch, not re-read from a mutable registry.
              * @example false
              */
             is_3p: boolean;
@@ -17434,7 +17434,7 @@ export interface components {
         };
         /**
          * DelegateRespondResponse
-         * @description Response to `delegate` `action: respond` (ADR-053 §5.1). Native: acknowledgement only (the answer routes into the child's warm-resumed turn). 3P: a new corrective session was spawned (D5) — see `corrective_session` for its identity.
+         * @description Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn; an external-CLI answer reaches the same CLI conversation by interrupt and resume, or is refused. No corrective session is created, so `corrective_session` is never set.
          */
         DelegateRespondResponse: {
             /**

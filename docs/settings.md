@@ -219,7 +219,7 @@ Leave the field blank and live available memory governs each new turn, reported 
 
 ### Which new agents get a self-line
 
-When an agent joins a workspace team — by any route, including a save that carries a complete list of lines — Omnipus seeds it a **self-line** — a trust line from the agent to itself, which is what allows handing a fresh piece of work back to the same agent. It seeds one for every agent except the ids on an exclusion list. That list is a private, file-only key:
+When an agent joins a workspace team — by any route, including a save that carries a complete list of lines — Omnipus seeds it a **self-line** — a trust line from the agent to itself, which is what allows handing a fresh piece of work back to the same agent. It seeds one for every agent that joins, except the ids on an exclusion list (a Team save that carries a complete list of lines still gets the new member's self-line). That list is a private, file-only key:
 
 - `workspace_seed_defaults.self_edge.exclude_agent_ids` in `config.json`.
 
@@ -228,12 +228,12 @@ There is no screen for it. It ships as `["judge", "plansupervisor"]` — the two
 | The key | Effect |
 |---|---|
 | Absent (the key, or the whole `workspace_seed_defaults` block, is missing) | The shipped list applies. A fresh install and an install that never wrote the key behave the same |
-| An empty list `[]` | **Nobody** is excluded — even the two hidden agents get a self-line. This is how you say "exclude no one" |
+| An empty list `[]` | **Nobody is excluded by this list.** It does not make the two hidden agents (or Admin) team members: they cannot be added to a workspace team, so they still get no workspace self-line. Every ordinary agent that joins a team is seeded one |
 | A list of ids | Exactly those ids are excluded. Adding an ordinary agent such as `"mia"` takes effect with no code change and no restart beyond the usual config reload |
 
 Two limits on what the key does:
 
-- **It governs future seeds only.** It is a default for the lines the product creates when a workspace is made or a team grows. It never edits the lines a workspace already has, never re-creates a line somebody removed, and never affects who may currently delegate to whom. To change an agent's *current* lines, edit them in the workspace [Team](workspaces.md#how-to-set-who-may-delegate-to-whom) panel.
+- **It governs future seeds only.** It is a default for the lines the product creates when a workspace is made or a team grows. It never edits the lines a workspace already has, never re-creates a line somebody removed while the agent stays on the team (an agent removed from the team and added back is a new member and is seeded again), and never affects who may currently delegate to whom. To change an agent's *current* lines, edit them in the workspace [Team](workspaces.md#how-to-set-who-may-delegate-to-whom) panel.
 - **It is not editable through the settings API.** It is left out of what the settings API returns, and a generic settings write refuses it. Edit `config.json` by hand.
 
 ### Steer, respond and redirect message size

@@ -1,10 +1,10 @@
 type: object
 title: DelegateRespondResponse
 description: >
-  Response to `delegate` `action: respond` (ADR-053 §5.1). Native:
-  acknowledgement only (the answer routes into the child's warm-resumed
-  turn). 3P: a new corrective session was spawned (D5) — see
-  `corrective_session` for its identity.
+  Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement
+  only. A native answer routes into the child's turn; an external-CLI answer
+  reaches the same CLI conversation by interrupt and resume, or is refused.
+  No corrective session is created, so `corrective_session` is never set.
 required:
   - acknowledged
 additionalProperties: false

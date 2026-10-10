@@ -57,6 +57,8 @@ That is a summary. The full list of tools that still ask, one row per tool, is u
 
 The chat switch is the one place that can turn Auto-approve **on** when the global default has it off, because you are present in that conversation. When the chat's agent hands work to another agent (a delegate), the delegate follows the chat's switch exactly as the agent you are talking to does: if Auto-approve is on for the chat, the delegate's Ask tools run under it too.
 
+**Exception: external command-line workers.** A worker that runs on Claude Code, Codex or OpenCode does not use Omnipus's tool approval dialog at all. Omnipus automatically approves the permission requests the external tool reports, so turning Auto-approve off is not a way to make an external worker ask you before each action. Omnipus Allow/Ask/Deny rules govern Omnipus tools only and do not reach inside the external tool. Treat delegating to an external command-line worker as its own trust decision.
+
 ### Auto-approve and the kernel sandbox (changed 2026-09-24)
 
 **Auto-approve no longer needs a kernel sandbox to work.** A kernel sandbox is protection enforced by the operating system itself: Landlock on Linux, Seatbelt on macOS, with the Process Sandbox set to **Enforce**. Until 2026-09-24, Auto-approve had no effect at all without one — every Ask tool prompted, the same as if Auto-approve were off, and there was no Auto-approve on Windows at all, because Windows has no kernel sandbox in Omnipus. That turned out to make Auto-approve effectively useless on Windows and on any machine where the sandbox failed to start or was deliberately left in Permissive or Off mode, so it was changed.

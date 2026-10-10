@@ -4845,8 +4845,8 @@ components:
             later acknowledgement can name the same number. Not a new counter.
             This frame is part of both the incremental catch-up and the full
             snapshot. 0 when the main has no outcome yet; omitted when this emit
-            is not an attach of a main or the saved order could not be read.
-            Keep in sync by hand with
+            is not an attach of a main or the saved order could not be read. An
+            omitted value means unknown, never zero. Keep in sync by hand with
             components/schemas/SessionStateFrame.yaml.
         auto_approve_modifier:
           type: boolean
