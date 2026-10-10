@@ -225,26 +225,28 @@ func (a *restAPI) mainSessionVisible(m *session.UnifiedMeta) bool {
 	return m.AgentID == agentID && m.WorkspaceID == wsID
 }
 
-// ensureDefaultWorkspaceAdminMain get-or-creates Admin's main in the default
-// workspace. Admin has no membership event to hang it on, so this runs from
-// the boot path that already ensures the default workspace, in BOTH branches —
-// the one that creates the workspace and the one that finds it already there.
-// An install with no default workspace (nothing to be Admin's main IN) is a
-// no-op, never a guessed workspace.
-func (a *restAPI) ensureDefaultWorkspaceAdminMain() {
+// ensureBootMains eagerly establishes every main that FR-002 says exists
+// without any later event: Admin's main in the default workspace, and one main
+// per eligible member of EVERY existing workspace team. It runs from the boot
+// path after the default workspace is ensured, so a fresh install's seeded
+// team owns its mains at first boot — a same-team PUT is a no-op and never the
+// trigger. Admin has no membership to hang a main on, so it is handled here
+// explicitly. Best-effort and idempotent: ensureMainSession reuses an existing
+// main, and an unresolvable pair is logged and skipped. An install with no
+// default workspace gets no Admin main — never a guessed workspace.
+func (a *restAPI) ensureBootMains() {
 	workspaces, err := listWorkspaceFiles(a.homePath)
 	if err != nil {
-		slog.Warn("rest: admin main: list workspaces failed", "error", err)
+		slog.Warn("rest: boot mains: list workspaces failed", "error", err)
 		return
 	}
 	for _, ws := range workspaces {
-		if !ws.IsDefault {
-			continue
+		if ws.IsDefault {
+			if _, err := a.ensureMainSession(ws.ID, string(coreagent.IDAdmin)); err != nil {
+				slog.Warn("rest: boot mains: admin main not resolved",
+					"workspace_id", ws.ID, "error", err)
+			}
 		}
-		if _, err := a.ensureMainSession(ws.ID, string(coreagent.IDAdmin)); err != nil {
-			slog.Warn("rest: admin main: default-workspace main not resolved",
-				"workspace_id", ws.ID, "error", err)
-		}
-		return
+		a.ensureMainsForTeam(ws)
 	}
 }
