@@ -1614,10 +1614,8 @@ func (rc *runContextWithOptions) configureHealthAndWatcher() {
 		if rc.agentLoopDead.Load() {
 			return true, "agent loop exited unexpectedly — gateway requires restart"
 		}
-		rc.runningServices.reloadMu.Lock()
-		defer rc.runningServices.reloadMu.Unlock()
-		if rc.runningServices.reloadDegraded {
-			return true, fmt.Sprintf("config reload failed: %v", rc.runningServices.reloadError)
+		if degraded, reason := rc.runningServices.reloadDegradedStatus(); degraded {
+			return true, reason
 		}
 		// ADR-054 §0 R3: the configured default agent naming an entity record
 		// that failed to load is a degraded state, not a silent fallback —

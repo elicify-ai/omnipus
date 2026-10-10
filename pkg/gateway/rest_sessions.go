@@ -1066,12 +1066,17 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 	// whose stop already landed (stopped or terminal record) is not running,
 	// even if a follow-up effect such as its parent notice is still pending.
 	if stillRunning := a.stillRunningAfterStop(res.StillRunning()); len(stillRunning) > 0 {
-		return fmt.Sprintf("%s; still running: %s", cancelIncompleteSubtreeSummary(res.Report), strings.Join(stillRunning, ", "))
+		slog.Warn("rest: delete session: sessions still running after Stop; deletion refused",
+			"session_id", id, "still_running", stillRunning)
+		return fmt.Sprintf("%s; %d session(s) still running; nothing was deleted",
+			cancelIncompleteSubtreeSummary(res.Report), len(stillRunning))
 	}
 	ids := append([]string{id}, res.Report.Reached...)
 	if live := a.agentLoop.AwaitStoppedTurns(r.Context(), ids); len(live) > 0 {
-		return fmt.Sprintf("Stop before delete incomplete: %d session(s) still running after the forced stop (%s); nothing was deleted",
-			len(live), strings.Join(live, ", "))
+		slog.Warn("rest: delete session: sessions still running after the forced Stop; deletion refused",
+			"session_id", id, "still_running", live)
+		return fmt.Sprintf("Stop before delete incomplete: %d session(s) still running after the forced stop; nothing was deleted",
+			len(live))
 	}
 	return ""
 }

@@ -1607,11 +1607,19 @@ func (tp *taskPatch) launchIfStarted() bool {
 			slog.Warn("rest: StartTaskNow failed",
 				"id", tp.id, "agent_id", tp.updated.AgentID, "prior_status", tp.preUpdateStatus,
 				"failed_disposition_preserved", failedDisposition, "error", startErr)
-			if httpStatus == http.StatusConflict {
-				// The two 409 classes (dispatch cap, plan state) are fixed
-				// domain errors with no storage detail.
+			switch {
+			case errors.Is(startErr, agent.ErrPlanStateUnresolvable):
+				// Not a conflict: the server could not READ the plan's state,
+				// and the wrapped cause carries the plan file's path. Fixed
+				// text, the cause is already logged above.
+				jsonServerFailure(tp.w, http.StatusInternalServerError,
+					"the task's plan state could not be verified", startErr)
+			case httpStatus == http.StatusConflict:
+				// The remaining 409 classes (dispatch cap, plan not
+				// executing) are domain errors built from fixed text, ids and
+				// the plan's state.
 				jsonErr(tp.w, httpStatus, startErr.Error())
-			} else {
+			default:
 				jsonErr(tp.w, httpStatus, "the task could not be started. Check the agent and try again; details are in the server log.")
 			}
 			return true
