@@ -26,8 +26,8 @@ import {
 } from '@/lib/llm-error'
 import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
-import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingClearRefetchSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
-import { refreshTranscriptAfterClear } from '../clear-refetch'
+import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
+import { settleClearRefetchAfterTurn } from '../clear-refetch'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
 import { gateFrameBySeq, cursorFromTerminalFrame, insertHistoryMessageId, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SessionCursor, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
@@ -1622,17 +1622,15 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 }
               }) as Partial<SessionChatState>
             })
-            // The turn that just completed may be one we sent from the
-            // offline-queue drain — send the next queued message, if any.
+            // FR-030/031 (U10b): settle what this turn means for the /clear
+            // transcript re-read — BEFORE the drain below can put another
+            // message on the wire and arm a different operation (the intent
+            // is bound to the /clear send itself: the turn that was active at
+            // send-time cannot consume it with its own done, and the intent
+            // clears only once the post-clear projection, marker included, is
+            // applied to the bucket). Then the drain.
+            settleClearRefetchAfterTurn(sid, frame.turn_id, withBucket)
             maybeDrainNext()
-            // FR-030/031 (U10b): the turn that just completed may be the
-            // reply to a /clear this client sent. Re-read the session's
-            // transcript so the view reflects the server — the marker entry
-            // the clear appended is never pushed live, so only a fresh read
-            // shows it (see clear-refetch.ts; consumed at most once).
-            if (pendingClearRefetchSids.delete(sid)) {
-              refreshTranscriptAfterClear(sid, withBucket)
-            }
           } else {
             // Defensive (boundary case, not an observed failure): a 'done'
             // frame with no session_id at all (a protocol-violating/malformed
@@ -1997,6 +1995,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 activeTurnAgentId: null,
               }
             })
+            // FR-030/031 (U10b): an errored turn ends the session's turn
+            // exactly like a done — settle the /clear transcript re-read the
+            // same way (a queued mid-turn /clear dispatches only after this
+            // turn ends), again BEFORE the drain can arm a different
+            // operation. An error frame carries no turn id, so a turn that
+            // was active at arm-time cannot be excluded here; a too-early
+            // read simply finds no marker yet and the intent survives.
+            settleClearRefetchAfterTurn(sid, undefined, withBucket)
             // The failed turn may have been one we sent from the offline-queue
             // drain — send the next queued message, if any.
             maybeDrainNext()

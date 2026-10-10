@@ -1,6 +1,7 @@
 // runtime-state.ts: Module-scoped replay, cancellation, routing, and diagnostics state used by the store
 
 import { emptySessionState } from './session'
+import type { ChatMessage } from './types'
 
 // Module-scoped handle for the 60s auto-clear timer on rate-limit events, keyed per session.
 export const rateLimitClearTimers: Record<string, ReturnType<typeof setTimeout>> = {}
@@ -39,15 +40,25 @@ export const pendingCancelAckSids = new Set<string>()
 // treating it as an error. Cleared on socket drop with pendingCancelAckSids.
 export const pendingRedirectSids = new Set<string>()
 
-// FR-030/031 (U10b): session ids this client has sent a /clear command for
-// (outbound-lifecycle's sendMessage arms it once the frame is on the wire)
-// whose reply turn has not finished yet. The successful clear appends a
-// chat-view marker entry server-side that is never pushed live, so when the
-// reply turn's `done` frame lands, the frames slice consumes the arm and
-// re-reads the session's transcript query (clear-refetch.ts) — the view then
-// reflects the server instead of a locally faked cleared view. Consumed at
-// most once per send.
-export const pendingClearRefetchSids = new Set<string>()
+// FR-030/031 (U10b): the transcript re-read owed to a /clear, keyed by
+// session id. The intent belongs to the /clear OPERATION — it is recorded
+// when a /clear is actually sent on the wire (normal send, offline-queue
+// drain and Retry/resend all go through armClearRefresh) and is bound to
+// that send's client_message_id plus the turn that was active at send-time,
+// so that turn's own done can never consume it. The intent clears only
+// after the post-clear server projection — marker entry included — has been
+// applied to the bucket (see clear-refetch.ts).
+export interface PendingClearRefresh {
+  /** The client_message_id of the /clear send this refresh belongs to. */
+  clientMessageId: string
+  /** The turn id announced when the /clear was sent; its own done must not consume the refresh. */
+  turnIdAtArm: string | null
+  /** Wall-clock ms at arm time — the cutoff that keeps newer client-only rows (e.g. a /new refusal) in a merge. */
+  armedAt: number
+  /** A successfully fetched projection held back because the bucket was busy; applied once it goes idle. */
+  heldProjection?: ChatMessage[]
+}
+export const pendingClearRefetches: Record<string, PendingClearRefresh | undefined> = {}
 
 // #823 catch-up redesign, Opus review round 2 item 7 (LOW): applySeqGate's
 // gap branch (frames.ts) sends `attach_session{S, cursor}` to recover from a

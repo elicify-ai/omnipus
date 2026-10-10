@@ -1,11 +1,13 @@
 /**
- * FR-007 / BDD-07.3 and founder X3. The server command table decides.
- * A server list that contains `clear` shows /clear; a list without it does
- * not. /new is the same: shown only when the server returns it. There is no
- * client-local handler for either — selecting one sends it as a normal
- * command, and startNewSession is never called. A leading "@" does not
- * switch the agent. /resume and /workspace stay the existing web-only
- * entries; this file does not remove them.
+ * FR-007 / BDD-07.3, founder X3, and the WC-1 amendment (2026-10-09).
+ * The server command table decides. A server list that contains `clear`
+ * shows /clear; a list without it does not — and selecting or typing /clear
+ * sends it as a normal server command, with startNewSession never called.
+ * /new is RETIRED: even a stale server that still advertises it must not
+ * reach the SPA's surface — the palette never lists it, and a typed /new is
+ * refused visibly without anything being sent and without a session being
+ * started. A leading "@" does not switch the agent. /resume and /workspace
+ * stay the existing web-only entries; this file does not remove them.
  */
 import type { KeyboardEvent } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -30,7 +32,7 @@ const server = vi.hoisted(() => {
     name: 'clear',
     label: '/clear',
     description: 'Reset this chat to a safe point',
-    delivery: 'client',
+    delivery: 'agent',
     available_while_streaming: false,
   })
   const newCommand = (): ServerCommand => ({
@@ -143,7 +145,7 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
     }))
     act(() => result.current.onInputChange('/'))
     expect(commandKeys(result.current.slashItems)).toEqual([
-      '/resume', '/workspace', '/clear', '/help', '/model', '/cancel',
+      '/sessions', '/workspace', '/clear', '/help', '/model', '/cancel',
     ])
   })
 
@@ -161,7 +163,7 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
     }))
     act(() => result.current.onInputChange('/'))
     expect(commandKeys(result.current.slashItems)).toEqual([
-      '/resume', '/workspace', '/help', '/model', '/cancel',
+      '/sessions', '/workspace', '/help', '/model', '/cancel',
     ])
   })
 
@@ -188,36 +190,91 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
     expect(content).not.toContain('switch agents')
   })
 
-  it.each(['/clear', '/new'] as const)(
-    'selecting %s sends that server command and does not start a session',
-    (label) => {
-      server.commands = label === '/clear' ? server.withClear() : server.withNew()
-      const composerRuntime = runtime('')
+  it('selecting /clear sends that server command and does not start a session', () => {
+    server.commands = server.withClear()
+    const composerRuntime = runtime('')
+    const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+    const { result } = renderHook(() => useSlashMenu({
+      isStreaming: false,
+      isReplaying: false,
+      inputEnabled: true,
+      composerRuntime: composerRuntime as unknown as ComposerRuntime,
+      appendMessage: vi.fn(),
+      cancelIfStreaming: vi.fn(),
+      sendRedirectFrame: vi.fn(),
+      activateStop: vi.fn(),
+    }))
+    act(() => result.current.onInputChange('/'))
+    const item = result.current.slashItems.find((entry) => entry.key === '/clear')
+    expect(item, 'the server returned /clear').toBeDefined()
+    act(() => item!.onSelect())
+    expect(startNewSession).not.toHaveBeenCalled()
+    expect(composerRuntime.send).toHaveBeenCalledTimes(1)
+    expect(composerRuntime.current().trim()).toBe('/clear')
+  })
+
+  it('a stale server advertising /new still gets no palette row — the SPA never offers it', () => {
+    server.commands = server.withNew()
+    const composerRuntime = runtime('/')
+    const appendMessage = vi.fn()
+    const { result } = renderHook(() => useSlashMenu({
+      isStreaming: false,
+      isReplaying: false,
+      inputEnabled: true,
+      composerRuntime: composerRuntime as unknown as ComposerRuntime,
+      appendMessage,
+      cancelIfStreaming: vi.fn(),
+      sendRedirectFrame: vi.fn(),
+      activateStop: vi.fn(),
+    }))
+    act(() => result.current.onInputChange('/'))
+    expect(result.current.slashItems.find((entry) => entry.key === '/new')).toBeUndefined()
+    // Nothing was refused either — there was no row to select.
+    expect(appendMessage).not.toHaveBeenCalled()
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+
+  it.each(['/new', '/NEW'] as const)(
+    'typing %s is refused visibly — nothing is sent and no session starts',
+    (typed) => {
+      server.commands = [...server.withClear(), ...server.withNew().filter((command) => command.name === 'new')]
+      const composerRuntime = runtime(typed)
+      const appendMessage = vi.fn()
       const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
       const { result } = renderHook(() => useSlashMenu({
         isStreaming: false,
         isReplaying: false,
         inputEnabled: true,
         composerRuntime: composerRuntime as unknown as ComposerRuntime,
-        appendMessage: vi.fn(),
+        appendMessage,
         cancelIfStreaming: vi.fn(),
         sendRedirectFrame: vi.fn(),
         activateStop: vi.fn(),
       }))
-      act(() => result.current.onInputChange('/'))
-      const item = result.current.slashItems.find((entry) => entry.key === label)
-      expect(item, `the server returned ${label}`).toBeDefined()
-      act(() => item!.onSelect())
+      let handled = false
+      act(() => {
+        result.current.onInputChange(typed)
+        handled = result.current.interceptClientCommand()
+      })
+      // Taken responsibility for: the caller must NOT dispatch it anywhere.
+      expect(handled).toBe(true)
+      expect(appendMessage).toHaveBeenCalledTimes(1)
+      const reply = appendMessage.mock.calls[0][0] as { role: string; content: string }
+      expect(reply.role).toBe('system')
+      expect(reply.content).toContain('no longer exists')
+      expect(reply.content).toContain('New chat')
+      expect(reply.content).toContain('/clear')
+      // The composer text is consumed; nothing reached the wire.
+      expect(composerRuntime.setText).toHaveBeenCalledWith('')
+      expect(composerRuntime.send).not.toHaveBeenCalled()
       expect(startNewSession).not.toHaveBeenCalled()
-      expect(composerRuntime.send).toHaveBeenCalledTimes(1)
-      expect(composerRuntime.current().trim()).toBe(label)
     },
   )
 
-  it.each(['/new', '/clear', '/NEW', '/Clear'])(
-    'typing %s is not a client command and does not start a session',
+  it.each(['/clear', '/Clear'] as const)(
+    'typing %s is not a client command — it goes to the server and starts no session',
     (typed) => {
-      server.commands = [...server.withClear(), ...server.withNew().filter((command) => command.name === 'new')]
+      server.commands = server.withClear()
       const composerRuntime = runtime(typed)
       const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
       const { result } = renderHook(() => useSlashMenu({

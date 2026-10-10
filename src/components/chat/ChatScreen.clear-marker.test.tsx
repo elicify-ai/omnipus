@@ -158,6 +158,12 @@ describe('ChatScreen — the /clear marker row and other system rows (FR-030/031
     const divider = container.querySelector('[data-testid="clear-context-divider"]')
     expect(divider, 'the marker row renders as the quiet divider').toBeTruthy()
     expect(divider!.textContent).toContain(CLEAR_MARKER_TEXT)
+    // Presentation, not just identity: the row IS a divider — the catalogued
+    // Separator primitive flanks the marker text (two hairline rules), and
+    // none of the ordinary system-pill treatment (the rounded bubble) is
+    // present.
+    expect(divider!.querySelectorAll('[data-orientation="horizontal"]')).toHaveLength(2)
+    expect(divider!.querySelector('.rounded-full')).toBeNull()
   })
 
   it('renders an UNKNOWN system row without throwing, present in the DOM, without the divider discriminator', async () => {

@@ -236,6 +236,37 @@ describe('useSlashMenu — /new is retired (WC-1): never sent, never a session, 
     expect(composerRuntime.send).not.toHaveBeenCalled()
   })
 
+  // The server command grammar splits the command token on ANY whitespace
+  // (the oracle's command parser), so tab, newline and non-breaking-space
+  // separators are retired-command invocations too. A word merely STARTING
+  // with "new" is not.
+  it.each(['/new\textra', '/new\nextra', '/new\u00a0extra', '/new extra'])('%s is refused like a bare /new (whitespace-separated argument)', (typed) => {
+    const composerRuntime = makeComposerRuntime(typed)
+    const appendMessage = vi.fn()
+    const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, appendMessage })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(true)
+    expect(appendMessage).toHaveBeenCalledTimes(1)
+    expect(startNewSession).not.toHaveBeenCalled()
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+
+  it.each(['/newspaper', '/newsletter'])('%s is NOT a retired command — it is sent to the server', (typed) => {
+    const composerRuntime = makeComposerRuntime(typed)
+    const appendMessage = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, appendMessage })))
+
+    let intercepted = true
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(false)
+    expect(appendMessage).not.toHaveBeenCalled()
+  })
+
   it('refuses /new immediately even while the command list is still loading', () => {
     commandsQueryIsLoading = true
     const composerRuntime = makeComposerRuntime('/new')
@@ -250,6 +281,34 @@ describe('useSlashMenu — /new is retired (WC-1): never sent, never a session, 
     expect(composerRuntime.send).not.toHaveBeenCalled()
   })
 
+  it('a submit held by the readiness gate is re-checked against the retirement when the list lands (edited while held)', () => {
+    commandsQueryIsLoading = true
+    const appendMessage = vi.fn()
+    const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+    const composerRuntime = makeComposerRuntime('/clear')
+    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, appendMessage })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+    // Held while the command list is in flight (asserted shape, no chai message arg).
+    expect(intercepted).toBe(true)
+
+    // The user edits the held submit to the retired command before the list lands.
+    ;(composerRuntime as unknown as { getState: () => { text: string } }).getState = () => ({ text: '/new' })
+    commandsQueryIsLoading = false
+    act(() => { rerender() })
+
+    // The deferred dispatch must run the SAME retirement check: visible
+    // refusal, nothing on the wire, no session.
+    expect(appendMessage).toHaveBeenCalledTimes(1)
+    const reply = appendMessage.mock.calls[0][0] as { role: string; content: string }
+    expect(reply.role).toBe('system')
+    expect(reply.content).toContain('no longer exists')
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+    expect(startNewSession).not.toHaveBeenCalled()
+    expect(composerRuntime.setText).toHaveBeenCalledWith('')
+  })
+
   it('/help built from a canonical server table never mentions /new', () => {
     const appendMessage = vi.fn()
     const { result } = renderHook(() => useSlashMenu(baseParams({ appendMessage })))
@@ -261,6 +320,22 @@ describe('useSlashMenu — /new is retired (WC-1): never sent, never a session, 
     const msg = appendMessage.mock.calls[0][0] as { role: string; content: string }
     expect(msg.role).toBe('system')
     expect(msg.content).toContain('/clear')
+    expect(msg.content).not.toContain('/new')
+  })
+
+  it('/help filters a retired command out even when a stale server still advertises it', () => {
+    serverCommands = [
+      ...CANONICAL_SERVER_COMMANDS,
+      { name: 'new', label: '/new', description: 'Start a new conversation', delivery: 'agent', available_while_streaming: false },
+    ]
+    const appendMessage = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ appendMessage })))
+    act(() => result.current.onInputChange('/'))
+    const item = result.current.slashItems.find((i) => i.key === '/help')!
+    act(() => item.onSelect())
+
+    expect(appendMessage).toHaveBeenCalledTimes(1)
+    const msg = appendMessage.mock.calls[0][0] as { role: string; content: string }
     expect(msg.content).not.toContain('/new')
   })
 })

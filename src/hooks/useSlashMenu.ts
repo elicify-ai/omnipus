@@ -335,13 +335,23 @@ const RETIRED_COMMAND_NAMES = new Set(['new'])
 const NEW_RETIREMENT_REPLY =
   "/new no longer exists. Start an extra chat with the agent row's New chat action, or use /clear to clear this chat's context — the conversation and its history are kept."
 
-/** True when a trimmed composer text invokes a retired command ('/new', any case, bare or with trailing text). */
+/**
+ * True when a trimmed composer text invokes a retired command. The server's
+ * command grammar splits the command token on ANY whitespace — tab, newline
+ * and non-breaking-space separators are retired-command invocations too,
+ * exactly like an ordinary space; a word merely STARTING with the name
+ * ("/newspaper") is not.
+ */
 function isRetiredCommandSubmit(trimmed: string): boolean {
-  const lowered = trimmed.toLowerCase()
   for (const name of RETIRED_COMMAND_NAMES) {
-    if (lowered === `/${name}` || lowered.startsWith(`/${name} `)) return true
+    if (new RegExp(`^/${name}(?:\\s|$)`, 'i').test(trimmed)) return true
   }
   return false
+}
+
+/** The server's command list with retired names removed — the palette and /help both consume this. */
+function withoutRetiredCommands(commands: SlashCommand[]): SlashCommand[] {
+  return commands.filter((cmd) => !RETIRED_COMMAND_NAMES.has(cmd.name.toLowerCase()))
 }
 
 function refuseRetiredCommand(appendMessage: (message: ChatMessage) => void): void {
@@ -412,8 +422,10 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
 
   if (name === 'help') {
     // US-4/AC-2: help text is the command list the server returned, plus the
-    // web-only entries. No tip about "@". /clear appears only then.
-    const helpLines = allCommands
+    // web-only entries. No tip about "@". /clear appears only then. A
+    // retired command is filtered even from a stale server's list — the SPA
+    // never offers /new, in the palette or here.
+    const helpLines = withoutRetiredCommands(allCommands)
       .map((c) => `- \`${c.label}\` — ${c.description}`)
       .join('\n')
     const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
@@ -765,7 +777,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     // WC-1: a retired command (/new) is never offered, even against a stale
     // server that still lists it — the SPA filters it from the palette the
     // same way the compliant server's table already omits it.
-    const listed = allCommands.filter((cmd) => !RETIRED_COMMAND_NAMES.has(cmd.name.toLowerCase()))
+    const listed = withoutRetiredCommands(allCommands)
     const all = rankByFilter(listed, menuFilter, (cmd, lf) => matchRank(cmd.label.slice(1), lf))
     const filtered = isStreaming ? all.filter((cmd) => cmd.available_while_streaming === true) : all
     return filtered.map((cmd) => ({
@@ -1131,6 +1143,17 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     deferredSlashSubmitRef.current = false
     const trimmed = (composerRuntime.getState().text ?? '').trim()
     if (trimmed === '') return
+    // WC-1: the deferred dispatch reads the composer's LATEST text — which
+    // may have been edited while the list was in flight — so it runs the
+    // SAME retirement check an immediate submit gets. Without it, a held
+    // submit edited to "/new" would go straight to the wire when the list
+    // landed (review round 1, F4).
+    if (isRetiredCommandSubmit(trimmed)) {
+      composerRuntime.setText('')
+      setInputValue('')
+      refuseRetiredCommand(appendMessage)
+      return
+    }
     const resolved = trimmed.startsWith('/') ? resolveClientCommand(trimmed) : null
     if (resolved) {
       composerRuntime.setText('')

@@ -23,11 +23,13 @@ export function isClearContextMarker(message: { role?: string; content?: string 
 }
 
 /**
- * True when an outgoing composer text is the /clear server command (any
- * case, surrounding whitespace ignored) — the text is sent verbatim and the
- * server executes it (DeliveryAgent), so the sender only needs to recognize
- * it to arm the post-turn transcript re-read.
+ * True when an outgoing composer text invokes the /clear server command —
+ * the FIRST token is what the server's command grammar dispatches on (any
+ * case; any whitespace, or nothing, may follow), so "/clear" and
+ * "/clear <anything>" both execute the clear and both must arm the
+ * post-turn transcript re-read. The text is sent verbatim; the sender only
+ * needs to recognize it.
  */
 export function isClearCommandText(content: string): boolean {
-  return content.trim().toLowerCase() === '/clear'
+  return /^\/clear(?:\s|$)/i.test(content.trim())
 }
