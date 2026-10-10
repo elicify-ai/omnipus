@@ -206,7 +206,7 @@ func TestSessionCoreU1_AdminHasDefaultWorkspaceMainOnly(t *testing.T) {
 // FR-002/C-MAIN: the gateway BOOT must EAGERLY create Admin's main in the
 // default workspace — not merely leave it to a lazy GET. This drives the REAL
 // boot (gateway_boot.go::buildRESTAPI →
-// ensureDefaultWorkspaceAdminMain) on a fresh home, then reads the sessions LIST
+// ensureBootMains) on a fresh home, then reads the sessions LIST
 // — a non-creating read (rest_sessions.go::listSessions never calls
 // resolveMainSessionForRead, so nothing is minted) — because a per-id GET would
 // lazily CREATE the main and mask a boot that no longer does (C1 CHECK survivor
@@ -227,8 +227,6 @@ func TestSessionCoreU1_BootEagerlyCreatesAdminMainBeforeAnyLookup(t *testing.T) 
 
 	// Exactly Admin's main must ALREADY be stored — read through the
 	// non-creating list surface, so only an eager boot creation can explain it.
-	// On a fresh home no other main exists: boot creates Admin's, and never a
-	// member's (members' mains come from a membership write).
 	req, err := gw.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
 	require.NoError(t, err)
 	resp, err := gw.Do(req)

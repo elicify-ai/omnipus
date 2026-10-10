@@ -14827,6 +14827,11 @@ export interface components {
             member_configs?: {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
             };
+            /**
+             * @description Server-computed id of the built-in Admin's main session in this workspace. Present only on the default workspace (is_default true) and only when that main resolves (same validation as WorkspaceMemberConfig.main_session_id). Omitted on every other workspace and whenever the main does not resolve - never a guessed id. Admin is not a workspace member; this is not a membership entry. The main's state (needs_attention, protected, etc.) comes from Session list/detail like any other main. Server-owned and read-only.
+             * @example main-session-ws-123+admin
+             */
+            readonly admin_main_session_id?: string;
         };
         /** @description Per-member config inside a workspace (keyed by agentId). */
         WorkspaceMemberConfig: {
@@ -16753,11 +16758,11 @@ export interface components {
             /** @description Every record carries its origin: how and where this session was launched (ADR-091 I-1). Kind discriminates the launch path. */
             origin?: {
                 /**
-                 * @description The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+                 * @description The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
                  * @example delegate
                  * @enum {string}
                  */
-                kind: "delegate" | "task" | "chat" | "channel" | "scheduled" | "heartbeat" | "verifier" | "plan" | "human";
+                kind: "delegate" | "task" | "chat" | "channel" | "main" | "scheduled" | "heartbeat" | "verifier" | "plan" | "human";
                 /**
                  * @description For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
                  * @example span_01J3ZQK8N2H8VXNRP5T7C9M4WE

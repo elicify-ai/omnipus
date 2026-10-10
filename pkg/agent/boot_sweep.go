@@ -994,7 +994,7 @@ const DefaultLifecycleRetentionDays = 90
 
 // standingRootExemptFromSweep keeps standing conversations out of the plan
 // engine's failed(interrupted) sweep (ADR-093 D3). A root has no SteeredBy edge;
-// its origin is absent or chat/channel/heartbeat/scheduled. SteerBootRecovery,
+// its origin is absent or chat/channel/main/heartbeat/scheduled. SteerBootRecovery,
 // not this sweep, produces ledger-backed stopped(restart) for an admitted
 // prior-boot ordinary execution; idle roots have no run to interrupt. A later
 // normal trigger may resume that restart stop on the same generation, while
@@ -1008,7 +1008,7 @@ func standingRootExemptFromSweep(rec session.LifecycleRecord) bool {
 		return true
 	}
 	switch rec.Origin.Kind {
-	case session.OriginKindChat, session.OriginKindChannel, session.OriginKindHeartbeat, session.OriginKindScheduled:
+	case session.OriginKindChat, session.OriginKindChannel, session.OriginKindMain, session.OriginKindHeartbeat, session.OriginKindScheduled:
 		return true
 	default:
 		return false
