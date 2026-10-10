@@ -104,6 +104,24 @@ describe('E.1 installed-app Expand stays in this window', () => {
   })
 })
 
+// Late-settle harness: the route change is committed and visible, but the
+// router only reports navigate() as finished when the test calls settle().
+async function startLateExpand() {
+  displayMode('standalone')
+  usePanelShellStore.getState().openPanel('library', context)
+  const { router, expand } = await renderSource()
+  let settle!: () => void
+  const navigate = router.navigate.bind(router)
+  vi.spyOn(router, 'navigate').mockImplementation(async (options) => {
+    await navigate(options)
+    await new Promise<void>((resolve) => { settle = resolve })
+  })
+  let expanded!: ReturnType<typeof expand>
+  await act(async () => { expanded = expand() })
+  await waitFor(() => expect(router.state.location.pathname).toBe('/panel/library'))
+  return { router, expanded, settle: () => settle() }
+}
+
 describe('E.2 standalone Expand settles late', () => {
   it('a navigation that settles after Back re-docked the panel does not close that dock', async () => {
     displayMode('standalone')
@@ -127,6 +145,43 @@ describe('E.2 standalone Expand settles late', () => {
       await expect(expanded).resolves.toBe('opened')
     })
     expect(usePanelShellStore.getState().activePanel).toEqual({ id: 'library', context })
+  })
+})
+
+describe('E.2 variants: a newer panel intent made during the wait wins over the late settle', () => {
+  it('closePanel during the wait ends with no active panel and the late settle adds no second close', async () => {
+    const { expanded, settle } = await startLateExpand()
+    await act(async () => { usePanelShellStore.getState().closePanel() })
+    const revisionAfterUserClose = usePanelShellStore.getState().panelIntentRevision
+    await act(async () => {
+      settle()
+      await expect(expanded).resolves.toBe('opened')
+    })
+    expect(usePanelShellStore.getState().activePanel).toBeNull()
+    // A stale settle must not issue its own close: that would be a second
+    // panel intent bumping the revision after the user's.
+    expect(usePanelShellStore.getState().panelIntentRevision).toBe(revisionAfterUserClose)
+  })
+
+  it('opening mail during the wait keeps mail docked after the late settle', async () => {
+    const { expanded, settle } = await startLateExpand()
+    const mailContext = { workspaceId: 'ws-1', path: 'Inbox' }
+    await act(async () => { usePanelShellStore.getState().openPanel('mail', mailContext) })
+    await act(async () => {
+      settle()
+      await expect(expanded).resolves.toBe('opened')
+    })
+    expect(usePanelShellStore.getState().activePanel).toEqual({ id: 'mail', context: mailContext })
+  })
+
+  it('control: a prompt settle with no newer intent closes the dock', async () => {
+    const { router, expanded, settle } = await startLateExpand()
+    await act(async () => {
+      settle()
+      await expect(expanded).resolves.toBe('opened')
+    })
+    expect(router.state.location.pathname).toBe('/panel/library')
+    expect(usePanelShellStore.getState().activePanel).toBeNull()
   })
 })
 
