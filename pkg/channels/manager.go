@@ -299,6 +299,11 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 				if deleter, ok := ch.(MessageDeleter); ok {
 					deleter.DeleteMessage(ctx, msg.ChatID, entry.id) // best effort
 				} else if editor, ok := ch.(MessageEditor); ok {
+					// F10: a content-carrying edit is a delivery - re-check the
+					// captured route AFTER the cleanup callbacks above ran.
+					if !m.refuseReturnRoute(m.liveConfig(), msg, "edit") {
+						return true // refused: nothing is delivered, Send is skipped too
+					}
 					editor.EditMessage(ctx, msg.ChatID, entry.id, msg.Content) // fallback
 				}
 			}
@@ -310,6 +315,11 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	if v, loaded := m.placeholders.LoadAndDelete(key); loaded {
 		if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
 			if editor, ok := ch.(MessageEditor); ok {
+				// F10: re-check the captured route immediately before the edit,
+				// after the cleanup callbacks (typing stop, reaction undo) ran.
+				if !m.refuseReturnRoute(m.liveConfig(), msg, "edit") {
+					return true // refused: nothing is delivered, Send is skipped too
+				}
 				if err := editor.EditMessage(ctx, msg.ChatID, entry.id, msg.Content); err == nil {
 					return true // edited successfully, skip Send
 				} else {
