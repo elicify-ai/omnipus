@@ -497,7 +497,12 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	// eligibility, and any refusal (wrong owner, wrong workspace, unreadable
 	// metadata, non-member, Admin outside the default workspace) is a visible
 	// 404 — never a served mismatched record and never a guessed replacement.
-	if !a.resolveMainSessionForRead(id) {
+	mainOK, mainErr := a.resolveMainSessionForRead(id)
+	if mainErr != nil {
+		jsonErr(w, http.StatusInternalServerError, mainErr.Error())
+		return
+	}
+	if !mainOK {
 		jsonErr(w, http.StatusNotFound, "session not found")
 		return
 	}
