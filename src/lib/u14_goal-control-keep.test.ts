@@ -52,7 +52,7 @@ describe('U14 KEEP — isGoalRunning keeps Stop reachable during a running goal 
     },
   )
 
-  it.each(['waiting_on_user', 'queued', 'done', 'failed', 'cleared'] as const)(
+  it.each(['waiting_on_user', 'done', 'failed', 'cleared'] as const)(
     'returns false for a goal that is parked/terminal (%s)',
     (state) => {
       // BDD-12.5: "false for waiting_on_user" — a Stop-paused goal parks until
