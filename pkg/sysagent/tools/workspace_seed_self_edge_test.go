@@ -1,6 +1,7 @@
 package systools
 
 import (
+	"reflect"
 	"testing"
 
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
@@ -54,9 +55,14 @@ func TestSeedDelegationEdgesForNewMembers_SeedsNewMemberSelfRow(t *testing.T) {
 					"(U5a condition-1 shape: one shared seed computation for every writer); got %+v",
 					tc.id, got)
 			}
-			if len(e.Modes) != 2 || !e.Modes[0].Valid() || !e.Modes[1].Valid() {
-				// Shape only; membership is asserted below with exact values.
-				t.Fatalf("self-row %s→%s modes = %v, want ordinary direct/task", tc.id, tc.id, e.Modes)
+			// Freeze the COMPLETE row shape (F5): exact mode membership AND
+			// order — not merely "two valid values". A [direct,direct]
+			// regression loses the task authorization yet passes a
+			// length+validity check, so length alone is a hole.
+			wantModes := []workspacepkg.DelegationMode{workspacepkg.ModeDirect, workspacepkg.ModeTask}
+			if !reflect.DeepEqual(e.Modes, wantModes) {
+				t.Fatalf("self-row %s→%s modes = %v, want exactly %v (ordinary direct+task)",
+					tc.id, tc.id, e.Modes, wantModes)
 			}
 			if e.Depth == nil {
 				t.Fatalf("self-row %s→%s must carry an explicit depth of min(3, ceiling), got nil (inherit)", tc.id, tc.id)
