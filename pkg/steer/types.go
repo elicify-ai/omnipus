@@ -65,6 +65,12 @@ type LaunchResult struct {
 	SessionID string
 	// Generation is 1 at launch.
 	Generation int
+	// Is3P is the runtime classification Launch PERSISTED on the child's
+	// lifecycle record (true: external CLI, false: native). Callers that report
+	// the child's runtime (delegate's is_3p) project this value; they never
+	// re-resolve it, because a later executor change would make a second read
+	// describe a different runtime from the child that was actually created.
+	Is3P bool
 }
 
 // DispatchState is DispatchResult.State's enum (I-2) — the authoritative

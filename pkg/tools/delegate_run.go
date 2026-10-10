@@ -295,11 +295,10 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		Generation: dispatch.Generation,
 		SessionId:  launch.SessionID,
 		State:      state,
-	}
-	if dt.t.getAgentRegistry != nil {
-		if registry := dt.t.getAgentRegistry(); registry != nil {
-			response.Is3p = registry.IsExternalCLI(targetAgentID)
-		}
+		// The classification Launch persisted for THIS child — never a fresh
+		// registry read, which a supported executor update could have changed
+		// since Launch stamped the record.
+		Is3p: launch.Is3P,
 	}
 	if dispatch.State == steer.DispatchQueued {
 		position := dispatch.QueuePosition

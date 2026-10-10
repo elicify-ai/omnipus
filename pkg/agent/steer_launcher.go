@@ -414,7 +414,7 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 		rollback()
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: edge: %w", steer.ErrStoreWrite, persistErr)
 	}
-	return steer.LaunchResult{SessionID: childID, Generation: 1}, nil
+	return steer.LaunchResult{SessionID: childID, Generation: 1, Is3P: is3P}, nil
 }
 
 // launchSteered is Launch's steered path (I-1): the child's record is
@@ -510,9 +510,7 @@ func (l *SteerLauncher) launchSteered(
 			// mutable handover owner from session creation (see
 			// createSessionLocked's DEL-11 note), so ActiveAgentID is empty on
 			// any session that was never switched and this read made the edge
-			// look like it had no delegating agent. Mirrors
-			// pkg/tools/delegate_followup.go::cloneCorrectiveSessionIdentity,
-			// which migrated the identical read the same way.
+			// look like it had no delegating agent.
 			parentAgentID := strings.TrimSpace(steererMeta.AgentID)
 			if parentAgentID == "" && l.al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID() {
 				return nil, fmt.Errorf("steer: launch: %w: delegating agent identity is empty", steer.ErrInvalidEdge)
@@ -602,7 +600,7 @@ func (l *SteerLauncher) launchSteered(
 		}
 		return steer.LaunchResult{}, pubErr
 	}
-	return steer.LaunchResult{SessionID: childID, Generation: resultGen}, nil
+	return steer.LaunchResult{SessionID: childID, Generation: resultGen, Is3P: is3P}, nil
 }
 
 // steerReportingSelfChannel is the fallback Channel a steered session's
