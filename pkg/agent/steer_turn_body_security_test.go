@@ -307,7 +307,22 @@ func assertRuntimeChangeRefused(
 	if !strings.Contains(rec.FailedReason, "start a new delegation") {
 		t.Errorf("refusal not actionable: %q", rec.FailedReason)
 	}
+	// F4 (F-01): the recovery must direct the person to the UPDATED
+	// configuration, not merely to a new delegation — the guidance mutant that
+	// drops that clause must die on this assertion.
+	if !strings.Contains(rec.FailedReason, "updated configuration") {
+		t.Errorf("refusal must tell the person to start a new delegation with the UPDATED configuration: %q", rec.FailedReason)
+	}
 	if !strings.Contains(rec.FailedReason, wasRuntime) || !strings.Contains(rec.FailedReason, nowRuntime) {
 		t.Errorf("refusal %q should name both runtimes (%s -> %s)", rec.FailedReason, wasRuntime, nowRuntime)
+	}
+	// F4 (F-01): a refusal must NOT restamp the durable record's launch-time
+	// Is3P to the live kind — the record keeps the classification it was
+	// launched with, so a later retry still compares against the real launch
+	// runtime. wasRuntime is the launch-time label, so it is the oracle here.
+	wantIs3P := wasRuntime == "external-CLI"
+	if rec.Is3P != wantIs3P {
+		t.Errorf("refused record Is3P = %v, want the ORIGINAL launch value %v — a refusal must not restamp the durable classification",
+			rec.Is3P, wantIs3P)
 	}
 }
