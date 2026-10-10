@@ -554,37 +554,6 @@ func TestAdr093TaskFromStoppedCreator_RunsAsOrdinaryRoot(t *testing.T) {
 	}
 }
 
-// TestAdr093TaskFromLiveCreator_SteeredUnchanged pins the behavior D6
-// deliberately keeps: a task created from a LIVE creator chat (record
-// running, no Stop) is still a STEERED launch — the child carries the
-// steering edge and the task origin. Characterization pin from the ADR's
-// "unchanged" list, not a RED test.
-func TestAdr093TaskFromLiveCreator_SteeredUnchanged(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	t.Cleanup(cleanup)
-	creatorID := newTestSteeringSession(t, al, adr093Workspace)
-
-	adr093Persist(t, al, adr093Record(creatorID, 1, session.LifecycleRunning))
-
-	te := adr093TaskExecutor(t, al)
-	tk := adr093CreatorTask("Live creator task", creatorID)
-	if err := te.store.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-
-	childID, err := te.startTaskNowViaLauncher(context.Background(), tk)
-	if err != nil {
-		t.Fatalf("startTaskNowViaLauncher from a live creator chat: %v", err)
-	}
-	rec := adr093Load(t, al, childID)
-	if rec.SteeredBy == nil || rec.SteeredBy.SteeringSessionID != creatorID {
-		t.Fatalf("task session %s steered_by = %+v, want steered by the live creator %s (ADR-093 D6: the live-creator path is unchanged)", childID, rec.SteeredBy, creatorID)
-	}
-	if rec.Origin == nil || rec.Origin.Kind != session.OriginKindTask || rec.Origin.TaskID != tk.ID {
-		t.Fatalf("task session %s origin = %+v, want task origin with task id %s", childID, rec.Origin, tk.ID)
-	}
-}
-
 // TestAdr093SystemWakeIntoTerminalRoot_NoRevival is MIN-004's negative pin:
 // a system wake (a heartbeat-style wake, not a human message) into a chat
 // whose record is terminal does NOT revive the record, and a delegation

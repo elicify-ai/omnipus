@@ -33,8 +33,13 @@ func TestQADelegateResume_MissingLifecycleNamesRequestedSessionID(t *testing.T) 
 	if result == nil || !result.IsError {
 		t.Fatalf("resume of missing lifecycle %q returned %+v, want a caller-visible tool error", requestedID, result)
 	}
-	if !strings.Contains(result.ForLLM, "lifecycle record not found") {
-		t.Errorf("resume missing-record error = %q, want the specific lifecycle-record-not-found cause", result.ForLLM)
+	// NEW-10 (leak round): the caller-visible error is now fixed text, with the
+	// raw lifecycle cause kept server-side.
+	if !strings.Contains(result.ForLLM, "was not found") {
+		t.Errorf("resume missing-record error = %q, want the fixed not-found text", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "lifecycle record not found") {
+		t.Errorf("resume error leaked the raw lifecycle cause: %q", result.ForLLM)
 	}
 	// Exact tokens, not substrings: naming the correct longer id must NOT
 	// accidentally satisfy the assertion for a shortened/mistyped requested id.
