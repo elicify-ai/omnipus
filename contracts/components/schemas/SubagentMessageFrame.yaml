@@ -70,14 +70,16 @@ properties:
       - artifact
       - blocker
       - question
-      - decision_request
       - error
       - handback
       - steer
       - respond
       - goal_status
+      - not_delivered
     description: >
-      The underlying SessionMessage kind. `revision_entry` is excluded —
+      The underlying SessionMessage kind, or `not_delivered` (FR-013): a
+      server-authored line saying a child's report was refused at an inbox cap and
+      not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded —
       it rides its own existing plan-scoped frame family, not the
       span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this
       span-scoped frame for child-to-parent verdicts.
@@ -98,7 +100,7 @@ properties:
   correlation_id:
     type: string
     description: >
-      Present for `question`/`decision_request`/`steer`/`respond` — lets
+      Present for `question`/`steer`/`respond` — lets
       the SPA thread a live reply.
     example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"
   sender_identity:

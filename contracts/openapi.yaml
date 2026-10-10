@@ -2030,9 +2030,9 @@ components:
         The typed, schema-validated envelope carried over the existing
         pkg/bus MessageBus (no new transport) that derives every
         control/visibility surface of the session-control plane (ADR-053
-        S6/US-6). Discriminated by `kind` — 12 variants covering
+        S6/US-6). Discriminated by `kind` — 11 variants covering
         child->parent reporting (progress/checkpoint/artifact/blocker/
-        question/decision_request/error/handback), engine-emitted control
+        question/error/handback), engine-emitted control
         (revision_entry), session->UI propagation (goal_status), and
         parent->child control (steer/respond). `direction` is one of
         `child_to_parent | parent_to_child | session_to_ui | engine` — the
@@ -2049,7 +2049,6 @@ components:
         - $ref: '#/components/schemas/SessionMessageArtifact'
         - $ref: '#/components/schemas/SessionMessageBlocker'
         - $ref: '#/components/schemas/SessionMessageQuestion'
-        - $ref: '#/components/schemas/SessionMessageDecisionRequest'
         - $ref: '#/components/schemas/SessionMessageError'
         - $ref: '#/components/schemas/SessionMessageHandback'
         - $ref: '#/components/schemas/SessionMessageRevisionEntry'
@@ -2064,7 +2063,6 @@ components:
           artifact: '#/components/schemas/SessionMessageArtifact'
           blocker: '#/components/schemas/SessionMessageBlocker'
           question: '#/components/schemas/SessionMessageQuestion'
-          decision_request: '#/components/schemas/SessionMessageDecisionRequest'
           error: '#/components/schemas/SessionMessageError'
           handback: '#/components/schemas/SessionMessageHandback'
           revision_entry: '#/components/schemas/SessionMessageRevisionEntry'
@@ -2081,8 +2079,6 @@ components:
       $ref: ./components/schemas/SessionMessageBlocker.yaml
     SessionMessageQuestion:
       $ref: ./components/schemas/SessionMessageQuestion.yaml
-    SessionMessageDecisionRequest:
-      $ref: ./components/schemas/SessionMessageDecisionRequest.yaml
     SessionMessageError:
       $ref: ./components/schemas/SessionMessageError.yaml
     SessionMessageHandback:
@@ -2217,6 +2213,14 @@ components:
           type: string
           description: Opaque cursor to pass as since_cursor on the next drain.
           example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WF"
+        not_delivered:
+          $ref: '#/components/schemas/DelegateNotDeliveredSummary'
+          description: >
+            Present only when at least one report from this child was refused at an inbox
+            cap and not saved (FR-013). Absent when nothing was ever refused. Counts
+            only; refused content is never kept.
+    DelegateNotDeliveredSummary:
+      $ref: ./components/schemas/DelegateNotDeliveredSummary.yaml
     DelegateRespondResponse:
       $ref: ./components/schemas/DelegateRespondResponse.yaml
     DelegatePeekResponse:
@@ -2233,11 +2237,9 @@ components:
         shape, discriminated by `kind` (ADR-053 §5.1). A child uses this
         exactly ONE tool to push a typed message into its parent's inbox
         — `progress | checkpoint | artifact | blocker | question |
-        handback`. `decision_request`/`error`/`revision_entry`/
-        `goal_status`/`steer`/`respond` are SessionMessage kinds the
-        child tool does NOT expose (decision_request is reserved for
-        future use; the other four are engine/parent-only or session-
-        internal).
+        handback`. `error`/`revision_entry`/`goal_status`/`steer`/
+        `respond` are SessionMessage kinds the child tool does NOT expose
+        (they are engine/parent-only or session-internal).
       oneOf:
         - $ref: '#/components/schemas/MessageParentProgress'
         - $ref: '#/components/schemas/MessageParentCheckpoint'
