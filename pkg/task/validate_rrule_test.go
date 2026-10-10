@@ -43,23 +43,10 @@ func dtstartMsAt(t *testing.T, tz string, y int, mo time.Month, d, h, mi, s int)
 
 func TestValidateTrigger_RruleRequiredSiblings(t *testing.T) {
 	validRrule := "FREQ=DAILY"
-	validCron := "0 9 * * *"
 	dtstart := dtstartMsAt(t, "UTC", 2026, 1, 5, 9, 0, 0)
 	tz := "UTC"
 
-	t.Run("row2: both cron_expr and rrule present -> 400", func(t *testing.T) {
-		tr := &Trigger{Type: TriggerRecurring, Config: TriggerConfig{
-			CronExpr:  &validCron,
-			Rrule:     &validRrule,
-			DtstartMs: &dtstart,
-			Tz:        &tz,
-		}}
-		err := ValidateTrigger(tr)
-		require.Error(t, err, "cron_expr + rrule together must be rejected")
-		assert.True(t, errors.Is(err, ErrValidation))
-	})
-
-	t.Run("row3: neither cron_expr nor rrule -> 400", func(t *testing.T) {
+	t.Run("row3: no rrule -> 400", func(t *testing.T) {
 		tr := &Trigger{Type: TriggerRecurring, Config: TriggerConfig{}}
 		err := ValidateTrigger(tr)
 		require.Error(t, err, "recurring trigger with neither cron_expr nor rrule must be rejected")
@@ -122,19 +109,6 @@ func TestValidateTrigger_RruleRequiredSiblings(t *testing.T) {
 		}}
 		err := ValidateTrigger(tr)
 		require.Error(t, err, "rrule/dtstart_ms/tz keys must be rejected on a once trigger")
-		assert.True(t, errors.Is(err, ErrValidation))
-	})
-
-	t.Run("rrule/dtstart_ms/tz illegal on type=every", func(t *testing.T) {
-		everyMs := int64(60000)
-		tr := &Trigger{Type: TriggerEvery, Config: TriggerConfig{
-			EveryMs:   &everyMs,
-			Rrule:     &validRrule,
-			DtstartMs: &dtstart,
-			Tz:        &tz,
-		}}
-		err := ValidateTrigger(tr)
-		require.Error(t, err, "rrule/dtstart_ms/tz keys must be rejected on an every trigger")
 		assert.True(t, errors.Is(err, ErrValidation))
 	})
 
@@ -322,10 +296,4 @@ func TestValidateTrigger_RruleInputBounds(t *testing.T) {
 		require.NoError(t, err, "COUNT=100000 is exactly at the cap and must be accepted")
 	})
 
-	t.Run("row15: legacy cron_expr alone accepted unchanged", func(t *testing.T) {
-		cron := "0 9 * * MON"
-		tr := &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
-		err := ValidateTrigger(tr)
-		require.NoError(t, err, "legacy cron_expr-only trigger must continue to validate unchanged")
-	})
 }

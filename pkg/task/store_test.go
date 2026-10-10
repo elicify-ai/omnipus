@@ -613,17 +613,12 @@ func TestSubtaskListByParent(t *testing.T) {
 
 func TestTriggerValidation(t *testing.T) {
 	at := int64(1781000000000)
-	every := int64(3600000)
-	tooFast := int64(500)
-	cron := "0 9 * * MON"
 	rruleBody := "FREQ=WEEKLY;BYDAY=MO;COUNT=5"
 	rruleDtstart := time.Date(2026, 8, 3, 9, 0, 0, 0, time.UTC).UnixMilli()
 	rruleTz := "Europe/Berlin"
 	good := []*Trigger{
 		{Type: TriggerManual},
 		{Type: TriggerOnce, Config: TriggerConfig{AtMs: &at}},
-		{Type: TriggerEvery, Config: TriggerConfig{EveryMs: &every}},
-		{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
 		{Type: TriggerRecurring, Config: TriggerConfig{Rrule: &rruleBody, DtstartMs: &rruleDtstart, Tz: &rruleTz}},
 	}
 	for _, tr := range good {
@@ -633,10 +628,8 @@ func TestTriggerValidation(t *testing.T) {
 	}
 	bad := []*Trigger{
 		{Type: "bogus"},
-		{Type: TriggerOnce},  // missing at_ms
-		{Type: TriggerEvery}, // missing every_ms
-		{Type: TriggerEvery, Config: TriggerConfig{EveryMs: &tooFast}}, // below min
-		{Type: TriggerRecurring}, // missing cron
+		{Type: TriggerOnce},      // missing at_ms
+		{Type: TriggerRecurring}, // missing rrule
 	}
 	for _, tr := range bad {
 		if err := ValidateTrigger(tr); err == nil {
@@ -645,28 +638,10 @@ func TestTriggerValidation(t *testing.T) {
 	}
 }
 
-func TestTriggerPersisted(t *testing.T) {
-	s := newStore(t)
-	cron := "0 9 * * MON"
-	tk := mkTask("recurring", "ws")
-	tk.AgentID = "agent-1"
-	tk.Trigger = &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
-	if err := s.Create(tk); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := s.Get(tk.ID)
-	if got.Trigger == nil || got.Trigger.Type != TriggerRecurring {
-		t.Fatalf("trigger not persisted: %+v", got.Trigger)
-	}
-	if got.Trigger.Config.CronExpr == nil || *got.Trigger.Config.CronExpr != cron {
-		t.Fatalf("trigger config not persisted: %+v", got.Trigger.Config)
-	}
-}
-
-// TestTriggerPersisted_Rrule is TestTriggerPersisted's RRULE counterpart —
-// store_test.go's own Store.Create/Store.Get round trip only ever exercised
-// CronExpr; the rrule/dtstart_ms/tz trio (Calendar Recurrence Redesign) had
-// no isolated Store-level coverage independent of the gateway layer.
+// TestTriggerPersisted_Rrule is the Store.Create/Store.Get round trip for the
+// `recurring` trigger: the rrule/dtstart_ms/tz trio (Calendar Recurrence
+// Redesign). The legacy cron_expr form was deleted by every-del (spec
+// C-TIMING / DEL-19), so this is the surviving persisted shape.
 func TestTriggerPersisted_Rrule(t *testing.T) {
 	s := newStore(t)
 	rruleBody := "FREQ=WEEKLY;BYDAY=MO;COUNT=5"
@@ -702,27 +677,22 @@ func TestTriggerPersisted_Rrule(t *testing.T) {
 	if got.Trigger.Config.Tz == nil || *got.Trigger.Config.Tz != tz {
 		t.Fatalf("trigger config.tz not persisted: %+v", got.Trigger.Config)
 	}
-	// cron_expr must NOT have been silently populated alongside rrule.
-	if got.Trigger.Config.CronExpr != nil {
-		t.Fatalf("trigger config.cron_expr unexpectedly set: %+v", got.Trigger.Config)
-	}
 }
 
 // TestScheduledAgentAssignment covers validateScheduledAgentAssignment: an
-// auto-firing trigger (once/every/recurring) on an llm task fires with no
+// auto-firing trigger (once/recurring) on an llm task fires with no
 // human present, so it must carry an assigned agent — reject at Create AND
 // Update, on both packages' entry points (normalize/updateLocked). `manual`
 // (or no trigger) starts only when a human explicitly runs it, so an empty
 // AgentID there is a legitimate human-only task and must NOT be rejected.
 func TestScheduledAgentAssignment(t *testing.T) {
 	at := int64(1781000000000)
-	cron := "0 9 * * MON"
 
 	t.Run("create: once/recurring + llm + no agent is rejected", func(t *testing.T) {
 		s := newStore(t)
 		for _, tr := range []*Trigger{
 			{Type: TriggerOnce, Config: TriggerConfig{AtMs: &at}},
-			{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
+			rruleTrigger(),
 		} {
 			tk := mkTask("scheduled-no-agent", "ws")
 			tk.Trigger = tr
@@ -740,7 +710,7 @@ func TestScheduledAgentAssignment(t *testing.T) {
 		s := newStore(t)
 		for _, tr := range []*Trigger{
 			{Type: TriggerOnce, Config: TriggerConfig{AtMs: &at}},
-			{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
+			rruleTrigger(),
 		} {
 			tk := mkTask("scheduled-with-agent", "ws")
 			tk.AgentID = "agent-1"
@@ -771,7 +741,7 @@ func TestScheduledAgentAssignment(t *testing.T) {
 		if err := s.Create(tk); err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		tr := &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
+		tr := rruleTrigger()
 		_, err := s.Update(tk.ID, Patch{Trigger: &tr})
 		if err == nil {
 			t.Fatal("expected error arming a recurring trigger on an agentless task")
@@ -785,7 +755,7 @@ func TestScheduledAgentAssignment(t *testing.T) {
 		s := newStore(t)
 		tk := mkTask("scheduled", "ws")
 		tk.AgentID = "agent-1"
-		tk.Trigger = &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
+		tk.Trigger = rruleTrigger()
 		if err := s.Create(tk); err != nil {
 			t.Fatalf("create: %v", err)
 		}
@@ -810,12 +780,12 @@ func TestScheduledAgentAssignment(t *testing.T) {
 			t.Fatalf("create manual precursor: %v", err)
 		}
 		agentID := "agent-1"
-		everyTrigger := &Trigger{Type: TriggerEvery, Config: TriggerConfig{EveryMs: ptr(int64(60000))}}
+		everyTrigger := rruleTrigger()
 		got, err := s.Update(tk.ID, Patch{AgentID: &agentID, Trigger: &everyTrigger})
 		if err != nil {
 			t.Fatalf("assigning agent alongside the trigger should succeed: %v", err)
 		}
-		if got.AgentID != agentID || got.Trigger == nil || got.Trigger.Type != TriggerEvery {
+		if got.AgentID != agentID || got.Trigger == nil || got.Trigger.Type != TriggerRecurring {
 			t.Fatalf("update did not persist trigger+agent together: %+v", got)
 		}
 	})
