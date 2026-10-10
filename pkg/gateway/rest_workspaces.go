@@ -1305,7 +1305,7 @@ func (rw *restAPIHandleWorkspacePut) prepareDelegation(team []string) bool {
 		// authoritative), and the operator exclusion data still applies.
 		cfg := rw.a.agentLoop.GetConfig()
 		introduced := make([]string, 0, len(team))
-		existingMembers := workspace.TeamSet(rw.state.Workspace.CoreTeam, nil)
+		existingMembers := workspace.TeamSet(rw.ws.CoreTeam, nil)
 		for _, id := range team {
 			if !existingMembers[id] {
 				introduced = append(introduced, id)
