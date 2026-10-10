@@ -537,7 +537,7 @@ func (a *restAPI) handleKnowledgeInfo(w http.ResponseWriter, r *http.Request, wo
 		// Nothing to add; the SPA falls back to the folder's own name.
 	default:
 		setKnowledgeDetectionError(&info, gen.KnowledgeBaseInfoDetectionErrorCodeMarkerUnreadable,
-			fmt.Sprintf("cannot read the marker in %s: %v", rootPath, markerErr))
+			knowledgeUnreadableText(rootPath, "read the marker in", markerErr))
 	}
 
 	jsonOK(w, info)
