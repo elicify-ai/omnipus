@@ -97,3 +97,15 @@ func (d gatewayAddressDeps) PublishUserEntry(sessionID string, entry session.Tra
 	}
 	d.h.hubPublishAndDeliver(sessionID, string(generated.WsFrameTypeUserMessage), data)
 }
+
+// PublishSessionError shows an error frame to every tab bound to the session
+// (agent.sessionErrorPublisher): the visible half of the refusal of a default
+// send to a connector from a main, and of a refused return.
+func (d gatewayAddressDeps) PublishSessionError(sessionID, message string) {
+	sid := sessionID
+	d.h.hubPublishFrame(sessionID, string(generated.WsFrameTypeError), generated.ErrorFrame{
+		Type:      string(generated.WsFrameTypeError),
+		Message:   message,
+		SessionId: &sid,
+	}, nil)
+}

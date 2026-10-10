@@ -894,6 +894,19 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				continue
 			}
 
+			// U8 (FR-028): bound connector input flows into the pair's main
+			// with a captured request id before the worker scope is chosen.
+			if refusal, admitErr := al.admitBoundConnectorInput(&msg); refusal != "" || admitErr != nil {
+				if admitErr != nil {
+					logger.WarnCF("agent", "bound connector input refused",
+						map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID, "error": admitErr.Error()})
+				}
+				if refusal != "" {
+					al.refuseConnectorInput(runCtx, msg, refusal)
+				}
+				continue
+			}
+
 			scope, _, ok := al.resolveSteeringTarget(msg)
 			if !ok {
 				// Unroutable — fall through to the original single-shot path so
@@ -1719,7 +1732,10 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// alongside tool calls and assistant responses.
 	channelNeedsTranscript := pm.transcriptStore != nil &&
 		pm.msg.Channel != "webchat" && pm.msg.Channel != "system" &&
-		strings.TrimSpace(pm.msg.Content) != ""
+		strings.TrimSpace(pm.msg.Content) != "" &&
+		// Bound connector input was already written once by
+		// admitBoundConnectorInput (it set TranscriptEntryID).
+		pm.msg.TranscriptEntryID == ""
 	if channelNeedsTranscript {
 		entry := session.TranscriptEntry{
 			ID:        fmt.Sprintf("user-%d", time.Now().UnixNano()),

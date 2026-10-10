@@ -61,8 +61,10 @@ func TestReplyForm_RoutesWithActingAgentFromContextAndTrimmedID(t *testing.T) {
 	if *sent {
 		t.Fatal("a reply must not take the ordinary send path")
 	}
-	if tool.HasSentInRound() {
-		t.Fatal("a reply to another conversation must not suppress the turn's own automatic reply")
+	// N2 (architect U8-OPEN): an accepted reply IS this round's send, so the
+	// turn's plain closing text is not delivered a second time.
+	if !tool.HasSentInRound() {
+		t.Fatal("an accepted reply must mark the round as sent")
 	}
 }
 
@@ -171,5 +173,27 @@ func TestAddressedForms_RefusedInDelegatedSessions(t *testing.T) {
 	tool.SetSteerAudienceResolver(fixedAudience{a: steer.AudienceUser})
 	if res := tool.Execute(ctx, map[string]any{"content": "x", "agent_id": "ray"}); res.IsError {
 		t.Errorf("ordinary session refused: %s", res.ForLLM)
+	}
+}
+
+// N2: an accepted reply counts as the round's send, so a plain closing reply in
+// the same (unbound, per-chat) turn is not sent a second time.
+func TestReplyForm_AcceptedReplyMarksTheRoundSent(t *testing.T) {
+	tool, _, reply, _ := addrTool()
+	if tool.HasSentInRound() {
+		t.Fatal("precondition")
+	}
+	if res := tool.Execute(u8TurnCtx(), map[string]any{"content": "x", "reply_to": "q1"}); res.IsError {
+		t.Fatal(res.ForLLM)
+	}
+	if !tool.HasSentInRound() {
+		t.Fatal("an accepted reply must mark the round as sent")
+	}
+	tool2, _, reply2, _ := addrTool()
+	reply2.err = errors.New("refused")
+	_ = reply
+	tool2.Execute(u8TurnCtx(), map[string]any{"content": "x", "reply_to": "q1"})
+	if tool2.HasSentInRound() {
+		t.Fatal("a refused reply must not mark the round as sent")
 	}
 }

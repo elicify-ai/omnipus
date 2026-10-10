@@ -99,6 +99,9 @@ func (m *Manager) SetReturnRefusalObserver(o ReturnRefusalObserver) {
 	m.returnRefusalObserver.Store(&o)
 }
 
+// HasReturnRefusalObserver reports whether an observer is installed.
+func (m *Manager) HasReturnRefusalObserver() bool { return m.returnRefusalObserver.Load() != nil }
+
 // liveConfig is the lock-free current config. Workers MUST use this, never
 // configSnapshot: Reload holds m.mu for writing while it waits for workers to
 // exit, so a worker taking the read lock would deadlock it.

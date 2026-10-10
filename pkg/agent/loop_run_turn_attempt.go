@@ -59,7 +59,8 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 		}
 	}
 	// Use streaming if the provider supports it and we have a streamer for this channel.
-	if sp, ok := p.(providers.StreamingProvider); ok && rt.al.bus != nil {
+	// U8 (FR-028): never stream to a connector from a main - which sender would it be?
+	if sp, ok := p.(providers.StreamingProvider); ok && rt.al.bus != nil && !rt.al.mainConnectorTurn(rt.ts.channel, rt.ts.transcriptSessionID) {
 		logger.DebugCF("agent", "Provider supports streaming, checking for streamer", map[string]any{"channel": rt.ts.channel, "chat_id": rt.ts.chatID})
 		if streamer, hasStreamer := rt.al.bus.GetStreamer(ctx, rt.ts.channel, rt.ts.chatID, rt.ts.transcriptSessionID); hasStreamer {
 			logger.InfoCF("agent", "Using streaming for response", map[string]any{"channel": rt.ts.channel, "chat_id": rt.ts.chatID})

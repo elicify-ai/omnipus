@@ -165,6 +165,10 @@ func (t *MessageTool) executeReplyForm(ctx context.Context, content, replyTo str
 	if err != nil {
 		return &ToolResult{ForLLM: fmt.Sprintf("reply refused, nothing was sent: %v", err), IsError: true, Err: err}
 	}
+	// N2: an accepted reply counts as this round's send, so a plain closing
+	// reply of the same turn is not ALSO sent to the unbound chat's default
+	// destination (the unbound per-chat turn would otherwise answer twice).
+	t.sentInRound.Store(true)
 	return &ToolResult{ForLLM: fmt.Sprintf("Reply to %s accepted for sending (%s)", replyTo, receipt.Destination), Silent: true}
 }
 
