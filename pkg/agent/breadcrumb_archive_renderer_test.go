@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"slices"
@@ -85,7 +86,7 @@ func TestArchiveBreadcrumbEntriesRenderNewestFirst(t *testing.T) {
 		archiveGapToolMsg("bc-ord-call-4", "order literal payload four"),
 		archiveGapAssistantMsg("assistant literal reply five"),
 	}
-	crumb := buildArchiveBreadcrumb(archive, len(archive))
+	crumb := crumbOf(t, archive, len(archive))
 	if want := "archive_range={from:0,to:5}"; !strings.Contains(crumb, want) {
 		t.Fatalf("header must address the whole evicted prefix 0..5: want %q in %q", want, crumb)
 	}
@@ -110,8 +111,7 @@ func TestBreadcrumbForWindowRendersStagedSkipNotSnapshotSkip(t *testing.T) {
 			archiveGapToolMsg(fmt.Sprintf("bc-m07-call-%d", i), fmt.Sprintf("m07 literal payload %d", i)))
 	}
 	// The checkpoint staged Skip=6 while its snapshot still carries Skip=2.
-	snap := memory.WindowSnapshot{State: memory.WindowState{Skip: 2}, Archive: archive}
-	crumb := breadcrumbForWindow(snap, 6)
+	crumb := crumbOf(t, archive, 6) // staged Skip, independent of any snapshot Skip
 	if want := "archive_range={from:0,to:5}"; !strings.Contains(crumb, want) {
 		t.Fatalf("staged Skip=6 must address evicted lines 0..5, not the snapshot Skip: want %q in %q", want, crumb)
 	}
@@ -163,7 +163,7 @@ func TestArchiveBreadcrumbCapPressureRetainsNewestEntriesAndCountsOmitted(t *tes
 	if kept < 2 || kept >= entries {
 		t.Fatalf("fixture must exercise cap pressure (some entries retained, some omitted): kept=%d perEntry=%d budget=%d", kept, perEntry, budget)
 	}
-	crumb := buildArchiveBreadcrumb(archive, total)
+	crumb := crumbOf(t, archive, total)
 	if want := fmt.Sprintf("archive_range={from:0,to:%d}", total-1); !strings.Contains(crumb, want) {
 		t.Fatalf("cap pressure must not hide the real evicted range: want %q in %q", want, crumb)
 	}
@@ -200,7 +200,7 @@ func TestArchiveBreadcrumbCapPressureStaysWithinFrozenBaselineCap(t *testing.T) 
 	for i := 0; i < entries; i++ {
 		archive = append(archive, archiveGapToolMsg(fmt.Sprintf("bc-cap-call-%02d", i), snippet))
 	}
-	crumb := buildArchiveBreadcrumb(archive, entries)
+	crumb := crumbOf(t, archive, entries)
 	// The frozen bound itself: 1000 tokens x 4 chars/token at baseline
 	// 0a750f3c2 (ADR-066 MAJ-CW-003, "within the existing breadcrumb cap").
 	// Deliberately not breadcrumbTokenCap*breadcrumbCharsPerToken — the point
@@ -226,11 +226,21 @@ func TestArchiveBreadcrumbCapPressureStaysWithinFrozenBaselineCap(t *testing.T) 
 // be a real evicted prefix).
 func TestArchiveBreadcrumbZeroSkipRendersNothing(t *testing.T) {
 	archive := []memory.ArchivedMessage{archiveGapToolMsg("bc-zero-call-0", "unused literal payload")}
-	if crumb := buildArchiveBreadcrumb(archive, 0); crumb != "" {
+	if crumb := crumbOf(t, archive, 0); crumb != "" {
 		t.Fatalf("skip=0 evicts nothing, so no breadcrumb prefix may be fabricated: %q", crumb)
 	}
-	snap := memory.WindowSnapshot{State: memory.WindowState{Skip: 0}, Archive: archive}
-	if crumb := breadcrumbForWindow(snap, 0); crumb != "" {
+	if crumb := crumbOf(t, archive, 0); crumb != "" {
 		t.Fatalf("staged skip=0 evicts nothing, so no breadcrumb prefix may be fabricated: %q", crumb)
 	}
+}
+
+// crumbOf renders the breadcrumb for a dense archive prefix through the indexed
+// slot reader (the renderer no longer takes a lifetime slice).
+func crumbOf(t *testing.T, archive []memory.ArchivedMessage, skip int) string {
+	t.Helper()
+	crumb, err := buildArchiveBreadcrumb(context.Background(), denseArchive(archive), skip)
+	if err != nil {
+		t.Fatalf("buildArchiveBreadcrumb: %v", err)
+	}
+	return crumb
 }

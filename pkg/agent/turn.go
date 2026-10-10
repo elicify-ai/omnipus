@@ -223,6 +223,12 @@ type turnState struct {
 	windowError    error
 	windowControls []providers.Message
 	windowNotice   contextReliefNotice
+	// callIssuers maps each tool call id this turn issued to the exact archive
+	// address of the assistant record that declared it, as returned by that
+	// record's own checked append (session-core U2 Decision B: identity is the
+	// call occurrence, not tool_call_id alone). A tool result names its issuer
+	// from here — never from a lookup by id. Guarded by mu.
+	callIssuers map[string]session.ArchiveAddress
 	// emptiedTranscriptPrev holds, for every transcript tool_call record the
 	// D5 pass rewrote during this turn (content_state emptied + projected
 	// result), the record's PREVIOUS state — so an abort can put the
@@ -869,12 +875,12 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 			if !ok {
 				ts.windowError = fmt.Errorf("context checkpoint: session store does not support atomic context checkpoints")
 			} else {
-				snap, err := store.SnapshotWindow(context.Background(), opts.SessionKey)
+				snap, err := store.WindowView(context.Background(), opts.SessionKey)
 				ts.windowError = err
 				if err == nil {
 					start := snap.State.Clone()
 					ts.initialWindow = &start
-					history, _ := memory.WindowHistory(snap)
+					history, _ := snap.History()
 					ts.initialHistoryLength = len(history)
 					ts.initialEmptiedSet = start.Projection.Entries.Clone()
 				}

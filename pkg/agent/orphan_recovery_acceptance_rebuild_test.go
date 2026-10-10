@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func orphanACTestRebuild(t *testing.T) {
@@ -67,7 +68,7 @@ func orphanACReload(t *testing.T) {
 	orphanACReopen(t, h)
 	wantLines := []int{0, 4, 5, 6, 7, 8}
 	out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, wantLines...))
-	require.Equal(t, []int{-1, 0, 4, 5, 6, 7, 8}, mapWindowMessages(orphanACSnapshot(t, h), out, -1, 0), "R2: reloaded view uses the original decoded archive addresses")
+	require.Equal(t, []int{-1, 0, 4, 5, 6, 7, 8}, mapWindowMessages(session.WindowViewFromSnapshot(orphanACSnapshot(t, h)), out, -1, 0), "R2: reloaded view uses the original decoded archive addresses")
 	require.NoError(t, validateWindowGroups(out), "only complete surviving groups reach validation")
 	orphanACAssertUnchanged(t, h, before, bytes)
 }
@@ -93,7 +94,7 @@ func orphanACLaterTurn(t *testing.T) {
 	out := orphanACAssemble(t, h, h.turn(""), h.agent.Sessions.GetHistory(h.key))
 	assert.Equal(t, want, out[1:], "R3: later assembly neither resurrects the old orphan nor erases a genuinely live incomplete group")
 	candidate := append([]providers.Message{{Role: "system", Content: "independent pinned envelope"}}, want...)
-	require.Equal(t, []int{-1, 0, 3, 4, 5, 6, 7}, mapWindowMessages(before, candidate, -1, 0), "R3: every later archived slot has its own original address, including in-flight declarations")
+	require.Equal(t, []int{-1, 0, 3, 4, 5, 6, 7}, mapWindowMessages(session.WindowViewFromSnapshot(before), candidate, -1, 0), "R3: every later archived slot has its own original address, including in-flight declarations")
 	orphanACAssertRejectedBeforeSend(t, h, h.turn(""), candidate, "context request: incomplete or invalid tool-result group at message 6")
 	orphanACAssertUnchanged(t, h, before, bytes)
 }
@@ -128,7 +129,7 @@ func orphanACTrimPrefix(t *testing.T) {
 	require.Equal(t, bytes, orphanACArchiveBytes(t, h), "forced trim does not rewrite the archive")
 	orphanACReopen(t, h)
 	out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, 3, 4, 5, 6, 7, 8, 9))
-	require.Equal(t, []int{-1, 3, 4, 5, 6, 7, 8, 9}, mapWindowMessages(orphanACSnapshot(t, h), out, -1, 0), "cut and reload preserve exact original addresses")
+	require.Equal(t, []int{-1, 3, 4, 5, 6, 7, 8, 9}, mapWindowMessages(session.WindowViewFromSnapshot(orphanACSnapshot(t, h)), out, -1, 0), "cut and reload preserve exact original addresses")
 }
 
 func orphanACTrimSuffix(t *testing.T) {
@@ -160,5 +161,5 @@ func orphanACTrimSuffix(t *testing.T) {
 	require.Equal(t, bytes, orphanACArchiveBytes(t, h))
 	orphanACReopen(t, h)
 	out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, 2, 5, 6, 7, 8))
-	require.Equal(t, []int{-1, 2, 5, 6, 7, 8}, mapWindowMessages(orphanACSnapshot(t, h), out, -1, 0), "R4b: retained raw canceled slots never poison subsequent alignment")
+	require.Equal(t, []int{-1, 2, 5, 6, 7, 8}, mapWindowMessages(session.WindowViewFromSnapshot(orphanACSnapshot(t, h)), out, -1, 0), "R4b: retained raw canceled slots never poison subsequent alignment")
 }

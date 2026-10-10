@@ -15,7 +15,8 @@ import (
 // turn bookkeeping changes until the metadata transaction succeeds.
 type windowCheckpoint struct {
 	ts                  *turnState
-	snapshot            memory.WindowSnapshot
+	snapshot            session.WindowView
+	slots               slotsBefore
 	state               memory.WindowState
 	messages            []providers.Message
 	lines               []int
@@ -52,15 +53,17 @@ func newWindowCheckpoint(ctx context.Context, ts *turnState, msgs []providers.Me
 	if !ok {
 		return nil, nil, fmt.Errorf("context checkpoint: session store does not support atomic context checkpoints")
 	}
-	snap, err := store.SnapshotWindow(ctx, ts.sessionKey)
+	snap, err := store.WindowView(ctx, ts.sessionKey)
 	if err != nil {
 		return nil, nil, err
 	}
-	p := &windowCheckpoint{ts: ts, snapshot: snap, state: snap.State.Clone(), policy: capPolicyFor(cs, agentContextBudget(ts.agent)), anchor: -1}
+	p := &windowCheckpoint{ts: ts, snapshot: snap, slots: storeSlots{store: store, key: ts.sessionKey}, state: snap.State.Clone(), policy: capPolicyFor(cs, agentContextBudget(ts.agent)), anchor: -1}
 	ts.mu.RLock()
 	p.notice = ts.windowNotice.clone()
 	ts.mu.RUnlock()
-	p.breadcrumb = breadcrumbForWindow(snap, snap.State.Skip)
+	if p.breadcrumb, err = breadcrumbForWindow(ctx, p.slots, snap.State.Skip); err != nil {
+		return nil, nil, err
+	}
 	p.recallAt, p.recallLen = recallBlockPosition(ts, msgs)
 	p.lines = mapWindowMessages(snap, msgs, p.recallAt, p.recallLen)
 	p.messages, err = projectMessagesChecked(msgs, func(i int) int { return p.lines[i] }, p.state.Projection.Entries, p.projectionContext())
@@ -81,8 +84,11 @@ func newWindowCheckpoint(ctx context.Context, ts *turnState, msgs []providers.Me
 }
 
 func (p *windowCheckpoint) projectionContext() projectionContext {
-	return projectionContext{policy: p.policy, archive: p.snapshot.Archive, sourceRunes: p.state.Projection.SourceRunes}
+	return projectionContext{policy: p.policy, archive: p.archive(), sourceRunes: p.state.Projection.SourceRunes}
 }
+
+// archive serves the staged window's retained slots to projection and turn numbering.
+func (p *windowCheckpoint) archive() windowArchive { return viewArchive{view: p.snapshot} }
 
 func (p *windowCheckpoint) dropRecall() bool {
 	if p.recallLen == 0 {
@@ -209,7 +215,9 @@ func (al *AgentLoop) checkpointWindow(ctx context.Context, ts *turnState, messag
 			break // Immutable residue is sent; never a local size-only failure.
 		}
 		progress = true
-		p.rebuildBreadcrumb()
+		if err := p.rebuildBreadcrumb(ctx); err != nil {
+			return messages, false, err
+		}
 		p.refreshNotice()
 	}
 	if !progress {

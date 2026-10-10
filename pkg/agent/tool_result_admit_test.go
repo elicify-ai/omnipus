@@ -951,7 +951,7 @@ func TestChokePoint_IncidentResult_FullInArchiveCappedOnReload(t *testing.T) {
 	skip := len(archive) - len(history)
 	projected := projectMessages(history, func(i int) int { return skip + i }, pm.Entries, projectionContext{
 		policy:  capPolicyFor(al.GetConfig().Context, agentContextBudget(ts.agent)),
-		archive: archive,
+		archive: denseArchive(archive),
 	})
 	assert.Equal(t, admitted.Message.Content, projected[2].Content, "reload renders the capped form byte-identical (B-12)")
 	assert.Equal(t, content, history[2].Content, "projection never mutates its input")
@@ -1154,7 +1154,7 @@ func TestChokePoint_FailureSurfaceCapSurvivesReload(t *testing.T) {
 	lineOf := archiveLineResolver(archive, reloadMsgs)
 	projected := projectMessages(reloadMsgs, lineOf, set, projectionContext{
 		policy:  capPolicyFor(config.DefaultContextSettings(), agentContextBudget(ts.agent)),
-		archive: archive,
+		archive: denseArchive(archive),
 	})
 
 	assert.Equal(t, liveBytes, projected[admitted.ArchiveLine].Content,

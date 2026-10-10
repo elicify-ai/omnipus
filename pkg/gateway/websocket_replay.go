@@ -367,27 +367,10 @@ func sendConnGenFrameDirect(wc *wsConn, frame any) {
 	wc.direct(data)
 }
 
-// resumeLiveSession is A8: hydrate the agent's history and re-emit goal
-// status for the attached session.
+// resumeLiveSession is A8: re-emit goal status for the attached session. The
+// model window is the addressed archive itself (session-core U2 DEL-12), so
+// nothing is rebuilt from the transcript on attach.
 func (wh *wsHandlerHandleAttachSession) resumeLiveSession() {
-	// Hydrate the per-agent session.SessionStore from the transcript so the
-	// next LLM turn sees the prior conversation. ADR-066 D5.5 (FR-045): only
-	// an EMPTY agent archive is hydrated — an archive with ≥ 1 line is the
-	// live record of the session.
-	if wh.h.agentLoop.AgentArchiveNonEmpty(wh.attachID) {
-		logsafeDebug("ws: attach_session: agent archive non-empty; hydration skipped",
-			"session_id", wh.attachID)
-	} else if err := wh.h.agentLoop.HydrateAgentHistoryFromTranscript(wh.attachID); err != nil {
-		logsafeWarn("ws: attach_session: hydrate agent history failed",
-			"session_id", wh.attachID, "error", err)
-		sidCopy := wh.attachID
-		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:      string(generated.WsFrameTypeError),
-			SessionId: &sidCopy,
-			Message:   "could not restore conversation context — agent may not remember earlier turns",
-		})
-	}
-
 	// Item 14 (review-round-1, ADR-088): goal_status is a pure live push —
 	// never a replayable transcript entry — so re-emit it for the attached
 	// session; this connection is already bound and receives it like any

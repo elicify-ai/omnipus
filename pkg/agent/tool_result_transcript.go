@@ -17,26 +17,26 @@ var ErrNoWindowProjection = errors.New("window projection: nothing to record for
 
 // resultTranscriptSnapshot validates the admitted archive address before writing
 // its transcript record. This also gives the metadata compare-and-commit base.
-func (ts *turnState) resultTranscriptSnapshot(tc session.ToolCall, line int) (session.ContextWindowStore, memory.WindowSnapshot, error) {
+func (ts *turnState) resultTranscriptSnapshot(tc session.ToolCall, line int) (session.ContextWindowStore, session.WindowView, error) {
 	store, ok := ts.agent.Sessions.(session.ContextWindowStore)
 	if !ok {
-		return nil, memory.WindowSnapshot{}, fmt.Errorf("context transcript: session store does not support atomic context checkpoints")
+		return nil, session.WindowView{}, fmt.Errorf("context transcript: session store does not support atomic context checkpoints")
 	}
-	snap, err := store.SnapshotWindow(context.Background(), ts.sessionKey)
+	snap, err := store.WindowView(context.Background(), ts.sessionKey)
 	if err != nil {
 		return nil, snap, err
 	}
-	if line < snap.State.Skip || line >= len(snap.Archive) {
+	m, ok := snap.Slot(line)
+	if line < snap.State.Skip || !ok {
 		return nil, snap, fmt.Errorf("context transcript: archive line %d is outside the retained window", line)
 	}
-	m := snap.Archive[line]
-	if m.Role != "tool" || m.ToolCallID != string(tc.ID) {
+	if m.Message.Role != "tool" || m.Message.ToolCallID != string(tc.ID) {
 		return nil, snap, fmt.Errorf("context transcript: archive line %d does not address tool call %q", line, tc.ID)
 	}
 	return store, snap, nil
 }
 
-func (ts *turnState) persistResultTranscriptLine(store session.ContextWindowStore, snap memory.WindowSnapshot, tc session.ToolCall, archiveLine, transcriptLine int) error {
+func (ts *turnState) persistResultTranscriptLine(store session.ContextWindowStore, snap session.WindowView, tc session.ToolCall, archiveLine, transcriptLine int) error {
 	after := snap.State.Clone()
 	key := memory.ProjectionKey{ToolCallID: string(tc.ID), ArchiveLine: archiveLine}
 	after.Projection.TranscriptLine[key] = transcriptLine
@@ -65,8 +65,9 @@ func (ex *agentLoopRunTurnToolsExecute) recordedProjection() (*windowProjectionC
 	}
 	key := memory.ProjectionKey{ToolCallID: ex.toolCallID, ArchiveLine: ex.admitted.ArchiveLine}
 	state := publicProjectionState(ex.admitted.Projection)
+	source, _ := snap.Slot(key.ArchiveLine) // resultTranscriptSnapshot proved the slot is loaded
 	mark, err := buildRecallMark(string(state), ex.toolName, key.ToolCallID, key.ArchiveLine,
-		snap.Archive[key.ArchiveLine].Content, turnNumberForArchiveLine(snap.Archive, key.ArchiveLine))
+		source.Message.Content, turnNumberForArchiveLine(viewArchive{view: snap}, key.ArchiveLine))
 	if err != nil {
 		return nil, err
 	}

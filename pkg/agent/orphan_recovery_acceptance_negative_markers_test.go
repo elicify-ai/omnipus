@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func orphanACTestNegatives(t *testing.T) {
@@ -30,7 +31,7 @@ func orphanACAssertUnsupported(t *testing.T, raw []providers.Message, wantErr st
 	for i := range raw {
 		lines = append(lines, i)
 	}
-	require.Equal(t, lines, mapWindowMessages(before, out, -1, 0), "unsupported records cannot remove, reindex or de-identify any archived entry")
+	require.Equal(t, lines, mapWindowMessages(session.WindowViewFromSnapshot(before), out, -1, 0), "unsupported records cannot remove, reindex or de-identify any archived entry")
 	orphanACAssertRejectedBeforeSend(t, h, ts, out, wantErr)
 	orphanACAssertUnchanged(t, h, before, bytes)
 }
@@ -124,7 +125,7 @@ func orphanACBoundaryNegatives(t *testing.T) {
 		before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
 		ts := h.turn("")
 		out := orphanACAssertView(t, h, ts, orphanACPick(raw, 0, 1, 4))
-		require.Equal(t, []int{-1, 0, 1, 4}, mapWindowMessages(before, out, -1, 0))
+		require.Equal(t, []int{-1, 0, 1, 4}, mapWindowMessages(session.WindowViewFromSnapshot(before), out, -1, 0))
 		orphanACAssertRejectedBeforeSend(t, h, ts, out, "context request: incomplete or invalid tool-result group at message 2")
 		orphanACAssertUnchanged(t, h, before, bytes)
 	})

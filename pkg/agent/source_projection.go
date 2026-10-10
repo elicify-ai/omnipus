@@ -3,17 +3,16 @@ package agent
 import (
 	"fmt"
 	"unicode/utf8"
-
-	"github.com/elicify-ai/omnipus/pkg/memory"
 )
 
 // projectSource keeps literal source runes around a complete addressed mark.
 // The mark is not source and is never shortened or used for a later cut.
-func projectSource(archive []memory.ArchivedMessage, line, kept int, tool, id string) (string, error) {
-	if line < 0 || line >= len(archive) || archive[line].Role != "tool" || archive[line].ToolCallID != id {
+func projectSource(archive windowArchive, line, kept int, tool, id string) (string, error) {
+	src, ok := archive.message(line)
+	if line < 0 || !ok || src.Role != "tool" || src.ToolCallID != id {
 		return "", fmt.Errorf("context checkpoint: tool result %q has no archive identity", id)
 	}
-	full := archive[line].Content
+	full := src.Content
 	n := utf8.RuneCountInString(full)
 	if kept < 0 || kept > n {
 		return "", fmt.Errorf("context checkpoint: invalid source limit %d/%d", kept, n)

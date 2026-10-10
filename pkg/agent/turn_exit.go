@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -157,11 +156,11 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	// the aborted bytes (FR-006), so the invariant to verify is the MODEL VIEW:
 	// the window a provider request is built from must hold exactly the
 	// messages visible at turn start, with the aborted span excluded.
-	snap, err := store.SnapshotWindow(context.Background(), ts.sessionKey)
+	snap, err := store.WindowView(context.Background(), ts.sessionKey)
 	if err != nil {
 		return fmt.Errorf("context rollback: verify window after rollback: %w", err)
 	}
-	window, _ := memory.WindowHistory(snap)
+	window, _ := snap.History()
 	if len(window) != ts.initialHistoryLength {
 		return fmt.Errorf("context rollback: window holds %d messages after rollback, expected %d", len(window), ts.initialHistoryLength)
 	}

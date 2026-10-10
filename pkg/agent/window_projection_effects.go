@@ -37,8 +37,12 @@ func (p *windowCheckpoint) projectionChanges() ([]windowProjectionChange, error)
 		}
 		tool, _ := owningToolCall(p.messages, i, key.ToolCallID)
 		public := publicProjectionState(state)
+		source, ok := p.archive().message(key.ArchiveLine)
+		if !ok {
+			return nil, fmt.Errorf("context checkpoint: tool result %q at archive line %d is not in the window", key.ToolCallID, key.ArchiveLine)
+		}
 		mark, err := buildRecallMark(string(public), tool, key.ToolCallID, key.ArchiveLine,
-			p.snapshot.Archive[key.ArchiveLine].Content, turnNumberForArchiveLine(p.snapshot.Archive, key.ArchiveLine))
+			source.Content, turnNumberForArchiveLine(p.archive(), key.ArchiveLine))
 		if err != nil {
 			return nil, err
 		}

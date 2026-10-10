@@ -36,7 +36,7 @@ func TestAppendWindowMessage_PropagatesStoreError_NotSwallowed(t *testing.T) {
 	cancel()
 	ts.ctx = canceledCtx
 
-	err := ts.appendWindowMessage(providers.Message{Role: "user", Content: "hello"})
+	_, err := ts.appendWindowMessage(providers.Message{Role: "user", Content: "hello"}, windowProducerUser)
 	require.Error(t, err, "appendWindowMessage must propagate the underlying store error, not swallow it "+
 		"and proceed as if the append succeeded")
 	require.ErrorIs(t, err, context.Canceled,

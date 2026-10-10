@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func orphanACTestBindings(t *testing.T) {
@@ -52,7 +53,7 @@ func orphanACParallel(t *testing.T) {
 			h.append(t, raw...)
 			before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
 			out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, tc.lines...))
-			require.Equal(t, append([]int{-1}, tc.lines...), mapWindowMessages(before, out, -1, 0), "P1: parallel exclusions never broaden to completed groups or control addresses")
+			require.Equal(t, append([]int{-1}, tc.lines...), mapWindowMessages(session.WindowViewFromSnapshot(before), out, -1, 0), "P1: parallel exclusions never broaden to completed groups or control addresses")
 			require.NoError(t, validateWindowGroups(out), "completed groups retain all their declared/result identities, independent of parallel completion order")
 			orphanACAssertUnchanged(t, h, before, bytes)
 		})
@@ -96,7 +97,7 @@ func orphanACReusedIDs(t *testing.T) {
 			out := orphanACAssemble(t, h, h.turn(""), h.agent.Sessions.GetHistory(h.key))
 			assert.Equal(t, want, out[1:], "I1: call_0 cancellation is positional, never a session-global deny set")
 			candidate := append([]providers.Message{{Role: "system", Content: "independent pinned envelope"}}, want...)
-			require.Equal(t, append([]int{-1}, lines...), mapWindowMessages(before, candidate, -1, 0), "each surviving reused ID stays attached to its original occurrence")
+			require.Equal(t, append([]int{-1}, lines...), mapWindowMessages(session.WindowViewFromSnapshot(before), candidate, -1, 0), "each surviving reused ID stays attached to its original occurrence")
 			if complete {
 				require.NoError(t, validateWindowGroups(candidate), "earlier result and marker cannot invalidate later complete reuse")
 			} else {

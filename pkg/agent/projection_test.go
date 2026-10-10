@@ -44,7 +44,7 @@ func TestProjection_PureFunction(t *testing.T) {
 	lineOf := func(i int) int { return i }
 	pc := projectionContext{
 		policy:  capPolicyFor(config.DefaultContextSettings(), 400_000),
-		archive: archive,
+		archive: denseArchive(archive),
 	}
 
 	t.Run("empty set is the identity", func(t *testing.T) {
@@ -101,7 +101,7 @@ func TestProjection_PureFunction(t *testing.T) {
 		// (buildRecallMark with identical state/tool/id/line/content/turn —
 		// projection_checked.go::retainedSourceRunes, source_projection.go).
 		live := append([]providers.Message(nil), history...)
-		mark, err := buildRecallMark("emptied", "read_file", "c1", 2, big, turnNumberForArchiveLine(archive, 2))
+		mark, err := buildRecallMark("emptied", "read_file", "c1", 2, big, turnNumberForArchiveLine(denseArchive(archive), 2))
 		require.NoError(t, err)
 		live[2].Content = mark
 		set := memory.ProjectionSet{{ToolCallID: "c1", ArchiveLine: 2}: memory.ProjectionEmptied}
@@ -116,7 +116,7 @@ func TestProjection_PureFunction(t *testing.T) {
 	})
 
 	t.Run("parallel calls use the /N cap on reload exactly as live", func(t *testing.T) {
-		smallBudget := projectionContext{policy: capPolicyFor(config.DefaultContextSettings(), 3_000), archive: archive}
+		smallBudget := projectionContext{policy: capPolicyFor(config.DefaultContextSettings(), 3_000), archive: denseArchive(archive)}
 		set := memory.ProjectionSet{{ToolCallID: "c3", ArchiveLine: 6}: memory.ProjectionCapped}
 		out := projectMessages(history, lineOf, set, smallBudget)
 		// Two parallel bash calls on B = 3,000: effective 3,750; 2 × 3,750 × 0.4 = 3,000 is not > B → 3,750.

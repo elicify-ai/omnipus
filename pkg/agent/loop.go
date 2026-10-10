@@ -25,6 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
@@ -1763,55 +1764,6 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		pm.al.resetIdleTicker(pm.transcriptSessionID)
 		// FR-024: track current session per agent for lazy CAS on switch.
 		pm.al.agentCurrentSession.Store(agent.ID, pm.transcriptSessionID)
-
-		// Self-heal: rebuild the agent's per-session history from the shared
-		// transcript when the in-memory copy is missing or stale. We rehydrate
-		// not only when the bucket is empty (handoff, fresh process, etc.) but
-		// also when the bucket has *no* assistant/tool entries while the
-		// transcript carries tool_calls owned by this agent — the symptom of
-		// the prior wsStreamer bug that wrote assistant text with empty AgentID
-		// and left the per-agent bucket stuck on user messages only. Without
-		// this stronger trigger, an old session keeps starting from scratch
-		// every turn because GetHistory returns the broken cached state and
-		// the empty-only check above is satisfied.
-		if agent.Sessions != nil {
-			cur := agent.Sessions.GetHistory(pm.sessionKey)
-			needsHydrate := len(cur) == 0
-			if !needsHydrate && pm.transcriptStore != nil {
-				hasAssistantOrTool := false
-				for _, m := range cur {
-					if m.Role == "assistant" || m.Role == "tool" {
-						hasAssistantOrTool = true
-						break
-					}
-				}
-				if !hasAssistantOrTool {
-					if entries, err := pm.transcriptStore.ReadTranscript(pm.transcriptSessionID); err == nil {
-						for i := range entries {
-							e := &entries[i]
-							if (e.AgentID == agent.ID || e.AgentID == "") &&
-								(e.Type == session.EntryTypeToolCall || e.Role == "assistant") {
-								needsHydrate = true
-								break
-							}
-						}
-					}
-				}
-			}
-			// ADR-066 D5.5 (FR-045): this emptiness condition is unchanged;
-			// hydration itself now refuses to touch an agent archive that
-			// already has lines, so a window that is empty only because Skip
-			// reached the end of a non-empty archive is never rebuilt.
-			if needsHydrate {
-				if err := pm.al.hydrateAgentHistory(pm.transcriptSessionID, pm.msg.TranscriptEntryID); err != nil {
-					logger.WarnCF("agent", "self-heal hydrate failed", map[string]any{
-						"agent_id":   agent.ID,
-						"session_id": pm.transcriptSessionID,
-						"error":      err.Error(),
-					})
-				}
-			}
-		}
 	}
 
 	// context-dependent commands check their own Runtime fields and report
@@ -2687,23 +2639,27 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 }
 
 // clearSessionWindow is /clear's window move (clearConversation): it empties
-// the live window while preserving the archive.
-//
-// It clears with the Skip-advancing primitive, NOT SetHistory. ADR-066 FR-047
-// narrowed SetHistory to a first-fill primitive — an archive-backed store
-// REFUSES it once the archive holds >= 1 line (memory.ErrArchiveNotEmpty) —
-// and because SessionWriter.SetHistory is fire-and-forget the refusal is
-// swallowed into a slog.Error. /clear therefore answered "Chat history
-// cleared!" on CLI and every channel while clearing nothing at all, and the
-// next message was answered with the whole prior conversation still in the
-// window.
-//
-// TruncateHistory(key, 0) sets Skip = Count: the live window is empty, the
-// JSONL archive is untouched (recall by tool_call_id still resolves), and the
-// projection entries below the new Skip are pruned in the same meta write.
+// the live window while preserving the archive. One compare-and-set metadata
+// commit moves Skip to Count, drops the pinned anchor and prunes the projection
+// rows that addressed the now-evicted slots; no archive byte is touched, so
+// recall by tool_call_id and the [capped]/[emptied] marks keep resolving.
 func clearSessionWindow(sessions session.SessionStore, sessionKey string) error {
-	sessions.TruncateHistory(sessionKey, 0)
-	return sessions.Save(sessionKey)
+	store, ok := sessions.(session.ContextWindowStore)
+	if !ok {
+		return fmt.Errorf("session store does not support atomic context checkpoints")
+	}
+	ctx := context.Background()
+	view, err := store.WindowView(ctx, sessionKey)
+	if err != nil {
+		return fmt.Errorf("read window: %w", err)
+	}
+	after := view.State.Clone()
+	after.Skip = after.Count
+	after.AnchorLine = nil
+	after.Projection.Entries = memory.ProjectionSet{}
+	after.Projection.SourceRunes = map[memory.ProjectionKey]int{}
+	after.Projection.TranscriptLine = map[memory.ProjectionKey]int{}
+	return store.CommitWindow(ctx, sessionKey, view.State, after)
 }
 
 // isNativeSearchProvider reports whether the given LLM provider implements

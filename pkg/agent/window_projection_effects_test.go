@@ -63,7 +63,7 @@ func TestCommitWindowProjections_TranscriptUndoFailure_PropagatesNotSwallowed(t 
 
 	p := &windowCheckpoint{
 		ts:       ts,
-		snapshot: snap0,
+		snapshot: session.WindowViewFromSnapshot(snap0),
 		state:    newState,
 		messages: []providers.Message{toolMsg},
 		lines:    []int{0},

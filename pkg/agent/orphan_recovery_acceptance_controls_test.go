@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 func orphanACTestControls(t *testing.T) {
@@ -86,7 +87,7 @@ func orphanACEmptyControl(t *testing.T) {
 	require.Len(t, before.Archive, 0)
 	require.Len(t, RecoverOrphanedToolCalls(h.agent.Sessions, h.key, nil), 0, "empty history cannot manufacture a cancellation")
 	out := orphanACAssertView(t, h, h.turn(""), []providers.Message{})
-	require.Equal(t, []int{-1}, mapWindowMessages(before, out, -1, 0), "the only slot is the ephemeral pinned envelope")
+	require.Equal(t, []int{-1}, mapWindowMessages(session.WindowViewFromSnapshot(before), out, -1, 0), "the only slot is the ephemeral pinned envelope")
 	require.NoError(t, validateWindowGroups(out))
 	require.Equal(t, before, orphanACSnapshot(t, h), "empty selection/recovery does not create window state or records")
 }
@@ -112,7 +113,7 @@ func orphanACUnboundControls(t *testing.T) {
 			for i := range tc.raw {
 				lines = append(lines, i)
 			}
-			require.Equal(t, lines, mapWindowMessages(before, out, -1, 0))
+			require.Equal(t, lines, mapWindowMessages(session.WindowViewFromSnapshot(before), out, -1, 0))
 			orphanACAssertUnchanged(t, h, before, bytes)
 		})
 	}
@@ -146,7 +147,7 @@ func orphanACParsedRecords(t *testing.T) {
 			h.append(t, raw...)
 			before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
 			out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, 0, 3, 5, 6, 7))
-			require.Equal(t, []int{-1, 0, 3, 5, 6, 7}, mapWindowMessages(before, out, -1, 0), "JSON representation cannot change original source addresses")
+			require.Equal(t, []int{-1, 0, 3, 5, 6, 7}, mapWindowMessages(session.WindowViewFromSnapshot(before), out, -1, 0), "JSON representation cannot change original source addresses")
 			require.NoError(t, validateWindowGroups(out))
 			orphanACAssertUnchanged(t, h, before, bytes)
 		})

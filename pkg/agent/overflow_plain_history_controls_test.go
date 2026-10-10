@@ -109,7 +109,8 @@ func plainHistoryCheckpointFixture(t *testing.T, key string, history []providers
 	ts := newTurnState(agent, processOptions{SessionKey: key, UserMessage: current.Content, Media: current.Media}, turnEventScope{turnID: key})
 	ts.ctx = context.Background()
 	require.NoError(t, ts.contextWindowError())
-	require.NoError(t, ts.appendWindowMessage(current))
+	_, appendErr := ts.appendWindowMessage(current, windowProducerUser)
+	require.NoError(t, appendErr)
 	messages := append([]providers.Message{{Role: "system", Content: "PINNED instruction must remain"}}, agent.Sessions.GetHistory(key)...)
 	return al, agent, ts, messages
 }

@@ -138,9 +138,9 @@ func TestProjection_NeverOrphans(t *testing.T) {
 	// is the same byte string projection.go produces for the persisted
 	// state, by construction").
 	live := append([]providers.Message(nil), history...)
-	p1Mark, err := buildRecallMark("emptied", "exec", "p1", 2, big, turnNumberForArchiveLine(archive, 2))
+	p1Mark, err := buildRecallMark("emptied", "exec", "p1", 2, big, turnNumberForArchiveLine(denseArchive(archive), 2))
 	require.NoError(t, err)
-	p2Mark, err := buildRecallMark("emptied", "exec", "p2", 3, big, turnNumberForArchiveLine(archive, 3))
+	p2Mark, err := buildRecallMark("emptied", "exec", "p2", 3, big, turnNumberForArchiveLine(denseArchive(archive), 3))
 	require.NoError(t, err)
 	live[2].Content = p1Mark
 	live[3].Content = p2Mark
@@ -153,7 +153,7 @@ func TestProjection_NeverOrphans(t *testing.T) {
 		{ToolCallID: "p2", ArchiveLine: 3}: memory.ProjectionEmptied,
 	}
 	projected := projectMessages(history, lineOf, set, projectionContext{
-		policy: capPolicyFor(config.DefaultContextSettings(), 100_000), archive: archive,
+		policy: capPolicyFor(config.DefaultContextSettings(), 100_000), archive: denseArchive(archive),
 	})
 	assert.Empty(t, findOrphanedToolCalls(projected))
 	for i := range projected {

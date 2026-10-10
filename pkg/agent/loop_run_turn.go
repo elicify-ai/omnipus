@@ -723,7 +723,7 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 			Content: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,
 			Media:   append([]string(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.media...),
 		}
-		if err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(rootMsg); err != nil {
+		if _, err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(rootMsg, windowProducerUser); err != nil {
 			rt := rp.rc.rx.rr.rq.ri.rf.rt
 			var status TurnEndStatus
 			rp.rc.ret0, status, rp.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
@@ -1270,7 +1270,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		for i, pm := range ri.pendingMessages {
 			// Persist original compact media refs before using the resolved
 			// provider-only message. Failed admission cannot emit an applied receipt.
-			if err := ri.rf.rt.ts.appendWindowMessage(pm); err != nil {
+			if _, err := ri.rf.rt.ts.appendWindowMessage(pm, windowProducerUser); err != nil {
 				var status TurnEndStatus
 				ri.ret0, status, ri.ret1 = ri.rf.rt.al.contextWindowTurnExit(ri.rf.rt.ts, ri.rf.rt.iteration, ri.rf.rt.llmModel, err)
 				ri.turnStatus = status
