@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +62,7 @@ func sessionCoreU7AbsentAcrossDirs(t *testing.T, symbol string, dirs []string, p
 				continue
 			}
 			data, err := os.ReadFile(f)
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			if err != nil {

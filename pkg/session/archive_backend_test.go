@@ -11,6 +11,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -272,7 +273,7 @@ func TestArchiveBackend_RoutingKeyResolvesToOwningSession(t *testing.T) {
 	require.FileExists(t, filepath.Join(b.baseDir, "sess-owner-1", "transcript.jsonl"),
 		"the archive lands at the owning session's transcript path")
 	_, err := os.Stat(filepath.Join(b.baseDir, "agent:mia:session:sess-owner-1"))
-	require.True(t, os.IsNotExist(err), "no stray routing-key directory is created")
+	require.True(t, errors.Is(err, os.ErrNotExist), "no stray routing-key directory is created")
 	require.Len(t, b.GetHistory(routing), 1, "reads through the routing key resolve to the same store")
 }
 
@@ -290,7 +291,7 @@ func TestUnifiedStore_DeleteSessionRemovesModelArchive(t *testing.T) {
 
 	require.NoError(t, us.DeleteSession(id))
 	_, err = os.Stat(archivePath)
-	require.True(t, os.IsNotExist(err), "the model archive is removed with the session")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the model archive is removed with the session")
 }
 
 // TestArchiveBackend_CommitWindowRefusesSkipRegression is the port of the

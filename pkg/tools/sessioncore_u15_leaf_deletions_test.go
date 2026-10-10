@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,7 +67,7 @@ func sessionCoreU15AbsentFromPackageSources(t *testing.T, symbol, presentControl
 			continue
 		}
 		data, err := os.ReadFile(f)
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {

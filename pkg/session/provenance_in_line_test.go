@@ -9,6 +9,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +42,7 @@ func TestProvenance_SourceLivesInTheMessageLineAndNowhereElse(t *testing.T) {
 		assert.NotContains(t, l, "provenance_pending", "the write-phase marker is gone")
 	}
 	_, statErr := os.Stat(filepath.Join(dir, "provenance.jsonl"))
-	assert.True(t, os.IsNotExist(statErr), "no side file")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "no side file")
 
 	got, ok, err := s.LookupMessageProvenance(id, "user-1")
 	require.NoError(t, err)

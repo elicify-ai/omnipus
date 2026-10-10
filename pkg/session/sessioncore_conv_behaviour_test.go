@@ -22,6 +22,7 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -154,7 +155,7 @@ func TestSessionCoreConv_InterruptedBootRetiresTheCompletedSourceWithoutDuplicat
 	t.Cleanup(func() { _ = store.Close() })
 
 	_, statErr := os.Stat(filepath.Join(sessionsDir, id+".jsonl"))
-	assert.True(t, os.IsNotExist(statErr),
+	assert.True(t, errors.Is(statErr, os.ErrNotExist),
 		"CONV retry: the next boot must finish the cleanup and retire the completed source; it is still present")
 
 	listed := convListIDs(t, store)

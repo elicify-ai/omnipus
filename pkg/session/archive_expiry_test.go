@@ -10,6 +10,7 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -124,7 +125,7 @@ func TestArchiveExpiry_StrictlyOlderThanCutoffExpires(t *testing.T) {
 	if !notice.Expired || notice.RemovedPartitions != 1 {
 		t.Fatalf("an older-than-cutoff partition must expire; got %#v", notice)
 	}
-	if _, err := os.Stat(rolled); !os.IsNotExist(err) {
+	if _, err := os.Stat(rolled); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expired partition should be gone; stat err=%v", err)
 	}
 }
