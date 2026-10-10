@@ -5,7 +5,7 @@ package commands
 // Definitions are stateless — runtime dependencies are provided
 // via the Runtime parameter passed to handlers at execution time.
 //
-// Canonical commands: help, model, cancel, stop, stop-redirect, tasks,
+// Canonical commands: help, model, clear, cancel, stop, stop-redirect, tasks,
 // skills, channels, status, config, remember, recall, retrospective, goal,
 // loop.
 //
@@ -20,8 +20,7 @@ package commands
 // Removed everywhere, no alias (FR-031; U10a, 2026-10-09): /skill and /use
 // (D1); /new — founder ruling 2026-10-09: starting an extra chat is the SPA's
 // local "New chat" action, so the server must not expose /new (which cleared
-// server history); /clear — absent from the table until U10b ships the real
-// main/extra-only safe-point clear (no interim hybrid /clear); /agents and its
+// server history); /agents and its
 // old selector/list action; and the deprecated /start, /show, /list, /switch,
 // /check. Typing any of them is ordinary text and passes through to the agent
 // (the executor returns Passthrough for an unregistered name).
@@ -30,6 +29,7 @@ func BuiltinDefinitions() []Definition {
 		// Canonical commands — visible on their respective surfaces.
 		helpCommand(),
 		modelCommand(),
+		clearCommand(),
 		cancelCommand(),
 		stopCommand(),
 		stopRedirectCommand(),

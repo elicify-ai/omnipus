@@ -2677,8 +2677,8 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 	return sb.String()
 }
 
-// clearSessionWindow implements /new (alias /clear): it empties the live
-// window while preserving the archive.
+// clearSessionWindow is /clear's window move (clearConversation): it empties
+// the live window while preserving the archive.
 //
 // It clears with the Skip-advancing primitive, NOT SetHistory. ADR-066 FR-047
 // narrowed SetHistory to a first-fill primitive — an archive-backed store
