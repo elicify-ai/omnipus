@@ -843,6 +843,12 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	prompt, sessionKey, taskChatID string,
 	delegationDepth int,
 ) (string, error) {
+	// N6: a task's external-CLI episode ends when this function returns (the
+	// run has exited and any steer continuation has been consumed), so release
+	// the retained driver — and with it the last prompt and the environment
+	// snapshot — exactly as a delegate's completion does. A pending continuation
+	// keeps it (the release re-checks the scope).
+	defer al.releaseExternalRunIfIdle(taskChatID)
 	var out taskExternalOutcome
 	resp, err := al.runTaskExternalCLIOnce(ctx, liveAgent, prompt, sessionKey, taskChatID, delegationDepth, false, &out)
 	for ctx.Err() == nil && !out.stopped && al.takeExternalSteerInterrupt(taskChatID) {
