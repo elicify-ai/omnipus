@@ -69,9 +69,9 @@ properties:
     example: false
   text:
     type: string
-    maxLength: 65536
     description: >
       The answer to the child's question.
+      The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
     example: "Yes, overwrite it — the backup is stale."
   correlation_id:
     type: string

@@ -2702,6 +2702,9 @@ components:
       - type
       - message
       additionalProperties: false
+      dependentRequired:
+        first_message_error:
+        - client_message_id
       properties:
         type:
           type: string
