@@ -297,13 +297,18 @@ export function UsageScreen() {
 
   // The agents roster — SAME ['agents'] query key the Sessions and Search
   // modal uses — backs the main-session display title (founder feedback
-  // 2026-10-11, point 4): an untitled main reads "<Agent> - Main Session",
-  // derived from the agent's CURRENT name, so a rename flows through this
-  // shared cache without a reload. A failed roster degrades to "Unknown
-  // agent - Main Session" — never "Untitled" on a main.
-  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+  // 2026-10-11, point 4): a main ALWAYS reads "<Agent> - Main Session",
+  // derived from the agent's CURRENT name (stored title ignored — steer
+  // 2026-10-12), so a rename flows through this shared cache without a
+  // reload. While the roster is loading the screen keeps its skeleton
+  // (agentsLoading joins isLoading below — no fabricated title is painted
+  // mid-load); a FAILED roster falls back to the AGENT ID — the server's own
+  // empty-name fallback (pkg/gateway/session_title.go::withDisplayTitle) —
+  // never "Unknown agent", and never "Untitled" on a main
+  // (S4-04/S2-05, 2026-10-12).
+  const { data: agents = [], isPending: agentsLoading } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
-  const isLoading = statsLoading || sessionsLoading
+  const isLoading = statsLoading || sessionsLoading || agentsLoading
 
   // Derive totals.
   // tokens_cache_read and tokens_cache_write are a SUBSET of tokens_total
@@ -343,16 +348,19 @@ export function UsageScreen() {
 
   // By-session items — use sessions list (includes verifier sessions, see
   // the fetchSessions call above) with total_tokens. Title resolves through
-  // sessionDisplayTitle (founder feedback 2026-10-11, point 4): server title
-  // when present; an untitled MAIN reads "<Agent> - Main Session" from the
+  // sessionDisplayTitle (founder feedback 2026-10-11, point 4; steer
+  // 2026-10-12): a MAIN always derives "<Agent> - Main Session" from the
   // agent's CURRENT display name — recomputed every render off the live
-  // agents query, never cached, so a rename updates the row. Non-main
-  // sessions keep "Untitled".
+  // agents query, never cached, its stored title ignored — so a rename
+  // updates the row. When the roster cannot name the agent, the AGENT ID
+  // stands in (the server's own fallback); null is impossible here (the wire
+  // requires agent_id) but the honest 'Untitled' is kept if it ever were.
+  // Non-main sessions keep "Untitled".
   const sessionRows: SessionRow[] = sessions
     .filter((s) => s.total_tokens != null && s.total_tokens > 0)
     .map((s) => ({
       id: s.id,
-      title: sessionDisplayTitle(s, agents.find((a) => a.id === s.agent_id)?.name, 'Untitled'),
+      title: sessionDisplayTitle(s, agents.find((a) => a.id === s.agent_id)?.name, 'Untitled', s.agent_id) ?? 'Untitled',
       tokens: s.total_tokens ?? 0,
       type: s.type,
     }))

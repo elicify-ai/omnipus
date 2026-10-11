@@ -60,19 +60,24 @@ export function resolveAddressedAgent(content: string): AddressedAgent | null {
 /**
  * The send-side truth about a leading "@" (C8, R3 delta re-review): an
  * agents cache that has NEVER resolved leaves the address unchecked, and
- * sending anyway would silently drop it. Three states:
+ * sending anyway would silently drop it. Four states:
  *   - `addressed` — a loaded candidate list matched the exact name;
  *   - `plain` — no leading "@" at all, or a leading "@" the loaded list
  *     matches nothing (ordinary text by design: the derivation is not
  *     sticky, an edited prefix travels verbatim);
  *   - `unresolvable` — a leading "@" but the `['agents']` cache holds no
- *     resolved data, so no candidate list exists to match against. Callers
- *     must refuse visibly instead of degrading to an unaddressed send.
+ *     resolved data and the query is still in flight: the list may yet
+ *     arrive. Callers must refuse visibly instead of degrading to an
+ *     unaddressed send.
+ *   - `failed` — the `['agents']` query has ERRORED with no data (S3-08):
+ *     waiting will not help, so the copy says the list could not be loaded
+ *     and offers a Retry instead of promising "try again in a moment".
  */
 export type AddressCheck =
   | { kind: 'addressed'; addressed: AddressedAgent }
   | { kind: 'plain' }
   | { kind: 'unresolvable'; nameGuess: string }
+  | { kind: 'failed'; nameGuess: string }
 
 export function checkAddressedAgent(content: string): AddressCheck {
   if (!content.startsWith('@')) return { kind: 'plain' }
@@ -80,6 +85,9 @@ export function checkAddressedAgent(content: string): AddressCheck {
     // The raw first token after "@" — copy material only, never a
     // resolution; no message content beyond it is logged or shown.
     const nameGuess = content.slice(1).match(/^\S+/)?.[0] ?? ''
+    if (queryClient.getQueryState(['agents'])?.status === 'error') {
+      return { kind: 'failed', nameGuess }
+    }
     return { kind: 'unresolvable', nameGuess }
   }
   const addressed = resolveAddressedAgent(content)
@@ -93,12 +101,33 @@ export function recipientAddressBlockMessage(agentName: string): string {
 
 /**
  * C8 — visible-block copy for the unresolvable-address corner (the agents
- * cache has never resolved). Shared by the composer block, the drain hold
- * and the resend block; truthful in all three (nothing was sent).
+ * cache has never resolved AND is still loading). Shared by the composer
+ * block, the drain hold and the resend block; truthful in all three (nothing
+ * was sent).
  */
 export function recipientAddressUnresolvedBlockMessage(nameGuess: string): string {
   const addressed = nameGuess ? `@${nameGuess}` : 'the @ address'
   return `The team list has not loaded yet, so ${addressed} cannot be checked as an addressee. The message was not sent — try again in a moment.`
+}
+
+/**
+ * C8 follow-up (S3-08) — visible-block copy for the FAILED corner: the
+ * agents query has errored with no data, so waiting will not help. Says what
+ * happened instead of promising a load; the toast carries a Retry action
+ * (retryAgentsRoster) as the offer.
+ */
+export function recipientAddressFailedBlockMessage(nameGuess: string): string {
+  const addressed = nameGuess ? `@${nameGuess}` : 'the @ address'
+  return `The team list could not be loaded, so ${addressed} cannot be checked as an addressee. The message was not sent.`
+}
+
+/**
+ * One recovery attempt on the agents roster (S3-08). Safe to call on every
+ * blocked send/drain trigger: react-query dedupes concurrent refetches, and
+ * a later successful load releases the hold on its own.
+ */
+export function retryAgentsRoster(): void {
+  void queryClient.refetchQueries({ queryKey: ['agents'] })
 }
 
 /**
@@ -115,8 +144,10 @@ export function recipientAddressResendBlockMessage(agentName: string): string {
  * an @-addressed message with no session to carry the recipient, or an
  * address that cannot be checked because the agents cache has never
  * resolved (C8 — the caller must not submit, shows this warning, and keeps
- * the composer text exactly as typed). Null when the text is ordinary or
- * safely plain.
+ * the composer text exactly as typed). Both unavailable shapes — still
+ * loading, or FAILED (S3-08: the failed copy + a Retry action) — return the
+ * same 'unresolvable' sentinel; only the toast copy differs. Null when the
+ * text is ordinary or safely plain.
  */
 export function recipientAddressBlocked(content: string): AddressedAgent | 'unresolvable' | null {
   const check = checkAddressedAgent(content)
@@ -127,6 +158,15 @@ export function recipientAddressBlocked(content: string): AddressedAgent | 'unre
       variant: 'warning',
     })
     logDiagnostic('chatRecipientSendBlockedAgentsUnavailable', { nameGuess: check.nameGuess })
+    return 'unresolvable'
+  }
+  if (check.kind === 'failed') {
+    useUiStore.getState().addToast({
+      message: recipientAddressFailedBlockMessage(check.nameGuess),
+      variant: 'warning',
+      action: { label: 'Retry', onClick: retryAgentsRoster },
+    })
+    logDiagnostic('chatRecipientSendBlockedAgentsErrored', { nameGuess: check.nameGuess })
     return 'unresolvable'
   }
   if (currentSessionId()) return null
@@ -146,6 +186,13 @@ export function recipientAddressBlocked(content: string): AddressedAgent | 'unre
  * address that cannot be checked because the agents cache has never
  * resolved (C8). The queue HOLDS; the warning is deduplicated on its exact
  * message so repeated drain triggers cannot stack identical toasts.
+ *
+ * The hold is never a silent wait for a load that may never come (S3-08):
+ * on a FAILED roster every drain trigger kicks a roster refetch
+ * (deduplicated by react-query) and the copy says the list could not be
+ * loaded, with a Retry action on the composer path. A held @-message is
+ * only ever released by real roster data — releasing it into an
+ * unaddressed send would be the silent drop C8 forbids.
  */
 export function recipientAddressHoldsQueue(content: string | undefined): boolean {
   if (!content) return false
@@ -153,15 +200,23 @@ export function recipientAddressHoldsQueue(content: string | undefined): boolean
   if (check.kind === 'plain') return false
   const message = check.kind === 'unresolvable'
     ? recipientAddressUnresolvedBlockMessage(check.nameGuess)
-    : recipientAddressBlockMessage(check.addressed.agentName)
+    : check.kind === 'failed'
+      ? recipientAddressFailedBlockMessage(check.nameGuess)
+      : recipientAddressBlockMessage(check.addressed.agentName)
   if (check.kind === 'addressed' && currentSessionId()) return false
   const ui = useUiStore.getState()
   const alreadyShown = ui.toasts.some((toast) => toast.variant === 'warning' && toast.message === message)
   if (!alreadyShown) {
-    ui.addToast({ message, variant: 'warning' })
+    ui.addToast({ message, variant: 'warning', ...(check.kind === 'failed' ? { action: { label: 'Retry', onClick: retryAgentsRoster } } : {}) })
   }
+  // Active recovery on the FAILED corner: every drain trigger retries the
+  // roster (refetchQueries dedupes), so a transient failure self-heals and
+  // the queue drains with its recipient; a permanent one stays loud.
+  if (check.kind === 'failed') retryAgentsRoster()
   if (check.kind === 'unresolvable') {
     logDiagnostic('chatRecipientQueueHeldAgentsUnavailable', { nameGuess: check.nameGuess })
+  } else if (check.kind === 'failed') {
+    logDiagnostic('chatRecipientQueueHeldAgentsErrored', { nameGuess: check.nameGuess })
   } else {
     logDiagnostic('chatRecipientQueueHeldNoSession', { agentName: check.addressed.agentName })
   }

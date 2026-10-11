@@ -527,6 +527,19 @@ describe('SearchModal — focus-reveal affordance', () => {
 // Gate round 2 SF-3/SF-4: expectations derive from the failure brief.
 // Keep the screen, filtering, QueryClient, and design-system controls real.
 describe('SearchModal — search lookup failures and Retry', () => {
+  it('an untitled main under a FAILED roster reads the AGENT ID — never "[removed]" or "Unknown" (S4-04)', async () => {
+    vi.mocked(fetchAgents).mockRejectedValue(new Error('agents down'))
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 's-main', type: 'main', title: '' }),
+    ])
+    renderModal()
+    // The id is what the server itself shows (withDisplayTitle falls back to
+    // m.AgentID); the fabricated "[removed]"/"Unknown" labels are gone.
+    expect(await screen.findByText('agent-1 - Main Session')).toBeInTheDocument()
+    expect(screen.queryByText(/removed/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Unknown/)).not.toBeInTheDocument()
+  })
+
   it('qualifies unavailable agent-name search, keeps title search usable, and restores name matches on Retry', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchAgents).mockRejectedValue(new Error('agents down'))
@@ -628,7 +641,7 @@ describe('SearchModal — error states', () => {
     expect(screen.queryByText('Session One')).not.toBeInTheDocument()
   })
 
-  it('uses a neutral "Unknown" label (never "[removed]") when the agents fetch fails', async () => {
+  it('falls back to the AGENT ID (never "[removed]", never a fabricated "Unknown") when the agents fetch fails — S4-04 supersedes the old "Unknown" label', async () => {
     vi.mocked(fetchAgents).mockReset().mockRejectedValue(new Error('agents down'))
     vi.mocked(fetchSessions).mockResolvedValue([
       makeSession({ id: 's-x', agent_id: 'agent-x', active_agent_id: 'agent-x', title: 'Session X', updated_at: '2026-07-16T11:00:00Z' }),
@@ -638,7 +651,11 @@ describe('SearchModal — error states', () => {
 
     await waitFor(() => expect(screen.getByText('Session X')).toBeInTheDocument())
     expect(screen.queryByText('[removed]')).not.toBeInTheDocument()
-    expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0)
+    // The id is the honest stand-in (the server's own empty-name fallback,
+    // pkg/gateway/session_title.go::withDisplayTitle) — not a placeholder word.
+    expect(screen.getByText('agent-x')).toBeInTheDocument()
+    expect(screen.getByText('agent-y')).toBeInTheDocument()
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
   })
 })
 
