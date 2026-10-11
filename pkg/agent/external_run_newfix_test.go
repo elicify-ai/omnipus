@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -164,7 +165,7 @@ func TestNEW4_ReleaseBetweenAvailabilityCheckAndRevivalKeepsTheDriver(t *testing
 	sess := al.externalRunSession(childID)
 	sess.mu.Lock()
 	sess.started = true
-	sess.driver = runner.NewFakeRunner()
+	sess.driver = runnertest.NewFakeRunner()
 	sess.mu.Unlock()
 
 	fired := false
@@ -199,7 +200,7 @@ func TestNEW4_ReservationEndsWithTheRevivalOrStop(t *testing.T) {
 	sess := al.externalRunSession("n4-hold")
 	sess.mu.Lock()
 	sess.started = true
-	sess.driver = runner.NewFakeRunner()
+	sess.driver = runnertest.NewFakeRunner()
 	sess.mu.Unlock()
 	rec, err := lc.Load("n4-hold")
 	require.NoError(t, err)
@@ -216,7 +217,7 @@ func TestNEW4_ReservationEndsWithTheRevivalOrStop(t *testing.T) {
 	al.releaseExternalRunIfIdle("n4-hold")
 	sess.mu.Lock()
 	require.Nil(t, sess.driver, "once the hold ends the idle release drops the driver again (N6)")
-	sess.driver = runner.NewFakeRunner()
+	sess.driver = runnertest.NewFakeRunner()
 	sess.mu.Unlock()
 
 	// Round 5 (NEW-7): Stop no longer clears every hold of the session. The hold of
