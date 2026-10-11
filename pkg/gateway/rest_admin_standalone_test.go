@@ -92,3 +92,26 @@ func TestAdminStandalone_WebSocketFirstMessageWithoutWorkspaceIsRefused(t *testi
 	assert.True(t, strings.Contains(frames, "default workspace"), frames)
 	assert.Zero(t, adminSessionCount(t, env), "no standalone Admin session may be minted over the WebSocket either")
 }
+
+// Gap 8 (R2): the refusal above had no POSITIVE CONTROL, so a mutant that
+// always refuses an Admin chat over the WebSocket survived it. This is the
+// control: the same first message from the same agent, naming the DEFAULT
+// workspace, must be ACCEPTED — adminChatRefusal refuses only when the
+// workspace is absent or is not the default.
+func TestAdminStandalone_WebSocketFirstMessageWithDefaultWorkspaceIsAccepted(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JADMINSTANDALONEWS000001"
+	env.seedWorkspace(t, ws, true, "mia") // this workspace IS the default
+	h := newWSHandler(bus.NewMessageBus(), env.api.agentLoop, "")
+	t.Cleanup(h.Wait)
+	wc := makeTestConn()
+
+	// arg 8 is the workspace; arg 3 is the frame's session id (empty on a first message).
+	h.handleChatMessage(context.Background(), "chat-admin-ok", "", "hello admin", "admin", nil, "", ws, false, wc)
+
+	frames := drainConnFrames(wc)
+	assert.NotContains(t, frames, `"type":"error"`,
+		"an Admin chat naming the DEFAULT workspace must be accepted over the WebSocket, not refused: %s", frames)
+	assert.Equal(t, 1, adminSessionCount(t, env),
+		"the Admin main inside the default workspace is minted")
+}

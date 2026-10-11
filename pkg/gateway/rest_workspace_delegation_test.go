@@ -593,8 +593,11 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 	for _, e := range seeded {
 		byPair[e.FromAgent+"->"+e.ToAgent] = e
 	}
+	// "mia->worker" is named explicitly: the count alone cannot catch a wrong
+	// edge in its place, and this is the one edge the UAT DEF-001 fix exists to
+	// produce (Worker on-team so the coreagent ->worker seed survives).
 	for _, want := range []string{
-		"mia->mia", "jim->ava", "jim->worker", "jim->jim", "jim->planner", "jim->researcher",
+		"mia->mia", "mia->worker", "jim->ava", "jim->worker", "jim->jim", "jim->planner", "jim->researcher",
 		"ava->ava", "worker->worker", "planner->planner", "planner->researcher", "researcher->researcher",
 	} {
 		assert.Contains(t, byPair, want, "expected seeded edge %s", want)
@@ -723,7 +726,7 @@ func TestDefaultWorkspaceSeeder_PartialRoster_DropsOnlyMissingAgentEdges(t *test
 		assert.NotEqual(t, "researcher", e.ToAgent, "researcher is off-team — must not appear as a to_agent")
 	}
 	for _, want := range []string{
-		"mia->mia", "jim->ava", "jim->worker", "jim->jim", "jim->planner",
+		"mia->mia", "mia->worker", "jim->ava", "jim->worker", "jim->jim", "jim->planner",
 		"ava->ava", "worker->worker", "planner->planner",
 	} {
 		assert.Contains(t, byPair, want, "expected surviving seeded edge %s", want)

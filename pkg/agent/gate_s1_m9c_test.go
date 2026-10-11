@@ -79,6 +79,59 @@ func TestStartTaskNow_ConcurrentStartsLaunchOnce_RealLauncher(t *testing.T) {
 	}
 }
 
+// The BARRIER variant of the concurrency shape: both callers are released at
+// the same instant, so the interleaving belongs to the scheduler, not to the
+// test. The deleted TestStartTaskNow_NoConcurrentDoubleLaunch was the only
+// test of this shape (R1 delta T3): the sequential variant above holds the
+// first caller inside Launch and starts the second afterwards, which cannot
+// exercise a genuine race for the launch slot — by then the first caller has
+// already bound the task, so the second takes the bound-session branch and
+// never reaches Launch at all.
+func TestStartTaskNow_BarrierReleasedStartsLaunchOnce_RealLauncher(t *testing.T) {
+	const callers = 2
+	al, _ := newRunTaskPolicyLoop(t, nil)
+	tk := createRunnableTask(t, al, "t-m9c-barrier", rtAssignee)
+	wl := &m9cLauncher{inner: NewSteerLauncher(al)}
+	al.taskExecutor.SetSessionLauncher(wl)
+
+	// A barrier, not a sleep: every caller is inside StartTaskNow before any of
+	// them may proceed.
+	var barrier sync.WaitGroup
+	barrier.Add(callers)
+	ids := make([]string, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			barrier.Done()
+			barrier.Wait()
+			ids[i], errs[i] = al.taskExecutor.StartTaskNow(context.Background(), tk.ID)
+		}(i)
+	}
+	wg.Wait()
+	joinGoalFixtureRuns(t, al)
+
+	// Whatever the interleaving, one task may hold at most ONE session.
+	seen := map[string]bool{}
+	for i := range callers {
+		if errs[i] != nil {
+			require.Empty(t, ids[i], "caller %d was refused but reported a session", i)
+			continue
+		}
+		require.NotEmpty(t, ids[i], "caller %d succeeded but reported no session", i)
+		seen[ids[i]] = true
+	}
+	require.LessOrEqual(t, len(seen), 1,
+		"every successful caller must name the SAME session, got %v", seen)
+	got, gerr := GetTaskStore(al).Get(tk.ID)
+	require.NoError(t, gerr)
+	require.NotEmpty(t, got.SessionID, "the task must end bound to exactly one session")
+	require.EqualValues(t, 1, wl.launches.Load(),
+		"two callers released on a barrier must still produce exactly ONE launch")
+}
+
 // A launch the launcher refuses must leave the task Failed with the reason,
 // never stuck in_progress.
 func TestStartTaskNow_RefusedLaunchFailsTheTask_RealLauncher(t *testing.T) {

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
@@ -38,6 +40,17 @@ func TestCompleteTask_EmptyAnswerFailsAndDeliversBeforeLifecycleTerminal(t *test
 	al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), lifecycle)
 	al.taskExecutor.SetLifecycleStore(lifecycle)
 	const taskSessionID = "task-empty-session"
+	// The run's recipient must be a RESOLVABLE MAIN: deliverTaskCompletionUpward
+	// skips (and records a notice loss for) any recipient that
+	// recipientStillVisible cannot resolve through the main resolver, so a bare
+	// lifecycle parent id never reaches the deliverer this test observes. The
+	// gateway installs the resolver at boot; here it is the shared fake.
+	const ws = "default"
+	parentMain, err := session.MainSessionID(ws, "native-agent")
+	require.NoError(t, err)
+	al.taskExecutor.SetMainSessionResolver(&u6FakeMainResolver{elig: map[[2]string]string{
+		{ws, "native-agent"}: parentMain,
+	}})
 	seedParentAndChild(t, lifecycle, "parent-1", taskSessionID)
 	deliverer := &lifecycleOrderingDeliverer{lifecycle: lifecycle}
 	al.SetSteerAudienceDeps(nil, nil, deliverer)
@@ -45,7 +58,15 @@ func TestCompleteTask_EmptyAnswerFailsAndDeliversBeforeLifecycleTerminal(t *test
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatal(err)
 	}
-	if !al.taskExecutor.completeTaskWithResult(tk, taskSessionID, task.StatusInProgress, true, "  ", nil) {
+	// A REAL run: deliverTaskCompletionUpward's own contract is "a nil run (a
+	// status change made by update_task, with no run) delivers nothing", so a
+	// nil run here could never reach the deliverer this test observes. The run
+	// must also carry at least one recipient.
+	run := al.taskExecutor.openRun(tk.ID, nil, task.RunKindManual, taskSessionID, parentMain)
+	if run == nil {
+		t.Fatal("fixture: the task run record did not open")
+	}
+	if !al.taskExecutor.completeTaskWithResult(tk, taskSessionID, task.StatusInProgress, true, "  ", run) {
 		t.Fatal("completion was not applied")
 	}
 	final, err := al.taskStore.Get(tk.ID)

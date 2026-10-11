@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -100,4 +101,40 @@ func TestDeliverExternalCLIInstruction_EnqueueRunsOutsideTheHolderLock(t *testin
 	}
 	require.Equal(t, 1, enqueues, "instrument check: exactly one enqueue call expected")
 	require.Equal(t, 0, heldAtEnqueue, "the durable enqueue must not run under the holder lock")
+
+	// R1 delta T7: the walk above catches a DIRECT enqueue under the lock, but a
+	// HELPER called under the lock could enqueue for it — the enqueue would then
+	// be structurally outside the lock while behaviourally inside it. Assert the
+	// locked region holds no call whose name looks like an enqueue, which covers
+	// the delivery's own call AND any helper that wraps it.
+	lockedEnqueueish := []string{}
+	held = false
+	for _, st := range fn.Body.List {
+		switch x := st.(type) {
+		case *ast.ExprStmt:
+			switch callName(x.X) {
+			case "Lock":
+				held = true
+			case "Unlock":
+				held = false
+			}
+		case *ast.DeferStmt:
+			if callName(x.Call) == "Unlock" {
+				held = true
+			}
+		}
+		if !held {
+			continue
+		}
+		ast.Inspect(st, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if name := callName(c); strings.Contains(strings.ToLower(name), "enqueue") {
+					lockedEnqueueish = append(lockedEnqueueish, name)
+				}
+			}
+			return true
+		})
+	}
+	require.Empty(t, lockedEnqueueish,
+		"no enqueue may run under the holder lock, directly or through a helper: %v", lockedEnqueueish)
 }
