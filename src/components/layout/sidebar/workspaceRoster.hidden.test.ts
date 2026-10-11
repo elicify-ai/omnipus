@@ -51,6 +51,8 @@ function makeWorkspace(memberConfigs: Workspace['member_configs'], adminMain?: s
     updated_at: '2025-01-01T00:00:00Z',
     revision: '0'.repeat(64),
     member_configs: memberConfigs,
+    // Admin's row projects only on the default workspace.
+    is_default: adminMain !== undefined,
     ...(adminMain ? { admin_main_session_id: adminMain } : {}),
   }
 }

@@ -218,7 +218,10 @@ function register(member: WorkspaceMemberConfig, mainId: string) {
   seam.mains.set(member, mainId)
 }
 
-/** Opens the row's ⋯ menu the way a pointer does (Radix opens on pointer down). */
+/** Opens the row's ⋯ menu the way a pointer does (Radix opens on pointer down).
+ * The row and trigger are resolved BEFORE opening: a Radix modal menu marks
+ * content outside its portal aria-hidden, so the row leaves the accessibility
+ * tree while the menu is open. */
 async function openRowMenu(agentName: string) {
   const row = screen.getByRole('group', { name: agentName })
   const trigger = within(row).getByRole('button', { name: `More actions for ${agentName}` })
@@ -226,7 +229,7 @@ async function openRowMenu(agentName: string) {
     fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
     fireEvent.pointerUp(trigger, { button: 0, pointerType: 'mouse' })
   })
-  return within(row).getByRole('group', { name: agentName })
+  return trigger
 }
 
 function menuItems(): HTMLElement[] {

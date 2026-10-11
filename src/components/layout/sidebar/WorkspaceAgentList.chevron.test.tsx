@@ -12,6 +12,11 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: ReactNode }) => children,
 }))
 
+// D6: WorkspaceAgentList now mounts the unified edit flow (AgentProfile) for
+// the row menus. This file renders the list bare — no QueryClientProvider —
+// and the editor needs the query context; these chevron cases never open it.
+vi.mock('@/components/agents/AgentProfile', () => ({ AgentProfile: () => null }))
+
 if (typeof window !== 'undefined' && !window.matchMedia) {
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
