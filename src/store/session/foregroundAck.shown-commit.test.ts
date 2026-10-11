@@ -17,7 +17,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from '@/store/chat/store'
-import { useSessionStore } from '@/store/session'
+import { registerGetSessionCursor, useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
 import type { Session } from '@/lib/api'
@@ -478,5 +478,36 @@ describe('final round (R1–R3): the record belongs to exactly one shown open', 
       { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
       { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 9 },
     ])
+  })
+})
+
+// Delta R3 (browser verification, test gateway): sign-in sent TWO attach_session
+// frames for the active chat, the second with ack_attention:true. The ack frame
+// is intended, but it carried no cursor, so the gateway answered it with a
+// full snapshot + transcript replay (cursorless attach = snapshot, A5-A6) - a
+// second full replay of the whole chat for a one-integer acknowledgement.
+// Sent with the bucket's own cursor it is answered incrementally.
+describe('the acknowledging attach is cheap: it carries the bucket cursor', () => {
+  // Production registers the getter from store/chat.ts; this file loads the
+  // store module directly, so register the same shape here and undo it after.
+  afterEach(() => registerGetSessionCursor(() => null))
+
+  it('a shown main with a cursor acknowledges with { ack_attention, attention_bound } PLUS since_seq and boot_id', () => {
+    const sid = 'main-ack-cursor'
+    registerGetSessionCursor((id) => (id === sid ? { bootId: 'boot-c', seq: 4 } : null))
+    shownForeground(sid, [mainSession(sid)])
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({
+      type: 'attach_session',
+      session_id: sid,
+      ack_attention: true,
+      attention_bound: 7,
+      since_seq: 4,
+      boot_id: 'boot-c',
+    })
   })
 })

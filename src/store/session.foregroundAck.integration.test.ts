@@ -194,6 +194,10 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
         session_id: main.id,
         ack_attention: true,
         attention_bound: 1,
+        // The ack carries the bucket cursor (delta R3) so the gateway answers
+        // it incrementally instead of replaying the whole chat again.
+        since_seq: 4,
+        boot_id: 'boot-1',
       },
     ])
     expect(seam.attentionBoundOfFrame).toHaveBeenCalledWith(expect.objectContaining({
