@@ -257,7 +257,7 @@ func NewWorkspaceCreateTool(d *Deps) *WorkspaceCreateTool { return &WorkspaceCre
 func (t *WorkspaceCreateTool) Name() string               { return "create_workspace" }
 func (t *WorkspaceCreateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceCreateTool) Description() string {
-	return "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to create_task_in_workspace when creating tasks for the workspace. Members named in core_team also get the default delegation trust edges between them, so they can delegate to each other immediately. name is capped at 200 characters and description at 2000; exceeding either is rejected.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace)."
+	return "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id as workspace_id to create_task when delivering tasks to the workspace. Members named in core_team also get the default delegation trust edges between them, so they can delegate to each other immediately. name is capped at 200 characters and description at 2000; exceeding either is rejected.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace)."
 }
 
 func (t *WorkspaceCreateTool) Parameters() map[string]any {
@@ -407,7 +407,7 @@ func NewWorkspaceUpdateTool(d *Deps) *WorkspaceUpdateTool { return &WorkspaceUpd
 func (t *WorkspaceUpdateTool) Name() string               { return "update_workspace" }
 func (t *WorkspaceUpdateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceUpdateTool) Description() string {
-	return "Update an existing workspace using the revision returned by get_workspace. Call this to change its name, description, status, pin state, complete core team, or complete delegation graph. Omitted fields are preserved. core_team replaces the entire team. Omitted delegation preserves valid existing edges, removes edges for removed members, and may seed approved edges for newly added built-ins; an explicit delegation array replaces the entire graph, suppresses implicit seeding, and [] clears it. Read the workspace first, include all intended membership and graph effects in the proposal, then submit its id and revision."
+	return "Update an existing workspace using the revision returned by get_workspace. Call this to change its name, description, status, pin state, complete core team, or complete delegation graph. Omitted fields are preserved. core_team replaces the entire team. Omitted delegation preserves valid existing edges, removes edges for removed members, and may seed approved edges for newly added built-ins; an explicit delegation array replaces the graph for continuing members, and [] clears their lines; each member newly added by the same update still receives its self-line unless the operator's seed defaults exclude it. Read the workspace first, include all intended membership and graph effects in the proposal, then submit its id and revision."
 }
 
 func (t *WorkspaceUpdateTool) Parameters() map[string]any {
@@ -1318,7 +1318,7 @@ func NewWorkspaceListTool(d *Deps) *WorkspaceListTool { return &WorkspaceListToo
 func (t *WorkspaceListTool) Name() string             { return "list_workspaces" }
 func (t *WorkspaceListTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *WorkspaceListTool) Description() string {
-	return "List workspaces with their live task counts. Call this to find workspace ids for create_task_in_workspace, list_tasks_in_workspace, get_workspace, or update_workspace. Ordering is: the default workspace first, then pinned workspaces by pin_order, then the rest newest-first — so the first result is not necessarily the most recently created one. Returns id, name, description, status, pinned, pin_order, is_default, core_team and task_count. Any workspace file that cannot be read is skipped and counted in `skipped`.\nParameters: status (optional: active/archived/all, defaults to active)."
+	return "List workspaces with their live task counts. Call this to find workspace ids to use with create_task, list_tasks (their optional workspace_id), get_workspace, or update_workspace. Ordering is: the default workspace first, then pinned workspaces by pin_order, then the rest newest-first — so the first result is not necessarily the most recently created one. Returns id, name, description, status, pinned, pin_order, is_default, core_team and task_count. Any workspace file that cannot be read is skipped and counted in `skipped`.\nParameters: status (optional: active/archived/all, defaults to active)."
 }
 
 func (t *WorkspaceListTool) Parameters() map[string]any {
