@@ -87,11 +87,23 @@ var ownerWakeRevivalPrincipal = steer.Principal{Kind: steer.PrincipalKindAgent, 
 // admitted, the answer stays in the transcript.
 var errOwnerWakeRetained = errors.New("ordinary admission: owner wake dropped: the conversation is stopped")
 
-// prepareOrdinarySessionExecution is shared by human and scheduled entries.
+// prepareOrdinarySessionExecution admits one ordinary execution of sessionID and,
+// once it is admitted, delivers the requests held for the session while it was
+// stopped (deliverHeldRequests): an admitted turn is the session running again.
+// The delivery runs after the admission locks are released.
+func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessionID string, opts processOptions, revival *steer.Principal) (ordinaryExecutionPreparation, error) {
+	preparation, err := al.admitOrdinarySessionExecution(ctx, sessionID, opts, revival)
+	if err == nil && preparation.execution != nil {
+		al.deliverHeldRequests(sessionID)
+	}
+	return preparation, err
+}
+
+// admitOrdinarySessionExecution is shared by human and scheduled entries.
 // A nil revival principal never revives: the ordinary dispatch guard still
 // refuses stopped/terminal records. A non-human trigger resumes only a standing
 // root stopped by restart; an operator Stop remains binding. No steered slot is reserved.
-func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessionID string, opts processOptions, revival *steer.Principal) (ordinaryExecutionPreparation, error) {
+func (al *AgentLoop) admitOrdinarySessionExecution(ctx context.Context, sessionID string, opts processOptions, revival *steer.Principal) (ordinaryExecutionPreparation, error) {
 	store := al.GetSessionLifecycleStore()
 	if sessionID == "" || store == nil {
 		return ordinaryExecutionPreparation{}, nil

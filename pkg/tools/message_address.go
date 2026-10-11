@@ -46,6 +46,9 @@ type PeerReceipt struct {
 	RequestID string
 	// SessionID is the receiver's main session the request was admitted to.
 	SessionID string
+	// Held is true when the receiver is stopped: the request is kept and is
+	// delivered when the receiver runs again.
+	Held bool
 }
 
 // PeerRouter admits a peer request. A nil error means the request was
@@ -219,7 +222,7 @@ func (t *MessageTool) executePeerForm(ctx context.Context, content, wsArg string
 		return &ToolResult{ForLLM: fmt.Sprintf("peer send refused, nothing was admitted: %v", err), IsError: true, Err: err}
 	}
 	return &ToolResult{
-		ForLLM: fmt.Sprintf("Request %s admitted to %s/%s's main session", receipt.RequestID, workspaceID, agentID),
+		ForLLM: peerAdmittedText(receipt, workspaceID, agentID),
 		Silent: true,
 	}
 }
@@ -248,4 +251,15 @@ func (t *MessageTool) denySteeredAddressing(ctx context.Context) *ToolResult {
 		IsError: true,
 		Err:     ErrSteeredSessionOwnChatOnly,
 	}
+}
+
+// peerAdmittedText is the asker's receipt. A request for a stopped agent is
+// kept and delivered when the agent runs again; the asker is told so instead of
+// being left to assume it was seen.
+func peerAdmittedText(receipt PeerReceipt, workspaceID, agentID string) string {
+	text := fmt.Sprintf("Request %s admitted to %s/%s's main session", receipt.RequestID, workspaceID, agentID)
+	if receipt.Held {
+		text += fmt.Sprintf(". %s is stopped; your request will be delivered when it runs again", agentID)
+	}
+	return text
 }

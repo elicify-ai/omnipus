@@ -120,29 +120,38 @@ type RequestAdmission struct {
 // session and starts (or joins) the receiver's turn through the ordinary
 // intake. It returns the admitted request id (the entry id the store wrote).
 func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requestID, receiverSessionID string, err error) {
+	requestID, receiverSessionID, _, err = al.admitRequest(ctx, a)
+	return requestID, receiverSessionID, err
+}
+
+// admitRequest is AdmitRequest plus whether the request is HELD: the receiver
+// was stopped when it was admitted, so the request is kept in the ledger and
+// delivered when the receiver runs again (deliverHeldRequests) instead of
+// starting a turn.
+func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requestID, receiverSessionID string, held bool, err error) {
 	store := al.GetSessionStore()
 	ledger := al.RequestLedger()
 	if store == nil || ledger == nil {
-		return "", "", fmt.Errorf("%w: session store unavailable", ErrPeerRefused)
+		return "", "", false, fmt.Errorf("%w: session store unavailable", ErrPeerRefused)
 	}
 	if err = a.Receiver.Validate(); err != nil {
-		return "", "", fmt.Errorf("%w: %w", ErrPeerRefused, err)
+		return "", "", false, fmt.Errorf("%w: %w", ErrPeerRefused, err)
 	}
 	// F1: authorization is read again HERE, after any Ask approval returned and
 	// before the receiver's main, the capture or the entry exist. A membership
 	// or policy change made while approval was pending refuses the request
 	// with nothing written.
 	if err = al.recheckReceiverAdmission(ctx, a.Receiver, a.Source.SessionID, a.AskApproved); err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	if a.BeforeCommit != nil {
 		if err = a.BeforeCommit(); err != nil {
-			return "", "", err
+			return "", "", false, err
 		}
 	}
 	meta, err := store.GetOrCreateMainSession(a.Receiver.WorkspaceID, a.Receiver.AgentID)
 	if err != nil {
-		return "", "", storageRefusal("the receiver's conversation could not be prepared", err, ErrPeerRefused)
+		return "", "", false, storageRefusal("the receiver's conversation could not be prepared", err, ErrPeerRefused)
 	}
 	receiverSessionID = meta.ID
 	requestID = uuid.New().String()
@@ -158,7 +167,7 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	// Capture first: if the append below fails the capture is discarded; if it
 	// were written second, a request the model can see might be unanswerable.
 	if err := ledger.Put(capture); err != nil {
-		return "", "", storageRefusal("the request could not be recorded", err, ErrPeerRefused)
+		return "", "", false, storageRefusal("the request could not be recorded", err, ErrPeerRefused)
 	}
 	al.pendingRequests.Store(requestID, receiverSessionID)
 	entry := session.TranscriptEntry{
@@ -177,9 +186,14 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 			logger.WarnCF("agent", "request capture could not be discarded after a failed append",
 				map[string]any{"request_id": requestID, "error": dErr.Error()})
 		}
-		return "", "", storageRefusal("the request could not be recorded", err, ErrPeerRefused)
+		return "", "", false, storageRefusal("the request could not be recorded", err, ErrPeerRefused)
 	}
 	al.publishUserEntry(receiverSessionID, entry)
+	// A stopped receiver is not woken by a request (it carries no human
+	// authority). The wake below is still published - a Resume that lands
+	// between this check and the wake picks the request up - and a wake that
+	// meets the stop is dropped, leaving the request held.
+	held = al.receiverStopped(receiverSessionID)
 
 	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -202,9 +216,9 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	}); err != nil {
 		// The request is durable in the receiver's main and answerable; only
 		// the turn start failed. Report it rather than hide it.
-		return requestID, receiverSessionID, fmt.Errorf("request %s was recorded but the receiver's turn could not be started: %w", requestID, err)
+		return requestID, receiverSessionID, held, fmt.Errorf("request %s was recorded but the receiver's turn could not be started: %w", requestID, err)
 	}
-	return requestID, receiverSessionID, nil
+	return requestID, receiverSessionID, held, nil
 }
 
 // composeRequestText is the server-composed envelope the receiver reads. The
@@ -233,7 +247,7 @@ func (r AddressRouter) SendPeer(ctx context.Context, req tools.PeerRequest) (too
 	if err != nil {
 		return tools.PeerReceipt{}, err
 	}
-	id, sid, err := al.AdmitRequest(ctx, RequestAdmission{
+	id, sid, held, err := al.admitRequest(ctx, RequestAdmission{
 		Receiver:    receiver,
 		Content:     req.Content,
 		Sender:      addressing.Sender{Agent: sender},
@@ -248,7 +262,7 @@ func (r AddressRouter) SendPeer(ctx context.Context, req tools.PeerRequest) (too
 	if err != nil {
 		return tools.PeerReceipt{RequestID: id, SessionID: sid}, err
 	}
-	return tools.PeerReceipt{RequestID: id, SessionID: sid}, nil
+	return tools.PeerReceipt{RequestID: id, SessionID: sid, Held: held}, nil
 }
 
 // CheckPeerAdmission is the whole admission rule for addressing a peer pair,
