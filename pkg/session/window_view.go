@@ -53,6 +53,9 @@ type WindowView struct {
 	// the window can belong to a declaration before Skip); they are never part of
 	// the model view. Bounded by leadLimit.
 	Lead []ModelSlot
+	// ExpiryNote is the FR-007 agent expiry notice: set when retention expired
+	// older content and moved the cursor, cleared by the next /clear.
+	ExpiryNote string
 	// PriorUserTurns counts the user messages at ordinals < State.Skip.
 	PriorUserTurns int
 

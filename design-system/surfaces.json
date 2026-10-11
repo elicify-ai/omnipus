@@ -6604,6 +6604,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/ClearContextDivider.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ComposerMediaLibrary.tsx",
       "lane": 4
     },
@@ -6613,6 +6617,10 @@
     },
     {
       "source": "src/components/chat/DelegationEventLine.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ErrorDetailDisclosure.tsx",
       "lane": 3
     },
     {
@@ -6668,6 +6676,14 @@
       "lane": 6
     },
     {
+      "source": "src/components/chat/ParticipantLabels.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/participantLabel.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ProviderFallbackNoteLine.tsx",
       "lane": 3
     },
@@ -6697,6 +6713,10 @@
     },
     {
       "source": "src/components/chat/composer/AutoApprovePicker.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/ComposerMenu.tsx",
       "lane": 3
     },
     {

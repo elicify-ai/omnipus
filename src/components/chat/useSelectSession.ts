@@ -22,6 +22,15 @@ export interface UseSelectSessionOptions {
    * session's Activity panel.
    */
   onSelected?: (session: Session) => void
+  /**
+   * Replace the current history entry instead of pushing (default: push).
+   * Only redirect stubs want this (e.g. /admin/chat → Admin's default-
+   * workspace main, team-lead ruling 2026-10-11): a pushed dead route would
+   * trap the back button, bouncing off the stub's redirect forever. Sidebar
+   * rows and the search modal keep the default push — a real click there is
+   * a place the user came from, and Back should return to it.
+   */
+  replace?: boolean
 }
 
 /**
@@ -75,7 +84,7 @@ export interface UseSelectSessionOptions {
  * `isReplaying=true` and `attachedSessionType`). See W2-1 regression test.
  */
 export function useSelectSession(options: UseSelectSessionOptions) {
-  const { agents, workspaces, onClose, onSelected } = options
+  const { agents, workspaces, onClose, onSelected, replace } = options
   const navigate = useNavigate()
   const { attachToSession, setActiveAgentType } = useSessionStore()
   const seedSessionTokens = useChatStore((s) => s.seedSessionTokens)
@@ -131,7 +140,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
       supersedeNavigationIntent()
       onSelected?.(session)
       onClose()
-      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId } })
+      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId }, replace })
       return
     }
 
@@ -148,7 +157,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
       supersedeNavigationIntent()
       onSelected?.(session)
       onClose()
-      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId } })
+      void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId }, replace })
       return
     }
 
@@ -158,6 +167,6 @@ export function useSelectSession(options: UseSelectSessionOptions) {
     // docblock, step 6).
     onSelected?.(session)
     onClose()
-    void navigate({ to: '/sessions/$sessionId', params: { sessionId: session.id } })
+    void navigate({ to: '/sessions/$sessionId', params: { sessionId: session.id }, replace })
   }
 }

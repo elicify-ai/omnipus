@@ -58,6 +58,7 @@ func (al *AgentLoop) assembleMessages(
 	userMsg string, media []string, skillNames []string,
 ) []providers.Message {
 	breadcrumb := ""
+	expiryNote := ""
 	if !ts.opts.NoHistory {
 		store, ok := ts.agent.Sessions.(session.ContextWindowStore)
 		if !ok {
@@ -88,6 +89,7 @@ func (al *AgentLoop) assembleMessages(
 			ts.setContextWindowError(err)
 			return history
 		}
+		expiryNote = snap.ExpiryNote
 	}
 	if ts.opts.IsTaskRun && breadcrumb != "" {
 		breadcrumb += "\n\nReminder (task run): when the work is verified, report completion by calling goal_claim (status \"met\", with your one-line evidence) — not by writing a status yourself."
@@ -102,9 +104,19 @@ func (al *AgentLoop) assembleMessages(
 	recordAssembledRecallSpan(ts, span, history, len(keptSpan))
 	// Build only the pinned instructions and the current user here. The live
 	// window is inserted verbatim; only the recalled span is sanitized.
+	// A re-read launch or revive instruction that is already the newest line of
+	// the model window is not added a second time (nor archived again). One that
+	// is archived for the person's view only is still supplied here.
+	ts.userInputInWindow = false
+	if ts.opts.InputAlreadyArchived && len(history) > 0 {
+		if last := history[len(history)-1]; last.Role == "user" && last.Content == userMsg {
+			ts.userInputInWindow = true
+			userMsg, media = "", nil
+		}
+	}
 	base := ts.agent.ContextBuilder.BuildMessages(ts.depth, nil, userMsg, media,
 		ts.opts.WorkspaceID, ts.channel, ts.chatID, ts.opts.SenderID,
-		ts.opts.SenderDisplayName, breadcrumb, nil, skillNames...)
+		ts.opts.SenderDisplayName, withExpiryNote(breadcrumb, expiryNote), nil, skillNames...)
 	out := make([]providers.Message, 0, len(base)+len(history)+len(keptSpan))
 	out = append(out, base[0])
 	// Keep the original leading user/anchor ahead of injected archived context.
@@ -461,4 +473,17 @@ func (al *AgentLoop) handleModelSwitch(
 	}
 
 	return agent, nil
+}
+
+// withExpiryNote appends the FR-007 agent expiry notice (why the window starts
+// later than the conversation) to the breadcrumb block of the system prompt.
+func withExpiryNote(breadcrumb, note string) string {
+	if note == "" {
+		return breadcrumb
+	}
+	block := "## Retention notice\n" + note
+	if breadcrumb == "" {
+		return block
+	}
+	return breadcrumb + "\n\n" + block
 }

@@ -225,6 +225,7 @@ type Message = {
   system_subtype?:
     | (
         | "browser_handover_notice"
+        | "expiry_notice"
         | "goal_outcome"
         | "subagent_start"
         | "subagent_state"
@@ -3644,6 +3645,7 @@ export const Message: z.ZodType<Message> = z.object({
   system_subtype: z
     .enum([
       "browser_handover_notice",
+      "expiry_notice",
       "goal_outcome",
       "subagent_start",
       "subagent_state",

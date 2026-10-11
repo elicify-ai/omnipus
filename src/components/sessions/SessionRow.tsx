@@ -24,7 +24,8 @@ const TONE_VARIANT: Record<SessionStatusTone, 'default' | 'secondary' | 'success
   done: 'success',
   failed: 'error',
   stopped: 'warning',
-  interrupted: 'warning',
+  // Founder ruling: an interrupt is a normal outcome (e.g. the user pressed Stop), so neutral grey.
+  interrupted: 'muted',
   unavailable: 'muted',
 }
 

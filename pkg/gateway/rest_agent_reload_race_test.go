@@ -69,6 +69,13 @@ func wireAsyncReload(t *testing.T, api *restAPI, reloadDelay time.Duration) {
 				api.agentLoop.ClearReloadPending()
 				return
 			}
+			// Production's reload repopulates cfg.Agents.List from the agent
+			// store (config.LoadConfig strips it); without this the swap drops
+			// every agent and the response's tool view 404s.
+			if rosterErr := populateAgentsListFromEntityStoreStrict(newCfg, api.homePath); rosterErr != nil {
+				api.agentLoop.ClearReloadPending()
+				return
+			}
 			// ReloadProviderAndConfig performs the same atomic registry swap
 			// production's handleConfigReload does (pkg/agent/loop.go); the mock
 			// provider mirrors what mustAgentLoop already wired the loop with.

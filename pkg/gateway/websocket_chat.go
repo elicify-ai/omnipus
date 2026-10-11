@@ -16,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/validation"
@@ -964,6 +965,18 @@ func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 // Kickoffs and legacy no-ID oversized refusals keep their acknowledgement path.
 // Returns true when the message was rejected.
 func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
+	// Navigation FR-038: Admin has no standalone, workspace-less session; a first
+	// message to Admin is accepted only inside the default workspace.
+	home := hcm.h.home
+	if home == "" {
+		home = config.OmnipusHomeDir()
+	}
+	if msg := adminChatRefusal(home, hcm.targetAgentID, hcm.workspaceID); msg != "" {
+		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type: string(generated.WsFrameTypeError), Message: msg,
+		})
+		return true
+	}
 	// No session_id in frame: mint a new session so all subsequent frames have one.
 	meta, err := hcm.store.NewSession(session.SessionTypeChat, "webchat", hcm.targetAgentID)
 	if err != nil {

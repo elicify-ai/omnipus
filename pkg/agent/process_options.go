@@ -30,8 +30,14 @@ type processOptions struct {
 	// sessions are attributable. Empty for channel-originated turns (the platform
 	// sender in Sender.Username is not a gateway principal and is never read here)
 	// and unauthenticated env-token / dev-bypass paths — never guessed.
-	UserID                  string              // Authenticated gateway principal (FR-017)
-	UserMessage             string              // User message content (may include prefix)
+	UserID      string // Authenticated gateway principal (FR-017)
+	UserMessage string // User message content (may include prefix)
+	// InputAlreadyArchived marks UserMessage as an instruction re-read from this
+	// session's archive by reconstructSteeredTurn (a launch or revive
+	// instruction). When it is also the newest line of the model window, the turn
+	// keeps using the text (routing, goal claim, external CLI) but neither adds it
+	// to the window a second time nor archives it again (turnState.userInputInWindow).
+	InputAlreadyArchived    bool
 	ForcedSkills            []string            // Skills explicitly requested for this message
 	Media                   []string            // media:// refs from inbound message
 	InitialSteeringMessages []providers.Message // Steering messages from refactor/agent

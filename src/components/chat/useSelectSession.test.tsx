@@ -133,6 +133,53 @@ function renderSelectSession() {
   return result
 }
 
+// ── replace option (default: push) ─────────────────────────────────────────
+//
+// team-lead ruling 2026-10-11 (nav-adminentry): ONLY redirect stubs may
+// replace (the /admin/chat stub passes replace: true so Back cannot bounce
+// off it forever). The default must stay a push — a sidebar row or search
+// result is a place the user came from, and Back should return to it.
+
+describe('useSelectSession — replace option default', () => {
+  it('navigates as a PUSH by default: no replace in the navigate call, so the sidebar row is unchanged', () => {
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' })
+    })
+    const result = renderSelectSession()
+    const session = makeSession({ id: 'sess-b', workspace_id: 'ws-b', title: 'In B' })
+
+    act(() => {
+      result.current(session)
+    })
+
+    expect(mockNavigate).toHaveBeenCalledTimes(1)
+    const call = mockNavigate.mock.calls[0][0] as { to: string; replace?: boolean }
+    expect(call.to).toBe('/workspaces/$workspaceId/chat')
+    // The strict pin: the key is ABSENT (undefined), not merely falsy — a
+    // hardcoded `replace: false` would also behave as a push, but the
+    // pass-through is the contract this pins.
+    expect(call.replace).toBeUndefined()
+  })
+
+  it('replaces the history entry when the caller passes replace: true', () => {
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' })
+    })
+    const { result } = renderHook(() => useSelectSession({ agents, workspaces, onClose, replace: true }))
+    const session = makeSession({ id: 'sess-b', workspace_id: 'ws-b', title: 'In B' })
+
+    act(() => {
+      result.current(session)
+    })
+
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/chat',
+      params: { workspaceId: 'ws-b' },
+      replace: true,
+    })
+  })
+})
+
 // ── Workspace-switch branch ────────────────────────────────────────────────
 
 describe('useSelectSession — workspace-switch branch', () => {

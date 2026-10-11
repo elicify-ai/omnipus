@@ -966,6 +966,15 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
 		return
 	}
+	// Navigation FR-038: Admin has no standalone, workspace-less session.
+	reqWorkspaceID := ""
+	if req.WorkspaceId != nil {
+		reqWorkspaceID = *req.WorkspaceId
+	}
+	if msg := adminChatRefusal(a.homePath, agentID, reqWorkspaceID); msg != "" {
+		jsonErr(w, http.StatusBadRequest, msg)
+		return
+	}
 
 	var sessionType session.UnifiedSessionType
 	reqType := ""

@@ -438,8 +438,8 @@ func HasSystemAllowsInConstructorSeed(agentID string) bool {
 
 // coreAgentDelegation supplies fresh workspace graph defaults: Jim can assign
 // Planner, Researcher, General Purpose, himself and Ava for configuration
-// proposals; Planner can ask Researcher and fork itself; General Purpose can
-// fork itself.
+// proposals; Mia can hand work to General Purpose and fork herself; Planner can
+// ask Researcher and fork itself; General Purpose can fork itself.
 //
 // SELF-EDGE (settled design, 2026-10-09): EVERY agent gets a self-edge
 // CANDIDATE — it may fork a NEW session running the same agent exactly like any
@@ -476,6 +476,14 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 				config.DelegationModeBackground,
 			},
 		}
+	case IDMia:
+		// Mia hands bounded work to the General Purpose worker (founder test,
+		// gap 6) and forks herself. Seeded as ordinary workspace edges; the
+		// operator can remove them in the policy editor.
+		return &config.DelegationPolicy{
+			To:    []config.AgentRef{ref(IDMia), ref(IDWorker)},
+			Modes: []config.DelegationMode{config.DelegationModeTask, config.DelegationModeBackground},
+		}
 	case IDPlanner:
 		// Planner can gather research before authoring the plan, and fork itself.
 		return &config.DelegationPolicy{
@@ -492,7 +500,7 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 			Modes: []config.DelegationMode{config.DelegationModeTask, config.DelegationModeBackground},
 		}
 	default:
-		// Every other agent (Mia, Ava, Admin, Researcher, the hidden System
+		// Every other agent (Ava, Admin, Researcher, the hidden System
 		// Agents, and every custom agent created later) gets a SINGLE self-edge
 		// CANDIDATE. Which ids actually receive the row is decided by the WRITERS
 		// from the operator's exclusion data (config.workspace_seed_defaults.

@@ -85,6 +85,10 @@ type turnResult struct {
 type turnState struct {
 	mu sync.RWMutex
 
+	// userInputInWindow is set by assembleMessages when this turn's re-read
+	// instruction is already the newest line of the model window.
+	userInputInWindow bool
+
 	agent *AgentInstance
 	opts  processOptions
 	scope turnEventScope

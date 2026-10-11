@@ -588,7 +588,7 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 	// mia/jim/ava/worker/planner/researcher each get {id→id}). Admin is off-team,
 	// so its (produced) self-row is dropped by seedEdgesForTeam.
 	seeded := loadStoredDelegationEdges(t, home, ws.ID)
-	require.Len(t, seeded, 11)
+	require.Len(t, seeded, 12) // 6 self + Mia→Worker + Jim's 4 + Planner→Researcher
 	byPair := make(map[string]storedDelegationEdge, len(seeded))
 	for _, e := range seeded {
 		byPair[e.FromAgent+"->"+e.ToAgent] = e
@@ -733,7 +733,7 @@ func TestDefaultWorkspaceSeeder_PartialRoster_DropsOnlyMissingAgentEdges(t *test
 	assert.NotContains(t, byPair, "jim->researcher")
 	assert.NotContains(t, byPair, "planner->researcher")
 	assert.NotContains(t, byPair, "admin->admin", "Admin is off-team — its self-edge is dropped")
-	assert.Len(t, seeded, 8, "5 on-team self-edges + Jim's 3 surviving staff edges (researcher's 2 dropped)")
+	assert.Len(t, seeded, 9, "5 on-team self-edges + Mia→Worker + Jim's 3 surviving staff edges (researcher's 2 dropped)")
 }
 
 // TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed verifies the
