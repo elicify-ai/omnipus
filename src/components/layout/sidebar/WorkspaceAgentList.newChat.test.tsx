@@ -1,24 +1,31 @@
 /**
- * T-13 the real "+ New chat" row. Oracles: FR-005, BDD-03.1, BDD-E02,
- * dataset N09, and the deleted screen test at fef5e42d0
+ * T-13 the store-driven "Start a new chat?" row dialog. Oracles: FR-005,
+ * BDD-03.1, BDD-E02, dataset N09, and the deleted screen test at fef5e42d0
  * (src/components/chat/ChatScreen.firstSendNewChat.test.tsx, cases D8).
  *
- * Behaviour: the sidebar row's New chat button is the only way to start an
- * extra. An unconfirmed first send with no real session id opens the existing
- * guard. Keep this chat retains that delivery and does not touch the main
- * pointer. Start a new chat abandons that client message id and starts an
- * extra owned by the row's agent, without replacing the main pointer.
+ * D7 (squad nav-agent-row-menu-20261011): the sidebar row's "New chat" BUTTON
+ * is removed — the CAPABILITY stays. These cases no longer click a button;
+ * they arm the prompt through newChatFlow itself (startNewSession), the same
+ * decision owner the removed button called into, and drive the capability
+ * entry (beginPairExtra) directly. The row keeps rendering the dialog from
+ * the store's `newChatPrompt`, and confirming still executes exactly what
+ * was asked.
+ *
+ * Behaviour: an unconfirmed first send with no real session id opens the
+ * existing guard. Keep this chat retains that delivery and does not touch the
+ * main pointer. Start a new chat abandons that client message id and starts
+ * an extra owned by the row's agent, without replacing the main pointer.
  * A dialog opened against an older pending id cannot discard a newer message
  * that has since reused the pending slot — and the refusal is VISIBLE (M7: a
- * warning toast), never a silent no-op. With no unconfirmed send, New chat
- * starts the extra directly.
+ * warning toast), never a silent no-op. With no unconfirmed send, starting an
+ * extra begins directly.
  *
  * REAL: WorkspaceAgentList, ConfirmDialog, newChatFlow (the decision's single
  * owner), beginPairExtra, startNewSession, and the chat/session/ui stores.
  * MOCK: the router (navigation is a process edge) and the session-core seam
- * (the row's main id is not on the wire yet). The test never calls
- * startNewSession itself: the stale-slot fixture replaces the pending slot
- * directly on the chat store, the way a late delivery acknowledgement would.
+ * (the row's main id is not on the wire yet). The stale-slot fixture replaces
+ * the pending slot directly on the chat store, the way a late delivery
+ * acknowledgement would.
  *
  * Cases: Keep (negative), Start (exact abandon + owner), stale slot
  * (negative + visible refusal), no pending (direct extra). No sized numeric
@@ -38,6 +45,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { beginPairExtra } from './pairExtra'
 import { WorkspaceAgentList } from './WorkspaceAgentList'
 
 const WARNING = 'Delivery not confirmed. Copy your message before starting a new chat.'
@@ -235,8 +243,14 @@ function armUnconfirmed(activeAgentId: string) {
 }
 
 function openMiaNewChat() {
-  const row = screen.getByRole('group', { name: 'Mia' })
-  fireEvent.click(within(row).getByRole('button', { name: /^New chat with Mia$/ }))
+  // D7: no button to click — the dialog is store-driven. Arm the prompt
+  // through the flow itself; newChatFlow decides 'prompt' against the armed
+  // pending send, exactly as the removed button's beginPairExtra did.
+  let outcome: string | undefined
+  act(() => {
+    outcome = useSessionStore.getState().startNewSession('mia')
+  })
+  expect(outcome, 'the armed pending send must open the guard').toBe('prompt')
   const dialog = screen.getByRole('alertdialog', { name: 'Start a new chat?' })
   expect(within(dialog).getByText(WARNING, { exact: true }).textContent).toBe(WARNING)
   return dialog
@@ -370,7 +384,7 @@ describe('WorkspaceAgentList + New chat (FR-005, BDD-03.1, BDD-E02, N09)', () =>
     expect(toast?.message, 'M7: the warning names the pending-message mismatch').toContain('no longer pending')
   })
 
-  it('with no unconfirmed send, New chat starts the extra for this agent and leaves the main pointer in place', () => {
+  it('with no unconfirmed send, the capability (beginPairExtra) starts the extra for this agent directly and leaves the main pointer in place', () => {
     act(() => {
       useSessionStore.setState({
         ...useSessionStore.getInitialState(),
@@ -397,16 +411,24 @@ describe('WorkspaceAgentList + New chat (FR-005, BDD-03.1, BDD-E02, N09)', () =>
     const before = pointers()
     renderList()
 
-    const row = screen.getByRole('group', { name: 'Mia' })
-    fireEvent.click(within(row).getByRole('button', { name: /^New chat with Mia$/ }))
+    // D7: the row button is gone; the capability entry (beginPairExtra — what
+    // the button called, and what the row dialog's confirm still calls) is
+    // driven directly. No UI click exists to simulate.
+    const navigate = vi.fn()
+    let outcome: string | undefined
+    act(() => {
+      outcome = beginPairExtra(WS, 'mia', navigate, () => {})
+    })
 
+    expect(outcome, 'no unconfirmed send means no guard and a direct start').toBe('started')
     expect(screen.queryByRole('alertdialog'), 'no unconfirmed send means no guard').not.toBeInTheDocument()
+    expect(navigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: WS } })
     expect({
       activeSessionId: useSessionStore.getState().activeSessionId,
       owner: useSessionStore.getState().activeAgentId,
       abandoned: useChatStore.getState().abandonedFirstSendIds,
       pointers: pointers(),
-    }, 'BDD-03.1 New chat starts Mia\'s extra without replacing the main').toEqual({
+    }, 'BDD-03.1 the direct start begins Mia\'s extra without replacing the main').toEqual({
       activeSessionId: null,
       owner: 'mia',
       abandoned: [],
