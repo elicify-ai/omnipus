@@ -281,9 +281,11 @@ func TestTaskRunDispatchFailure_ReleasesItsSlotAndOwner(t *testing.T) {
 	inProgress := task.StatusInProgress
 	_, err := f.al.taskStore.Update(f.task.ID, task.Patch{Status: &inProgress})
 	require.NoError(t, err)
-	f.te.mu.Lock()
-	f.te.running[f.task.ID] = &taskSlot{}
-	f.te.mu.Unlock()
+	// StartTaskNow now reserves the task's run slot before launching, so the
+	// "executor already holds a run" state is planted between the launch and the
+	// dispatch: the launcher has reserved its slot and stamped the owner, and the
+	// dispatch is then refused.
+	f.te.SetSessionLauncher(&plantRunAfterLaunch{inner: f.te.launcher, te: f.te, taskID: f.task.ID})
 
 	_, err = f.te.StartTaskNow(context.Background(), f.task.ID)
 	require.Error(t, err, "the refused dispatch must be reported to the caller")
@@ -825,4 +827,26 @@ func TestTaskRunAdmissionRefusals_OtherThanAStopAreNotReportedAsStopped(t *testi
 			require.Empty(t, f.provider.Requests())
 		})
 	}
+}
+
+// plantRunAfterLaunch plants a live run for the task right after the real
+// Launch, so the following Dispatch finds the executor already holding one.
+type plantRunAfterLaunch struct {
+	inner  steer.SessionLauncher
+	te     *TaskExecutor
+	taskID string
+}
+
+func (l *plantRunAfterLaunch) Launch(ctx context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {
+	res, err := l.inner.Launch(ctx, req)
+	if err == nil {
+		l.te.mu.Lock()
+		l.te.running[l.taskID] = &taskSlot{}
+		l.te.mu.Unlock()
+	}
+	return res, err
+}
+
+func (l *plantRunAfterLaunch) Dispatch(ctx context.Context, id string, gen int) (steer.DispatchResult, error) {
+	return l.inner.Dispatch(ctx, id, gen)
 }
