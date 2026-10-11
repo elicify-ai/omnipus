@@ -561,7 +561,10 @@ describe('D5 — Hide from sidebar', () => {
   })
 })
 
-describe('D4/D8 — Remove', () => {
+// The D4/D8 Remove suite, split into focused describe blocks (function-size
+// budget: a describe callback is a function to scripts/tsfunlen.cjs). Test
+// order and every assertion are unchanged from the pre-split single block.
+describe('D4/D8 — Remove · dialog and the Team-tab PUT', () => {
   it('the dialog names the agent AND the workspace and says membership, not history, ends', async () => {
     renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
     await openRowMenu('Mia')
@@ -617,7 +620,9 @@ describe('D4/D8 — Remove', () => {
     // action can reach (R2: removal never deletes the main chat).
     expect(apiMocks.fetchWorkspace).not.toHaveBeenCalled()
   })
+})
 
+describe('D4/D8 — Remove · failure surfaces (S4-05 rejection, S4-01 refusal)', () => {
   it('a FAILED Remove surfaces the rejection and does not claim success (S4-05)', async () => {
     apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
     // removeWorkspaceMember's 409 path refetches the workspace and retries the
@@ -714,7 +719,9 @@ describe('D4/D8 — Remove', () => {
     expect(toast?.message).toContain('Could not remove Mia')
     expect(toast?.message).toContain('team list is unavailable')
   })
+})
 
+describe('D4/D8 — Remove · bounded 409 recovery (S4-07)', () => {
   it('on 409 refetches the workspace and retries ONCE with the fresh revision (same bounded retry as Hide, S4-07)', async () => {
     apiMocks.updateWorkspace
       .mockRejectedValueOnce(new ApiError(409, 'workspace changed elsewhere'))
@@ -766,7 +773,9 @@ describe('D4/D8 — Remove', () => {
     expect(toast?.variant).toBe('error')
     expect(toast?.message).toContain('workspace changed elsewhere')
   })
+})
 
+describe('D4/D8 — Remove · post-removal reporting and binding (S4-02/S4-03)', () => {
   it('a failed RECOVERY after a successful removal reports the true state — removed, not failed (S4-02)', async () => {
     apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
     apiMocks.updateWorkspace.mockResolvedValue(workspaceWith({ jim: jimMember }, { core_team: ['jim'] }))
@@ -860,7 +869,9 @@ describe('D4/D8 — Remove', () => {
     // And the binding STAYS explicitly fresh afterwards.
     expect(useSessionStore.getState().sessionByWorkspace[WS] ?? null).toBeNull()
   })
+})
 
+describe('D4/D8 — Remove · disabled with a visible reason', () => {
   it('Remove is disabled with a visible reason for a locked built-in on the default workspace', async () => {
     const lockedMia = makeAgent({ id: 'mia', name: 'Mia', type: 'core', locked: true })
     renderList({
