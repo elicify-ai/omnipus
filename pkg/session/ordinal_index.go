@@ -48,6 +48,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 const (
@@ -200,6 +202,18 @@ func (s *ArchiveDayStore) repairOrdinalIndexLocked() error {
 	for next < size {
 		row, l, err := readRowAt(rows, next)
 		if err != nil || row.Ordinal != n {
+			// Only a provably torn tail (a partial row with no newline at the end
+			// of the log) was never published. Anything else - a framed row that
+			// does not decode, an out-of-sequence ordinal, a read failure - is
+			// corruption or an I/O error: cutting there would delete every later
+			// published row, so it surfaces instead.
+			torn, tornErr := tornRowTail(rows, next, size)
+			if tornErr != nil {
+				return fmt.Errorf("ordinal index: inspect row log tail at %d: %w", next, tornErr)
+			}
+			if !torn {
+				return fmt.Errorf("ordinal index: row log is corrupt at offset %d (expected ordinal %d): %w", next, n, errors.Join(errOrdinalCorrupt, err))
+			}
 			if err := rows.Truncate(next); err != nil {
 				return fmt.Errorf("ordinal index: cut torn row log: %w", err)
 			}
@@ -216,10 +230,27 @@ func (s *ArchiveDayStore) repairOrdinalIndexLocked() error {
 	return offs.Sync()
 }
 
+// errOrdinalCorrupt marks a row log that is damaged somewhere other than a torn
+// tail. It is never repaired by truncation.
+var errOrdinalCorrupt = errors.New("ordinal index: row log is corrupt")
+
+// tornRowTail reports whether the log bytes [from, size) are a single partial
+// row with no newline - the only shape of an unpublished append.
+func tornRowTail(f *os.File, from, size int64) (bool, error) {
+	if size-from > ordinalRowBound {
+		return false, nil
+	}
+	buf := make([]byte, size-from)
+	if _, err := f.ReadAt(buf, from); err != nil {
+		return false, err
+	}
+	return !bytes.Contains(buf, []byte{'\n'}), nil
+}
+
 // rebuildOffsetsLocked rewrites the offsets table from the row log: one pass over
-// the rows, keeping rows only while their ordinals run 0,1,2,.. and cutting the
-// log at the first row that does not (a torn or out-of-sequence tail was never
-// published).
+// the rows, which must run 0,1,2,.. A partial last row with no newline was never
+// published and is cut off; a framed row that does not decode or is out of
+// sequence, or a read error, is returned as an error with the log untouched.
 func (s *ArchiveDayStore) rebuildOffsetsLocked() error {
 	rows, err := os.OpenFile(s.ordinalRowsPath(), os.O_RDWR, 0o600)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -235,11 +266,14 @@ func (s *ArchiveDayStore) rebuildOffsetsLocked() error {
 	for n := 0; ; n++ {
 		line, err := br.ReadBytes('\n')
 		if err != nil {
-			break // a torn tail without a newline was never published
+			if errors.Is(err, io.EOF) {
+				break // the end of the log; any partial last row was never published
+			}
+			return fmt.Errorf("ordinal index: read rows for rebuild: %w", err)
 		}
 		var row ordinalRow
-		if json.Unmarshal(bytes.TrimSuffix(line, []byte{'\n'}), &row) != nil || row.Ordinal != n {
-			break
+		if decErr := json.Unmarshal(bytes.TrimSuffix(line, []byte{'\n'}), &row); decErr != nil || row.Ordinal != n {
+			return fmt.Errorf("ordinal index: row %d at offset %d is not the next published row: %w", n, off, errors.Join(errOrdinalCorrupt, decErr))
 		}
 		var buf [ordinalOffsetSize]byte
 		binary.BigEndian.PutUint64(buf[:], uint64(off))
@@ -249,12 +283,8 @@ func (s *ArchiveDayStore) rebuildOffsetsLocked() error {
 	if err := rows.Truncate(off); err != nil {
 		return fmt.Errorf("ordinal index: cut row log: %w", err)
 	}
-	tmp := s.ordinalOffsetsPath() + ".tmp"
-	if err := os.WriteFile(tmp, table, 0o600); err != nil {
+	if err := fileutil.WriteFileAtomic(s.ordinalOffsetsPath(), table, 0o600); err != nil {
 		return fmt.Errorf("ordinal index: write rebuilt offsets: %w", err)
-	}
-	if err := os.Rename(tmp, s.ordinalOffsetsPath()); err != nil {
-		return fmt.Errorf("ordinal index: install rebuilt offsets: %w", err)
 	}
 	return nil
 }

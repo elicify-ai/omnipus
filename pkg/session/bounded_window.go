@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -175,12 +176,8 @@ func (s *ArchiveDayStore) SaveWindow(w AddressedWindow) error {
 	if err != nil {
 		return fmt.Errorf("archive: encode window: %w", err)
 	}
-	tmp := filepath.Join(s.dir(), archiveWindowFile+".tmp")
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := fileutil.WriteFileAtomic(filepath.Join(s.dir(), archiveWindowFile), data, 0o600); err != nil {
 		return fmt.Errorf("archive: write window: %w", err)
-	}
-	if err := os.Rename(tmp, filepath.Join(s.dir(), archiveWindowFile)); err != nil {
-		return fmt.Errorf("archive: rename window: %w", err)
 	}
 	return nil
 }
