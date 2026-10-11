@@ -68,10 +68,33 @@ type TokenFrameType = Extract<Parameters<ChatStore['handleFrame']>[0], { type: '
 // the screen (or the "/clear was not performed" reply resolves it) — an
 // append ack for the command row must not flip it to a sent look midway. A
 // server-reported failure still marks the row for Retry.
+/**
+ * A send the server failed or discarded never starts a turn. Drop the empty
+ * optimistic "thinking" placeholder sendMessage put right after the user row,
+ * then release the busy flag only if nothing else backs it (another running
+ * turn, a streaming bubble, a running tool). A mid-turn steer has no
+ * placeholder, so its discard removes nothing and never stops the running turn.
+ */
+function releaseUnstartedSend(draft: SessionChatState, userMessageId: string): void {
+  const idx = draft.messageOrder.indexOf(userMessageId)
+  const nextId = idx === -1 ? undefined : draft.messageOrder[idx + 1]
+  const next = nextId ? draft.messagesById[nextId] : undefined
+  const ownsLiveTool = !!nextId && Object.values(draft.toolCallOwnerMessageId ?? {}).includes(nextId)
+  const isOptimisticPlaceholder =
+    !!next && next.role === 'assistant' && (next.isStreaming || next.status === 'streaming') &&
+    !next.content && !next.turnId && !next.agentId && !next.tool_calls?.length && !next.spans?.length && !next.media?.length && !ownsLiveTool
+  if (nextId && isOptimisticPlaceholder) {
+    delete draft.messagesById[nextId]
+    draft.messageOrder.splice(idx + 1, 1)
+  }
+  if (busyFlagIsUnbacked(draft)) draft.isStreaming = false
+}
+
 function applyMessageStatusFrame(bucket: SessionChatState, frame: MessageStatusFrame): Partial<SessionChatState> {
   return produce(bucket, (draft) => {
     const message = draft.messagesById[frame.client_message_id] ?? findFirstSendMessage(draft, frame.client_message_id)
     if (!message || message.role !== 'user') return
+    if (frame.state === 'failed' || frame.state === 'discarded') releaseUnstartedSend(draft, message.id)
     if (frame.state !== 'failed' && isClearCommandText(message.content)) return
     message.deliveryStatus = frame.state === 'failed' ? 'failed' : frame.state
     message.status = frame.state === 'failed' ? 'error' : 'done'

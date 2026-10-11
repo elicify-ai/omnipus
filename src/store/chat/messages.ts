@@ -273,7 +273,8 @@ export function advanceEventTime(current: string | null, incoming: string | null
 /**
  * True when the bucket's busy flag (`isStreaming`, which draws the composer's
  * Stop button) has nothing behind it: no message is streaming, no tool call is
- * running, no turn was announced active, and no replay is rebuilding history.
+ * running, no turn was announced active, no replay is rebuilding history, and
+ * no steer is waiting for its continuation.
  * `tool_call_start` sets the flag but carries no turn_id, so a straggler that
  * lands after a turn already ended (after Stop, after done, after a reconnect)
  * re-arms it with no later frame to end it - Stop shows while the transcript
@@ -285,6 +286,15 @@ export function busyFlagIsUnbacked(
 ): boolean {
   if (!b.isStreaming || b.isReplaying || b.activeTurnId) return false
   if (Object.values(b.toolCalls).some((t) => t.status === 'running')) return false
+  // A mid-turn steer closes the running bubble before the turn's continuation
+  // opens a new one. While the last assistant bubble is that closed-by-steer
+  // one, the turn is still in flight and the flag is backed.
+  for (let i = b.messageOrder.length - 1; i >= 0; i--) {
+    const m = b.messagesById[b.messageOrder[i]]
+    if (m?.role !== 'assistant') continue
+    if (m.closedBySteer) return false
+    break
+  }
   return !b.messageOrder.some((id) => {
     const m = b.messagesById[id]
     return !!m && (m.isStreaming || m.status === 'streaming')
