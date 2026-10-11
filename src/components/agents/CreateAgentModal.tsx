@@ -28,6 +28,7 @@ import {
   fetchRegistryTools,
   fetchSkills,
   getErrorMessage,
+  invalidateAfterAgentCreate,
 } from '@/lib/api'
 import type {
   Agent,
@@ -249,7 +250,11 @@ export function CreateAgentModal({
           onCreateProp(data).then(() => null)
         : createAgent(data),
     onSuccess: (agent, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      // Shared post-create freshness (invalidateAfterAgentCreate): besides
+      // ['agents'] this also invalidates the workspaces list queries — the
+      // sidebar roster is membership-driven (core_team + member_configs), so
+      // without that half the new agent's row waited for the 30 s poll.
+      invalidateAfterAgentCreate(queryClient)
       addToast({
         // Real create path: use the server-echoed name. Legacy path (agent
         // is null, no server entity was returned): fall back to the name

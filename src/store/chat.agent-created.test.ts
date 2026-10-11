@@ -17,10 +17,11 @@
  * matching chat.task-run-status.test.ts's direct-invalidate shape.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 import { useChatStore } from './chat'
 import { queryClient } from '@/lib/queryClient'
+import { workspacesQueryKeys } from '@/lib/api'
 import type { AgentCreatedFrame } from '@/lib/api/generated/asyncapi-types'
 
 describe('chat handleFrame → agent_created (agent-picker freshness fix)', () => {
@@ -52,5 +53,39 @@ describe('chat handleFrame → agent_created (agent-picker freshness fix)', () =
 
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['agents'] })
     }
+  })
+})
+
+// Sidebar-roster freshness (founder bug 2026-10-11): the roster is
+// membership-driven (workspaceRoster.ts::memberRoster reads the workspace's
+// core_team + member_configs), so ['agents'] alone leaves the new agent's
+// sidebar row waiting for the 30 s workspaces poll. The frame must invalidate
+// the workspaces list queries too. Asserted on the QUERY STATE (isInvalidated)
+// rather than a spy: the effect on the exact mounted keys is the contract,
+// and a spy could green-light a no-op key (workspacesQueryKeys.list() with no
+// params matches ZERO registered queries — see WorkspaceTeamTab.tsx's NOTE).
+describe('chat handleFrame → agent_created (sidebar roster freshness)', () => {
+  const activeListKey = workspacesQueryKeys.list({ status: 'active' })
+  const archivedListKey = workspacesQueryKeys.list({ status: 'archived' })
+
+  beforeEach(() => {
+    queryClient.clear()
+  })
+
+  afterEach(() => {
+    queryClient.clear()
+  })
+
+  it('invalidates the agents query AND both mounted workspaces list queries', () => {
+    queryClient.setQueryData(['agents'], [])
+    queryClient.setQueryData(activeListKey, [])
+    queryClient.setQueryData(archivedListKey, [])
+
+    const frame: AgentCreatedFrame = { type: 'agent_created', agent_id: 'agent-new-3' }
+    useChatStore.getState().handleFrame(frame)
+
+    expect(queryClient.getQueryState(['agents'])?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(activeListKey)?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryState(archivedListKey)?.isInvalidated).toBe(true)
   })
 })
