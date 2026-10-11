@@ -31,6 +31,11 @@ type AgentInstance struct {
 	// written by SwitchModel while runTurn reads them concurrently.
 	mu sync.RWMutex
 
+	// initErr is set when the instance could not be constructed (its session
+	// store did not open). Such an instance carries only ID, Name and this error
+	// and is never registered; the registry reports it through InitErr.
+	initErr error
+
 	ID        string
 	Name      string
 	Model     string
@@ -156,6 +161,7 @@ type AgentInstance struct {
 
 // newAgentInstance carries the shared state of NewAgentInstance across its stages.
 type newAgentInstance struct {
+	initErr             error
 	agentCfg            *config.AgentConfig
 	defaults            *config.AgentDefaults
 	cfg                 *config.Config
@@ -205,6 +211,11 @@ func NewAgentInstance(
 	nai.registerTools()
 
 	nai.prepareIdentity()
+	if nai.initErr != nil {
+		// No session store: the instance cannot run. Hand back only the error
+		// (the registry refuses it) instead of panicking mid-construction.
+		return &AgentInstance{ID: nai.agentID, Name: nai.agentName, initErr: nai.initErr}
+	}
 
 	nai.resolveRuntimeLimits()
 
@@ -372,7 +383,8 @@ func (nai *newAgentInstance) prepareIdentity() {
 	// store and no fallback to another kind of store.
 	sharedStore, storeErr := openSharedSessionStore(sessionsHomeFor(nai.cfg))
 	if storeErr != nil {
-		panic(fmt.Sprintf("agent %q: %v", nai.agentID, storeErr))
+		nai.initErr = storeErr
+		return
 	}
 	nai.sessions = sharedStore
 

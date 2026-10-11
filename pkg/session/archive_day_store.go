@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -36,6 +37,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 )
 
@@ -284,7 +286,18 @@ func (s *ArchiveDayStore) partitionPathForKeyLocked(key string) (string, error) 
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("archive: stat partition %s: %w", key, err)
 	}
-	return "", fmt.Errorf("archive: no partition for key %q", key)
+	return "", fmt.Errorf("archive: no partition for key %q: %w", key, errNoPartition)
+}
+
+// errNoPartition marks a partition key whose file is provably gone (swept by
+// retention). It is the only partition failure that means "expired"; any other
+// failure to resolve or read a partition is an error, never expiry.
+var errNoPartition = errors.New("partition is gone")
+
+// partitionGone reports whether err proves the addressed partition no longer
+// exists, as opposed to an I/O or corruption error that must surface.
+func partitionGone(err error) bool {
+	return errors.Is(err, errNoPartition) || errors.Is(err, fs.ErrNotExist)
 }
 
 func (s *ArchiveDayStore) readDayMarkLocked() (string, error) {
@@ -302,12 +315,8 @@ func (s *ArchiveDayStore) writeDayMarkLocked(day string) error {
 	if err := os.MkdirAll(s.dir(), 0o700); err != nil {
 		return fmt.Errorf("archive: create dir: %w", err)
 	}
-	tmp := filepath.Join(s.dir(), archiveDayMarkFile+".tmp")
-	if err := os.WriteFile(tmp, []byte(day+"\n"), 0o600); err != nil {
+	if err := fileutil.WriteFileAtomic(filepath.Join(s.dir(), archiveDayMarkFile), []byte(day+"\n"), 0o600); err != nil {
 		return fmt.Errorf("archive: write day mark: %w", err)
-	}
-	if err := os.Rename(tmp, filepath.Join(s.dir(), archiveDayMarkFile)); err != nil {
-		return fmt.Errorf("archive: rename day mark: %w", err)
 	}
 	return nil
 }

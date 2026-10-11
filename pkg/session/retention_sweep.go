@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -107,6 +108,11 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// Track session dirs we touched so we can decide which to remove entirely.
 	touchedSessionDirs := make(map[string]struct{})
 
+	// Rolled day partitions expire through the archive's own path, which also
+	// moves each session's window past the expired content. The generic walk
+	// below never deletes them.
+	expiryErr := us.expireArchiveSessions(retentionDays, &removed, touchedSessionDirs)
+
 	err := filepath.WalkDir(us.baseDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if path == us.baseDir {
@@ -134,6 +140,9 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		parts := strings.SplitN(rel, string(filepath.Separator), 3)
 		if len(parts) < 2 {
 			return nil
+		}
+		if parts[0] != ".context" && transcriptDayPattern.MatchString(d.Name()) {
+			return nil // a rolled day partition: owned by expireArchiveSessions
 		}
 
 		info, err := d.Info()
@@ -174,7 +183,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	})
 	if err != nil {
 		unlock()
-		return removed, err
+		return removed, errors.Join(err, expiryErr)
 	}
 
 	// Second pass: remove session directories that lost all their transcripts
@@ -247,5 +256,33 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		}
 	}
 
-	return removed, nil
+	return removed, expiryErr
+}
+
+// expireArchiveSessions runs the archive expiry path over every session
+// directory, adding the removed partition count to *removed and marking each
+// touched directory for the empty-directory pass. A session whose expiry fails
+// is skipped and its error joined into the result; the others still run.
+func (us *UnifiedStore) expireArchiveSessions(retentionDays int, removed *int, touched map[string]struct{}) error {
+	entries, err := os.ReadDir(us.baseDir)
+	if err != nil {
+		return fmt.Errorf("session: retention_sweep: list sessions: %w", err)
+	}
+	var errs error
+	for _, ent := range entries {
+		if !ent.IsDir() || strings.HasPrefix(ent.Name(), ".") {
+			continue
+		}
+		notice, expErr := us.backend.expireSession(ent.Name(), retentionDays)
+		if expErr != nil {
+			slog.Warn("session: retention_sweep: archive expiry failed", "session_id", ent.Name(), "error", expErr)
+			errs = errors.Join(errs, fmt.Errorf("session %s: %w", ent.Name(), expErr))
+			continue
+		}
+		if notice.RemovedPartitions > 0 {
+			*removed += notice.RemovedPartitions
+			touched[filepath.Join(us.baseDir, ent.Name())] = struct{}{}
+		}
+	}
+	return errs
 }

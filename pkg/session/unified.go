@@ -382,8 +382,9 @@ func validateSessionID(id string) error {
 	return nil
 }
 
-// NewUnifiedStore creates a UnifiedStore rooted at baseDir.
-// It migrates legacy flat JSONL files if any are found.
+// NewUnifiedStore creates a UnifiedStore rooted at baseDir. It performs no
+// saved-chat conversion: that runs only in the explicit boot step
+// (CutoverSavedChatsAtBoot / CutoverSavedChatsAtBootWithAgentStores).
 // The agentID is no longer baked into the store — callers pass it per-operation
 // (e.g., NewSession receives creatingAgentID).
 //
@@ -393,7 +394,7 @@ func validateSessionID(id string) error {
 // (e.g., <home>/agents/<id>/sessions), use NewUnifiedStoreWithHome so that
 // upload files are found at the correct <home>/uploads/<sessionID> path.
 func NewUnifiedStore(baseDir string) (*UnifiedStore, error) {
-	return newUnifiedStore(baseDir, filepath.Dir(filepath.Clean(baseDir)), false)
+	return newUnifiedStore(baseDir, filepath.Dir(filepath.Clean(baseDir)))
 }
 
 // NewUnifiedStoreWithHome creates a UnifiedStore rooted at baseDir whose
@@ -404,20 +405,15 @@ func NewUnifiedStore(baseDir string) (*UnifiedStore, error) {
 // cascade-deletes on DeleteSession, ClearAll, and RetentionSweep always remove
 // files from the correct location regardless of the store's baseDir depth.
 //
-// This is the BOOT constructor (pkg/agent's initSessionStore and the shared
-// store both use it): it runs the one-time CONV saved-chat cutover
-// (unified_conv.go) BEFORE loadMetaCacheLocked, so the session cache/list/
-// attach never observe a pre-cutover saved chat. The bare NewUnifiedStore
-// convenience wrapper over an arbitrary directory is NOT a boot path and does
-// not run the cutover.
+// Like NewUnifiedStore it never converts saved chats. The one-time CONV
+// cutover (unified_conv.go) is the explicit boot step the agent boot flow runs
+// BEFORE it opens the shared store (architect Q10): the only legacy reader.
 func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
-	return newUnifiedStore(baseDir, homePath, true)
+	return newUnifiedStore(baseDir, homePath)
 }
 
-// newUnifiedStore is the shared constructor body; runCutover selects the
-// one-time CONV saved-chat cutover (see NewUnifiedStoreWithHome). It is false
-// for the convenience/test constructor, which has no boot semantics.
-func newUnifiedStore(baseDir, homePath string, runCutover bool) (*UnifiedStore, error) {
+// newUnifiedStore is the shared constructor body.
+func newUnifiedStore(baseDir, homePath string) (*UnifiedStore, error) {
 	if err := os.MkdirAll(baseDir, 0o700); err != nil {
 		return nil, fmt.Errorf("unified_store: create base dir %q: %w", baseDir, err)
 	}
@@ -441,15 +437,6 @@ func newUnifiedStore(baseDir, homePath string, runCutover bool) (*UnifiedStore, 
 	}
 
 	backend.provider = us.archiveStore
-	if runCutover {
-		if convErr := us.convergeSavedChats(); convErr != nil {
-			// Visible cutover failure (spec CONV / Failure): do not start
-			// ordinary session-serving over an incomplete conversion. Tear the
-			// backend down so a refused boot leaks no resources.
-			_ = backend.Close()
-			return nil, convErr
-		}
-	}
 	us.loadMetaCacheLocked()
 	// ADR-057 U6 W24 (FR-063): every store gets a running periodic flusher
 	// from construction — a fresh install with no operator override still
