@@ -195,7 +195,12 @@ export async function withCsrfRetry<T>(attempt: () => Promise<T>): Promise<T> {
   }
 }
 
-export async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>): Promise<T> {
+export async function request<T>(
+  path: string,
+  init?: RequestInit,
+  schema?: ZodType<T>,
+  onResponseHeaders?: (headers: Headers) => void,
+): Promise<T> {
   // Client-side CSRF gate: reject state-changing calls that would be
   // guaranteed to 403 at the server. This gives a clear error immediately
   // instead of a cryptic "403 csrf cookie missing" from the network tab
@@ -221,11 +226,16 @@ export async function request<T>(path: string, init?: RequestInit, schema?: ZodT
     )
   }
 
-  const attempt = () => performRequest<T>(path, init, schema)
+  const attempt = () => performRequest<T>(path, init, schema, onResponseHeaders)
   return stateChanging ? withCsrfRetry(attempt) : attempt()
 }
 
-async function performRequest<T>(path: string, init?: RequestInit, schema?: ZodType<T>): Promise<T> {
+async function performRequest<T>(
+  path: string,
+  init?: RequestInit,
+  schema?: ZodType<T>,
+  onResponseHeaders?: (headers: Headers) => void,
+): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase()
   let res: Response
   try {
@@ -246,6 +256,13 @@ async function performRequest<T>(path: string, init?: RequestInit, schema?: ZodT
   if (!res.ok) {
     throw await ApiError.fromResponse(res)
   }
+
+  // Response headers a caller needs beyond the body (e.g. the messages read's
+  // X-Has-Earlier-Messages — contracts/openapi.yaml GET /sessions/{id}/messages).
+  // Success responses only: an error response carries no body contract the
+  // caller is about to consume. Optional, so every existing caller is
+  // unchanged.
+  onResponseHeaders?.(res.headers)
 
   // Empty-body responses (HTTP 204 No Content, 205 Reset Content, or any 2xx
   // that explicitly advertises a zero-length body) carry no JSON to parse.

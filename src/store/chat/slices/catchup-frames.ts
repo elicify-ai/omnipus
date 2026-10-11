@@ -70,9 +70,17 @@ export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: C
       // be treated as unanswered.
       const snapshotFrame = frame as SessionSnapshotFrame
       noteServerAttentionFrame(targetSid, snapshotFrame)
+      // Founder ruling 2026-10-11: the attach replay serves the chat view
+      // from the session's last /clear marker; has_earlier_messages says
+      // whether entries exist before it. Recorded so the quiet
+      // "Earlier messages are saved." line above the clear divider can show.
       withBucket(targetSid, (b) => {
         const wiped = applySnapshotHistoryWipe(b)
-        return { ...wiped, snapshotWasBootMismatch: snapshotFrame.reason === 'boot_mismatch' }
+        return {
+          ...wiped,
+          snapshotWasBootMismatch: snapshotFrame.reason === 'boot_mismatch',
+          hasEarlierMessages: snapshotFrame.has_earlier_messages === true,
+        }
       })
       return true
     }

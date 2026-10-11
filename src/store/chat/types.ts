@@ -490,6 +490,18 @@ export interface SessionChatState {
    */
   snapshotWasBootMismatch?: boolean
   /**
+   * Founder ruling 2026-10-11 (until #1266): true when this session's chat
+   * view starts at its last /clear marker and earlier transcript entries
+   * exist before it — the cleared context. Read from every carrier the
+   * server sends it on (SessionDetail.has_earlier_messages,
+   * SessionSnapshotFrame.has_earlier_messages, the messages read's
+   * X-Has-Earlier-Messages header) and rendered ONLY as the quiet
+   * "Earlier messages are saved." line above the clear divider
+   * (components/chat/ClearContextDivider.tsx). Never a control, never a
+   * pager — scroll-back of the earlier messages is #1266.
+   */
+  hasEarlierMessages?: boolean
+  /**
    * SPA-only: a completed boot-mismatch attach confirmed a cut-off answer in
    * this tab. Keeps Interrupted independent of the optional REST lifecycle's
    * arrival. Retains boot identity through rebuilds so the same boot cannot

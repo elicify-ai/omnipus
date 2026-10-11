@@ -288,7 +288,10 @@ describe('SearchModal — delete flow', () => {
     // logical disabled state is asserted directly via aria-disabled instead.
     expect(deleteBtn).not.toBeDisabled()
     expect(deleteBtn).toHaveAttribute('aria-disabled', 'true')
-    expect(deleteBtn).toHaveAttribute('title', 'Protected (heartbeat)')
+    // Text updated per the nav-clearview brief (2026-10-11, T5/D4): a main
+    // chat's protection is its IDENTITY (server computeSessionProtected:
+    // main ⇒ protected), not a heartbeat — the tooltip says so.
+    expect(deleteBtn).toHaveAttribute('title', 'Main chat — protected')
 
     // Still not natively disabled, so a click reaches the handler — which
     // must no-op on its own: the destructive confirm step never appears, and
@@ -319,7 +322,8 @@ describe('SearchModal — delete flow', () => {
     // when this attribute is actually present, regardless of the static
     // Tailwind modifier string always being part of the component's class list.
     expect(deleteBtn).not.toHaveAttribute('disabled')
-    expect(deleteBtn).toHaveAttribute('title', 'Protected (heartbeat)')
+    // Text updated per the nav-clearview brief (2026-10-11, T5/D4): protection is identity, not heartbeat.
+    expect(deleteBtn).toHaveAttribute('title', 'Main chat — protected')
     // Non-disabled elements stay in the tab order and are focusable, which is
     // what keeps the title tooltip (and a screen reader's read of aria-disabled)
     // reachable for keyboard users too — a truly `disabled` button drops out

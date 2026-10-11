@@ -29,8 +29,8 @@
 //       applied at the next busy→idle transition (turn done/error, the
 //       replay-clear timer, setReplaying(false), catch_up_complete) without
 //       a new network read. The intent clears only after a projection
-//       carrying THIS operation's marker (the marker following that
-//       operation's own user row) has been applied.
+//       carrying a marker the view did not have at arm time — THIS
+//       operation's marker — has been applied.
 //   D2  Operation ownership: the read is keyed by the operation's
 //       client_message_id (a newer /clear never shares an older in-flight
 //       read), the owning intent is captured before the read is awaited, and
@@ -48,9 +48,11 @@
 //       toast; the diagnostics stay for triage.
 //
 // Nothing here clears anything locally, ever: a projection that does not
-// carry this operation's marker (the clear has not executed server-side yet,
-// or the clear was refused — a refusal writes no marker) is merged honestly,
-// and the intent survives so the next opportunity re-reads.
+// carry a marker unknown at arm time (the clear has not executed
+// server-side yet, or the clear was refused — a refusal writes no marker)
+// is applied to NOTHING, and the intent survives so the next opportunity
+// re-reads. The screen moves only when the server's own fresh view
+// (starting at the marker) says it moved.
 
 import { queryClient } from '@/lib/queryClient'
 import { fetchSessionMessages } from '@/lib/api'
@@ -101,11 +103,12 @@ function noteUnresolved(sid: string, op: PendingClearRefresh, userInitiated: boo
   if (userInitiated) tell("Can't confirm the /clear result yet. It will be checked again after the next reply.")
 }
 
-export function armClearRefresh(sid: string, clientMessageId: string, activeTurnId: string | null): void {
+export function armClearRefresh(sid: string, clientMessageId: string, activeTurnId: string | null, knownMarkerIds: string[] = []): void {
   pendingClearRefetches[sid] = {
     clientMessageId,
     turnIdAtArm: activeTurnId,
     armedAt: Date.now(),
+    knownMarkerIds,
   }
 }
 
@@ -161,6 +164,12 @@ async function runClearRefetch(sid: string, withBucket: WithBucket, userInitiate
     // V3: the read runs on the SHARED history key, so its failure surfaces as
     // the screen's own history-error state (with Retry) and its success
     // publishes into the history cache directly.
+    // D2 (marker keying): a read that JOINS an already-in-flight fetch on the
+    // shared key may be served by data computed before this operation's clear
+    // executed — with the old own-user-row correlation gone, there is no way
+    // to tell whose marker such a response carries, so it cannot retire this
+    // operation (the intent survives and the next opportunity re-reads).
+    const joinedInFlight = queryClient.getQueryState(['messages', sid])?.fetchStatus === 'fetching'
     const fresh = await queryClient.fetchQuery({
       queryKey: ['messages', sid],
       queryFn: () => fetchSessionMessages(sid),
@@ -173,7 +182,7 @@ async function runClearRefetch(sid: string, withBucket: WithBucket, userInitiate
       logDiagnostic('clearRefetchSuperseded', { sessionId: sid, operationId: op.clientMessageId })
       return
     }
-    applyProjection(sid, op, fresh, withBucket, userInitiated)
+    applyProjection(sid, op, fresh, withBucket, userInitiated, joinedInFlight)
   } catch (error) {
     // C2/D5: a READ failure is distinct from an application failure. Nothing
     // stale is applied, the diagnostic carries the operation and the error's
@@ -189,13 +198,26 @@ async function runClearRefetch(sid: string, withBucket: WithBucket, userInitiate
   }
 }
 
-function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[], withBucket: WithBucket, userInitiated = false): void {
-  // D2: a response that does not even contain THIS operation's own /clear
-  // user row predates the operation (it was answered before the server saw
-  // this /clear) — it is not this operation's view. Apply nothing; the
-  // intent survives and the next opportunity re-reads.
-  if (!projectionContainsOwnUserRow(fresh, op.clientMessageId)) {
-    logDiagnostic('clearRefetchPredatesOperation', { sessionId: sid, operationId: op.clientMessageId })
+function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[], withBucket: WithBucket, userInitiated = false, joinedInFlight = false): void {
+  // D2, re-keyed ON THE MARKER (founder ruling 2026-10-11): the server's
+  // chat-view read starts at the session's LAST /clear marker and
+  // deliberately keeps no link between a /clear row and the marker it
+  // produced (pkg/session/transcript_view.go::sinceLastClear — a Stop can
+  // land entries between the command row and the marker, so "the row just
+  // before the marker" is not a reliable link and none is kept). The
+  // marker itself, matched by IDENTITY, is therefore the only honest
+  // signal: the projection is a post-clear view for this operation only
+  // when it carries a marker the view did not already have at arm time,
+  // and it was not served by a read that predates the operation (the
+  // joinedInFlight guard). Anything else — a queued /clear whose row is
+  // still in the view, a refusal (no marker is ever written), a stale read
+  // on a previously cleared session whose only markers predate the
+  // operation, or a response a still-running earlier fetch served — is not
+  // this operation's view: apply NOTHING (the live view is untouched, so
+  // local-only rows above the /clear bubble can never vanish — audit D2),
+  // and the intent survives for the next opportunity.
+  if (joinedInFlight || !projectionCarriesFreshMarker(fresh, op)) {
+    logDiagnostic('clearRefetchNoMarkerYet', { sessionId: sid, operationId: op.clientMessageId })
     noteUnresolved(sid, op, userInitiated)
     return
   }
@@ -211,7 +233,7 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
         return {}
       }
       const merged = mergeServerProjection(b, fresh, op)
-      markerApplied = hasOwnMarker(merged, op.clientMessageId)
+      markerApplied = true
       return { messagesById: merged.messagesById, messageOrder: merged.messageOrder }
     })
   } catch (error) {
@@ -230,43 +252,24 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
     return
   }
   if (deferred) return
-  if (markerApplied) {
-    // C4: the intent clears only now — a projection carrying THIS
-    // operation's marker (its own user row followed by the marker) is in the
-    // view.
-    delete pendingClearRefetches[sid]
-  } else {
-    // No marker for this operation in what the server returned: the clear
-    // has not executed yet (a queued mid-turn /clear) or was refused (no
-    // marker is ever written). The view reflects the server either way; the
-    // intent survives so the next opportunity re-reads once — or whether —
-    // the clear lands.
-    op.heldProjection = undefined
-    logDiagnostic('clearRefetchNoMarkerYet', { sessionId: sid, operationId: op.clientMessageId })
-    noteUnresolved(sid, op, userInitiated)
-  }
+  // C4: the intent clears only now — the projection carried this
+  // operation's marker (a marker unknown at arm time) and it is in the
+  // view: the fresh view starts at the divider.
+  delete pendingClearRefetches[sid]
 }
 
 /**
- * D2: an intent is retired only by a projection that contains THIS
- * operation's marker — the /clear marker entry that follows THAT
- * operation's own user row (matched by the wire correlation id), never a
- * historical marker from an earlier clear.
+ * D2 (founder ruling 2026-10-11): an intent is retired only by a projection
+ * carrying a /clear marker that was NOT in the session's view when the
+ * operation was armed. The server's chat view starts at the LAST marker, so
+ * a marker unknown at arm time can only be the one this operation's clear
+ * produced (a newer /clear replaces the intent outright — the D2 superseded
+ * check); every marker known at arm belongs to an earlier clear, and a
+ * projection holding only those predates this operation.
  */
-function projectionContainsOwnUserRow(fresh: Message[], clientMessageId: string): boolean {
-  return fresh.some((row) => row.role === 'user' && ((row as ChatMessage).clientMessageId ?? row.id) === clientMessageId)
-}
-
-function hasOwnMarker(
-  merged: { messagesById: Record<string, ChatMessage>; messageOrder: string[] },
-  clientMessageId: string,
-): boolean {
-  const ownRowIndex = merged.messageOrder.findIndex((id) => {
-    const row = merged.messagesById[id]
-    return row.role === 'user' && (row.clientMessageId ?? row.id) === clientMessageId
-  })
-  if (ownRowIndex === -1) return false
-  return merged.messageOrder.slice(ownRowIndex + 1).some((id) => isClearContextMarker(merged.messagesById[id]))
+function projectionCarriesFreshMarker(fresh: Message[], op: PendingClearRefresh): boolean {
+  const known = new Set(op.knownMarkerIds ?? [])
+  return fresh.some((row) => isClearContextMarker(row) && !known.has(row.id))
 }
 
 
