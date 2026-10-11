@@ -253,6 +253,7 @@ func defaultToolPoliciesGeneral() map[string]string {
 		"search_web":     "allow",
 		"fetch_url":      "allow",
 		"send_message":   "allow",
+		"answer_request": "allow",
 		"send_file":      "allow",
 		"find_skills":    "allow",
 		"install_skill":  "allow",

@@ -176,8 +176,11 @@ func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
 	// shares with write_file/send_file, since its destination is always the
 	// authorized workspace's mail hierarchy. No attachment-specific
 	// mechanism; auto_approve_mail_test.go pins the peer-class equality.
-	if len(table) != 109 {
-		t.Errorf("table has %d entries, want 109 (104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02)", len(table))
+	// plus answer_request (founder gap 5, 2026-10-11): a thin front for
+	// send_message's reply_to form, so it rides send_message's class (AutoRuns)
+	// -- total 110.
+	if len(table) != 110 {
+		t.Errorf("table has %d entries, want 110 (104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02 -- plus answer_request, founder gap 5, 2026-10-11)", len(table))
 	}
 	if got := table["bash"]; got != AutoShellMode {
 		t.Errorf("bash class = %s, want shell_mode (bash keeps its own mechanism, §3.7)", got)

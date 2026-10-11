@@ -292,6 +292,7 @@ func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
 	if !w.inTurn.Load() || w.systemTurn.Load() {
 		return false
 	}
+	w.parent.markRequestDelivered(msg.TranscriptEntryID)
 	if err := w.parent.enqueueSteeringFromMessage(msg); err != nil {
 		// A steering-rejected error here means the message was NOT accepted
 		// by the steering path (classify failure, revive failure). It is
@@ -520,6 +521,11 @@ func (w *sessionWorker) runLoop() {
 // so each session worker has its own independent execution path.
 func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage) {
 	al := w.parent
+	// Registered first, so it runs last: after the turn, its response and the
+	// worker's in-turn flag are all settled. An unanswered request gets its one
+	// reminder (request_reminder.go).
+	defer al.remindUnansweredRequests(msg.SessionID)
+	al.markRequestDelivered(msg.TranscriptEntryID)
 	ctx, executionEntry := ordinaryExecutionContext(ctx)
 	defer func() {
 		if err := al.finishExecutionDisposition(executionEntry.disposition); err != nil {

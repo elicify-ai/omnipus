@@ -172,6 +172,7 @@ func (al *AgentLoop) admitBoundConnectorInputCtx(ctx context.Context, msg *bus.I
 	if pErr := ledger.Put(capture); pErr != nil {
 		return unroutable, fmt.Errorf("connector intake: capture: %w", pErr)
 	}
+	al.pendingRequests.Store(requestID, meta.ID)
 	raw := msg.Content
 	entry := session.TranscriptEntry{
 		ID: requestID, Role: "user", AgentID: pair.AgentID, Content: raw, Timestamp: capture.AdmittedAt,
@@ -179,6 +180,7 @@ func (al *AgentLoop) admitBoundConnectorInputCtx(ctx context.Context, msg *bus.I
 		Participant: participantFromSender(capture.Sender, al.agentDisplayName),
 	}
 	if aErr := store.AppendTranscriptStrict(meta.ID, entry); aErr != nil {
+		al.pendingRequests.Delete(requestID)
 		if dErr := ledger.Discard(meta.ID, requestID); dErr != nil {
 			logger.WarnCF("agent", "connector request capture could not be discarded after a failed append",
 				map[string]any{"request_id": requestID, "error": dErr.Error()})
