@@ -71,10 +71,16 @@ func (us *UnifiedStore) transcriptPartitionPaths(sessionID string) ([]string, er
 	var days []dayFile
 	current := ""
 	for _, e := range entries {
+		name := e.Name()
 		if e.IsDir() {
+			// Any other subdirectory (uploads, ...) is not archive content. A
+			// directory where a partition belongs is a corrupt store: skipping
+			// it would report the transcript as empty.
+			if name == transcriptFileName || transcriptDayPattern.MatchString(name) {
+				return nil, fmt.Errorf("unified_store: transcript partition %q in session %q is a directory, not a file", name, sessionID)
+			}
 			continue
 		}
-		name := e.Name()
 		if name == transcriptFileName {
 			current = name
 			continue
