@@ -18,6 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/goal"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -78,6 +79,19 @@ func newBindingRunFixture(t *testing.T, mode bindingFaultMode, failDisposition b
 	if executor == nil {
 		t.Fatal("binding fixture: real executor missing")
 	}
+	// S1 M9 (978c232bc): the ONLY task start path is the session launcher the
+	// gateway installs at boot; StartTaskNow refuses without one, so without
+	// this wiring these tests never reach the binding code they are about.
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	loop.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(home, "session_messages")), lifecycle)
+	boot := session.NewBootEpochStore(home)
+	if _, epochErr := boot.Mint(); epochErr != nil {
+		t.Fatalf("binding fixture: mint boot epoch: %v", epochErr)
+	}
+	loop.SetBootEpochStore(boot)
+	executor.SetLifecycleStore(lifecycle)
+	executor.SetSessionLauncher(agent.NewSteerLauncher(loop))
 	stored := createBindingTaskAndGoal(t, store, home)
 	worker.store, worker.taskID = store, stored.ID
 	fault.target(filepath.Join(store.Dir(), stored.ID+".json"))
