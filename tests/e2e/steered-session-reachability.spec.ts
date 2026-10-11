@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test'
+import { expect, type BrowserContext, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, dismissStaleDialogOverlay, selectAgent, waitForConnected, watchAndDenyToolApprovals } from './fixtures/selectors'
 
@@ -121,6 +121,42 @@ test('steered session is reachable in its own live view without leaking child ou
   requireApiKey()
   test.setTimeout(420_000)
 
+
+  const { parentURL, denyWatcher } = await openSteeredDelegation(page)
+
+  const { childAgentLabel } = await assertChildLiveView(page)
+
+  const parentDenyWatcher = await assertParentStaysContained(context, parentURL, childAgentLabel)
+
+  // Stop the mid-run deny watchers and surface what they caught. The
+  // annotation rows are already attached (pushed at deny time); this summary
+  // makes the count visible in the list reporter even without opening the
+  // HTML report.
+  parentDenyWatcher.stop()
+  denyWatcher.stop()
+  const totalDenies = denyWatcher.denies.length + parentDenyWatcher.denies.length
+  if (test.info().annotations.some((a) => a.type === 'tool-approval-denied')) {
+    console.warn(
+      `[steered-session-reachability] SUMMARY: ${totalDenies} tool-approval card(s) appeared ` +
+        'mid-run and were DENIED (see the tool-approval-denied annotations) — child C reached ' +
+        'for an Ask-gated tool despite the pinned two-tool task.',
+    )
+  }
+})
+
+
+// ── Extracted step helpers for steered-session-reachability ────────────
+// Pure refactor (no behaviour change): the test body above is split into
+// contiguous step helpers so every function stays under the 240-line function
+// budget. Each helper receives exactly the values it needs and the test calls
+// them in the same order as the original inline body.
+
+interface SteeredSessionHandles {
+  parentURL: string
+  denyWatcher: { stop: () => void; denies: string[] }
+}
+
+async function openSteeredDelegation(page: Page): Promise<SteeredSessionHandles> {
   await page.goto('/')
   // A pending approval modal left over from earlier state rehydrates on every
   // fresh page load while its ask pends (reconcileWithSessionState,
@@ -256,6 +292,10 @@ test('steered session is reachable in its own live view without leaking child ou
   const childSessionID = await boundSurface.getAttribute('data-active-session-id')
   expect(childSessionID, 'the open control must bind the chat surface to the child session').toBeTruthy()
 
+  return { parentURL, denyWatcher }
+}
+
+async function assertChildLiveView(page: Page): Promise<{ childAgentLabel: string }> {
   // Two wrong oracles have stood here. Matching CHILD_ONLY_SENTINEL page-wide proved
   // only that the child RECEIVED the task: the parent interpolates the sentinel into
   // the task text, so it renders as the child's own INBOUND user message the moment
@@ -415,6 +455,14 @@ test('steered session is reachable in its own live view without leaking child ou
     'the child must run a DIFFERENT agent from the parent (Jim), or "no child-attributed message in the parent" is vacuous',
   ).not.toMatch(/Jim/i)
 
+  return { childAgentLabel }
+}
+
+async function assertParentStaysContained(
+  context: BrowserContext,
+  parentURL: string,
+  childAgentLabel: string,
+): Promise<{ stop: () => void; denies: string[] }> {
   const parentView = await context.newPage()
   await parentView.goto(parentURL)
   // The parent view is a SECOND page in this context: an approval card can
@@ -506,18 +554,5 @@ test('steered session is reachable in its own live view without leaking child ou
     ).not.toHaveText(/\d+ running/)
   }
 
-  // Stop the mid-run deny watchers and surface what they caught. The
-  // annotation rows are already attached (pushed at deny time); this summary
-  // makes the count visible in the list reporter even without opening the
-  // HTML report.
-  parentDenyWatcher.stop()
-  denyWatcher.stop()
-  const totalDenies = denyWatcher.denies.length + parentDenyWatcher.denies.length
-  if (test.info().annotations.some((a) => a.type === 'tool-approval-denied')) {
-    console.warn(
-      `[steered-session-reachability] SUMMARY: ${totalDenies} tool-approval card(s) appeared ` +
-        'mid-run and were DENIED (see the tool-approval-denied annotations) — child C reached ' +
-        'for an Ask-gated tool despite the pinned two-tool task.',
-    )
-  }
-})
+  return parentDenyWatcher
+}

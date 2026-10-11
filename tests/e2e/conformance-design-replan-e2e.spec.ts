@@ -21,7 +21,7 @@
 // another test wrote, in this file or in any sibling — which is precisely what
 // makes splitting the suite across shards sound.
 
-import { expect } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import type { components } from '../../src/lib/api/generated/openapi-types'
 import { test } from './fixtures/plan-cleanup'
 import {
@@ -136,6 +136,182 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // ceiling; 1500s preserves 300s for setup, evidence collection, assertions,
   // and teardown when both polling stages approach their full budgets.
   test.setTimeout(1_500_000)
+
+  const setup = await runReplanSetup(page, createdPlanIds)
+
+  await assertFirstHoldReached(page, setup)
+
+  const obs = await observeReplanCorrections(page, setup)
+
+  assertReplanCorrectionCommits(obs, setup)
+
+  assertReplanNotWedged(obs, setup)
+})
+
+// ── Conformance_g4_ParallelLintE2E ───────────────────────────────────────────
+//
+// BDD (§9.1 g4): disjoint write-sets → lint passes; overlapping → lint
+// REJECTS at approve; an exploratory member → own isolated checkout
+// (highest available rung: worktree → clone → subdir). A merge at the
+// join surfaces a real conflict as a plan-correction event.
+//
+// Traces to:
+//   - §9.1 g4 "parallel streams lint walks the drawn path" (line ~1188)
+//   - TDD Plan row 45 `Conformance_g4_ParallelLintE2E`
+
+test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping rejected', async ({
+  page,
+  createdPlanIds,
+}) => {
+  requireApiKey()
+
+  test.setTimeout(180_000)
+  await startFreshChatWithJim(page)
+
+  // Setup: per-test Main agent in its own workspace core_team.
+  const ownerId = await createMainAgent(page, `conformance-g4-owner-${Date.now()}`)
+  const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
+    name: 'conformance-g4',
+    core_team: [ownerId],
+  })
+  if (!wsRes.ok) throw new Error(`g4: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
+  const workspaceId = wsRes.body.id
+
+  // CASE 1: disjoint write_sets — must be accepted at approve (G-16 happy
+  // path). Plan-lint runs at APPROVE (handlePlanApprove, rest_plans.go),
+  // not at create — so the plan + member tasks create fine, and the gate
+  // is exercised by the approve call below.
+  const { planId: disjointPlanId } = await createPlanWithMembers(
+    page,
+    workspaceId,
+    ownerId,
+    {
+      title: 'g4 disjoint plan',
+      goal: 'lint passes',
+      bounds: { plan_judge_max_rounds: 3 },
+    },
+    [
+      {
+        label: 'a',
+        title: 'stream a',
+        prompt: 'reply alpha',
+        write_set: ['g4/a.txt'],
+        criteria: [proseCriterion('reply contains "alpha"')],
+      },
+      {
+        label: 'b',
+        title: 'stream b',
+        prompt: 'reply beta',
+        write_set: ['g4/b.txt'],
+        criteria: [proseCriterion('reply contains "beta"')],
+      },
+    ],
+    createdPlanIds,
+  )
+
+  // Approve the disjoint plan — must succeed (lint passes: disjoint
+  // write_sets on the two parallel members a/b).
+  const approveDisjoint = await apiFetch<{ status: string }>(
+    page,
+    'POST',
+    `/api/v1/plans/${disjointPlanId}/approve`,
+    {},
+  )
+  expect(
+    approveDisjoint.ok,
+    `g4: disjoint plan approve must succeed (G-16 lint). Got ${approveDisjoint.status}: ${approveDisjoint.raw}`,
+  ).toBe(true)
+
+  // CASE 2: OVERLAPPING write_sets — must be REJECTED at approve
+  // (G-16 fail-closed: overlap → lint rejection). The plan + member tasks
+  // create fine (lint is an approve-time gate); the two parallel members
+  // x/y share the same write_set path, which lint rejects at approve.
+  const { planId: overlapPlanId } = await createPlanWithMembers(
+    page,
+    workspaceId,
+    ownerId,
+    {
+      title: 'g4 overlapping plan',
+      goal: 'lint rejects',
+      bounds: { plan_judge_max_rounds: 3 },
+    },
+    [
+      {
+        label: 'x',
+        title: 'stream x',
+        prompt: 'reply x',
+        write_set: ['shared/conflict.txt'],
+        criteria: [proseCriterion('reply contains "x"')],
+      },
+      {
+        label: 'y',
+        title: 'stream y',
+        prompt: 'reply y',
+        // INTENTIONALLY overlapping with x's write_set — the same file path.
+        write_set: ['shared/conflict.txt'],
+        criteria: [proseCriterion('reply contains "y"')],
+      },
+    ],
+    createdPlanIds,
+  )
+
+  // Drawn-path assertion 2: the overlapping plan is REJECTED at approve
+  // by lint (G-16). A 2xx success here means the lint gate is missing or
+  // bypassed — BLOCKED.
+  const approveOverlap = await apiFetch<{ status: string }>(
+    page,
+    'POST',
+    `/api/v1/plans/${overlapPlanId}/approve`,
+    {},
+  )
+  expect(
+    !approveOverlap.ok,
+    `g4: overlapping-write-sets plan must be rejected by lint (G-16) at approve — ` +
+      `create succeeded AND approve succeeded. The lint gate is missing. ` +
+      `Approve response: ${approveOverlap.status} ${approveOverlap.raw}`,
+  ).toBe(true)
+  expect(
+    approveOverlap.status >= 400 && approveOverlap.status < 500,
+    `g4: overlapping plan approve must be rejected with 4xx — got ${approveOverlap.status}: ${approveOverlap.raw}`,
+  ).toBe(true)
+})
+
+
+// ── Extracted step helpers for Conformance_t3_PlanningReplanningE2E ───
+// Pure refactor (no behaviour change): the test body above is split into
+// contiguous step helpers so every function stays under the 240-line function
+// budget. Each helper receives exactly the values it needs and the test calls
+// them in the same order as the original inline body.
+
+const HOLD_PHASE = 'awaiting_supervision'
+
+interface T3Sample {
+  tMs: number
+  state: string
+  phase: string
+  judgeRounds: number
+  correctionRounds: number
+  memberSig: string
+}
+
+interface ReplanSetup {
+  planId: string
+  workspaceId: string
+  memberIds: Record<string, string>
+  m2WrongNumberEvidence: string
+}
+
+interface ReplanObservation {
+  samples: T3Sample[]
+  committed: Array<{ status: string; parameters: Record<string, unknown> }>
+  diagnostic: string
+  allObservedMemberIds: Set<string>
+  finalPlanState: string
+  finalPlanPhase: string
+  staleForMs: number
+}
+
+async function runReplanSetup(page: Page, createdPlanIds: string[]): Promise<ReplanSetup> {
   await startFreshChatWithJim(page)
 
   // Setup: per-test Main agent (chat-target owner + member assignee) in
@@ -333,7 +509,11 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   const approveRes = await apiFetch<{ status: string }>(page, 'POST', `/api/v1/plans/${planId}/approve`, {})
   expect(approveRes.ok, `t3: POST /plans/{id}/approve failed ${approveRes.status}: ${approveRes.raw}`).toBe(true)
 
-  const HOLD_PHASE = 'awaiting_supervision'
+  return { planId, workspaceId, memberIds, m2WrongNumberEvidence }
+}
+
+async function assertFirstHoldReached(page: Page, setup: ReplanSetup): Promise<void> {
+  const { planId, memberIds, m2WrongNumberEvidence } = setup
 
   // --- Step 1: MANDATORY — reach the hold at least once -------------------
   // First prove m2 is done-but-wrong, not merely that its stub printed a
@@ -431,6 +611,10 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
       'DoD-flagged wrong) + m3 (its stub worker ends every run Blocked at once) make a round-1 unmet verdict ' +
       'expected reliably.',
   ).toBe(true)
+}
+
+async function observeReplanCorrections(page: Page, setup: ReplanSetup): Promise<ReplanObservation> {
+  const { planId, workspaceId, memberIds } = setup
 
   // --- Step 2: observe the REAL correction mechanism over the plan's full
   // round budget. Every distinct plan_correct call is discoverable via the
@@ -449,14 +633,6 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // running", and the only honest way to do that without a new arbitrary
   // staleness budget is to record whether the plan's own observable state
   // ever moves at all, and hand that trace to the check.
-  interface T3Sample {
-    tMs: number
-    state: string
-    phase: string
-    judgeRounds: number
-    correctionRounds: number
-    memberSig: string
-  }
   const samples: T3Sample[] = []
   const seenSessionIds = new Set<string>()
   // Cumulative set of every member task id this plan has ever had — seeded
@@ -557,6 +733,21 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
     `plan state="${finalPlanState}" phase="${finalPlanPhase}"; sessions=${[...seenSessionIds].join(',')}; ` +
     `all plan_correct calls: ${JSON.stringify(allCalls)}`
 
+  return {
+    samples,
+    committed,
+    diagnostic,
+    allObservedMemberIds,
+    finalPlanState,
+    finalPlanPhase,
+    staleForMs,
+  }
+}
+
+function assertReplanCorrectionCommits(obs: ReplanObservation, setup: ReplanSetup): void {
+  const { committed, diagnostic, allObservedMemberIds } = obs
+  const { memberIds } = setup
+
   // MANDATORY: the mechanism actually committed at least one correction.
   // Zero committed corrections after a full round budget with two
   // unambiguous, well-motivated problems means plan_correct is not
@@ -622,6 +813,11 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
     supersededM2,
     `t3: no committed supersede named m2's real id (${memberIds.m2}) as superseded_member_id. ${diagnostic}`,
   ).toBe(true)
+}
+
+function assertReplanNotWedged(obs: ReplanObservation, setup: ReplanSetup): void {
+  const { samples, finalPlanState, finalPlanPhase, staleForMs } = obs
+  const { planId } = setup
 
   // No-wedge sanity: the plan must not be permanently stuck. This is
   // deliberately NOT "the plan is finished or held" (the previous version of
@@ -689,132 +885,4 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
       `state="${finalPlanState}" phase="${finalPlanPhase}", last observed change ${staleForMs}ms before the ` +
       `window closed. Sample trace: ${JSON.stringify(samples)}`,
   ).toBe(true)
-})
-
-// ── Conformance_g4_ParallelLintE2E ───────────────────────────────────────────
-//
-// BDD (§9.1 g4): disjoint write-sets → lint passes; overlapping → lint
-// REJECTS at approve; an exploratory member → own isolated checkout
-// (highest available rung: worktree → clone → subdir). A merge at the
-// join surfaces a real conflict as a plan-correction event.
-//
-// Traces to:
-//   - §9.1 g4 "parallel streams lint walks the drawn path" (line ~1188)
-//   - TDD Plan row 45 `Conformance_g4_ParallelLintE2E`
-
-test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping rejected', async ({
-  page,
-  createdPlanIds,
-}) => {
-  requireApiKey()
-
-  test.setTimeout(180_000)
-  await startFreshChatWithJim(page)
-
-  // Setup: per-test Main agent in its own workspace core_team.
-  const ownerId = await createMainAgent(page, `conformance-g4-owner-${Date.now()}`)
-  const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
-    name: 'conformance-g4',
-    core_team: [ownerId],
-  })
-  if (!wsRes.ok) throw new Error(`g4: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
-  const workspaceId = wsRes.body.id
-
-  // CASE 1: disjoint write_sets — must be accepted at approve (G-16 happy
-  // path). Plan-lint runs at APPROVE (handlePlanApprove, rest_plans.go),
-  // not at create — so the plan + member tasks create fine, and the gate
-  // is exercised by the approve call below.
-  const { planId: disjointPlanId } = await createPlanWithMembers(
-    page,
-    workspaceId,
-    ownerId,
-    {
-      title: 'g4 disjoint plan',
-      goal: 'lint passes',
-      bounds: { plan_judge_max_rounds: 3 },
-    },
-    [
-      {
-        label: 'a',
-        title: 'stream a',
-        prompt: 'reply alpha',
-        write_set: ['g4/a.txt'],
-        criteria: [proseCriterion('reply contains "alpha"')],
-      },
-      {
-        label: 'b',
-        title: 'stream b',
-        prompt: 'reply beta',
-        write_set: ['g4/b.txt'],
-        criteria: [proseCriterion('reply contains "beta"')],
-      },
-    ],
-    createdPlanIds,
-  )
-
-  // Approve the disjoint plan — must succeed (lint passes: disjoint
-  // write_sets on the two parallel members a/b).
-  const approveDisjoint = await apiFetch<{ status: string }>(
-    page,
-    'POST',
-    `/api/v1/plans/${disjointPlanId}/approve`,
-    {},
-  )
-  expect(
-    approveDisjoint.ok,
-    `g4: disjoint plan approve must succeed (G-16 lint). Got ${approveDisjoint.status}: ${approveDisjoint.raw}`,
-  ).toBe(true)
-
-  // CASE 2: OVERLAPPING write_sets — must be REJECTED at approve
-  // (G-16 fail-closed: overlap → lint rejection). The plan + member tasks
-  // create fine (lint is an approve-time gate); the two parallel members
-  // x/y share the same write_set path, which lint rejects at approve.
-  const { planId: overlapPlanId } = await createPlanWithMembers(
-    page,
-    workspaceId,
-    ownerId,
-    {
-      title: 'g4 overlapping plan',
-      goal: 'lint rejects',
-      bounds: { plan_judge_max_rounds: 3 },
-    },
-    [
-      {
-        label: 'x',
-        title: 'stream x',
-        prompt: 'reply x',
-        write_set: ['shared/conflict.txt'],
-        criteria: [proseCriterion('reply contains "x"')],
-      },
-      {
-        label: 'y',
-        title: 'stream y',
-        prompt: 'reply y',
-        // INTENTIONALLY overlapping with x's write_set — the same file path.
-        write_set: ['shared/conflict.txt'],
-        criteria: [proseCriterion('reply contains "y"')],
-      },
-    ],
-    createdPlanIds,
-  )
-
-  // Drawn-path assertion 2: the overlapping plan is REJECTED at approve
-  // by lint (G-16). A 2xx success here means the lint gate is missing or
-  // bypassed — BLOCKED.
-  const approveOverlap = await apiFetch<{ status: string }>(
-    page,
-    'POST',
-    `/api/v1/plans/${overlapPlanId}/approve`,
-    {},
-  )
-  expect(
-    !approveOverlap.ok,
-    `g4: overlapping-write-sets plan must be rejected by lint (G-16) at approve — ` +
-      `create succeeded AND approve succeeded. The lint gate is missing. ` +
-      `Approve response: ${approveOverlap.status} ${approveOverlap.raw}`,
-  ).toBe(true)
-  expect(
-    approveOverlap.status >= 400 && approveOverlap.status < 500,
-    `g4: overlapping plan approve must be rejected with 4xx — got ${approveOverlap.status}: ${approveOverlap.raw}`,
-  ).toBe(true)
-})
+}

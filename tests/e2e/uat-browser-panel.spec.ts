@@ -510,13 +510,13 @@ async function waitForViewportInput(page: Page): Promise<void> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-test.describe('UAT Group C — the live browser panel', () => {
-  // Squad J instrumentation — patch RTCPeerConnection so the first oracle
-  // failure in any UAT case can dump pc/track/stats state. Idempotent.
-  test.beforeEach(async ({ page }) => {
-    await installWebrtcDebug(page);
-  });
+// Squad J instrumentation — patch RTCPeerConnection so the first oracle
+// failure in any UAT case can dump pc/track/stats state. Idempotent.
+test.beforeEach(async ({ page }) => {
+  await installWebrtcDebug(page);
+});
 
+test.describe('UAT Group C — the live browser panel', () => {
   test('UAT-C0 — with no browser open yet, the panel says so rather than sitting blank', async ({
     page,
   }, testInfo) => {
@@ -570,6 +570,9 @@ test.describe('UAT Group C — the live browser panel', () => {
     ).toBe(0);
   });
 
+});
+
+test.describe('UAT Group C — the live browser panel', () => {
   test('UAT-13 — video is smooth, and it is really video', async ({ page }, testInfo) => {
     // Temporary quarantine: current CI live-browser video failure.
     // https://github.com/elicify-ai/omnipus/issues/1142 — expires 2026-10-17.
@@ -707,6 +710,9 @@ test.describe('UAT Group C — the live browser panel', () => {
     ).toBeGreaterThanOrEqual(15);
   });
 
+});
+
+test.describe('UAT Group C — the live browser panel', () => {
   test('UAT-14 — a click lands where you clicked, and the page responds', async ({ page }, testInfo) => {
     // Temporary quarantine: current CI live-browser click failure.
     // https://github.com/elicify-ai/omnipus/issues/1142 — expires 2026-10-17.
@@ -849,6 +855,9 @@ test.describe('UAT Group C — the live browser panel', () => {
     ).toBeLessThan(1_500);
   });
 
+});
+
+test.describe('UAT Group C — the live browser panel', () => {
   test('UAT-15 (human half) — taking the wheel and handing it back is visible and matches reality', async ({
     page,
   }, testInfo) => {
@@ -977,6 +986,9 @@ test.describe('UAT Group C — the live browser panel', () => {
     );
   });
 
+});
+
+test.describe('UAT Group C — the live browser panel', () => {
   test('UAT-15 (agent half) — after you release, the agent acts with no take-over step and no prompt', async ({
     page,
   }, testInfo) => {
@@ -1138,6 +1150,9 @@ test.describe('UAT Group C — the live browser panel', () => {
     ).toBe(false);
   });
 
+});
+
+test.describe('UAT Group C — the live browser panel', () => {
   test('UAT-16 — a video failure is visible, names a real reason, and offers a Retry', async ({
     page,
   }, testInfo) => {

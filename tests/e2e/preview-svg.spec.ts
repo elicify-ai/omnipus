@@ -958,6 +958,9 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
     expect(h['referrer-policy']).toBe('no-referrer');
   });
 
+})
+
+test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confusion', () => {
   /**
    * Spec test 94 — E2E_SvgWithScript_TopLevel_IsInert (FR-008a).
    *
@@ -1024,6 +1027,9 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
     expect(report.cookie ?? '').toContain('omnipus_probe=SECRET');
   });
 
+})
+
+test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confusion', () => {
   /**
    * Spec test 122 — an SVG subresource renders and stays inert.
    *
@@ -1089,6 +1095,9 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
     ).toEqual(expect.arrayContaining(['img', 'fetch', 'beacon']));
   });
 
+})
+
+test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confusion', () => {
   /**
    * Type confusion, forward direction (FR-015, FR-015b, FR-016).
    *
@@ -1214,6 +1223,9 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
     ).toEqual(expect.arrayContaining(['img', 'fetch', 'beacon']));
   });
 
+})
+
+test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confusion', () => {
   /**
    * FR-015c's one stated default, and the sharpest available end-to-end
    * evidence that the response does not consult the host MIME registry or the
@@ -1269,6 +1281,9 @@ test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confus
     ).toBeUndefined();
   });
 
+})
+
+test.describe('ADR-067 §10.4 — .svg on the inline allow-list, and type confusion', () => {
   /**
    * ════════════════════════════════════════════════════════════════════════
    * MUTATION A — the sandbox directive removed from the REAL gateway response.
