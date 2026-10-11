@@ -53,17 +53,23 @@ func loadChatParticipantRule(t *testing.T) chatParticipantRule {
 	require.True(t, ok, "kind must be an enum")
 	kinds := make([]string, 0, len(rawKinds))
 	for _, k := range rawKinds {
-		kinds = append(kinds, k.(string))
+		kindName, isString := k.(string)
+		require.True(t, isString, "kind enum entries must be strings, got %T", k)
+		kinds = append(kinds, kindName)
 	}
 
 	name, ok := props["display_name"].(map[string]any)
 	require.True(t, ok, "the contract must declare display_name")
-	minName := int(name["minLength"].(int))
-	maxName := int(name["maxLength"].(int))
+	minName, ok := name["minLength"].(int)
+	require.True(t, ok, "display_name must declare an integer minLength")
+	maxName, ok := name["maxLength"].(int)
+	require.True(t, ok, "display_name must declare an integer maxLength")
 
 	src, ok := props["source"].(map[string]any)
 	require.True(t, ok, "the contract must declare source")
-	pat := regexp.MustCompile(src["pattern"].(string))
+	rawPattern, ok := src["pattern"].(string)
+	require.True(t, ok, "source must declare a string pattern")
+	pat := regexp.MustCompile(rawPattern)
 
 	// Instrument check: the contract must be able to REJECT something, or the
 	// pattern assertions below would be vacuous.
@@ -99,7 +105,7 @@ func TestParticipant_StampedRecordObeysTheContract(t *testing.T) {
 		{"web principal", addressing.Sender{Principal: "dan"}},
 		{"web principal with a name at the bound", addressing.Sender{Principal: strings.Repeat("é", rule.maxName)}},
 		{"web principal with a name over the bound", addressing.Sender{Principal: strings.Repeat("é", rule.maxName+50)}},
-		{"web principal with control characters", addressing.Sender{Principal: "A\u0000li‮ce\n"}},
+		{"web principal with control characters", addressing.Sender{Principal: "A\u0000li\u202ece\n"}},
 	}
 	produced := 0
 	for _, tc := range senders {
@@ -139,7 +145,7 @@ func TestParticipant_NoAuthenticatedFactIsNeverAHuman(t *testing.T) {
 		{},
 		{Principal: "   "},
 		{Platform: "telegram"},
-		{Platform: "telegram", DisplayName: "\u0007​"},
+		{Platform: "telegram", DisplayName: "\u0007\u200b"},
 		{DisplayName: "a name with no authenticated fact behind it"},
 	} {
 		require.Nil(t, participantFromSender(s, nil),
