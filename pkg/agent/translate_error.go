@@ -858,14 +858,6 @@ func TranslateTurnError(err error) LLMError {
 		}
 		return typedExitError(code, err)
 	}
-	// An ORDINARY admission refused because the same chat's previous reply is
-	// still finishing (ErrPreviousExecutionPending), or because a concurrent
-	// ordinary admission claimed the session first (ordinaryAdmissionRefusalError):
-	// neither is a provider fault, and the person's fix is to send the message
-	// again. A bare steer.ErrStaleGeneration is deliberately NOT mapped: its other
-	// producers (steered dispatch, reconstruction, cancel, queued wake) are not
-	// "send it again" cases and keep their own wording. CodeUnknown carries the
-	// curated text; no new wire code is minted for it.
 	// The sender's own message could not be saved (founder ruling 2026-10-11):
 	// the turn is refused and the sender sees only the fixed reply; the store's
 	// error stays in Detail and the log.
@@ -878,6 +870,14 @@ func TranslateTurnError(err error) LLMError {
 			Detail:    buildDetail(nil, err.Error()),
 		}
 	}
+	// An ORDINARY admission refused because the same chat's previous reply is
+	// still finishing (ErrPreviousExecutionPending), or because a concurrent
+	// ordinary admission claimed the session first (ordinaryAdmissionRefusalError):
+	// neither is a provider fault, and the person's fix is to send the message
+	// again. A bare steer.ErrStaleGeneration is deliberately NOT mapped: its other
+	// producers (steered dispatch, reconstruction, cancel, queued wake) are not
+	// "send it again" cases and keep their own wording. CodeUnknown carries the
+	// curated text; no new wire code is minted for it.
 	var admissionRefusal *ordinaryAdmissionRefusalError
 	if errors.Is(err, ErrPreviousExecutionPending) || errors.As(err, &admissionRefusal) {
 		return LLMError{
