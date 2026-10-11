@@ -120,7 +120,7 @@ func TestR7_F3_UnreadablePlanIsAFixedServerFailure(t *testing.T) {
 		require.NotEmpty(t, matches, "instrument check: the plan's stored file must exist")
 		planFile = matches[0]
 	}
-	r5Block(t, planFile, 0o000)
+	r5Block(t, planFile)
 
 	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
 
