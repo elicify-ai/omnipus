@@ -106,7 +106,7 @@ The first time you turn God Mode on through this screen, on an installation that
 | Area | Under God Mode |
 |---|---|
 | Tool policies | Every tool's global (installation-wide) policy is treated as Allow — no prompt from that policy, for any tool. |
-| Shell approval | No approval dialog before a shell command runs, ever. |
+| Shell approval | God Mode removes the global shell approval requirement. A per-agent Ask can still require approval, and a per-agent Deny still blocks the tool. Operator deny rules and the surviving outside-workspace write guard also remain in force. |
 | Kernel filesystem confinement | Off for the shell's own commands: they can reach any file your account can, not just the workspace. |
 | Kernel network-port controls | Off for the shell's own commands: they can bind or connect to any port, not just an allowed list. |
 | Outbound network filtering | The shell's commands are not filtered against the address block list that otherwise stops them reaching your internal network or cloud-metadata services. |
@@ -236,7 +236,7 @@ Not run: this is a headless scheduled run with no operator available to approve 
 
 A shell command that would need a prompt (for example one that needs the network) is refused the same way; its error ends with `auto-denied: no operator attached to this headless/scheduled run to approve it`.
 
-For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. If an unattended agent must use a tool that still asks, set that tool to Allow for that agent. See [tools](tools.md).
+For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. An unattended call must either clear Auto-approve or have an effective Allow policy. Setting one agent to Allow cannot override a global Ask or Deny. If a required tool still resolves to Ask, review both policy layers. Changing the global ceiling affects every agent; use per-agent restrictions to retain tighter access elsewhere. Do not assume that having the chat open makes an automatically dispatched run attended. See [tools](tools.md).
 
 **What counts as unattended (founder decision, 2026-09-24).** This is not only the Schedules feature. It is every run nobody sent live:
 
@@ -331,7 +331,7 @@ and
 { "action": "deny", "binary": "rm", "arg_prefix": "-rf" }
 ```
 
-A command like `rm -rf /tmp/build` matches both rules — the narrower `/tmp`-scoped allow rule and the broader deny rule. The deny rule wins and the command is refused, even though the allow rule looks more specific to this exact case. Writing a narrower allow rule is never a way to carve an exception past a broader deny rule; if you want that exception, the deny rule itself has to be narrowed instead.
+With `allow` for `binary: "rm", arg_prefix: "-rf /tmp"` and `deny` for `binary: "rm", arg_prefix: "-rf"`, `rm -rf /tmp` matches both rules and Deny wins. `rm -rf /tmp/build` does not match the narrower allow: `/tmp` and `/tmp/build` are different argument words. `arg_prefix` is not a directory-tree matcher. Writing a narrower allow rule is never a way to carve an exception past a broader deny rule; if you want that exception, the deny rule itself has to be narrowed instead.
 
 ### Chained commands
 
