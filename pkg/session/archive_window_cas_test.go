@@ -27,6 +27,7 @@ package session
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -86,23 +87,52 @@ func TestArchiveWindow_ConcurrentAppendWins_StaleRestoreRefused(t *testing.T) {
 	restoreTarget := before.State.Clone()
 	restoreTarget.Skip = 1
 
-	appendDone := make(chan struct{})
+	// A REAL interleaving, not an ordering (R1 delta T6): both operations are
+	// released together on a barrier, so the scheduler decides who reaches the
+	// CAS first. The oracle holds under EVERY interleaving:
+	//   - the append is never lost;
+	//   - whichever operation landed first wins, and the other is refused with
+	//     the documented ErrWindowChanged sentinel.
+	// The previous form joined the append goroutine BEFORE calling
+	// RestoreWindow, which is a strictly serial ordering and could never
+	// exercise the comparison the CAS exists for.
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	var restoreErr error
 	go func() {
-		defer close(appendDone)
+		defer wg.Done()
+		<-start
 		store.AddFullMessage(key, providers.Message{Role: "assistant", Content: "concurrent append"})
 	}()
-	<-appendDone
-
-	restoreErr := store.RestoreWindow(ctx, key, before.State, restoreTarget)
-	require.Error(t, restoreErr, "a restore against a stale snapshot must be refused")
-	require.ErrorIs(t, restoreErr, memory.ErrWindowChanged,
-		"the refusal must carry the documented ErrWindowChanged sentinel, not a generic cursor error")
+	go func() {
+		defer wg.Done()
+		<-start
+		restoreErr = store.RestoreWindow(ctx, key, before.State, restoreTarget)
+	}()
+	close(start)
+	wg.Wait()
 
 	after, err := store.WindowView(ctx, key)
 	require.NoError(t, err)
-	require.Equal(t, len(seed)+1, after.State.Count, "the concurrent append must not be lost")
-	require.Len(t, after.Live, len(seed)+1, "the archive must retain the concurrent append")
-	require.Zero(t, after.State.Skip, "a refused restore must not apply its Skip move")
+	require.Equal(t, len(seed)+1, after.State.Count,
+		"the concurrent append must not be lost, whichever operation reached the CAS first")
+
+	if restoreErr == nil {
+		// The restore reached the CAS first: it applied, and the append landed
+		// after it — the window keeps the restore's Skip move, so the live view
+		// is one slot shorter even though the archive still holds every record.
+		require.Equal(t, 1, after.State.Skip,
+			"a restore that won the race must have applied its Skip move")
+		require.Len(t, after.Live, len(seed)+1-1,
+			"the archive retains the append; the restore's own Skip move evicts one slot from the live view")
+	} else {
+		// The append won: the restore is refused, and it must say why.
+		require.ErrorIs(t, restoreErr, memory.ErrWindowChanged,
+			"the refusal must carry the documented ErrWindowChanged sentinel, not a generic cursor error")
+		require.Zero(t, after.State.Skip, "a refused restore must not apply its Skip move")
+		require.Len(t, after.Live, len(seed)+1, "the archive must retain the concurrent append")
+	}
 }
 
 // TestArchiveWindow_ConcurrentSkipMove_StaleRestoreRefused isolates the
@@ -116,26 +146,50 @@ func TestArchiveWindow_ConcurrentSkipMove_StaleRestoreRefused(t *testing.T) {
 	before, err := store.WindowView(ctx, key)
 	require.NoError(t, err)
 
-	// A concurrent caller advances the window by one record.
+	// A REAL interleaving (R1 delta T6): both moves are built from the SAME
+	// snapshot and released together, so they race for the CAS. Count never
+	// changes, so only the saved-snapshot comparison can refuse the loser.
 	moved := before.State.Clone()
 	moved.Skip = 1
-	require.NoError(t, store.CommitWindow(ctx, key, before.State, moved),
-		"fixture: the concurrent commit must land")
-
-	// The stale caller still holds `before` and tries a restore that changes
-	// nothing about Count — only the saved-snapshot comparison can see this.
 	stale := before.State.Clone()
 	stale.Skip = 2
-	restoreErr := store.RestoreWindow(ctx, key, before.State, stale)
-	require.Error(t, restoreErr,
-		"a restore built from a superseded snapshot must be refused even when Count still matches")
-	require.ErrorIs(t, restoreErr, memory.ErrWindowChanged,
-		"the refusal must carry the ErrWindowChanged sentinel")
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	var commitErr, restoreErr error
+	go func() {
+		defer wg.Done()
+		<-start
+		commitErr = store.CommitWindow(ctx, key, before.State, moved)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		restoreErr = store.RestoreWindow(ctx, key, before.State, stale)
+	}()
+	close(start)
+	wg.Wait()
+
+	// Exactly one of the two may land: the winner matched the snapshot, so the
+	// loser's CAS must be refused with the documented sentinel.
+	winners := 0
+	for _, err := range []error{commitErr, restoreErr} {
+		if err == nil {
+			winners++
+			continue
+		}
+		require.ErrorIs(t, err, memory.ErrWindowChanged,
+			"the loser of the snapshot CAS must carry ErrWindowChanged, got %v", err)
+	}
+	require.Equal(t, 1, winners,
+		"exactly one move may land (commitErr=%v restoreErr=%v)", commitErr, restoreErr)
 
 	after, err := store.WindowView(ctx, key)
 	require.NoError(t, err)
-	require.Equal(t, 1, after.State.Skip, "the refused restore must not move Skip")
-	require.Equal(t, before.State.Count, after.State.Count, "the refused restore must not change Count")
+	require.Equal(t, before.State.Count, after.State.Count, "neither move may change Count")
+	require.Contains(t, []int{1, 2}, after.State.Skip,
+		"Skip must be exactly the winner's move, got %d", after.State.Skip)
 }
 
 // TestArchiveWindow_AccurateSnapshotRestores_ThenAppendLands is the companion
