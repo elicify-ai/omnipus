@@ -179,8 +179,16 @@ export type ChatMessage = Message & {
   clientMessageId?: string
   /** Ordinary first-send status only; workspace kickoffs never use it. */
   firstSendStatus?: FirstSendStatus
-  /** SPA-only acknowledgement state for a user-authored message. */
-  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded'
+  /**
+   * SPA-only acknowledgement state for a user-authored message. The two
+   * /clear-only terminal states (delta re-review C1/R1#1, 2026-10-11) name
+   * the outcomes no wire state covers: 'not-performed' — the server replied
+   * "/clear was not performed …" (pkg/agent/clear_while_busy.go); and
+   * 'unconfirmed' — the bounded wait ended with the server neither
+   * confirming nor refusing the clear. Both are RESOLVED rows: never
+   * pending-tail, never the offline "will be sent automatically" look.
+   */
+  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded' | 'not-performed' | 'unconfirmed'
   media?: MediaAttachment[]
   /**
    * Review finding 17 — the `media://` refs (opts.mediaRefs) this user

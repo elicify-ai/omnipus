@@ -54,9 +54,10 @@ import { BrowserLiveView } from './BrowserLiveView'
  * fallback). Both are valid concurrent browser-using agents per ADR-043. */
 function seedAgents() {
   const agents: Agent[] = [
-    // Agent-first navigation spec DS-I/I03: legacy identity gold becomes Orange.
-    makeAgent({ id: 'jim', name: 'Jim', color: '#FB923C' }),
-    makeAgent({ id: 'ray', name: 'Ray', color: '#3B82F6' }),
+    // Agent-first navigation spec DS-I/I03; palette re-coloured by the
+    // founder's 2026-10-11 avatar palette decision (AVATAR-PALETTE-DECISION.md).
+    makeAgent({ id: 'jim', name: 'Jim', color: '#A97142' }),
+    makeAgent({ id: 'ray', name: 'Ray', color: '#6E8BA8' }),
   ]
   queryClient.setQueryData(['agents'], agents)
 }

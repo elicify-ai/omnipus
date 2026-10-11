@@ -556,40 +556,40 @@ func (e AgentActivityRunState) Valid() bool {
 
 // Defines values for AgentColor.
 const (
-	AgentColorHash22D3EE AgentColor = "#22D3EE"
-	AgentColorHash38BDF8 AgentColor = "#38BDF8"
-	AgentColorHash3B82F6 AgentColor = "#3B82F6"
-	AgentColorHash818CF8 AgentColor = "#818CF8"
-	AgentColorHash9CA3AF AgentColor = "#9CA3AF"
-	AgentColorHashA78BFA AgentColor = "#A78BFA"
-	AgentColorHashC084FC AgentColor = "#C084FC"
-	AgentColorHashE879F9 AgentColor = "#E879F9"
-	AgentColorHashF472B6 AgentColor = "#F472B6"
-	AgentColorHashFB923C AgentColor = "#FB923C"
+	AgentColorHash4F8A80 AgentColor = "#4F8A80"
+	AgentColorHash5E6973 AgentColor = "#5E6973"
+	AgentColorHash6E8BA8 AgentColor = "#6E8BA8"
+	AgentColorHash7A8C9E AgentColor = "#7A8C9E"
+	AgentColorHash7B7290 AgentColor = "#7B7290"
+	AgentColorHash8E9196 AgentColor = "#8E9196"
+	AgentColorHash9C8A5B AgentColor = "#9C8A5B"
+	AgentColorHashA97142 AgentColor = "#A97142"
+	AgentColorHashB76E79 AgentColor = "#B76E79"
+	AgentColorHashCDBA96 AgentColor = "#CDBA96"
 )
 
 // Valid indicates whether the value is a known member of the AgentColor enum.
 func (e AgentColor) Valid() bool {
 	switch e {
-	case AgentColorHash22D3EE:
+	case AgentColorHash4F8A80:
 		return true
-	case AgentColorHash38BDF8:
+	case AgentColorHash5E6973:
 		return true
-	case AgentColorHash3B82F6:
+	case AgentColorHash6E8BA8:
 		return true
-	case AgentColorHash818CF8:
+	case AgentColorHash7A8C9E:
 		return true
-	case AgentColorHash9CA3AF:
+	case AgentColorHash7B7290:
 		return true
-	case AgentColorHashA78BFA:
+	case AgentColorHash8E9196:
 		return true
-	case AgentColorHashC084FC:
+	case AgentColorHash9C8A5B:
 		return true
-	case AgentColorHashE879F9:
+	case AgentColorHashA97142:
 		return true
-	case AgentColorHashF472B6:
+	case AgentColorHashB76E79:
 		return true
-	case AgentColorHashFB923C:
+	case AgentColorHashCDBA96:
 		return true
 	default:
 		return false
@@ -14246,7 +14246,7 @@ type Agent struct {
 	ActivationStatus *AgentActivationStatus `json:"activation_status,omitempty"`
 	ChangedFields    *[]string              `json:"changed_fields,omitempty"`
 
-	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. A value from the previous palette is accepted on write and mapped one-to-one to its new equivalent, and a stored previous value is returned as its new equivalent on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Color *AgentColor `json:"color,omitempty"`
 
 	// ContextWindowClamped Read-only (ADR-066 D2): true when an operator override exceeded the model's capability and was clamped down to it (a WARN names the agent). Optional — absent until the resolver lands.
@@ -14494,7 +14494,7 @@ type AgentActivityRunRole string
 // AgentActivityRunState The run's session lifecycle - running, queued for a slot, or waiting on input.
 type AgentActivityRunState string
 
-// AgentColor Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+// AgentColor Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. A value from the previous palette is accepted on write and mapped one-to-one to its new equivalent, and a stored previous value is returned as its new equivalent on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 type AgentColor string
 
 // AgentCreateRequest Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired).
@@ -14503,9 +14503,9 @@ type AgentCreateRequest struct {
 }
 
 // AgentCreateRequestMain Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
-// Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #9CA3AF), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
+// Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
 type AgentCreateRequestMain struct {
-	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. A value from the previous palette is accepted on write and mapped one-to-one to its new equivalent, and a stored previous value is returned as its new equivalent on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Color *AgentColor `json:"color,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
@@ -14594,9 +14594,9 @@ type AgentCreateRequestMainToolsCfgBuiltinPolicies string
 type AgentCreateRequestMainType string
 
 // AgentCreateRequestSubagent Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
-// Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #9CA3AF), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
+// Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
 type AgentCreateRequestSubagent struct {
-	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. A value from the previous palette is accepted on write and mapped one-to-one to its new equivalent, and a stored previous value is returned as its new equivalent on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Color *AgentColor `json:"color,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
@@ -14682,9 +14682,9 @@ type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
 type AgentCreateRequestSubagentType string
 
 // AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
-// Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #9CA3AF), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
+// Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
 type AgentCreateRequestSubagent3p struct {
-	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. A value from the previous palette is accepted on write and mapped one-to-one to its new equivalent, and a stored previous value is returned as its new equivalent on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Color *AgentColor `json:"color,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
@@ -15044,7 +15044,7 @@ type AgentToolsUpdateRequestConfigBuiltinPolicies string
 
 // AgentUpdateRequest Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. For figure, role, and color, only omission means unchanged. Explicit null and invalid supplied values are rejected with HTTP 400, and no sibling field, timestamp, or revision is changed.
 type AgentUpdateRequest struct {
-	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. A value from the previous palette is accepted on write and mapped one-to-one to its new equivalent, and a stored previous value is returned as its new equivalent on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
 	Color *AgentColor `json:"color,omitempty"`
 
 	// ContextWindowOverride Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.

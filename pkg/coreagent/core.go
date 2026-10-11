@@ -285,7 +285,7 @@ func Jim() *CoreAgent {
 			"delegates to the right specialists, tracks progress, and drives work to completion.",
 		Figure: DefaultFigure,
 		Role:   DefaultRole,
-		Color:  "#22D3EE",
+		Color:  "#4F8A80",
 	}
 }
 
@@ -299,7 +299,7 @@ func Ava() *CoreAgent {
 			"Reviews one combined proposal with you before applying changes and checking the result.",
 		Figure: DefaultFigure,
 		Role:   DefaultRole,
-		Color:  "#FB923C",
+		Color:  "#A97142",
 	}
 }
 
@@ -313,7 +313,7 @@ func Mia() *CoreAgent {
 			"answers questions, and connects you with the right specialist when needed.",
 		Figure: DefaultFigure,
 		Role:   DefaultRole,
-		Color:  "#3B82F6",
+		Color:  "#6E8BA8",
 	}
 }
 
@@ -321,17 +321,17 @@ func Mia() *CoreAgent {
 // it is a core runtime identity, not a hidden system agent.
 //
 // Visible roster colours (All, the set TestCoreAgentMetadataDifferentiation
-// checks) are distinct: Mia Azure #3B82F6, Jim Cyan #22D3EE, Ava Orange
-// #FB923C, Admin Pink #F472B6, Planner Sky #38BDF8, Researcher Violet
-// #A78BFA, General Purpose Grey #9CA3AF. Admin is Pink so it does not share
-// Ava's Orange. Hidden Judge (Azure) and Plan Supervisor (Cyan) are not in
-// All() and are outside that check.
+// checks) are distinct: Mia Steel blue #6E8BA8, Jim Verdigris #4F8A80, Ava
+// Bronze #A97142, Admin Champagne #CDBA96, Planner Titanium #7A8C9E,
+// Researcher Graphite violet #7B7290, General Purpose Pewter #8E9196. Hidden
+// Judge (Steel blue) and Plan Supervisor (Verdigris) are not in All() and are
+// outside that check.
 func Admin() *CoreAgent {
 	return &CoreAgent{
 		ID: IDAdmin, Name: "Admin", Subtitle: "Operator",
 		Description: "Configures connectors, providers, channels, diagnostics, and document dependencies.",
 		Figure:      DefaultFigure, Role: string(generated.AgentRoleSecurity),
-		Color: "#F472B6",
+		Color: "#CDBA96",
 	}
 }
 
@@ -349,7 +349,7 @@ func Worker() *CoreAgent {
 			"does the work, and returns a concise result. Not a chat persona; invoked via delegation.",
 		Figure: DefaultFigure,
 		Role:   DefaultRole,
-		Color:  "#9CA3AF",
+		Color:  "#8E9196",
 	}
 }
 
@@ -366,7 +366,7 @@ func Planner() *CoreAgent {
 			"Uses permitted delegation to gather additional evidence when needed. Invoked via delegation; not a chat persona.",
 		Figure: DefaultFigure,
 		Role:   DefaultRole,
-		Color:  "#38BDF8",
+		Color:  "#7A8C9E",
 	}
 }
 
@@ -381,6 +381,6 @@ func Researcher() *CoreAgent {
 			"synthesizes findings with citations. Invoked via delegation; not a chat persona.",
 		Figure: DefaultFigure,
 		Role:   DefaultRole,
-		Color:  "#A78BFA",
+		Color:  "#7B7290",
 	}
 }

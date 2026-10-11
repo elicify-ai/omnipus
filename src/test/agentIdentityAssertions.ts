@@ -6,14 +6,17 @@
 import { expect } from 'vitest'
 import { within } from '@testing-library/react'
 
+// Colour names and order: founder decision 2026-10-11
+// (AVATAR-PALETTE-DECISION.md, ten metallic tones).
 export const IDENTITY_COLOUR_NAMES = [
-  'Azure', 'Sky', 'Cyan', 'Indigo', 'Violet', 'Purple', 'Fuchsia', 'Pink', 'Orange', 'Grey',
+  'Steel blue', 'Titanium', 'Verdigris', 'Gunmetal', 'Graphite violet',
+  'Rose gold', 'Bronze', 'Antique brass', 'Champagne', 'Pewter',
 ] as const
 
 export const FOUNDER_FIGURE_ORDER = ['Omnipus', 'Man', 'Robot', 'Woman', 'Monogram'] as const
 
 /** All ten colour dots present, `selected` pressed, every dot disabled (built-in lock). */
-export function expectLockedIdentityColours(root: HTMLElement, selected = 'Azure') {
+export function expectLockedIdentityColours(root: HTMLElement, selected = 'Steel blue') {
   const basics = within(root)
   for (const name of IDENTITY_COLOUR_NAMES) {
     const choice = basics.getByRole('button', { name })
@@ -58,6 +61,6 @@ export function expectEditableIdentityChoices(root: HTMLElement) {
   const role = basics.getByRole('combobox', { name: 'Role badge' })
   expect(role).toBeEnabled()
   expect(role, 'default role is General assistant').toHaveTextContent('General assistant')
-  expect(basics.getByRole('button', { name: 'Azure' })).toBeEnabled()
-  expect(basics.getByRole('button', { name: 'Azure' })).toHaveAttribute('aria-pressed', 'true')
+  expect(basics.getByRole('button', { name: 'Steel blue' })).toBeEnabled()
+  expect(basics.getByRole('button', { name: 'Steel blue' })).toHaveAttribute('aria-pressed', 'true')
 }

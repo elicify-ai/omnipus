@@ -58,6 +58,48 @@ describe('UserMessageDeliveryStatus', () => {
     expect(container.innerHTML).not.toMatch(/color-(?:error|warning)|\bred-|\borange-|\bamber-/)
   })
 
+  // Delta re-review C1/R1#1: the /clear row's settled outcomes. Each resolves
+  // to a passive, honest chip — never the offline "Not sent yet, will be sent
+  // automatically" look, which would be false (the server has the command).
+  it.each([
+    [
+      'not-performed',
+      'Not performed',
+      'The server received /clear but could not perform it — nothing was cleared. Send /clear again if you still want a fresh start.',
+    ],
+    [
+      'unconfirmed',
+      'Not confirmed',
+      "The server did not confirm this /clear, so the chat's context may not have been cleared. Send /clear again if you still want a fresh start.",
+    ],
+  ] as const)('renders the /clear %s settle outcome with its exact label and tooltip', (state, label, tooltip) => {
+    render(<UserMessageDeliveryStatus state={state} agentName="Mia" latest />)
+
+    const icon = screen.getByRole('button', { name: label })
+    fireEvent.focus(icon)
+    expect(screen.getByRole('tooltip')).toHaveTextContent(tooltip)
+  })
+
+  it('renders a discarded /clear as "Not applied" — not the never-read wording (delta C1)', () => {
+    render(<UserMessageDeliveryStatus state="discarded" agentName="Mia" latest isClearCommand />)
+
+    // A held-then-discarded command WAS read by the server (it held it and
+    // answered the stop); the generic "before it read this message" wording
+    // would be false for it.
+    const icon = screen.getByRole('button', { name: 'Not applied' })
+    fireEvent.focus(icon)
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'You stopped the turn, so this /clear was discarded — nothing was cleared. Send /clear again if you still want a fresh start.',
+    )
+  })
+
+  it('keeps the generic "Not delivered" wording for a discarded non-clear message (delta C1 guard)', () => {
+    render(<UserMessageDeliveryStatus state="discarded" agentName="Mia" latest />)
+
+    expect(screen.getByRole('button', { name: 'Not delivered' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Not applied' })).toBeNull()
+  })
+
   it('keeps failed text and exposes the exact retry action without error colours', () => {
     const onRetry = vi.fn()
     const { container } = render(

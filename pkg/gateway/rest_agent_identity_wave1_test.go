@@ -13,7 +13,7 @@ import (
 )
 
 // Wire oracles: ARCH-DECISIONS 1.2 and 1.4.
-// Create defaults: figure Omnipus, role general, colour #9CA3AF.
+// Create defaults: figure Omnipus, role general, colour #8E9196.
 // A non-enum figure or role, or a hex outside the ten, is 400 with no write.
 // Omitted on update means unchanged. A listed hex is stored uppercase.
 // GET/list emit the defaults when the stored value is empty and do not write.
@@ -26,14 +26,14 @@ func TestAgentIdentity_CreateDefaultsOmnipusGeneralGrey(t *testing.T) {
 	body := decodeObject(t, rec.Body.Bytes())
 	assert.Equal(t, "Omnipus", body["figure"])
 	assert.Equal(t, "general", body["role"])
-	assert.Equal(t, "#9CA3AF", body["color"])
+	assert.Equal(t, "#8E9196", body["color"])
 
 	id, idOK := body["id"].(string)
 	require.True(t, idOK, "create response id must be a string, got %#v", body["id"])
 	saved := savedAgent(t, api, id)
 	assert.Equal(t, "Omnipus", saved["figure"])
 	assert.Equal(t, "general", saved["role"])
-	assert.Equal(t, "#9CA3AF", saved["color"])
+	assert.Equal(t, "#8E9196", saved["color"])
 }
 
 func TestAgentIdentity_CreateRejectsNonEnumAndNonPalette(t *testing.T) {
@@ -75,7 +75,7 @@ func TestAgentIdentity_CreateNormalisesHex(t *testing.T) {
 	body := decodeObject(t, rec.Body.Bytes())
 	assert.Equal(t, "Woman", body["figure"])
 	assert.Equal(t, "writer", body["role"])
-	assert.Equal(t, "#FB923C", body["color"])
+	assert.Equal(t, "#A97142", body["color"])
 	// Agent.icon is deleted (7b6d48db6 "feat(contracts): remove Agent.icon",
 	// 802879225 "delete the legacy icon system"), so the wire shape must carry
 	// no icon key at all — this replaces the retired "keeps the legacy icon
@@ -87,7 +87,7 @@ func TestAgentIdentity_CreateNormalisesHex(t *testing.T) {
 	saved := savedAgent(t, api, id)
 	assert.Equal(t, "Woman", saved["figure"])
 	assert.Equal(t, "writer", saved["role"])
-	assert.Equal(t, "#FB923C", saved["color"])
+	assert.Equal(t, "#A97142", saved["color"])
 	assert.NotContains(t, saved, "icon", "the stored record must not carry the deleted Agent.icon field")
 }
 
@@ -111,7 +111,7 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 	saved := savedAgent(t, api, id)
 	assert.Equal(t, "Man", saved["figure"], "omitted figure stays")
 	assert.Equal(t, "developer", saved["role"], "omitted role stays")
-	assert.Equal(t, "#3B82F6", saved["color"], "omitted colour stays")
+	assert.Equal(t, "#6E8BA8", saved["color"], "omitted colour stays")
 	assert.NotContains(t, saved, "icon", "Agent.icon is deleted (7b6d48db6); nothing may reintroduce it")
 
 	before, err := agentstore.New(api.homePath).ReadState(id)
@@ -122,7 +122,7 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 	after := savedAgent(t, api, id)
 	assert.Equal(t, "Man", after["figure"], "400 does not apply a later valid role or colour")
 	assert.Equal(t, "developer", after["role"])
-	assert.Equal(t, "#3B82F6", after["color"])
+	assert.Equal(t, "#6E8BA8", after["color"])
 	state, err := agentstore.New(api.homePath).ReadState(id)
 	require.NoError(t, err)
 	assert.Equal(t, before.Revision, state.Revision, "rejected update is zero-write")
@@ -175,12 +175,12 @@ func TestAgentIdentity_UpdateNormalisesPaletteHex(t *testing.T) {
 	rec := putAgent(t, api, "test-agent", `{"color":"#3b82f6"}`)
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 	saved := savedAgent(t, api, "test-agent")
-	assert.Equal(t, "#3B82F6", saved["color"])
+	assert.Equal(t, "#6E8BA8", saved["color"])
 
 	nonPalette := putAgent(t, api, "test-agent", `{"color":"#123456"}`)
 	require.Equal(t, http.StatusBadRequest, nonPalette.Code, "body: %s", nonPalette.Body.String())
 	assert.NotContains(t, strings.ToLower(nonPalette.Body.String()), "unknown field")
-	assert.Equal(t, "#3B82F6", savedAgent(t, api, "test-agent")["color"], "rejected hex must not replace the stored palette colour")
+	assert.Equal(t, "#6E8BA8", savedAgent(t, api, "test-agent")["color"], "rejected hex must not replace the stored palette colour")
 }
 
 func TestAgentIdentity_ListAndGetEmitDefaultsWithoutWriting(t *testing.T) {
@@ -196,12 +196,12 @@ func TestAgentIdentity_ListAndGetEmitDefaultsWithoutWriting(t *testing.T) {
 	got := getAgentObject(t, api, "test-agent")
 	assert.Equal(t, "Omnipus", got["figure"])
 	assert.Equal(t, "general", got["role"])
-	assert.Equal(t, "#9CA3AF", got["color"])
+	assert.Equal(t, "#8E9196", got["color"])
 
 	listed := findListedAgent(t, api, "test-agent")
 	assert.Equal(t, "Omnipus", listed["figure"])
 	assert.Equal(t, "general", listed["role"])
-	assert.Equal(t, "#9CA3AF", listed["color"])
+	assert.Equal(t, "#8E9196", listed["color"])
 
 	after := savedAgent(t, api, "test-agent")
 	_, hadFigure = after["figure"]

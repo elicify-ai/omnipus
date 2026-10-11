@@ -698,7 +698,7 @@ func FixtureSession_Edge() Session {
 // Agent
 
 func FixtureAgent_Populated() Agent {
-	color := AgentColorHash3B82F6
+	color := AgentColorHash6E8BA8
 	model := "claude-sonnet-4-6"
 	warning := strPtr("Config reload failed after update")
 	return Agent{
@@ -2401,7 +2401,7 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 //     variant at all.
 
 func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
-	color := AgentColorHash3B82F6
+	color := AgentColorHash6E8BA8
 	model := "claude-sonnet-4-6"
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
 	description := "Focused research assistant"
@@ -2465,7 +2465,7 @@ func FixtureAgentCreateRequestMain_InvalidType() AgentCreateRequestMain {
 }
 
 func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
-	color := AgentColorHash38BDF8
+	color := AgentColorHash7A8C9E
 	model := "claude-sonnet-4-6"
 	description := "Native delegation-only research worker"
 	deny := AgentCreateRequestSubagentToolsCfgBuiltinPoliciesDeny
@@ -2516,7 +2516,7 @@ func FixtureAgentCreateRequestSubagent_InvalidType() AgentCreateRequestSubagent 
 // allows: type/name/description/model/provider/color/rate_limits/soul/
 // executor/timeout_seconds. executor is REQUIRED.
 func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3p {
-	color := AgentColorHashF472B6
+	color := AgentColorHashCDBA96
 	model := "claude-sonnet-4-6"
 	provider := "anthropic"
 	description := "External-CLI delegation-only worker"
@@ -2604,7 +2604,7 @@ func FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON() []byte {
 // Traces to: contracts/components/schemas/AgentUpdateRequest.yaml
 
 func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
-	color := AgentColorHash3B82F6
+	color := AgentColorHash6E8BA8
 	model := "gpt-4o"
 	name := "Renamed Agent"
 	description := "Updated description"

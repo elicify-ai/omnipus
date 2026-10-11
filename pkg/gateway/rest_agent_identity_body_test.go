@@ -59,7 +59,7 @@ func TestAgentIdentity_UpdateBodyFailsClosed(t *testing.T) {
 					t.Logf("BODY_CASE=%s strict=%t auth=%t bytes=%d status=%d revision_before=%s revision_after=%s", tc.name, strict, wrapped, len(body), rec.Code, stateBefore.Revision, stateAfter.Revision)
 					assert.Equal(t, tc.wantStatus, rec.Code, "body: %s", rec.Body.String())
 					if tc.wantStatus == http.StatusOK {
-						assert.Equal(t, "#22D3EE", savedAgent(t, api, "test-agent")["color"], "complete in-limit control must actually write")
+						assert.Equal(t, "#4F8A80", savedAgent(t, api, "test-agent")["color"], "complete in-limit control must actually write")
 						assert.NotEqual(t, stateBefore.Revision, stateAfter.Revision)
 						return
 					}

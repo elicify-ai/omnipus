@@ -132,7 +132,7 @@ describe('edit header live identity preview', () => {
     await screen.findByRole('heading', { name: 'Mia' })
     await waitFor(() => expect(headerMark('Mia')).toHaveAttribute('data-figure', 'Omnipus'))
     expect(headerMark('Mia').querySelector('[data-role]')).toHaveAttribute('data-role', 'general')
-    expect(headerMark('Mia')).toHaveStyle({ color: '#3B82F6' })
+    expect(headerMark('Mia')).toHaveStyle({ color: '#6E8BA8' }) // Steel blue (decision 2026-10-11)
     expect(updateAgent).not.toHaveBeenCalled()
   })
 
@@ -152,14 +152,14 @@ describe('edit header live identity preview', () => {
     // pick the Writer option; the header mark must preview it before any save.
     fireEvent.click(within(layout).getByRole('combobox', { name: 'Role badge' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Writer' }))
-    fireEvent.click(within(layout).getByRole('button', { name: 'Violet' }))
+    fireEvent.click(within(layout).getByRole('button', { name: 'Graphite violet' }))
     const preview = headerMark('Custom Mia')
     expect(preview).toHaveAttribute('data-figure', 'Woman')
     expect(preview.querySelector('[data-role]')).toHaveAttribute('data-role', 'writer')
-    expect(preview).toHaveStyle({ color: '#A78BFA' })
+    expect(preview).toHaveStyle({ color: '#7B7290' })
     expect(within(layout).getByRole('button', { name: 'Woman' })).toHaveAttribute('aria-pressed', 'true')
     expect(within(layout).getByRole('combobox', { name: 'Role badge' })).toHaveTextContent('Writer')
-    expect(within(layout).getByRole('button', { name: 'Violet' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(layout).getByRole('button', { name: 'Graphite violet' })).toHaveAttribute('aria-pressed', 'true')
     expect(updateAgent).not.toHaveBeenCalled()
   })
 })
@@ -196,12 +196,12 @@ describe('successful custom identity edit', () => {
       // The role is ONE searchable dropdown (founder 2026-10-10).
       fireEvent.click(within(layout).getByRole('combobox', { name: 'Role badge' }))
       fireEvent.click(screen.getByRole('option', { name: 'Writer' }))
-      fireEvent.click(within(layout).getByRole('button', { name: 'Violet' }))
+      fireEvent.click(within(layout).getByRole('button', { name: 'Graphite violet' }))
       // Run the profile's real 1500ms debounce, not saveNow or a mocked hook.
       await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
       expect(updateAgent).toHaveBeenCalledTimes(1)
       expect(updateAgent).toHaveBeenCalledWith('custom-save', {
-        revision: reviewedRevision, figure: 'Woman', role: 'writer', color: '#A78BFA',
+        revision: reviewedRevision, figure: 'Woman', role: 'writer', color: '#7B7290', // Graphite violet (decision 2026-10-11)
       })
       // The deleted legacy field must not ride onto the wire with the patch.
       expect(vi.mocked(updateAgent).mock.calls[0][1]).not.toHaveProperty('icon')
@@ -221,11 +221,11 @@ describe('successful custom identity edit', () => {
       expect(fetchAgent).toHaveBeenCalledTimes(1)
       expect(fetchAgent).toHaveBeenCalledWith('custom-save')
       expect(headerMark('Saved identity').querySelector('[data-role]')).toHaveAttribute('data-role', 'writer')
-      expect(headerMark('Saved identity')).toHaveStyle({ color: '#A78BFA' })
+      expect(headerMark('Saved identity')).toHaveStyle({ color: '#7B7290' })
       const reloadedLayout = visibleIdentityLayout()
       expect(within(reloadedLayout).getByRole('button', { name: 'Woman' })).toHaveAttribute('aria-pressed', 'true')
       expect(within(reloadedLayout).getByRole('combobox', { name: 'Role badge' })).toHaveTextContent('Writer')
-      expect(within(reloadedLayout).getByRole('button', { name: 'Violet' })).toHaveAttribute('aria-pressed', 'true')
+      expect(within(reloadedLayout).getByRole('button', { name: 'Graphite violet' })).toHaveAttribute('aria-pressed', 'true')
       // FOUNDER DECISION 2026-10-10 (avatar consistency): the stored legacy
       // slug is no longer displayed anywhere; nothing about Agent.icon is UI.
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -260,7 +260,7 @@ describe('built-in identity stays locked', () => {
     const role = within(layout).getByRole('combobox', { name: 'Role badge' })
     expect(role).toBeDisabled()
     expect(role).toHaveTextContent('General assistant')
-    const colour = within(layout).getByRole('button', { name: 'Azure' })
+    const colour = within(layout).getByRole('button', { name: 'Steel blue' })
     expect(colour).toBeDisabled()
     expect(figure).toHaveAttribute('aria-pressed', 'true')
     expect(colour).toHaveAttribute('aria-pressed', 'true')

@@ -23,6 +23,26 @@ export function isClearContextMarker(message: { role?: string; content?: string 
 }
 
 /**
+ * The prefix of the assistant reply the server publishes when a /clear typed
+ * during a running turn could not be performed
+ * (pkg/agent/clear_while_busy.go::clearNotPerformedReply — "/clear was not
+ * performed: <reason> Nothing was cleared; send /clear again."). A refusal is
+ * a plain reply delivered as an ordinary assistant turn; NO marker is ever
+ * written for it. The role check is part of the predicate (same discipline as
+ * isClearContextMarker): a user quoting the sentence never matches.
+ */
+export const CLEAR_NOT_PERFORMED_PREFIX = '/clear was not performed:'
+
+/** True for the assistant refusal reply a not-performed /clear produces. */
+export function isClearNotPerformedReply(message: { role?: string; content?: string | null }): boolean {
+  return (
+    message.role === 'assistant' &&
+    typeof message.content === 'string' &&
+    message.content.startsWith(CLEAR_NOT_PERFORMED_PREFIX)
+  )
+}
+
+/**
  * True when an outgoing composer text invokes the /clear server command —
  * the FIRST token is what the server's command grammar dispatches on (any
  * case; any whitespace, or nothing, may follow), so "/clear" and

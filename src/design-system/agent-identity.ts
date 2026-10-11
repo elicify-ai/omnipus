@@ -64,10 +64,14 @@ export const FIGURE_ART = {
 export type AgentIconFigure = keyof typeof FIGURE_ART
 
 // Governed identity ink, not UI chrome. Kept in the kit so the published
-// component never depends on generated application schemas.
+// component never depends on generated application schemas. Values and order
+// are the founder's 2026-10-11 avatar palette decision (Option 2, metallic /
+// brand-derived; coordination/squads/joint-merge-20261009/AVATAR-PALETTE-DECISION.md).
+// lib/agentIdentity's compile-time coverage check pins this list to the
+// generated AgentColor enum, so any contract drift fails typecheck.
 export const AGENT_ICON_PALETTE = [
-  '#3B82F6', '#38BDF8', '#22D3EE', '#818CF8', '#A78BFA',
-  '#C084FC', '#E879F9', '#F472B6', '#FB923C', '#9CA3AF',
+  '#6E8BA8', '#7A8C9E', '#4F8A80', '#5E6973', '#7B7290',
+  '#B76E79', '#A97142', '#9C8A5B', '#CDBA96', '#8E9196',
 ] as const
 
 // not-wire-format: palette ink accepted by AgentIcon.

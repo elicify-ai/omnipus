@@ -73,6 +73,15 @@ export interface PendingClearRefresh {
 }
 export const pendingClearRefetches: Record<string, PendingClearRefresh | undefined> = {}
 
+/**
+ * The bounded-wait timer per session (R1#1, delta re-review): armed when a
+ * /clear goes out, fired only if the server has neither confirmed (marker
+ * applied) nor refused (not-performed reply / discard / failure) by the
+ * bound — the lost-clear case. Lives beside pendingClearRefetches; owned by
+ * clear-refetch.ts (arm/drop), see CLEAR_CONFIRM_TIMEOUT_MS there.
+ */
+export const clearConfirmTimers: Record<string, ReturnType<typeof setTimeout> | undefined> = {}
+
 // #823 catch-up redesign, Opus review round 2 item 7 (LOW): applySeqGate's
 // gap branch (frames.ts) sends `attach_session{S, cursor}` to recover from a
 // sequence gap. Without a guard, EVERY subsequent gapped frame that arrives

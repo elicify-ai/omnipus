@@ -173,7 +173,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     needs_model: false,
     status: 'active',
     soul: '',
-    color: '#3B82F6',
+    color: '#6E8BA8',
     timeout_seconds: 300,
     max_tool_iterations: 50,
     max_tool_iterations_source: 'global',

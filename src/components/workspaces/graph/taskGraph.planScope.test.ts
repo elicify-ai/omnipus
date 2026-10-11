@@ -96,11 +96,12 @@ describe('buildTaskGraph — plan scoping', () => {
 
   it('resolves agent avatar info the same way in plan scope as in the unscoped graph', () => {
     const tasks = [makeTask({ id: 'a', plan_id: 'plan-1', agent_id: 'mia' })]
-    // Agent-first navigation spec, Locked identity vocabulary / DS-I I03:
-    // legacy identity gold maps to the approved Orange #FB923C.
-    const agents = [makeAgent({ id: 'mia', name: 'Mia', color: '#FB923C' })]
+    // Agent-first navigation spec, Locked identity vocabulary / DS-I I03,
+    // re-coloured by the founder's 2026-10-11 avatar palette decision
+    // (AVATAR-PALETTE-DECISION.md): Bronze #A97142.
+    const agents = [makeAgent({ id: 'mia', name: 'Mia', color: '#A97142' })]
     const { nodes } = buildTaskGraph(tasks, agents, { planId: 'plan-1' })
     expect(nodes[0].data.agentName).toBe('Mia')
-    expect(nodes[0].data.agentColor).toBe('#FB923C')
+    expect(nodes[0].data.agentColor).toBe('#A97142')
   })
 })

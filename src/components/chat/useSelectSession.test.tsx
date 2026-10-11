@@ -35,7 +35,7 @@ const agents = [
     type: 'core',
     status: 'active',
     description: 'Chat agent',
-    color: '#9CA3AF',
+    color: '#8E9196',
     icon: null,
   },
   {
@@ -45,7 +45,7 @@ const agents = [
     type: 'custom',
     status: 'active',
     description: 'Task agent',
-    color: '#9CA3AF',
+    color: '#8E9196',
     icon: null,
   },
 ] as unknown as Agent[]
