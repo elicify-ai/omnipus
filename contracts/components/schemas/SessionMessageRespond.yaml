@@ -69,7 +69,7 @@ properties:
     example: false
   text:
     type: string
-    maxLength: 16384
+    maxLength: 65536
     description: >
       The answer to the child's question.
     example: "Yes, overwrite it — the backup is stale."

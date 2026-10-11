@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 import type { AgentActivityRun } from '@/lib/api/generated/openapi-types'
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -20,8 +21,9 @@ import { makeAgent } from '@/test/factories'
 import { useRunningActivity } from './useRunningActivity'
 import type { TaskRunActivityItem } from './useRunningActivity'
 
+let client: QueryClient
 function wrapper() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return ({ children }: { children: React.ReactNode }) => React.createElement(QueryClientProvider, { client }, children)
 }
 
@@ -89,5 +91,37 @@ describe('useRunningActivity — task and scheduler runs', () => {
     await waitFor(() => expect(vi.mocked(fetchAgentActivityRuns)).toHaveBeenCalled())
     await new Promise((r) => setTimeout(r, 30))
     expect(result.current.running.map((i) => i.kind)).toEqual(['agent'])
+  })
+})
+
+describe('useRunningActivity — a failed run poll is visible', () => {
+  let toasts: string[]
+  beforeEach(() => {
+    toasts = []
+    vi.spyOn(useUiStore.getState(), 'addToast').mockImplementation(((t: { message: string }) => { toasts.push(t.message) }) as never)
+  })
+
+  it('tells the user once when the poll fails, and a later failure in the same episode stays quiet', async () => {
+    vi.mocked(fetchAgentActivityRuns).mockRejectedValue(new Error('boom'))
+    const { result } = renderHook(() => useRunningActivity(), { wrapper: wrapper() })
+    await waitFor(() => expect(toasts).toHaveLength(1))
+    expect(toasts[0]).toMatch(/couldn't refresh task and scheduler runs/i)
+    await act(async () => { await client.refetchQueries({ queryKey: ['agent-activity-runs'] }) })
+    expect(toasts).toHaveLength(1)
+    expect(result.current.running).toEqual([])
+  })
+
+  it('marks last-known rows stale and stops their timer when a later poll fails', async () => {
+    vi.mocked(fetchAgentActivityRuns).mockResolvedValueOnce([wireRun({ session_id: 'sess-run-1' })])
+    const { result } = renderHook(() => useRunningActivity(), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current.running).toHaveLength(1))
+    expect((result.current.running[0] as TaskRunActivityItem).stale).toBeUndefined()
+    expect((result.current.running[0] as TaskRunActivityItem).durationMs).toBeGreaterThan(0)
+
+    vi.mocked(fetchAgentActivityRuns).mockRejectedValue(new Error('boom'))
+    await act(async () => { await client.refetchQueries({ queryKey: ['agent-activity-runs'] }) })
+    await waitFor(() => expect((result.current.running[0] as TaskRunActivityItem).stale).toBe(true))
+    expect((result.current.running[0] as TaskRunActivityItem).durationMs).toBeUndefined()
+    expect(toasts).toHaveLength(1)
   })
 })

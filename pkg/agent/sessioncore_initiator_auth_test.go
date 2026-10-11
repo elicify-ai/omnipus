@@ -278,12 +278,12 @@ func TestInitiatorAuth_R8_CarriersSurviveReload(t *testing.T) {
 
 	ps := plan.New(filepath.Join(dir, "plans"))
 	p := &plan.Plan{Title: "p", WorkspaceID: "ws", OwnerAgentID: "a", CreatedBy: "a"}
-	if err := ps.Create(p); err != nil {
-		t.Fatalf("create plan: %v", err)
+	if createErr := ps.Create(p); createErr != nil {
+		t.Fatalf("create plan: %v", createErr)
 	}
 	ini := &task.Initiator{AgentID: "a", SessionID: "s", Depth: 2}
-	if _, err := ps.Update(p.ID, plan.Patch{InitiatedBy: &ini}); err != nil {
-		t.Fatalf("set initiator: %v", err)
+	if _, updErr := ps.Update(p.ID, plan.Patch{InitiatedBy: &ini}); updErr != nil {
+		t.Fatalf("set initiator: %v", updErr)
 	}
 	reloaded, err := plan.New(filepath.Join(dir, "plans")).Get(p.ID)
 	if err != nil || !reflect.DeepEqual(reloaded.InitiatedBy, ini) {

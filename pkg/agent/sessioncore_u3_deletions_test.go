@@ -48,6 +48,11 @@ func TestSessionCoreU3_CompetingIntakeDeclarationsAreGone(t *testing.T) {
 	// "absent" verdict is not the scanner's default for unknown names.
 	require.False(t, decls["sessionCoreU3AbsenceInstrumentSentinel"],
 		"control: a fabricated name must read absent")
+	// Surviving session-scoped siblings must be visible too, so the DEL-22/24
+	// names below are not "absent" merely because the scanner skips methods.
+	for _, kept := range []string{"InterruptSessionHard", "Interrupt", "GetActiveTurnBySession", "getActiveTurnState"} {
+		require.True(t, decls[kept], "control: the session-scoped %s is KEPT and must be visible to the scanner", kept)
+	}
 
 	for _, gone := range []string{
 		"parseSteeringMode",   // DEL-04: user-selectable dequeue modes
@@ -65,6 +70,17 @@ func TestSessionCoreU3_CompetingIntakeDeclarationsAreGone(t *testing.T) {
 		"SteeringMode",            // DEL-04: AgentLoop.SteeringMode() accessor
 		"SetSteeringMode",         // DEL-04: AgentLoop.SetSteeringMode() setter
 		"dequeueSteeringMessages", // DEL-04: the retired whole-queue dequeue
+
+		// DEL-22/24 (S1 final-gate M8): the process-wide "act on whichever turn
+		// is first" entry points. A re-add of any of them would let a steer or an
+		// interrupt for session B land on session A.
+		"Steer",                 // AgentLoop.Steer
+		"InjectFollowUp",        // alias chain onto Steer
+		"InjectSteering",        // alias chain onto Steer
+		"InterruptGraceful",     // process-wide graceful interrupt
+		"InterruptHard",         // process-wide hard interrupt (the session-scoped InterruptSessionHard is KEPT)
+		"GetActiveTurn",         // first-active-turn introspection (GetActiveTurnBySession is KEPT)
+		"getAnyActiveTurnState", // the first-active-turn lookup behind them
 	} {
 		require.False(t, decls[gone],
 			"%s must be deleted — FR-009 keeps ONE steering FIFO/runner and removes the competing worker inbox/manual queue/steer modes (DEL-03/04)", gone)
@@ -108,4 +124,26 @@ func packageDeclNames(t *testing.T, dir string) map[string]bool {
 	}
 	require.Greater(t, parsed, 10, "control: the scanner parsed the package's non-test Go sources")
 	return out
+}
+
+// TestSessionCoreU3_DeletionScannerCatchesAReAdd is the injected-forbidden
+// control (spec: "known-present and injected-forbidden controls test absence
+// instruments"): a source file that re-declares each deleted method must make
+// the scanner report it, so a real re-add cannot hide behind a passing proof.
+func TestSessionCoreU3_DeletionScannerCatchesAReAdd(t *testing.T) {
+	src := "package agent\n"
+	for _, name := range []string{"Steer", "InjectFollowUp", "InjectSteering", "InterruptGraceful", "InterruptHard", "GetActiveTurn", "getAnyActiveTurnState"} {
+		src += "func (al *AgentLoop) " + name + "() {}\n"
+	}
+	f, err := parser.ParseFile(token.NewFileSet(), "readded.go", src, 0)
+	require.NoError(t, err)
+	got := map[string]bool{}
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok {
+			got[fd.Name.Name] = true
+		}
+	}
+	for _, name := range []string{"Steer", "InjectFollowUp", "InjectSteering", "InterruptGraceful", "InterruptHard", "GetActiveTurn", "getAnyActiveTurnState"} {
+		require.True(t, got[name], "control: the declaration scan must see a re-added %s", name)
+	}
 }

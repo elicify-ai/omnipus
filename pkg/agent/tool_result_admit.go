@@ -14,8 +14,7 @@
 //
 // The twelve producers (nine in loop.go — the success-path result, the seven
 // denied sites and the skipped site — plus attachment hydration and the
-// recall page) call here; the orphan-repair placeholder in repair.go is the
-// single exemption (bounded by construction). TestChokePoint_ProducerListByGrep
+// recall page) call here. TestChokePoint_ProducerListByGrep
 // fails the build-time invariant if a new `Role: "tool"` literal appears
 // anywhere else in the package.
 //
@@ -538,7 +537,7 @@ func capMarkOrEmpty(tool, toolCallID string, line int, content string, turn int)
 }
 
 // toolResultMessage is the ONE constructor of a role:"tool" provider message
-// in this package (repair.go's exempt placeholder aside). Producers never
+// in this package. Producers never
 // build the literal themselves — that is what TestChokePoint_ProducerListByGrep
 // pins.
 func toolResultMessage(toolCallID, content string, media []string) providers.Message {

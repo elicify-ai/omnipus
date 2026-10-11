@@ -3,7 +3,8 @@ title: DelegateSteerAction
 description: >
   `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection
   at the child's next tool boundary (skip-remaining-batch semantics
-  identical to chat steering). Rate-capped 6/min, 16 KiB body.
+  identical to chat steering). Rate-capped (default 60/min) and body-capped (default 65,536
+  UTF-8 bytes) by session_messaging.steer_rate/steer_body.
 required:
   - action
   - session_id
@@ -23,7 +24,7 @@ properties:
   text:
     type: string
     minLength: 1
-    maxLength: 16384
+    maxLength: 65536
     description: Steering instruction.
     example: "Skip the xlsx shard for now, prioritize the CSV export."
   correlation_id:

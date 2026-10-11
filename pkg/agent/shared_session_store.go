@@ -19,10 +19,18 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
+// sharedStoreEntry is one registered store and the number of loops that own it.
+// Registries and instances only look the store up; a loop acquires it and is the
+// one that releases it, and the store closes when the last owner releases.
+type sharedStoreEntry struct {
+	store  *session.UnifiedStore
+	owners int
+}
+
 var sharedStores = struct {
 	mu sync.Mutex
-	m  map[string]*session.UnifiedStore
-}{m: map[string]*session.UnifiedStore{}}
+	m  map[string]*sharedStoreEntry
+}{m: map[string]*sharedStoreEntry{}}
 
 // sessionsHomeFor is the omnipus home directory the shared store belongs to: the
 // parent of the default workspace, exactly where the loop puts its task store.
@@ -36,32 +44,55 @@ func sessionsHomeFor(cfg *config.Config) string {
 }
 
 // openSharedSessionStore returns the shared store for homePath, opening it on
-// first use. A failure is returned, never replaced by another store.
+// first use, without taking ownership of it. A failure is returned, never
+// replaced by another store.
 func openSharedSessionStore(homePath string) (*session.UnifiedStore, error) {
+	return sharedSessionStoreFor(homePath, false)
+}
+
+// acquireSharedSessionStore is openSharedSessionStore for a loop: it also counts
+// the caller as an owner, so the store stays open until every owner has released.
+func acquireSharedSessionStore(homePath string) (*session.UnifiedStore, error) {
+	return sharedSessionStoreFor(homePath, true)
+}
+
+func sharedSessionStoreFor(homePath string, own bool) (*session.UnifiedStore, error) {
 	key := filepath.Clean(homePath)
 	sharedStores.mu.Lock()
 	defer sharedStores.mu.Unlock()
-	if s, ok := sharedStores.m[key]; ok {
-		return s, nil
+	e, ok := sharedStores.m[key]
+	if !ok {
+		dir := filepath.Join(key, "sessions")
+		s, err := session.NewUnifiedStoreWithHome(dir, key)
+		if err != nil {
+			return nil, fmt.Errorf("shared session store at %s: %w", dir, err)
+		}
+		e = &sharedStoreEntry{store: s}
+		sharedStores.m[key] = e
 	}
-	dir := filepath.Join(key, "sessions")
-	s, err := session.NewUnifiedStoreWithHome(dir, key)
-	if err != nil {
-		return nil, fmt.Errorf("shared session store at %s: %w", dir, err)
+	if own {
+		e.owners++
 	}
-	sharedStores.m[key] = s
-	return s, nil
+	return e.store, nil
 }
 
-// releaseSharedSessionStore forgets store as the shared store of homePath (when
-// it is the registered one) and closes it. It is called once, by the loop that
-// owns the store.
-func releaseSharedSessionStore(homePath string, store *session.UnifiedStore) error {
-	key := filepath.Clean(homePath)
+// releaseSharedSessionStore gives up one ownership of store. The store is
+// forgotten and closed when the last owner releases; a store that is no longer
+// registered was already released and is not closed again.
+func releaseSharedSessionStore(store *session.UnifiedStore) error {
 	sharedStores.mu.Lock()
-	if sharedStores.m[key] == store {
+	for key, e := range sharedStores.m {
+		if e.store != store {
+			continue
+		}
+		if e.owners--; e.owners > 0 {
+			sharedStores.mu.Unlock()
+			return nil
+		}
 		delete(sharedStores.m, key)
+		sharedStores.mu.Unlock()
+		return store.Close()
 	}
 	sharedStores.mu.Unlock()
-	return store.Close()
+	return nil
 }

@@ -28,7 +28,8 @@ type DiscardedInput struct {
 // without a delegate steer receipt that are not upward wakes) and labels each
 // archived original discarded. Input already committed into a running turn is
 // not in the queue and is untouched. A failure to label one message is returned
-// (joined) - the message is still discarded, never left to be consumed.
+// (joined) - the message is still discarded, its reply authority still revoked
+// and it is still reported, never left to be consumed.
 func (al *AgentLoop) discardUndeliveredHumanInput(sessionID string) ([]DiscardedInput, error) {
 	if al == nil || al.steering == nil {
 		return nil, nil
@@ -44,14 +45,14 @@ func (al *AgentLoop) discardUndeliveredHumanInput(sessionID string) ([]Discarded
 			if item.transcriptEntryID == "" {
 				continue // never archived (no entry to label)
 			}
-			store := al.ResolveSessionStore(sessionID)
-			if store == nil {
+			// The message has left the queue whether or not its label can be
+			// written, so a label failure is reported but must never stop the
+			// reply authority from being revoked or the caller from learning
+			// the message was discarded.
+			if store := al.ResolveSessionStore(sessionID); store == nil {
 				errs = append(errs, fmt.Errorf("label discarded input %q: no session store owns %q", item.transcriptEntryID, sessionID))
-				continue
-			}
-			if err := store.RecordInputDiscarded(sessionID, item.transcriptEntryID, ""); err != nil {
+			} else if err := store.RecordInputDiscarded(sessionID, item.transcriptEntryID, ""); err != nil {
 				errs = append(errs, fmt.Errorf("label discarded input %q: %w", item.transcriptEntryID, err))
-				continue
 			}
 			// F4: when the discarded input is an admitted U8 request, its reply
 			// authority ends with it. A message with no capture is a no-op.

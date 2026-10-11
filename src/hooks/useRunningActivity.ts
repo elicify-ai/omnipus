@@ -9,10 +9,12 @@
 // groupBashSessions below for why liveness is read from each call's RESULT
 // payload rather than the tool_call's own completion status).
 //
-// v1 scope is active-session-only: it reads the chat store's foreground
-// `messages`/`toolCalls` fields, which are already derived for the active
-// session (see bucketToForeground in chat.ts) — no cross-session
-// aggregation. Keeping it simple per the spec.
+// Spans and background bash read the chat store's foreground
+// `messages`/`toolCalls` fields, already derived for the active session (see
+// bucketToForeground in chat.ts) — no cross-session aggregation there. Task and
+// scheduler runs (FR-033) are the exception: they come from the active AGENT's
+// `GET /agents/{id}/activity-runs`, polled, and show even when this chat spawned
+// nothing. A failed poll is surfaced (toast plus stale rows), never silent.
 //
 // Elapsed time: neither SubagentSpan nor ToolCall carries a start timestamp
 // on the wire or in store state today, and this hook must NOT add one to
@@ -36,12 +38,13 @@
 // written to localStorage/anywhere durable, since it only needs to survive
 // client-side navigation, not a hard refresh).
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 import { fetchAgentActivityRuns, fetchAgents } from '@/lib/api'
 import type { Agent, ToolCall } from '@/lib/api'
 import type { AgentActivityRun } from '@/lib/api/generated/openapi-types'
@@ -190,6 +193,8 @@ export interface TaskRunActivityItem {
   /** Provider-run tokens still available. null / undefined = UNKNOWN, never zero (BDD-10.3). */
   availableTokens?: number | null
   durationMs?: number
+  /** True when the last run poll failed: this row is the last known state and may be out of date. */
+  stale?: boolean
 }
 
 /**
@@ -571,7 +576,7 @@ function groupBashSessions(orderedCalls: ToolCall[]): Map<string, BashSessionSta
 // guessed `span.status` fallback is removed. A missing/unknown state maps to
 // 'parked' — pending, not executing.
 /** Map one wire run onto its Activity row. Queued/waiting runs are parked, not executing. */
-function taskRunItem(run: AgentActivityRun, agents: Agent[]): TaskRunActivityItem {
+function taskRunItem(run: AgentActivityRun, agents: Agent[], stale: boolean): TaskRunActivityItem {
   const resolved = resolveAgent(run.agent_id, agents)
   const startedAt = Date.parse(run.started_at)
   return {
@@ -589,7 +594,9 @@ function taskRunItem(run: AgentActivityRun, agents: Agent[]): TaskRunActivityIte
     sessionId: run.session_id,
     // The endpoint carries no token figure (descoped): unknown, never zero.
     availableTokens: null,
-    durationMs: run.state === 'running' && !Number.isNaN(startedAt) ? Math.max(0, Date.now() - startedAt) : undefined,
+    // A stale row must not keep a ticking timer: the run may already be over.
+    durationMs: !stale && run.state === 'running' && !Number.isNaN(startedAt) ? Math.max(0, Date.now() - startedAt) : undefined,
+    stale: stale || undefined,
   }
 }
 
@@ -621,7 +628,7 @@ export function useRunningActivity(): RunningActivity {
   // FR-033: the active agent's open task/scheduler runs. Polled while the
   // activity surface is mounted; a failed poll leaves the last rows in place.
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
-  const { data: activityRuns } = useQuery({
+  const { data: activityRuns, isError: activityRunsFailed } = useQuery({
     queryKey: ['agent-activity-runs', activeAgentId],
     queryFn: () => fetchAgentActivityRuns(activeAgentId as string),
     enabled: !!activeAgentId,
@@ -637,6 +644,22 @@ export function useRunningActivity(): RunningActivity {
     const id = setInterval(() => setTick((t) => t + 1), 1000)
     return () => clearInterval(id)
   }, [])
+
+  // A failed poll must not look like "nothing running" or leave finished runs
+  // looking live: say so once per failure episode, and mark the rows stale.
+  const toldRunsFailure = useRef(false)
+  useEffect(() => {
+    if (!activityRunsFailed) {
+      toldRunsFailure.current = false
+      return
+    }
+    if (toldRunsFailure.current) return
+    toldRunsFailure.current = true
+    useUiStore.getState().addToast({
+      message: "Couldn't refresh task and scheduler runs. The list may be out of date.",
+      variant: 'warning',
+    })
+  }, [activityRunsFailed])
 
   const agentSpans: SubagentSpan[] = useMemo(() => messages.flatMap((m) => m.spans ?? []), [messages])
 
@@ -723,7 +746,7 @@ export function useRunningActivity(): RunningActivity {
   const spawnedSessionIds = new Set(agentSpans.flatMap((s) => (s.childSessionId ? [s.childSessionId] : [])))
   for (const run of activityRuns ?? []) {
     if (run.session_id && spawnedSessionIds.has(run.session_id)) continue
-    running.push(taskRunItem(run, agents))
+    running.push(taskRunItem(run, agents, activityRunsFailed))
   }
 
   for (const [sessionId, session] of bashSessions) {

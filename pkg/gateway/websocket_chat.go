@@ -1044,6 +1044,11 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 // active workspace, and binds the connection to the session for live
 // delivery. Returns true when the message was rejected.
 func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
+	// Final-gate M4: a stale tab must not keep chatting in a main the pair is no
+	// longer entitled to.
+	if !hcm.h.mainSessionAllowed(hcm.wc, hcm.sessionID) {
+		return true
+	}
 	// This branch — an existing, client-supplied session_id — is
 	// reachable only by a NORMAL (non-kickoff) message: the mint-only
 	// guard near the top of this function already rejected any

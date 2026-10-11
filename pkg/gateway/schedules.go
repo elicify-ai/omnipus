@@ -581,6 +581,25 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 		if workspaceID == "" {
 			return "", fmt.Errorf("main session mode: the job carries no workspace, so no main can be resolved")
 		}
+		// Final-gate M5: the owner's entitlement to this main is re-checked when
+		// the run FIRES, not only when the schedule was saved. The owner may have
+		// been removed from the team or deleted since; writing into the hidden
+		// main (or minting one) would resurrect it. Heartbeat jobs are exempt:
+		// they are workspace-owned and reconciled from the team on every
+		// membership write.
+		if job.Payload.Kind != heartbeatJobKind {
+			mainID, idErr := session.MainSessionID(workspaceID, owner)
+			if idErr != nil {
+				return "", fmt.Errorf("main session mode: %w", idErr)
+			}
+			_, eligible, gateErr := mainSessionGate(config.OmnipusHomeDir(), r.getConfig(), mainID)
+			if gateErr != nil {
+				return "", fmt.Errorf("main session mode: the owner's workspace could not be read: %w", gateErr)
+			}
+			if !eligible {
+				return "", fmt.Errorf("main session mode: the owner no longer has a main in this workspace (removed from the team or no longer a chat agent); the run was not started")
+			}
+		}
 		meta, err := store.GetOrCreateMainSession(workspaceID, owner)
 		if err != nil {
 			return "", fmt.Errorf("main session create: %w", err)
@@ -1155,7 +1174,11 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 	// FR-017: there is no session-mode choice. The mode is derived from the
 	// owner and the run_isolated checkbox.
 	runIsolated := req.RunIsolated != nil && *req.RunIsolated
-	sessionMode := a.deriveScheduleSessionMode(runIsolated, req.OwnerAgentId, schedule)
+	sessionMode, modeErr := a.deriveScheduleSessionMode(runIsolated, req.OwnerAgentId, schedule)
+	if modeErr != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not determine the schedule's run mode", modeErr)
+		return
+	}
 
 	// M3: persist the COMPLETE job (owner, mode, timeout, created-by) in one
 	// atomic write via AddJobFull. The previous AddJob+UpdateJob pair briefly
@@ -1264,7 +1287,12 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, i
 	// FR-017: re-derive the mode from the (possibly changed) owner, trigger and
 	// run_isolated. A heartbeat job keeps its internal main mode.
 	if job.Payload.Kind != heartbeatJobKind {
-		job.SessionMode = a.deriveScheduleSessionMode(job.RunIsolated, job.AgentID, job.Schedule)
+		mode, modeErr := a.deriveScheduleSessionMode(job.RunIsolated, job.AgentID, job.Schedule)
+		if modeErr != nil {
+			jsonServerFailure(w, http.StatusInternalServerError, "could not determine the schedule's run mode", modeErr)
+			return
+		}
+		job.SessionMode = mode
 	}
 
 	if err := a.cronSvc().UpdateJob(&job); err != nil {
@@ -1476,8 +1504,20 @@ func boolPtrIfTrue(b bool) *bool {
 // otherwise an owner with an eligible main in the default workspace runs in that
 // main; otherwise a recurring schedule continues its own chat and a one-time
 // schedule runs isolated. Heartbeats set their main mode internally.
-func (a *restAPI) deriveScheduleSessionMode(runIsolated bool, ownerAgentID string, schedule cron.CronSchedule) cron.SessionMode {
-	return deriveScheduleSessionMode(runIsolated, a.ownerHasEligibleDefaultMain(ownerAgentID), schedule.Kind != "at")
+//
+// A failure to READ the default workspace (final-gate M10) is returned, not
+// treated as "no main": the schedule would otherwise be saved as continue or
+// isolated with no signal that it was downgraded from main. A missing default
+// workspace is the ordinary "no main" and is not an error.
+func (a *restAPI) deriveScheduleSessionMode(runIsolated bool, ownerAgentID string, schedule cron.CronSchedule) (cron.SessionMode, error) {
+	if runIsolated {
+		return cron.SessionModeIsolated, nil // the checkbox decides; no eligibility read needed
+	}
+	eligible, err := a.ownerHasEligibleDefaultMain(ownerAgentID)
+	if err != nil {
+		return "", err
+	}
+	return deriveScheduleSessionMode(runIsolated, eligible, schedule.Kind != "at"), nil
 }
 
 func deriveScheduleSessionMode(runIsolated, ownerMainEligible, recurring bool) cron.SessionMode {
@@ -1494,16 +1534,26 @@ func deriveScheduleSessionMode(runIsolated, ownerMainEligible, recurring bool) c
 }
 
 // ownerHasEligibleDefaultMain reports whether agentID owns an eligible visible
-// main in the default workspace. A read failure is "no" here only for the
-// derivation (the schedule then continues/isolates), never a guessed main.
-func (a *restAPI) ownerHasEligibleDefaultMain(agentID string) bool {
+// main in the default workspace. No default workspace, or a workspace that does
+// not exist, is (false, nil). A read failure is an error: the caller must not
+// guess a main, and must not silently downgrade the schedule either.
+func (a *restAPI) ownerHasEligibleDefaultMain(agentID string) (bool, error) {
 	wsID, err := workspace.ResolveDefaultID(config.OmnipusHomeDir())
-	if err != nil || wsID == "" {
-		return false
+	if err != nil {
+		if errors.Is(err, workspace.ErrNoDefault) {
+			return false, nil
+		}
+		return false, fmt.Errorf("resolve the default workspace: %w", err)
 	}
-	ws, ok := a.workspaceForMainSession(wsID)
-	if !ok {
-		return false
+	if wsID == "" {
+		return false, nil
 	}
-	return mainSessionPairEligible(a.agentLoop.GetConfig(), ws, agentID)
+	ws, found, err := loadWorkspaceForMain(a.homePath, wsID)
+	if err != nil {
+		return false, fmt.Errorf("read the default workspace: %w", err)
+	}
+	if !found {
+		return false, nil
+	}
+	return mainSessionPairEligible(a.agentLoop.GetConfig(), ws, agentID), nil
 }

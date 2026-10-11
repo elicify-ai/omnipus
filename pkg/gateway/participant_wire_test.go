@@ -71,7 +71,7 @@ func TestParticipant_LiveUserEntryAndGuestReplyCarryLabels(t *testing.T) {
 
 	var sawUser, sawToken bool
 	deadline := time.After(2 * time.Second)
-	for !(sawUser && sawToken) {
+	for !sawUser || !sawToken {
 		select {
 		case b := <-wc.sendCh:
 			var f map[string]any

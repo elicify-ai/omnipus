@@ -68,6 +68,12 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		return fmt.Errorf("context canceled after registry creation: %w", err)
 	}
 
+	// A registry that could not be built whole (no session store, an agent that
+	// would not construct) is never swapped in over the running one.
+	if err := registry.InitErr(); err != nil {
+		return fmt.Errorf("registry creation failed: %w", err)
+	}
+
 	// Apply configurable default agent override on the new registry.
 	if cfg.Agents.Defaults.DefaultAgentID != "" {
 		registry.SetDefaultAgentOverride(cfg.Agents.Defaults.DefaultAgentID)

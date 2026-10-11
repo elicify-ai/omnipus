@@ -33,7 +33,10 @@ func declaredSessionTypes(t *testing.T) []UnifiedSessionType {
 			continue
 		}
 		for _, spec := range gd.Specs {
-			vs := spec.(*ast.ValueSpec)
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
 			id, ok := vs.Type.(*ast.Ident)
 			if !ok || id.Name != "UnifiedSessionType" || len(vs.Values) != 1 {
 				continue

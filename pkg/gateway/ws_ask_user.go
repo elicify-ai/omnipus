@@ -349,7 +349,8 @@ func (h *WSHandler) handleAskUserAnswer(wc *wsConn, f generated.AskUserAnswerFra
 				"card_id", f.CardId,
 				"session_id", f.SessionId,
 				"outcome", outcome,
-				"reason", reason)
+				"reason", reason,
+				"error", err) // the real cause, for the operator; the client frame stays fixed text
 			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
 				Message: "ask_user_answer: your answer was accepted but the paused turn could not resume. Details are in the server log.",

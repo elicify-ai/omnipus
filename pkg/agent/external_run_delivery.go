@@ -37,6 +37,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -82,31 +83,42 @@ func (al *AgentLoop) deliverExternalCLIInstruction(
 	// (task_executor_run.go::processTaskDirectExternalCLI) consumes the queued
 	// instruction after the interrupt and resumes the same native conversation.
 	// Only a run the task loop can resume is marked, so the mark can never
-	// outlive a consumer.
-	taskOrigin := false
-	if rec, rerr := al.loadLifecycleRecord(sessionID); rerr == nil && rec != nil &&
-		rec.Origin != nil && rec.Origin.Kind == session.OriginKindTask {
-		taskOrigin = true
+	// outlive a consumer. A lifecycle record that cannot be READ is not "not a
+	// task run": the delivery refuses before anything is queued or cancelled,
+	// rather than interrupting a run whose resume path it cannot determine.
+	taskOrigin, originErr := al.externalRunIsTaskOrigin(sessionID)
+	if originErr != nil {
+		return "", &authoredRefusalError{text: fmt.Sprintf(
+			"external-cli steer: could not read the lifecycle record of session %s; the instruction was not delivered",
+			sessionID)}
 	}
 
 	sess := al.externalRunSessionIfPresent(sessionID)
 	if sess == nil {
 		return "", al.noLiveExternalConversationErr(sessionID)
 	}
-	// Hold the holder's lock across check-run → capture-claim → enqueue →
-	// cancel-run (N2). beginExternalRun and finishExternalRun also take this
-	// lock, so no run can end or start between the check and the cancel.
+	// Check-run → capture-claim under the holder's lock (N2): beginExternalRun
+	// and finishExternalRun take this lock too, so the run cannot end or be
+	// superseded between the check and the capture. The lock is released BEFORE
+	// the durable enqueue: the enqueue reads the lifecycle record and appends the
+	// steer receipt, and the lifecycle lock is never taken under the holder lock
+	// (beginExternalRun's own ordering rule); a slow disk must not stall a turn
+	// end or a Stop.
 	sess.mu.Lock()
-	defer sess.mu.Unlock()
 	if !sess.running || sess.driver == nil {
+		sess.mu.Unlock()
 		return "", al.noLiveExternalConversationErr(sessionID)
 	}
 	if expected.Generation != 0 &&
 		(expected.SessionID != sess.claim.SessionID || expected.Generation != sess.claim.Generation) {
+		sess.mu.Unlock()
 		return "", &authoredRefusalError{text: fmt.Sprintf(
 			"external-cli steer: the selected execution for session %s was superseded; the instruction was not delivered",
 			sessionID)}
 	}
+	selected := sess.claim
+	sess.mu.Unlock()
+
 	// Queue FIRST, so the instruction is present before the run ends: the
 	// post-turn drain sees it and re-enters the external-CLI body with it. The
 	// D4 steer receipt (enqueueDelegateSteer) records it as a real accepted
@@ -115,17 +127,43 @@ func (al *AgentLoop) deliverExternalCLIInstruction(
 	if err != nil {
 		return "", fmt.Errorf("external-cli steer: enqueue instruction for %s: %w", sessionID, err)
 	}
-	// Interrupt THIS run via its own cancel func (N2) — never
-	// al.Interrupt(sessionID, …), which resolves whatever turn is current for
-	// the session id and could cancel a newer run. A cancel of an already-ended
-	// run is a harmless no-op; the drain still consumes the queued instruction.
-	if taskOrigin {
-		sess.steerInterrupt = true
-	}
-	if sess.cancelRun != nil {
-		sess.cancelRun()
+
+	// Interrupt THIS run via its own cancel func (N2) - never
+	// al.Interrupt(sessionID, ...), which resolves whatever turn is current for
+	// the session id and could cancel a newer run. Re-take the lock and fire the
+	// cancel only if the SELECTED run is still the one in flight; if it ended or
+	// was superseded while the instruction was being queued, the queued
+	// instruction is left for the post-turn drain / next entry to consume (the
+	// same outcome as cancelling an already-ended run, which was always a no-op).
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.running && sess.claim == selected {
+		if taskOrigin {
+			sess.steerInterrupt = true
+		}
+		if sess.cancelRun != nil {
+			sess.cancelRun()
+		}
 	}
 	return resolved, nil
+}
+
+// externalRunIsTaskOrigin reports whether sessionID's durable lifecycle record
+// says it is a task run. A missing record or an unwired store means "not a task
+// run"; any other read failure is returned, never swallowed.
+func (al *AgentLoop) externalRunIsTaskOrigin(sessionID string) (bool, error) {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false, nil
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if errors.Is(err, session.ErrLifecycleNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return rec != nil && rec.Origin != nil && rec.Origin.Kind == session.OriginKindTask, nil
 }
 
 // noLiveExternalConversationErr is the shared BDD-05.6 refusal for "there is no

@@ -5,8 +5,8 @@ description: >
   Surface). Parent -> child. Mid-run injection applied at the child's next
   tool boundary (skip-remaining-batch semantics identical to chat
   steering, INV-3) — never mid-tool, never interleaved with an in-flight
-  verdict write. Rate-capped 6/min, 16 KiB body (session_messaging.
-  steer_rate/steer_body). Envelope fields are duplicated inline (ADR-034
+  verdict write. Rate-capped (default 60/min) and body-capped
+  (default 65,536 UTF-8 bytes) by session_messaging.steer_rate/steer_body. Envelope fields are duplicated inline (ADR-034
   precedent, see SessionMessageProgress for the rationale).
 required:
   - message_id
@@ -67,7 +67,7 @@ properties:
     example: false
   text:
     type: string
-    maxLength: 16384
+    maxLength: 65536
     description: Steering instruction injected at the child's next tool boundary.
     example: "Skip the xlsx shard for now, prioritize the CSV export."
   correlation_id:

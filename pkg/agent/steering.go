@@ -11,6 +11,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
@@ -34,6 +35,10 @@ type steeringQueue struct {
 	queues            map[string][]steeringQueueItem
 	closedGenerations map[string]int
 	terminalizing     map[string]*steeringTerminalTransition
+	// aggregateCap is session_messaging.steer_aggregate_body (FR-010): the most
+	// UTF-8 body bytes the ordinary items waiting for ONE scope may add up to.
+	// Guarded by mu; set at boot and on every reload by SetAggregateCap.
+	aggregateCap int
 }
 
 type steeringTerminalTransition struct {
@@ -85,12 +90,45 @@ func newSteeringQueue() *steeringQueue {
 		queues:            make(map[string][]steeringQueueItem),
 		closedGenerations: make(map[string]int),
 		terminalizing:     make(map[string]*steeringTerminalTransition),
+		aggregateCap:      config.DefaultSMSteerAggregateBodyBytes,
 	}
+}
+
+// SetAggregateCap installs the waiting-bytes bound (FR-010). A value below 1
+// restores the shipped default, matching EffectiveSteerAggregateBody.
+func (sq *steeringQueue) SetAggregateCap(n int) {
+	if n < 1 {
+		n = config.DefaultSMSteerAggregateBodyBytes
+	}
+	sq.mu.Lock()
+	sq.aggregateCap = n
+	sq.mu.Unlock()
+}
+
+// exceedsAggregate reports whether admitting item would take the waiting
+// ordinary bytes past the cap. Equal to the cap is accepted. Caller holds mu.
+func (sq *steeringQueue) exceedsAggregate(waiting []steeringQueueItem, item steeringQueueItem) bool {
+	return waitingBodyBytes(waiting)+len(item.message.Content) > sq.aggregateCap
+}
+
+// waitingBodyBytes sums the UTF-8 body bytes of the ordinary (non-wake) items.
+func waitingBodyBytes(items []steeringQueueItem) int {
+	total := 0
+	for _, it := range items {
+		if it.wake == nil {
+			total += len(it.message.Content)
+		}
+	}
+	return total
 }
 
 // errSteeringQueueFull is the refusal for a scope already holding MaxQueueSize
 // items; its text is already a plain, publishable sentence.
 var errSteeringQueueFull = errors.New("steering queue is full")
+
+// errSteeringAggregateFull is the refusal for an ordinary item that would take
+// the bytes already waiting for one scope past steer_aggregate_body (FR-010).
+var errSteeringAggregateFull = errors.New("waiting messages for this chat exceed the allowed total size; wait for the agent to catch up")
 
 var errSteeringScopeClosed = errors.New("steering session finished; use follow_up to continue it")
 
@@ -150,6 +188,9 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 		} else if len(transition.finishingItems) >= MaxQueueSize {
 			sq.mu.Unlock()
 			return false, errSteeringQueueFull
+		} else if sq.exceedsAggregate(transition.finishingItems, item) {
+			sq.mu.Unlock()
+			return false, errSteeringAggregateFull
 		}
 		transition.finishingItems = append(transition.finishingItems, item)
 		sq.mu.Unlock()
@@ -176,6 +217,9 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 	} else if len(queue) >= MaxQueueSize {
 		sq.mu.Unlock()
 		return false, errSteeringQueueFull
+	} else if sq.exceedsAggregate(queue, item) {
+		sq.mu.Unlock()
+		return false, errSteeringAggregateFull
 	}
 	sq.queues[scope] = append(queue, item)
 	sq.mu.Unlock()
@@ -470,20 +514,6 @@ func (sq *steeringQueue) lenScope(scope string) int {
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
 	return len(sq.queues[normalizeSteeringScope(scope)])
-}
-
-// Steer enqueues a user message to be injected into the currently running
-// agent loop. The message will be picked up after the current tool finishes
-// executing, causing any remaining tool calls in the batch to be skipped.
-func (al *AgentLoop) Steer(msg providers.Message) error {
-	scope := ""
-	agentID := ""
-	if ts := al.getAnyActiveTurnState(); ts != nil {
-		scope = ts.sessionKey
-		agentID = ts.agentID
-	}
-	_, _, err := al.enqueueSteeringMessage(scope, agentID, msg, "")
-	return err
 }
 
 // enqueueSteeringFromMessage redirects an inbound bus message into the
@@ -1060,7 +1090,10 @@ func (al *AgentLoop) enqueueSteeringItemWithStatus(scope, agentID string, item s
 		Source:    "Steer",
 		TracePath: "turn.interrupt.received",
 	}
-	if ts := al.getAnyActiveTurnState(); ts != nil {
+	// Attribute the event to the turn that owns THIS scope. A process-wide
+	// "first active turn" would report a steer for session B against whichever
+	// session happens to be registered first.
+	if ts := al.getActiveTurnState(normalizeSteeringScope(scope)); ts != nil {
 		meta = ts.eventMeta("Steer", "turn.interrupt.received")
 	} else {
 		if strings.TrimSpace(agentID) != "" {
@@ -1551,27 +1584,6 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		})
 }
 
-func (al *AgentLoop) InterruptGraceful(hint string) error {
-	ts := al.getAnyActiveTurnState()
-	if ts == nil {
-		return fmt.Errorf("no active turn")
-	}
-	if !ts.requestGracefulInterrupt(hint) {
-		return fmt.Errorf("turn %s cannot accept graceful interrupt", ts.turnID)
-	}
-
-	al.emitEvent(
-		EventKindInterruptReceived,
-		ts.eventMeta("InterruptGraceful", "turn.interrupt.received"),
-		InterruptReceivedPayload{
-			Kind:    InterruptKindGraceful,
-			HintLen: len(hint),
-		},
-	)
-
-	return nil
-}
-
 // collectDescendantTurnIDs walks activeTurnStates and returns the turn IDs of
 // every turnState whose routingSessionID matches sessionID. This is the
 // canonical session-match predicate shared by Interrupt's whole-chat cascade
@@ -2036,26 +2048,6 @@ func (al *AgentLoop) sessionTurnsStillAlive(sessionID string) []*turnState {
 	return alive
 }
 
-func (al *AgentLoop) InterruptHard() error {
-	ts := al.getAnyActiveTurnState()
-	if ts == nil {
-		return fmt.Errorf("no active turn")
-	}
-	if !ts.requestHardAbort() {
-		return fmt.Errorf("turn %s is already aborting", ts.turnID)
-	}
-
-	al.emitEvent(
-		EventKindInterruptReceived,
-		ts.eventMeta("InterruptHard", "turn.interrupt.received"),
-		InterruptReceivedPayload{
-			Kind: InterruptKindHard,
-		},
-	)
-
-	return nil
-}
-
 // ====================== SubTurn Result Polling ======================
 //
 // dequeuePendingSubTurnResults was deleted 2026-09-24 as an unreachable
@@ -2070,7 +2062,7 @@ func (al *AgentLoop) InterruptHard() error {
 //
 // Use this when the user explicitly requests immediate termination (e.g., "stop now", "abort").
 // For graceful interruption that allows the agent to finish the current tool and summarize,
-// use Steer() instead.
+// use a session-scoped steer instead.
 func (al *AgentLoop) HardAbort(sessionKey string) error {
 	tsInterface, ok := al.activeTurnStates.Load(sessionKey)
 	if !ok {
@@ -2100,37 +2092,6 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 	}
 
 	return nil
-}
-
-// ====================== Follow-Up Injection ======================
-
-// InjectFollowUp enqueues a message to be automatically processed after the current
-// turn completes. Unlike Steer(), which interrupts the current execution, InjectFollowUp
-// waits for the current turn to finish naturally before processing the message.
-//
-// This is useful for:
-// - Automated workflows that need to chain multiple turns
-// - Background tasks that should run after the main task completes
-// - Scheduled follow-up actions
-//
-// The message will be processed via Continue() when the agent becomes idle.
-func (al *AgentLoop) InjectFollowUp(msg providers.Message) error {
-	// InjectFollowUp uses the same steering queue mechanism as Steer(),
-	// but the semantic difference is in when it's called:
-	// - Steer() is called during active execution to interrupt
-	// - InjectFollowUp() is called when planning future work
-	//
-	// Both end up in the same queue and are processed by Continue()
-	// when the agent is idle.
-	return al.Steer(msg)
-}
-
-// ====================== API Aliases for Design Document Compatibility ======================
-
-// InjectSteering is an alias for Steer() to match the design document naming.
-// It injects a steering message into the currently running agent loop.
-func (al *AgentLoop) InjectSteering(msg providers.Message) error {
-	return al.Steer(msg)
 }
 
 // ====================== ADR-053 S3: Typed SessionMessage Transport ======================

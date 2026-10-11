@@ -18,12 +18,12 @@ import (
 	"testing"
 )
 
-// curatedRefusalStub is an authored refusal sentence, like the agent's
+// curatedRefusalError is an authored refusal sentence, like the agent's
 // curatedTurnError.
-type curatedRefusalStub struct{ text string }
+type curatedRefusalError struct{ text string }
 
-func (e curatedRefusalStub) Error() string       { return e.text }
-func (e curatedRefusalStub) RefusalText() string { return e.text }
+func (e curatedRefusalError) Error() string       { return e.text }
+func (e curatedRefusalError) RefusalText() string { return e.text }
 
 func requireNoStoreDetail(t *testing.T, text string, forbidden ...string) {
 	t.Helper()

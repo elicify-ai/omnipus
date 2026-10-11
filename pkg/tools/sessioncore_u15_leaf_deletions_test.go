@@ -45,8 +45,8 @@ func sessionCoreU15AbsentFromPackageSources(t *testing.T, symbol, presentControl
 
 	// Injected-forbidden control.
 	injected := filepath.Join(t.TempDir(), "injected_fixture.txt")
-	if err := os.WriteFile(injected, []byte(symbol), 0o600); err != nil {
-		t.Fatalf("U15 instrument: write injected fixture: %v", err)
+	if werr := os.WriteFile(injected, []byte(symbol), 0o600); werr != nil {
+		t.Fatalf("U15 instrument: write injected fixture: %v", werr)
 	}
 	injectedData, err := os.ReadFile(injected)
 	if err != nil {

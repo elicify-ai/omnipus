@@ -989,7 +989,7 @@ func recordExternalPermission(al *AgentLoop, childTS *turnState, pr *runner.Perm
 //
 // The in-place update reads the transcript JSONL, rewrites the matching line,
 // and writes the file back atomically under an advisory flock. This mirrors the
-// read-modify-rewrite pattern used by UnifiedStore.MarkLastEntryTruncated.
+// read-modify-rewrite pattern used by the unified store's former truncation rewrite.
 // Because the store's AppendTranscript is guarded by an in-process mutex (not
 // flock), a narrow in-process race with a concurrent append from a sibling
 // sub-turn sharing this transcript session remains: in the worst case a

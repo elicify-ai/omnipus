@@ -183,7 +183,7 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		Content:   content,
 		Timestamp: time.Now().UTC(),
 		Model:     model,
-		// TurnID: without this, neither MarkLastEntryTruncated's own
+		// TurnID: without this, neither the former truncation rewrite's own
 		// turn-scoped backward-walk (H2 fix — it matches on e.TurnID ==
 		// turnID) nor the frontend's turn_canceled -> assistant-message
 		// replay correlation can ever match a REAL entry; both were only
@@ -231,12 +231,10 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 	ts.appendAssistantTranscriptImpl(content, false, false, "", producedModel...)
 }
 
-// validTruncationReasonsAgent mirrors pkg/session's unexported
-// validTruncationReasons (ADR-087 D2): the only two values
-// appendAssistantTranscriptTruncated will ever stamp onto a persisted
-// entry. Kept in lockstep with session.MarkLastEntryTruncated's own set —
-// pkg/session cannot be imported for the map itself since it is
-// unexported, but both lists must never diverge.
+// validTruncationReasonsAgent is the closed set of truncation reasons (ADR-087
+// D2): the only two values appendAssistantTranscriptTruncated will ever stamp
+// onto a persisted entry. It is the single list - pkg/session no longer keeps a
+// second one, so there is nothing to keep in step with.
 var validTruncationReasonsAgent = map[string]bool{
 	"cancelled":         true,
 	"max_output_tokens": true,
@@ -246,9 +244,8 @@ var validTruncationReasonsAgent = map[string]bool{
 // write-choke-point fix: it stamps Truncated=true and TruncationReason on
 // the assistant entry in the SAME construction/write appendAssistantTranscript
 // already performs, instead of the pre-fix two-step pattern (append the
-// entry, then have loop.go immediately call session.MarkLastEntryTruncated
-// to re-read, re-parse, and rewrite the whole transcript.jsonl just to
-// stamp two fields on the entry that was built one call earlier). The
+// entry, then have loop.go immediately re-read, re-parse and rewrite the
+// whole transcript.jsonl just to stamp two fields on the entry that was built one call earlier). The
 // streaming path already writes truncation state in a single pass via
 // wsStreamer.Finalize (commit 47c086ca); this brings the non-streaming
 // path to parity.
@@ -262,8 +259,7 @@ var validTruncationReasonsAgent = map[string]bool{
 // reason MUST be one of session's two accepted values ("cancelled",
 // "max_output_tokens" — ADR-087 D2, see validTruncationReasonsAgent). Any
 // other value is a programming error at this call site: rather than
-// silently persist an unrecognized reason (which session.MarkLastEntryTruncated
-// would itself have rejected), this logs loudly at Error level and falls
+// silently persist an unrecognized reason, this logs loudly at Error level and falls
 // back to writing the entry WITHOUT the truncation fields — so the
 // content is never lost, but a bad reason can never masquerade as a valid
 // one on disk.
@@ -315,7 +311,7 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 		// the assistant entry it describes, so (1) the frontend's
 		// turn_canceled -> assistant-message replay correlation could never
 		// match a real entry (chatTurnCanceledNoMatch always fired on
-		// reload), and (2) MarkLastEntryTruncated's own turn-scoped
+		// reload), and (2) the former truncation rewrite's own turn-scoped
 		// backward-walk (which requires e.TurnID == turnID) could never
 		// match a real entry either, silently disabling the Truncated flag
 		// for every real cancel. Both were only ever exercised by tests that
@@ -471,15 +467,6 @@ func (ts *turnState) writeErrorTranscriptFlagged(kind, stage, message string, co
 
 func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLMErrorCode, pe ...*ProviderError) {
 	ts.writeErrorTranscriptCore(kind, stage, message, code, false, nil, pe...)
-}
-
-func (ts *turnState) writeErrorTranscriptWithAbandonment(
-	kind, stage, message string,
-	code LLMErrorCode,
-	allowAbandoned bool,
-	pe ...*ProviderError,
-) {
-	ts.writeErrorTranscriptCore(kind, stage, message, code, allowAbandoned, nil, pe...)
 }
 
 // writeErrorTranscriptCore is the one error-transcript write engine.

@@ -824,7 +824,6 @@ func TestTriggerScheduler_LegacyPathUnchanged(t *testing.T) {
 			t.Fatal("expected an error for a manual trigger (never routed through triggerToCronSchedule in practice)")
 		}
 	})
-
 }
 
 // -----------------------------------------------------------------------------

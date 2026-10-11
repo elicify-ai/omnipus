@@ -35,7 +35,9 @@ import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
-import { replayingStartedAt } from './runtime-state'
+import { pendingClearRefetches, replayingStartedAt } from './runtime-state'
+import { MAX_UNRESOLVED_READS, retryClearTranscriptRead } from './clear-refetch'
+import { useUiStore } from '@/store/ui'
 import type { ServerFrame } from '@/lib/ws'
 import type { ChatMessage } from './types'
 
@@ -600,5 +602,131 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
     useChatStore.getState().handleFrame(doneFrame('turn-y', 2))
     await new Promise((r) => setTimeout(r, 10))
     expect(requestMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent', () => {
+  /** What the server answers when it refused the /clear: its own user row and a reply, but NO marker. */
+  function rawRefusedProjection(clearClientMessageId: string): Record<string, unknown>[] {
+    return [
+      rawUser('srv-u-refused', clearClientMessageId, '/clear', '2026-10-10T00:00:00Z'),
+      rawAssistant('srv-a-refused', 'The clear was refused.', '2026-10-10T00:00:01Z'),
+    ]
+  }
+
+  let toasts: string[]
+  beforeEach(() => {
+    delete pendingClearRefetches[SID]
+    toasts = []
+    vi.spyOn(useUiStore.getState(), 'addToast').mockImplementation(((t: { message: string }) => { toasts.push(t.message) }) as never)
+  })
+  afterEach(() => {
+    delete pendingClearRefetches[SID]
+  })
+
+  async function endTurnAndSettle(turn: number, expectedReads: number): Promise<void> {
+    useChatStore.getState().handleFrame(doneFrame(`turn-refused-${turn}`, turn))
+    await vi.waitFor(() => expect(requestMock).toHaveBeenCalledTimes(expectedReads))
+    await new Promise((r) => setTimeout(r, 15))
+  }
+
+  it('drops the intent after the bound, tells the user once, and later turns read nothing', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    requestMock.mockImplementation(async () => rawRefusedProjection(sentClientMessageId(0)))
+    useChatStore.getState().sendMessage('/clear')
+
+    for (let turn = 1; turn <= MAX_UNRESOLVED_READS; turn++) {
+      expect(pendingClearRefetches[SID], `still armed before read ${turn}`).toBeTruthy()
+      await endTurnAndSettle(turn, turn)
+    }
+    expect(pendingClearRefetches[SID], 'expired at the bound').toBeUndefined()
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0]).toMatch(/did not confirm your \/clear/i)
+
+    useChatStore.getState().handleFrame(doneFrame('turn-after', 99))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(requestMock).toHaveBeenCalledTimes(MAX_UNRESOLVED_READS)
+  })
+
+  it('founder ruling: /clear shows a fresh conversation, deletes nothing, and leaves nothing armed', async () => {
+    seedBucket([
+      localMessage({ id: 'u-old', role: 'user', content: 'an old question', deliveryStatus: 'received' }),
+      localMessage({ id: 'a-old', role: 'assistant', content: 'an old answer' }),
+    ])
+    requestMock.mockImplementation(async () => rawPostClearProjection(sentClientMessageId(0), 1))
+    useChatStore.getState().sendMessage('/clear')
+    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
+    await vi.waitFor(() => expect(pendingClearRefetches[SID]).toBeUndefined())
+
+    // The screen is a new conversation: this /clear, its reply, the divider. Nothing older.
+    const order = bucket().messageOrder
+    expect(order.slice(0, 3)).toEqual(['srv-u-clear-1', 'srv-a-reply-1', 'srv-clear-marker-1'])
+    // Only the finalized empty live assistant placeholder may follow; no pre-clear row.
+    for (const id of order.slice(3)) expect(bucket().messagesById[id]).toMatchObject({ role: 'assistant', content: '' })
+    expect(order).not.toContain('u-old')
+    expect(order).not.toContain('a-old')
+    // Nothing was deleted: the SPA only read the transcript (GET), never wrote or deleted.
+    for (const call of requestMock.mock.calls) {
+      const init = call[1] as { method?: string } | undefined
+      expect(init?.method ?? 'GET').toBe('GET')
+      expect(String(call[0])).toBe(`/sessions/${SID}/messages`)
+    }
+    // Nothing left armed: later turns re-read nothing.
+    const reads = requestMock.mock.calls.length
+    useChatStore.getState().handleFrame(doneFrame('turn-later', 2))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(requestMock).toHaveBeenCalledTimes(reads)
+  })
+
+  it('a history Retry that reads but cannot settle the operation says so instead of going quiet', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    requestMock.mockImplementation(async () => rawRefusedProjection(sentClientMessageId(0)))
+    useChatStore.getState().sendMessage('/clear')
+    expect(pendingClearRefetches[SID]).toBeTruthy()
+    // The screen's Retry is only reachable once the turn has gone idle.
+    useChatStore.setState((st) => ({ ...st, sessionsById: { ...st.sessionsById, [SID]: { ...st.sessionsById[SID], isStreaming: false } } }) as never)
+
+    retryClearTranscriptRead(SID, (sid, updater) => {
+      useChatStore.setState((st) => {
+        const b = st.sessionsById[sid!]
+        return { ...st, sessionsById: { ...st.sessionsById, [sid!]: { ...b, ...updater(b) } } } as never
+      })
+    })
+    await vi.waitFor(() => expect(toasts.length).toBeGreaterThanOrEqual(1))
+    expect(toasts[0]).toMatch(/can't confirm/i)
+    expect(pendingClearRefetches[SID], 'one unresolved read does not drop the intent').toBeTruthy()
+  })
+
+  it('an application failure is shown once, keeps the projection for later, and does not drop the intent', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    requestMock.mockImplementation(async () => rawPostClearProjection(sentClientMessageId(0), 1))
+    useChatStore.getState().sendMessage('/clear')
+    const throwing = () => { throw new Error('bucket write failed') }
+
+    retryClearTranscriptRead(SID, throwing)
+    await vi.waitFor(() => expect(toasts).toHaveLength(1))
+    expect(toasts[0]).toMatch(/couldn't refresh this chat/i)
+    retryClearTranscriptRead(SID, throwing)
+    await vi.waitFor(() => expect(requestMock).toHaveBeenCalledTimes(2))
+    await new Promise((r) => setTimeout(r, 15))
+    expect(toasts, 'said once, not on every retry').toHaveLength(1)
+    expect(pendingClearRefetches[SID]?.heldProjection).toBeTruthy()
+  })
+
+  it('a successful clear retires the intent without any toast', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    requestMock.mockImplementation(async () => rawPostClearProjection(sentClientMessageId(0), 1))
+    useChatStore.getState().sendMessage('/clear')
+    useChatStore.getState().handleFrame(doneFrame('turn-ok', 1))
+    await vi.waitFor(() => expect(pendingClearRefetches[SID]).toBeUndefined())
+    expect(toasts).toEqual([])
+  })
+
+  it('deleting the session drops its pending refresh', () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    useChatStore.getState().sendMessage('/clear')
+    expect(pendingClearRefetches[SID]).toBeTruthy()
+    useSessionStore.getState().pruneSessionDescriptor(SID)
+    expect(pendingClearRefetches[SID]).toBeUndefined()
   })
 })

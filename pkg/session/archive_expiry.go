@@ -35,6 +35,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 // ExpiryNotice is the AGENT-VISIBLE outcome of one SweepExpired pass (FR-007:
@@ -166,9 +168,15 @@ func (s *ArchiveDayStore) repairWindowLocked(w AddressedWindow) (AddressedWindow
 	for start < len(w.Model) {
 		rec, err := s.readAtLocked(w.Model[start])
 		if err != nil {
-			// The slot's partition was swept (or the record is corrupt): expired.
-			start++
-			continue
+			if partitionGone(err) {
+				// The slot's partition was swept: expired.
+				start++
+				continue
+			}
+			// An I/O error or an unreadable record is not expiry. Advancing here
+			// would shorten the persisted window and permanently drop context
+			// over a transient failure, so it surfaces and nothing is saved.
+			return w, nil, false, false, fmt.Errorf("archive: repair window: read slot %d: %w", start, err)
 		}
 		if slotIsOrphanToolResult(rec) {
 			// A tool result cannot start a complete group.
@@ -261,12 +269,8 @@ func (s *ArchiveDayStore) saveWindowLocked(w AddressedWindow) error {
 	if err != nil {
 		return fmt.Errorf("archive: encode window: %w", err)
 	}
-	tmp := filepath.Join(s.dir(), archiveWindowFile+".tmp")
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := fileutil.WriteFileAtomic(filepath.Join(s.dir(), archiveWindowFile), data, 0o600); err != nil {
 		return fmt.Errorf("archive: write window: %w", err)
-	}
-	if err := os.Rename(tmp, filepath.Join(s.dir(), archiveWindowFile)); err != nil {
-		return fmt.Errorf("archive: rename window: %w", err)
 	}
 	return nil
 }
@@ -295,4 +299,130 @@ func sourcesForSlotsLocked(s *ArchiveDayStore, slots []ArchiveAddress) ([]Archiv
 		out = append(out, slot)
 	}
 	return out, nil
+}
+
+// expireSession is the ONE retention-expiry path for a session: it deletes the
+// aged rolled partitions (SweepExpired), then moves the live backend cursor past
+// every model slot whose record was expired, so the next window read resolves.
+// UnifiedStore.RetentionSweep calls it for every session directory and no other
+// code deletes a rolled day partition. The caller holds the session shard.
+func (b *archiveBackend) expireSession(sessionID string, retentionDays int) (ExpiryNotice, error) {
+	if retentionDays <= 0 {
+		return ExpiryNotice{}, nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	store, err := b.store(sessionID)
+	if err != nil {
+		return ExpiryNotice{}, err
+	}
+	notice, err := store.SweepExpired(retentionDays)
+	if err != nil {
+		return notice, err
+	}
+	if err := b.advancePastExpiredLocked(sessionID, store); err != nil {
+		return notice, err
+	}
+	return notice, nil
+}
+
+// advancePastExpiredLocked moves meta.Skip to the first retained COMPLETE model
+// slot after the last live slot whose record is gone, and drops an anchor whose
+// record is gone. A slot is gone only when its partition is provably absent; any
+// other failure returns an error and changes nothing. b.mu must be held.
+func (b *archiveBackend) advancePastExpiredLocked(key string, store *ArchiveDayStore) error {
+	meta, err := b.loadMetaLocked(key)
+	if err != nil {
+		return err
+	}
+	n, err := store.OrdinalCount()
+	if err != nil || n == 0 {
+		return err
+	}
+	present := make(map[string]bool)
+	skip := clampSkip(meta.Skip, n)
+	lastGone := -1
+	for from := skip; from < n; from += scanChunk {
+		rows, err := store.readOrdinalRows(from, min(n, from+scanChunk))
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if retractedOrdinal(meta.Retracted, row.Ordinal) {
+				continue
+			}
+			ok, err := store.rowResolvable(row, present)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				lastGone = row.Ordinal
+			}
+		}
+	}
+	newSkip := skip
+	if lastGone >= 0 {
+		newSkip = lastGone + 1
+		// A tool result cannot begin a complete group: trim leading orphans.
+		for newSkip < n {
+			rows, err := store.readOrdinalRows(newSkip, newSkip+1)
+			if err != nil {
+				return err
+			}
+			if len(rows) == 0 || rows[0].Role != "tool" {
+				break
+			}
+			newSkip++
+		}
+	}
+	anchorGone := false
+	if a := meta.AnchorLine; a != nil && *a >= 0 && *a < n {
+		rows, err := store.readOrdinalRows(*a, *a+1)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 1 {
+			ok, err := store.rowResolvable(rows[0], present)
+			if err != nil {
+				return err
+			}
+			anchorGone = !ok
+		}
+	}
+	if newSkip == meta.Skip && meta.Count == n && !anchorGone {
+		return nil
+	}
+	meta.Skip, meta.Count = newSkip, n
+	if anchorGone {
+		meta.AnchorLine = nil
+	}
+	return b.saveMetaLocked(key, meta)
+}
+
+// rowResolvable reports whether the partitions a model slot reads from (the slot
+// itself and, for a model_ref, its source) still exist. present caches the
+// answer per partition key. Only a provably absent partition is "not resolvable";
+// any other failure is returned.
+func (s *ArchiveDayStore) rowResolvable(row ordinalRow, present map[string]bool) (bool, error) {
+	for _, addr := range []ArchiveAddress{row.Slot, row.content()} {
+		ok, cached := present[addr.PartitionKey]
+		if !cached {
+			s.mu.Lock()
+			_, err := s.partitionPathForKeyLocked(addr.PartitionKey)
+			s.mu.Unlock()
+			switch {
+			case err == nil:
+				ok = true
+			case errors.Is(err, errNoPartition):
+				ok = false
+			default:
+				return false, err
+			}
+			present[addr.PartitionKey] = ok
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
 }

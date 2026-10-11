@@ -73,6 +73,7 @@ At startup Telegram registers Omnipus's built-in bot commands automatically via 
 | --- | --- |
 | `/help` | Show help text |
 | `/model` | Show or switch the active model (e.g. `/model gpt-4.1`) |
+| `/clear` | Clear this main or extra chat's model context, retaining the same conversation and its saved history. Helper and task-child sessions refuse it. |
 | `/status` | Show the current model, channel, and agent summary |
 | `/tasks` | Show running sub-agents and the task tree |
 | `/skills` | List installed skills |
@@ -90,10 +91,11 @@ At startup Telegram registers Omnipus's built-in bot commands automatically via 
 also works when typed, but is left out of the native menu — Telegram allows only
 `a-z`, `0-9` and `_` in menu commands.
 
-(Defined in `pkg/commands/builtin.go` — the full registered set.) `/new`,
-`/agents`, `/clear`, `/start`, `/show`, `/list`, `/switch`, `/check` and `/use`
-are no longer commands: typing one of them sends it to the agent as ordinary
-text.
+(Defined in `pkg/commands/builtin.go::BuiltinDefinitions` — the full registered set; `/clear` is `pkg/commands/cmd_clear.go::clearCommand`.) `/new`,
+`/agents`, `/start`, `/show`, `/list`, `/switch`, `/check` and `/use` are no
+longer registered server commands; on Telegram they pass through as ordinary
+text. `/clear` is a current server command. Use `/help` for the installed
+command list.
 
 ## Notes
 

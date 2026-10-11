@@ -227,21 +227,6 @@ func sendMessageErr(conn *websocket.Conn, content string, sessionID ...string) e
 	return conn.WriteMessage(websocket.TextMessage, []byte(frame))
 }
 
-// extractSessionID scans frames for the first session_started frame and
-// returns its session_id. Used by tests that need to thread session_id
-// through subsequent sendMessage calls so they target the SAME session
-// rather than each minting a fresh one.
-func extractSessionID(frames []map[string]any) string {
-	for _, f := range frames {
-		if tp, _ := f["type"].(string); tp == "session_started" {
-			if sid, _ := f["session_id"].(string); sid != "" {
-				return sid
-			}
-		}
-	}
-	return ""
-}
-
 // wsWaitError is the classified failure of waitForFirstTokenErr. Its whole
 // reason to exist is to keep two failure modes apart that a concurrency test
 // MUST NOT confuse:

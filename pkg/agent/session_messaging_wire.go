@@ -152,6 +152,12 @@ func (s delegateSteeringSink) EnqueueSteeringMessageWithStatus(scope, agentID st
 // tools.MessageParentWaker), and the content-egress filter (the config's
 // SensitiveDataReplacer, N-10).
 func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance, cfg *config.Config) {
+	// FR-010/C-LIMIT: install steer_aggregate_body on the one waiting-message
+	// queue. This function runs at boot and on every hot reload with the config
+	// being registered (see cfg above), so the saved value governs admission.
+	if cfg != nil {
+		al.steering.SetAggregateCap(cfg.SessionMessaging.EffectiveSteerAggregateBody())
+	}
 	if agent == nil || agent.Tools == nil {
 		return
 	}

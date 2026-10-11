@@ -1290,6 +1290,7 @@ export const SessionSnapshotFrame = z
     session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
     boot_id: z.string().optional(),
+    has_earlier_messages: z.boolean().optional(),
     reason: z.enum(["cursor_ahead", "retention_exceeded", "unknown_position", "boot_mismatch"]).optional(),
   })
   .strict();

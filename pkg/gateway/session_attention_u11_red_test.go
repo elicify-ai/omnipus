@@ -117,6 +117,15 @@ func u11NeedsAttention(t *testing.T, sessionObj map[string]any) (value bool, pre
 	return b, true
 }
 
+// u11SessionObj returns the decoded "session" object of a detail response,
+// failing the test when it is absent or not an object.
+func u11SessionObj(t *testing.T, detail map[string]any) map[string]any {
+	t.Helper()
+	obj, ok := detail["session"].(map[string]any)
+	require.True(t, ok, "detail must carry a session object: %v", detail)
+	return obj
+}
+
 // u11AppendGoalOutcome appends a goal_outcome transcript entry to id — the one
 // lasting line a goal ending leaves (pkg/agent/goal_outcome.go::
 // recordGoalOutcome). It is the spec's "saved outcome ... order" fixture
@@ -212,7 +221,7 @@ func TestSessionCoreU11_PendingAskMakesMainNeedAttention(t *testing.T) {
 	u11SetPendingAsk(t, store, mainID)
 
 	detail := u11GetSessionBody(t, api, mainID)
-	sessionObj := detail["session"].(map[string]any)
+	sessionObj := u11SessionObj(t, detail)
 	value, present := u11NeedsAttention(t, sessionObj)
 	require.True(t, present, "needs_attention must be present on a main")
 	assert.True(t, value, "a pending structured ask must make the main need attention (BDD-13.1)")
@@ -226,7 +235,7 @@ func TestSessionCoreU11_UnseenMetOutcomeMakesMainNeedAttention(t *testing.T) {
 	u11AppendGoalOutcome(t, store, mainID, "goal-met-u11", generated.GoalOutcomeEndingMet)
 
 	detail := u11GetSessionBody(t, api, mainID)
-	sessionObj := detail["session"].(map[string]any)
+	sessionObj := u11SessionObj(t, detail)
 	value, present := u11NeedsAttention(t, sessionObj)
 	require.True(t, present, "needs_attention must be present on a main")
 	assert.True(t, value, "an unseen met (finished) outcome must make the main need attention (BDD-13.1)")
@@ -239,7 +248,7 @@ func TestSessionCoreU11_RoundsExhaustedOutcomeMakesMainNeedAttention(t *testing.
 	u11AppendGoalOutcome(t, store, mainID, "goal-exhausted-u11", generated.GoalOutcomeEndingRoundsExhausted)
 
 	detail := u11GetSessionBody(t, api, mainID)
-	sessionObj := detail["session"].(map[string]any)
+	sessionObj := u11SessionObj(t, detail)
 	value, present := u11NeedsAttention(t, sessionObj)
 	require.True(t, present, "needs_attention must be present on a main")
 	assert.True(t, value, "an unseen rounds_exhausted outcome must make the main need attention (BDD-13.1)")
@@ -252,7 +261,7 @@ func TestSessionCoreU11_StoppedByUserOutcomeIsNotAttention(t *testing.T) {
 	u11AppendGoalOutcome(t, store, mainID, "goal-stopped-u11", generated.GoalOutcomeEndingStoppedByUser)
 
 	detail := u11GetSessionBody(t, api, mainID)
-	sessionObj := detail["session"].(map[string]any)
+	sessionObj := u11SessionObj(t, detail)
 	value, present := u11NeedsAttention(t, sessionObj)
 	require.True(t, present, "needs_attention must be present on a main")
 	assert.False(t, value,
