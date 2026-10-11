@@ -1,6 +1,7 @@
 package addressing
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -162,5 +163,74 @@ func TestPairValidate(t *testing.T) {
 	}
 	if err := (Pair{WorkspaceID: "w", AgentID: "a"}).Validate(); err != nil {
 		t.Errorf("valid pair refused: %v", err)
+	}
+}
+
+// S3 M2: a torn last line (a crashed or short append, no newline) was never
+// acknowledged. It must not glue onto the next record and poison the session's
+// ledger: reads skip it, and the next write cuts it off first.
+func TestLedger_TornTailDoesNotPoisonTheSession(t *testing.T) {
+	l, dir := newLedger(t, "jim-main")
+	first := capture("jim-main")
+	first.RequestID = "q1"
+	if err := l.Put(first); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "jim-main", ledgerFileName)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"request_id":"q2","receiver_sess`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	if _, ok, err := l.Get("jim-main", "q1"); err != nil || !ok {
+		t.Fatalf("a torn tail must not make earlier records unreadable: ok=%v err=%v", ok, err)
+	}
+	second := capture("jim-main")
+	second.RequestID = "q3"
+	if err := l.Put(second); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"q1", "q3"} {
+		if c, ok, err := l.Get("jim-main", id); err != nil || !ok || c.RequestID != id {
+			t.Fatalf("request %s must resolve after the torn tail: ok=%v err=%v", id, ok, err)
+		}
+	}
+	if err := l.Discard("jim-main", "q3"); err != nil {
+		t.Fatalf("discard after a torn tail: %v", err)
+	}
+	if _, err := l.Resolve("jim-main", jim, "q3"); !errors.Is(err, ErrDiscarded) {
+		t.Fatalf("q3 must be discarded, got %v", err)
+	}
+}
+
+// A complete record that lost only its newline is a real record: it is kept.
+func TestLedger_CompleteRecordMissingNewlineIsKept(t *testing.T) {
+	l, dir := newLedger(t, "jim-main")
+	c := capture("jim-main")
+	c.RequestID = "q1"
+	raw, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "jim-main", ledgerFileName)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := l.Get("jim-main", "q1"); err != nil || !ok {
+		t.Fatalf("a complete unterminated record must be readable: ok=%v err=%v", ok, err)
+	}
+	next := capture("jim-main")
+	next.RequestID = "q2"
+	if err := l.Put(next); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"q1", "q2"} {
+		if _, ok, err := l.Get("jim-main", id); err != nil || !ok {
+			t.Fatalf("%s must survive: ok=%v err=%v", id, ok, err)
+		}
 	}
 }

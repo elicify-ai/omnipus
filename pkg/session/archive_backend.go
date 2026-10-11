@@ -50,6 +50,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/oklog/ulid/v2"
@@ -718,7 +719,17 @@ func (b *archiveBackend) leadLocked(store *ArchiveDayStore, skip int) ([]ModelSl
 	}
 	rows = rows[start:]
 	out := make([]ModelSlot, 0, len(rows))
+	present := make(map[string]bool)
 	for _, row := range rows {
+		// Lead rows are context before the window; one whose partition was expired
+		// by retention is gone for good and is left out rather than failing the read.
+		ok, err := store.rowResolvable(row, present)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
 		slot, _, err := loadSlot(store, row)
 		if err != nil {
 			return nil, err
@@ -830,12 +841,8 @@ func (b *archiveBackend) saveMetaLocked(key string, m archiveBackendMeta) error 
 	if err != nil {
 		return fmt.Errorf("archive_backend: encode meta: %w", err)
 	}
-	tmp := filepath.Join(dir, archiveBackendMetaFile+".tmp")
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := fileutil.WriteFileAtomic(filepath.Join(dir, archiveBackendMetaFile), data, 0o600); err != nil {
 		return fmt.Errorf("archive_backend: write meta: %w", err)
-	}
-	if err := os.Rename(tmp, filepath.Join(dir, archiveBackendMetaFile)); err != nil {
-		return fmt.Errorf("archive_backend: rename meta: %w", err)
 	}
 	return nil
 }

@@ -244,10 +244,9 @@ type pendingEffect struct {
 func (us *UnifiedStore) readTranscriptMerged(sessionID string) ([]TranscriptEntry, error) {
 	parts, err := us.transcriptPartitions(sessionID)
 	if err != nil {
-		// Never silently drop retained history: fall back to the current file
-		// and make the loss visible.
-		warnOnStrayDayPartition(sessionID, err)
-		parts = []partitionRef{{key: "unmarked", path: filepath.Join(us.baseDir, sessionID, transcriptFileName)}}
+		// Reading only the current day would present a partial transcript as the
+		// whole one and silently hide retained history, so the failure surfaces.
+		return nil, fmt.Errorf("unified_store: read transcript: list partitions: %w", err)
 	}
 	entries := []TranscriptEntry{}
 	index := map[ArchiveAddress]int{}

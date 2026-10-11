@@ -40,7 +40,9 @@ import (
 // time they run, this step has already converted the archive (or refused boot),
 // so they perform no write.
 func (nal *newAgentLoop) initializeConvertedSessions() error {
-	homePath := filepath.Dir(nal.cfg.AgentHomeBasePath())
+	// The key every other opener uses (registry, instances): the loop must not
+	// compute its own, or the same home can end up with two stores.
+	homePath := sessionsHomeFor(nal.cfg)
 	if err := session.CutoverSavedChatsAtBootWithAgentStores(
 		filepath.Join(homePath, "sessions"), perAgentSessionDirs(nal.cfg)); err != nil {
 		return err
@@ -48,7 +50,7 @@ func (nal *newAgentLoop) initializeConvertedSessions() error {
 	// The one shared store opens right after the cutover, before any registry
 	// exists. A failure refuses boot (the same rule as a refused cutover): there
 	// is no other store to fall back to.
-	store, err := openSharedSessionStore(homePath)
+	store, err := acquireSharedSessionStore(homePath)
 	if err != nil {
 		return err
 	}

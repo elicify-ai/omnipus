@@ -51,10 +51,9 @@ import (
 // runtime path ever observes the pre-cutover shape.
 //
 // It is exported precisely so the agent boot flow can run the cutover ahead of
-// registry/session-store construction; the store constructor calls it too
-// (convergeSavedChats) as a boot-constructor backstop. Both paths share this
-// one implementation, so the conversion is idempotent across the two calls:
-// a completed cutover performs no write on the second pass.
+// registry/session-store construction. It is the ONLY legacy reader: no store
+// constructor calls it, so a reload or a store opened by any other path never
+// runs a conversion pass.
 //
 // Idempotent and retry-safe: a completed conversion is recognized and not
 // rewritten; an interrupted one is finished without appending a second copy.
@@ -96,13 +95,6 @@ func CutoverSavedChatsAtBootWithAgentStores(baseDir string, agentSessionDirs []s
 		return err
 	}
 	return convNormalizeSavedChatDirs(baseDir)
-}
-
-// convergeSavedChats runs CONV over this store's base directory; it is the
-// boot-constructor backstop for the explicit CutoverSavedChatsAtBoot entry
-// above (both share one implementation).
-func (us *UnifiedStore) convergeSavedChats() error {
-	return CutoverSavedChatsAtBoot(us.baseDir)
 }
 
 // convConvergeFlatJSONLSources handles the legacy flat "<id>.jsonl" sources
