@@ -172,12 +172,7 @@ describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5
   // 404s again — so a missing chat gets no Retry.
   it('a missing chat (404, no agent_removed signal) says so plainly and offers no doomed Retry', async () => {
     seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
-    queryMock.result = {
-      data: undefined,
-      isError: true,
-      error: new ApiError(404, 'session not found'),
-      refetch: vi.fn(),
-    }
+    vi.mocked(fetchSessionMessages).mockRejectedValue(new ApiError(404, 'session not found'))
 
     const container = await renderScreen()
 
@@ -189,11 +184,19 @@ describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5
 
   it('a server agent_removed signal keeps the agent-removed wording', async () => {
     seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
-    queryMock.result = { data: [], isError: false, error: null, refetch: vi.fn() }
-
-    const container = await act(async () => {
-      const result = render(<ChatScreen agentRemoved />)
-      return result.container
+    // The history read succeeds; the signal arrives the production way — the
+    // agentRemoved PROP, which the deep-link route feeds from
+    // fetchSessionDetail().agent_removed (sessions.$sessionId.tsx). That prop
+    // is the only path ChatScreen reads the signal through.
+    vi.mocked(fetchSessionMessages).mockResolvedValue([])
+    let container!: HTMLElement
+    await act(async () => {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      container = render(
+        <QueryClientProvider client={client}>
+          <ChatScreen agentRemoved />
+        </QueryClientProvider>,
+      ).container
     })
 
     expect(container.textContent).toContain('Agent removed — this session is read-only')
@@ -202,12 +205,7 @@ describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5
 
   it('a transport failure keeps Retry (only a confirmed 404 loses it)', async () => {
     seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
-    queryMock.result = {
-      data: undefined,
-      isError: true,
-      error: new ApiError(0, 'Network unavailable. Check your connection.'),
-      refetch: vi.fn(),
-    }
+    vi.mocked(fetchSessionMessages).mockRejectedValue(new ApiError(0, 'Network unavailable. Check your connection.'))
 
     const container = await renderScreen()
 
