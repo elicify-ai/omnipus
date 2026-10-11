@@ -248,17 +248,20 @@ export const selectAgent = async (
 
 // ── Agent-row "⋯" menu (founder decision D1/D2, squad nav-agent-row-menu-20261011) ──
 //
-// PARAMETERISATION POINT: the menu button's accessible name is spec'd here in
-// exactly ONE constant builder because frontend-lead's component had not
-// landed on this branch when these were written (DECISIONS.md D1 says only
-// "ONE ⋯ (three dots) button"). When the component lands, confirm the real
-// accessible name against this builder and adjust HERE — never in the specs,
-// which all derive the name through it.
+// PARAMETERISATION POINT — now CONFIRMED: the landed component
+// (AgentRowMenu.tsx, work/nav-agent-row-menu-20261011) labels its trigger
+// exactly `More actions for ${agentName}`, matching this builder. The specs
+// all derive the name through here, so a future label change is fixed in
+// THIS constant, never per spec.
 export const agentRowMenuButtonLabel = (agentName: string): string =>
   `More actions for ${agentName}`;
 
 /** The menu's items in EXACTLY the order founder decision D2 fixes: History ·
- * Hide from sidebar · Edit · Remove (DECISIONS.md D2; D3 keeps "History"). */
+ * Hide from sidebar · Edit · Remove (DECISIONS.md D2; D3 keeps "History").
+ * CONFIRMED against the landed AgentRowMenu.tsx for MEMBER rows. One real
+ * exception: Admin's row omits "Hide from sidebar" entirely (Admin is not a
+ * workspace member, so no member entry exists to carry the flag) — a row
+ * whose menu is asserted against this array must be a member row. */
 export const AGENT_ROW_MENU_ITEMS = [
   'History',
   'Hide from sidebar',
