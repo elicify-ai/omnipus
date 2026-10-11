@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -25,6 +27,11 @@ const (
 	// windowProducerParent is input a delegating parent sent to the steered
 	// (helper) session the turn runs in.
 	windowProducerParent
+	// windowProducerAnonymous is input whose origin could not be established
+	// (the lifecycle record that would say a parent sent it was unreadable). It
+	// is archived with the existing "anonymous" source kind: no human is
+	// invented and no authority is implied.
+	windowProducerAnonymous
 )
 
 func (p windowProducer) modelAppend(msg providers.Message, agentID string) session.ModelAppend {
@@ -36,6 +43,8 @@ func (p windowProducer) modelAppend(msg providers.Message, agentID string) sessi
 		in.Source = session.EntrySource{Kind: "connector"}
 	case windowProducerParent:
 		in.Source = session.EntrySource{Kind: "parent"}
+	case windowProducerAnonymous:
+		in.Source = session.EntrySource{Kind: "anonymous"}
 	default:
 		in.Source = session.EntrySource{Kind: "user"}
 	}
@@ -51,13 +60,25 @@ func (al *AgentLoop) inputProducer(ts *turnState) windowProducer {
 	if sessionID == "" {
 		sessionID = ts.sessionKey
 	}
+	unverifiable := false
 	if lc := al.GetSessionLifecycleStore(); lc != nil && sessionID != "" {
-		if rec, err := lc.Load(sessionID); err == nil && rec != nil && rec.SteeredBy != nil {
+		rec, err := lc.Load(sessionID)
+		switch {
+		case err == nil && rec != nil && rec.SteeredBy != nil:
 			return windowProducerParent
+		case err != nil && !errors.Is(err, session.ErrLifecycleNotFound):
+			// No record is a plain chat; a record that exists but cannot be read
+			// is not "no parent" - never label that input a person's (R1 #11).
+			logger.WarnCF("agent", "input producer: lifecycle record unreadable - input is archived as anonymous",
+				map[string]any{"session_id": sessionID, "error": err.Error()})
+			unverifiable = true
 		}
 	}
 	if al.mainConnectorTurn(ts.channel, sessionID) {
 		return windowProducerConnector
+	}
+	if unverifiable {
+		return windowProducerAnonymous
 	}
 	return windowProducerUser
 }
