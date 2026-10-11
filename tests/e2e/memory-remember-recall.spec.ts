@@ -47,7 +47,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { startNewChat, waitForConnected } from './fixtures/selectors';
+import { waitForConnected } from './fixtures/selectors';
+import { freshChat } from './fixtures/session-setup';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -409,10 +410,13 @@ test(
     // `getByRole('banner')` (removed with the workspace top-bar redesign),
     // then typed "/new" + Enter. Both are gone: FR-031 (founder WC-1,
     // 2026-10-09) deleted "/new" outright and the composer has no new-chat
-    // control at all. `startNewChat` (tests/e2e/fixtures/selectors.ts) now
-    // drives the one remaining path — the agent row's "New chat with
-    // <Agent>" icon button in the sidebar (FR-029).
-    await startNewChat(page);
+    // control at all. The agent row's "New chat with <Agent>" icon button
+    // (FR-029) that `startNewChat` drove next is gone too now — founder
+    // decision D7 (DECISIONS.md, squad nav-agent-row-menu-20261011) removed
+    // the new-chat UI access point everywhere. `freshChat`
+    // (tests/e2e/fixtures/session-setup.ts) creates the session via the
+    // public REST API and deep-links it.
+    await freshChat(page);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
     const input = chatInput(page);

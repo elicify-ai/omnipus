@@ -9,12 +9,23 @@ import {
 import { projectMainAttention, type Signal } from '@/lib/nav/mainAttention'
 import { adminMainSessionIdOfWorkspace } from '@/lib/nav/sessionCoreSeam'
 
-const ADMIN_AGENT_ID = 'admin'
+/** Built-in Admin. Rendered only from the default workspace's admin_main_session_id, never via membership. */
+export const ADMIN_AGENT_ID = 'admin'
 
 export type RosterState = 'fresh' | 'failed-no-cache' | 'failed-stale-cache'
 
 export type WorkspaceMains = {
   result: EligibleResult
+  /**
+   * D5: the rows the sidebar lists — every projected row whose member is NOT
+   * hidden_from_sidebar. `result.rows` still carries ALL rows.
+   */
+  visible: EligibleRow[]
+  /**
+   * D5: rows hidden from the list. They stay full members and their attention
+   * still counts toward `signals`/`onCount` (ADR §SPA read path).
+   */
+  hidden: EligibleRow[]
   signals: Record<string, Signal>
   /** Mains whose attention is on. Meaningful only when `unknown` is false. */
   onCount: number
@@ -71,8 +82,23 @@ export function workspaceMains(
     sessions,
     cachedRows,
   })
+  // D5 split: hidden is a DISPLAY flag on the member config. Admin's row is
+  // not a member entry, so it can never land in `hidden`.
+  const hiddenIds = new Set(
+    Object.entries(workspace.member_configs ?? {})
+      .filter(([, member]) => member.hidden_from_sidebar === true)
+      .map(([id]) => id),
+  )
+  const visible: EligibleRow[] = []
+  const hidden: EligibleRow[] = []
+  for (const row of result.rows) {
+    if (hiddenIds.has(row.agentId)) hidden.push(row)
+    else visible.push(row)
+  }
   // Global projection: a main id is whatever the seam validated, looked up
   // on the session list. Missing from the projection is unknown, never off.
+  // Computed over ALL rows — hidden included — so hiding a row never mutes
+  // the "a main chat needs you" signal on the collapsed workspace row.
   const projection = projectMainAttention(sessions)
   const signals: Record<string, Signal> = {}
   let onCount = 0
@@ -83,5 +109,5 @@ export function workspaceMains(
     if (signal === 'unknown') unknown = true
     else if (signal === 'on') onCount += 1
   }
-  return { result, signals, onCount, unknown }
+  return { result, visible, hidden, signals, onCount, unknown }
 }

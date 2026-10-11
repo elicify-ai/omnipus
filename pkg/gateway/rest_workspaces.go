@@ -466,6 +466,10 @@ func workspaceToWireFrom(
 				}
 				entry.Heartbeat = hbWire
 			}
+			if mc.HiddenFromSidebar {
+				h := true
+				entry.HiddenFromSidebar = &h
+			}
 			if mains != nil {
 				if id := mains(w, agentID); id != "" {
 					entry.MainSessionId = &id
@@ -1061,6 +1065,14 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	if rw.loadAndValidateTeam() {
 		return
 	}
+	// D8 refusal BEFORE any side effect (founder ruling 2026-10-11, gate
+	// round 1 S2/F2): prepareWorkspacePutMembers pauses and resumes plans — a
+	// persistent effect — so a refused removal must be decided first, leaving
+	// plans, delegation and the workspace record untouched exactly as the 409
+	// contract promises.
+	if rw.refuseBuiltinRemoval() {
+		return
+	}
 	if rw.prepareWorkspacePutMembers() {
 		return
 	}
@@ -1114,6 +1126,16 @@ func (rw *restAPIHandleWorkspacePut) prepareWorkspacePutMembers() bool {
 		// used to key on no longer exists (session-core U1, DEL-01).
 		// Best-effort either way: a failure is logged, never blocks the PUT.
 		for agentID, mc := range rw.incomingMC {
+			if pureHideShowEntry((*rw.req.MemberConfigs)[agentID]) {
+				// Pure hide/show (flag present, heartbeat absent — ADR
+				// addendum 2026-10-11): the stored heartbeat survives
+				// unchanged, so there is no enable→disable transition to act
+				// on. An entry that omits the heartbeat WITHOUT carrying the
+				// flag ({}) is NOT a pure hide/show: it keeps the ordinary
+				// replace behaviour (the stored heartbeat is cleared) and the
+				// disable side effect below fires exactly as it always has.
+				continue
+			}
 			wasEnabled := false
 			if stored, exists := rw.ws.MemberConfigs[agentID]; exists &&
 				stored.Heartbeat != nil {
@@ -1398,6 +1420,28 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 			rw.ws.MemberConfigs = make(map[string]workspace.MemberConfig)
 		}
 		for agentID, mc := range rw.incomingMC {
+			// ADR-hide-from-sidebar addendum 2026-10-11 (founder: "hiding is
+			// only hiding") — the incoming member config REPLACES the stored
+			// one (an omitted heartbeat clears it, with the disable
+			// transition), except exactly two display-flag rules:
+			//   rule 1: hidden_from_sidebar absent => the stored flag is
+			//           preserved (a heartbeat save never un-hides);
+			//   rule 2: a PURE hide/show entry — flag present, heartbeat
+			//           absent (pureHideShowEntry) — preserves the stored
+			//           heartbeat, so hide/show never changes any other
+			//           setting.
+			// An entry with neither field ({}) keeps the ordinary replace
+			// behaviour: the stored heartbeat is cleared, the flag still
+			// preserved by rule 1. The wire entry (pointer fields) is the
+			// tri-state that distinguishes absent from explicit false.
+			wireEntry := (*rw.req.MemberConfigs)[agentID]
+			stored, exists := rw.ws.MemberConfigs[agentID]
+			if wireEntry.HiddenFromSidebar == nil && exists {
+				mc.HiddenFromSidebar = stored.HiddenFromSidebar
+			}
+			if pureHideShowEntry(wireEntry) && exists {
+				mc.Heartbeat = stored.Heartbeat
+			}
 			rw.ws.MemberConfigs[agentID] = mc
 		}
 		// GC: drop entries for agents no longer on the effective team. No
@@ -1426,6 +1470,38 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 		}
 	}
 	return false
+}
+
+// refuseBuiltinRemoval is the D8 stage, run BEFORE prepareWorkspacePutMembers
+// so a refusal precedes every side effect (founder ruling 2026-10-11). The
+// rule, its message and its wire code live in pkg/workspace
+// (RefuseBuiltinRemoval) and are enforced identically by the update_workspace
+// tool (S1/S6, gate round 1).
+func (rw *restAPIHandleWorkspacePut) refuseBuiltinRemoval() bool {
+	if !rw.ws.IsDefault || rw.req.CoreTeam == nil {
+		return false
+	}
+	cfg := rw.a.agentLoop.GetConfig()
+	configuredIDs := make([]string, 0, len(cfg.Agents.List))
+	for i := range cfg.Agents.List {
+		configuredIDs = append(configuredIDs, cfg.Agents.List[i].ID)
+	}
+	if err := workspace.RefuseBuiltinRemoval(rw.ws.IsDefault, rw.ws.CoreTeam,
+		deduplicateStrings(*rw.req.CoreTeam), configuredIDs); err != nil {
+		jsonErrCode(rw.w, http.StatusConflict, workspace.BuiltinRemovalMessage, workspace.BuiltinRemovalCode)
+		return true
+	}
+	return false
+}
+
+// pureHideShowEntry reports whether an incoming member_config entry carries
+// ONLY the display flag — hidden_from_sidebar present, heartbeat absent
+// (ADR-hide-from-sidebar addendum 2026-10-11, founder ruling "hiding is only
+// hiding"). applyUpdate and prepareWorkspacePutMembers must agree on it:
+// applyUpdate preserves the stored heartbeat for such an entry, and the
+// pause/resume loop must not fire a transition for it.
+func pureHideShowEntry(entry gen.WorkspaceMemberConfig) bool {
+	return entry.HiddenFromSidebar != nil && entry.Heartbeat == nil
 }
 
 // persistAndRespond persists a changed workspace, reconciles schedules, audits, and responds.

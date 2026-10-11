@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 func TestSteeredHelperWithGoal_SetGoalRefusedAndRecordUntouched(t *testing.T) {
@@ -92,4 +93,32 @@ func TestSteeredHelperWithGoal_SetGoalRefusedAndRecordUntouched(t *testing.T) {
 	after, err := resolveGoalRecordStore().Get(rec.GoalRef)
 	require.NoError(t, err)
 	require.Equal(t, before, after, "a refused set_goal must leave the helper's goal record untouched")
+}
+
+// A nested turn must never carry its parent helper's goal-owner marker: a
+// child helper (with or without a goal of its own) or a non-helper turn run
+// through a context derived from the parent's would otherwise pass goal_claim on
+// the parent's session. The marker is set or cleared for EVERY turn.
+func TestWithSteeredDelegationDepth_NestedTurnNeverInheritsTheParentsGoalMarker(t *testing.T) {
+	steeredBy := &session.SteeredBy{}
+	parentRec := &session.LifecycleRecord{SessionID: "session_parent", SteeredBy: steeredBy, GoalRef: "goal-parent"}
+	parentCtx := withSteeredDelegationDepth(context.Background(), parentRec)
+	require.Equal(t, "session_parent", tools.ToolOwnGoalSession(parentCtx), "a launch-goal helper owns its own session's goal")
+
+	childNoGoal := &session.LifecycleRecord{SessionID: "session_child", SteeredBy: steeredBy}
+	require.Empty(t, tools.ToolOwnGoalSession(withSteeredDelegationDepth(parentCtx, childNoGoal)),
+		"a child helper without a goal must not inherit the parent's marker")
+
+	childWithGoal := &session.LifecycleRecord{SessionID: "session_child2", SteeredBy: steeredBy, GoalRef: "goal-child"}
+	require.Equal(t, "session_child2", tools.ToolOwnGoalSession(withSteeredDelegationDepth(parentCtx, childWithGoal)),
+		"a child helper with its own goal owns ITS session, never the parent's")
+
+	root := &session.LifecycleRecord{SessionID: "session_root"}
+	require.Empty(t, tools.ToolOwnGoalSession(withSteeredDelegationDepth(parentCtx, root)),
+		"an ordinary (unsteered) turn must not inherit the marker")
+
+	taskRec := &session.LifecycleRecord{SessionID: "session_task", SteeredBy: steeredBy, GoalRef: "g",
+		Origin: &session.Origin{Kind: session.OriginKindTask}}
+	require.Empty(t, tools.ToolOwnGoalSession(withSteeredDelegationDepth(parentCtx, taskRec)),
+		"a task-origin turn must not inherit the marker")
 }

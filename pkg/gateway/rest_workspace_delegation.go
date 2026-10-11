@@ -405,22 +405,16 @@ func defaultWorkspaceTeam(cfg *config.Config) []string {
 	if cfg == nil {
 		return nil
 	}
-	present := make(map[string]bool, len(cfg.Agents.List))
+	configuredIDs := make([]string, 0, len(cfg.Agents.List))
 	for i := range cfg.Agents.List {
-		present[cfg.Agents.List[i].ID] = true
+		configuredIDs = append(configuredIDs, cfg.Agents.List[i].ID)
 	}
-	// Display order follows coreagent.All() so the Team tab matches the
-	// Agents library seed order (Mia first, then Jim/Ava/Ray, Worker, then
-	// the three specialists).
-	all := coreagent.All()
-	team := make([]string, 0, len(all))
-	for _, a := range all {
-		id := string(a.ID)
-		if present[id] && !coreagent.ExcludedFromWorkspaceTeams(a.ID) {
-			team = append(team, id)
-		}
-	}
-	return team
+	// The derivation moved to pkg/workspace (founder ruling 2026-10-11) so the
+	// REST PUT's built-in-removal refusal and the update_workspace tool decide
+	// "built-in" from the ONE list; display order is unchanged (it follows
+	// coreagent.All() there just as it did here — Mia first, then Jim/Ava/Ray,
+	// Worker, then the three specialists).
+	return workspace.DefaultWorkspaceTeamIDs(configuredIDs)
 }
 
 // newWorkspaceSetupTeam returns the seed roster for a NEW user-created

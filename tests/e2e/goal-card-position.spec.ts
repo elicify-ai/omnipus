@@ -11,7 +11,8 @@
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, waitForConnected, startNewChat, assistantMessages, userMessages } from './fixtures/selectors'
+import { chatInput, waitForConnected, assistantMessages, userMessages } from './fixtures/selectors'
+import { freshChat } from './fixtures/session-setup'
 import { endTurnDeterministically, trackServerFrames } from './helpers/endTurn'
 
 const goalEchoCard = (page: Page) => page.locator('[data-testid="goal-echo-card"]')
@@ -44,7 +45,7 @@ test('S-15 goal card sits where the goal was set, live and after reload', async 
   const input = chatInput(page)
   await expect(input).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
-  await startNewChat(page)
+  await freshChat(page)
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
 
   await input.fill('/goal build a tiny single-file page that shows the text HELLO')

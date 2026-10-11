@@ -272,6 +272,10 @@ func steeredExternalCLITimeout(rec *session.LifecycleRecord) time.Duration {
 // A recorded initiator depth larger than 1 is honoured, mirroring
 // TaskExecutor.runDelegationDepth.
 func withSteeredDelegationDepth(ctx context.Context, rec *session.LifecycleRecord) context.Context {
+	// The goal-owner marker belongs to exactly one turn: clear whatever a context
+	// derived from a parent turn carries, then set it again below only for this
+	// turn's own launch goal.
+	ctx = tools.WithOwnGoalSession(ctx, "")
 	if rec == nil || rec.SteeredBy == nil {
 		return ctx
 	}
@@ -282,5 +286,11 @@ func withSteeredDelegationDepth(ctx context.Context, rec *session.LifecycleRecor
 	if rec.InitiatedBy != nil && rec.InitiatedBy.Depth > depth {
 		depth = rec.InitiatedBy.Depth
 	}
-	return tools.WithDelegationDepth(ctx, depth)
+	ctx = tools.WithDelegationDepth(ctx, depth)
+	if rec.GoalRef != "" {
+		// The helper was launched with its own goal in its own session: it may
+		// claim that goal (goal_claim) but, at depth >= 1, still cannot amend it.
+		ctx = tools.WithOwnGoalSession(ctx, rec.SessionID)
+	}
+	return ctx
 }

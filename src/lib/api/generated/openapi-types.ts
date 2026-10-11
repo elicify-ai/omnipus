@@ -14882,7 +14882,7 @@ export interface components {
              */
             owner?: string;
             /**
-             * @description Per-member (agentId → config) settings for this workspace, keyed by agent ID. Absent when no member has a config (empty map). Carries heartbeat settings and the server-computed read-only main_session_id; it does NOT carry a session address for the heartbeat — a heartbeat runs in the member's computed main session, and the retired per-member session_id is no longer part of this shape.
+             * @description Per-member (agentId → config) settings for this workspace, keyed by agent ID. Absent when no member has a config (empty map). Carries heartbeat settings, the display-only hidden_from_sidebar flag (in updates: absent preserves the stored flag; a pure hide/show entry — flag present, heartbeat absent — preserves the stored heartbeat), and the server-computed read-only main_session_id; it does NOT carry a session address for the heartbeat — a heartbeat runs in the member's computed main session, and the retired per-member session_id is no longer part of this shape.
              * @example {
              *       "mia": {
              *         "main_session_id": "main-session-ws-123+mia",
@@ -14911,6 +14911,8 @@ export interface components {
              */
             readonly main_session_id?: string;
             heartbeat?: components["schemas"]["WorkspaceMemberHeartbeat"];
+            /** @description Display-only: when true the sidebar omits this member's row in this workspace, but the member stays a full team member — messageable, delegable, @-addressable; main and work untouched. Merge rules inside an incoming member config: absent => the stored flag is preserved (a heartbeat save never un-hides). Present with heartbeat absent (a pure hide/show) => the stored heartbeat is preserved unchanged. An entry with neither field ({}) keeps the ordinary replace behaviour: the stored heartbeat is cleared and the flag is still preserved by the absent rule. A heartbeat that IS present is always replaced wholesale, never merged field-by-field. Off-team entries are garbage-collected, so removing a member clears the flag and re-adding the agent starts visible. */
+            hidden_from_sidebar?: boolean;
         };
         /** @description Heartbeat settings for this (workspace, agent) pair. */
         WorkspaceMemberHeartbeat: {
@@ -14994,7 +14996,7 @@ export interface components {
             pinned?: boolean;
             pin_order?: number;
             core_team?: string[];
-            /** @description Per-member (agentId → config) settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. main_session_id is server-owned and read-only: a value sent here is ignored, and the server always reprojects its own computed main session id. There is no client-supplied session address of any kind. */
+            /** @description Per-member (agentId → config) settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. main_session_id is server-owned and read-only: a value sent here is ignored, and the server always reprojects its own computed main session id. There is no client-supplied session address of any kind. Two display-flag exceptions: hidden_from_sidebar absent => the stored flag is preserved (a heartbeat save never un-hides); hidden_from_sidebar present with heartbeat absent (a pure hide/show) => the stored heartbeat is preserved unchanged. An entry with neither field ({}) keeps the ordinary replace behaviour — the stored heartbeat is cleared. A heartbeat that IS present is always replaced wholesale, never merged field-by-field. */
             member_configs?: {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
             };
@@ -23718,7 +23720,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
-            /** @description Workspace membership or graph revision changed; no writes occurred. */
+            /** @description Workspace membership or graph revision changed; or a built-in roster member was removed from the default workspace (the next boot would re-add it) — that refusal carries the machine-readable code builtin_roster_default with the message "Built-in agents can't be removed from this workspace" and no writes occurred (workspace record, delegation and plan pause state all unchanged). A stale-revision conflict is the same status with NO code, so the two are distinguishable. */
             409: {
                 headers: {
                     [name: string]: unknown;

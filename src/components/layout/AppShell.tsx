@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Outlet } from '@tanstack/react-router'
 import { Sidebar } from './Sidebar'
+import { AgentProfile } from '@/components/agents/AgentProfile'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
 import { Button } from '@/components/ui/button'
@@ -197,6 +198,13 @@ export function AppShell() {
 
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />
+
+      {/* The ONE store-driven agent editor (AgentProfile). It reads
+          editAgentId, so it must be hosted exactly once at the shell level:
+          the sidebar's row-menu Edit, the Team tab, and the Agents screen all
+          open this same instance, and a second host anywhere would open a
+          second simultaneous sheet (CR F6). */}
+      <AgentProfile />
 
       {/* The real application host for the shared panel shell. Its chat child
           is the existing routed application column; Library and Browser are

@@ -18,7 +18,6 @@ import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { AgentProfile } from '@/components/agents/AgentProfile'
 import { useUiStore } from '@/store/ui'
 import { useActiveWorkspace } from './WorkspaceTabContainer'
 import { WorkspaceTeamGraph } from './team/WorkspaceTeamGraph'
@@ -581,9 +580,10 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
         )}
       </div>
 
-      {/* The shared global-agent editor. Store-driven (reads editAgentId), so
-          opening it here edits the SAME global definition as the Agents screen. */}
-      <AgentProfile />
+      {/* The unified global-agent editor is NOT mounted here: it is
+          store-driven (reads editAgentId) and hosted ONCE in the app shell —
+          a second host here opened two simultaneous sheets whenever the
+          sidebar's row-menu Edit sat next to this tab (CR F6). */}
     </div>
   )
 }
