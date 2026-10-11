@@ -1376,6 +1376,12 @@ func TestSessionLifecycle_PopulatesLifecycleStateAndStopNote(t *testing.T) {
 func TestSessionLifecycle_NoLifecycleStoreWired_FieldsAbsent(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
+	// The shared harness now installs a REAL lifecycle store, because the
+	// task start path it wires needs one (S1 M9 + qa shared-harness launcher,
+	// 2982c3b38). This test is about the NIL-store path, so it unwires the
+	// store explicitly instead of relying on a harness default that no longer
+	// exists.
+	api.agentLoop.SetSessionMessagingStores(nil, nil)
 	require.Nil(t, api.agentLoop.GetSessionLifecycleStore(), "fixture: no lifecycle store wired by default")
 
 	sessionID := createTestSession(t, api)

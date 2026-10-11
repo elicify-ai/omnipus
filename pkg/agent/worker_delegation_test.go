@@ -51,7 +51,14 @@ func seedEdgesFromConfig(cfg *config.Config) []graphEdge {
 		}
 		modes := make([]string, 0, len(dp.Modes))
 		for _, m := range dp.Modes {
-			modes = append(modes, string(m))
+			// The graph stores the COLLAPSED edge vocabulary ("direct"/"task"),
+			// NOT the config mode name. coreagent seeds {task, background}, and
+			// "background" is a config mode that collapses to "direct"
+			// (loop_delegation.go::EdgeModeCategory). Writing the raw name makes
+			// the store drop the whole edge as invalid ("delegation edge mode
+			// background is invalid (valid: direct, task)"), so every seeded
+			// edge vanished and every check denied.
+			modes = append(modes, string(EdgeModeCategory(m)))
 		}
 		var depth *int
 		if dp.Depth != nil {
@@ -138,9 +145,17 @@ func TestSeededGraph_DisallowedTargetDenied(t *testing.T) {
 	}
 }
 
-// TestSeededGraph_JimAwaitModeAllowed checks Jim's permitted await path and
-// Mia's lack of a staff delegation edge. Mode-category rules remain covered
-// separately by synthetic graph tests in delegation_enforce_test.go.
+// TestSeededGraph_JimAwaitModeAllowed checks Jim's permitted await path, plus a
+// deny-by-default control on a target Mia genuinely has no edge to.
+//
+// The control used to name WORKER and assert "Mia's lack of a staff delegation
+// edge". That is no longer true: the UAT DEF-001 fix put Worker on the
+// workspace team so the coreagent ->worker seed survives seedEdgesForTeam, and
+// TestDefaultWorkspaceSeeder_TeamAndEdges pins the seeded mia->worker edge. The
+// control therefore asserted the opposite of the product. It now names Ava,
+// which the seed genuinely omits (same target TestSeededGraph_DisallowedTargetDenied
+// uses). Mode-category rules remain covered separately by synthetic graph tests
+// in delegation_enforce_test.go.
 func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 	cfg := &config.Config{}
 	coreagent.SeedConfig(cfg)
@@ -155,13 +170,15 @@ func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 		t.Fatalf("Jim → worker (await) must be allowed, got deny: %+v", denial)
 	}
 
-	// Mia hands substantial work to Jim rather than assigning staff directly.
+	// Deny-by-default control: a target Mia has no seeded edge to is denied by
+	// the trust graph. (See this test's doc comment for why this is Ava and not
+	// worker.)
 	miaCheck := buildDelegationDenyCheckerForDelegate(
 		string(coreagent.IDMia),
 		cfg.Performance,
 		config.DelegationMode("await"),
 	)
-	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial == nil || denial.Policy != "trust_set" {
-		t.Fatalf("Mia → worker must be denied by the trust graph, got: %+v", denial)
+	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDAva)); denial == nil || denial.Policy != "trust_set" {
+		t.Fatalf("Mia → Ava must be denied by the trust graph (no seeded edge), got: %+v", denial)
 	}
 }
