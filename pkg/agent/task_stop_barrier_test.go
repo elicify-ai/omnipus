@@ -611,6 +611,10 @@ func TestTaskRunStop_WhileTheJudgeDeliberates(t *testing.T) {
 			criteria := []task.AcceptanceCriterion{proseCriterion("c1", "the work is complete")}
 			_, err := f.al.taskStore.Update(f.task.ID, task.Patch{Criteria: &criteria})
 			require.NoError(t, err)
+			// DEL-18: fresh creation owns the task's paired goal record. Without
+			// one the run has no goal loop, the Judge is never asked to deliberate,
+			// and this test can only time out waiting for it.
+			pairTaskGoalRecordUsingTaskCriteria(t, f.al, f.task.ID)
 
 			if front == taskFrontLauncher {
 				inProgress := task.StatusInProgress
