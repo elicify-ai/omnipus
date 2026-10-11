@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -99,9 +100,9 @@ const extTestEffectiveLimit = 30
 
 // withFakeDriver swaps the external driver factory for the test, returning a
 // restore func and the FakeRunner instance the factory will hand out.
-func withFakeDriver(t *testing.T) (*runner.FakeRunner, func()) {
+func withFakeDriver(t *testing.T) (*runnertest.FakeRunner, func()) {
 	t.Helper()
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 	prev := newExternalDriver
 	newExternalDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
 		return fr, nil

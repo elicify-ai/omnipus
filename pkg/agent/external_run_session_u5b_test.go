@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -137,7 +138,7 @@ func TestU5b_N7_NonSteeredSessionStillRunsFresh(t *testing.T) {
 func u5bSeedLiveHolder(t *testing.T, al *AgentLoop, sessKey string, gen int) *externalCLIRunSession {
 	t.Helper()
 	sess := al.externalRunSession(sessKey)
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 	prev := newExternalDriver
 	newExternalDriver = func(string, runner.ConsentHandler) (runner.ExternalAgentRunner, error) { return fr, nil }
 	t.Cleanup(func() { newExternalDriver = prev })
@@ -564,7 +565,7 @@ func TestU5b_N3_HumanMessageIntoExternalWorkerDelivers(t *testing.T) {
 	al := newDelegateDispatchLoop(t, provider)
 	u5bSeedSteered(t, al, "sess-n3", delegateExtCLIAgentID, true)
 
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 	prev := newExternalDriver
 	newExternalDriver = func(string, runner.ConsentHandler) (runner.ExternalAgentRunner, error) { return fr, nil }
 	defer func() { newExternalDriver = prev }()
