@@ -8,7 +8,9 @@ import { expectA11yClean } from './fixtures/a11y';
 // Workspace-as-project IA: the top-level Chat (/#/) and Monitor (/#/monitor)
 // nav items were removed and Connectors replaced the old Channels item. The
 // main navigation's fixed-bottom "Assets" group (Sidebar.tsx ASSET_ITEMS)
-// now exposes Admin chat · Agents · Skills & Tools · Connectors as direct links.
+// now exposes Agents · Skills & Tools · Connectors as direct links; the old
+// "Admin chat" entry is gone (founder request 2026-10-11) — Admin's one main
+// chat is a row under the default workspace, and /admin/chat only redirects.
 //
 // Settings is NOT one of them: it moved into the "Open user menu" profile
 // dropdown at the very bottom of the sidebar (Sidebar.tsx: DropdownMenuItem
