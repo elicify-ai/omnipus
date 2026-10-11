@@ -1603,8 +1603,6 @@ func (tp *taskPatch) launchIfStarted() bool {
 			}
 			httpStatus := http.StatusInternalServerError
 			switch {
-			case errors.Is(startErr, agent.ErrDispatchCapReached):
-				httpStatus = http.StatusConflict
 			case errors.Is(startErr, agent.ErrExecutorDraining):
 				// Shutdown, not a fault in the request or the task (architect
 				// ruling R1 #2): the task was reverted above and is startable
