@@ -43,7 +43,6 @@ import { test } from './fixtures/console-errors';
 import {
   chatInput,
   waitForConnected,
-  startNewChat,
   selectAgent,
   assistantMessages,
   watchLiveButton,
@@ -51,6 +50,7 @@ import {
   browserLiveFrame,
   browserLiveVideo,
 } from './fixtures/selectors';
+import { freshChat } from './fixtures/session-setup'
 import {
   installWebrtcDebug,
   logWebrtcDebug,
@@ -138,7 +138,7 @@ test(
     // (pkg/coreagent/core.go); Mia's "guide" persona routes browser work
     // away rather than executing it (media.spec.ts, browser-live-video.spec.ts
     // rely on the same choice).
-    await startNewChat(page);
+    await freshChat(page);
     await selectAgent(page, /Jim/i);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 

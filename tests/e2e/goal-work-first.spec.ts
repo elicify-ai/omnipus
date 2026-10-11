@@ -26,7 +26,8 @@
 
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, waitForConnected, startNewChat, assistantMessages } from './fixtures/selectors'
+import { chatInput, waitForConnected, assistantMessages } from './fixtures/selectors'
+import { freshChat } from './fixtures/session-setup'
 import { endTurnDeterministically, trackServerFrames } from './helpers/endTurn'
 
 const stopButton = (page: import('@playwright/test').Page) =>
@@ -73,7 +74,7 @@ test(
     await waitForConnected(page)
 
     // Fresh session so assistantMessages/goal state start clean.
-    await startNewChat(page)
+    await freshChat(page)
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
 
     // No confirm row exists before the goal is even sent — the sanity

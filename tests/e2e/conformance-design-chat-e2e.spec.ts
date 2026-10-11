@@ -379,7 +379,7 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
     const doneWait = waitForDone(90_000)
 
     // Type the steer the way a user does, per keystroke — NOT via fill().
-    // selectors.ts::startNewChat documents that fill() bypasses the input
+    // session-setup.ts::freshChat (via selectors' composer rules) documents that fill() bypasses the input
     // events this composer listens to on this textarea (T22 in
     // cancel-cross-channel.spec.ts types for the same reason); in the flaky
     // release run the fills demonstrably never became sends, and the failed

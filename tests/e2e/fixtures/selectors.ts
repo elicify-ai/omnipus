@@ -61,16 +61,25 @@ export const sendButton = (page: Page) =>
 //     e84ac0532 "remove the composer agent picker";
 //     src/components/chat/ChatScreen.pickerRemoval.test.tsx pins its
 //     absence), so `agentPicker` is gone from this file.
-//   - "New chat with <Agent name>" icon button on the row
-//     (WorkspaceAgentList.tsx:299,379) — the ONLY new-chat path (FR-029
-//     "only agent-row New chat creates extra MAIN chat"; FR-031 deleted
-//     "/new" outright and forbids the SPA from sending it).
+//   - The row's former "New chat with <Agent>" and "Past sessions with
+//     <Agent>" icon buttons were REMOVED by founder decision D7
+//     (squad nav-agent-row-menu-20261011, DECISIONS.md): one "⋯" menu button
+//     replaces them (D1), and the new-chat UI access point is gone
+//     everywhere (D7 — the capability stays in code, with no button). Specs
+//     that need a fresh chat use `freshChat` (fixtures/session-setup.ts:
+//     public REST + the SPA's own deep-link route), NOT a UI path.
 //
 // The sidebar is CLOSED by default (src/store/sidebar.ts isOpen:false,
 // isPinned:false) and renders nav[aria-label="Main navigation"] only while
 // open (Sidebar.tsx:375), so every helper below first opens it the way a
 // user does: the header hamburger, aria-label "Show sidebar"
 // (SidebarShowButton.tsx:32).
+//
+// Specs needing a FRESH CHAT use `freshChat` in fixtures/session-setup.ts
+// (public REST + the SPA's own deep-link route) — not a UI path. It lives
+// there, not here, because it reuses that file's REST auth plumbing and
+// openSessionByDeepLink, and selectors.ts must not import session-setup
+// (session-setup imports this file's locators).
 
 /** escapeRegExp — embedded in locator name patterns below. */
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -126,9 +135,36 @@ export async function openSidebar(page: Page): Promise<void> {
 }
 
 /**
+ * Locate an agent row's group (role="group" aria-label="<Agent name>") and
+ * make it RESOLVABLE — sidebar opened, workspace roster expanded — WITHOUT
+ * waiting for the row itself. Use this when the row may legitimately be
+ * ABSENT (e.g. asserting a hidden agent's absence, D5) and a visibility wait
+ * would turn that absence into a timeout; use agentRowGroup when the row
+ * must be there.
+ */
+export async function agentRowLocator(
+  page: Page,
+  name: string | RegExp,
+  workspace: string = DEFAULT_WORKSPACE_NAME,
+): Promise<Locator> {
+  await openSidebar(page);
+  const disclosure = workspaceDisclosureButton(page, workspace);
+  await disclosure.waitFor({ state: 'visible', timeout: 15_000 });
+  if ((await disclosure.getAttribute('aria-expanded')) === 'false') {
+    // Bounded: a disclosure that never becomes clickable (overlay, rerender
+    // churn) must fail here, named, in seconds — not at the test timeout.
+    await disclosure.click({ timeout: 15_000 });
+  }
+  return page
+    .getByRole('group', { name: workspace, exact: true })
+    .getByRole('group', { name });
+}
+
+/**
  * Locate an agent row's group (role="group" aria-label="<Agent name>"),
- * expanding the workspace's roster first when it is folded. The workspace
- * defaults to the seeded default workspace (DEFAULT_WORKSPACE_NAME).
+ * expanding the workspace's roster first when it is folded, and wait until
+ * the row is VISIBLE. The workspace defaults to the seeded default workspace
+ * (DEFAULT_WORKSPACE_NAME).
  *
  * The row group is the same locator the component's own vitest tests use
  * (WorkspaceAgentList.newChat.test.tsx:235), and name matching follows
@@ -141,17 +177,7 @@ export async function agentRowGroup(
   workspace: string = DEFAULT_WORKSPACE_NAME,
   opts: { rowTimeoutMs?: number } = {},
 ) {
-  await openSidebar(page);
-  const disclosure = workspaceDisclosureButton(page, workspace);
-  await disclosure.waitFor({ state: 'visible', timeout: 15_000 });
-  if ((await disclosure.getAttribute('aria-expanded')) === 'false') {
-    // Bounded: a disclosure that never becomes clickable (overlay, rerender
-    // churn) must fail here, named, in seconds — not at the test timeout.
-    await disclosure.click({ timeout: 15_000 });
-  }
-  const row = page
-    .getByRole('group', { name: workspace, exact: true })
-    .getByRole('group', { name });
+  const row = await agentRowLocator(page, name, workspace);
   await row.waitFor({ state: 'visible', timeout: opts.rowTimeoutMs ?? 15_000 });
   return row;
 }
@@ -180,9 +206,11 @@ export const selectAgent = async (
   workspace: string = DEFAULT_WORKSPACE_NAME,
 ) => {
   const row = await agentRowGroup(page, name, workspace);
-  // The row strip's first button is the row's MAIN action (WorkspaceAgentList
-  // .tsx:348-387: main button, then "Past sessions with X", then "New chat
-  // with X" — an order the component's own vitest tests pin).
+  // The row strip's FIRST button is the row's MAIN action (main button, then
+  // then the action buttons — an order the component's own vitest tests pin;
+  // after D1 the strip is main button + ONE "⋯" menu button). LOAD-BEARING
+  // CONTRACT with the component: the menu button must never precede the main
+  // button, or this locator clicks the menu instead of opening the chat.
   const mainButton = row.locator('.sidebar-agent-row button').first();
   // Bounded: a click that never lands (row detached mid-attach, overlay)
   // fails here, named, in seconds — the unbounded default burned whole test
@@ -218,128 +246,25 @@ export const selectAgent = async (
   }
 };
 
-/**
- * Start a new chat via the agent row's "New chat with <Agent name>" icon
- * button — the ONLY new-chat path left (FR-029; FR-031 deleted "/new" from
- * the command table and the SPA must not send it: typing it now shows a
- * refusal and sends nothing, src/hooks/useSlashMenu.ts RETIRED_COMMAND_NAMES).
- * The old header "New Chat" button and the /new palette route this helper
- * used to drive are both gone.
- *
- * Which row: `name`/`workspace` pick one explicitly; with no name, the
- * CURRENTLY SELECTED row is used when one exists (the old /new kept the
- * active agent — this preserves that contract), falling back to the first
- * row of the workspace roster (deterministic core_team order).
- *
- * When the current first message has no known chat id, the SPA raises the
- * "Start a new chat?" confirm dialog (extraChatGuard.decideNewChat — an
- * unconfirmed send must not be silently abandoned; src/components/layout/
- * sidebar/WorkspaceAgentList.tsx:394-403). A user who wants a fresh chat
- * confirms it, so this helper clicks "Start a new chat" whenever the dialog
- * appears and is a no-op when it does not.
- *
- * The new chat binds lazily: like the /new it replaces, the session id is
- * minted on the first sent message (beginPairExtra → startNewSession —
- * src/components/layout/sidebar/pairExtra.ts), so specs that identify the
- * turn's session by diffing OMNIPUS_HOME/sessions keep working unchanged.
- * Returns once the dialog question is settled; callers assert the empty
- * thread themselves (assistantMessages toHaveCount(0)).
- */
-export const startNewChat = async (
-  page: Page,
-  name?: string | RegExp,
-  workspace: string = DEFAULT_WORKSPACE_NAME,
-) => {
-  let row: Locator;
-  if (name !== undefined) {
-    row = await agentRowGroup(page, name, workspace);
-  } else {
-    await openSidebar(page);
-    row = selectedAgentRow(page);
-    if ((await row.count()) === 0) {
-      row = page
-        .getByRole('group', { name: workspace, exact: true })
-        .getByRole('group')
-        .first();
-    }
-  }
-  const agentName = await row.getAttribute('aria-label', { timeout: 15_000 });
-  if (!agentName) {
-    throw new Error(
-      'startNewChat: could not resolve an agent row to click — no "New chat with …" ' +
-        `label could be derived (name=${String(name)})`,
-    );
-  }
-  // Click the row's "New chat with <Agent>" button DIRECTLY — never a strip
-  // hover first. The hover this used to do is the fail-slow defect behind the
-  // llm-agents shard burning whole spec timeouts (CI run 38112714098: every
-  // cancel-cross-channel T2x attempt died at exactly its test timeout — 4.7m
-  // for the slow() tests, 6.2m/7.3m for T24a/b; reproduced locally on T21 as
-  // "locator.hover: Test timeout of 270000ms exceeded" looping "element is
-  // not stable" / "element was detached"): startNewChat runs right after the
-  // row was clicked, while the sidebar is animating (exit/re-enter slide) and
-  // the row's attention halo (attention.css sidebar-attention-halo-loop, a
-  // 1.6s infinite scale pulse) keeps boxes moving; Playwright's hover demands
-  // a stable box across two frames and retries FOREVER by default (config
-  // sets no actionTimeout). The click needs no hover: agent-row.css reveals
-  // the actions when the row is hovered, focus-within, OR SELECTED
-  // ([data-selected='true'] .sidebar-agent-actions { opacity: 1 }), and the
-  // click itself moves the pointer onto the row, :hover-revealing them.
-  //
-  // The click is OUTCOME-VERIFIED rather than trusted blind, because a
-  // LANDING click closes the sidebar (beginPairExtra → closeOverlay →
-  // Sidebar's onOverlayClose) and detaches the button mid-action — Playwright
-  // reports that as a click timeout even though the fresh chat started
-  // (observed in the same local T21 run: the failure screenshot showed the
-  // fresh, empty Jim chat while the click "timed out"). Bounded retries; the
-  // OUTCOME between attempts decides: the confirm dialog up, or the sidebar
-  // closed (closeOverlay only runs on the 'started' outcome — pairExtra.ts),
-  // means the new-chat flow is under way. Overall budget 20s: bounded, named,
-  // and far below every caller's test timeout.
-  const newChatButton = row.getByRole('button', {
-    name: new RegExp(`^New chat with ${escapeRegExp(agentName)}$`),
-  });
-  const nav = page.locator('nav[aria-label="Main navigation"]');
-  const dialog = page.getByRole('alertdialog', { name: 'Start a new chat?' });
-  const clickBudget = Date.now() + 20_000;
-  for (;;) {
-    try {
-      await newChatButton.click({ timeout: 5_000 });
-      break;
-    } catch (err) {
-      // Outcome first: a landed click either raised the dialog ('prompt') or
-      // closed the sidebar ('started' — closeOverlay only runs there).
-      const dialogUp = await dialog.isVisible().catch(() => false);
-      const navVisible = await nav.isVisible().catch(() => true);
-      if (dialogUp || !navVisible) break;
-      if (!(err instanceof errors.TimeoutError) || Date.now() >= clickBudget) {
-        throw new Error(
-          `startNewChat: the "New chat with ${agentName}" button never produced a landing ` +
-            `click within its 20s budget (sidebar ${navVisible ? 'still open' : 'closed'}, ` +
-            `dialog ${dialogUp ? 'up' : 'not up'}) — the roster row kept animating/detaching ` +
-            'so Playwright could not complete the action. Original error: ' +
-            (err instanceof Error ? err.message : String(err)),
-          { cause: err },
-        );
-      }
-      // Otherwise the click genuinely has not landed yet — retry.
-    }
-  }
+// ── Agent-row "⋯" menu (founder decision D1/D2, squad nav-agent-row-menu-20261011) ──
+//
+// PARAMETERISATION POINT: the menu button's accessible name is spec'd here in
+// exactly ONE constant builder because frontend-lead's component had not
+// landed on this branch when these were written (DECISIONS.md D1 says only
+// "ONE ⋯ (three dots) button"). When the component lands, confirm the real
+// accessible name against this builder and adjust HERE — never in the specs,
+// which all derive the name through it.
+export const agentRowMenuButtonLabel = (agentName: string): string =>
+  `More actions for ${agentName}`;
 
-  // Confirm dialog — only when an unconfirmed first send is pending; confirm
-  // it (the caller asked for a FRESH chat) and wait for the question to
-  // settle. When no dialog ever appears this resolves immediately. (`dialog`
-  // is declared above, next to the click whose outcome it verifies.)
-  try {
-    await dialog.waitFor({ state: 'visible', timeout: 3_000 });
-  } catch {
-    return; // no unconfirmed send — the extra chat started directly
-  }
-  await dialog
-    .getByRole('button', { name: 'Start a new chat', exact: true })
-    .click({ timeout: 10_000 });
-  await expect(dialog).toHaveCount(0, { timeout: 10_000 });
-};
+/** The menu's items in EXACTLY the order founder decision D2 fixes: History ·
+ * Hide from sidebar · Edit · Remove (DECISIONS.md D2; D3 keeps "History"). */
+export const AGENT_ROW_MENU_ITEMS = [
+  'History',
+  'Hide from sidebar',
+  'Edit',
+  'Remove',
+] as const;
 
 /**
  * Completed assistant messages — only counts messages whose data-status is not
@@ -381,13 +306,16 @@ export const navLink = (page: Page, href: string) =>
 export const agentCards = (page: Page) =>
   page.locator('button[aria-label^="View agent "]');
 
-// The retired `newChatButton` (header banner "New Chat") and the former
-// /new-palette `startNewChat` were deleted here — both drove surfaces the
-// navigation redesign removed. Citations: header button removed (ChatControls
-// .tsx), "/new" deleted outright by session-core-spec FR-031 (founder WC-1,
-// 2026-10-09; the SPA must not send it), extra-chat creation is the agent-row
-// "New chat" action per FR-029. The current `startNewChat` above is the
-// replacement.
+// The retired `newChatButton` (header banner "New Chat"), the former
+// /new-palette `startNewChat`, and the agent-row-button `startNewChat` were
+// deleted here — each drove a surface the navigation redesign or founder
+// decision D7 removed. Citations: header button removed (ChatControls.tsx),
+// "/new" deleted outright by session-core-spec FR-031 (founder WC-1,
+// 2026-10-09; the SPA must not send it), the agent-row "New chat with
+// <Agent>" button removed everywhere by D7 (DECISIONS.md,
+// squad nav-agent-row-menu-20261011 — capability stays, UI access point
+// gone). The replacement is `freshChat` in fixtures/session-setup.ts:
+// public REST (POST /api/v1/sessions) + the SPA's own deep-link route.
 
 /**
  * Session token/cost counter — moved out of the header banner into the
