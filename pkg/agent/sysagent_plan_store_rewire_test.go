@@ -69,6 +69,16 @@ func TestSetPlanStore_ReWiresSysagentPlanStoreForDeleteAgentActivePlanGuard(t *t
 		GetCfg:           al.GetConfig,
 		MutateConfig:     al.MutateConfig,
 		SaveConfigLocked: func(*config.Config) error { return nil },
+		// delete_agent's cascade also removes the victim's sessions. Without a
+		// store the delete fails at its CLEANUP stage ("session store
+		// unavailable: the agent's sessions could not be cleaned up") and never
+		// reaches the active-plan guard this test is about — the tool answers
+		// SAVE_FAILED/partly_deleted instead. The loop owns exactly one live
+		// store; hand the cascade that one (DEL-10).
+		DeleteSessionStore: func() systools.AgentSessionStore { return al.GetSessionStore() },
+		StopSessionForDelete: func(string) string {
+			return "" // no sessions are seeded for either victim, so nothing is stopped
+		},
 	}
 	al.WireSysagentDeps(sysDeps)
 
