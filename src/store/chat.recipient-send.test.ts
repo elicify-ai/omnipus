@@ -380,3 +380,134 @@ describe('C8 — the @ address is never dropped silently', () => {
     expect(failed.deliveryStatus).toBe('failed')
   })
 })
+
+// C2 (contract: ARCHITECT-C2-contract.md, decided 2026-10-11): the server
+// tags a message-scoped refusal with the sender's session_id AND
+// client_message_id (no first_message_error), followed by a
+// MessageStatusFrame{failed} for the row. The SPA must route the refusal to
+// THAT chat as a visible notice and touch nothing turn-shaped — no
+// streaming-bubble sweep, no isStreaming=false, no activeTurnId clear —
+// because the turn the message was sent into keeps running (the Stop button
+// must survive). An error frame without client_message_id keeps today's
+// full turn-ending behaviour.
+describe('C2 — a message-scoped refusal routes to its own chat and never ends a live turn', () => {
+  const CHAT_X = 'chat-x'
+  const CHAT_Y = 'chat-y'
+  const REFUSAL_TEXT = 'That agent is not addressable here'
+
+  /** A chat with a live turn: a streaming assistant bubble, an active turn,
+   * and a mid-turn @-steer row (clientMessageId) appended after the bubble. */
+  function seedLiveChat(sid: string, steerClientMessageId: string): void {
+    act(() => {
+      const bucket = {
+        ...makeBucketMessages([
+          { id: 'asst-1', role: 'assistant', content: 'Working on it…', timestamp: '2026-10-11T10:00:00Z', status: 'streaming', isStreaming: true },
+          { id: steerClientMessageId, role: 'user', content: '@Ava also check the logs', timestamp: '2026-10-11T10:00:05Z', status: 'done', deliveryStatus: 'sending' },
+        ]),
+        toolCalls: {},
+        toolCallOrder: [],
+        textAtToolCallStart: {},
+        isStreaming: true,
+        activeTurnId: `turn-${sid}`,
+      }
+      useChatStore.setState((s) => ({
+        sessionsById: { ...s.sessionsById, [sid]: bucket },
+      }))
+    })
+  }
+
+  function refusalFrames(steerClientMessageId: string, tagged: boolean): Array<Record<string, unknown>> {
+    const error: Record<string, unknown> = { type: 'error', message: REFUSAL_TEXT }
+    if (tagged) {
+      error.session_id = CHAT_X
+      error.client_message_id = steerClientMessageId
+    }
+    return [
+      error,
+      { type: 'message_status', session_id: CHAT_X, client_message_id: steerClientMessageId, state: 'failed' },
+    ]
+  }
+
+  it('(a) a refusal for chat X lands in X while chat Y is active — Y untouched, X turn intact', () => {
+    seedLiveChat(CHAT_X, 'steer-1')
+    act(() => {
+      const plainY = {
+        ...makeBucketMessages([
+          { id: 'y-1', role: 'user', content: 'hello', timestamp: '2026-10-11T09:00:00Z', status: 'done', deliveryStatus: 'received' },
+          { id: 'y-2', role: 'assistant', content: 'Hi!', timestamp: '2026-10-11T09:00:10Z', status: 'done', deliveryStatus: 'received' },
+        ]),
+        toolCalls: {},
+        toolCallOrder: [],
+        textAtToolCallStart: {},
+        isStreaming: false,
+      }
+      useChatStore.setState((s) => ({ sessionsById: { ...s.sessionsById, [CHAT_Y]: plainY } }))
+      useSessionStore.setState({ activeSessionId: CHAT_Y, activeAgentId: 'jim' })
+    })
+    const yOrderBefore = useChatStore.getState().sessionsById[CHAT_Y]!.messageOrder
+
+    for (const frame of refusalFrames('steer-1', true)) {
+      act(() => { useChatStore.getState().handleFrame(frame as never) })
+    }
+
+    const x = useChatStore.getState().sessionsById[CHAT_X]!
+    // The refusal is VISIBLE in X: a notice bubble carrying the server's text.
+    const notice = x.messageOrder.map((id) => x.messagesById[id]).find((m) => m?.role === 'assistant' && m.status === 'error')
+    expect(notice?.content).toBe(REFUSAL_TEXT)
+    // The refused row exits 'sending'.
+    expect(x.messagesById['steer-1']?.deliveryStatus).toBe('failed')
+    // X's live turn is untouched: streaming bubble intact, busy flag up,
+    // active turn announced.
+    expect(x.messagesById['asst-1']?.status).toBe('streaming')
+    expect(x.messagesById['asst-1']?.isStreaming).toBe(true)
+    expect(x.isStreaming).toBe(true)
+    expect(x.activeTurnId).toBe(`turn-${CHAT_X}`)
+    // Y is untouched: same rows, no error bubble, still not streaming.
+    const y = useChatStore.getState().sessionsById[CHAT_Y]!
+    expect(y.messageOrder).toEqual(yOrderBefore)
+    expect(y.isStreaming).toBe(false)
+    expect(useChatStore.getState().isStreaming).toBe(false)
+  })
+
+  it('(b) a refusal in the ACTIVE chat with a live turn keeps Stop: isStreaming and activeTurnId survive', () => {
+    seedLiveChat(CHAT_X, 'steer-2')
+    act(() => {
+      useSessionStore.setState({ activeSessionId: CHAT_X, activeAgentId: 'jim' })
+      useChatStore.setState({ messages: [], isStreaming: true })
+    })
+
+    for (const frame of refusalFrames('steer-2', true)) {
+      act(() => { useChatStore.getState().handleFrame(frame as never) })
+    }
+
+    const x = useChatStore.getState().sessionsById[CHAT_X]!
+    const notice = x.messageOrder.map((id) => x.messagesById[id]).find((m) => m?.role === 'assistant' && m.status === 'error')
+    expect(notice?.content).toBe(REFUSAL_TEXT)
+    expect(x.messagesById['steer-2']?.deliveryStatus).toBe('failed')
+    // THE POINT of the contract's no-sweep rule: the running turn keeps its
+    // Stop button (isStreaming) and its announced turn id.
+    expect(x.isStreaming).toBe(true)
+    expect(x.activeTurnId).toBe(`turn-${CHAT_X}`)
+    expect(x.messagesById['asst-1']?.status).toBe('streaming')
+  })
+
+  it('(c) an untagged error frame keeps the existing turn-ending behaviour in full', () => {
+    seedLiveChat(CHAT_X, 'steer-3')
+    act(() => {
+      useSessionStore.setState({ activeSessionId: CHAT_X, activeAgentId: 'jim' })
+      useChatStore.setState({ messages: [], isStreaming: true })
+    })
+
+    for (const frame of refusalFrames('steer-3', false)) {
+      act(() => { useChatStore.getState().handleFrame(frame as never) }
+      )
+    }
+
+    const x = useChatStore.getState().sessionsById[CHAT_X]!
+    // Untagged ⇒ turn-ending, exactly as before: the streaming bubble is
+    // closed with the error text, the busy flag drops, the turn id clears.
+    expect(x.messagesById['asst-1']?.status).toBe('error')
+    expect(x.isStreaming).toBe(false)
+    expect(x.activeTurnId).toBeNull()
+  })
+})
