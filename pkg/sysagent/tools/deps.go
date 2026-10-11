@@ -181,6 +181,14 @@ type Deps struct {
 	//
 	// The gateway wires this to AgentLoop.ReconcileMCP.
 	ReconcileMCP func(ctx context.Context) error
+
+	// EnsureWorkspaceMains provisions the main chat of every eligible member of
+	// the named workspace's team - the same path a workspace save runs
+	// (final-gate H2). create_agent calls it after it adds the new agent to the
+	// team, so the member's main exists without a restart or an unrelated
+	// workspace save. Nil in tests or when not wired; callers nil-check. The
+	// gateway wires it to restAPI.ensureWorkspaceMains.
+	EnsureWorkspaceMains func(workspaceID string) error
 	// MCPStatus reports live per-server connection status so mcp tool results
 	// can be honest about whether a server actually connected rather than
 	// just echoing the config write. status is one of "connected", "error",

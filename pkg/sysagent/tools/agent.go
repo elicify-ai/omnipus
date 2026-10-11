@@ -488,6 +488,15 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 	if wsID := tools.ToolWorkspaceID(ac.ctx); wsID != "" {
 		joined, joinErr := ac.t.joinWorkspaceTeam(wsID, ac.finalID)
 		ac.joinedWorkspace = joined
+		if joined && ac.t.deps.EnsureWorkspaceMains != nil {
+			// Final-gate H2: the member now exists on the team; give it its main
+			// through the path workspace saves use. A failure is logged, not fatal:
+			// the main is re-attempted when its chat is opened.
+			if mainsErr := ac.t.deps.EnsureWorkspaceMains(wsID); mainsErr != nil {
+				slog.Error("sysagent: create_agent: the new member's main chat was not created; it is re-attempted when the chat is opened",
+					"agent_id", ac.finalID, "workspace_id", wsID, "error", mainsErr)
+			}
+		}
 		switch {
 		case joinErr == nil:
 			// Fully joined: the membership landed AND the self-row was seeded.

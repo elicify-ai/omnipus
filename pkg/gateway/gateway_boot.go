@@ -1324,6 +1324,9 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// branches of ensureDefaultWorkspace above; a no-op for Admin when no
 	// default workspace exists.
 	stg.api.ensureBootMains()
+	// Final-gate H2: the Admin create_agent tool joins agents to teams without a
+	// workspace save; it provisions their mains through this hook.
+	stg.runningServices.ensureWorkspaceMains = stg.api.ensureWorkspaceMains
 	// session-core U6 (FR-017/019): the task executor derives a run's mode and
 	// captures its recipients from which agents own a visible main. Without this
 	// resolver every task run stays ISOLATED.

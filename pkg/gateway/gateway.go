@@ -152,7 +152,10 @@ func selfHealWriteHook(reg *configSelfWriteRegistry) config.SelfHealWriteHook {
 }
 
 type services struct {
-	CronService *cron.CronService
+	// ensureWorkspaceMains provisions a workspace team's mains (final-gate H2);
+	// set at boot once the REST API exists, read when the system tools are wired.
+	ensureWorkspaceMains func(workspaceID string) error
+	CronService          *cron.CronService
 	// LiveLimits is ADR-066 rung 4; retained so shutdown can Close it (abort
 	// in-flight fetches, forbid cache writes) — see agent.LiveLimits.Close.
 	LiveLimits *agent.LiveLimits
@@ -1351,6 +1354,9 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		},
 		CredStore:  rc.credStore,
 		ReloadFunc: rc.reloadTrigger,
+		// EnsureWorkspaceMains (final-gate H2): create_agent's team join gives the
+		// new member its main chat through the workspace-save path.
+		EnsureWorkspaceMains: rc.runningServices.ensureWorkspaceMains,
 		// WaitForReloadFunc: AgentDeleteTool's synchronous reload wait (see
 		// systools.Deps.WaitForReloadFunc's doc comment for the delete_agent →
 		// list_agents ghost-listing race this closes). Built on the same

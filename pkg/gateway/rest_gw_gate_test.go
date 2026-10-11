@@ -75,3 +75,25 @@ func TestGW_H1_StaleRevisionAgentDeleteDestroysNothing(t *testing.T) {
 	_, statErr = os.Stat(filepath.Join(api.homePath, "sessions", meta.ID))
 	assert.True(t, errors.Is(statErr, os.ErrNotExist), "a valid delete still cleans the session")
 }
+
+// H2 (finding 2): the gateway half of the provisioning hook. A member added to a
+// team by a path that did not run the workspace-save provisioning (the Admin
+// create_agent tool) has no main; ensureWorkspaceMains is the hook that gives
+// every eligible member one, through the same ensureMainsForTeam a save uses.
+func TestGW_H2_EnsureWorkspaceMainsProvisionsAnUnprovisionedMember(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JGWGATEH2WS0000000000001"
+	env.seedWorkspace(t, ws, false, "mia")
+	id := u1MainID(ws, "mia")
+	_, err := env.store(t).GetMeta(id)
+	require.Error(t, err, "instrument check: the member starts with no main")
+
+	require.NoError(t, env.api.ensureWorkspaceMains(ws))
+
+	meta, err := env.store(t).GetMeta(id)
+	require.NoError(t, err, "the member's main must exist after the hook")
+	assert.Equal(t, "mia", meta.AgentID)
+	assert.Equal(t, ws, meta.WorkspaceID)
+	// An unknown workspace is a visible error, never a silent no-op.
+	assert.Error(t, env.api.ensureWorkspaceMains("01JGWGATEH2NOSUCHWS00000001"))
+}

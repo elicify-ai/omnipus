@@ -248,6 +248,18 @@ func (a *restAPI) mainSessionVisible(m *session.UnifiedMeta) bool {
 	return m.AgentID == agentID && m.WorkspaceID == wsID
 }
 
+// ensureWorkspaceMains provisions the main of every eligible member of one
+// workspace's team - the provisioning a workspace save runs - for the writers
+// that change membership without a save (the Admin create_agent tool, final-gate
+// H2). A workspace that cannot be read is an error, never a silent no-op.
+func (a *restAPI) ensureWorkspaceMains(workspaceID string) error {
+	ws, err := readWorkspaceFile(a.homePath, workspaceID)
+	if err != nil {
+		return fmt.Errorf("workspace %s: %w", workspaceID, err)
+	}
+	return a.ensureMainsForTeam(ws)
+}
+
 // ensureBootMains eagerly establishes every main that FR-002 says exists
 // without any later event: Admin's main in the default workspace, and one main
 // per eligible member of EVERY existing workspace team. It runs from the boot
