@@ -385,7 +385,7 @@ export interface paths {
         };
         /**
          * Get session transcript messages
-         * @description Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed. The list starts at the session's last /clear marker (the marker itself is the first entry, preceded only by the /clear command row that issued it); the X-Has-Earlier-Messages response header says whether earlier entries exist before that point.
+         * @description Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed. The list starts at the session's last /clear marker (the marker itself is the first entry); the X-Has-Earlier-Messages response header says whether earlier entries exist before that point.
          */
         get: operations["getSessionMessages"];
         put?: never;
