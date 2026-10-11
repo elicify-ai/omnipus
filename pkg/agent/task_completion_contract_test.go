@@ -15,9 +15,12 @@ package agent
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -121,6 +124,18 @@ func newNativeTaskCompletionTestLoop(t *testing.T, provider providers.LLMProvide
 	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	bindMetSoftTierJudge(t, al)
+	// S1 M9: production starts a task ONLY through the session launcher the
+	// gateway installs at boot — StartTaskNow refuses without one. Install the
+	// real launcher so every test built on this fixture exercises the
+	// production start path instead of the deleted launcher-less one.
+	mintGenuineBootEpochForLoop(t, al)
+	// The launcher's mandatory write needs the session stores (the gateway wires
+	// both at boot); without them the launch fails "session stores not wired".
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(home, "session_messages")), lifecycle)
+	al.taskExecutor.SetLifecycleStore(lifecycle)
+	al.taskExecutor.SetSessionLauncher(NewSteerLauncher(al))
 	// al.Close() drains session workers/recaps before t.TempDir()'s own
 	// cleanup runs, so a real tool-call test (e.g. one that exercises
 	// update_task's session-worker writes) can't race an async write against
@@ -161,7 +176,35 @@ func newCompletionContractTask(t *testing.T, al *AgentLoop, agentID, title strin
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	pairTaskGoalRecord(t, al, tk)
 	return tk
+}
+
+// pairTaskGoalRecord gives tk the paired goal record that production's
+// fresh-creation path writes (pkg/tools.SyncTaskGoalRecord, called by the
+// create_task tool and the REST create handler).
+//
+// session-core DEL-18 deleted the run-start minting of an unpaired task's goal
+// record: "fresh task creation/edit owns the record". A fixture that creates a
+// task without pairing one therefore starts a run with NO goal loop — the
+// executor logs "task ... has no paired goal record", goal_claim can never
+// complete the run, and the test hangs until its deadline. Pairing here is the
+// fixture doing what the product's own create path does, not a test-only bypass.
+func pairTaskGoalRecord(t *testing.T, al *AgentLoop, tk *task.Task) {
+	t.Helper()
+	updated, err := al.taskStore.Update(tk.ID, task.Patch{
+		Criteria: &[]task.AcceptanceCriterion{planProseCriterion("the work is done")},
+	})
+	require.NoError(t, err, "fixture: attach the task's own criteria")
+	require.NoError(t,
+		tools.SyncTaskGoalRecord(
+			// The READER's store: the executor resolves the paired record through
+			// resolveGoalRecordStore() (goal.NewStore(config.OmnipusHomeDir())), which
+			// equals tools.GoalStoreForTasks only when the task store sits at
+			// <home>/tasks. Pair where the executor will look.
+			resolveGoalRecordStore(), updated, true,
+			[]task.AcceptanceCriterion{planProseCriterion("the work is verified")}, true, nil),
+		"fixture: pair the task's goal record the way fresh creation does")
 }
 
 // waitForCompletionContractTerminal polls al's task store until taskID

@@ -373,6 +373,11 @@ func TestRunner_SessionMode_MainWithoutWorkspaceRefuses(t *testing.T) {
 func TestRunner_SessionMode_MainDerivesTheDefaultWorkspaceMain(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	cfg := baseConfig()
+	// The owner must be a TEAM MEMBER of the default workspace, or the derived
+	// main resolves to nobody and the run is refused ("the owner no longer has a
+	// main in this workspace"). Membership first, then the delegation graph the
+	// graph seeder needs.
+	ensureTestWorkspaceMembership(t, cfg)
 	seedDefaultDelegationGraph(t, testHarnessAgentIDs(cfg))
 	r, exec, _, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
 
