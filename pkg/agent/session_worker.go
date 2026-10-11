@@ -121,6 +121,11 @@ type sessionWorker struct {
 	parent *AgentLoop
 }
 
+// inputBusyReply is the visible refusal for input that is dropped because the
+// waiting-item bound (MaxQueueSize) is full - on a session worker inbox or on a
+// connector chat lane.
+const inputBusyReply = "Your message could not be queued — the agent is busy. Please resend in a few seconds."
+
 // workerInboxBuffer is the inbox channel's buffer: only the hot path, not a
 // capacity. The capacity is MaxQueueSize, counted in enqueue (see pushInbox).
 const workerInboxBuffer = 8
@@ -253,7 +258,7 @@ func (w *sessionWorker) enqueue(msg bus.InboundMessage) bool {
 	if pubErr := w.parent.bus.PublishOutbound(rejectCtx, bus.OutboundMessage{
 		Channel: msg.Channel,
 		ChatID:  msg.ChatID,
-		Content: "Your message could not be queued — the agent is busy. Please resend in a few seconds.",
+		Content: inputBusyReply,
 	}); pubErr != nil {
 		logger.WarnCF("agent.worker", "Failed to send inbox-full reply",
 			map[string]any{"channel": msg.Channel, "error": pubErr.Error()})
