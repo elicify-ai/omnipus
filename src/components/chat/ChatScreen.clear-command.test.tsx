@@ -237,11 +237,14 @@ describe('ChatScreen — typed /clear and the retired /new (FR-030/031)', () => 
     expect(sentFrames).toHaveLength(0)
     // No new session was minted or attached.
     expect(useSessionStore.getState().activeSessionId).toBe(SID)
-    // The refusal is VISIBLE in the thread: it names the retirement and both
-    // replacements (the agent row's New chat action, and /clear).
+    // The refusal is VISIBLE in the thread: it names the retirement and points
+    // to /clear. Founder decision D7 (sidebar agent-row menu, 2026-10-11): the
+    // agent row's "New chat" entry is removed, so the refusal says there is no
+    // sidebar entry for an extra chat instead of naming it.
     const thread = document.body.textContent ?? ''
     expect(thread).toContain('/new')
-    expect(thread).toContain('New chat')
+    expect(thread).toContain('no sidebar entry to start an extra chat')
+    expect(thread).not.toContain('New chat')
     expect(thread).toContain('/clear')
     expect(thread).toContain('no longer exists')
   })
