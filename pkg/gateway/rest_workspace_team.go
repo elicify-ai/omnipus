@@ -116,7 +116,8 @@ func logWorkspacelessAgents(home string, cfg *config.Config) {
 //
 // Tri-state note (ADR-hide-from-sidebar): an absent hidden_from_sidebar maps
 // to false here — the same value as an explicit false. The distinction is
-// restored by applyUpdate's preserve step, which is the only place the stored
+// restored by applyUpdate's rule-1 preserve step (absent => the stored flag
+// is preserved; addendum 2026-10-11), which is the only place the stored
 // value is available; this mapper must stay storage-agnostic.
 func workspaceMemberConfigsFromWire(
 	wire *map[string]gen.WorkspaceMemberConfig,

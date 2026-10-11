@@ -32,13 +32,19 @@ type MemberHeartbeat struct {
 // (keyed by agent ID in MemberConfigs). Carries the heartbeat settings and the
 // display-only sidebar flag.
 //
-// Merge semantics (ADR-hide-from-sidebar): an incoming member_config replaces
-// the stored one ONLY in the fields it actually carries — a field the body
-// omits keeps the stored value (hidden_from_sidebar AND the heartbeat). So the
-// one-click hide body ({"hidden_from_sidebar":true}) cannot wipe a stored
-// heartbeat, and a heartbeat-only body cannot clear the flag. A heartbeat the
-// body DOES carry keeps its documented wholesale-replace semantics (no
-// field-by-field heartbeat merge).
+// Merge semantics (ADR-hide-from-sidebar addendum 2026-10-11, founder ruling
+// "hiding is only hiding"): an incoming member_config REPLACES the stored one
+// — an omitted heartbeat clears it, with the disable transition — except
+// exactly two display-flag rules the gateway PUT handler enforces:
+//   - hidden_from_sidebar absent => the stored flag is preserved (a
+//     heartbeat save never un-hides);
+//   - a pure hide/show entry (flag present, heartbeat absent) preserves the
+//     stored heartbeat, so hide/show never changes any other setting.
+//
+// An entry with neither field ({}) keeps the ordinary replace behaviour: the
+// stored heartbeat is cleared, the flag still preserved by the first rule. A
+// heartbeat the body DOES carry is replaced wholesale, never merged
+// field-by-field.
 type MemberConfig struct {
 	Heartbeat *MemberHeartbeat `json:"heartbeat,omitempty"`
 

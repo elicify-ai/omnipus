@@ -486,6 +486,24 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", excludedTeamMemberMessage(excluded),
 				"Remove the excluded role from core_team — ADR-090 bars it from workspace teams"))
 		}
+		// D8 (founder ruling 2026-10-11, gate round 1 S1): the SAME built-in
+		// roster rule the REST PUT enforces, from the SAME pkg/workspace
+		// helper — built-ins cannot leave the default workspace by ANY
+		// writer, because ensureBuiltinRosterPresent re-adds them at the next
+		// boot. The refusal precedes every effect of this call: nothing is
+		// written and no delegation edge is seeded.
+		if err := workspacepkg.RefuseBuiltinRemoval(w.IsDefault, oldTeam, w.CoreTeam, configAgentIDs(t.deps)); err != nil {
+			return tools.ErrorResult(errorJSON(strings.ToUpper(workspacepkg.BuiltinRemovalCode),
+				workspacepkg.BuiltinRemovalMessage,
+				"Built-in roster members rejoin the default workspace at every boot; remove them from other workspaces instead"))
+		}
+		// Removal cleanup (gate round 1 S6): the members this call drops are
+		// garbage-collected out of member_configs — hidden_from_sidebar
+		// included — so re-adding an agent starts visible, exactly as the
+		// REST PUT's GC does.
+		if pruned, removed := workspacepkg.GCMemberConfigs(w.CoreTeam, w.MemberConfigs); len(removed) > 0 {
+			w.MemberConfigs = pruned
+		}
 	}
 	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
 	if delegationErr != nil {
@@ -1112,6 +1130,19 @@ func configAgentPresenceSet(d *Deps) map[string]bool {
 		present[cfg.Agents.List[i].ID] = true
 	}
 	return present
+}
+
+// configAgentIDs returns the live config's agent ids — the same data
+// configAgentPresenceSet reads, as a slice — for
+// workspacepkg.DefaultWorkspaceTeamIDs, the shared D8 roster derivation both
+// workspace writers feed RefuseBuiltinRemoval from.
+func configAgentIDs(d *Deps) []string {
+	present := configAgentPresenceSet(d)
+	ids := make([]string, 0, len(present))
+	for id := range present {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // selfEdgeExcludedAgentIDs resolves the operator's self-edge seed exclusion
