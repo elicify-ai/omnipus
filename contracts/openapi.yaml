@@ -3161,7 +3161,7 @@ paths:
     get:
       operationId: getSessionMessages
       summary: Get session transcript messages
-      description: 'Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed.
+      description: 'Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed. The list starts at the session''s last /clear marker (the marker itself is the first entry, preceded only by the /clear command row that issued it); the X-Has-Earlier-Messages response header says whether earlier entries exist before that point.
 
         '
       tags:
@@ -3178,6 +3178,14 @@ paths:
       responses:
         '200':
           description: Ordered list of transcript entries.
+          headers:
+            X-Has-Earlier-Messages:
+              description: '"true" when the list starts at the last /clear marker and earlier entries exist before it; "false" when the list is the whole transcript.'
+              schema:
+                type: string
+                enum:
+                - 'true'
+                - 'false'
           content:
             application/json:
               schema:

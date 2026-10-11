@@ -1095,6 +1095,8 @@ type SessionModeUpdatedFrame struct {
 type SessionSnapshotFrame struct {
 	// The gateway process that produced this snapshot.
 	BootId *string `json:"boot_id,omitempty"`
+	// True when the replay that follows starts at the session's last /clear marker and earlier transcript entries exist before it (cleared context). Absent (or false) when the replay is the whole transcript.
+	HasEarlierMessages *bool `json:"has_earlier_messages,omitempty"`
 	// Why a snapshot was sent instead of an incremental catch-up. boot_mismatch is checked first and always wins over the other three reasons.
 	Reason *string `json:"reason,omitempty"`
 	// The session's high-water sequence number at snapshot time. Mirrored on the terminal catch_up_complete frame.

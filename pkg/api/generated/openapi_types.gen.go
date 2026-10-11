@@ -24415,6 +24415,9 @@ type SessionDetail struct {
 	// AgentRemoved True when the agent that owned this session has been deleted from the config. Used by the SPA to display a banner informing the user that the original agent no longer exists. Absent (or false) in the common case.
 	AgentRemoved *bool `json:"agent_removed,omitempty"`
 
+	// HasEarlierMessages True when messages starts at the session's last /clear marker and earlier transcript entries exist before it (cleared context). Absent (or false) when messages is the whole transcript. The earlier entries are kept in the archive and remain reachable by recall; they are simply not part of the chat view.
+	HasEarlierMessages *bool `json:"has_earlier_messages,omitempty"`
+
 	// Messages Ordered list of transcript entries for this session. Capped at 100000 messages to bound response payload size.
 	Messages []struct {
 		// AgentId ID of the agent that produced this entry (FR-002). Always present.

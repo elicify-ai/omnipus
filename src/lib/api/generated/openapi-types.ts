@@ -385,7 +385,7 @@ export interface paths {
         };
         /**
          * Get session transcript messages
-         * @description Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed.
+         * @description Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed. The list starts at the session's last /clear marker (the marker itself is the first entry, preceded only by the /clear command row that issued it); the X-Has-Earlier-Messages response header says whether earlier entries exist before that point.
          */
         get: operations["getSessionMessages"];
         put?: never;
@@ -4617,6 +4617,11 @@ export interface components {
             session: components["schemas"]["Session"];
             /** @description Ordered list of transcript entries for this session. Capped at 100000 messages to bound response payload size. */
             messages: components["schemas"]["Message"][];
+            /**
+             * @description True when messages starts at the session's last /clear marker and earlier transcript entries exist before it (cleared context). Absent (or false) when messages is the whole transcript. The earlier entries are kept in the archive and remain reachable by recall; they are simply not part of the chat view.
+             * @example false
+             */
+            has_earlier_messages?: boolean;
             /**
              * @description True when the agent that owned this session has been deleted from the config. Used by the SPA to display a banner informing the user that the original agent no longer exists. Absent (or false) in the common case.
              * @example false
@@ -18765,6 +18770,8 @@ export interface operations {
             /** @description Ordered list of transcript entries. */
             200: {
                 headers: {
+                    /** @description "true" when the list starts at the last /clear marker and earlier entries exist before it; "false" when the list is the whole transcript. */
+                    "X-Has-Earlier-Messages"?: "true" | "false";
                     [name: string]: unknown;
                 };
                 content: {
