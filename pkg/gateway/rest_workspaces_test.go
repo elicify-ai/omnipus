@@ -1563,6 +1563,20 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 	// admin's produced self-row is dropped (off-team).
 	assert.Len(t, bootEdges, 12, "the boot default workspace must seed the ordinary self-rows "+
 		"plus the full ADR-090 cross-edge set")
+	// Name the edges, not just their count: a wrong edge in place of any of
+	// these keeps the count at 12 (R2 gap 14). "mia->worker" is the edge the
+	// UAT DEF-001 fix exists to produce — Worker must be on-team so the
+	// coreagent ->worker seed survives seedEdgesForTeam.
+	bootPairs := make(map[string]bool, len(bootEdges))
+	for _, e := range bootEdges {
+		bootPairs[e.FromAgent+"->"+e.ToAgent] = true
+	}
+	for _, want := range []string{
+		"mia->mia", "mia->worker", "jim->ava", "jim->worker", "jim->jim", "jim->planner", "jim->researcher",
+		"ava->ava", "worker->worker", "planner->planner", "planner->researcher", "researcher->researcher",
+	} {
+		assert.True(t, bootPairs[want], "the boot default workspace must seed edge %s", want)
+	}
 	assert.False(t, ws.SetupPending,
 		"the boot default workspace must never be setup_pending — it never runs the setup interview")
 
