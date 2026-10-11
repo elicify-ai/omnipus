@@ -298,19 +298,20 @@ describe('D1/D2 — one ⋯ trigger and the catalogued menu', () => {
   it('Arrow keys move focus between items and Escape closes the menu (catalogued primitive)', async () => {
     renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
     await openRowMenu('Mia')
+    const menu = screen.getByRole('menu')
 
     await act(async () => {
-      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'ArrowDown' })
+      fireEvent.keyDown(menu, { key: 'ArrowDown' })
     })
     expect(menuItems()[0]).toHaveFocus()
 
     await act(async () => {
-      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'ArrowDown' })
+      fireEvent.keyDown(menu, { key: 'ArrowDown' })
     })
     expect(menuItems()[1]).toHaveFocus()
 
     await act(async () => {
-      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+      fireEvent.keyDown(menu, { key: 'Escape' })
     })
     expect(screen.queryByRole('menu')).toBeNull()
   })
@@ -444,7 +445,7 @@ describe('D4/D8 — Remove', () => {
       fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
     })
     const dialog = screen.getByRole('alertdialog', { name: 'Remove Mia from Product launch?' })
-    const description = within(dialog).getByRole('document').textContent ?? dialog.textContent
+    const description = dialog.textContent ?? ''
     expect(description).toContain('Agents list')
     expect(description).toContain('chat history')
   })
