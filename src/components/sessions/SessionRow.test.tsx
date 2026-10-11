@@ -23,10 +23,13 @@ function renderRow(overrides: Partial<Session>) {
 }
 
 describe('SessionRow status badge', () => {
-  it('draws Interrupted in the warning colour, not the error colour Failed uses', () => {
+  // Founder ruling (supersedes the earlier warning tone): Interrupted is a normal
+  // outcome, e.g. the user pressed Stop, so it is neutral grey - never warning or error.
+  it('draws Interrupted in the neutral grey tone, not warning and not the error colour Failed uses', () => {
     const badge = renderRow({ lifecycle_state: 'interrupted' })
     expect(badge).toHaveTextContent('Interrupted')
-    expect(badge.className).toContain('--color-warning')
+    expect(badge.className).toContain('--color-muted')
+    expect(badge.className).not.toContain('--color-warning')
     expect(badge.className).not.toContain('--color-error')
   })
 
