@@ -132,6 +132,9 @@ func (w *sessionWorker) waitForTurnToSettle(ctx context.Context, timeout time.Du
 func (w *sessionWorker) rejectClear(msg bus.InboundMessage, reason string) {
 	logger.WarnCF("agent.worker", "/clear while a turn was running was not performed",
 		map[string]any{"scope": w.scope, "reason": reason})
+	// The terminal fact for the person's /clear row; the reply below is only
+	// the human-readable reason.
+	w.parent.notifyClearNotPerformed(msg)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := w.parent.bus.PublishOutbound(ctx, bus.OutboundMessage{

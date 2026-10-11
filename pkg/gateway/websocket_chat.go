@@ -1252,7 +1252,8 @@ func (hcm *wsHandlerHandleChatMessage) acceptPersistedUserMessage(entry session.
 // a message that is not an ID-bearing first send (ADR-20260928 D1.4: a failed
 // append is visible for EVERY message, and never continues the turn). Same
 // discipline as sendFirstMessageError: no filesystem details, and an unsaved
-// or uncertain append never names the session, so nothing looks acknowledged.
+// or uncertain append of a NEW chat's first message never names the session,
+// so nothing looks acknowledged; a message of an existing chat names it (C2).
 // The sender's deferred message_status "failed" tick still fires on top of
 // this frame through the ordinary rejection path.
 func (hcm *wsHandlerHandleChatMessage) sendAppendFailureError(err error) {
@@ -1267,6 +1268,14 @@ func (hcm *wsHandlerHandleChatMessage) sendAppendFailureError(err error) {
 	if hcm.clientMessageID != "" {
 		cid := hcm.clientMessageID
 		frame.ClientMessageId = &cid
+		// Contract C2: a refusal about ONE message of an existing chat names
+		// that chat (the one the sender addressed) beside the message id, so
+		// the SPA files it there and does not end the chat's running turn. A
+		// send that names no chat (a new chat) has none to name.
+		if hcm.frameSessionID != "" {
+			sid := hcm.frameSessionID
+			frame.SessionId = &sid
+		}
 	}
 	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), frame)
 }

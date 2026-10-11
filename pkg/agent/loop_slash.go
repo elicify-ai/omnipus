@@ -53,6 +53,17 @@ func (al *AgentLoop) handleCommand(
 	}
 
 	rt := al.buildCommandsRuntime(agent, opts)
+	if clearHistory := rt.ClearHistory; clearHistory != nil {
+		// A /clear that is refused (helper session) or fails is reported for the
+		// person's /clear row; a clear that happens is signalled by its marker.
+		rt.ClearHistory = func() error {
+			err := clearHistory()
+			if err != nil {
+				al.notifyClearNotPerformed(msg)
+			}
+			return err
+		}
+	}
 	executor := commands.NewExecutor(al.cmdRegistry, rt)
 
 	var commandReply string
