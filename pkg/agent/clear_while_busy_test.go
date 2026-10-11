@@ -299,3 +299,72 @@ func (p *replyingProvider) callCount() int {
 	defer p.mu.Unlock()
 	return p.calls
 }
+
+// Delta review R1 #1: a /clear typed during a turn longer than the worker idle
+// timeout used to be lost - the worker's idle timer (reset only on a receive)
+// had already fired, so the worker exited when the stopped turn ended, and
+// stopThenClear pushed the /clear into its dead inbox. The clear must happen (or
+// be visibly refused), never vanish.
+func TestClearWhileBusy_TurnLongerThanTheIdleTimeoutStillClears(t *testing.T) {
+	old := workerIdleTimeout
+	workerIdleTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { workerIdleTimeout = old })
+
+	al, cleanup := newSteerAL(t)
+	t.Cleanup(cleanup)
+	sid := newTestSteeringSession(t, al, "")
+	prov := newStoppableProvider()
+	adr093UseProvider(t, al, prov)
+	scope := "agent:" + testDefaultAgentID + ":session:" + sid
+	stopDrain := make(chan struct{})
+	t.Cleanup(func() { close(stopDrain) })
+	go func() {
+		for {
+			select {
+			case <-al.bus.OutboundChan():
+			case <-stopDrain:
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		if v, ok := al.sessionWorkers.Load(scope); ok {
+			v.(*sessionWorker).cancel()
+		}
+	})
+
+	human := func(content string) bus.InboundMessage {
+		m := adr093HumanMessage(content, sid)
+		m.Sender.CanonicalID = "webchat:tester"
+		return m
+	}
+	require.True(t, al.dispatchSessionWorker(scope, human("long running work")))
+	select {
+	case <-prov.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first turn never reached the model")
+	}
+	// The turn outlives the worker idle timeout several times over.
+	time.Sleep(3 * workerIdleTimeout)
+
+	store := al.GetSessionStore()
+	require.NoError(t, store.AppendTranscriptStrict(sid, session.TranscriptEntry{
+		ID: "clear-row-long", Role: "user", Content: "/clear", AgentID: testDefaultAgentID,
+	}))
+	clearMsg := human("/clear")
+	clearMsg.TranscriptEntryID = "clear-row-long"
+	require.True(t, al.dispatchSessionWorker(scope, clearMsg))
+
+	markers := func() int {
+		entries, err := store.ReadTranscript(sid)
+		require.NoError(t, err)
+		n := 0
+		for _, e := range entries {
+			if session.IsClearMarker(e) {
+				n++
+			}
+		}
+		return n
+	}
+	waitUntilClear(t, "the /clear to happen after the long turn was stopped", 20*time.Second, func() bool { return markers() == 1 })
+}
