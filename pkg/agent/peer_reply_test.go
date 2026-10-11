@@ -212,18 +212,20 @@ func TestWorkerTurn_AnsweredRequestGetsNoReminder(t *testing.T) {
 }
 
 // Reachability (CLAUDE.md Definition of Done): the answer tool is registered on
-// the conversational agents and their effective policy lets it run.
+// every agent that can send messages (the policy side is pinned for the seeded
+// roles in pkg/coreagent).
 func TestAnswerRequest_IsRegisteredAndAllowed(t *testing.T) {
 	f := newAddrFixture(t)
+	checked := 0
 	for _, id := range f.al.GetRegistry().ListAgentIDs() {
 		inst, ok := f.al.GetRegistry().GetAgent(id)
 		require.True(t, ok)
 		if _, has := inst.Tools.Get("send_message"); !has {
 			continue // not a messaging agent
 		}
+		checked++
 		_, has := inst.Tools.Get("answer_request")
 		assert.True(t, has, "agent %s can send messages but has no way to answer a request", id)
 	}
-	assert.Equal(t, "allow", string(tools.ResolveEffectivePolicy(f.al.GetConfig(), "answer_request")),
-		"the ceiling lets the answer tool run")
+	require.NotZero(t, checked, "instrument check: at least one messaging agent was examined")
 }
