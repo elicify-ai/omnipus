@@ -2,7 +2,7 @@
 // an ErrorFrame about ONE message of an existing chat carries that chat's
 // session_id together with the message's client_message_id, so the SPA files
 // it in that chat and does not end the chat's running turn. The architect's
-// decision note (ARCHITECT-C2-contract.md) names the mid-turn append failure
+// ADR-20261012-session-core-delta-amendments-c2-r1-2.md (Part 1) names the mid-turn append failure
 // and the client_message_id retry error as covered. ORACLE: that note.
 
 package gateway
