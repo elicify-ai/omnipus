@@ -245,7 +245,7 @@ afterEach(() => {
 })
 
 describe('F4 — ghost ThinkingIndicator over a visible failed ToolSearch row', () => {
-  it('a streaming message whose only content is a failed ToolSearch (status:error, no error string) shows the "Failed" row and does NOT also show the ghost thinking indicator', async () => {
+  it('a streaming message whose only content is a failed ToolSearch (status:error, no error string) shows the "Failed" row and keeps the working indicator while the turn is still streaming', async () => {
     const messageId = 'msg_ghost'
     seedEmptyStreamingReply(messageId)
 
@@ -258,11 +258,18 @@ describe('F4 — ghost ThinkingIndicator over a visible failed ToolSearch row', 
     // the F4 error oracle. No populated tool_calls fixture or explicit bake.
     resolveToolSearch('tc_ghost', 'error', null)
 
-    // Keep the original F4 assertions: the real failed row must render, and
-    // that visible row must not share its empty reply with a ghost indicator.
+    // The real failed row must render. Founder UI feedback 2026-10-11
+    // (point 1b) supersedes the old "ghost indicator" oracle here: the
+    // indicator never disappears while the reply is working, and this
+    // message is STILL streaming (isStreaming stays true through the failed
+    // call) — the working indicator stays pinned below the Failed card. The
+    // old rule described the retired separate ThinkingIndicator, whose empty
+    // placeholder could sit above a legitimately visible row; a settled
+    // reply still paints no indicator and no status word (covered in
+    // ChatScreen.reply-label.test.tsx and the wave1 pack).
     expect(screen.getByText('Failed')).toBeInTheDocument()
-    expect(screen.queryByText(THINKING_TEXT_RE)).toBeNull()
-    expect(screen.queryByText('Thinking', { exact: true })).toBeNull()
+    expect(screen.getByTestId('reply-status-indicator')).toBeInTheDocument()
+    expect(screen.getByText(THINKING_TEXT_RE)).toBeInTheDocument()
   })
 
   it('control: a streaming message whose only content is a SUCCESSFUL ToolSearch call correctly shows the ghost thinking indicator (ToolSearch stays hidden by default, so the message legitimately has no visible content yet)', async () => {

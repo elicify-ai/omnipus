@@ -23,7 +23,7 @@ export function RouteErrorFallback({ error, reset }: Partial<ErrorComponentProps
     <div className="flex flex-col items-center justify-center h-full gap-[var(--space-2-5)] text-center px-[var(--space-3)]">
       <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Something went wrong loading this page.</p>
       {message && (
-        <p className="max-w-prose break-words text-[length:var(--type-utility-xs-size)] text-[var(--color-text-muted)]">{message}</p>
+        <p className="max-w-prose break-words text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{message}</p>
       )}
       {reset && (
         <Button variant="outline" onClick={tryAgain}>
