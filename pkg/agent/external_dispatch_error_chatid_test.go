@@ -57,13 +57,13 @@ func TestExternalDispatch_ErrorEvent_CarriesChatID(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindError,
 			Err: &runner.ErrorEvent{
 				Message: "fatal: connection reset",
 				Fatal:   true,
 			},
-		})
+		}))
 		fr.Cancel()
 	}()
 

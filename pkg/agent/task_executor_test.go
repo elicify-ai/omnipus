@@ -76,11 +76,11 @@ func TestProcessTaskDirect_ExternalCLIWorker_DispatchesViaExternalCLI(t *testing
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind:   runner.EventKindOutput,
 			Output: &runner.OutputEvent{Text: "external CLI result"},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel() // closes the event channel so the dispatcher/drain loop ends
 	}()
 
@@ -137,8 +137,8 @@ func TestProcessTaskDirect_ExternalCLIWorker_NoSoul_ComposesTaskOnly(t *testing.
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 

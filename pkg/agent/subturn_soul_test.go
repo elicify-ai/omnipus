@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/stretchr/testify/require"
 )
 
 // soullessAgentID is an agent with no compiled prompt and no SOUL.md on disk.
@@ -117,8 +118,8 @@ func TestSpawnSubTurn_ExternalCLI_WorkerEmptySoulDeliversTaskOnly(t *testing.T) 
 	// Drive the external dispatcher with the composed input and assert the
 	// driver received task-only input (no "## System" header, no persona).
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 	res, err := runExternalCLISubTurn(context.Background(), al, ts, composed, 30*1_000_000_000)

@@ -15,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/stretchr/testify/require"
 )
 
 // newExternalCLITaskTestLoop builds a real AgentLoop (registry + task store)
@@ -77,7 +78,7 @@ func TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindOutput,
 			// ADR-052 FR-035: an external CLI's success marker is a claim only
 			// with a "[goal:evidence] ..." line immediately before it — without
@@ -85,8 +86,8 @@ func TestTaskExecutor_ExternalCLIWorker_CompletesViaStatusMarker(t *testing.T) {
 			Output: &runner.OutputEvent{
 				Text: "task finished by external CLI\n[goal:evidence] confirmed the external run completed\nTASK_STATUS: success",
 			},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -134,10 +135,10 @@ func TestTaskExecutor_ExternalCLIWorker_FatalError_TaskFails(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindError,
 			Err:  &runner.ErrorEvent{Message: "external CLI crashed", Fatal: true},
-		})
+		}))
 		fr.Cancel() // closes the event channel so the dispatcher/drain loop ends
 	}()
 
