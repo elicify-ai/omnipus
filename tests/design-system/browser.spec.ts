@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { readFile, mkdir } from 'node:fs/promises'
@@ -404,6 +404,131 @@ async function performKeyboardStep(page: Page, step: NonNullable<Metadata['keybo
   }
 }
 
+async function assertPointerCheck(page: Page, testInfo: TestInfo, metadata: Metadata) {
+  const coarse = testInfo.project.name.includes('coarse-pointer')
+  expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), `project must expose a ${coarse ? 'coarse' : 'fine'} pointer`).toBe(coarse)
+  expect(metadata.pointerTargets?.length, 'pointer checks require parameters.designSystem.pointerTargets').toBeGreaterThan(0)
+  const targets = await Promise.all((metadata.pointerTargets ?? []).map(async (selector) => ({
+    box: await page.locator(selector).boundingBox(),
+    borderRadius: await page.locator(selector).evaluate((element) => parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0),
+  })))
+  const minimum = coarse ? 44 : 24
+  const effective = []
+  for (let index = 0; index < targets.length; index += 1) {
+    const { box, borderRadius } = targets[index]
+    expect(box, `pointer target ${metadata.pointerTargets![index]} must render`).not.toBeNull()
+    const center = { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }
+    const width = Math.max(box!.width, minimum)
+    const height = Math.max(box!.height, minimum)
+    const radiusX = width / 2 - 1
+    const radiusY = height / 2 - 1
+    const cornerX = radiusX - (box!.width >= minimum ? Math.min(borderRadius + 1, radiusX - 1) : 0)
+    const cornerY = radiusY - (box!.height >= minimum ? Math.min(borderRadius + 1, radiusY - 1) : 0)
+    for (const point of [
+      center,
+      { x: center.x - radiusX, y: center.y }, { x: center.x + radiusX, y: center.y },
+      { x: center.x, y: center.y - radiusY }, { x: center.x, y: center.y + radiusY },
+      { x: center.x - cornerX, y: center.y - cornerY }, { x: center.x + cornerX, y: center.y - cornerY },
+      { x: center.x - cornerX, y: center.y + cornerY }, { x: center.x + cornerX, y: center.y + cornerY },
+    ]) {
+      expect(await pointerHitsTarget(page, metadata.pointerTargets![index], point.x, point.y, coarse), `${metadata.pointerTargets![index]} must receive a real pointer event at (${point.x}, ${point.y}) across its ${minimum}px effective region`).toBe(true)
+    }
+    effective.push({ x: center.x - width / 2, y: center.y - height / 2, width, height })
+  }
+  for (let left = 0; left < effective.length; left += 1) for (let right = left + 1; right < effective.length; right += 1) {
+    const a = effective[left]; const b = effective[right]
+    expect(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y, 'pointer hit regions must not overlap').toBe(true)
+  }
+}
+
+async function assertReducedMotionCheck(page: Page, metadata: Metadata) {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true)
+  if (metadata.motionSetup) await page.locator(metadata.motionSetup.trigger).press(metadata.motionSetup.key)
+  expect(metadata.motionTargets?.length, 'reduced-motion checks require parameters.designSystem.motionTargets').toBeGreaterThan(0)
+  for (const selector of metadata.motionTargets ?? []) {
+    const timing = await page.locator(selector).evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        animationNames: style.animationName.split(',').map((value) => value.trim()),
+        animationDurations: style.animationDuration.split(',').map((value) => parseFloat(value)),
+        transitionProperties: style.transitionProperty.split(',').map((value) => value.trim()),
+        transitionDurations: style.transitionDuration.split(',').map((value) => parseFloat(value)),
+      }
+    })
+    const animationsInactive = timing.animationNames.every((name, index) => name === 'none' || (timing.animationDurations[index % timing.animationDurations.length] ?? 0) <= 0.01)
+    const transitionsInactive = timing.transitionProperties.every((property, index) => property === 'none' || (timing.transitionDurations[index % timing.transitionDurations.length] ?? 0) <= 0.01)
+    expect({ animationsInactive, transitionsInactive }, `${selector} must expose no active animation or transition under reduced motion`).toEqual({ animationsInactive: true, transitionsInactive: true })
+  }
+}
+
+async function assertForcedColorsCheck(page: Page, testInfo: TestInfo, metadata: Metadata, manifest: Manifest) {
+  expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), `forced colors unsupported in ${testInfo.project.name}; record as a coverage gap`).toBe(true)
+  await assertForcedColorsContract(page, metadata.forcedColors)
+  if (manifest.component === 'ViewSwitch') {
+    const board = page.getByRole('radio', { name: 'Board', exact: true })
+    const list = page.getByRole('radio', { name: 'List', exact: true })
+    const decoration = (target: Locator) => target.evaluate((element) => getComputedStyle(element).textDecorationLine)
+    await expect.poll(() => decoration(board), 'the selected view needs a visible cue beyond label contrast').toBe('underline')
+    await expect.poll(() => decoration(list)).toBe('none')
+    for (const target of [board, list]) {
+      await expect(target, 'each view must keep ButtonText on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:text-\[ButtonText\](?:\s|$)/)
+      await expect(target, 'each view must keep ButtonFace on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:bg-\[ButtonFace\](?:\s|$)/)
+    }
+    // Coarse-pointer projects cannot hover; they still verify both utilities above.
+    if (await page.evaluate(() => matchMedia('(hover: hover)').matches)) {
+      const expectedHoverColors = await page.evaluate(() => {
+        const probe = document.createElement('span')
+        probe.style.color = 'ButtonText'
+        probe.style.backgroundColor = 'ButtonFace'
+        probe.style.forcedColorAdjust = 'none'
+        document.body.append(probe)
+        const style = getComputedStyle(probe)
+        const colors = { color: style.color, background: style.backgroundColor }
+        probe.remove()
+        return colors
+      })
+      for (const target of [board, list]) {
+        await target.hover()
+        await expect.poll(() => target.evaluate((element) => {
+          const style = getComputedStyle(element)
+          return { color: style.color, background: style.backgroundColor }
+        }), 'selected and unselected hovered views must use the ButtonText/ButtonFace pair').toEqual(expectedHoverColors)
+      }
+    }
+    await board.focus()
+    await board.press('ArrowRight')
+    await expect(list).toBeFocused()
+    await expect(list).toHaveAttribute('aria-checked', 'true')
+    await expect(board).toHaveAttribute('aria-checked', 'false')
+    await expect.poll(() => decoration(list), 'the selection cue must follow keyboard selection').toBe('underline')
+    await expect.poll(() => decoration(board)).toBe('none')
+  }
+}
+
+async function assertReflowCheck(page: Page, metadata: Metadata) {
+  await page.setViewportSize({ width: 320, height: 720 })
+  // setViewportSize returns as soon as the browser process has applied the
+  // new size; the renderer processes the resize (fires the window resize
+  // event, re-lays out) a beat later. Portalled Radix floaters reposition
+  // from that resize event via floating-ui's autoUpdate, i.e. one frame
+  // after the resize lands — measured on Linux chromium (Playwright
+  // 1.61.1): the popper wrapper still sits at its 1280px-layout position
+  // (left 514) in the instant after the resize and only repositions to
+  // its 320px-layout spot (left 34) by the next frame (~21ms). Measuring
+  // overflow in that window raced the reposition and made this check
+  // flake red on loaded CI runners (3 red / 2 green on unchanged code)
+  // while the content itself always reflowed correctly. Wait for the
+  // resize-processing frame to finish (resize steps run before rAF
+  // callbacks in a frame) plus one more, so the measurement sees the
+  // settled layout. The assertion below is untouched: content that
+  // genuinely overflows at 320px still fails it.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  }))
+  await assertNoOverflow(page, metadata.reflowExemptions)
+}
+
 test('manifest coverage exists before browser verification can pass', async () => {
   expect(manifests.length, 'design-system/manifests contains no component manifests').toBeGreaterThan(0)
 })
@@ -525,101 +650,11 @@ for (const manifest of manifests) {
           await performKeyboardStep(page, step)
         }
       } else if (check.kind === 'pointer') {
-        const coarse = testInfo.project.name.includes('coarse-pointer')
-        expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), `project must expose a ${coarse ? 'coarse' : 'fine'} pointer`).toBe(coarse)
-        expect(metadata.pointerTargets?.length, 'pointer checks require parameters.designSystem.pointerTargets').toBeGreaterThan(0)
-        const targets = await Promise.all((metadata.pointerTargets ?? []).map(async (selector) => ({
-          box: await page.locator(selector).boundingBox(),
-          borderRadius: await page.locator(selector).evaluate((element) => parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0),
-        })))
-        const minimum = coarse ? 44 : 24
-        const effective = []
-        for (let index = 0; index < targets.length; index += 1) {
-          const { box, borderRadius } = targets[index]
-          expect(box, `pointer target ${metadata.pointerTargets![index]} must render`).not.toBeNull()
-          const center = { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }
-          const width = Math.max(box!.width, minimum)
-          const height = Math.max(box!.height, minimum)
-          const radiusX = width / 2 - 1
-          const radiusY = height / 2 - 1
-          const cornerX = radiusX - (box!.width >= minimum ? Math.min(borderRadius + 1, radiusX - 1) : 0)
-          const cornerY = radiusY - (box!.height >= minimum ? Math.min(borderRadius + 1, radiusY - 1) : 0)
-          for (const point of [
-            center,
-            { x: center.x - radiusX, y: center.y }, { x: center.x + radiusX, y: center.y },
-            { x: center.x, y: center.y - radiusY }, { x: center.x, y: center.y + radiusY },
-            { x: center.x - cornerX, y: center.y - cornerY }, { x: center.x + cornerX, y: center.y - cornerY },
-            { x: center.x - cornerX, y: center.y + cornerY }, { x: center.x + cornerX, y: center.y + cornerY },
-          ]) {
-            expect(await pointerHitsTarget(page, metadata.pointerTargets![index], point.x, point.y, coarse), `${metadata.pointerTargets![index]} must receive a real pointer event at (${point.x}, ${point.y}) across its ${minimum}px effective region`).toBe(true)
-          }
-          effective.push({ x: center.x - width / 2, y: center.y - height / 2, width, height })
-        }
-        for (let left = 0; left < effective.length; left += 1) for (let right = left + 1; right < effective.length; right += 1) {
-          const a = effective[left]; const b = effective[right]
-          expect(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y, 'pointer hit regions must not overlap').toBe(true)
-        }
+        await assertPointerCheck(page, testInfo, metadata)
       } else if (check.kind === 'reduced-motion') {
-        await page.emulateMedia({ reducedMotion: 'reduce' })
-        expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true)
-        if (metadata.motionSetup) await page.locator(metadata.motionSetup.trigger).press(metadata.motionSetup.key)
-        expect(metadata.motionTargets?.length, 'reduced-motion checks require parameters.designSystem.motionTargets').toBeGreaterThan(0)
-        for (const selector of metadata.motionTargets ?? []) {
-          const timing = await page.locator(selector).evaluate((element) => {
-            const style = getComputedStyle(element)
-            return {
-              animationNames: style.animationName.split(',').map((value) => value.trim()),
-              animationDurations: style.animationDuration.split(',').map((value) => parseFloat(value)),
-              transitionProperties: style.transitionProperty.split(',').map((value) => value.trim()),
-              transitionDurations: style.transitionDuration.split(',').map((value) => parseFloat(value)),
-            }
-          })
-          const animationsInactive = timing.animationNames.every((name, index) => name === 'none' || (timing.animationDurations[index % timing.animationDurations.length] ?? 0) <= 0.01)
-          const transitionsInactive = timing.transitionProperties.every((property, index) => property === 'none' || (timing.transitionDurations[index % timing.transitionDurations.length] ?? 0) <= 0.01)
-          expect({ animationsInactive, transitionsInactive }, `${selector} must expose no active animation or transition under reduced motion`).toEqual({ animationsInactive: true, transitionsInactive: true })
-        }
+        await assertReducedMotionCheck(page, metadata)
       } else if (check.kind === 'forced-colors') {
-        expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), `forced colors unsupported in ${testInfo.project.name}; record as a coverage gap`).toBe(true)
-        await assertForcedColorsContract(page, metadata.forcedColors)
-        if (manifest.component === 'ViewSwitch') {
-          const board = page.getByRole('radio', { name: 'Board', exact: true })
-          const list = page.getByRole('radio', { name: 'List', exact: true })
-          const decoration = (target: Locator) => target.evaluate((element) => getComputedStyle(element).textDecorationLine)
-          await expect.poll(() => decoration(board), 'the selected view needs a visible cue beyond label contrast').toBe('underline')
-          await expect.poll(() => decoration(list)).toBe('none')
-          for (const target of [board, list]) {
-            await expect(target, 'each view must keep ButtonText on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:text-\[ButtonText\](?:\s|$)/)
-            await expect(target, 'each view must keep ButtonFace on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:bg-\[ButtonFace\](?:\s|$)/)
-          }
-          // Coarse-pointer projects cannot hover; they still verify both utilities above.
-          if (await page.evaluate(() => matchMedia('(hover: hover)').matches)) {
-            const expectedHoverColors = await page.evaluate(() => {
-              const probe = document.createElement('span')
-              probe.style.color = 'ButtonText'
-              probe.style.backgroundColor = 'ButtonFace'
-              probe.style.forcedColorAdjust = 'none'
-              document.body.append(probe)
-              const style = getComputedStyle(probe)
-              const colors = { color: style.color, background: style.backgroundColor }
-              probe.remove()
-              return colors
-            })
-            for (const target of [board, list]) {
-              await target.hover()
-              await expect.poll(() => target.evaluate((element) => {
-                const style = getComputedStyle(element)
-                return { color: style.color, background: style.backgroundColor }
-              }), 'selected and unselected hovered views must use the ButtonText/ButtonFace pair').toEqual(expectedHoverColors)
-            }
-          }
-          await board.focus()
-          await board.press('ArrowRight')
-          await expect(list).toBeFocused()
-          await expect(list).toHaveAttribute('aria-checked', 'true')
-          await expect(board).toHaveAttribute('aria-checked', 'false')
-          await expect.poll(() => decoration(list), 'the selection cue must follow keyboard selection').toBe('underline')
-          await expect.poll(() => decoration(board)).toBe('none')
-        }
+        await assertForcedColorsCheck(page, testInfo, metadata, manifest)
       } else if (check.kind === 'root-size') {
         for (const [input, expected] of [[10, 12], [12, 12], [14, 14], [20, 20], [22, 20]]) {
           await page.evaluate((size) => { document.documentElement.style.setProperty('--user-font-size', `${size}px`) }, input)
@@ -648,26 +683,7 @@ for (const manifest of manifests) {
         }))
         await assertNoOverflow(page, metadata.reflowExemptions)
       } else if (check.kind === 'reflow') {
-        await page.setViewportSize({ width: 320, height: 720 })
-        // setViewportSize returns as soon as the browser process has applied the
-        // new size; the renderer processes the resize (fires the window resize
-        // event, re-lays out) a beat later. Portalled Radix floaters reposition
-        // from that resize event via floating-ui's autoUpdate, i.e. one frame
-        // after the resize lands — measured on Linux chromium (Playwright
-        // 1.61.1): the popper wrapper still sits at its 1280px-layout position
-        // (left 514) in the instant after the resize and only repositions to
-        // its 320px-layout spot (left 34) by the next frame (~21ms). Measuring
-        // overflow in that window raced the reposition and made this check
-        // flake red on loaded CI runners (3 red / 2 green on unchanged code)
-        // while the content itself always reflowed correctly. Wait for the
-        // resize-processing frame to finish (resize steps run before rAF
-        // callbacks in a frame) plus one more, so the measurement sees the
-        // settled layout. The assertion below is untouched: content that
-        // genuinely overflows at 320px still fails it.
-        await page.evaluate(() => new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-        }))
-        await assertNoOverflow(page, metadata.reflowExemptions)
+        await assertReflowCheck(page, metadata)
       } else {
         expect(metadata.browserAssertions?.length, 'browser checks require parameters.designSystem.browserAssertions').toBeGreaterThan(0)
         // The opened story's own assertions move with `check.story` (openStory selects

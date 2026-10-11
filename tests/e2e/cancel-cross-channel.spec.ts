@@ -17,7 +17,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { expect, errors, type Page } from '@playwright/test'
+import { expect, errors, type Page, type Locator } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, openSidebar, selectAgent, selectedAgentRow, waitForConnected } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
@@ -479,10 +479,7 @@ test(
  * (see the failure-history note above), so model compliance would produce a
  * guaranteed rejection instead of a delegation.
  */
-async function assertCancelCascadesToSubagent(
-  page: Page,
-  mode: { label: string; closer: string },
-) {
+async function cancelPreamble(page: Page) {
   await page.goto('/')
 
   const input = chatInput(page)
@@ -570,7 +567,14 @@ async function assertCancelCascadesToSubagent(
   // gateway leave their own session dirs behind). The turn's session is bound
   // by the exact id above — this set is no longer the identifier.
   const sessionsBefore = new Set(listSessionDirs(OMNIPUS_HOME))
+  return { input, sessionsBefore, parentSessionId };
+}
 
+async function cancelSendAndStop(
+  page: Page,
+  input: Locator,
+  mode: { label: string; closer: string },
+): Promise<void> {
   // The subagent task must keep the descendant RUNNING for several seconds so a
   // Stop click lands while it's live. A long inline essay streams for several
   // seconds; an instant-rejected tool task (e.g. a sandbox-escaping read)
@@ -647,7 +651,9 @@ async function assertCancelCascadesToSubagent(
   const stopBtn = page.locator('[data-testid="stop-btn"]')
   await expect(stopBtn).toBeVisible({ timeout: 10_000 })
   await stopBtn.click({ timeout: 15_000 })
+}
 
+async function assertCancelInterrupted(page: Page): Promise<void> {
   // Assert the parent message shows "(interrupted)". Budget: RequestCancel's
   // own escalation ladder (pkg/agent/cancel.go) is graceful-immediate → 3s
   // hard-abort → +5s detach, so a hard-abort-bound cancel can legitimately
@@ -672,11 +678,19 @@ async function assertCancelCascadesToSubagent(
   // Left at 10s deliberately: it passes 6/6 including under load, and raising a
   // green timeout on a hunch is how real regressions get masked. But do NOT
   // derive a new budget from the old claim — measure the ladder instead.
+  const stopBtn = page.locator('[data-testid="stop-btn"]')
   await expect(stopBtn).not.toBeVisible({ timeout: 10_000 })
   await expect(chatInput(page)).toBeEnabled({ timeout: 10_000 })
   const interruptedLabels = page.locator('text=(interrupted)')
   await expect(interruptedLabels.first()).toBeVisible({ timeout: 10_000 })
+}
 
+async function assertCancelTranscriptCascade(
+  page: Page,
+  sessionsBefore: Set<string>,
+  parentSessionId: string,
+  mode: { label: string; closer: string },
+): Promise<void> {
   // Assert transcript.jsonl contains {type: "turn_canceled"} entry with a
   // non-empty descendants_canceled array.
   //
@@ -778,6 +792,16 @@ async function assertCancelCascadesToSubagent(
       (cancelledEntry.descendants_canceled as string[]).length > 0,
     `turn_canceled entry must have a non-empty descendants_canceled array (cascade wired per FR-6a, mode=${mode.label})`,
   ).toBe(true)
+}
+
+async function assertCancelCascadesToSubagent(
+  page: Page,
+  mode: { label: string; closer: string },
+) {
+  const { input, sessionsBefore, parentSessionId } = await cancelPreamble(page)
+  await cancelSendAndStop(page, input, mode)
+  await assertCancelInterrupted(page)
+  await assertCancelTranscriptCascade(page, sessionsBefore, parentSessionId, mode)
 }
 
 test(

@@ -242,108 +242,199 @@ function omnipusHome(): string {
   return home;
 }
 
+let ext: RecordingOrigin;
+let mutant: MutantOrigin;
+let workspaceID: string;
+let shippedPolicy: string;
+let spaEntryChunk: string;
+
+test.beforeAll(async ({ playwright, baseURL }) => {
+  ext = await startExternalOrigin();
+
+  const api = await playwright.request.newContext({
+    baseURL,
+    storageState: process.env.OMNIPUS_AUTH_FILE || './tests/e2e/fixtures/.auth/admin.json',
+  });
+
+  // The workspace whose work tree receives the hostile bundle. The list is
+  // returned default-first (rest_workspaces.go's sort), so index 0 is the
+  // workspace a fresh install actually previews from.
+  const wsResponse = await api.get('/api/v1/workspaces');
+  expect(wsResponse.ok(), `GET /api/v1/workspaces → ${wsResponse.status()}`).toBeTruthy();
+  const workspaces = await wsResponse.json() as Array<{ id: string }>;
+  expect(workspaces.length, 'no workspaces exist — cannot preview anything').toBeGreaterThan(0);
+  workspaceID = workspaces[0].id;
+
+  const workRoot = workspaceWorkRoot(omnipusHome(), workspaceID);
+  fs.mkdirSync(workRoot, { recursive: true });
+  installBundle(workRoot, ext.port);
+
+  // The SPA's entry chunk, read out of the shell the gateway is actually
+  // serving. Test 111's oracle is "this exact URL was never requested", and
+  // a hardcoded or glob-matched name would stop matching on the next build
+  // and pass forever.
+  const shell = await api.get('/');
+  expect(shell.ok(), `GET / → ${shell.status()}`).toBeTruthy();
+  const shellHTML = await shell.text();
+  const entry = /\/assets\/index-[A-Za-z0-9_-]+\.js/.exec(shellHTML);
+  expect(entry, 'no /assets/index-*.js in the SPA shell — is a real SPA embedded?').not.toBeNull();
+  spaEntryChunk = entry![0];
+
+  await api.dispose();
+});
+
+test.afterAll(async () => {
+  await ext?.close();
+  await mutant?.close();
+});
+
+test.beforeEach(() => {
+  ext.reset();
+  mutant?.reset();
+});
+
+/**
+ * Mint a token for the hostile bundle and hand back its serving URL.
+ *
+ * Minting goes through the real authenticated endpoint on purpose (FR-003b):
+ * a token that never widened access is part of what makes the rest of this
+ * meaningful, and a hand-forged URL would test a route nobody can reach.
+ */
+async function tokenURLFor(page: Page, entry: string): Promise<string> {
+  const minted = await mintPreviewToken(page, workspaceID, BUNDLE_DIR_NAME, 'bundle', entry);
+  expect(minted.token, 'token must be the 43-char base64url shape (FR-003h)').toHaveLength(43);
+  return minted.url;
+}
+
+/**
+ * The fixture's own self-report, read out of the frame.
+ *
+ * Corroborating evidence, never the egress oracle. It exists for the three
+ * things a server log cannot see — whether the external script ran, whether
+ * the stylesheet applied, and whether `document.cookie` THREW rather than
+ * returned empty — and for the `attempted` list, which is the only
+ * non-vacuity oracle that works on every engine (WebKit hides a sandboxed
+ * frame's network activity from the driver entirely).
+ */
+async function readPreviewReport(
+  page: Page,
+  frameSelector?: string,
+): Promise<{ js_ran: boolean; css_applied: boolean; origin_opaque: boolean; cookie: string; attempted: string }> {
+  const locator = frameSelector
+    ? page.frameLocator(frameSelector).locator('#result')
+    : page.locator('#result');
+  const raw = await locator.textContent({ timeout: 20_000 });
+  expect(raw, 'the preview never produced its report — it did not load or did not run').toBeTruthy();
+  return JSON.parse(raw!) as {
+    js_ran: boolean; css_applied: boolean; origin_opaque: boolean; cookie: string; attempted: string;
+  };
+}
+
+/** The gesture-driven popup attempt — see the fixture's note 3. */
+async function clickInsidePreview(page: Page, frameSelector?: string): Promise<void> {
+  try {
+    const target = frameSelector
+      ? page.frameLocator(frameSelector).locator('#gesture')
+      : page.locator('#gesture');
+    await target.click({ timeout: 5_000 });
+  } catch {
+    // A refused click is not a finding: the load-time popup attempt still
+    // stands, and the positive controls below prove the vector is observable.
+  }
+}
+
+/**
+ * The bare frame really is bare. Asserted, never assumed: if a future edit
+ * gave it a `sandbox` attribute, every containment row that uses it would stay
+ * green with the header's sandbox directive deleted — the attribute would be
+ * doing the header's job — and nothing would say so.
+ */
+async function expectBareFrame(page: Page): Promise<void> {
+  const attrs = await bareFrameAttributes(page);
+  expect(attrs.present, 'the bare frame was never created').toBe(true);
+  expect(attrs.sandbox, 'the bare frame must carry NO sandbox attribute — the header has to stand alone').toBe(false);
+  expect(attrs.allow, 'no allow attribute either').toBe(false);
+  expect(attrs.referrerpolicy, 'no referrerpolicy attribute either').toBe(false);
+  expect(attrs.csp, 'no csp attribute either').toBe(false);
+  expect(attrs.srcdoc, 'never srcdoc — it has no response to carry the policy').toBe(false);
+}
+
+/**
+ * Build the mutant origin from the policy the gateway is ACTUALLY sending.
+ *
+ * Fetched from a live token-path response, then split. A hand-copied mutant
+ * would keep testing the policy we used to have; this one follows §10.3
+ * wherever it goes.
+ */
+async function ensureMutantOrigin(page: Page): Promise<MutantOrigin> {
+  if (mutant) return mutant;
+  await page.goto('/');
+  const tokenURL = await tokenURLFor(page, 'index.html');
+  const response = await page.request.get(tokenURL);
+  expect(response.ok(), `token path → ${response.status()}`).toBeTruthy();
+  const policy = response.headers()['content-security-policy'];
+  expect(policy, 'every token-path response must carry the §10.3 policy (FR-005a)').toBeTruthy();
+  shippedPolicy = policy;
+
+  const policies = mutantPolicies(shippedPolicy);
+  expect(policies.sandboxonly, 'the shipped policy must contain a sandbox directive').toMatch(/^sandbox\b/);
+  expect(policies.nosandbox, 'the shipped policy must contain source directives').toContain("default-src 'none'");
+  // The `wrongsource` mutant must actually BE a mutation. If §10.3 ever
+  // reached a shape with no origin-bearing source at all, the rewrite would
+  // be the identity function and the render-mutation proof below would pass
+  // while proving nothing — the precise false-green this file is built
+  // against.
+  expect(policies.wrongsource, 'repointing the sources must change the policy — otherwise the render mutation is vacuous')
+    .not.toBe(shippedPolicy);
+  expect(policies.wrongsource, `the repointed policy must name ${DEAD_ORIGIN}`).toContain(DEAD_ORIGIN);
+  mutant = await startMutantOrigin(policies, ext.port);
+  return mutant;
+}
+
+async function driveMutant(page: Page, policy: MutantPolicyName): Promise<void> {
+  const origin = await ensureMutantOrigin(page);
+  ext.reset();
+  // waitUntil: 'commit' — NOT a relaxation, a race fix. Read this before
+  // "simplifying" it back to the default ('load').
+  //
+  // Under the `none` mutant (no CSP at all) the fixture document's OWN
+  // inline script performs a REAL top-level navigation of THIS SAME page:
+  // the unblocked form submit ~600ms after load (index.html's `fireAll`,
+  // "LAST, AND ON A DELAY"). window.open's load-time popup call runs even
+  // earlier. If `page.goto` here is still waiting for the full 'load'
+  // milestone when that self-triggered navigation fires, Firefox tears down
+  // the still-in-flight navigation and reports it as `NS_BINDING_ABORTED` —
+  // and Playwright attributes that abort to THIS `goto`, not to the
+  // in-page navigation that actually caused it (observed in CI, not
+  // reproduced locally; see docs/internal/defect-list-html-preview-2026-09-08.md
+  // CI-2). Chromium/WebKit tolerate the same race; Firefox does not.
+  //
+  // 'commit' resolves this promise as soon as the navigation's response
+  // starts arriving — before the document's inline script has even run,
+  // let alone reached the 600 ms form timer — so there is no window in
+  // which a later self-navigation can supersede an outstanding `goto`
+  // promise. This does not weaken what the test proves: every step after
+  // this one already waits on its own oracle rather than on `goto`'s
+  // resolution — `clickInsidePreview` locator-auto-waits for `#gesture`
+  // (with its own timeout), `waitForVectors`/`readPreviewReport` poll with
+  // multi-second timeouts, and the fixed `EGRESS_SETTLE_MS` settle below
+  // still runs in full. The seven-vector assertion itself is unchanged.
+  await page.goto(origin.documentURL(policy), { waitUntil: 'commit' });
+  await clickInsidePreview(page);
+  await page.waitForTimeout(EGRESS_SETTLE_MS);
+}
+
+async function waitForVectors(expected: number, timeoutMs = 15_000): Promise<void> {
+  // Poll on the LIST, not on a count: "6 of 7" without naming the missing one
+  // is a failure nobody can act on, and the experiment's measured table is
+  // written in vector names.
+  await expect.poll(
+    () => vectorsReaching(ext.hits).sort(),
+    { timeout: timeoutMs },
+  ).toHaveLength(expected);
+}
+
 test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', () => {
-  let ext: RecordingOrigin;
-  let mutant: MutantOrigin;
-  let workspaceID: string;
-  let shippedPolicy: string;
-  let spaEntryChunk: string;
-
-  test.beforeAll(async ({ playwright, baseURL }) => {
-    ext = await startExternalOrigin();
-
-    const api = await playwright.request.newContext({
-      baseURL,
-      storageState: process.env.OMNIPUS_AUTH_FILE || './tests/e2e/fixtures/.auth/admin.json',
-    });
-
-    // The workspace whose work tree receives the hostile bundle. The list is
-    // returned default-first (rest_workspaces.go's sort), so index 0 is the
-    // workspace a fresh install actually previews from.
-    const wsResponse = await api.get('/api/v1/workspaces');
-    expect(wsResponse.ok(), `GET /api/v1/workspaces → ${wsResponse.status()}`).toBeTruthy();
-    const workspaces = await wsResponse.json() as Array<{ id: string }>;
-    expect(workspaces.length, 'no workspaces exist — cannot preview anything').toBeGreaterThan(0);
-    workspaceID = workspaces[0].id;
-
-    const workRoot = workspaceWorkRoot(omnipusHome(), workspaceID);
-    fs.mkdirSync(workRoot, { recursive: true });
-    installBundle(workRoot, ext.port);
-
-    // The SPA's entry chunk, read out of the shell the gateway is actually
-    // serving. Test 111's oracle is "this exact URL was never requested", and
-    // a hardcoded or glob-matched name would stop matching on the next build
-    // and pass forever.
-    const shell = await api.get('/');
-    expect(shell.ok(), `GET / → ${shell.status()}`).toBeTruthy();
-    const shellHTML = await shell.text();
-    const entry = /\/assets\/index-[A-Za-z0-9_-]+\.js/.exec(shellHTML);
-    expect(entry, 'no /assets/index-*.js in the SPA shell — is a real SPA embedded?').not.toBeNull();
-    spaEntryChunk = entry![0];
-
-    await api.dispose();
-  });
-
-  test.afterAll(async () => {
-    await ext?.close();
-    await mutant?.close();
-  });
-
-  test.beforeEach(() => {
-    ext.reset();
-    mutant?.reset();
-  });
-
-  /**
-   * Mint a token for the hostile bundle and hand back its serving URL.
-   *
-   * Minting goes through the real authenticated endpoint on purpose (FR-003b):
-   * a token that never widened access is part of what makes the rest of this
-   * meaningful, and a hand-forged URL would test a route nobody can reach.
-   */
-  async function tokenURLFor(page: Page, entry: string): Promise<string> {
-    const minted = await mintPreviewToken(page, workspaceID, BUNDLE_DIR_NAME, 'bundle', entry);
-    expect(minted.token, 'token must be the 43-char base64url shape (FR-003h)').toHaveLength(43);
-    return minted.url;
-  }
-
-  /**
-   * The fixture's own self-report, read out of the frame.
-   *
-   * Corroborating evidence, never the egress oracle. It exists for the three
-   * things a server log cannot see — whether the external script ran, whether
-   * the stylesheet applied, and whether `document.cookie` THREW rather than
-   * returned empty — and for the `attempted` list, which is the only
-   * non-vacuity oracle that works on every engine (WebKit hides a sandboxed
-   * frame's network activity from the driver entirely).
-   */
-  async function readPreviewReport(
-    page: Page,
-    frameSelector?: string,
-  ): Promise<{ js_ran: boolean; css_applied: boolean; origin_opaque: boolean; cookie: string; attempted: string }> {
-    const locator = frameSelector
-      ? page.frameLocator(frameSelector).locator('#result')
-      : page.locator('#result');
-    const raw = await locator.textContent({ timeout: 20_000 });
-    expect(raw, 'the preview never produced its report — it did not load or did not run').toBeTruthy();
-    return JSON.parse(raw!) as {
-      js_ran: boolean; css_applied: boolean; origin_opaque: boolean; cookie: string; attempted: string;
-    };
-  }
-
-  /** The gesture-driven popup attempt — see the fixture's note 3. */
-  async function clickInsidePreview(page: Page, frameSelector?: string): Promise<void> {
-    try {
-      const target = frameSelector
-        ? page.frameLocator(frameSelector).locator('#gesture')
-        : page.locator('#gesture');
-      await target.click({ timeout: 5_000 });
-    } catch {
-      // A refused click is not a finding: the load-time popup attempt still
-      // stands, and the positive controls below prove the vector is observable.
-    }
-  }
-
   // ───────────────────────────────────────────────────────────────────────────
   // Spec test 11 — the product, embedded exactly as §10.6 requires
   // ───────────────────────────────────────────────────────────────────────────
@@ -472,7 +563,9 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     expect(report.js_ran, "FR-004 / script-src: the bundle's external script MUST execute").toBe(true);
     expect(report.css_applied, 'style-src: the bundle\'s external stylesheet MUST apply').toBe(true);
   });
+});
 
+test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', () => {
   // ───────────────────────────────────────────────────────────────────────────
   // Spec test 95 — E2E_PreviewFrame_SandboxComposition
   // ───────────────────────────────────────────────────────────────────────────
@@ -603,23 +696,9 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     // see, which on WebKit is nothing from inside the frame, by design.
     await log.settle();
   });
+});
 
-  /**
-   * The bare frame really is bare. Asserted, never assumed: if a future edit
-   * gave it a `sandbox` attribute, every containment row that uses it would stay
-   * green with the header's sandbox directive deleted — the attribute would be
-   * doing the header's job — and nothing would say so.
-   */
-  async function expectBareFrame(page: Page): Promise<void> {
-    const attrs = await bareFrameAttributes(page);
-    expect(attrs.present, 'the bare frame was never created').toBe(true);
-    expect(attrs.sandbox, 'the bare frame must carry NO sandbox attribute — the header has to stand alone').toBe(false);
-    expect(attrs.allow, 'no allow attribute either').toBe(false);
-    expect(attrs.referrerpolicy, 'no referrerpolicy attribute either').toBe(false);
-    expect(attrs.csp, 'no csp attribute either').toBe(false);
-    expect(attrs.srcdoc, 'never srcdoc — it has no response to carry the policy').toBe(false);
-  }
-
+test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', () => {
   // ───────────────────────────────────────────────────────────────────────────
   // Spec test 11 — the mode where the response header stands alone.
   //
@@ -675,7 +754,9 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     expect(report.origin_opaque, 'FR-005: the header alone must bind the document to an opaque origin').toBe(true);
     expect(report.cookie, 'document.cookie must THROW, not return empty').toMatch(/^THREW:/);
   });
+});
 
+test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', () => {
   // ───────────────────────────────────────────────────────────────────────────
   // Spec test 110 — FR-006a: the accepted residual, and its stated condition
   // ───────────────────────────────────────────────────────────────────────────
@@ -855,7 +936,9 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
       .toContain('omnipus-session');
     await controlPage.close();
   });
+});
 
+test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', () => {
   // ───────────────────────────────────────────────────────────────────────────
   // UAT 2026-09-13 D-106 — the top-level tab is refused, and still contained
   // ───────────────────────────────────────────────────────────────────────────
@@ -908,7 +991,9 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     assertNoEgress(ext.hits, 'the refused top-level tab');
     expect(vectorsReaching(ext.hits)).toEqual([]);
   });
+});
 
+test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', () => {
   // ───────────────────────────────────────────────────────────────────────────
   // Spec test 111 — FR-006b: the SPA refuses to be framed
   // ───────────────────────────────────────────────────────────────────────────
@@ -999,85 +1084,12 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
 
     await context.close();
   });
+});
 
+test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', () => {
   // ═════════════════════════════════════════════════════════════════════════
   // PROOF OF FAILURE. Same fixture, same assertion, broken policies.
   // ═════════════════════════════════════════════════════════════════════════
-
-  /**
-   * Build the mutant origin from the policy the gateway is ACTUALLY sending.
-   *
-   * Fetched from a live token-path response, then split. A hand-copied mutant
-   * would keep testing the policy we used to have; this one follows §10.3
-   * wherever it goes.
-   */
-  async function ensureMutantOrigin(page: Page): Promise<MutantOrigin> {
-    if (mutant) return mutant;
-    await page.goto('/');
-    const tokenURL = await tokenURLFor(page, 'index.html');
-    const response = await page.request.get(tokenURL);
-    expect(response.ok(), `token path → ${response.status()}`).toBeTruthy();
-    const policy = response.headers()['content-security-policy'];
-    expect(policy, 'every token-path response must carry the §10.3 policy (FR-005a)').toBeTruthy();
-    shippedPolicy = policy;
-
-    const policies = mutantPolicies(shippedPolicy);
-    expect(policies.sandboxonly, 'the shipped policy must contain a sandbox directive').toMatch(/^sandbox\b/);
-    expect(policies.nosandbox, 'the shipped policy must contain source directives').toContain("default-src 'none'");
-    // The `wrongsource` mutant must actually BE a mutation. If §10.3 ever
-    // reached a shape with no origin-bearing source at all, the rewrite would
-    // be the identity function and the render-mutation proof below would pass
-    // while proving nothing — the precise false-green this file is built
-    // against.
-    expect(policies.wrongsource, 'repointing the sources must change the policy — otherwise the render mutation is vacuous')
-      .not.toBe(shippedPolicy);
-    expect(policies.wrongsource, `the repointed policy must name ${DEAD_ORIGIN}`).toContain(DEAD_ORIGIN);
-    mutant = await startMutantOrigin(policies, ext.port);
-    return mutant;
-  }
-
-  async function driveMutant(page: Page, policy: MutantPolicyName): Promise<void> {
-    const origin = await ensureMutantOrigin(page);
-    ext.reset();
-    // waitUntil: 'commit' — NOT a relaxation, a race fix. Read this before
-    // "simplifying" it back to the default ('load').
-    //
-    // Under the `none` mutant (no CSP at all) the fixture document's OWN
-    // inline script performs a REAL top-level navigation of THIS SAME page:
-    // the unblocked form submit ~600ms after load (index.html's `fireAll`,
-    // "LAST, AND ON A DELAY"). window.open's load-time popup call runs even
-    // earlier. If `page.goto` here is still waiting for the full 'load'
-    // milestone when that self-triggered navigation fires, Firefox tears down
-    // the still-in-flight navigation and reports it as `NS_BINDING_ABORTED` —
-    // and Playwright attributes that abort to THIS `goto`, not to the
-    // in-page navigation that actually caused it (observed in CI, not
-    // reproduced locally; see docs/internal/defect-list-html-preview-2026-09-08.md
-    // CI-2). Chromium/WebKit tolerate the same race; Firefox does not.
-    //
-    // 'commit' resolves this promise as soon as the navigation's response
-    // starts arriving — before the document's inline script has even run,
-    // let alone reached the 600 ms form timer — so there is no window in
-    // which a later self-navigation can supersede an outstanding `goto`
-    // promise. This does not weaken what the test proves: every step after
-    // this one already waits on its own oracle rather than on `goto`'s
-    // resolution — `clickInsidePreview` locator-auto-waits for `#gesture`
-    // (with its own timeout), `waitForVectors`/`readPreviewReport` poll with
-    // multi-second timeouts, and the fixed `EGRESS_SETTLE_MS` settle below
-    // still runs in full. The seven-vector assertion itself is unchanged.
-    await page.goto(origin.documentURL(policy), { waitUntil: 'commit' });
-    await clickInsidePreview(page);
-    await page.waitForTimeout(EGRESS_SETTLE_MS);
-  }
-
-  async function waitForVectors(expected: number, timeoutMs = 15_000): Promise<void> {
-    // Poll on the LIST, not on a count: "6 of 7" without naming the missing one
-    // is a failure nobody can act on, and the experiment's measured table is
-    // written in vector names.
-    await expect.poll(
-      () => vectorsReaching(ext.hits).sort(),
-      { timeout: timeoutMs },
-    ).toHaveLength(expected);
-  }
 
   test('mutation control — with NO policy, all seven vectors reach the second origin', async ({ page }) => {
     // If this ever reports fewer than seven, every "zero" above is meaningless:
@@ -1139,7 +1151,9 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
     assertNoEgress(ext.hits, 'the shipped-policy mutant baseline');
     expect(vectorsReaching(ext.hits)).toEqual([]);
   });
+});
 
+test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', () => {
   test('mutation — repointing the SOURCES at a dead origin stops the bundle rendering, and the render assertions go red', async ({ page }) => {
     // THE MUTATION PROOF FOR 11c AND 11d's RENDER HALF.
     //

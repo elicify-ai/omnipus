@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // tsfunlen: list every TS/TSX function-like node under src/, and every
-// MJS/JS/CJS function-like node under scripts/ and tests/, whose line span
+// MJS/JS/CJS function-like node under scripts/ (and TS/TSX/MJS/JS/CJS under
+// tests/), whose line span
 // exceeds a threshold, for the function-size budget gate
 // (scripts/check-function-budget.sh). Companion to scripts/funlen (Go).
 //
@@ -92,13 +93,15 @@ function isTestPath(rel) {
 }
 
 // SOURCE_ROOTS: each { dir, extensions } pair is walked independently and
-// unioned. src/ scans TS/TSX only; scripts/ and tests/ scan MJS/JS/CJS
-// only (never TS/TSX there — tests/e2e's TS/TSX, if any, stays out of
-// scope). The three dirs never overlap, so no file is ever walked twice.
+// unioned. src/ scans TS/TSX only; scripts/ scans MJS/JS/CJS only; tests/
+// scans TS/TSX AND MJS/JS/CJS (the size-budget ruling applies to test code
+// too, and tests/e2e is TypeScript — a 317-line e2e describe slipped past this
+// scanner while tests/ was JS-only). The three dirs never overlap, so no file
+// is ever walked twice.
 const SOURCE_ROOTS = [
   { dir: 'src', extensions: ['.ts', '.tsx'] },
   { dir: 'scripts', extensions: ['.mjs', '.js', '.cjs'] },
-  { dir: 'tests', extensions: ['.mjs', '.js', '.cjs'] },
+  { dir: 'tests', extensions: ['.ts', '.tsx', '.mjs', '.js', '.cjs'] },
 ];
 
 // walkSourceFiles collects every file matching SOURCE_ROOTS under <root>,

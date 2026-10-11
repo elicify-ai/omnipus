@@ -1496,8 +1496,10 @@ func (rw *registerSharedToolsWire3) registerSkillTool(agentID string, agent *Age
 				// load resolves slug for the acting agent through the full
 				// per-shelf grant model (ADR-072 D4/D4.1, via
 				// ContextBuilder.ResolveSkillFullForWorkspace) and loads its
-				// body directly from the resolved shelf's own on-disk path
-				// for this turn only — every Skill call audited (D3.1).
+				// body directly from the resolved shelf's own on-disk path;
+				// the body returns as an ordinary tool message that stays in
+				// the conversation until context relief trims or shortens it
+				// — every Skill call audited (D3.1).
 				func(ctx context.Context, slug string) tools.SkillLoadOutcome {
 					callerID := tools.ToolAgentID(ctx)
 					if callerID == "" {
