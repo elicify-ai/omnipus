@@ -124,6 +124,14 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	return requestID, receiverSessionID, err
 }
 
+// AdmitRequestReportingHeld is AdmitRequest plus whether the request was HELD
+// (the receiver was stopped, so it waits until the receiver runs again). The
+// WebSocket intake uses it to tell the sender's row.
+func (al *AgentLoop) AdmitRequestReportingHeld(ctx context.Context, a RequestAdmission) (held bool, err error) {
+	_, _, held, err = al.admitRequest(ctx, a)
+	return held, err
+}
+
 // admitRequest is AdmitRequest plus whether the request is HELD: the receiver
 // was stopped when it was admitted, so the request is kept in the ledger and
 // delivered when the receiver runs again (deliverHeldRequests) instead of
