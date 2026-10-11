@@ -673,17 +673,24 @@ func newTestRestAPIAlignedStoresWithProvider(
 	}
 }
 
-// TestHandleTaskPatch_RunTask_StartErrRevertsStatus verifies that when
-// StartTaskNow fails for any reason, PATCH status=in_progress returns a
-// non-2xx status code AND reverts the task to its prior status so it is not
-// left stranded as in_progress.
+// TestHandleTaskPatch_RunTask_StartErrFailsTheTaskWithTheReason verifies that
+// when the session launcher refuses a start, PATCH status=in_progress returns
+// a non-2xx status AND the task ends Failed with the refusal reason - exactly
+// one disposition. S1 M9 (674840dd3, "a refused launch fails the task") made
+// StartTaskNow write Failed through failTaskBeforeDispatch; the handler then
+// finds that stored failure carrying the SAME cause it was returned
+// (rest_tasks.go: failedDisposition) and preserves it instead of reverting to
+// the prior status. This test first asserted the pre-ruling disposition (revert
+// to 'next', StartedAt cleared). The revert itself is still covered where the
+// executor writes no Failed: TestHandleTaskPatch_RunTask_NilExecutorReturns503
+// and TestHandleTaskPatch_DispatchFailure_UnrelatedStoredFailure_StillReverts.
 //
 // BDD:
 //
 //	Given a task with an agent_id not present in the registry,
 //	When PATCH /api/v1/tasks/{id} with {"status":"in_progress"},
-//	Then non-2xx (500), and the task is NOT in_progress.
-func TestHandleTaskPatch_RunTask_StartErrRevertsStatus(t *testing.T) {
+//	Then non-2xx (500), and the task is Failed with a non-empty reason.
+func TestHandleTaskPatch_RunTask_StartErrFailsTheTaskWithTheReason(t *testing.T) {
 	api := newTestRestAPIAlignedStores(t)
 	wsID := ensureTestWorkspace(t, api)
 
@@ -691,29 +698,24 @@ func TestHandleTaskPatch_RunTask_StartErrRevertsStatus(t *testing.T) {
 	advanceTaskToNext(t, api, tsk.Id)
 
 	// Directly inject a non-existent agent_id via the store, bypassing the REST
-	// FK guard. This makes StartTaskNow fail at the registry check with 500.
+	// FK guard. This makes the launcher refuse the start.
 	unknownAgent := "nonexistent-agent-xyz"
 	_, storeErr := api.taskStore.Update(tsk.Id, task.Patch{AgentID: &unknownAgent})
 	require.NoError(t, storeErr, "direct agent_id set must succeed")
 
-	// PATCH status=in_progress — StartTaskNow will fail (agent not in registry).
 	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
 	assert.NotEqual(t, http.StatusOK, w.Code,
-		"StartTaskNow failure must return non-2xx; body=%s", w.Body.String())
+		"a refused start must return non-2xx; body=%s", w.Body.String())
 	assert.GreaterOrEqual(t, w.Code, 400,
 		"response code must be >=400; body=%s", w.Body.String())
 
-	// Task must be reverted to its prior status, not left as in_progress.
-	statusAfter := getTaskStatus(t, api, tsk.Id)
-	assert.Equal(t, gen.TaskStatusNext, statusAfter,
-		"task must revert to 'next' after StartTaskNow error (not left as in_progress)")
-
-	// StartedAt must be cleared, not left carrying a "started" timestamp from
-	// an attempt that never actually ran (the in_progress patch above stamped
-	// it before StartTaskNow's failure reverted the status).
-	startedAtAfter := getTaskStartedAt(t, api, tsk.Id)
-	assert.Nil(t, startedAtAfter,
-		"task must have StartedAt cleared after StartTaskNow-error revert, not a phantom 'started' timestamp")
+	// One disposition: Failed with the reason, never reverted underneath it.
+	full := getTaskFull(t, api, tsk.Id)
+	assert.Equal(t, gen.TaskStatusFailed, full.Status,
+		"a refused launch fails the task (S1 M9); the handler must not revert it")
+	require.NotNil(t, full.Result, "the Failed task carries the refusal reason")
+	assert.NotEmpty(t, *full.Result, "the Failed task carries the refusal reason")
+	assert.Nil(t, full.SessionId, "no session may be bound to a refused start")
 }
 
 // TestHandleTaskPatch_RunTask_NilExecutorReturns503 verifies that PATCH
