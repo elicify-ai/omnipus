@@ -17,9 +17,9 @@ import { useChatStore } from '@/store/chat'
 import type { FirstSendStatus } from '@/store/chat/types'
 import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
+import type { UserDeliveryState } from '@/lib/userDeliveryState'
 import { dismissRestartNotice, useRestartInterrupted, useRestartNoticeDismissal } from './useRestartInterrupted'
 
-export type UserDeliveryState = 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded' | 'not-performed' | 'unconfirmed'
 
 const FIRST_SEND_COPY: Record<FirstSendStatus, { label: string; action?: 'Retry' | 'Generate again' }> = {
   sending: { label: 'Sending…' },
