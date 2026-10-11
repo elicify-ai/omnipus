@@ -124,7 +124,9 @@ func orphanACTrimPrefix(t *testing.T) {
 	wantState := before.State.Clone()
 	wantState.Skip = 3 // Original address of the second user, not compacted position 1.
 	assert.Equal(t, wantState, after.State, "R4a: only the legal original-index Skip advances")
-	require.Equal(t, viewArchived(before), viewArchived(after), "trim keeps all raw records for recall")
+	require.Equal(t, orphanACSurvivingLive(before, after), after.Live,
+		"R4a: a trim shrinks the visible window to the surviving tail; the raw records stay in the archive")
+	require.Equal(t, bytes, orphanACArchiveBytes(t, h), "forced trim keeps every raw record for recall")
 	require.Equal(t, bytes, orphanACArchiveBytes(t, h), "forced trim does not rewrite the archive")
 	orphanACReopen(t, h)
 	out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, 3, 4, 5, 6, 7, 8, 9))
@@ -156,7 +158,8 @@ func orphanACTrimSuffix(t *testing.T) {
 	wantState := before.State.Clone()
 	wantState.Skip = 2
 	assert.Equal(t, wantState, after.State, "first legal cut is original address 2; cancellation grants no extra Skip movement")
-	require.Equal(t, viewArchived(before), viewArchived(after))
+	require.Equal(t, orphanACSurvivingLive(before, after), after.Live,
+		"R4b: a trim shrinks the visible window to the surviving tail")
 	require.Equal(t, bytes, orphanACArchiveBytes(t, h))
 	orphanACReopen(t, h)
 	out := orphanACAssertView(t, h, h.turn(""), orphanACPick(raw, 2, 5, 6, 7, 8))

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -451,36 +453,116 @@ func TestProcessSystemMessage_AsyncResult_SessionIsolation_NoCrossSessionLeak(t 
 	}
 }
 
-// TestProcessSystemMessage_AsyncResult_NoOriginSession_FallsBackToMainKey
-// covers the narrower fallback: when the inbound system message carries no
-// AsyncTranscriptSessionID at all (no origin session known), the notify-turn
-// still falls back to the agent-wide "main" key exactly as it did before this
-// fix — there is no session to scope to, so this is not a regression case.
-func TestProcessSystemMessage_AsyncResult_NoOriginSession_FallsBackToMainKey(t *testing.T) {
-	al, msgBus, _, defaultAgent := newAsyncResultTestLoop(t, &mockProvider{})
+// asyncNoHistoryProvider records the exact message list of every Chat call, so
+// the oracle can inspect what a no-origin notify turn builds.
+type asyncNoHistoryProvider struct {
+	mu       sync.Mutex
+	requests [][]providers.Message
+}
 
+func (p *asyncNoHistoryProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.requests = append(p.requests, append([]providers.Message(nil), messages...))
+	p.mu.Unlock()
+	return &providers.LLMResponse{Content: "notify turn answer", ToolCalls: []providers.ToolCall{}}, nil
+}
+
+func (p *asyncNoHistoryProvider) GetDefaultModel() string { return "test-model" }
+
+func (p *asyncNoHistoryProvider) recorded() [][]providers.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([][]providers.Message(nil), p.requests...)
+}
+
+// TestProcessSystemMessage_AsyncResult_NoOriginSession_RunsWithoutHistory is the
+// SUPERSESSION of ..._FallsBackToMainKey. Oracle source:
+// ARCHITECT-ANSWER-FINAL-GATE.md item 4a, which applies DEL-10 step 0
+// (ARCHITECT-ANSWER-DEL10.md): "Remove the agent:<id>:main model-content key
+// fallback… A system message with no origin session runs without session
+// history". The old oracle read GetHistory("agent:<id>:main"); that key is
+// deliberately no longer written, so the old test could only fail.
+//
+// Oracles: no error and a published outbound response; the provider request
+// holds only system prompts plus this one notify user message, with NO prior
+// history; the shared store gains no session and no agent:<id>:main or
+// agent:<id>:system:* directory; and a second no-origin message never sees the
+// first one's content.
+func TestProcessSystemMessage_AsyncResult_NoOriginSession_RunsWithoutHistory(t *testing.T) {
+	provider := &asyncNoHistoryProvider{}
+	al, msgBus, _, defaultAgent := newAsyncResultTestLoop(t, provider)
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "the loop owns one shared session store")
+	before, err := store.ListSessions()
+	require.NoError(t, err)
+
+	const firstContent = "no TranscriptSessionID on this event"
 	msg := drainNotify(t, al, msgBus, AsyncNotifyEvent{
 		Channel:    "webchat",
 		ChatID:     "direct",
 		SourceKind: "bash",
-		Content:    "no TranscriptSessionID on this event",
+		Content:    firstContent,
 		// AgentID and TranscriptSessionID deliberately left unset.
 	})
 	require.Empty(t, msg.AsyncTranscriptSessionID, "test precondition: no origin session on this message")
 
-	_, err := al.processSystemMessage(context.Background(), msg)
-	require.NoError(t, err)
+	_, err = al.processSystemMessage(context.Background(), msg)
+	require.NoError(t, err, "a no-origin notify turn must still run")
 
-	mainKey := "agent:" + defaultAgent.ID + ":main"
-	require.NotNil(t, defaultAgent.Sessions)
-	// Give the async turn goroutine (if any) a brief moment; runAgentLoop
-	// itself is synchronous here so this is just defensive against future
-	// changes, mirroring the existing FallsBackToDefault test's spirit.
-	time.Sleep(10 * time.Millisecond)
-	mainHistory := defaultAgent.Sessions.GetHistory(mainKey)
-	assert.NotEmpty(t, mainHistory,
-		"with no origin session known, the notify-turn must still use the agent-wide 'main' key %q "+
-			"(unchanged fallback behavior — not a regression)", mainKey)
+	// A response reaches the outbound bus.
+	select {
+	case out := <-msgBus.OutboundChan():
+		assert.Contains(t, out.Content, "notify turn answer", "the notify turn's answer must be published")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the notify turn published no outbound response")
+	}
+
+	requests := provider.recorded()
+	require.NotEmpty(t, requests, "the notify turn must reach the provider")
+	first := requests[0]
+	var nonSystem []providers.Message
+	for _, m := range first {
+		if m.Role != "system" {
+			nonSystem = append(nonSystem, m)
+		}
+	}
+	require.Len(t, nonSystem, 1, "a no-origin turn must carry NO prior history: %+v", first)
+	assert.Equal(t, "user", nonSystem[0].Role)
+	assert.Contains(t, nonSystem[0].Content, firstContent,
+		"the one non-system message is this notify message")
+
+	// The shared store gains no session, and no fallback-key directory exists.
+	after, err := store.ListSessions()
+	require.NoError(t, err)
+	assert.Len(t, after, len(before), "a no-origin notify turn must not create a session")
+
+	entries, err := os.ReadDir(store.BaseDir())
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.NotEqual(t, "agent:"+defaultAgent.ID+":main", e.Name(),
+			"DEL-10 step 0 removed the agent-wide main history bucket")
+		assert.False(t, strings.HasPrefix(e.Name(), "agent:"+defaultAgent.ID+":system:"),
+			"the one-off scope key must never be persisted as a session directory: %s", e.Name())
+	}
+
+	// Isolation control: a second no-origin message must not see the first.
+	second := drainNotify(t, al, msgBus, AsyncNotifyEvent{
+		Channel: "webchat", ChatID: "direct", SourceKind: "bash", Content: "a second unrelated notify",
+	})
+	_, err = al.processSystemMessage(context.Background(), second)
+	require.NoError(t, err)
+	requests = provider.recorded()
+	require.GreaterOrEqual(t, len(requests), 2, "the second notify turn must also reach the provider")
+	for _, m := range requests[len(requests)-1] {
+		assert.NotContains(t, m.Content, firstContent,
+			"a no-origin turn must never inherit another no-origin turn's history")
+	}
 }
 
 // TestResolveMessageRoute_BoundDrop_SkipsGetDefaultAgent verifies TDD #10 /

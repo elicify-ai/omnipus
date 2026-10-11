@@ -49,10 +49,6 @@ import { fileURLToPath } from 'url';
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
 
-const OMNIPUS_HOME =
-  process.env.OMNIPUS_HOME ||
-  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test');
-
 // Auth file location mirrors retention.spec.ts and global-setup.ts.
 const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
   ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
@@ -372,265 +368,27 @@ test('persists memory settings across reload', async ({ page }) => {
 // Traces to: FR-019 (auto-recap toggle), FR-023 (session-end pipeline),
 //   pkg/agent/session_end.go CloseSession(), pkg/memrooms/rooms.go
 
-test('auto-recap toggle changes runtime behaviour (saved != ignored)', async ({ page }) => {
-  // 150s test-level override (Phase A 10s + Phase B 90s + REST/WS setup and
-  // teardown overhead) — see "Notes on flakiness budget" above for the full
-  // 60s-overallBudget rationale.
-  test.setTimeout(150_000);
-
-  // ── Arrange: navigate and obtain a session ID + agent ID ─────────────────
-  await page.goto('/');
-  await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 });
-
-  // Fetch the agent list to get Mia's ID (the default agent).
-  // GET /api/v1/agents returns an array of AgentConfig objects.
-  const agentsResp = await page.request.get(`${BASE_URL}/api/v1/agents`, {
-    headers: await authHeaders(page),
-  });
-  expect(agentsResp.ok(), `GET /api/v1/agents returned ${agentsResp.status()}`).toBeTruthy();
-  const agents = (await agentsResp.json()) as Array<{ id: string; default?: boolean }>;
-  // Pick the default agent; fall back to the first enabled agent.
-  const defaultAgent =
-    agents.find((a) => a.default === true) ??
-    agents.find((a) => a.id === 'mia') ??
-    agents[0];
-
-  if (!defaultAgent) {
-    // No agents configured (fresh install without seed). The behavior check
-    // cannot run without an agent workspace directory.
-    // This is a BLOCKED condition, not a quiet skip.
-    throw new Error(
-      'BLOCKED: GET /api/v1/agents returned an empty list. ' +
-        'Cannot locate the agent workspace directory for last-session.md assertion. ' +
-        'Ensure coreagent.SeedConfig has run (gateway started at least once).',
-    );
-  }
-
-  const agentId = defaultAgent.id;
-  const privateRoomRoot = path.join(OMNIPUS_HOME, 'agents', agentId, '.omnipus');
-  const lastSessionPath = path.join(privateRoomRoot, 'last-session.md');
-
-  // Read current settings so we can restore them.
-  const getResp = await page.request.get(`${BASE_URL}/api/v1/settings/memory`, {
-    headers: await authHeaders(page),
-  });
-  expect(getResp.ok(), `GET /api/v1/settings/memory returned ${getResp.status()}`).toBeTruthy();
-  const originalSettings = (await getResp.json()) as MemorySettingsWire;
-
-  // ── Create a fresh session via REST so we have a known session_id ─────────
-  const createResp = await page.request.post(`${BASE_URL}/api/v1/sessions`, {
-    headers: await authHeaders(page),
-    data: JSON.stringify({ agent_id: agentId }),
-  });
-  expect(
-    createResp.ok(),
-    `POST /api/v1/sessions returned ${createResp.status()} — ${await createResp.text()}`,
-  ).toBeTruthy();
-  const sessionBody = (await createResp.json()) as { id: string };
-  const sessionId: string = sessionBody.id;
-  expect(sessionId, 'POST /api/v1/sessions must return a session id').toBeTruthy();
-
-  // Remove any pre-existing last-session.md from prior test runs so the
-  // assert-absent leg starts from a clean state.
-  try {
-    fs.unlinkSync(lastSessionPath);
-  } catch {
-    // File did not exist — fine.
-  }
-
-  // ── Phase A: Auto recap OFF → session close must NOT produce last-session.md ──
-
-  // Turn auto_recap_enabled OFF via the API.
-  const disableResp = await page.request.put(`${BASE_URL}/api/v1/settings/memory`, {
-    headers: await authHeaders(page),
-    data: JSON.stringify({ ...originalSettings, auto_recap_enabled: false }),
-  });
-  expect(
-    disableResp.ok(),
-    `PUT /api/v1/settings/memory (disable) returned ${disableResp.status()} — ` +
-      `${await disableResp.text()}`,
-  ).toBeTruthy();
-  const afterDisable = (await disableResp.json()) as MemorySettingsWire;
-  expect(
-    afterDisable.auto_recap_enabled,
-    'PUT /api/v1/settings/memory must return auto_recap_enabled: false (differentiation check)',
-  ).toBe(false);
-
-  // Send a WS session_close frame for the session we created.
-  // We do this via page.evaluate to open a raw WebSocket to the gateway so
-  // the test is not coupled to the SPA's WS connection lifecycle. The frame
-  // format matches pkg/gateway/websocket.go ("session_close" + session_id).
-  const wsSendResult = await page.evaluate(
-    async ({ baseUrl, sid, token }: { baseUrl: string; sid: string; token: string | null }) => {
-      return new Promise<{ ok: boolean; error: string | null }>((resolve) => {
-        // The gateway WS endpoint is /api/v1/chat/ws (not /ws — that serves the SPA).
-        const wsUrl = baseUrl.replace(/^http/, 'ws') + '/api/v1/chat/ws';
-        const ws = new WebSocket(wsUrl);
-        let authSent = false;
-
-        ws.onopen = () => {
-          // Authenticate first (auth frame sent if token present).
-          if (token) {
-            ws.send(JSON.stringify({ type: 'auth', token }));
-            authSent = true;
-          }
-          // Send session_close immediately after auth (or directly if no auth).
-          const closeFrame = JSON.stringify({ type: 'session_close', session_id: sid });
-          if (!authSent) {
-            ws.send(closeFrame);
-          } else {
-            // Small delay so the auth frame is processed first.
-            setTimeout(() => {
-              ws.send(closeFrame);
-            }, 200);
-          }
-          // Wait for the session_close_ack or a brief window, then close.
-          setTimeout(() => {
-            ws.close();
-            resolve({ ok: true, error: null });
-          }, 2_000);
-        };
-        ws.onerror = (evt) => {
-          resolve({ ok: false, error: String(evt) });
-        };
-      });
-    },
-    { baseUrl: BASE_URL, sid: sessionId, token: getStoredAuthToken() },
-  );
-
-  // Log but don't fail if the WS couldn't connect — the REST-only path also works:
-  // dev_mode_bypass=true gateways allow CloseSession to be triggered via the UI.
-  // If WS fails we still do the file-absent poll (the recap would not run anyway
-  // since the gateway didn't receive the close — so the assert-absent still holds).
-  if (!wsSendResult.ok) {
-     
-    console.warn(`settings-memory: WS session_close send warning: ${wsSendResult.error}`);
-  }
-
-  // Poll for 10 s asserting that last-session.md does NOT appear.
-  // The recap goroutine, if mistakenly launched, typically writes the file within 5–8 s.
-  // If it appears, the test fails with a clear message identifying the bug.
-  const recapAbsentDeadline = Date.now() + 10_000;
-  let recapAppearedWhileOff = false;
-  while (Date.now() < recapAbsentDeadline) {
-    if (fs.existsSync(lastSessionPath)) {
-      recapAppearedWhileOff = true;
-      break;
-    }
-    await page.waitForTimeout(500);
-  }
-
-  expect(
-    recapAppearedWhileOff,
-    [
-      `last-session.md appeared at ${lastSessionPath} DESPITE auto_recap_enabled=false.`,
-      'This means the agent loop is NOT reading the persisted flag —',
-      'the "saved but ignored" bug this test was written to catch.',
-      `Session: ${sessionId}, Agent: ${agentId}`,
-    ].join(' '),
-  ).toBe(false);
-
-  // ── Phase B: Auto recap ON → session close MUST produce last-session.md ──
-
-  // Create a second session to avoid the FR-027 idempotency gate (duplicate
-  // CloseSession calls for the same sessionID are silently dropped).
-  const createResp2 = await page.request.post(`${BASE_URL}/api/v1/sessions`, {
-    headers: await authHeaders(page),
-    data: JSON.stringify({ agent_id: agentId }),
-  });
-  expect(
-    createResp2.ok(),
-    `POST /api/v1/sessions (second session) returned ${createResp2.status()} — ` +
-      `${await createResp2.text()}`,
-  ).toBeTruthy();
-  const sessionBody2 = (await createResp2.json()) as { id: string };
-  const sessionId2: string = sessionBody2.id;
-  expect(sessionId2, 'POST /api/v1/sessions must return a session id (second)').toBeTruthy();
-
-  // Remove any existing last-session.md so the assert-present is clean.
-  try {
-    fs.unlinkSync(lastSessionPath);
-  } catch {
-    // Fine.
-  }
-
-  // Turn auto_recap_enabled ON.
-  const enableResp = await page.request.put(`${BASE_URL}/api/v1/settings/memory`, {
-    headers: await authHeaders(page),
-    data: JSON.stringify({ ...originalSettings, auto_recap_enabled: true }),
-  });
-  expect(
-    enableResp.ok(),
-    `PUT /api/v1/settings/memory (enable) returned ${enableResp.status()} — ` +
-      `${await enableResp.text()}`,
-  ).toBeTruthy();
-  const afterEnable = (await enableResp.json()) as MemorySettingsWire;
-  expect(
-    afterEnable.auto_recap_enabled,
-    'PUT /api/v1/settings/memory must return auto_recap_enabled: true (differentiation check)',
-  ).toBe(true);
-
-  // Send session_close for the second session.
-  // The gateway WS endpoint is /api/v1/chat/ws (not /ws — that serves the SPA).
-  await page.evaluate(
-    async ({ baseUrl, sid, token }: { baseUrl: string; sid: string; token: string | null }) => {
-      return new Promise<void>((resolve) => {
-        const wsUrl = baseUrl.replace(/^http/, 'ws') + '/api/v1/chat/ws';
-        const ws = new WebSocket(wsUrl);
-        ws.onopen = () => {
-          if (token) ws.send(JSON.stringify({ type: 'auth', token }));
-          setTimeout(() => {
-            ws.send(JSON.stringify({ type: 'session_close', session_id: sid }));
-            setTimeout(() => { ws.close(); resolve(); }, 1_000);
-          }, 200);
-        };
-        ws.onerror = () => resolve();
-      });
-    },
-    { baseUrl: BASE_URL, sid: sessionId2, token: getStoredAuthToken() },
-  );
-
-  // Poll for up to 90 s for last-session.md to appear — see "Notes on
-  // flakiness budget" above for the 60s-overallBudget rationale.
-  const recapPresentDeadline = Date.now() + 90_000;
-  let recapAppearedWhileOn = false;
-  while (Date.now() < recapPresentDeadline) {
-    if (fs.existsSync(lastSessionPath)) {
-      recapAppearedWhileOn = true;
-      break;
-    }
-    await page.waitForTimeout(1_000);
-  }
-
-  expect(
-    recapAppearedWhileOn,
-    [
-      `last-session.md did NOT appear at ${lastSessionPath} within 90 s`,
-      'even though auto_recap_enabled=true was saved and a session_close frame was sent.',
-      'This means either the agent loop is not reading the updated flag,',
-      'the session_close WS frame was not delivered, or the recap pipeline failed.',
-      `Session: ${sessionId2}, Agent: ${agentId}`,
-      'Check gateway logs under $OMNIPUS_HOME/logs/gateway.log for "session_end" events.',
-    ].join(' '),
-  ).toBe(true);
-
-  // Assert the file has non-empty content (not a zero-byte stub).
-  const recapContent = fs.readFileSync(lastSessionPath, 'utf-8');
-  expect(
-    recapContent.trim().length,
-    'last-session.md must contain non-empty recap content',
-  ).toBeGreaterThan(0);
-
-  // ── Teardown: restore original settings ──────────────────────────────────
-  await page.request.put(`${BASE_URL}/api/v1/settings/memory`, {
-    headers: await authHeaders(page),
-    data: JSON.stringify({
-      auto_recap_enabled: originalSettings.auto_recap_enabled ?? false,
-      idle_timeout_minutes: originalSettings.idle_timeout_minutes ?? 30,
-      bootstrap_recap_enabled: originalSettings.bootstrap_recap_enabled ?? false,
-      bootstrap_recap_max_per_minute: originalSettings.bootstrap_recap_max_per_minute ?? 5,
-      session_days: originalSettings.session_days ?? 90,
-      memory_retros_days: originalSettings.memory_retros_days ?? 180,
-    }),
-  });
-});
+// ── DELETED: "auto-recap toggle changes runtime behaviour (saved != ignored)" ──
+//
+// That test triggered the recap pipeline by sending a WS `session_close` frame.
+// `session_close` / `session_close_ack` were RETIRED by DEL-08 (handover,
+// explicit close and SSE removed) — it exists in no contract and in no Go
+// source today, so the frame is silently ignored by the decoder. With the
+// trigger gone the test could only produce a FALSE GREEN on its "disabled ->
+// file absent" half and a hard failure on its "enabled -> file present" half,
+// neither of which measured what it claimed.
+//
+// The live trigger for a human chat's recap is now the idle ticker
+// (pkg/agent/loop_idle.go::resetIdleTicker -> CloseSession(idle), driven by
+// agents.defaults.idle_timeout_minutes). It has no browser-reachable test seam:
+// loop_idle.go::fireIdleTimeout is a Go-only seam, and the real timer's minimum
+// is one minute. Porting this test onto it would also mean lowering a GLOBAL
+// setting (idle_timeout_minutes=1) for ~90 s in the shared e2e gateway, which
+// can close other specs' sessions mid-test.
+//
+// The chain itself (CloseSession -> runRecap -> last-session.md -> next-session
+// injection) stays covered by Go tests: pkg/agent/session_end_*_test.go,
+// pkg/agent/idle_timeout_seam_test.go and pkg/agent/session_end_smoke_test.go.
+// What is LOST is the end-to-end browser hop through the real gateway + WS +
+// LLM + filesystem. Reported as a coverage gap; the port recipe is in the pack
+// report. Do not re-add a `session_close` send here.

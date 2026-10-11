@@ -60,11 +60,17 @@ func TestContextOverflowPlain_CommittedReliefPreservesArchiveAndReload(t *testin
 	require.Equal(t, 2, after.State.Skip, "exact completed oldest plain prefix")
 	require.Equal(t, before.State.Count, after.State.Count)
 	// FR-030: relief evicts exactly the completed oldest prefix, so the LIVE
-	// view shrinks by that prefix and nothing else moves — the surviving slots
-	// are the tail of the pre-relief live view. (The previous form compared the
-	// two live views for equality, which no eviction can satisfy; the archive
-	// bytes themselves are pinned unchanged above.)
-	require.Equal(t, viewArchived(before)[after.State.Skip:], viewArchived(after),
+	// view shrinks to the slots at or above the new Skip. Filter by ORDINAL, not
+	// by indexing the slice at Skip: an excluded slot inside the evicted prefix
+	// means Skip is not a count of dropped Live entries
+	// (ARCHITECT-ANSWER-FINAL-GATE.md item 4d).
+	var surviving []memory.ArchivedMessage
+	for _, slot := range before.Live {
+		if slot.Ordinal >= after.State.Skip {
+			surviving = append(surviving, memory.ArchivedMessage{Message: slot.Message, TS: slot.TS})
+		}
+	}
+	require.Equal(t, surviving, viewArchived(after),
 		"committed relief evicts exactly the completed oldest prefix and changes nothing else")
 
 	// A separately constructed REAL store has no live backend cache or staged

@@ -256,7 +256,7 @@ func TestGW_M8_UnreadableWorkspaceIsAVisibleLoggedFailure(t *testing.T) {
 	id := u1MainID(ws, "mia")
 	code, _ := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
 	require.Equal(t, http.StatusOK, code, "precondition")
-	r5Block(t, filepath.Join(env.home, "workspaces", ws+".json"), 0o000)
+	r5Block(t, filepath.Join(env.home, "workspaces", ws+".json"))
 
 	code, body := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
 
