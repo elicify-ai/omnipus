@@ -41,7 +41,7 @@ const mockSkills = [
 // files should mean the same thing everywhere, so "max" is a worker in both
 // files, never a chat-eligible agent in either.
 const mockAgents: Agent[] = [
-  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#3B82F6', description: 'Assistant' }),
+  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#6E8BA8', description: 'Assistant' }),
   makeAgent({ id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' }),
   makeAgent({ id: 'mars', name: 'Mars', type: 'Main', status: 'active', description: 'Ops lead' }),
   makeAgent({ id: 'max', name: 'Max Worker', type: 'Subagent', status: 'active', description: 'Labour agent' }),

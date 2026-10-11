@@ -37,7 +37,7 @@ describe('AgentStatusIndicator Monogram', () => {
         label="Thinking…"
         figure={figure}
         role="general"
-        color="#3B82F6"
+        color="#6E8BA8"
         name={name}
       />,
     )
@@ -56,7 +56,7 @@ describe('AgentStatusIndicator Monogram', () => {
         label="Thinking…"
         figure="Monogram"
         role="general"
-        color="#3B82F6"
+        color="#6E8BA8"
         name="Daniel"
       />,
     )
@@ -79,7 +79,7 @@ describe('AgentStatusIndicator Monogram', () => {
         label="Thinking…"
         figure="Monogram"
         role="general"
-        color="#3B82F6"
+        color="#6E8BA8"
       />,
     )
     // No name → the mark is not drawn (the existing incomplete-identity

@@ -16,7 +16,9 @@ import { AgentColor } from '@/lib/api/generated/schemas'
  * create-default colour. It never guesses a figure from the name.
  */
 
-/** Create default colour (docs/agents.md: omitted colour → #9CA3AF). */
+/** Create default colour (docs/agents.md: omitted colour → Pewter #8E9196,
+ *  the last palette entry in both the generated enum and the founder's
+ *  2026-10-11 decision). */
 const DEFAULT_COLOR = AgentColor.options[9]
 
 export type AgentMarkSize = 18 | 26 | 40 | 48

@@ -1,8 +1,8 @@
 // Identity colours for tests.
 //
-// SPEC "Locked identity vocabulary" (agent-first-navigation-spec), ordered
-// Azure → Grey. The values are the generated AgentColor enum — the wire
-// palette — not a second list of hex literals copied into each test.
+// Founder decision 2026-10-11 (AVATAR-PALETTE-DECISION.md), ordered
+// Steel blue → Pewter. The values are the generated AgentColor enum — the
+// wire palette — not a second list of hex literals copied into each test.
 //
 // Each colour is `AgentColor.options[n]` with a numeric literal, returned
 // from its own named function. A variable index (`generated[index]`) is
@@ -15,58 +15,58 @@ import { AgentColor } from '@/lib/api/generated/schemas'
 
 type PaletteColor = NonNullable<Agent['color']>
 
-export function azure(): PaletteColor {
+export function steelBlue(): PaletteColor {
   return AgentColor.options[0] as PaletteColor
 }
 
-export function sky(): PaletteColor {
+export function titanium(): PaletteColor {
   return AgentColor.options[1] as PaletteColor
 }
 
-export function cyan(): PaletteColor {
+export function verdigris(): PaletteColor {
   return AgentColor.options[2] as PaletteColor
 }
 
-export function indigo(): PaletteColor {
+export function gunmetal(): PaletteColor {
   return AgentColor.options[3] as PaletteColor
 }
 
-export function violet(): PaletteColor {
+export function graphiteViolet(): PaletteColor {
   return AgentColor.options[4] as PaletteColor
 }
 
-export function purple(): PaletteColor {
+export function roseGold(): PaletteColor {
   return AgentColor.options[5] as PaletteColor
 }
 
-export function fuchsia(): PaletteColor {
+export function bronze(): PaletteColor {
   return AgentColor.options[6] as PaletteColor
 }
 
-export function pink(): PaletteColor {
+export function antiqueBrass(): PaletteColor {
   return AgentColor.options[7] as PaletteColor
 }
 
-export function orange(): PaletteColor {
+export function champagne(): PaletteColor {
   return AgentColor.options[8] as PaletteColor
 }
 
-export function grey(): PaletteColor {
+export function pewter(): PaletteColor {
   return AgentColor.options[9] as PaletteColor
 }
 
-// Index order is the contract enum order, which is the spec table order.
+// Index order is the contract enum order, which is the decision table order.
 const _orderCheck = [
-  azure(),
-  sky(),
-  cyan(),
-  indigo(),
-  violet(),
-  purple(),
-  fuchsia(),
-  pink(),
-  orange(),
-  grey(),
+  steelBlue(),
+  titanium(),
+  verdigris(),
+  gunmetal(),
+  graphiteViolet(),
+  roseGold(),
+  bronze(),
+  antiqueBrass(),
+  champagne(),
+  pewter(),
 ] as const satisfies readonly PaletteColor[]
 
 void _orderCheck
