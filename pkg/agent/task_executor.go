@@ -1356,9 +1356,11 @@ func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.T
 	if err != nil {
 		return "", te.failTaskBeforeDispatch(t.ID, te.mapLaunchRefusal(t, "", "launch", err))
 	}
-	updated, err := te.store.Update(t.ID, task.Patch{SessionID: &launched.SessionID})
+	// #1026: the same retry-once-then-Failed binding ExecuteTask uses; no worker
+	// is dispatched until the durable binding exists.
+	updated, err := te.persistTaskSessionBinding(t.ID, launched.SessionID)
 	if err != nil {
-		return "", fmt.Errorf("task_executor: StartTaskNow: persist session id: %w", err)
+		return "", te.failTaskBeforeDispatch(t.ID, err)
 	}
 	_ = te.activateTaskGoal(updated, launched.SessionID)
 	run := te.openRun(t.ID, nil, task.RunKindManual, launched.SessionID, recipients...)
