@@ -19,7 +19,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -86,13 +85,12 @@ func (w *sessionWorker) stopThenClear(msg bus.InboundMessage) {
 }
 
 // requestStopForClear runs the one session Stop for the person who typed /clear.
+// An unauthenticated sender is refused by the Stop itself ("Stop requires an
+// authenticated sender"), and that error becomes the visible failure.
 func (w *sessionWorker) requestStopForClear(msg bus.InboundMessage) error {
 	userID := strings.TrimSpace(msg.Sender.CanonicalID)
 	if userID == "" {
 		userID = strings.TrimSpace(msg.GatewayUserID)
-	}
-	if userID == "" {
-		return fmt.Errorf("the sender is not authenticated")
 	}
 	ctx, cancel := context.WithTimeout(w.ctx, clearStopSettleTimeout)
 	defer cancel()
