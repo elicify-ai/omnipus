@@ -75,14 +75,16 @@ PROBE_INTERVAL=5
 
 # CI_CLUSTER_TIERS overrides the whole map. One tier per line:
 #   <name>|<machine-id>|<gate> <gate> ...
-# The default map takes machine ids from per-tier env vars because ids are NOT
-# known when this script is written — the harness provisions the machines and
-# injects their ids. An empty machine id means "tier not provisioned" → skipped.
+# The default map takes machine ids from per-tier env vars; the defaults are the
+# CURRENT placement (founder ruling 2026-10-12): `go` on the one PERFORMANCE machine, `node`
+# and `xplat` on SHARED machines (the full e2e gate also belongs on the performance machine,
+# after the go tier, never in parallel). Override any id with the env var; an explicitly EMPTY
+# id (CI_CLUSTER_NODE_MACHINE=) means "tier not provisioned" and the tier is skipped.
 default_tier_map() {
   printf '%s\n' \
-    "go|${CI_CLUSTER_GO_MACHINE:-}|gofmt go-build go-vet lint go-test go-race" \
-    "node|${CI_CLUSTER_NODE_MACHINE:-}|contracts spa" \
-    "xplat|${CI_CLUSTER_XPLAT_MACHINE:-}|embed-build records-no-sqlite cli-verb-guard"
+    "go|${CI_CLUSTER_GO_MACHINE-080d74db170408}|gofmt go-build go-vet lint go-test go-race" \
+    "node|${CI_CLUSTER_NODE_MACHINE-d8d0d90a1e9648}|contracts spa" \
+    "xplat|${CI_CLUSTER_XPLAT_MACHINE-78113d4f329908}|embed-build records-no-sqlite cli-verb-guard"
 }
 
 # --- run state -----------------------------------------------------------------------------
@@ -113,9 +115,9 @@ Usage: deploy/ci-worker/ci-cluster.sh <git-ref> [tier ...]
 
 Env:
   CI_CLUSTER_APP            Fly app name (default ci-omnipus-1)
-  CI_CLUSTER_GO_MACHINE     machine id of the `go` tier   (default map)
-  CI_CLUSTER_NODE_MACHINE   machine id of the `node` tier (default map)
-  CI_CLUSTER_XPLAT_MACHINE  machine id of the `xplat` tier (default map)
+  CI_CLUSTER_GO_MACHINE     machine id of the `go` tier   (default 080d74db170408, the performance machine)
+  CI_CLUSTER_NODE_MACHINE   machine id of the `node` tier (default d8d0d90a1e9648, shared)
+  CI_CLUSTER_XPLAT_MACHINE  machine id of the `xplat` tier (default 78113d4f329908, shared)
   CI_CLUSTER_TIERS          full map override, one "<name>|<machine-id>|<gates>" per line
   CI_CLUSTER_START_TIMEOUT  seconds to wait for a started machine to become reachable
   CI_CLUSTER_LOG_DIR        where per-gate logs go (default a fresh dir under /tmp)

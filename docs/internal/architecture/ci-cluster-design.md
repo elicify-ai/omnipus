@@ -108,38 +108,34 @@ therefore about not paying for 8 idle vCPUs, not about zero bill. The volumes ar
 repeat runs fast (Go/npm caches and the cloned repo survive), so deleting them to save
 storage would trade minutes of every run for cents — not worth it.
 
-## Sizing — performance vs shared-cpu, measured or not at all
+## Sizing and placement - sized per test type, on purpose
 
-The `go` tier needs the big `performance-8x` box: `go-test` and `go-race` are sustained,
-CPU-bound compiles, and `runci.sh`'s own contention tuning (`-p 2` + `GOMAXPROCS=4`) assumes
-8 real cores.
+The cluster is deliberately NOT five identical machines. One machine is `performance` 8x/16 GB
+(`080d74db170408`); four are `shared` 8x/16 GB (`d8d3977c946558`, `d8d0d90a1e9648`,
+`78113d4f329908`, `48ee71eb1e9768`). Founder ruling, 2026-10-12: that is the intended setup and
+there is no plan to resize; the work is placed to fit the machine.
 
-The `node` and `xplat` tiers *may* be cheaper as `shared-cpu-4x` machines — but that must be
-**measured, not assumed**. Shared vCPUs throttle under sustained load, so 4 shared cores are
-not 4 performance cores on a long compile; a naive "vitest is just tests, shared is fine"
-guess is exactly how a wall-clock doubles silently. The measurement is one comparable run of
-each tier's heaviest gate on both machine sizes (for the `go` tier that is one `go-test` on
-shared vs performance; for the others, `spa` and `embed-build`), comparing wall-clock — and
-watching for throttle-induced timing flakes, which are the more dangerous outcome (a false
-RED trains people to ignore a gate; see the e2e trap history in `deploy/ci-worker/CLAUDE.md`).
-Until those numbers exist, all tiers stay on `performance`.
+| Work | Where | Why |
+|---|---|---|
+| `go` tier (`go-test`, `go-race`) | the performance machine | sustained, CPU-bound compiles; `runci.sh`'s contention tuning (`-p 2` + `GOMAXPROCS=4`) assumes 8 real cores |
+| full `e2e` gate | the performance machine, **after** the go tier, never in parallel with it | 24 shards of Chromium rendering; starves under shared vCPU throttling |
+| `node` tier (`contracts`, `spa`) | a shared machine (default `d8d0d90a1e9648`) | short and light enough |
+| `xplat` tier (`embed-build`, `records-no-sqlite`, `cli-verb-guard`) | a shared machine (default `78113d4f329908`) | same |
+| targeted few-spec e2e rerun (`E2E_SPECS=...`) | may use a shared machine | a handful of specs, no matrix |
 
-**Reality check (2026-10-12, `fly machine status`): that is NOT what is deployed.** Only
-`080d74db170408` is `performance` 8x/16 GB. The other four machines (`d8d3977c946558`,
-`d8d0d90a1e9648`, `78113d4f329908`, `48ee71eb1e9768`) are `shared` 8x/16 GB. The measurement
-this section asks for happened by accident: the full e2e gate on a shared machine ran 2 h at
-load around 21 and starved (the baseline failed nearly everything), and `embed-build` (npm ci,
-SPA build, mipsle link checks) took ~46 min on a shared machine against minutes on the
-performance one. Shared 8x is therefore not a substitute for performance 8x for the sustained
-tiers (`go`, `e2e`). Whether to resize is a cost decision for the founder; this document only
-records what is true.
+**Measured, not assumed.** Shared vCPUs throttle under sustained load. On 2026-10-11 the full
+e2e gate was run on shared machines: it ran 2 h at load around 21 and starved (even the baseline
+failed nearly everything). `embed-build` on a shared machine took ~46 min against minutes on the
+performance one. Both were a **placement error** - heavy sustained work put on a shared machine -
+not undersizing. A false RED from a starved machine trains people to ignore a gate (see the e2e
+trap history in `deploy/ci-worker/CLAUDE.md`), which is why the placement rule above is a rule.
 
 ## Configuration surface
 
 | Env | Meaning | Default |
 |---|---|---|
 | `CI_CLUSTER_APP` | Fly app name | `ci-omnipus-1` |
-| `CI_CLUSTER_GO_MACHINE` / `_NODE_` / `_XPLAT_` | machine id per tier (default map) | unset → tier skipped |
+| `CI_CLUSTER_GO_MACHINE` / `_NODE_` / `_XPLAT_` | machine id per tier (default map) | `080d74db170408` (performance) / `d8d0d90a1e9648` (shared) / `78113d4f329908` (shared); set EMPTY → tier skipped |
 | `CI_CLUSTER_TIERS` | full map override, `<name>\|<machine>\|<gates>` per line | the default map above |
 | `CI_CLUSTER_START_TIMEOUT` | seconds to wait for a started machine to answer SSH | 180 |
 | `CI_CLUSTER_LOG_DIR` | where per-gate logs go | fresh dir under `$TMPDIR` |
