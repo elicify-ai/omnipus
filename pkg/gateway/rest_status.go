@@ -543,7 +543,9 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 		{
 			for _, m := range metas {
 				if m.CreatedAt.After(cutoff) {
-					summary := m.Title
+					// A main's title is derived on read, like every other
+					// surface; its stored title is empty.
+					summary := a.withDisplayTitle(m).Title
 					if summary == "" {
 						summary = "New session"
 					}

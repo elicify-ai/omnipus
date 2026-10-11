@@ -5,11 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/addressing"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -335,5 +337,45 @@ func TestHeldRequest_UnreadableReceiverRecord_IsReportedAsHeld(t *testing.T) {
 	}
 	if _, held := heldAsk(t, f, "sender-session"); !held {
 		t.Fatal("an unreadable receiver record was reported as not held: the asker is told its request was seen")
+	}
+}
+
+// Architect ruling 2026-10-12 (PublishInbound census): the wake a held request
+// is re-published with is the SAME message the admission published - one
+// helper, publishRequestWake, so the two cannot drift. Compared field by field
+// across a real admission and a real held delivery.
+func TestHeldRequest_RepublishedWakeIsTheAdmissionWake(t *testing.T) {
+	f, recv, asker := heldSetup(t)
+	id, held := heldAsk(t, f, asker)
+	if !held {
+		t.Fatal("precondition: the request is held")
+	}
+	first := nextWake(t, f.al) // the wake the admission published
+	forgetInMemory(f.al)
+	f.al.deliverHeldRequests(recv)
+	second := nextWake(t, f.al) // the wake the held path re-published
+
+	if first.TranscriptEntryID != id {
+		t.Fatalf("instrument check: first wake names request %s, got %q", id, first.TranscriptEntryID)
+	}
+	if first.OperatorPrompt || second.OperatorPrompt || first.UserInitiated || second.UserInitiated {
+		t.Fatal("a request wake is never an operator prompt or a user-initiated turn")
+	}
+	if first.Metadata[ownerWakeMetadataKey] != "1" || second.Metadata[ownerWakeMetadataKey] != "1" {
+		t.Fatalf("both wakes carry the owner-wake marker: %v / %v", first.Metadata, second.Metadata)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("the held re-publication differs from the admission wake:\nadmit: %+v\nheld:  %+v", first, second)
+	}
+}
+
+func nextWake(t *testing.T, al *AgentLoop) bus.InboundMessage {
+	t.Helper()
+	select {
+	case m := <-al.bus.InboundChan():
+		return m
+	case <-time.After(5 * time.Second):
+		t.Fatal("no wake was published")
+		return bus.InboundMessage{}
 	}
 }

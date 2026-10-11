@@ -6,8 +6,8 @@
 // tool) inside a workspace joined the team but did not get its main chat, so the
 // sidebar (which lists a member only when its workspace member_configs entry
 // carries main_session_id) never showed it. The real tool is driven here with the
-// production wiring order: EnsureWorkspaceMains runs inside the tool BEFORE the
-// publish hook refreshes the live roster.
+// production wiring order: the tool's publish hook refreshes the live roster first,
+// and only then does EnsureWorkspaceMains run (its eligibility reads that roster).
 
 package gateway
 
@@ -53,7 +53,7 @@ func TestNewAgent_CreatedByAvaInWorkspace_GetsItsMainListed(t *testing.T) {
 	res := systools.NewAgentCreateTool(newAgentCreateToolDeps(env)).Execute(
 		tools.WithWorkspaceID(context.Background(), ws), map[string]any{
 			"name": "Newbie", "description": "created in context", "soul": "You help.",
-			"model": "test/model", "color": "#22C55E",
+			"model": "test/model", "color": "#6E8BA8",
 		})
 	require.False(t, res.IsError, "create failed: %s", res.ForLLM)
 

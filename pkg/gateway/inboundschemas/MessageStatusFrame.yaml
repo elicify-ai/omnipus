@@ -5,9 +5,11 @@ description: >
   appended, working after the message is successfully admitted to the agent
   bus, failed when processing stops before admission, and discarded (with
   reason stopped_before_delivery) when Stop discards the input before it is
-  delivered into the agent's model input (session-core FR-024). Emitted only for a
-  MessageFrame carrying client_message_id, preserving compatibility with older
-  clients.
+  delivered into the agent's model input (session-core FR-024), and held after
+  received when an @-recipient request was accepted but the recipient is stopped,
+  so the request waits until it runs again (it is not a failure and not terminal).
+  Emitted only for a MessageFrame carrying client_message_id, preserving
+  compatibility with older clients.
 type: object
 required:
   - type
@@ -34,6 +36,7 @@ properties:
       - working
       - failed
       - discarded
+      - held
   reason:
     type: string
     enum:

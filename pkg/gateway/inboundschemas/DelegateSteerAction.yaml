@@ -24,8 +24,9 @@ properties:
   text:
     type: string
     minLength: 1
-    maxLength: 65536
-    description: Steering instruction.
+    description: >
+      Steering instruction.
+      The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
     example: "Skip the xlsx shard for now, prioritize the CSV export."
   correlation_id:
     type: string

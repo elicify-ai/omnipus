@@ -492,6 +492,13 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 		// writer, because ensureBuiltinRosterPresent re-adds them at the next
 		// boot. The refusal precedes every effect of this call: nothing is
 		// written and no delegation edge is seeded.
+		if w.IsDefault && len(teamDiffAdded(w.CoreTeam, oldTeam)) > 0 && !liveConfigAvailable(t.deps) {
+			// An unreadable roster is not an empty one: fail closed rather than
+			// let a removal through that cannot be checked (S2-18).
+			return tools.ErrorResult(errorJSON("NOT_AVAILABLE",
+				"the live configuration is unavailable, so a team removal from the default workspace cannot be checked",
+				"Retry once the gateway configuration is loaded"))
+		}
 		if err := workspacepkg.RefuseBuiltinRemoval(w.IsDefault, oldTeam, w.CoreTeam, configAgentIDs(t.deps)); err != nil {
 			return tools.ErrorResult(errorJSON(strings.ToUpper(workspacepkg.BuiltinRemovalCode),
 				workspacepkg.BuiltinRemovalMessage,
@@ -1130,6 +1137,11 @@ func configAgentPresenceSet(d *Deps) map[string]bool {
 		present[cfg.Agents.List[i].ID] = true
 	}
 	return present
+}
+
+// liveConfigAvailable reports whether the live config can be read at all.
+func liveConfigAvailable(d *Deps) bool {
+	return d != nil && d.GetCfg != nil && d.GetCfg() != nil
 }
 
 // configAgentIDs returns the live config's agent ids — the same data

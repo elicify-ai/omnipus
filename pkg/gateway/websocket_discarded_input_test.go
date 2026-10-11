@@ -103,3 +103,47 @@ func sessionEntryForDisposition(id, content, clientID string) session.Transcript
 		Timestamp: time.Now().UTC(), ClientMessageID: clientID,
 	}
 }
+
+// S3-02 server half: a /clear the worker refused or could not carry out is
+// framed to every bound tab as message_status failed for the /clear's own row.
+// The path under test is the real one: the WS handler installs itself as the
+// agent loop's not-performed receiver at construction, and the receiver
+// resolves the client id from the persisted entry.
+func TestClearNotPerformed_IsFramedAsAFailedMessageStatus(t *testing.T) {
+	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
+	wc := makeTestConn()
+	handler.handleChatMessageWithClientID(context.Background(), "chat-s302", "", "/clear", "", nil,
+		"", "", false, "client-s302-1", nil, wc)
+	received := readMessageStatusFrames(t, wc, 1)
+	sessionID := received[0].SessionId
+	bindTestConnToSession(handler, "chat-s302", sessionID, wc)
+
+	store := handler.agentLoop.ResolveSessionStore(sessionID)
+	require.NotNil(t, store)
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	var entryID string
+	for _, e := range entries {
+		if e.ClientMessageID == "client-s302-1" {
+			entryID = e.ID
+		}
+	}
+	require.NotEmpty(t, entryID, "setup: the persisted /clear row")
+
+	// Through the loop's own seam, not by calling the method directly: this is
+	// what proves the constructor wired the receiver.
+	handler.agentLoop.NotifyClearNotPerformedForTest(sessionID, entryID)
+
+	frames := readMessageStatusFrames(t, wc, 1)
+	assert.Equal(t, "failed", frames[0].State)
+	assert.Equal(t, "client-s302-1", frames[0].ClientMessageId)
+	assert.Equal(t, sessionID, frames[0].SessionId)
+
+	// A row with no client id (not a web send) frames nothing.
+	handler.announceClearNotPerformed(sessionID, "no-such-entry")
+	select {
+	case raw := <-wc.sendCh:
+		t.Fatalf("an unknown row must frame nothing, got %s", raw)
+	case <-time.After(200 * time.Millisecond):
+	}
+}

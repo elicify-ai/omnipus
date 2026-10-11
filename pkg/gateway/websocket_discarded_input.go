@@ -59,6 +59,28 @@ func (h *WSHandler) announceDiscardedInput(d agent.DiscardedInput) {
 	}, nil)
 }
 
+// announceClearNotPerformed publishes message_status state=failed for a /clear
+// the server refused or could not carry out (S3-02): the person's /clear row is
+// the one message that failed. The explanatory reply stays as the human reason;
+// the client reads this frame, not the reply text. A /clear that happened is
+// signalled by its marker row, never by this frame.
+func (h *WSHandler) announceClearNotPerformed(sessionID, transcriptEntryID string) {
+	if h == nil || h.agentLoop == nil {
+		return
+	}
+	clientID := h.clientMessageIDOf(sessionID, transcriptEntryID)
+	if clientID == "" {
+		return
+	}
+	h.dropPendingMessageStatus(sessionID, clientID)
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
+		Type:            string(generated.WsFrameTypeMessageStatus),
+		SessionId:       sessionID,
+		ClientMessageId: clientID,
+		State:           "failed",
+	}, nil)
+}
+
 // clientMessageIDOf returns the client_message_id the archived entry messageID
 // was persisted with, or "" when it had none or cannot be read.
 func (h *WSHandler) clientMessageIDOf(sessionID, messageID string) string {

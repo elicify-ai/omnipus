@@ -16347,7 +16347,7 @@ type DelegateRespondAction struct {
 	// SessionId The child session being answered.
 	SessionId string `json:"session_id"`
 
-	// Text The answer to the child's question.
+	// Text The answer to the child's question. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
 	Text string `json:"text"`
 }
 
@@ -17177,7 +17177,7 @@ type DelegateSteerAction struct {
 	// SessionId The child session to steer.
 	SessionId string `json:"session_id"`
 
-	// Text Steering instruction.
+	// Text Steering instruction. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
 	Text string `json:"text"`
 }
 
@@ -25469,7 +25469,7 @@ type SessionMessageRespond struct {
 	// SessionId The CHILD session being answered.
 	SessionId string `json:"session_id"`
 
-	// Text The answer to the child's question.
+	// Text The answer to the child's question. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
 	Text string `json:"text"`
 
 	// UntrustedOrigin False — parent-authored, trusted content.
@@ -25571,7 +25571,7 @@ type SessionMessageSteer struct {
 	// SessionId The CHILD session being steered.
 	SessionId string `json:"session_id"`
 
-	// Text Steering instruction injected at the child's next tool boundary.
+	// Text Steering instruction injected at the child's next tool boundary. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
 	Text string `json:"text"`
 
 	// UntrustedOrigin False — parent-authored, trusted content.

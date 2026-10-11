@@ -34,7 +34,7 @@ func TestCreateAgent_InContext_ProvisionsTheTeamMains(t *testing.T) {
 	}
 
 	res := systools.NewAgentCreateTool(deps).Execute(tools.WithWorkspaceID(context.Background(), wsID), map[string]any{
-		"name": "Mains Bot", "description": "joins a team", "soul": "You help.", "model": "test/model", "color": "#22C55E",
+		"name": "Mains Bot", "description": "joins a team", "soul": "You help.", "model": "test/model", "color": "#6E8BA8",
 	})
 	if res.IsError {
 		t.Fatalf("create failed: %s", res.ForLLM)
@@ -51,7 +51,7 @@ func TestCreateAgent_NoWorkspace_ProvisionsNothing(t *testing.T) {
 	deps.EnsureWorkspaceMains = func(string) error { called = true; return nil }
 
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
-		"name": "Loose Bot", "description": "no team", "soul": "You help.", "model": "test/model", "color": "#22C55E",
+		"name": "Loose Bot", "description": "no team", "soul": "You help.", "model": "test/model", "color": "#6E8BA8",
 	})
 	if res.IsError {
 		t.Fatalf("create failed: %s", res.ForLLM)
@@ -66,7 +66,7 @@ func TestCreateAgent_NoWorkspace_ProvisionsNothing(t *testing.T) {
 func TestRunAgentDeleteCascade_StaleRevisionDestroysNothing(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
-		"name": "Cascade Bot", "description": "to be deleted", "soul": "You help.", "model": "test/model", "color": "#22C55E",
+		"name": "Cascade Bot", "description": "to be deleted", "soul": "You help.", "model": "test/model", "color": "#6E8BA8",
 	})
 	if res.IsError {
 		t.Fatalf("create failed: %s", res.ForLLM)

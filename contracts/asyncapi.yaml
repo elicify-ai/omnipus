@@ -2050,8 +2050,10 @@ components:
         received follows durable transcript persistence; working follows
         successful turn admission; failed means processing stopped before
         admission; discarded (reason stopped_before_delivery) means Stop discarded
-        the input before delivery (session-core FR-024). Emitted only when the client
-        supplied client_message_id.
+        the input before delivery (session-core FR-024); held means an @-recipient
+        request was accepted but the recipient is stopped, so it waits until the
+        recipient runs again (not a failure, not terminal). Emitted only when the
+        client supplied client_message_id.
       type: object
       required:
       - type
@@ -2078,6 +2080,7 @@ components:
           - working
           - failed
           - discarded
+          - held
         reason:
           type: string
           enum:
@@ -2702,6 +2705,9 @@ components:
       - type
       - message
       additionalProperties: false
+      dependentRequired:
+        first_message_error:
+        - client_message_id
       properties:
         type:
           type: string

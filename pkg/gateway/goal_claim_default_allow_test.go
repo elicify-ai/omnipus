@@ -130,7 +130,7 @@ func TestGoalClaimDefaultsToAllow_EveryAgentCreationPath(t *testing.T) {
 			"description": "created by the create_agent tool",
 			"soul":        "You are tool made.",
 			"model":       "test/model",
-			"color":       "#22C55E",
+			"color":       "#6E8BA8",
 		})
 		require.False(t, result.IsError, "create_agent failed: %s", result.ForLLM)
 

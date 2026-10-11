@@ -124,6 +124,14 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	return requestID, receiverSessionID, err
 }
 
+// AdmitRequestReportingHeld is AdmitRequest plus whether the request was HELD
+// (the receiver was stopped, so it waits until the receiver runs again). The
+// WebSocket intake uses it to tell the sender's row.
+func (al *AgentLoop) AdmitRequestReportingHeld(ctx context.Context, a RequestAdmission) (held bool, err error) {
+	_, _, held, err = al.admitRequest(ctx, a)
+	return held, err
+}
+
 // admitRequest is AdmitRequest plus whether the request is HELD: the receiver
 // was stopped when it was admitted, so the request is kept in the ledger and
 // delivered when the receiver runs again (deliverHeldRequests) instead of
@@ -198,28 +206,36 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 
 	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := al.bus.PublishInbound(pubCtx, bus.InboundMessage{
-		Channel:           "webchat",
-		ChatID:            "request:" + requestID,
-		Sender:            bus.SenderInfo{CanonicalID: "request:" + requestID},
-		Content:           entry.Content,
-		SessionID:         receiverSessionID,
-		TranscriptEntryID: requestID,
-		// A request carries no human authority on the RECEIVER's conversation
-		// (FR-045: no transfer of Stop/grants). It reuses the owner-wake marker:
-		// reviveInboundIsHumanTurn rejects it and prepareOrdinaryExecution admits
-		// it as the non-human principal, which starts the next round of a
-		// finished or idle chat but never continues a stopped one - the request
-		// stays in the transcript (final-gate SG-01). Not UserInitiated /
-		// OperatorPrompt either (fail closed for /goal, /loop and the browser
-		// wheel).
-		Metadata: map[string]string{"agent_id": a.Receiver.AgentID, "workspace_id": a.Receiver.WorkspaceID, ownerWakeMetadataKey: "1"},
-	}); err != nil {
+	if err := al.publishRequestWake(pubCtx, a.Receiver, requestID, receiverSessionID, entry.Content); err != nil {
 		// The request is durable in the receiver's main and answerable; only
 		// the turn start failed. Report it rather than hide it.
 		return requestID, receiverSessionID, held, fmt.Errorf("request %s was recorded but the receiver's turn could not be started: %w", requestID, err)
 	}
 	return requestID, receiverSessionID, held, nil
+}
+
+// publishRequestWake is the ONE publication of a request's owner wake: the
+// admission publishes it, and a held request is re-published through it when
+// its receiver runs again, so both are the same message by construction.
+//
+// A request carries no human authority on the RECEIVER's conversation (FR-045:
+// no transfer of Stop/grants). It reuses the owner-wake marker:
+// reviveInboundIsHumanTurn rejects it and prepareOrdinaryExecution admits it as
+// the non-human principal, which starts the next round of a finished or idle
+// chat but never continues a stopped one - the request stays in the transcript
+// (final-gate SG-01). Not UserInitiated / OperatorPrompt either (fail closed
+// for /goal, /loop and the browser wheel; scripts/check-operator-prompt-sites.sh
+// counts this as one non-operator PublishInbound site).
+func (al *AgentLoop) publishRequestWake(ctx context.Context, receiver addressing.Pair, requestID, receiverSessionID, content string) error {
+	return al.bus.PublishInbound(ctx, bus.InboundMessage{
+		Channel:           "webchat",
+		ChatID:            "request:" + requestID,
+		Sender:            bus.SenderInfo{CanonicalID: "request:" + requestID},
+		Content:           content,
+		SessionID:         receiverSessionID,
+		TranscriptEntryID: requestID,
+		Metadata:          map[string]string{"agent_id": receiver.AgentID, "workspace_id": receiver.WorkspaceID, ownerWakeMetadataKey: "1"},
+	})
 }
 
 // composeRequestText is the server-composed envelope the receiver reads. The
