@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ActivityBar } from './ActivityBar'
 import { useSelectSession } from './useSelectSession'
 import { useUiStore } from '@/store/ui'
-import { clearAttachMarker, useSessionStore } from '@/store/session'
+import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -72,20 +72,11 @@ describe('activity panel request', () => {
     useSessionStore.setState({ activeSessionId: null, attachToSession: originalAttach })
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
     useChatStore.setState({ messages: [] })
-    // Test isolation for the one-owner-of-the-initial-attach guard: a prior
-    // case's noteAttachSent(SESSION_ID) plus its still-replaying bucket made
-    // the NEXT case's real attachAlreadyInFlight() skip the transport send
-    // entirely (the send=0 assertion). Module-level markers must not leak
-    // between cases — production behaviour is untouched.
-    clearAttachMarker()
-    useChatStore.setState({ sessionsById: {} })
   })
 
   afterEach(() => {
     useSessionStore.setState({ attachToSession: originalAttach, activeSessionId: null })
     useUiStore.setState({ activityPanelRequest: null })
-    clearAttachMarker()
-    useChatStore.setState({ sessionsById: {} })
   })
 
   it('stores the requested session id', () => {

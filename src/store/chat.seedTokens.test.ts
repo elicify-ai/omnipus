@@ -25,10 +25,6 @@ vi.mock('@/store/session', () => ({
   // module load; a mock missing it crashes the import (see registerGetSessionCursor's
   // own doc comment, src/store/session.ts).
   registerGetSessionCursor: vi.fn(),
-  // The one-owner-of-the-initial-attach guard (session.ts) — chat.ts
-  // registers the replaying getter at module load; same contract as the
-  // registrations above (a mock missing it crashes the import).
-  registerIsSessionReplaying: vi.fn(),
 }))
 vi.mock('@/store/connection', () => ({
   useConnectionStore: { getState: () => ({ isConnected: false, connection: null }) },
