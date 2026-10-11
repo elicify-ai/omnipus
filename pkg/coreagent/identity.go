@@ -52,6 +52,17 @@ func CanonicalRole(raw string) (string, bool) {
 	return string(r), true
 }
 
+// PaletteColors lists the avatar palette (AgentColor.yaml) for refusal messages.
+func PaletteColors() []string {
+	return []string{
+		string(generated.AgentColorHash4F8A80), string(generated.AgentColorHash5E6973),
+		string(generated.AgentColorHash6E8BA8), string(generated.AgentColorHash7A8C9E),
+		string(generated.AgentColorHash7B7290), string(generated.AgentColorHash8E9196),
+		string(generated.AgentColorHash9C8A5B), string(generated.AgentColorHashA97142),
+		string(generated.AgentColorHashB76E79), string(generated.AgentColorHashCDBA96),
+	}
+}
+
 // CanonicalColor accepts any letter-case of a palette hex and returns the
 // uppercase enum value; a hex of the previous palette is mapped to its new
 // equivalent (legacyColors). Any other string, including a well-formed hex

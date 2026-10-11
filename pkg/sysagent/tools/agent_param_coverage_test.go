@@ -142,7 +142,7 @@ func TestAgentCreate_AppliesProviderAndMaxToolIterations(t *testing.T) {
 		"description":         "Tests provider + max_tool_iterations wiring",
 		"soul":                "You are a test bot.",
 		"model":               "test/model",
-		"color":               "#22C55E",
+		"color":               "#6E8BA8",
 		"provider":            "openrouter",
 		"max_tool_iterations": float64(42),
 	})
@@ -174,7 +174,7 @@ func TestAgentCreate_RejectsNegativeMaxToolIterations(t *testing.T) {
 		"description":         "d",
 		"soul":                "s",
 		"model":               "test/model",
-		"color":               "#22C55E",
+		"color":               "#6E8BA8",
 		"max_tool_iterations": float64(-1),
 	})
 	if !result.IsError {

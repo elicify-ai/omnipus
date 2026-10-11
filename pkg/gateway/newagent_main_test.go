@@ -53,7 +53,7 @@ func TestNewAgent_CreatedByAvaInWorkspace_GetsItsMainListed(t *testing.T) {
 	res := systools.NewAgentCreateTool(newAgentCreateToolDeps(env)).Execute(
 		tools.WithWorkspaceID(context.Background(), ws), map[string]any{
 			"name": "Newbie", "description": "created in context", "soul": "You help.",
-			"model": "test/model", "color": "#22C55E",
+			"model": "test/model", "color": "#6E8BA8",
 		})
 	require.False(t, res.IsError, "create failed: %s", res.ForLLM)
 

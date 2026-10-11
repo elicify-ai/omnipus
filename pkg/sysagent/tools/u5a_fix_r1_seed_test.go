@@ -225,7 +225,7 @@ func u5aCreateAgent(t *testing.T, deps *Deps, ctx context.Context, name string) 
 		"description": "created in a workspace context",
 		"soul":        "You help.",
 		"model":       "test/model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 	})
 	body := u5aParseJSON(t, res.ForLLM)
 	if res.IsError {
@@ -351,7 +351,7 @@ func TestCreateAgent_SeedFailureReturnsPartialNotMetadataOnly(t *testing.T) {
 		"description": "created in a workspace context",
 		"soul":        "You help.",
 		"model":       "test/model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 	})
 	if !res.IsError {
 		t.Fatalf("a seed failure after membership landed must NOT be reported as a normal success: %s", res.ForLLM)
@@ -419,7 +419,7 @@ func TestCreateAgent_JoinSerializesWithExplicitGraphWrite(t *testing.T) {
 				"description": "created in a workspace context",
 				"soul":        "You help.",
 				"model":       "test/model",
-				"color":       "#22C55E",
+				"color":       "#6E8BA8",
 			})
 	}()
 

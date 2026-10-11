@@ -79,10 +79,11 @@ func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any, defau
 		return err
 	}
 	if err := applyOptionalString(args, "color", func(v string) error {
-		if err := validateAgentColor(v); err != nil {
+		canon, err := canonicalAgentColor(v)
+		if err != nil {
 			return err
 		}
-		a.Color = v
+		a.Color = canon
 		return nil
 	}); err != nil {
 		return err
