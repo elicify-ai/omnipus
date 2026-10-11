@@ -14,3 +14,13 @@ properties:
     example: "550e8400-e29b-41d4-a716-446655440000"
   heartbeat:
     $ref: ./WorkspaceMemberHeartbeat.yaml
+  hidden_from_sidebar:
+    type: boolean
+    description: >
+      Display-only: when true the sidebar omits this member's row in this
+      workspace, but the member stays a full team member — messageable,
+      delegable, @-addressable; main and work untouched. Inside an incoming
+      member config, absent => preserve the stored value; heartbeat keeps its
+      wholesale-replace semantics. Off-team entries are garbage-collected, so
+      removing a member clears the flag and re-adding the agent starts
+      visible.

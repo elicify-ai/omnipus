@@ -41,6 +41,8 @@ properties:
       for agents no longer on the core team. main_session_id is server-owned
       and read-only: a value sent here is ignored, and the server always
       reprojects its own computed main session id. There is no client-supplied
-      session address of any kind.
+      session address of any kind. One documented exception: inside an
+      incoming member config, hidden_from_sidebar absent => preserve the
+      stored value; heartbeat keeps its wholesale-replace semantics.
 additionalProperties: false
 minProperties: 2

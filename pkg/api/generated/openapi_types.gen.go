@@ -28485,7 +28485,7 @@ type Workspace struct {
 	// IsDefault True only for the auto-created default workspace. The default workspace cannot be deleted and always appears first in the sidebar.
 	IsDefault *bool `json:"is_default,omitempty"`
 
-	// MemberConfigs Per-member (agentId → config) settings for this workspace, keyed by agent ID. Absent when no member has a config (empty map). Carries heartbeat settings and the server-computed read-only main_session_id; it does NOT carry a session address for the heartbeat — a heartbeat runs in the member's computed main session, and the retired per-member session_id is no longer part of this shape.
+	// MemberConfigs Per-member (agentId → config) settings for this workspace, keyed by agent ID. Absent when no member has a config (empty map). Carries heartbeat settings, the display-only hidden_from_sidebar flag, and the server-computed read-only main_session_id; it does NOT carry a session address for the heartbeat — a heartbeat runs in the member's computed main session, and the retired per-member session_id is no longer part of this shape.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
 	Message       *string                           `json:"message,omitempty"`
 
@@ -28648,6 +28648,9 @@ type WorkspaceMemberConfig struct {
 	// Heartbeat Heartbeat settings for this (workspace, agent) pair.
 	Heartbeat *WorkspaceMemberHeartbeat `json:"heartbeat,omitempty"`
 
+	// HiddenFromSidebar Display-only: when true the sidebar omits this member's row in this workspace, but the member stays a full team member — messageable, delegable, @-addressable; main and work untouched. Inside an incoming member config, absent => preserve the stored value; heartbeat keeps its wholesale-replace semantics. Off-team entries are garbage-collected, so removing a member clears the flag and re-adding the agent starts visible.
+	HiddenFromSidebar *bool `json:"hidden_from_sidebar,omitempty"`
+
 	// MainSessionId The member's server-computed main session id (format decided later). Omitted for members who are not eligible for a main (workers, other system agents, and Admin, who is not a workspace member). Server-owned and read-only.
 	MainSessionId *string `json:"main_session_id,omitempty"`
 }
@@ -28721,7 +28724,7 @@ type WorkspaceUpdateRequest struct {
 	} `json:"delegation,omitempty"`
 	Description *string `json:"description,omitempty"`
 
-	// MemberConfigs Per-member (agentId → config) settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. main_session_id is server-owned and read-only: a value sent here is ignored, and the server always reprojects its own computed main session id. There is no client-supplied session address of any kind.
+	// MemberConfigs Per-member (agentId → config) settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. main_session_id is server-owned and read-only: a value sent here is ignored, and the server always reprojects its own computed main session id. There is no client-supplied session address of any kind. One documented exception: inside an incoming member config, hidden_from_sidebar absent => preserve the stored value; heartbeat keeps its wholesale-replace semantics.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
 	Name          *string                           `json:"name,omitempty"`
 	PinOrder      *int                              `json:"pin_order,omitempty"`

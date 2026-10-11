@@ -14879,7 +14879,7 @@ export interface components {
              */
             owner?: string;
             /**
-             * @description Per-member (agentId → config) settings for this workspace, keyed by agent ID. Absent when no member has a config (empty map). Carries heartbeat settings and the server-computed read-only main_session_id; it does NOT carry a session address for the heartbeat — a heartbeat runs in the member's computed main session, and the retired per-member session_id is no longer part of this shape.
+             * @description Per-member (agentId → config) settings for this workspace, keyed by agent ID. Absent when no member has a config (empty map). Carries heartbeat settings, the display-only hidden_from_sidebar flag, and the server-computed read-only main_session_id; it does NOT carry a session address for the heartbeat — a heartbeat runs in the member's computed main session, and the retired per-member session_id is no longer part of this shape.
              * @example {
              *       "mia": {
              *         "main_session_id": "main-session-ws-123+mia",
@@ -14908,6 +14908,8 @@ export interface components {
              */
             readonly main_session_id?: string;
             heartbeat?: components["schemas"]["WorkspaceMemberHeartbeat"];
+            /** @description Display-only: when true the sidebar omits this member's row in this workspace, but the member stays a full team member — messageable, delegable, @-addressable; main and work untouched. Inside an incoming member config, absent => preserve the stored value; heartbeat keeps its wholesale-replace semantics. Off-team entries are garbage-collected, so removing a member clears the flag and re-adding the agent starts visible. */
+            hidden_from_sidebar?: boolean;
         };
         /** @description Heartbeat settings for this (workspace, agent) pair. */
         WorkspaceMemberHeartbeat: {
@@ -14991,7 +14993,7 @@ export interface components {
             pinned?: boolean;
             pin_order?: number;
             core_team?: string[];
-            /** @description Per-member (agentId → config) settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. main_session_id is server-owned and read-only: a value sent here is ignored, and the server always reprojects its own computed main session id. There is no client-supplied session address of any kind. */
+            /** @description Per-member (agentId → config) settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. main_session_id is server-owned and read-only: a value sent here is ignored, and the server always reprojects its own computed main session id. There is no client-supplied session address of any kind. One documented exception: inside an incoming member config, hidden_from_sidebar absent => preserve the stored value; heartbeat keeps its wholesale-replace semantics. */
             member_configs?: {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
             };
@@ -23715,7 +23717,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
-            /** @description Workspace membership or graph revision changed; no writes occurred. */
+            /** @description Workspace membership or graph revision changed, or a built-in roster member was removed from the default workspace (the next boot would silently re-add it); no writes occurred. */
             409: {
                 headers: {
                     [name: string]: unknown;

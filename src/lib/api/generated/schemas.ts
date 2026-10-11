@@ -2532,6 +2532,7 @@ type WorkspaceDelegationEdge = {
 type WorkspaceMemberConfig = Partial<{
   main_session_id: string;
   heartbeat: WorkspaceMemberHeartbeat;
+  hidden_from_sidebar: boolean;
 }>;
 type WorkspaceMemberHeartbeat = Partial<{
   enabled: boolean;
@@ -5503,6 +5504,7 @@ export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
   .object({
     main_session_id: z.string().max(255),
     heartbeat: WorkspaceMemberHeartbeat,
+    hidden_from_sidebar: z.boolean(),
   })
   .partial();
 export const Workspace: z.ZodType<Workspace> = z
@@ -15102,7 +15104,7 @@ Returns HTTP 201 on success.
       },
       {
         status: 409,
-        description: `Workspace membership or graph revision changed; no writes occurred.`,
+        description: `Workspace membership or graph revision changed, or a built-in roster member was removed from the default workspace (the next boot would silently re-add it); no writes occurred.`,
         schema: z.void(),
       },
       {
