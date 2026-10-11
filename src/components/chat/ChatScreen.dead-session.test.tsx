@@ -28,7 +28,7 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { ApiError } from '@/lib/api-error'
 
-const queryMock = vi.hoisted(() => ({ result: { data: undefined as unknown, isError: false, error: null as unknown, refetch: (..._: unknown[]) => {} } }))
+const queryMock = vi.hoisted(() => ({ result: { data: undefined as unknown, isError: false, error: null as unknown, refetch: () => {} } }))
 
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock())
 
