@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Buildings, CaretDown, CaretRight, ClockCounterClockwise, Plus } from '@phosphor-icons/react'
+import { Buildings, CaretDown, CaretRight } from '@phosphor-icons/react'
 import type { Agent, Session, Workspace } from '@/lib/api'
 import { workspacesQueryKeys } from '@/lib/api'
 import { queryClient } from '@/lib/queryClient'
@@ -10,12 +10,12 @@ import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ErrorState } from '@/components/ui/error-state'
 import { IconButton } from '@/components/ui/icon-button'
-import { Tooltip } from '@/components/ui/tooltip'
 import { useSessionStore } from '@/store/session'
 import { dismissNewChatPrompt } from '@/store/session/newChatFlow'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
+import { AgentRowMenu } from './AgentRowMenu'
+import { invalidateWorkspaceRoster, setHiddenFromSidebar, surfaceActionError } from './agentRowActions'
 import { SidebarAgentIcon } from './SidebarAgentIcon'
 import { attentionCountLabel, useAttentionMotion } from './attentionCue'
 import { beginPairExtra } from './pairExtra'
@@ -93,7 +93,8 @@ export function WorkspaceAgentList({
           project={project}
           isActive={activeId === project.id}
           isExpanded={expandedIds.has(project.id)}
-          rows={mains.result.rows}
+          rows={mains.visible}
+          hiddenRows={mains.hidden}
           signals={mains.signals}
           onCount={mains.onCount}
           countKnown={!mains.unknown && mains.result.status === 'ready'}
@@ -139,6 +140,7 @@ function WorkspaceBlock({
   isActive,
   isExpanded,
   rows,
+  hiddenRows,
   signals,
   onCount,
   countKnown,
@@ -155,6 +157,7 @@ function WorkspaceBlock({
   isActive: boolean
   isExpanded: boolean
   rows: EligibleRow[]
+  hiddenRows: EligibleRow[]
   signals: Record<string, 'on' | 'off' | 'unknown'>
   onCount: number
   countKnown: boolean
@@ -167,6 +170,11 @@ function WorkspaceBlock({
   onOpen: () => void
   onOverlayClose: () => void
 }) {
+  const showHidden = () => {
+    void setHiddenFromSidebar(project, hiddenRows.map((row) => row.agentId), false)
+      .then(invalidateWorkspaceRoster)
+      .catch((err: unknown) => surfaceActionError(`Could not show hidden ${project.name} agents`, err))
+  }
   const showCount = !isExpanded && countKnown && onCount > 0
   const countLabel = attentionCountLabel(onCount)
   return (
@@ -258,6 +266,20 @@ function WorkspaceBlock({
             onOverlayClose={onOverlayClose}
           />
         ))}
+        {isExpanded && hiddenRows.length > 0 && (
+          <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)]">
+            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+              {hiddenRows.length} hidden
+            </span>
+            <Button
+              variant="ghost"
+              onClick={showHidden}
+              className="h-auto shrink-0 px-[var(--space-2)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+            >
+              Show
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -291,11 +313,10 @@ function AgentMainRow({
   // asked its question for THIS agent; confirm executes exactly what was
   // asked (the prompt's own clientMessageId), and a state change while the
   // dialog was open is answered by the flow visibly, never silently.
+  // D7: the row's New chat BUTTON is gone; the dialog and the capability stay.
   const prompt = useSessionStore((state) => state.newChatPrompt)
   const promptOpen = prompt?.action === 'prompt' && prompt.agentId === row.agentId
   const selected = activeWorkspaceId === workspace.id && ownsSelectedChat
-  const pastLabel = `Past sessions with ${row.name}`
-  const extraLabel = `New chat with ${row.name}`
 
   const openMain = () => {
     const session = sessions.find((candidate) => candidate.id === row.mainSessionId)
@@ -305,10 +326,6 @@ function AgentMainRow({
     }
     setUnresolved(false)
     selectSession(session)
-  }
-
-  const startExtra = () => {
-    beginPairExtra(workspace.id, row.agentId, navigate, onOverlayClose)
   }
 
   const confirmExtra = () => {
@@ -339,28 +356,7 @@ function AgentMainRow({
           <span className="truncate">{row.name}</span>
         </Button>
         <div className="sidebar-agent-actions flex shrink-0 pr-[var(--space-2)]">
-          <Tooltip content={pastLabel} interactive>
-            <IconButton
-              size="sm"
-              aria-label={pastLabel}
-              title={pastLabel}
-              onClick={() => useUiStore.getState().openSearchModal(workspace.id, row.agentId)}
-              className="h-[var(--icon-size-feature)] w-[var(--icon-size-feature)] shrink-0 font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
-            >
-              <ClockCounterClockwise size={14} weight="regular" aria-hidden="true" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip content={extraLabel} interactive>
-            <IconButton
-              size="sm"
-              aria-label={extraLabel}
-              title={extraLabel}
-              onClick={startExtra}
-              className="h-[var(--icon-size-feature)] w-[var(--icon-size-feature)] shrink-0 font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
-            >
-              <Plus size={14} weight="regular" aria-hidden="true" />
-            </IconButton>
-          </Tooltip>
+          <AgentRowMenu workspace={workspace} agent={agent} agentId={row.agentId} agentName={row.name} />
         </div>
       </div>
       {unresolved && (

@@ -315,19 +315,19 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
     expect(productMia).not.toBe(defaultMia)
   })
 
-  it('BDD-03.3 Past sessions comes before New chat, as two independent named buttons', async () => {
+  it('D1 each agent row carries ONE ⋯ trigger and neither of the two old buttons', async () => {
     renderSidebar()
     await expandAgents('Product launch')
     const productGroup = await screen.findByRole('group', { name: 'Product launch' })
     const mia = within(productGroup).getByRole('group', { name: 'Mia' })
-    const past = within(mia).getByRole('button', { name: /^Past sessions with Mia$/ })
-    const newer = within(mia).getByRole('button', { name: /^New chat with Mia$/ })
-    expect(past.compareDocumentPosition(newer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(past.contains(newer)).toBe(false)
-    expect(newer.contains(past)).toBe(false)
+    expect(within(mia).getAllByRole('button', { name: 'More actions for Mia' })).toHaveLength(1)
+    expect(within(mia).queryByRole('button', { name: /^Past sessions with Mia$/ })).toBeNull()
+    expect(within(mia).queryByRole('button', { name: /^New chat with Mia$/ })).toBeNull()
+    // D7: the New chat entry is gone everywhere on the row, not renamed.
+    expect(within(mia).queryByText(/^New chat/)).toBeNull()
   })
 
-  it('R22 keeps icon-only labelled actions beside the selected agent, including in an extra chat', async () => {
+  it('R22 keeps one icon-only labelled action beside the selected agent, including in an extra chat', async () => {
     act(() => {
       useWorkspacesStore.setState({ activeWorkspaceId: product.id })
       useSessionStore.setState({ activeSessionId: 'extra-newer', activeAgentId: 'mia' })
@@ -337,21 +337,18 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
     const group = await screen.findByRole('group', { name: 'Product launch' })
     const row = within(group).getByRole('group', { name: 'Mia' })
     const main = within(row).getByRole('button', { name: /^Mia$/ })
-    const past = within(row).getByRole('button', { name: /^Past sessions with Mia$/ })
-    const extra = within(row).getByRole('button', { name: /^New chat with Mia$/ })
+    const menu = within(row).getByRole('button', { name: /^More actions for Mia$/ })
 
     expect(row).toHaveAttribute('data-selected', 'true')
     expect(main).toHaveAttribute('aria-current', 'true')
-    expect(past).toHaveAttribute('title', 'Past sessions with Mia')
-    expect(extra).toHaveAttribute('title', 'New chat with Mia')
-    expect(past.textContent).toBe('')
-    expect(extra.textContent).toBe('')
-    expect(past.querySelector('svg')).not.toBeNull()
-    expect(extra.querySelector('svg')).not.toBeNull()
-    expect(main.contains(past)).toBe(false)
-    expect(main.contains(extra)).toBe(false)
-    expect(main.compareDocumentPosition(past) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
-    expect(past.compareDocumentPosition(extra) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(menu).toHaveAttribute('aria-label', 'More actions for Mia')
+    expect(menu.textContent).toBe('')
+    expect(menu.querySelector('svg')).not.toBeNull()
+    expect(main.contains(menu)).toBe(false)
+    expect(main.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    // The trigger rides the .sidebar-agent-actions container, so the
+    // hover/selected/focus-within reveal (agent-row.css) still applies.
+    expect(menu.closest('.sidebar-agent-actions')).not.toBeNull()
   })
 
   it('R22 selection follows the immutable owner in this workspace, never the same agent in another workspace', async () => {
@@ -374,21 +371,11 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
     expect(within(productGroup).getByRole('group', { name: 'Jim' })).toHaveAttribute('data-selected', 'true')
   })
 
-  it('BDD-03.2 Past sessions opens one modal filtered by this workspace and this agent', async () => {
-    renderSidebar()
-    await expandAgents('Product launch')
-    const productGroup = await screen.findByRole('group', { name: 'Product launch' })
-    const mia = within(productGroup).getByRole('group', { name: 'Mia' })
-    fireEvent.click(within(mia).getByRole('button', { name: /^Past sessions with Mia$/ }))
-    const modal = useUiStore.getState() as {
-      searchModalOpen: boolean
-      searchModalWorkspaceFilter: string | null
-      searchModalAgentFilter?: string
-    }
-    expect(modal.searchModalOpen).toBe(true)
-    expect(modal.searchModalWorkspaceFilter).toBe('product-launch')
-    expect(modal.searchModalAgentFilter).toBe('mia')
-  })
+  // BDD-03.2 ("Past sessions opens one modal filtered by this workspace and
+  // this agent") moved to WorkspaceAgentList.rowMenu.test.tsx (D3 History):
+  // this file stubs the dropdown primitive away (no menu items, no onSelect),
+  // so the menu can only be exercised for real against the component with the
+  // catalogued primitive mounted.
 
   it('N10 Admin is a row in the default workspace and not in Product launch', async () => {
     renderSidebar()

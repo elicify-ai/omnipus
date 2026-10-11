@@ -48,7 +48,8 @@
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, waitForConnected, startNewChat, assistantMessages, userMessages } from './fixtures/selectors'
+import { chatInput, waitForConnected, assistantMessages, userMessages } from './fixtures/selectors'
+import { freshChat } from './fixtures/session-setup'
 import { installFreezeProxy } from './helpers/freezeProxy'
 import { GatewayProcess } from './fixtures/gateway-process'
 
@@ -115,7 +116,7 @@ async function startLongTurn(
   const input = chatInput(page)
   await expect(input).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
-  await startNewChat(page)
+  await freshChat(page)
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
   // Bounded (fail fast): an unbounded fill/press rides the locator default
   // (config sets no actionTimeout) out to the whole test timeout when a modal
@@ -453,7 +454,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   test('f: two chats active during an outage — A incremental, B complete on switch', async ({ page, context }) => {
     test.setTimeout(420_000)
     const beforeA = await startLongTurn(page)
-    await startNewChat(page)
+    await freshChat(page)
     const beforeB = await startLongTurn(page)
     await context.setOffline(true)
     await page.waitForTimeout(45_000)
@@ -471,7 +472,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     const input = chatInput(page)
     await expect(input).toBeVisible({ timeout: 15_000 })
     await waitForConnected(page)
-    await startNewChat(page)
+    await freshChat(page)
     // Founder decision Q6: real wait. Lane A's test-only idle-eviction
     // shortcut (`b588bbb04`) is `OMNIPUS_TEST_ONLY_HUB_IDLE_EVICT_SECONDS`
     // — an env var read once at gateway startup
@@ -559,7 +560,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         const input = chatInput(page)
         await expect(input).toBeVisible({ timeout: 15_000 })
         await waitForConnected(page)
-        await startNewChat(page)
+        await freshChat(page)
         await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
         // Token delay plus the explicit running precondition make a finite
         // answer long enough to interrupt, and still let its manual retry finish.
@@ -656,7 +657,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     const input = chatInput(page)
     await expect(input).toBeVisible({ timeout: 15_000 })
     await waitForConnected(page)
-    await startNewChat(page)
+    await freshChat(page)
     await context.setOffline(true)
     await page.evaluate(() => window.dispatchEvent(new Event('offline')))
     await input.fill('typed while offline')

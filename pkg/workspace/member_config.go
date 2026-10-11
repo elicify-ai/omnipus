@@ -29,21 +29,47 @@ type MemberHeartbeat struct {
 }
 
 // MemberConfig is the per-member configuration stored on a Workspace record
-// (keyed by agent ID in MemberConfigs). Currently carries only heartbeat
-// settings; the struct is extensible for future per-member concerns.
+// (keyed by agent ID in MemberConfigs). Carries the heartbeat settings and the
+// display-only sidebar flag.
+//
+// Merge semantics (ADR-hide-from-sidebar addendum 2026-10-11, founder ruling
+// "hiding is only hiding"): an incoming member_config REPLACES the stored one
+// — an omitted heartbeat clears it, with the disable transition — except
+// exactly two display-flag rules the gateway PUT handler enforces:
+//   - hidden_from_sidebar absent => the stored flag is preserved (a
+//     heartbeat save never un-hides);
+//   - a pure hide/show entry (flag present, heartbeat absent) preserves the
+//     stored heartbeat, so hide/show never changes any other setting.
+//
+// An entry with neither field ({}) keeps the ordinary replace behaviour: the
+// stored heartbeat is cleared, the flag still preserved by the first rule. A
+// heartbeat the body DOES carry is replaced wholesale, never merged
+// field-by-field.
 type MemberConfig struct {
 	Heartbeat *MemberHeartbeat `json:"heartbeat,omitempty"`
+
+	// HiddenFromSidebar is DISPLAY-ONLY (D5): when true the sidebar omits the
+	// member's row in this workspace, but the member stays a full team member
+	// — messageable, delegable, @-addressable; main and work untouched. It
+	// rides the member entry, so removing the member garbage-collects the
+	// flag with the entry and re-adding the agent starts visible. omitempty
+	// so records that never hid anyone serialize exactly as before.
+	HiddenFromSidebar bool `json:"hidden_from_sidebar,omitempty"`
 }
 
 // ValidateMemberConfigs checks a proposed member_configs map against the
 // workspace's current CoreTeam and the isWorker predicate.
 //
-// Validation rules (FR-003/004/005/005b/025):
+// Validation rules (FR-003/004/005/005b/025, plus the sidebar flag from
+// ADR-hide-from-sidebar):
 //   - Every key must be present in coreTeam (unknown-member reject).
+//   - A worker agent (isWorker returns true) must not have a heartbeat.
+//   - A worker agent must not be hidden from the sidebar: sidebar rows exist
+//     only for main-eligible colleagues, so the flag would be inert there —
+//     mirroring the worker-heartbeat rule keeps the API honest.
 //   - When a heartbeat is enabled, IntervalMinutes must be ≥ 5.
 //   - Body length must not exceed MaxHeartbeatBodyBytes.
 //   - Enabled=true requires a non-empty Body.
-//   - A worker agent (isWorker returns true) must not have a heartbeat.
 //
 // Returns the first validation error encountered, or nil if all entries are
 // valid. Callers (gateway handler) map these to HTTP 422 responses.
@@ -56,6 +82,9 @@ func ValidateMemberConfigs(coreTeam []string, mc map[string]MemberConfig, isWork
 	for agentID, cfg := range mc {
 		if !teamSet[agentID] {
 			return fmt.Errorf("member_configs: agent %q is not in core_team (unknown member)", agentID)
+		}
+		if cfg.HiddenFromSidebar && isWorker != nil && isWorker(agentID) {
+			return fmt.Errorf("member_configs: agent %q is a worker and cannot be hidden from the sidebar", agentID)
 		}
 		hb := cfg.Heartbeat
 		if hb == nil {

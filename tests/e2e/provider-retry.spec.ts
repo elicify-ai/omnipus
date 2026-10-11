@@ -51,9 +51,9 @@ import { test } from './fixtures/console-errors';
 import {
   chatInput,
   waitForConnected,
-  startNewChat,
   assistantMessages,
 } from './fixtures/selectors';
+import { freshChat } from './fixtures/session-setup';
 import { GatewayProcess } from './fixtures/gateway-process';
 import http from 'node:http';
 
@@ -247,7 +247,7 @@ test.describe('provider-messages row 20 (A-1, A-5, DG-1, DG-2, MIN-005)', () => 
       const input = chatInput(page);
       await expect(input).toBeVisible({ timeout: 15_000 });
       await waitForConnected(page);
-      await startNewChat(page);
+      await freshChat(page);
       await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
       await input.fill('Say hello.');
       await input.press('Enter');

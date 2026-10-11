@@ -15,7 +15,8 @@
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, waitForConnected, startNewChat, assistantMessages } from './fixtures/selectors'
+import { chatInput, waitForConnected, assistantMessages } from './fixtures/selectors'
+import { freshChat } from './fixtures/session-setup'
 
 // Plain prose, no tools: a single long streaming round with a stable shape.
 const LONG_PROMPT =
@@ -29,7 +30,7 @@ async function startLongTurn(page: Page): Promise<string> {
   const input = chatInput(page)
   await expect(input).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
-  await startNewChat(page)
+  await freshChat(page)
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
   await input.fill(LONG_PROMPT)
   await input.press('Enter')

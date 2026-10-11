@@ -41,6 +41,12 @@ properties:
       for agents no longer on the core team. main_session_id is server-owned
       and read-only: a value sent here is ignored, and the server always
       reprojects its own computed main session id. There is no client-supplied
-      session address of any kind.
+      session address of any kind. Two display-flag exceptions:
+      hidden_from_sidebar absent => the stored flag is preserved (a heartbeat
+      save never un-hides); hidden_from_sidebar present with heartbeat absent
+      (a pure hide/show) => the stored heartbeat is preserved unchanged. An
+      entry with neither field ({}) keeps the ordinary replace behaviour —
+      the stored heartbeat is cleared. A heartbeat that IS present is always
+      replaced wholesale, never merged field-by-field.
 additionalProperties: false
 minProperties: 2

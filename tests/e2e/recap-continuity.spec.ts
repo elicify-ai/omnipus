@@ -47,7 +47,8 @@ import { test, expect, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { chatInput, assistantMessages, startNewChat } from './fixtures/selectors';
+import { chatInput, assistantMessages } from './fixtures/selectors';
+import { freshChat } from './fixtures/session-setup';
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
 const OMNIPUS_HOME = process.env.OMNIPUS_HOME || path.join(process.env.HOME || '', '.omnipus');
@@ -177,7 +178,7 @@ test(
     await pollLastSession(page, agentId, nonce);
 
     // ── A NEW chat with the same agent: the recap must be injected ──────────
-    await startNewChat(page);
+    await freshChat(page);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 15_000 });
     const fresh = chatInput(page);
     await fresh.fill('What was the launch codename I told you about? Answer with just the codename.');

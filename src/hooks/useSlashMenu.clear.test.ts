@@ -227,7 +227,11 @@ describe('useSlashMenu — /new is retired (WC-1): never sent, never a session, 
     const reply = appendMessage.mock.calls[0][0] as { role: string; content: string }
     expect(reply.role).toBe('system')
     expect(reply.content).toContain('/new')
-    expect(reply.content).toContain('New chat')
+    // CR F9: the reply must NOT promise the removed row action (D7) — it
+    // states there is no sidebar entry and names /clear instead.
+    expect(reply.content).toContain('no longer exists')
+    expect(reply.content).toContain('no sidebar entry to start an extra chat')
+    expect(reply.content).not.toContain('New chat action')
     expect(reply.content).toContain('/clear')
     // The composer text is consumed (the refused command does not linger).
     expect(composerRuntime.setText).toHaveBeenCalledWith('')
