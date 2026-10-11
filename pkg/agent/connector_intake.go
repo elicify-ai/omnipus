@@ -180,7 +180,7 @@ func (al *AgentLoop) admitBoundConnectorInputCtx(ctx context.Context, msg *bus.I
 		Participant: participantFromSender(capture.Sender, al.agentDisplayName),
 	}
 	if aErr := store.AppendTranscriptStrict(meta.ID, entry); aErr != nil {
-		al.pendingRequests.Delete(requestID)
+		al.settleRequest(requestID)
 		if dErr := ledger.Discard(meta.ID, requestID); dErr != nil {
 			logger.WarnCF("agent", "connector request capture could not be discarded after a failed append",
 				map[string]any{"request_id": requestID, "error": dErr.Error()})
