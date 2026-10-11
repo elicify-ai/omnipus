@@ -12,7 +12,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
 import { EMPTY_BUCKET, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from './runtime-state'
 import { applyMessageArray, emptySessionState, omitKeys } from './session'
-import { flushHeldClearProjection, retryClearTranscriptRead, setClearRefetchBucketWriter } from './clear-refetch'
+import { flushHeldClearProjection, retryClearTranscriptRead } from './clear-refetch'
 import type { ChatMessage, ChatStore, OutboundQueueItem, RateLimitEventData, SessionChatState } from './types'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
@@ -167,12 +167,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
       return { sessionsById, ...bucketToForeground(activeBucket) }
     })
   }
-  // R1#1 (delta re-review): the /clear bounded-wait timer lives in
-  // clear-refetch.ts, which cannot import this store (this module imports
-  // it — a cycle), so it resolves its row through this one registration.
-  // Registered at store creation, before any send can arm a timer.
-  setClearRefetchBucketWriter(withBucket)
-
   /**
    * Remove a bucket entirely (unlike `withBucket`, which can only
    * patch/create). Used for FULL teardown of the `'__pending'` bucket —

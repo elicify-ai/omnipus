@@ -66,21 +66,12 @@ export interface PendingClearRefresh {
    * at arm time belongs to an EARLIER clear, never to this one.
    */
   knownMarkerIds?: string[]
-  /** Re-reads that did not settle this operation (no own user row, or no marker yet). Bounded by MAX_UNRESOLVED_READS in clear-refetch.ts. */
+  /** Re-reads that did not settle this operation (no own user row, or no marker yet) — diagnostic only; there is NO bound (ruling S3-02). */
   unresolvedReads?: number
   /** True once the user was told an application failure is being retried, so it is said once. */
   applyFailureShown?: boolean
 }
 export const pendingClearRefetches: Record<string, PendingClearRefresh | undefined> = {}
-
-/**
- * The bounded-wait timer per session (R1#1, delta re-review): armed when a
- * /clear goes out, fired only if the server has neither confirmed (marker
- * applied) nor refused (not-performed reply / discard / failure) by the
- * bound — the lost-clear case. Lives beside pendingClearRefetches; owned by
- * clear-refetch.ts (arm/drop), see CLEAR_CONFIRM_TIMEOUT_MS there.
- */
-export const clearConfirmTimers: Record<string, ReturnType<typeof setTimeout> | undefined> = {}
 
 // #823 catch-up redesign, Opus review round 2 item 7 (LOW): applySeqGate's
 // gap branch (frames.ts) sends `attach_session{S, cursor}` to recover from a

@@ -46,7 +46,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { expect, type Page, type Locator } from "@playwright/test";
+import { expect, type Page, type Locator, type TestInfo } from "@playwright/test";
 import { test } from "./fixtures/console-errors";
 import {
   chatInput,
@@ -326,44 +326,12 @@ function dataUrlToPngBuffer(dataUrl: string): Buffer {
   return Buffer.from(base64, "base64");
 }
 
-test.beforeEach(async ({ page }) => {
-  await page.goto("/");
-  // Squad J instrumentation — patch RTCPeerConnection so the first oracle
-  // failure in this spec can dump pc/track/stats state. Idempotent.
-  await installWebrtcDebug(page);
-});
-
-// DISABLED (2026-09-28): intermittent hang under CI, root cause not yet found —
-// a real Playwright failure captured on a related run was
-// `locator.click: Test timeout of 720000ms exceeded`. Founder-ruled: stop
-// investigating for now, disable instead. Tracked as
-// https://github.com/elicify-ai/omnipus/issues/1015 ("Live-video e2e tests
-// disabled — intermittent hang"). Do not delete this test's body — re-enable
-// (test.fixme -> test) once #1015's root cause is fixed and verified stable.
-test.fixme(
-  "live browser view streams genuinely playing video with real audio and realtime input",
-  async ({
-    page,
-  }, testInfo) => {
-  // Budget (worst-case ceiling, same accounting discipline as media.spec.ts):
-  //   Agent picker + Jim selection + input visibility ...................... ~35s
-  //   assistantMessages toHaveCount ceiling ................................ 240s
-  //   waitForTurnFullyDone: gapMs(8s) + follow-up-call ceiling(180s) ....... 188s
-  //   LIVE_PROBE_READY text assertion ........................................ 15s
-  //   Watch-live click + panel visible ....................................... 30s
-  //   sink detection poll (video-vs-JPEG-vs-neither honesty gate) ........... 90s
-  //   motion/frame-count/rVFC evidence (waits ~1.5s each) .................... 20s
-  //   audio RMS sampling (~800ms sampling window) ........................... 15s
-  //   input-latency poll ceiling ............................................. 5s
-  //   a11y scan ............................................................. 10s
-  // Worst-case total: 35+240+188+15+30+90+20+15+5+10 = 648s.
-  // Budget: 648s ceiling + ~11% margin for CI scheduling jitter = 720s (12 min).
-  // (Was 900s while this spec opened the live browser up front as an
-  // issue-#671 mitigation. Removing that step does not make real runs
-  // slower — it moves the cold Chrome launch back inside the 240s agent
-  // turn, which is where it was always paid before the mitigation existed.)
-  test.setTimeout(720_000);
-
+async function runLiveProbeSetup(page: Page): Promise<{
+  relDir: string;
+  input: Locator;
+  panel: Locator;
+  addressBar: Locator;
+}> {
   // ── Setup: seed the deterministic fixture directly on disk (no LLM
   // authoring involved — deterministic content, matching media.spec.ts's
   // send_file fixture pattern) ───────────────────────────────────────────
@@ -416,34 +384,15 @@ test.fixme(
   // below both as the "the operator's tab now exists" signal and as the
   // diagnosis when no frame ever paints.
   const addressBar = page.getByRole("textbox", { name: "Address bar" });
+  return { relDir, input, panel, addressBar };
+}
 
-  // ── The operator's tab set is deliberately left EMPTY here ───────────
-  //
-  // This is the regression guard for issue #671, and the reason it is an
-  // absence rather than a step.
-  //
-  // A browser has two tab sets: the operator's workspace-owned one and each
-  // chat's own. The live panel used to be hard-wired to the operator's,
-  // while an agent's browser_* tools drive the chat's — so whenever the
-  // operator's set was empty, the agent browsed in a tab the panel
-  // structurally could not look at, and "Watch live" showed a perfectly
-  // painted /browser-start page with no error of any kind. Measured
-  // top-band luminance was 22.7 on both a 15s and a 45s budget, identical to
-  // the decimal, because nothing was ever starting slowly: it was the wrong
-  // tab, rendered correctly.
-  //
-  // This test used to paper over that by opening the panel once up front to
-  // create the operator's set, which made the agent's navigate divert onto a
-  // tab the panel already watched. That mitigation is removed: the panel now
-  // resolves the tab set from the chat it was opened for
-  // (BrowserManager.PanelTabSetID), so panel and agent can no longer
-  // diverge. Leaving the set empty means this spec exercises the exact shape
-  // that used to fail — a fresh workspace whose first browse is the agent's
-  // own — and the video assertions below are what would catch it coming
-  // back, including in the capture binding, which has no unit-level proof
-  // because it needs a real Chromium.
-
-  const countBefore = await assistantMessages(page).count();
+async function driveAgentToProbe(
+  page: Page,
+  input: Locator,
+  relDir: string,
+  countBefore: number,
+): Promise<void> {
   await test.step("drive the agent to serve+navigate+click a deterministic motion+audio page", async () => {
     await input.fill(
       [
@@ -466,7 +415,9 @@ test.fixme(
       timeout: 15_000,
     });
   });
+}
 
+async function openLiveView(page: Page, panel: Locator): Promise<void> {
   // ── Open the live view ────────────────────────────────────────────────
   await test.step('open the live view via "Watch live"', async () => {
     const btn = watchLiveButton(page);
@@ -474,7 +425,9 @@ test.fixme(
     await btn.click();
     await expect(panel).toBeVisible({ timeout: 15_000 });
   });
+}
 
+async function assertLiveWebrtcSinkIsVideo(page: Page): Promise<Locator> {
   // ── HONESTY GATE (non-negotiable) ─────────────────────────────────────
   // WebRTC cold start can legitimately take up to ~30s
   // (BrowserWebRTCSession's firstAnswerTimeoutMs) plus one 15s automatic
@@ -523,7 +476,15 @@ test.fixme(
     hasLiveStream,
     "browser-live-video must have a real MediaStream srcObject attached",
   ).toBe(true);
+  return video;
+}
 
+async function assertVideoPixelsChange(
+  page: Page,
+  video: Locator,
+  addressBar: Locator,
+  testInfo: TestInfo,
+): Promise<void> {
   // ── Evidence 1: genuine motion — two frames, sampled ~1.5s apart, MUST
   // differ, and neither may be blank/black (guards against "different
   // noise on a black screen"). ──────────────────────────────────────────
@@ -696,7 +657,12 @@ test.fixme(
         "video is frozen (or a hardcoded/static frame), not genuinely playing",
     ).toBeGreaterThan(30);
   });
+}
 
+async function assertTotalVideoFramesIncrease(
+  page: Page,
+  video: Locator,
+): Promise<void> {
   // ── Evidence 2: a SECOND, independent "is it really playing" signal —
   // getVideoPlaybackQuality().totalVideoFrames must increase over time. ──
   await test.step("evidence: totalVideoFrames increases (second independent playing signal)", async () => {
@@ -738,7 +704,12 @@ test.fixme(
         "— a stalled/frozen decode would leave this flat",
     ).toBeGreaterThan(framesBefore);
   });
+}
 
+async function assertAudioSignal(
+  video: Locator,
+  testInfo: TestInfo,
+): Promise<void> {
   // ── Evidence 3: audio is flowing — pull the audio track off the SAME
   // srcObject MediaStream, run it through a WebAudio AnalyserNode, and
   // assert a SUSTAINED non-zero signal (not a single lucky sample). Muted
@@ -800,7 +771,13 @@ test.fixme(
         "not satisfy this, ruling out transient noise as a false positive.",
     ).toBeGreaterThanOrEqual(6);
   });
+}
 
+async function assertRealtimeInput(
+  page: Page,
+  video: Locator,
+  testInfo: TestInfo,
+): Promise<void> {
   // ── Evidence 4: input is realtime — dispatch a real click through the
   // live panel and measure the round trip to an observable pixel change
   // in the CAPTURED video (agent's tab → CDP/DC input → target page click
@@ -869,4 +846,79 @@ test.fixme(
       `end-to-end input latency (${latencyMs}ms) exceeded the realtime budget`,
     ).toBeLessThan(3_000);
   });
+}
+
+test.beforeEach(async ({ page }) => {
+  await page.goto("/");
+  // Squad J instrumentation — patch RTCPeerConnection so the first oracle
+  // failure in this spec can dump pc/track/stats state. Idempotent.
+  await installWebrtcDebug(page);
+});
+
+// DISABLED (2026-09-28): intermittent hang under CI, root cause not yet found —
+// a real Playwright failure captured on a related run was
+// `locator.click: Test timeout of 720000ms exceeded`. Founder-ruled: stop
+// investigating for now, disable instead. Tracked as
+// https://github.com/elicify-ai/omnipus/issues/1015 ("Live-video e2e tests
+// disabled — intermittent hang"). Do not delete this test's body — re-enable
+// (test.fixme -> test) once #1015's root cause is fixed and verified stable.
+test.fixme(
+  "live browser view streams genuinely playing video with real audio and realtime input",
+  async ({
+    page,
+  }, testInfo) => {
+  // Budget (worst-case ceiling, same accounting discipline as media.spec.ts):
+  //   Agent picker + Jim selection + input visibility ...................... ~35s
+  //   assistantMessages toHaveCount ceiling ................................ 240s
+  //   waitForTurnFullyDone: gapMs(8s) + follow-up-call ceiling(180s) ....... 188s
+  //   LIVE_PROBE_READY text assertion ........................................ 15s
+  //   Watch-live click + panel visible ....................................... 30s
+  //   sink detection poll (video-vs-JPEG-vs-neither honesty gate) ........... 90s
+  //   motion/frame-count/rVFC evidence (waits ~1.5s each) .................... 20s
+  //   audio RMS sampling (~800ms sampling window) ........................... 15s
+  //   input-latency poll ceiling ............................................. 5s
+  //   a11y scan ............................................................. 10s
+  // Worst-case total: 35+240+188+15+30+90+20+15+5+10 = 648s.
+  // Budget: 648s ceiling + ~11% margin for CI scheduling jitter = 720s (12 min).
+  // (Was 900s while this spec opened the live browser up front as an
+  // issue-#671 mitigation. Removing that step does not make real runs
+  // slower — it moves the cold Chrome launch back inside the 240s agent
+  // turn, which is where it was always paid before the mitigation existed.)
+  test.setTimeout(720_000);
+
+  const { relDir, input, panel, addressBar } = await runLiveProbeSetup(page);
+
+  // ── The operator's tab set is deliberately left EMPTY here ───────────
+  //
+  // This is the regression guard for issue #671, and the reason it is an
+  // absence rather than a step.
+  //
+  // A browser has two tab sets: the operator's workspace-owned one and each
+  // chat's own. The live panel used to be hard-wired to the operator's,
+  // while an agent's browser_* tools drive the chat's — so whenever the
+  // operator's set was empty, the agent browsed in a tab the panel
+  // structurally could not look at, and "Watch live" showed a perfectly
+  // painted /browser-start page with no error of any kind. Measured
+  // top-band luminance was 22.7 on both a 15s and a 45s budget, identical to
+  // the decimal, because nothing was ever starting slowly: it was the wrong
+  // tab, rendered correctly.
+  //
+  // This test used to paper over that by opening the panel once up front to
+  // create the operator's set, which made the agent's navigate divert onto a
+  // tab the panel already watched. That mitigation is removed: the panel now
+  // resolves the tab set from the chat it was opened for
+  // (BrowserManager.PanelTabSetID), so panel and agent can no longer
+  // diverge. Leaving the set empty means this spec exercises the exact shape
+  // that used to fail — a fresh workspace whose first browse is the agent's
+  // own — and the video assertions below are what would catch it coming
+  // back, including in the capture binding, which has no unit-level proof
+  // because it needs a real Chromium.
+  const countBefore = await assistantMessages(page).count();
+  await driveAgentToProbe(page, input, relDir, countBefore);
+  await openLiveView(page, panel);
+  const video = await assertLiveWebrtcSinkIsVideo(page);
+  await assertVideoPixelsChange(page, video, addressBar, testInfo);
+  await assertTotalVideoFramesIncrease(page, video);
+  await assertAudioSignal(video, testInfo);
+  await assertRealtimeInput(page, video, testInfo);
 });

@@ -137,7 +137,10 @@ func TestAnswerRequest_SchemaIsMinimalAndExact(t *testing.T) {
 	if tool.Name() != "answer_request" {
 		t.Fatalf("name = %q", tool.Name())
 	}
-	props := tool.Parameters()["properties"].(map[string]any)
+	props, ok := tool.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties is %T, want map[string]any", tool.Parameters()["properties"])
+	}
 	if len(props) != 2 || props["request_id"] == nil || props["text"] == nil {
 		t.Fatalf("properties = %v, want exactly request_id and text", props)
 	}

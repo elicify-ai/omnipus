@@ -14,6 +14,7 @@ import type {
   LLMError as GeneratedLLMError,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
+import type { UserDeliveryState } from '@/lib/userDeliveryState'
 
 /**
  * #823 catch-up redesign (BE-DESIGN.md §6.1) — the SPA's per-session
@@ -180,15 +181,15 @@ export type ChatMessage = Message & {
   /** Ordinary first-send status only; workspace kickoffs never use it. */
   firstSendStatus?: FirstSendStatus
   /**
-   * SPA-only acknowledgement state for a user-authored message. The two
-   * /clear-only terminal states (delta re-review C1/R1#1, 2026-10-11) name
-   * the outcomes no wire state covers: 'not-performed' — the server replied
-   * "/clear was not performed …" (pkg/agent/clear_while_busy.go); and
-   * 'unconfirmed' — the bounded wait ended with the server neither
-   * confirming nor refusing the clear. Both are RESOLVED rows: never
-   * pending-tail, never the offline "will be sent automatically" look.
+   * SPA-only acknowledgement state for a user-authored message. Ruling
+   * S3-02 (2026-10-12): /clear outcomes are wire states — a refusal arrives
+   * as 'failed' (message_status for the /clear's client_message_id, any
+   * refusal path), a done clear applies the fresh marker projection, and a
+   * HELD clear simply stays 'queued' with no deadline. The former
+   * /clear-only 'not-performed' and 'unconfirmed' states (and the 90 s
+   * bounded wait that produced the latter) are deleted.
    */
-  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded' | 'not-performed' | 'unconfirmed'
+  deliveryStatus?: UserDeliveryState
   media?: MediaAttachment[]
   /**
    * Review finding 17 — the `media://` refs (opts.mediaRefs) this user
@@ -440,7 +441,8 @@ export interface SessionChatState {
    * that already ended (after Stop, done, a discarded send); a start that finds
    * the flag already up belongs to a turn in flight. The result releases the
    * flag only for an idle-armed call (see busyFlagIsUnbacked), so a mid-turn
-   * tool result never blinks Stop off. Entries are removed at the call's result.
+   * tool result never blinks Stop off. Overlapping stragglers form one burst:
+   * the marks are cleared together when no tool is running any more.
    */
   idleArmedToolCalls?: Record<string, true>
   toolCalls: Record<string, ToolCall & { call_id: string }>

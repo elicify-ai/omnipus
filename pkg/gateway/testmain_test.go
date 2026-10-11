@@ -16,6 +16,9 @@ import (
 
 func TestMain(m *testing.M) {
 	testutil.RegisterGatewayRunner(RunContext)
+	if stale := removeStaleLeakedLocks("entities"); len(stale) > 0 {
+		println("gateway TestMain: removed", len(stale), "stale lock file(s) left in the package directory by an earlier run:", strings.Join(stale, ", "))
+	}
 	code := m.Run()
 	if leaked := leakedPackageDirFiles(); len(leaked) > 0 && code == 0 {
 		println("gateway TestMain: a test wrote into the package directory instead of its temp home:", strings.Join(leaked, ", "))

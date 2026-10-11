@@ -282,7 +282,7 @@ func TestDeltaGW_ScheduledMainRun_UsesTheRunnersHome(t *testing.T) {
 		ID: "W12", Name: "W12", Status: "active", IsDefault: true, CoreTeam: []string{"mia"},
 		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
 	}))
-	r, _, _, _ := newRunnerHarness(t, baseConfig(), map[string]bool{"mia": true})
+	r := newRunnerOnly(t, baseConfig(), map[string]bool{"mia": true})
 	r.home = runnerHome
 	job := &cron.CronJob{ID: "m12", Name: "derived", AgentID: "mia", CreatedBy: "alice",
 		SessionMode: cron.SessionModeMain, Payload: cron.CronPayload{Message: "do it"}}

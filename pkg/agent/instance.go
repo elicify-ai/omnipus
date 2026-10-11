@@ -115,7 +115,8 @@ type AgentInstance struct {
 	// list) for callers that want to inspect the raw configured grant.
 	// ADR-072 D1/D3: this is NOT unioned into a turn's active skills any more
 	// — activeSkillNames (loop.go) only reflects opts.ForcedSkills, populated
-	// by the /<slug> command and delegate's requested_skill. The actual grant
+	// only by the /<slug> command (loop_slash.go::applyExplicitSkillCommand);
+	// delegate's requested_skill no longer writes it. The actual grant
 	// enforcement (which names ARE allowed) lives on
 	// ContextBuilder.skillAllowlist / skillAllowed, installed from this same
 	// source via WithSkillAllowlist — this field is a convenience mirror, not

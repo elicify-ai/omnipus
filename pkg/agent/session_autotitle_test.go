@@ -21,6 +21,8 @@ func TestAutoTitleAfterFirstReply(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", home)
 	provider := testutil.NewScenario().WithText("Sure, here is a plan.").WithUsage(10, 5).
 		WithText("Sure, here is a plan.").WithUsage(10, 5).
+		WithText("Sure, here is a plan.").WithUsage(10, 5).
+		// Fourth turn: the non-chat session-type case below.
 		WithText("Sure, here is a plan.").WithUsage(10, 5)
 
 	cfg := &config.Config{}
@@ -69,5 +71,49 @@ func TestAutoTitleAfterFirstReply(t *testing.T) {
 		require.NoError(t, err)
 		run(t, main.ID, "Plan my week please")
 		require.Empty(t, title(t, main.ID), "a main's title is derived on read, never stored")
+	})
+
+	// S1-16: the empty-reply guard. autoTitleAfterFirstReply returns early when
+	// the reply's final content is empty, so a turn that produced no reply text
+	// leaves the session untitled. Driven through the guard directly: an empty
+	// scripted reply is retried by the provider (it consumes the next scripted
+	// turn), so the run path cannot construct the state this guard exists for.
+	// The control call on a second session proves the check can see the
+	// difference rather than passing for an unrelated reason.
+	t.Run("an empty first reply leaves the session untitled", func(t *testing.T) {
+		const msg = "Plan my week please"
+		empty, err := store.NewSession(session.SessionTypeChat, "web", "jim")
+		require.NoError(t, err)
+		control, err := store.NewSession(session.SessionTypeChat, "web", "jim")
+		require.NoError(t, err)
+
+		(&turnState{
+			transcriptStore:     store,
+			transcriptSessionID: empty.ID,
+			opts:                processOptions{UserMessage: msg},
+		}).autoTitleAfterFirstReply("")
+
+		require.Empty(t, title(t, empty.ID),
+			"a session whose first reply was empty must not be titled")
+
+		(&turnState{
+			transcriptStore:     store,
+			transcriptSessionID: control.ID,
+			opts:                processOptions{UserMessage: msg},
+		}).autoTitleAfterFirstReply("Sure, here is a plan.")
+		require.Equal(t, msg, title(t, control.ID),
+			"instrument: the same fixture DOES title a session when the reply was non-empty")
+	})
+
+	// S1-16: the ruling covers EVERY session other than a main — including a
+	// non-chat type. The guard excludes only a main, and SetTitleIfEmpty is what
+	// enforces that, so a task session IS titled from its first message.
+	t.Run("a non-chat, non-main session is titled too (the ruling names only mains as exempt)", func(t *testing.T) {
+		tk, err := store.NewSession(session.SessionTypeTask, "web", "jim")
+		require.NoError(t, err)
+		require.Empty(t, title(t, tk.ID), "instrument: a fresh task session starts untitled")
+		run(t, tk.ID, "Plan my week please")
+		require.Equal(t, "Plan my week please", title(t, tk.ID),
+			"the ruling exempts a MAIN only; a task session is titled from its first reply like any other")
 	})
 }

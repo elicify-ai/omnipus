@@ -228,3 +228,61 @@ func TestTaskCreate_GoalWriteFailureRollsBackTask(t *testing.T) {
 		t.Errorf("error must not claim the task exists once it is rolled back: %s", res.ForLLM)
 	}
 }
+
+// S1-06 (create_task authorization-before-workspace, 8b0dfda51): an explicit
+// workspace_id is resolved BEFORE the delegation gate — the gate must run
+// against the destination workspace's graph — but an IMPLICIT one is resolved
+// only AFTER it, so a denied caller sees the DENIAL and never a workspace
+// error. Before the reorder validateRequest resolved the target workspace
+// unconditionally, so a caller who was about to be denied for delegation got
+// "task_create failed: could not resolve default workspace" instead, and a
+// regression that moved resolution back before the gate would restore exactly
+// that masking.
+func TestTaskCreate_DeniedCallerSeesTheDenialNotAWorkspaceError(t *testing.T) {
+	f := newTGFixture(t)
+	// Nothing is bound on the turn context and no workspace exists on disk, so
+	// resolving the caller's own (implicit) workspace fails outright.
+	f.tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial {
+		return &DelegationDenial{Reason: "not a delegate", Policy: DenyTrustSet, TargetAgentID: "assignee-b"}
+	})
+	ctx := WithAgentID(context.Background(), "creator-a") // deliberately NO WithWorkspaceID
+
+	res := f.tool.Execute(ctx, f.args("assignee-b", ""))
+	if !res.IsError {
+		t.Fatalf("a denied caller must be refused, got: %s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, DelegationDeniedCode) {
+		t.Fatalf("S1-06: the delegation denial must be what the caller sees, got: %s", res.ForLLM)
+	}
+	if strings.Contains(res.ForLLM, "could not resolve default workspace") {
+		t.Fatalf("S1-06: a workspace error must not mask the delegation denial, got: %s", res.ForLLM)
+	}
+	if all, _ := f.store.List(task.Filter{}); len(all) != 0 {
+		t.Fatalf("a denied create must write nothing, found %d task(s)", len(all))
+	}
+}
+
+// S1-06 control: the reorder narrowed WHEN an implicit workspace is resolved;
+// it must not weaken the pre-gate refusal an EXPLICIT bad workspace still gets.
+// A caller naming a workspace that does not exist is refused for that reason,
+// before the gate, exactly as before the reorder (C-TASK-TOOLS: "Null/empty/
+// invalid/inaccessible explicit choice refuses; no fallback"). The same
+// fixture with the deny-checker left permissive proves the workspace error is
+// not the denial in disguise.
+func TestTaskCreate_ExplicitUnknownWorkspaceIsStillRefusedBeforeTheGate(t *testing.T) {
+	f := newTGFixture(t)                             // default deny-checker: permissive, records the workspace it was asked about
+	tgSeedWorkspace(t, f.home, tgOwnWS, "creator-a") // the caller's own workspace must resolve first
+	ctx := WithAgentID(context.Background(), "creator-a")
+	ctx = WithWorkspaceID(ctx, tgOwnWS)
+
+	res := f.tool.Execute(ctx, f.args("assignee-b", "01JXTGNOSUCHWORKSPACE00001"))
+	if !res.IsError {
+		t.Fatalf("an explicit unknown workspace must be refused, got: %s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "does not exist") {
+		t.Fatalf("an explicit unknown workspace must be refused for THAT reason, got: %s", res.ForLLM)
+	}
+	if len(f.seen) != 0 {
+		t.Fatalf("the delegation gate must not run for an unresolvable explicit workspace, gate saw %v", f.seen)
+	}
+}

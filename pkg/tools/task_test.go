@@ -2139,3 +2139,30 @@ func TestTaskDeleteTool_NilStore_FailsClosedInsteadOfPanicking(t *testing.T) {
 		t.Fatalf("expected an ErrorResult for a nil task store, got %+v", res)
 	}
 }
+
+// S1-12 (architect ruling, intended): a steered helper runs at delegation depth
+// 1, so with performance.max_delegation_depth: 1 it cannot create a task - its
+// child task would be depth 2 - while a root (depth 0) chat still can.
+func TestTaskCreateTool_HelperAtDepthOne_CannotCreateATaskWhenTheBoundIsOne(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewTaskCreateTool(store)
+	tool.SetMaxDelegationDepth(1)
+	tool.SetDelegationDenyChecker(func(context.Context, string) *DelegationDenial { return nil })
+	args := map[string]any{"title": "t", "prompt": "p", "agent_id": "b", "criteria": validCriteriaArg(), "dod": validDoDArg()}
+
+	root := WithWorkspaceID(WithAgentID(context.Background(), "caller"), "ws")
+	if res := tool.Execute(root, args); res.IsError {
+		t.Fatalf("a root chat (depth 0) must still be able to create a task at bound 1: %s", res.ForLLM)
+	}
+
+	helper := WithDelegationDepth(root, 1) // what withSteeredDelegationDepth seeds for a helper
+	res := tool.Execute(helper, args)
+	if !res.IsError || !strings.Contains(res.ForLLM, "maximum task delegation depth (1) reached") {
+		t.Fatalf("a helper at depth 1 with max_delegation_depth 1 must be refused with the depth message; got error=%v %q", res.IsError, res.ForLLM)
+	}
+	all, _ := store.List(task.Filter{WorkspaceID: "ws"})
+	if len(all) != 1 {
+		t.Fatalf("the refused create left a task behind: %d tasks", len(all))
+	}
+}

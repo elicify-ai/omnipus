@@ -93,7 +93,14 @@ export function AgentRowMenu({
         state.setWorkspaceSessionDescriptor(workspace.id, null)
       }
       if (ownsSelectedChat) {
-        await runWorkspaceEntry(workspace.id)
+        try {
+          await runWorkspaceEntry(workspace.id)
+        } catch (err: unknown) {
+          // S4-02: the removal HAS succeeded here — a failed follow-up
+          // recovery reports the true state (removed; reopening the chat
+          // failed), never "Could not remove".
+          surfaceActionError(`Removed ${agentName}, but could not refresh the chat view`, err)
+        }
       }
     })().catch((err: unknown) => surfaceActionError(`Could not remove ${agentName}`, err))
   }
