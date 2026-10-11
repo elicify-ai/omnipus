@@ -426,6 +426,15 @@ export interface SessionChatState {
   /** Number of messages trimmed from the front of messageOrder (evicted from the ring buffer). */
   trimmedCount: number
 
+  /**
+   * Tool calls whose `tool_call_start` found the busy flag DOWN, i.e. that
+   * re-armed it themselves. Only such a start can be a straggler from a turn
+   * that already ended (after Stop, done, a discarded send); a start that finds
+   * the flag already up belongs to a turn in flight. The result releases the
+   * flag only for an idle-armed call (see busyFlagIsUnbacked), so a mid-turn
+   * tool result never blinks Stop off. Entries are removed at the call's result.
+   */
+  idleArmedToolCalls?: Record<string, true>
   toolCalls: Record<string, ToolCall & { call_id: string }>
   toolCallOrder: string[]
   textAtToolCallStart: Record<string, string>

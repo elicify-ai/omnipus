@@ -42,7 +42,7 @@ import {
   sessionAttention,
 } from '@/lib/nav/sessionCoreSeam'
 import { useConnectionStore } from '@/store/connection'
-import { useSessionStore } from '@/store/session'
+import { attachSessionCursorFields, useSessionStore } from '@/store/session'
 
 /** The one pending shown commit. Replaced wholesale by the next attach. */
 type ShownCommit = {
@@ -114,6 +114,10 @@ function sendCaptured(sessionId: string, fields: Record<string, unknown>): boole
   const frame = {
     type: 'attach_session' as const,
     session_id: sessionId,
+    // The bucket's own cursor, as every other attach sends it: without it the
+    // gateway answers this acknowledgement with a full snapshot + transcript
+    // replay (a cursorless attach is a first attach); with it, a tiny catch-up.
+    ...attachSessionCursorFields(sessionId),
     ...fields,
   } as AttachSessionFrame
   return connection.send(frame)

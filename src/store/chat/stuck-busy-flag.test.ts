@@ -154,3 +154,54 @@ describe('a send that is discarded or fails', () => {
     expect(bucket().isStreaming).toBe(true)
   })
 })
+
+// ── Delta review R3 ──────────────────────────────────────────────────────────
+
+describe('C3: a straggler tool call after a discarded send', () => {
+  beforeEach(() => {
+    useConnectionStore.setState({
+      connection: { send: () => true, close: () => {} } as never,
+      isConnected: true,
+    } as never)
+  })
+
+  it.each(['discarded', 'failed'] as const)('send -> %s -> straggler tool start/result leaves no stuck Stop', (state) => {
+    act(() => { useChatStore.getState().sendMessage('hello') })
+    const user = bucket().messages.find((m) => m.role === 'user')!
+    feed({ type: 'message_status', client_message_id: user.id, state })
+    expect(bucket().isStreaming).toBe(false)
+
+    feed(TOOL_START)
+    expect(anyRunningTool()).toBe(true)
+    feed(TOOL_RESULT)
+    expect(anyStreamingMessage(), 'the straggler must not mint a streaming bubble that backs the flag').toBe(false)
+    expect(bucket().isStreaming, 'Stop must not stay up with no activity').toBe(false)
+  })
+
+  it('negative control: a NEW send after the discard still gets a normal streaming turn', () => {
+    act(() => { useChatStore.getState().sendMessage('first') })
+    const first = bucket().messages.find((m) => m.role === 'user')!
+    feed({ type: 'message_status', client_message_id: first.id, state: 'discarded' })
+    act(() => { useChatStore.getState().sendMessage('second') })
+    feed(TOOL_START, TOOL_RESULT)
+    expect(bucket().isStreaming, 'the second send is a live turn; its flag stays up').toBe(true)
+  })
+})
+
+describe('C11: no Stop blink between a mid-turn tool result and the next token', () => {
+  it('a live turn whose last bubble is already finalized keeps the flag up after a tool result', () => {
+    // Turn is running (flag armed by the user's send), the last assistant bubble
+    // was finalized at an agent boundary, no turn id announced.
+    feed(TOKEN)
+    act(() => {
+      const sid = SID
+      const b = useChatStore.getState().sessionsById[sid]
+      const id = b.messageOrder[b.messageOrder.length - 1]
+      useChatStore.setState({
+        sessionsById: { ...useChatStore.getState().sessionsById, [sid]: { ...b, isStreaming: true, messagesById: { ...b.messagesById, [id]: { ...b.messagesById[id], isStreaming: false, status: 'done' } } } },
+      } as never)
+    })
+    feed(TOOL_START, TOOL_RESULT)
+    expect(bucket().isStreaming, 'the turn is still in flight; Stop must not blink off').toBe(true)
+  })
+})
