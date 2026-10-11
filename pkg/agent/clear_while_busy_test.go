@@ -329,7 +329,9 @@ func TestClearWhileBusy_TurnLongerThanTheIdleTimeoutStillClears(t *testing.T) {
 	}()
 	t.Cleanup(func() {
 		if v, ok := al.sessionWorkers.Load(scope); ok {
-			v.(*sessionWorker).cancel()
+			if w, isWorker := v.(*sessionWorker); isWorker {
+				w.cancel()
+			}
 		}
 	})
 
