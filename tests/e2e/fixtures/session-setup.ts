@@ -12,8 +12,15 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { expect, type Page } from '@playwright/test'
-import { chatInput, waitForConnected } from './selectors'
+import { expect, type Locator, type Page } from '@playwright/test'
+import {
+  agentRowGroup,
+  chatInput,
+  DEFAULT_WORKSPACE_NAME,
+  openSidebar,
+  selectedAgentRow,
+  waitForConnected,
+} from './selectors'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
@@ -196,6 +203,209 @@ export async function openSessionByDeepLink(page: Page, sessionId: string): Prom
   // after this returns needs BOTH true, or the message lands in the
   // outbound queue instead of the wire.
   await waitForConnected(page, { timeout: 30_000 })
+}
+
+// ── freshChat — the fresh-chat isolation seam (founder decision D7) ───────────
+
+export interface FreshChat {
+  sessionId: string
+  agentId: string
+  agentName: string
+}
+
+/**
+ * Start a genuinely NEW chat session for an agent — the replacement for the
+ * deleted selectors.ts::startNewChat, which clicked the agent row's
+ * "New chat with <Agent>" icon button. That button (and the whole new-chat UI
+ * access point) was REMOVED by founder decision D7 (DECISIONS.md, squad
+ * nav-agent-row-menu-20261011): the capability stays in code, but there is no
+ * UI path to a fresh chat anymore. Specs obtain one the way the SPA itself
+ * can, through public surfaces only — no test-only hook exists or is added:
+ *
+ *   1. `POST /api/v1/sessions` — contracts/openapi.yaml `createSession`:
+ *      `{agent_id, type: 'chat', workspace_id}` → 201 + `Session{id}`. The
+ *      same call the SPA's own "Open browser" launcher makes
+ *      (SessionCreateRequest.yaml description) and the same seam this file's
+ *      createSession/seedAndOpenSession already drive.
+ *   2. openSessionByDeepLink — the SPA's own /sessions/<id> route
+ *      (src/routes/_app/sessions.$sessionId.tsx), which adopts the session
+ *      into its workspace chat: binds the workspace, sends the real
+ *      `attach_session` WS frame, and redirects to
+ *      /#/workspaces/<id>/chat. Its data-active-session-id guard is the
+ *      binding proof.
+ *
+ * WHY THIS IS SOUND WHEN AN EARLIER ATTEMPT WAS NOT: cancel-cross-channel
+ * T26's 2026-07-28 header records that "createSession() REST + goto('/#/sessions/<id>')
+ * does not bind — the SPA lazily mints its own session on first send". That
+ * finding predates the route's deep-link adoption; today the route attaches
+ * for real, and open-in-chat.spec.ts test (a) proves END-TO-END against a
+ * live gateway that a POST-created session deep-linked via /sessions/<id>
+ * attaches (attach_session frame) and streams a subsequent send in THAT
+ * session. The earlier attempt also lacked any binding check before sending;
+ * openSessionByDeepLink's data-active-session-id wait is exactly that check,
+ * and the row assertion below adds the agent half (the selected row must be
+ * THIS agent's after the redirect). If the bind ever regresses, freshChat
+ * fails loudly here instead of letting the caller send into the wrong
+ * session.
+ *
+ * Compared with the removed button's flow the OUTCOME is the same shape (a
+ * new, empty, selected chat for the agent) with one honest difference: the
+ * session id is KNOWN here (the REST response carries it), where the button's
+ * lazy flow minted it on first send. Specs that identify a turn's session by
+ * diffing OMNIPUS_HOME/sessions can now bind audit/transcript rows to the
+ * exact id instead of inferring it from a directory diff.
+ *
+ * Which agent: `name`/`workspace` pick one explicitly (same contract as the
+ * helper this replaces); with no name, the CURRENTLY SELECTED row's agent is
+ * used when one exists (the removed button kept the active agent — this
+ * preserves that contract), falling back to the first row of the workspace
+ * roster (deterministic core_team order).
+ *
+ * REQUIRES an online page: the REST call and the deep-link's WS-driven
+ * attach both need the connection. Every current caller satisfies this
+ * (they run after goto('/') + readiness waits, before any setOffline()).
+ *
+ * Returns the created session's id, the agent's id, and the agent's concrete
+ * display name. A freshly created session has no transcript, so callers'
+ * existing `assistantMessages → toHaveCount(0)` assertions hold immediately.
+ */
+export async function freshChat(
+  page: Page,
+  name?: string | RegExp,
+  workspace: string = DEFAULT_WORKSPACE_NAME,
+): Promise<FreshChat> {
+  // Resolve the CONCRETE agent display name from the row — the same first
+  // step the removed helper performed (its click label was derived from the
+  // row's aria-label). The row, not the caller's pattern, is the source of
+  // the concrete name, so an explicit /Jim/i and a no-arg call behave
+  // identically from here on.
+  let row: Locator
+  if (name !== undefined) {
+    row = await agentRowGroup(page, name, workspace)
+  } else {
+    await openSidebar(page)
+    row = selectedAgentRow(page)
+    if ((await row.count()) === 0) {
+      row = page
+        .getByRole('group', { name: workspace, exact: true })
+        .getByRole('group')
+        .first()
+    }
+  }
+  const agentName = await row.getAttribute('aria-label', { timeout: 15_000 })
+  if (!agentName) {
+    throw new Error(
+      'freshChat: could not resolve an agent row — no row label could be read ' +
+        `(name=${String(name)}). Pass an explicit agent name if the sidebar has ` +
+        'no selected/first row to read.'
+    )
+  }
+
+  const workspaceId = await resolveWorkspaceIdByName(page, workspace)
+  const agentId = await resolveAgentIdByName(page, agentName)
+
+  // Create the session — contracts/openapi.yaml createSession: 201 + Session.
+  // Both failure modes below are honest reds (unknown agent → 400; contract
+  // drift in the response shape) and must fail the caller's test, never retry.
+  const createResp = await page.request.post(`${BASE_URL}/api/v1/sessions`, {
+    headers: await apiHeaders(page),
+    data: { agent_id: agentId, type: 'chat', workspace_id: workspaceId },
+  })
+  if (!createResp.ok() || createResp.status() !== 201) {
+    throw new Error(
+      `freshChat: POST /api/v1/sessions failed: ${createResp.status()} ` +
+        `${await createResp.text()} (oracle: contracts/openapi.yaml createSession — ` +
+        '201 on success, 400 when the agent does not exist)'
+    )
+  }
+  const created = (await createResp.json()) as { id?: string }
+  if (!created.id) {
+    throw new Error(
+      `freshChat: POST /api/v1/sessions returned no session id (response: ` +
+        `${JSON.stringify(created)}; contract: 201 → Session{id})`
+    )
+  }
+
+  // Open it through the SPA's own deep-link route — the real attach +
+  // replay path, with the data-active-session-id binding guard
+  // (see openSessionByDeepLink's doc comment).
+  await openSessionByDeepLink(page, created.id)
+
+  // The adopted session is the SELECTED chat of THIS agent's row — the
+  // user-visible half of the binding (data-active-session-id above proves
+  // the session; this proves the agent): data-selected="true" is exactly
+  // "this workspace is active AND this agent owns the selected chat"
+  // (WorkspaceAgentList.tsx). Catches a wrong-agent resolution before any
+  // caller sends a message.
+  const boundRow = await agentRowGroup(page, agentName, workspace)
+  await expect(
+    boundRow,
+    `freshChat: deep-linked session ${created.id} did not become the selected ` +
+      `chat of ${agentName}'s row in "${workspace}" — the composer would send ` +
+      'into a different session or as a different agent than this helper created'
+  ).toHaveAttribute('data-selected', 'true', { timeout: 15_000 })
+
+  return { sessionId: created.id, agentId, agentName }
+}
+
+/** Resolve a workspace's id by its display name via GET /api/v1/workspaces —
+ * fails with the full roster when the name matches nothing (contract:
+ * Workspace{id,name}, contracts/components/schemas/Workspace.yaml). */
+async function resolveWorkspaceIdByName(
+  page: Page,
+  workspaceName: string
+): Promise<string> {
+  const resp = await page.request.get(`${BASE_URL}/api/v1/workspaces`, {
+    headers: await apiHeaders(page),
+    failOnStatusCode: false,
+  })
+  if (!resp.ok()) {
+    throw new Error(
+      `freshChat: GET /api/v1/workspaces failed: ${resp.status()} ${await resp.text()}`
+    )
+  }
+  const workspaces = (await resp.json()) as Array<{ id: string; name?: string }>
+  const found = workspaces.find((w) => w.name === workspaceName)
+  if (!found?.id) {
+    throw new Error(
+      `freshChat: no workspace named "${workspaceName}" — names present: ` +
+        `${JSON.stringify(workspaces.map((w) => w.name))}. The seeded default is ` +
+        `"${DEFAULT_WORKSPACE_NAME}" (ensureDefaultWorkspace, pkg/gateway/rest_workspaces.go:584)`
+    )
+  }
+  return found.id
+}
+
+/** Resolve an agent's id by matching its display name via GET /api/v1/agents —
+ * RegExp matched with test(), strings compared case-insensitively (the same
+ * matching rules getByRole applies to the row's aria-label). Fails with the
+ * full roster when nothing matches. */
+async function resolveAgentIdByName(
+  page: Page,
+  name: string | RegExp
+): Promise<string> {
+  const resp = await page.request.get(`${BASE_URL}/api/v1/agents`, {
+    headers: await apiHeaders(page),
+    failOnStatusCode: false,
+  })
+  if (!resp.ok()) {
+    throw new Error(
+      `freshChat: GET /api/v1/agents failed: ${resp.status()} ${await resp.text()}`
+    )
+  }
+  const agents = (await resp.json()) as Array<{ id: string; name?: string }>
+  const match = agents.find((a) =>
+    typeof name === 'string'
+      ? a.name?.toLowerCase() === name.toLowerCase()
+      : name.test(a.name ?? '')
+  )
+  if (!match?.id) {
+    throw new Error(
+      `freshChat: no agent matches ${String(name)} — roster present: ` +
+        `${JSON.stringify(agents.map((a) => a.name))}`
+    )
+  }
+  return match.id
 }
 
 export interface SeedAndOpenResult {
