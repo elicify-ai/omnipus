@@ -1,8 +1,11 @@
 // GoalIndicator — ADR-049 D6/US-12/FR-094/SD-C9.
 //
-// Persistent chat indicator for an active `/goal` session, driven entirely
-// by `goal_status` WS frames (the chat store just stores the frame
-// verbatim — see chat.ts's `case 'goal_status'`). Renders in the SAME
+// Chat indicator for an active `/goal` session and the `/loop` status line.
+// NOTE (final-gate S4 L6): in production the only caller (ChatScreen) passes
+// `goalStatus={null}` — live goal state is drawn by GoalPillTray — so only the
+// `/loop` line is reachable today; the goal branch is exercised by tests alone.
+// When a goal frame IS passed it is rendered as stored (the chat store keeps
+// the frame verbatim — see chat.ts's `case 'goal_status'`). Renders in the SAME
 // non-scrolling composer slot as RateLimitIndicator (SD-C9), directly above
 // the composer: persistent (no dismiss control) while the session bucket
 // holds a frame, collapses to nothing once the bucket goes back to null

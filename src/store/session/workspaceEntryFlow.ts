@@ -301,6 +301,18 @@ async function execute(workspaceId: string): Promise<void> {
       committed,
     })
     applyEntry(workspaceId, result, loaded.sessions, token)
+  } catch (error) {
+    // Not a network failure (loadInputs absorbs those): something threw. Never
+    // leave the entry silently unresolved — show the same unavailable state with Retry.
+    logDiagnostic('sessionWorkspaceEntryThrew', {
+      workspaceId,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+    })
+    if (navigationIntentCurrent(token) && useWorkspacesStore.getState().activeWorkspaceId === workspaceId) {
+      useSessionStore.setState({
+        workspaceEntry: { status: 'unavailable', sessionId: null, sendEnabled: false, acknowledged: false, retry: true },
+      })
+    }
   } finally {
     clearResolving(workspaceId)
     if (navigationIntentCurrent(token) && useWorkspacesStore.getState().activeWorkspaceId === workspaceId) {

@@ -51,3 +51,15 @@ describe('workspace restore warning', () => {
     })
   })
 })
+
+describe('workspace entry that throws', () => {
+  it('lands on the unavailable state with Retry instead of an unhandled rejection', async () => {
+    vi.mocked(fetchSessions).mockResolvedValue([])
+    vi.mocked(fetchWorkspace).mockResolvedValue({
+      get member_configs(): never { throw new Error('unexpected shape') },
+    } as unknown as Awaited<ReturnType<typeof fetchWorkspace>>)
+    await expect(runWorkspaceEntry('ws-product')).resolves.toBeUndefined()
+    expect(useSessionStore.getState().workspaceEntry).toMatchObject({ status: 'unavailable', retry: true, sendEnabled: false })
+    expect(useSessionStore.getState().resolvingSessionForWorkspace['ws-product']).toBeUndefined()
+  })
+})
