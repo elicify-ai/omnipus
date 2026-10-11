@@ -19,6 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -92,7 +93,23 @@ func TestSteeredHelperWithGoal_SetGoalRefusedAndRecordUntouched(t *testing.T) {
 
 	after, err := resolveGoalRecordStore().Get(rec.GoalRef)
 	require.NoError(t, err)
-	require.Equal(t, before, after, "a refused set_goal must leave the helper's goal record untouched")
+	// Compare what set_goal would change, not the whole record: LastActivityAt and
+	// the round counters move with any turn, refused or not, so a whole-record
+	// comparison is timing-dependent (it failed once on the CI worker).
+	require.Equal(t, goalSemantics(before), goalSemantics(after),
+		"a refused set_goal must leave the helper's goal record (definition, criteria, DoD, state, binding) untouched")
+}
+
+// goalSemantics is the part of a goal record set_goal can amend or the helper's
+// launch fixed: its definition, criteria, definition of done, source, owner,
+// state and session binding. Activity stamps and counters are excluded.
+func goalSemantics(g *goal.Goal) map[string]any {
+	return map[string]any{
+		"goal_id": g.GoalID, "owner_kind": g.OwnerKind, "owner_id": g.OwnerID,
+		"source": g.Source, "prompt": g.Prompt, "definition": g.Definition,
+		"criteria": g.Criteria, "dod": g.DoD, "max_rounds": g.MaxRounds,
+		"state": g.State, "active_session_id": g.ActiveSessionID,
+	}
 }
 
 // A nested turn must never carry its parent helper's goal-owner marker: a
