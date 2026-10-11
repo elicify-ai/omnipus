@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -168,7 +169,7 @@ func TestU10b_FR032_HumanMessageIntoLiveExternalTaskChatSteers(t *testing.T) {
 	sess := al.externalRunSession(u10bTaskChat)
 	sess.mu.Lock()
 	sess.started, sess.running = true, true
-	sess.driver = runner.NewFakeRunner()
+	sess.driver = runnertest.NewFakeRunner()
 	sess.cancelRun = func() { canceled++ }
 	sess.mu.Unlock()
 

@@ -18,7 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -158,7 +158,7 @@ func TestN7_ConversationAvailabilityGate(t *testing.T) {
 	sess := al.externalRunSession("n7-retained")
 	sess.mu.Lock()
 	sess.started = true
-	sess.driver = runner.NewFakeRunner()
+	sess.driver = runnertest.NewFakeRunner()
 	sess.mu.Unlock()
 	require.True(t, al.externalConversationAvailable("n7-retained", load("n7-retained")),
 		"a retained driver means the conversation can be resumed")

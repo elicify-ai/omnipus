@@ -8,7 +8,7 @@ import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
-import { tasksQueryKeys } from '@/lib/api'
+import { invalidateAfterAgentCreate, tasksQueryKeys } from '@/lib/api'
 import type {
   SubagentStartFrame,
   SubagentEndFrame,
@@ -2573,8 +2573,12 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         // D-107 shape just above. Not debounced like library_changed:
         // creates don't burst, so a direct invalidate matches the other
         // single-shot cases here (task_status_changed/task_run_status).
+        // invalidateAfterAgentCreate (founder bug 2026-10-11) additionally
+        // invalidates the workspaces list queries: the sidebar roster is
+        // membership-driven (core_team + member_configs), so ['agents']
+        // alone left the new agent's row waiting for the 30 s poll.
         case 'agent_created':
-          queryClient.invalidateQueries({ queryKey: ['agents'] })
+          invalidateAfterAgentCreate(queryClient)
           break
 
         // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires

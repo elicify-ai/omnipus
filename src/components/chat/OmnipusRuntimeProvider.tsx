@@ -8,7 +8,7 @@ import { useChatStore } from "@/store/chat";
 import { getPendingFirstSend } from "@/store/chat/first-send";
 import { useConnectionStore } from "@/store/connection";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
-import { useSessionStore, attachSessionCursorFields, attachAlreadyInFlight, noteAttachSent, clearAttachMarker } from "@/store/session";
+import { useSessionStore, attachSessionCursorFields, attachAlreadyInFlight, noteAttachSent } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
 import { queryClient } from "@/lib/queryClient";
 import type { Session, SessionDetail } from "@/lib/api";
@@ -113,7 +113,7 @@ export function resolveLastActiveAgentId(sessionId: string): string | null {
 // send method — so the reattach logic can be unit-tested without a real
 // WebSocket. Pick keeps the signature exactly in sync with WsConnection.send
 // (typed against ClientFrame) so a real connection is assignable.
-export type ReattachSender = Pick<WsConnection, 'send'>;
+export type ReattachSender = Pick<WsConnection, 'send'> & Partial<Pick<WsConnection, 'socketGeneration'>>;
 
 // Re-binds the active session to a freshly-opened WS connection (the onConnected
 // path). Extracted from the inline handler so the failed-reattach branch can be
@@ -168,7 +168,7 @@ export function reattachActiveSession(
   // One owner of the initial attach: workspace entry may already have sent
   // this session's attach_session and its replay is in flight — a second one
   // would replay the whole transcript again.
-  if (attachAlreadyInFlight(activeSessionId)) return true;
+  if (attachAlreadyInFlight(activeSessionId, conn)) return true;
   const sent = conn.send({
     type: "attach_session",
     session_id: activeSessionId,
@@ -186,7 +186,7 @@ export function reattachActiveSession(
   // — mark the session's BUCKET as replaying (same as attachToSession) until
   // that lands. The bucket flag, not the flat foreground one, is what the
   // session-list refresh gate and the in-flight check read.
-  noteAttachSent(activeSessionId);
+  noteAttachSent(activeSessionId, conn);
   useChatStore.getState().setReplaying(true);
   // #823 catch-up redesign (BE-DESIGN.md §6.1): the bucket is NO LONGER
   // wiped here on success either — the cursor just sent carries it across
@@ -244,8 +244,6 @@ function WsLifecycle() {
         // alive server-side, the reconnect + attach_session replay rebuilds the
         // correct state (and the gateway re-emits a terminal frame).
         useChatStore.getState().clearStreamingState();
-        // The replay on the dead socket will never finish: let the next attach send.
-        clearAttachMarker();
       },
       onError: setConnectionError,
       // Fix 2: wire reconnect phase changes into the connection store so the
