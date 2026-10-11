@@ -23,12 +23,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // errNoSessionStore is returned when the gateway has no shared session store
@@ -143,6 +145,34 @@ func mainSessionGate(home string, cfg *config.Config, id string) (isMain, eligib
 		return true, false, nil
 	}
 	return true, mainSessionPairEligible(cfg, ws, agentID), nil
+}
+
+// adminStandaloneRefusal is the fixed client text for a request to create a chat
+// with Admin outside the default workspace.
+const adminStandaloneRefusal = "Admin's chats live in the default workspace; open Admin's main chat there."
+
+// adminChatRefusal enforces navigation FR-038 / "one main per agent per workspace"
+// at the two doors that mint a chat session (POST /sessions and the first
+// WebSocket message): Admin has no team and no standalone, workspace-less
+// session. A chat with Admin is accepted only inside the DEFAULT workspace;
+// anything else (no workspace, another workspace, an unreadable or missing
+// default) returns the refusal text. Other agents return "". home is the
+// OMNIPUS_HOME the workspaces live under.
+func adminChatRefusal(home, agentID, workspaceID string) string {
+	if agentID != string(coreagent.IDAdmin) {
+		return ""
+	}
+	def, err := workspace.ResolveDefaultID(home)
+	if err != nil {
+		if !errors.Is(err, workspace.ErrNoDefault) {
+			slog.Error("rest: could not resolve the default workspace for an Admin chat", "error", err)
+		}
+		return adminStandaloneRefusal
+	}
+	if def == "" || strings.TrimSpace(workspaceID) != def {
+		return adminStandaloneRefusal
+	}
+	return ""
 }
 
 // mainSessionAllowed is the WebSocket door of mainSessionGate: false (after
