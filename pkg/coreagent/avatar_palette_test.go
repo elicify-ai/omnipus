@@ -48,7 +48,7 @@ func TestPalette_CanonicalColorAcceptsTheNewSetAndMapsTheOldOne(t *testing.T) {
 
 func TestPalette_MappingIsOneToOneAndLandsInTheNewSet(t *testing.T) {
 	seen := map[string]string{}
-	for old, want := range oldToNew {
+	for old := range oldToNew {
 		got, _ := coreagent.CanonicalColor(old)
 		if prior, dup := seen[got]; dup {
 			t.Fatalf("%s and %s both map to %s: distinct agents would collapse", prior, old, got)

@@ -22,7 +22,7 @@ func TestMigrateUnenforcedAgentIdentity_MonogramSurvivesAndInvalidMigrates(t *te
 			Type:   config.AgentTypeCustom,
 			Figure: "Monogram",
 			Role:   "general",
-			Color:  "#3B82F6",
+			Color:  "#6E8BA8",
 		},
 		{
 			ID:     "custom-bogus",
@@ -30,7 +30,7 @@ func TestMigrateUnenforcedAgentIdentity_MonogramSurvivesAndInvalidMigrates(t *te
 			Type:   config.AgentTypeCustom,
 			Figure: "octopus",
 			Role:   "general",
-			Color:  "#3B82F6",
+			Color:  "#6E8BA8",
 		},
 	}}}
 
