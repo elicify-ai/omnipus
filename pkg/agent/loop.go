@@ -2698,6 +2698,7 @@ func clearSessionWindowReversible(sessions session.SessionStore, sessionKey stri
 		return nil, err
 	}
 	before := view.State.Clone()
+	before.RestoreExpiryNote = view.ExpiryNote
 	moved := after.Clone()
 	moved.DropExpiryNote = false
 	return func() error { return store.RestoreWindow(ctx, sessionKey, moved, before) }, nil

@@ -69,3 +69,34 @@ func TestClearSessionWindow_DropsTheExpiryNoticeEvenWhenNothingMoves(t *testing.
 	require.NoError(t, err)
 	assert.Empty(t, view.ExpiryNote, "a /clear starts over: the stale retention notice is gone")
 }
+
+// S1-10: a /clear that fails and is undone puts EVERYTHING back, including the
+// retention notice the clear dropped; otherwise the agent is never told what
+// retention expired.
+func TestClearConversation_MarkerFailureAlsoRestoresTheRetentionNotice(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX file permissions and a non-root user")
+	}
+	al, inst, id := clearFixture(t, session.SessionTypeChat)
+	store := al.GetSessionStore()
+	const note = "Retention expired older conversation content for this conversation."
+	metaPath := filepath.Join(store.BaseDir(), id, "backend_meta.json")
+	raw, err := os.ReadFile(metaPath)
+	require.NoError(t, err)
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal(raw, &meta))
+	meta["expiry_note"] = note
+	raw, err = json.Marshal(meta)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, raw, 0o600))
+
+	transcript := filepath.Join(store.BaseDir(), id, "transcript.jsonl")
+	require.NoError(t, os.Chmod(transcript, 0o400))
+	t.Cleanup(func() { _ = os.Chmod(transcript, 0o600) })
+	require.Error(t, al.clearConversation(context.Background(), inst, id, id))
+	require.NoError(t, os.Chmod(transcript, 0o600))
+
+	view, verr := store.WindowView(context.Background(), id)
+	require.NoError(t, verr)
+	assert.Equal(t, note, view.ExpiryNote, "the failed /clear was undone, so the retention notice must be back")
+}
