@@ -49,7 +49,13 @@ func TestAdmitBoundConnectorInput_RoutesToPairMainWithCaptureAndEnvelope(t *test
 	if msg.SessionID != wantMain || msg.Metadata["agent_id"] != addrReceiver || msg.TranscriptEntryID == "" {
 		t.Fatalf("msg not addressed to the main: %+v", msg)
 	}
-	if !strings.Contains(msg.Content, `reply_to="`+msg.TranscriptEntryID+`"`) || !strings.Contains(msg.Content, "please summarise") ||
+	// The envelope names the ANSWER path, not the retired reply_to phrasing:
+	// gap 5 made answer_request the thin front for send_message's reply_to form,
+	// and address_router.go's envelope now says "call the answer_request tool
+	// with request_id=...". Asserting reply_to= here pinned the old wording.
+	if !strings.Contains(msg.Content, `request_id="`+msg.TranscriptEntryID+`"`) ||
+		!strings.Contains(msg.Content, "answer_request tool") ||
+		!strings.Contains(msg.Content, "please summarise") ||
 		!strings.Contains(msg.Content, "@alice") {
 		t.Fatalf("model envelope = %q", msg.Content)
 	}
