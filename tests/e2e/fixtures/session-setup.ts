@@ -181,8 +181,18 @@ export async function waitForWsConnected(page: Page): Promise<void> {
  * `waitForReplayDone` wait, so callers should NOT add another enabled-wait
  * immediately after this.
  */
-export async function openSessionByDeepLink(page: Page, sessionId: string): Promise<void> {
-  await page.goto(`/#/sessions/${sessionId}`)
+export async function openSessionByDeepLink(
+  page: Page,
+  sessionId: string,
+  origin?: string,
+): Promise<void> {
+  // `origin` must be passed when the page is NOT on the shared server:
+  // Playwright resolves a relative goto against the configured baseURL
+  // (playwright.config.ts — the SHARED origin), never against the page's
+  // current origin, so the relative form would yank an isolated-GatewayProcess
+  // page to the wrong server. Omitted = the historical relative form, for the
+  // shared-gateway callers that predate freshChat.
+  await page.goto(origin !== undefined ? `${origin}/#/sessions/${sessionId}` : `/#/sessions/${sessionId}`)
   // Route-swap guard FIRST: wait until the chat surface is bound to THIS
   // session (ChatScreen stamps data-active-session-id once attach lands).
   // A bare visible/enabled wait on the composer is satisfied by the
@@ -206,6 +216,44 @@ export async function openSessionByDeepLink(page: Page, sessionId: string): Prom
 }
 
 // ── freshChat — the fresh-chat isolation seam (founder decision D7) ───────────
+
+/**
+ * The app origin the PAGE is currently on — the base for every REST call and
+ * the deep link freshChat makes. Deriving it from the page (not a module
+ * constant) is what makes freshChat work unchanged on isolated
+ * GatewayProcess gateways (provider-retry, catchup-scenarios, gateway-restart
+ * scenarios run on their OWN origin, not BASE_URL). Throws when the page is
+ * not on an app origin (about:blank) — the caller must goto() first, exactly
+ * like every current call site does; failing loudly beats guessing a server.
+ */
+export function originOf(page: Page): string {
+  const url = page.url()
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.origin
+  } catch {
+    // falls through to the throw below
+  }
+  throw new Error(
+    `freshChat: the page is not on an app origin (url: ${url || '(empty)'}). ` +
+      'goto() the app first, or pass an explicit origin — refusing to guess a server.'
+  )
+}
+
+/**
+ * Cookie + CSRF auth headers ONLY — the same shape agents.spec.ts::csrfHeaders.
+ * freshChat deliberately does NOT reuse this file's apiHeaders(): that helper
+ * attaches the SHARED server's bearer token from .auth/admin.json, and an
+ * isolated GatewayProcess gateway must never receive it (the page there
+ * authenticates through its OWN UI login — provider-retry.spec.ts::login —
+ * so its cookie jar already carries the right omnipus-session cookie for
+ * whichever gateway the page is on).
+ */
+async function pageCsrfHeaders(page: Page): Promise<Record<string, string>> {
+  const cookies = await page.context().cookies()
+  const csrfCookie = cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')
+  return csrfCookie ? { 'X-CSRF-Token': csrfCookie.value } : {}
+}
 
 export interface FreshChat {
   sessionId: string
@@ -301,14 +349,22 @@ export async function freshChat(
     )
   }
 
-  const workspaceId = await resolveWorkspaceIdByName(page, workspace)
-  const agentId = await resolveAgentIdByName(page, agentName)
+  // Every REST call and the deep link ride the PAGE's origin — freshChat
+  // must hit whichever gateway the page is on (shared OR isolated
+  // GatewayProcess), and openSessionByDeepLink needs the absolute form
+  // because Playwright resolves relative gotos against the configured
+  // (shared) baseURL, not the page origin. The page is on the app by here:
+  // the row resolution above already drove sidebar UI.
+  const origin = originOf(page)
+
+  const workspaceId = await resolveWorkspaceIdByName(page, origin, workspace)
+  const agentId = await resolveAgentIdByName(page, origin, agentName)
 
   // Create the session — contracts/openapi.yaml createSession: 201 + Session.
   // Both failure modes below are honest reds (unknown agent → 400; contract
   // drift in the response shape) and must fail the caller's test, never retry.
-  const createResp = await page.request.post(`${BASE_URL}/api/v1/sessions`, {
-    headers: await apiHeaders(page),
+  const createResp = await page.request.post(`${origin}/api/v1/sessions`, {
+    headers: await pageCsrfHeaders(page),
     data: { agent_id: agentId, type: 'chat', workspace_id: workspaceId },
   })
   if (!createResp.ok() || createResp.status() !== 201) {
@@ -328,8 +384,8 @@ export async function freshChat(
 
   // Open it through the SPA's own deep-link route — the real attach +
   // replay path, with the data-active-session-id binding guard
-  // (see openSessionByDeepLink's doc comment).
-  await openSessionByDeepLink(page, created.id)
+  // (see openSessionByDeepLink's doc comment). Absolute origin: see above.
+  await openSessionByDeepLink(page, created.id, origin)
 
   // The adopted session is the SELECTED chat of THIS agent's row — the
   // user-visible half of the binding (data-active-session-id above proves
@@ -353,10 +409,11 @@ export async function freshChat(
  * Workspace{id,name}, contracts/components/schemas/Workspace.yaml). */
 async function resolveWorkspaceIdByName(
   page: Page,
+  origin: string,
   workspaceName: string
 ): Promise<string> {
-  const resp = await page.request.get(`${BASE_URL}/api/v1/workspaces`, {
-    headers: await apiHeaders(page),
+  const resp = await page.request.get(`${origin}/api/v1/workspaces`, {
+    headers: await pageCsrfHeaders(page),
     failOnStatusCode: false,
   })
   if (!resp.ok()) {
@@ -382,10 +439,11 @@ async function resolveWorkspaceIdByName(
  * full roster when nothing matches. */
 async function resolveAgentIdByName(
   page: Page,
+  origin: string,
   name: string | RegExp
 ): Promise<string> {
-  const resp = await page.request.get(`${BASE_URL}/api/v1/agents`, {
-    headers: await apiHeaders(page),
+  const resp = await page.request.get(`${origin}/api/v1/agents`, {
+    headers: await pageCsrfHeaders(page),
     failOnStatusCode: false,
   })
   if (!resp.ok()) {

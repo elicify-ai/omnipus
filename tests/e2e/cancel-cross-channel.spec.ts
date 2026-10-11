@@ -271,7 +271,7 @@ async function triggerLongStreamingTurn(page: Page): Promise<string> {
   // session via the public REST API and deep-links it, and RETURNS its id —
   // callers that bind on-disk evidence (transcript/audit rows) to the turn
   // use the exact id instead of inferring it from a sessions-dir diff.
-  return (await freshChat(page, /Jim/i)).sessionId
+  const sessionId = (await freshChat(page, /Jim/i)).sessionId
 
   await input.fill(LONG_PROSE_PROMPT)
   await input.press('Enter', { timeout: 15_000 })
@@ -280,6 +280,11 @@ async function triggerLongStreamingTurn(page: Page): Promise<string> {
   // comment) before returning — a subsequent cancel always has a real,
   // in-flight turn with hundreds of words of runway left.
   await waitForActiveStream(page)
+
+  // Returned LAST: the id is only handed to callers once the turn this
+  // helper exists to start is actually streaming (g1-code-reviewer F2: an
+  // early return here silently skipped the send entirely).
+  return sessionId
 }
 
 // ── T21: Web stop button cancels turn within 5 seconds (US-1.1, SC-1) ─────────

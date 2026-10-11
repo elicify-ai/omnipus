@@ -25,6 +25,7 @@ import {
   AGENT_ROW_MENU_ITEMS,
   DEFAULT_WORKSPACE_NAME,
 } from './selectors'
+import { originOf } from './session-setup'
 
 interface FakeLocator {
   isVisible: () => Promise<boolean>
@@ -219,5 +220,32 @@ describe('AGENT_ROW_MENU_ITEMS — the D2 menu contract (items and order)', () =
   it('has no duplicates and no extras — four items, each named once', () => {
     expect(new Set(AGENT_ROW_MENU_ITEMS).size).toBe(AGENT_ROW_MENU_ITEMS.length)
     expect(AGENT_ROW_MENU_ITEMS.length).toBe(4)
+  })
+})
+
+describe('originOf — freshChat rides the PAGE’s gateway, never a module constant', () => {
+  // ORACLE: freshChat must hit whichever gateway the page is on (shared OR
+  // isolated GatewayProcess), so the origin comes from the page URL; and it
+  // must REFUSE to guess a server when the page is not on one
+  // (g1-code-reviewer F3 / g1-silent-failure-hunter F4). Pure string logic —
+  // no browser involved.
+
+  function pageAt(url: string): Page {
+    return { url: () => url } as unknown as Page
+  }
+
+  it('derives the origin from the page URL, including non-default ports (isolated GatewayProcess gateways)', () => {
+    expect(originOf(pageAt('http://localhost:6060/#/workspaces/x/chat'))).toBe(
+      'http://localhost:6060'
+    )
+    expect(originOf(pageAt('http://127.0.0.1:6139/'))).toBe('http://127.0.0.1:6139')
+    expect(originOf(pageAt('https://omnipus.example.com/#/agents'))).toBe(
+      'https://omnipus.example.com'
+    )
+  })
+
+  it('refuses to guess a server off about:blank — the caller must goto() first', () => {
+    expect(() => originOf(pageAt('about:blank'))).toThrow(/not on an app origin/)
+    expect(() => originOf(pageAt(''))).toThrow(/not on an app origin/)
   })
 })
