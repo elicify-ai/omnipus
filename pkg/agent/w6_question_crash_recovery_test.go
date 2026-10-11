@@ -133,8 +133,19 @@ func TestW6RespondToStoppedChild_AppendFailureRefusesVisiblyThenRecovers(t *test
 	if !result.IsError {
 		t.Fatalf("respond with an unwritable transcript must fail visibly (the revive refuses before any dispatch): error=false text=%q", result.ForLLM)
 	}
-	if !strings.Contains(result.ForLLM, w6cPermDenied) {
-		t.Fatalf("respond error must name the injected write failure, not a random failure: %q", result.ForLLM)
+	// Ruling 54adcf6df (steer/resume refusals carry fixed sentences, not store
+	// detail): the calling agent reads the fixed revive-failure sentence and never
+	// the filesystem error; the injected write failure is the logged cause and
+	// stays reachable on the result's error, which is how this test proves it is
+	// THE injected fault and not a random one.
+	if !strings.Contains(result.ForLLM, "could not be revived right now; retry shortly") {
+		t.Fatalf("respond error must be the fixed revive-failure sentence: %q", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, w6cPermDenied) {
+		t.Fatalf("respond error leaked the store error to the calling agent: %q", result.ForLLM)
+	}
+	if result.Err == nil || !strings.Contains(result.Err.Error(), w6cPermDenied) {
+		t.Fatalf("the injected write failure must be the cause carried on the result error, not a random failure: %v", result.Err)
 	}
 	if len(launches.calls) != 0 {
 		t.Fatalf("a refused revive must dispatch nothing: %+v", launches.calls)
