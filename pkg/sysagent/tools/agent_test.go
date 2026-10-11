@@ -166,7 +166,11 @@ func installLiveSessionStore(t *testing.T, deps *systools.Deps, home string) {
 // liveSessionStore returns the live shared session store newTestDepsWithHome
 // installed in deps.
 func liveSessionStore(deps *systools.Deps) *session.UnifiedStore {
-	return deps.DeleteSessionStore().(*session.UnifiedStore)
+	store, ok := deps.DeleteSessionStore().(*session.UnifiedStore)
+	if !ok {
+		panic("liveSessionStore: DeleteSessionStore is not a *session.UnifiedStore")
+	}
+	return store
 }
 
 // TestAgentCreate_WithColor verifies that create persists color

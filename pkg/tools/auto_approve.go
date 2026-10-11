@@ -161,9 +161,12 @@ var autoApproveClasses = map[string]AutoApproveClass{
 
 	// Sending out
 	"send_message": AutoRuns,
-	"send_file":    AutoRunsIfArgs,
-	"send_email":   AutoAsks,
-	"reply":        AutoAsks,
+	// answer_request is a thin front for send_message's reply_to form (same reply
+	// admission, same authorization), so it classifies exactly as send_message.
+	"answer_request": AutoRuns,
+	"send_file":      AutoRunsIfArgs,
+	"send_email":     AutoAsks,
+	"reply":          AutoAsks,
 	// create_email_draft only appends to the mailbox's own Drafts folder and
 	// never sends, so it runs under Auto like the other non-sending email
 	// tools (founder ruling 2026-09-26, decision D45); D33: attachments add

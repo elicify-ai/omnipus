@@ -100,8 +100,14 @@ type AgentLoop struct {
 	// recallSpans holds the transient in-memory recall span per session
 	// (FR-019): key sessionKey (string), value *RecallSpan. Never persisted;
 	// set by recall_conversation, read/dropped by windowTrim + assembly.
-	recallSpans      sync.Map // key: sessionKey (string), value: *RecallSpan
-	activeTurnStates sync.Map // key: sessionKey (string), value: *turnState
+	recallSpans sync.Map // key: sessionKey (string), value: *RecallSpan
+	// pendingRequests / remindedRequests back the unanswered-request reminder
+	// (request_reminder.go): request id -> receiver session id, and the ids that
+	// already got their one reminder.
+	pendingRequests   sync.Map
+	deliveredRequests sync.Map // request ids a turn has actually been given
+	remindedRequests  sync.Map
+	activeTurnStates  sync.Map // key: sessionKey (string), value: *turnState
 	// externalRunSessions holds the live external-CLI driver per child session
 	// (key: the child's transcript session id (string), value: *externalCLIRunSession)
 	// so a follow-up instruction can reach the SAME native CLI conversation via

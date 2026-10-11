@@ -606,30 +606,27 @@ func TestTaskRun_AgentCreatedTaskAtDepthCanClaim(t *testing.T) {
 	}
 }
 
-// A legacy task with no goal record gets one at its first run, so its worker
-// can claim through goal_claim.
-func TestTaskRun_LegacyTaskWithoutGoalRecordCanClaim(t *testing.T) {
-	worker := newClaimingWorker(turnClaimMet("painted the widget green"))
-	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
-	judgeInst.Provider = &b6ScriptedJudge{metFromCall: 1, reason: "ok"}
-	tk := &task.Task{
-		Title: "paint the widget", Prompt: "the widget must end up green", Action: task.ActionLLM,
-		AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
-	}
-	if err := al.taskStore.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-
-	final := runTaskUntilTerminal(t, al, tk.ID, 1)
-
-	if final.Status != task.StatusDone {
-		t.Fatalf("status = %q, want done (result: %s)", final.Status, final.Result)
-	}
-	rec := waitForGoalState(t, tk.ID, generated.GoalStateMet)
-	if len(rec.DoD) == 0 {
-		t.Error("the minted goal record carries no Definition of Done")
-	}
-}
+// TestTaskRun_LegacyTaskWithoutGoalRecordCanClaim was DELETED (session-core
+// DEL-18) and NOT replaced by a weaker test.
+//
+// It asserted "a legacy task with no goal record gets one at its first run, so
+// its worker can claim through goal_claim". That run-start minting is deleted —
+// activateTaskGoal (pkg/agent/task_executor.go): "a task reaching run start with
+// no paired goal record is NOT given one here. Fresh task creation/edit owns the
+// record; upgrade-only minting is deleted (greenfield)." Its oracle therefore
+// describes code that no longer exists.
+//
+// The replacement I tried first — assert the unpaired run ends FAILED — does not
+// hold either: with no goal loop the worker's goal_claim is refused
+// ("this session has no active goal"), the run re-dispatches, and it is still
+// running when runTaskUntilTerminal's deadline expires (27 s, "1 expected
+// dispatch(es)"). That is reported to the chief as an observation rather than
+// encoded as an oracle here, because a test that only passes with a longer
+// deadline would hide the behaviour instead of stating it.
+//
+// The paired-task case — the one that must keep working — is covered by
+// TestExecuteTask_* and the completion-contract suite, which pair their goal
+// records the way fresh creation does.
 
 // The idle keeper stands down while the executor holds a task's run, and
 // resumes once it does not.

@@ -506,7 +506,7 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	genSessions := make([]gen.Session, 0, len(filtered))
 	approvals := a.pendingApprovalMains()
 	for _, m := range filtered {
-		s := unifiedMetaToGenSession(m)
+		s := unifiedMetaToGenSession(a.withDisplayTitle(m))
 		// U11 (FR-047): needs_attention for a main (nil for every other row).
 		stampNeedsAttention(&s, m, approvals)
 		// C-MAIN: compute the `protected` flag. Only a main is protected;
@@ -618,7 +618,7 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
 	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
 	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
-	writeSessionDetail(w, meta, messages, view.HasEarlier, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), mainNeedsAttention(meta, a.pendingApprovalMains()), a.agentLoop.CurrentBootEpoch())
+	writeSessionDetail(w, a.withDisplayTitle(meta), messages, view.HasEarlier, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), mainNeedsAttention(meta, a.pendingApprovalMains()), a.agentLoop.CurrentBootEpoch())
 }
 
 func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {
@@ -730,6 +730,12 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 		jsonErr(w, http.StatusNotFound, "session not found")
 		return
 	}
+	// A main's title is fixed ("<Agent> - Main Session", derived on read), so a
+	// rename would be accepted and then never shown: refuse it visibly.
+	if cur, getErr := store.GetMeta(id); getErr == nil && cur.Type == session.SessionTypeMain {
+		jsonErr(w, http.StatusConflict, "a main session's title is fixed")
+		return
+	}
 	if err := store.SetMeta(id, session.MetaPatch{Title: &req.Title}); err != nil {
 		jsonSessionStorageError(w, "renamed", id, err)
 		return
@@ -739,7 +745,7 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
-	s := unifiedMetaToGenSession(meta)
+	s := unifiedMetaToGenSession(a.withDisplayTitle(meta))
 	if err := attachSessionRuntimeFields(&s, a.agentLoop.GetSessionLifecycleStore(), meta.ID, a.agentLoop.CurrentBootEpoch()); err != nil {
 		slog.Warn("rest: rename session: lifecycle read failed", "session_id", meta.ID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "session lifecycle unavailable")
@@ -971,7 +977,12 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	if req.WorkspaceId != nil {
 		reqWorkspaceID = *req.WorkspaceId
 	}
-	if msg := adminChatRefusal(a.homePath, agentID, reqWorkspaceID); msg != "" {
+	msg, adminFault := adminChatRefusal(a.homePath, agentID, reqWorkspaceID)
+	if adminFault != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not check where Admin's chat may live", adminFault)
+		return
+	}
+	if msg != "" {
 		jsonErr(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -1047,7 +1058,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 			meta = refreshed
 		}
 	}
-	s := unifiedMetaToGenSession(meta)
+	s := unifiedMetaToGenSession(a.withDisplayTitle(meta))
 	// A freshly REST-created session rarely has a LifecycleRecord yet (those
 	// are minted by the delegate/task paths, not this handler) — this call
 	// degrades to both fields absent in that common case, same as every

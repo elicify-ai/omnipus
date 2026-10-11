@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
@@ -688,11 +689,13 @@ func clearSessionsWarning(agentID string) string {
 // HandleClearSessions handles DELETE /api/v1/sessions/all.
 //
 // Founder ruling (S2 #6): "a main chat can only be deleted when the main agent
-// is deleted" - so this NEVER deletes a main; its history is kept. Every other
-// chat is deleted one by one through the same path a single delete uses: the
-// session's tree is Stopped first (a chat that will not stop is kept and
-// reported, nothing half-deleted), then removed together with its helper
-// descendants' uploads, retained external-CLI drivers and in-memory media refs.
+// is deleted" - so this NEVER deletes a main; its history is kept, and so are the
+// helper sessions that belong to a main. Every other chat is deleted one by one
+// through the same path a single delete uses: the session's tree is Stopped first
+// (a chat that will not stop is kept and reported, nothing half-deleted), then
+// removed together with its helper descendants' uploads, retained external-CLI
+// drivers and in-memory media refs. The response counts what was removed and
+// reports, by fixed text, every chat that was kept or could not even be read.
 func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -708,17 +711,29 @@ func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 		jsonServerFailure(w, http.StatusInternalServerError, "could not list sessions", err)
 		return
 	}
-	removed, kept := 0, 0
+	// A chat whose metadata cannot be read is invisible to ListSessions; it is
+	// neither deleted nor counted as kept unless asked for here.
+	unreadable, err := store.UnreadableSessionIDs()
+	if err != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not list sessions", err)
+		return
+	}
+	keptWithMain := a.sessionsBelongingToMains(metas)
+	removed, kept, mains := 0, len(unreadable), 0
+	for _, id := range unreadable {
+		slog.Warn("rest: clear sessions: a chat's metadata is unreadable; it is kept", "session_id", id)
+	}
 	for _, m := range metas {
 		if m == nil {
 			continue
 		}
-		// A main is never deleted here; a session whose protection cannot be
-		// decided is not deleted either (fail closed, as single delete does).
+		// A main is never deleted here, and neither is a helper session that
+		// belongs to one: it is part of that main's history.
 		if m.Type == session.SessionTypeMain {
+			mains++
 			continue
 		}
-		if prot := computeSessionProtected(m); prot != nil && *prot {
+		if _, isMainsHelper := keptWithMain[m.ID]; isMainsHelper {
 			continue
 		}
 		if summary := a.stopBeforeDelete(r, m.ID); summary != "" {
@@ -739,18 +754,74 @@ func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 		Status: gen.ClearAllSessionsResponseStatusCleared,
 		Count:  removed,
 	}
+	var warnings []string
 	if kept > 0 {
-		warnings := []string{clearSessionsKeptWarning(kept)}
+		warnings = append(warnings, clearSessionsKeptWarning(kept))
+	}
+	if mains > 0 {
+		warnings = append(warnings, clearSessionsMainsWarning(mains))
+	}
+	if len(warnings) > 0 {
 		resp.Warnings = &warnings
 	}
 	jsonOK(w, resp)
 }
 
+// sessionsBelongingToMains returns the ids of every listed session that is a
+// helper of a main chat: a descendant by the durable lifecycle edge, or by the
+// session's own parent link. They are kept with their main.
+func (a *restAPI) sessionsBelongingToMains(metas []*session.UnifiedMeta) map[string]struct{} {
+	byID := make(map[string]*session.UnifiedMeta, len(metas))
+	for _, m := range metas {
+		if m != nil {
+			byID[m.ID] = m
+		}
+	}
+	out := make(map[string]struct{})
+	for _, m := range metas {
+		if m == nil || m.Type != session.SessionTypeMain {
+			continue
+		}
+		ids, walkErr := agent.CollectDescendantSessionIDs(a.agentLoop.GetSessionLifecycleStore(), m.ID)
+		if walkErr != nil {
+			slog.Warn("rest: clear sessions: a main's helper walk was incomplete", "session_id", m.ID, "error", walkErr)
+		}
+		for _, id := range ids {
+			out[id] = struct{}{}
+		}
+	}
+	for _, m := range metas {
+		if m == nil || m.Type == session.SessionTypeMain {
+			continue
+		}
+		seen := map[string]bool{m.ID: true}
+		for cur := m; cur != nil && cur.ParentSessionID != ""; {
+			parent := byID[cur.ParentSessionID]
+			if parent == nil || seen[parent.ID] {
+				break
+			}
+			if parent.Type == session.SessionTypeMain {
+				out[m.ID] = struct{}{}
+				break
+			}
+			seen[parent.ID] = true
+			cur = parent
+		}
+	}
+	return out
+}
+
 // clearSessionsKeptWarning is the fixed warning for chats delete-all could not
-// remove (a Stop that did not complete, or a storage failure). It names no
-// session id, path or cause; those are in the server log.
+// remove (a Stop that did not complete, a storage failure, or metadata that could
+// not be read). It names no session id, path or cause; those are in the server log.
 func clearSessionsKeptWarning(n int) string {
-	return fmt.Sprintf("%d chat(s) could not be deleted and were kept (a running turn did not stop, or storage failed); see the server log", n)
+	return fmt.Sprintf("%d chat(s) could not be deleted and were kept (a running turn did not stop, storage failed, or the chat could not be read); see the server log", n)
+}
+
+// clearSessionsMainsWarning is the fixed notice that main chats are never
+// deleted by delete-all: a main goes only with its agent.
+func clearSessionsMainsWarning(n int) string {
+	return fmt.Sprintf("%d main chat(s) were kept: a main chat is deleted only together with its agent", n)
 }
 
 // HandleAbout handles GET /api/v1/about.

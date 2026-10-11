@@ -319,6 +319,7 @@ export const startNewChat = async (
             `dialog ${dialogUp ? 'up' : 'not up'}) — the roster row kept animating/detaching ` +
             'so Playwright could not complete the action. Original error: ' +
             (err instanceof Error ? err.message : String(err)),
+          { cause: err },
         );
       }
       // Otherwise the click genuinely has not landed yet — retry.

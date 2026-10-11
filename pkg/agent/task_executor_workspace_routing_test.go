@@ -118,6 +118,7 @@ func TestExecuteTask_NativeDispatch_RootsAtTaskWorkspaceID_WhenAgentBelongsToMul
 		Status:      task.StatusNext,
 	}
 	require.NoError(t, al.taskStore.Create(tk))
+	pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
 
 	require.NoError(t, al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil))
 	final := waitForCompletionContractTerminal(t, al, tk.ID)

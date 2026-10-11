@@ -262,7 +262,7 @@ func TestReadTranscript_PartitionListFailureIsAnError(t *testing.T) {
 	day := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
 	setArchiveDay(s, &day)
 	for i, d := range []time.Time{day, day.AddDate(0, 0, 1)} {
-		*(&day) = d
+		day = d
 		_, err := s.AppendTranscriptAddressed(sid, TranscriptEntry{ID: fmt.Sprintf("m%d", i), Role: "user",
 			Content: fmt.Sprintf("message %d", i), Timestamp: d})
 		require.NoError(t, err)

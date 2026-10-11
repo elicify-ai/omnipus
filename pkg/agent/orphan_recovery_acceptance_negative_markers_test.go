@@ -69,11 +69,12 @@ func orphanACMarkerNegatives(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			prefix := []providers.Message{
-				{Role: "user", Content: "unsupported restart evidence"},
+			prefix := make([]providers.Message, 0, 4)
+			prefix = append(prefix,
+				providers.Message{Role: "user", Content: "unsupported restart evidence"},
 				orphanACGroup("incomplete parallel group", "done", "missing"),
 				orphanACResult("done", "completed partial result must remain visible"),
-			}
+			)
 			if tc.role == "" {
 				orphanACAssertUnsupported(t, prefix, "context request: incomplete or invalid tool-result group at message 2")
 				return

@@ -41,7 +41,7 @@ import {
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { noteServerAttentionFrame } from '@/store/session/foregroundAck'
 import { buildBrowserHandoverInsertion, buildGoalAckInsertion, evictGoalPillsOverCap, mergeGoalPillFrame } from '../goals'
-import { MAX_MESSAGES_PER_SESSION, evictMessageFromBucket, findAssistantMessageIdByTurnId, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
+import { MAX_MESSAGES_PER_SESSION, busyFlagIsUnbacked, evictMessageFromBucket, findAssistantMessageIdByTurnId, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { isTurnFinished, schedulePlanStatusInvalidate } from '../routing'
 import { sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
@@ -229,6 +229,11 @@ function handleSessionStateFrame(
     // "session_state WITHOUT active_turn leaves current behaviour
     // unchanged").
     const existing = get().sessionsById[targetSid]
+    // An authoritative "no turn in flight" also releases a busy flag with
+    // nothing behind it (a straggler tool call re-armed it; see busyFlagIsUnbacked).
+    if (existing && !existing.activeTurnId && busyFlagIsUnbacked(existing)) {
+      withBucket(targetSid, () => ({ isStreaming: false }))
+    }
     if (existing?.activeTurnId) {
       withBucket(targetSid, (b) => {
         // #823 catch-up redesign pass 2: "is a bubble actually open" is now
