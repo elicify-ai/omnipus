@@ -461,6 +461,9 @@ func TestTaskRunHistory_SchedulerFire_RecordsOccurrenceMsAndScheduledKind(t *tes
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	// DEL-18: fresh creation owns the task's paired goal record; without one
+	// the scheduled run has no goal loop and never reaches a terminal status.
+	pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
 	sched.OnTaskUpserted(tk)
 
 	jobs := jobsForTask(sched, tk.ID)
