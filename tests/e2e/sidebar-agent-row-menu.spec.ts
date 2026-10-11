@@ -329,6 +329,22 @@ test.describe('D3 — History opens the past-chats modal', () => {
       'History must open the same past-chats view the "Past sessions" button opened (D3)',
     ).toBeVisible({ timeout: 15_000 })
 
+    // S5-05/F6: "the modal opened" alone cannot catch a History action scoped
+    // to the WRONG agent (or to none). The modal renders an agent-filter chip
+    // whenever searchModalAgentFilter is set (SearchModal.tsx), and that chip
+    // carries a stable, semantic anchor — the "Clear agent filter" button. Pin
+    // both halves: the chip exists (a filter was applied at all) and it names
+    // the row's own agent (it was applied to the RIGHT one).
+    const agentChip = sessionsModal.getByRole('button', { name: 'Clear agent filter' })
+    await expect(
+      agentChip,
+      'History must open the past-chats view SCOPED to the row agent, not an unscoped list',
+    ).toBeVisible({ timeout: 15_000 })
+    await expect(
+      agentChip.locator('..'),
+      "the History filter chip must name the row's own agent",
+    ).toContainText('Jim', { timeout: 15_000 })
+
     await page.keyboard.press('Escape')
     await expect(sessionsModal).toBeHidden({ timeout: 15_000 })
   })
