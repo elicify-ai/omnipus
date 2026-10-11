@@ -3195,14 +3195,18 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
       className="flex flex-col absolute inset-0 overflow-hidden"
       data-active-session-id={activeSessionId ?? ''}
     >
-      {/* Agent-removed banner — shown when the session's agent has been deleted (#103), or the session itself is gone (D5) */}
+      {/* Dead-session banner (D5 + C10). Two truths, keyed on what the server
+          actually said: agentRemoved (the agent_removed signal from the
+          session detail) is the only grounds for "Agent removed"; a confirmed
+          404 from the history read proves only that the CHAT is gone, so the
+          copy says exactly that — not "Agent removed". */}
       {(agentRemoved || sessionGone) && (
         <div
           data-testid="agent-removed-banner"
           className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 flex items-center gap-[var(--space-2)]"
         >
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">
-            Agent removed — this session is read-only
+            {agentRemoved ? 'Agent removed — this session is read-only' : 'This chat no longer exists'}
           </span>
         </div>
       )}
@@ -3214,26 +3218,31 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
       {historyError ? (
         <div className="flex flex-col items-center justify-center flex-1 gap-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           <p>Could not load messages.</p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              // V3 (FR-030/031): when a /clear operation still owes this
-              // session its view, Retry runs ONLY that operation's own
-              // read+apply — it publishes into the history cache on success,
-              // and a competing ordinary refetch could fail afterwards and
-              // undo the recovery (round-3 review N5). No-op when no clear
-              // operation is pending.
-              const sid = activeSessionId
-              if (sid && sid !== '__pending' && pendingClearRefetches[sid]) {
-                useChatStore.getState().retryClearTranscript(sid)
-                return
-              }
-              refetchHistory()
-            }}
-          >
-            <ArrowCounterClockwise size={14} /> Retry
-          </Button>
+          {/* C10: a confirmed 404 is deletion — the refetch 404s again, so no
+              Retry is offered (the dead-session banner above carries the
+              truthful copy). Every other failure keeps Retry. */}
+          {!sessionGone && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                // V3 (FR-030/031): when a /clear operation still owes this
+                // session its view, Retry runs ONLY that operation's own
+                // read+apply — it publishes into the history cache on success,
+                // and a competing ordinary refetch could fail afterwards and
+                // undo the recovery (round-3 review N5). No-op when no clear
+                // operation is pending.
+                const sid = activeSessionId
+                if (sid && sid !== '__pending' && pendingClearRefetches[sid]) {
+                  useChatStore.getState().retryClearTranscript(sid)
+                  return
+                }
+                refetchHistory()
+              }}
+            >
+              <ArrowCounterClockwise size={14} /> Retry
+            </Button>
+          )}
         </div>
       ) : (
         <ThreadPrimitive.Root className="flex flex-col flex-1 min-h-0">

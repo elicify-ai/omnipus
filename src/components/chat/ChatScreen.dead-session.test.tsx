@@ -179,4 +179,53 @@ describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5
     expect(container.querySelector('[data-testid="agent-removed-banner"]')).toBeNull()
     expect(container.querySelector('[data-testid="composer-input"]')).toBeNull()
   })
+
+  // C10 (R3 delta re-review): the banner said "Agent removed" for ANY
+  // confirmed 404 — but a 404 only proves the CHAT is gone; the server says
+  // "agent removed" only via the agent_removed signal (agentRemoved prop).
+  // And the Retry offered next to a 404 can never succeed — a deleted chat
+  // 404s again — so a missing chat gets no Retry.
+  it('a missing chat (404, no agent_removed signal) says so plainly and offers no doomed Retry', async () => {
+    seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
+    queryMock.result = {
+      data: undefined,
+      isError: true,
+      error: new ApiError(404, 'session not found'),
+      refetch: vi.fn(),
+    }
+
+    const container = await renderScreen()
+
+    expect(container.textContent).toContain('This chat no longer exists')
+    expect(container.textContent).not.toContain('Agent removed')
+    // No Retry that cannot succeed: the 404 refetch 404s again.
+    expect(container.textContent).not.toContain('Retry')
+  })
+
+  it('a server agent_removed signal keeps the agent-removed wording', async () => {
+    seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
+    queryMock.result = { data: [], isError: false, error: null, refetch: vi.fn() }
+
+    const container = await act(async () => {
+      const result = render(<ChatScreen agentRemoved />)
+      return result.container
+    })
+
+    expect(container.textContent).toContain('Agent removed — this session is read-only')
+    expect(container.textContent).not.toContain('This chat no longer exists')
+  })
+
+  it('a transport failure keeps Retry (only a confirmed 404 loses it)', async () => {
+    seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
+    queryMock.result = {
+      data: undefined,
+      isError: true,
+      error: new ApiError(0, 'Network unavailable. Check your connection.'),
+      refetch: vi.fn(),
+    }
+
+    const container = await renderScreen()
+
+    expect(container.textContent).toContain('Retry')
+  })
 })
