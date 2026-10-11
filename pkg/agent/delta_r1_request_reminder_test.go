@@ -18,7 +18,7 @@ func TestRequestReminder_FailedPublishLeavesTheReminderOwed(t *testing.T) {
 	al, _ := newSteerAL(t)
 	const session, request = "sess-r1-4", "req-r1-4"
 	al.pendingRequests.Store(request, session)
-	al.markRequestDelivered(request)
+	al.markRequestDelivered(session, request)
 
 	al.bus.Close() // every PublishInbound now fails
 	al.remindUnansweredRequests(session)
@@ -36,12 +36,12 @@ func TestRequestReminder_SettledAndNonRequestIdsAreNotRetained(t *testing.T) {
 	const session = "sess-r1-9"
 
 	// Not a request: nothing may be stored.
-	al.markRequestDelivered("human-message-1")
+	al.markRequestDelivered(session, "human-message-1")
 	require.Zero(t, syncMapLen(&al.deliveredRequests), "a non-request inbound must not be recorded")
 
 	// A request that is delivered and reminded, then settled, leaves nothing.
 	al.pendingRequests.Store("req-r1-9", session)
-	al.markRequestDelivered("req-r1-9")
+	al.markRequestDelivered(session, "req-r1-9")
 	require.Equal(t, []string{"req-r1-9"}, al.takeUnansweredRequests(session))
 	require.Equal(t, 1, syncMapLen(&al.deliveredRequests))
 	require.Equal(t, 1, syncMapLen(&al.remindedRequests))

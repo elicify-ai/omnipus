@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -16,11 +17,12 @@ import (
 type fakePeer struct {
 	calls []PeerRequest
 	err   error
+	held  bool
 }
 
 func (f *fakePeer) SendPeer(_ context.Context, r PeerRequest) (PeerReceipt, error) {
 	f.calls = append(f.calls, r)
-	return PeerReceipt{RequestID: "req-1", SessionID: "main"}, f.err
+	return PeerReceipt{RequestID: "req-1", SessionID: "main", Held: f.held}, f.err
 }
 
 type fakeReply struct {
@@ -235,5 +237,27 @@ func TestOrdinarySend_RefusedToAConnectorFromAMain(t *testing.T) {
 	*sent = false
 	if res := tool.Execute(webMain, map[string]any{"content": "hi"}); res.IsError || !*sent {
 		t.Errorf("a main's webchat send must keep working: %+v", res)
+	}
+}
+
+// Founder ruling 2026-10-11 (R1 #5): asking a stopped agent is not silent; the
+// asker is told its request is waiting and will be delivered.
+func TestPeerSend_HeldReceipt_TellsTheAskerItIsWaiting(t *testing.T) {
+	tool, peer, _, _ := addrTool()
+	peer.held = true
+	res := tool.Execute(u8TurnCtx(), map[string]any{"content": "please review X", "workspace_id": "ws-2", "agent_id": "ava"})
+	if res.IsError {
+		t.Fatalf("unexpected refusal: %s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "ava is stopped") || !strings.Contains(res.ForLLM, "delivered when") {
+		t.Fatalf("receipt text = %q, want it to say ava is stopped and the request will be delivered when it runs again", res.ForLLM)
+	}
+}
+
+func TestPeerSend_NotHeld_ReceiptHasNoWaitingNote(t *testing.T) {
+	tool, _, _, _ := addrTool()
+	res := tool.Execute(u8TurnCtx(), map[string]any{"content": "please review X", "workspace_id": "ws-2", "agent_id": "ava"})
+	if res.IsError || strings.Contains(res.ForLLM, "stopped") {
+		t.Fatalf("receipt = %q (error=%v), want a plain admission", res.ForLLM, res.IsError)
 	}
 }
