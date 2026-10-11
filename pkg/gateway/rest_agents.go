@@ -1238,7 +1238,13 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	// Final-gate H1: a stale revision is refused here too, BEFORE the goals are
 	// ended (that is destructive as well) and before the shared cascade runs.
 	if err := systools.CheckAgentDeleteRevision(a.homePath, id, revision); err != nil {
-		jsonErr(w, http.StatusConflict, err.Error())
+		if errors.Is(err, agentstore.ErrRevisionConflict) {
+			jsonErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		// A read failure carries a file path: fixed text to the client, the cause
+		// to the server log. Nothing has been destroyed yet.
+		jsonServerFailure(w, http.StatusInternalServerError, "the agent record could not be read before deleting it", err)
 		return
 	}
 	// UAT E-3 / ADR-086 D9: end the active goals this agent was working as an
