@@ -560,37 +560,38 @@ function requireBugHarnessHome(): void {
   }
 }
 
+// NOTE (fixed 2026-08-24, was `.fixme` since 2026-05-30): the test sets
+// up a per-agent session by writing meta.json + transcript.jsonl into
+//   OMNIPUS_HOME/agents/<id>/sessions/<sid>/
+// then drives a real browser to it and sends a follow-up message.
+//
+// The original note guessed the resulting transcript stayed empty
+// because an empty SEEDED transcript reads to SPA hydration as "fresh
+// chat". Live reproduction (instrumenting the real WS traffic) disproved
+// that: the actual cause was a RACE between the composer becoming
+// enabled/"connected" (which only proves the WS socket is open) and the
+// SessionRoute mount effect's `attach_session` call actually completing
+// (which is what points the chat store's `activeSessionId` at this
+// seeded session). The test used to send its follow-up as soon as the
+// composer looked usable — often before that effect had run — so the
+// outbound `message` frame carried no `session_id`, and the gateway
+// minted a brand-new session in the shared store (attributed to the
+// default agent) instead of resuming the seeded one. Fixed by waiting
+// for the WS `done` frame that closes out `attach_session`'s replay
+// before sending anything — see the `expect.poll` below, right before
+// the follow-up is sent. Two harness-only bugs (unrelated to the
+// product) had to be fixed to even reach that race: the agent-creation
+// POST needed the CSRF header this suite's double-submit pattern
+// requires, and it needed `type`/`soul`, both required by the
+// ADR-034 discriminated-union create contract added since this test
+// was written.
+//
+// The underlying PRODUCT bug (not this test harness) already has a
+// rock-solid Go regression test — TestWS_Message_FindsSession_InPerAgentStore
+// in pkg/gateway/websocket_session_test.go — verified to fail without
+// the fix and pass with it.
 test.describe('Bug-Hans: per-agent session resume must not produce "session not found"', () => {
-  // NOTE (fixed 2026-08-24, was `.fixme` since 2026-05-30): the test sets
-  // up a per-agent session by writing meta.json + transcript.jsonl into
-  //   OMNIPUS_HOME/agents/<id>/sessions/<sid>/
-  // then drives a real browser to it and sends a follow-up message.
-  //
-  // The original note guessed the resulting transcript stayed empty
-  // because an empty SEEDED transcript reads to SPA hydration as "fresh
-  // chat". Live reproduction (instrumenting the real WS traffic) disproved
-  // that: the actual cause was a RACE between the composer becoming
-  // enabled/"connected" (which only proves the WS socket is open) and the
-  // SessionRoute mount effect's `attach_session` call actually completing
-  // (which is what points the chat store's `activeSessionId` at this
-  // seeded session). The test used to send its follow-up as soon as the
-  // composer looked usable — often before that effect had run — so the
-  // outbound `message` frame carried no `session_id`, and the gateway
-  // minted a brand-new session in the shared store (attributed to the
-  // default agent) instead of resuming the seeded one. Fixed by waiting
-  // for the WS `done` frame that closes out `attach_session`'s replay
-  // before sending anything — see the `expect.poll` below, right before
-  // the follow-up is sent. Two harness-only bugs (unrelated to the
-  // product) had to be fixed to even reach that race: the agent-creation
-  // POST needed the CSRF header this suite's double-submit pattern
-  // requires, and it needed `type`/`soul`, both required by the
-  // ADR-034 discriminated-union create contract added since this test
-  // was written.
-  //
-  // The underlying PRODUCT bug (not this test harness) already has a
-  // rock-solid Go regression test — TestWS_Message_FindsSession_InPerAgentStore
-  // in pkg/gateway/websocket_session_test.go — verified to fail without
-  // the fix and pass with it.
+
   test('(Bug-Hans-a) follow-up message on a per-agent session succeeds', async ({ page }) => {
     test.slow() // real LLM call once the message lands; budget accordingly
     requireBugHarnessHome() // unresolvable home is a fail-fast preflight, not a skip (helper above)
