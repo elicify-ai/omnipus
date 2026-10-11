@@ -214,11 +214,22 @@ func TestHandleCancel_SecondClickOnAlreadyClaimedTurn_SendsNoAckFrame(t *testing
 	// cancel_stage frame observed here is attributable only to the SECOND
 	// click.
 	secondStages := readCancelStageFrames(conn2, 500*time.Millisecond)
-	assert.Empty(t, secondStages,
+	// The FIRST click's own cascade publishes its "detached" stage on the HUB
+	// (websocket_cancel.go's sendCancelReportFrame), so conn2 sees that frame
+	// inside this window even though it belongs to the first cancel. The claim
+	// under test is about the second click's ACK — "graceful"/"hard" — so only
+	// those count as a second ack.
+	secondAcks := []string{}
+	for _, stage := range secondStages {
+		if stage == "graceful" || stage == "hard" {
+			secondAcks = append(secondAcks, stage)
+		}
+	}
+	assert.Empty(t, secondAcks,
 		"a second cancel on an already-claimed, still-registered turn is a "+
 			"genuine no-op (Fired:false, Armed:false — a live turn was found, "+
 			"ClaimCancel just lost the race) and must NOT produce another ack "+
-			"frame; doing so would over-signal")
+			"frame; doing so would over-signal (saw stages %v)", secondStages)
 
 	cancelCtx()
 }

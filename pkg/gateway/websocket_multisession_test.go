@@ -674,9 +674,20 @@ func TestWS_Cancel_OnlyInterruptsTargetSession(t *testing.T) {
 
 	// Give the server a moment to process. No error frame should arrive.
 	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
-	_, _, readErr := conn.ReadMessage()
-	// Only allowed failure: deadline exceeded (no frame) or close.
+	_, rawFrame, readErr := conn.ReadMessage()
+	// A frame after a cancel is EXPECTED: ADR-091 I-6 publishes a cancel_stage
+	// report on the hub (here stage "detached", with the cascade's reached /
+	// skipped_newer_generation lists). The original assertion — "must not
+	// produce any server frame" — predates that report and pinned the absence
+	// of a frame the product is now specified to send.
+	//
+	// What the test is actually about, in its own words above, is that the
+	// cancel is a clean no-op: "There must be no error frame emitted to the
+	// client from this cancel." That is what is asserted now.
 	if readErr == nil {
-		t.Error("cancel on a finished session must not produce any server frame")
+		assert.NotContains(t, string(rawFrame), `"type":"error"`,
+			"cancel on a finished session must not produce an error frame; got %s", string(rawFrame))
+		assert.Contains(t, string(rawFrame), `"type":"cancel_stage"`,
+			"the only frame a finished-session cancel may produce is the documented cancel_stage report; got %s", string(rawFrame))
 	}
 }
