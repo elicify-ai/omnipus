@@ -205,7 +205,7 @@ function seedTranscript(sessionId: string, entries: OrderedEntry[]): void {
     )
   }
   const transcriptPath = path.join(sessionDir, 'transcript.jsonl')
-  const lines = entries.map((e) => JSON.stringify(e)).join('\n') + '\n'
+  const lines = entries.map((e) => JSON.stringify({ view_membership: 'chat', ...e })).join('\n') + '\n'
   fs.writeFileSync(transcriptPath, lines, { encoding: 'utf-8' })
 }
 

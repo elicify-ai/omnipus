@@ -705,7 +705,7 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
       content: 'task done — open me to resume',
       timestamp: nowISO,
     }
-    fs.writeFileSync(path.join(sessionDir, 'transcript.jsonl'), JSON.stringify(priorEntry) + '\n')
+    fs.writeFileSync(path.join(sessionDir, 'transcript.jsonl'), JSON.stringify({ view_membership: 'chat', ...priorEntry }) + '\n')
 
     // 4. Navigate directly to the seeded session (TanStack Router hash form).
     await page.goto(`/#/sessions/${sessionID}`)

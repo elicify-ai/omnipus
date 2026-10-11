@@ -269,3 +269,24 @@ export function advanceEventTime(current: string | null, incoming: string | null
   if (inc.ms !== cur.ms) return inc.ms > cur.ms ? incoming : current
   return inc.subMs > cur.subMs ? incoming : current
 }
+
+/**
+ * True when the bucket's busy flag (`isStreaming`, which draws the composer's
+ * Stop button) has nothing behind it: no message is streaming, no tool call is
+ * running, no turn was announced active, and no replay is rebuilding history.
+ * `tool_call_start` sets the flag but carries no turn_id, so a straggler that
+ * lands after a turn already ended (after Stop, after done, after a reconnect)
+ * re-arms it with no later frame to end it - Stop shows while the transcript
+ * shows no activity. Callers release the flag at the points where the evidence
+ * is decided (a tool result, a "no turn in flight" snapshot).
+ */
+export function busyFlagIsUnbacked(
+  b: Pick<SessionChatState, 'isStreaming' | 'isReplaying' | 'activeTurnId' | 'messageOrder' | 'messagesById' | 'toolCalls'>,
+): boolean {
+  if (!b.isStreaming || b.isReplaying || b.activeTurnId) return false
+  if (Object.values(b.toolCalls).some((t) => t.status === 'running')) return false
+  return !b.messageOrder.some((id) => {
+    const m = b.messagesById[id]
+    return !!m && (m.isStreaming || m.status === 'streaming')
+  })
+}

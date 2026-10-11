@@ -25,7 +25,7 @@ import {
   readLLMErrorFromFrame,
   sanitizeLegacyErrorMessage,
 } from '@/lib/llm-error'
-import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
+import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { flushHeldClearProjection, settleClearRefetchAfterTurn } from '../clear-refetch'
@@ -288,6 +288,9 @@ function applyToolCallResultFrame(
     tc.status = frame.status ?? 'success'
     tc.duration_ms = frame.duration_ms
     tc.error = frame.error
+    // The last running tool just finished. If that start was a straggler from a
+    // turn that already ended, nothing is left to clear the busy flag.
+    if (busyFlagIsUnbacked(draft)) draft.isStreaming = false
   }) as Partial<SessionChatState>
 }
 
