@@ -72,9 +72,120 @@ func orphanACSnapshot(t *testing.T, h *cwR1Harness) session.WindowView {
 	return snap
 }
 
+// orphanACSurvivingLive is the slots of before a trim at after.State.Skip must
+// keep: those whose Ordinal is at or above the new Skip. Filter by ORDINAL, not
+// by indexing the slice at Skip — a canceled, excluded slot can sit inside the
+// evicted prefix, so Skip is not a count of dropped Live entries
+// (ARCHITECT-ANSWER-FINAL-GATE.md item 4d).
+func orphanACSurvivingLive(before, after session.WindowView) []session.ModelSlot {
+	out := make([]session.ModelSlot, 0, len(before.Live))
+	for _, slot := range before.Live {
+		if slot.Ordinal >= after.State.Skip {
+			out = append(out, slot)
+		}
+	}
+	return out
+}
+
+// orphanACAssertUnsupportedSplit re-points an unsupported-recovery case whose
+// offending record can no longer be STORED (ARCHITECT-ANSWER-FINAL-GATE.md item
+// 4d, the same re-point as 4c). The archive holds only the admissible records, so
+// the invalid sequence is built IN MEMORY for the send boundary, and the refusal
+// of the offending record at ADMISSION is asserted separately — that boundary is
+// what made the old fully-seeded fixture lose its record silently.
+// orphanACAssertStandaloneOrphan re-points the leaf whose store-derived
+// candidate cannot show the fault: a standalone tool result followed by a marker
+// for the same id. assembleMessages reads the ARCHIVE (which deliberately cannot
+// hold this record), so it hands back a sequence with no tool message at all and
+// both prepareCallMessages and callProviderOnce see nothing wrong. The sequence
+// is therefore built BY HAND — the ruling's "invalid sequence built in memory" —
+// and callProviderOnce, which validates exactly what it is given, still refuses
+// it with the original expected text.
+//
+// What is asserted:
+//   - the orphan result is refused at ADMISSION, and the archive does not move;
+//   - the send boundary refuses the marker-bound sequence with the same specific
+//     refusal the original case expected.
+func orphanACAssertStandaloneOrphan(t *testing.T, prefix []providers.Message, suffix []providers.Message, wantErr string) {
+	t.Helper()
+	h := cwR1New(t, 100000)
+	h.append(t, prefix...)
+	before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
+	ts := h.turn("")
+	orphanACAssertView(t, h, ts, prefix)
+
+	// (i) admission refuses the orphan result itself.
+	_, _, aerr := h.store.AppendModelMessage(context.Background(), h.key, session.ModelAppend{
+		Message:        suffix[0],
+		ViewMembership: session.ViewMembershipBoth,
+		Source:         session.EntrySource{Kind: "user"},
+	})
+	require.Error(t, aerr, "admission must refuse a tool result that names no issuing assistant")
+
+	// (ii) the send boundary refuses the same sequence, built in memory.
+	seq := []providers.Message{{Role: "system", Content: "PINNED instruction must remain"}}
+	seq = append(seq, prefix...)
+	seq = append(seq, suffix...)
+	r, provider := cwR1OpenAI(t, 0)
+	rr := cwR1Flow(h, ts, seq, provider)
+	_, cerr := rr.rq.ri.rf.rt.callProviderOnce(seq, nil)
+	require.EqualError(t, cerr, wantErr,
+		"the send boundary must refuse the invalid structure built in memory")
+	require.Len(t, r.requests(t), 0, "a rejected request reaches no provider")
+
+	orphanACAssertUnchanged(t, h, before, bytes)
+}
+
+func orphanACAssertUnsupportedSplit(t *testing.T, admissible []providers.Message, bad providers.Message, trailing []providers.Message, wantErr string, storeDerived bool) {
+	t.Helper()
+	h := cwR1New(t, 100000)
+	h.append(t, admissible...)
+	before, bytes := orphanACSnapshot(t, h), orphanACArchiveBytes(t, h)
+	ts := h.turn("")
+
+	// The archive's own view holds exactly the admissible records.
+	orphanACAssertView(t, h, ts, admissible)
+
+	// The send boundary must still refuse the invalid sequence, with the
+	// offending record exactly where a producer bug would place it. The
+	// sequence passed on is the ASSEMBLED view (system envelope + records), so
+	// the message index in the refusal matches the fully-seeded cases.
+	seq := append([]providers.Message(nil), admissible...)
+	seq = append(seq, bad)
+	seq = append(seq, trailing...)
+	assembled := orphanACAssemble(t, h, ts, seq)
+	if storeDerived {
+		orphanACAssertRejectedBeforeSend(t, h, ts, assembled, wantErr)
+	} else {
+		// The store-derived candidate cannot see this record: prepareCallMessages
+		// re-derives from the archive, and the refused record is deliberately not
+		// there. The send boundary is therefore asserted directly on the
+		// assembled sequence, which callProviderOnce validates itself.
+		// (ARCHITECT-ANSWER-FINAL-GATE.md item 4c anticipated exactly this.)
+		r, provider := cwR1OpenAI(t, 0)
+		rr := cwR1Flow(h, ts, assembled, provider)
+		_, cerr := rr.rq.ri.rf.rt.callProviderOnce(assembled, nil)
+		require.EqualError(t, cerr, wantErr, "the send boundary must refuse the invalid structure built in memory")
+		require.Len(t, r.requests(t), 0, "a rejected request reaches no provider")
+	}
+
+	// And the same record is refused when SAVED.
+	_, _, aerr := h.store.AppendModelMessage(context.Background(), h.key, session.ModelAppend{
+		Message:        bad,
+		ViewMembership: session.ViewMembershipBoth,
+		Source:         session.EntrySource{Kind: "user"},
+	})
+	require.Error(t, aerr, "admission must refuse a record that cannot name its issuing assistant")
+	orphanACAssertUnchanged(t, h, before, bytes)
+}
+
 func orphanACArchiveBytes(t *testing.T, h *cwR1Harness) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(h.dir, h.key+".jsonl"))
+	// U2 Decision D / DEL-12: the ONE addressed archive is
+	// <baseDir>/<owning session id>/transcript.jsonl (archive_day_store.go);
+	// the retired model backend wrote <baseDir>/<key>.jsonl. h.key ("cw-r1")
+	// carries no ":session:" segment, so owningSessionID leaves it unchanged.
+	data, err := os.ReadFile(filepath.Join(h.dir, h.key, "transcript.jsonl"))
 	require.NoError(t, err, "read original archive bytes")
 	return data
 }

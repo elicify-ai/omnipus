@@ -66,54 +66,24 @@ func toolCallEntry(id, tool string, params map[string]any) session.TranscriptEnt
 	}
 }
 
-func TestRepairHistory_OrphanToolResult_SynthesizesToolUse(t *testing.T) {
-	// Mirrors the observed Ray session: an assistant message declares two
-	// tool_uses, but a third tool_result arrives for an id that was never
-	// declared. Repair must inject a matching tool_use into the preceding
-	// assistant so Anthropic's invariant holds.
-	store, sid := newTranscriptFixture(t, []session.TranscriptEntry{
-		toolCallEntry("t_orphan", "fetch_url", map[string]any{"url": "https://example.com"}),
-	})
-
-	messages := []providers.Message{
-		{Role: "user", Content: "hi"},
-		{Role: "assistant", ToolCalls: []providers.ToolCall{
-			{ID: "t_declared", Type: "function", Name: "search_web"},
-		}},
-		{Role: "tool", ToolCallID: "t_declared", Content: "some results"},
-		{Role: "tool", ToolCallID: "t_orphan", Content: "orphan result"},
-	}
-
-	out, stats := repairHistory(context.Background(), messages, store, sid, nil, "test-agent")
-
-	if stats.SyntheticToolUses != 1 {
-		t.Errorf("expected 1 synthetic tool_use, got %d", stats.SyntheticToolUses)
-	}
-	if len(out) != len(messages) {
-		t.Fatalf(
-			"repair should not change message count on pure-result-orphan case, got %d want %d",
-			len(out),
-			len(messages),
-		)
-	}
-	// The assistant message should now declare BOTH t_declared and t_orphan.
-	assistant := out[1]
-	ids := make([]string, 0, len(assistant.ToolCalls))
-	for _, tc := range assistant.ToolCalls {
-		ids = append(ids, tc.ID)
-	}
-	if len(ids) != 2 || ids[0] != "t_declared" || ids[1] != "t_orphan" {
-		t.Errorf("assistant tool_calls = %v; want [t_declared, t_orphan]", ids)
-	}
-	// The synthesized tool_use must carry the tool name + arguments from the transcript.
-	synth := assistant.ToolCalls[1]
-	if synth.Name != "fetch_url" {
-		t.Errorf("synth tool name = %q, want fetch_url", synth.Name)
-	}
-	if url, _ := synth.Arguments["url"].(string); url != "https://example.com" {
-		t.Errorf("synth url = %q, want https://example.com", url)
-	}
-}
+// DELETED: TestRepairHistory_OrphanToolResult_SynthesizesToolUse.
+//
+// Ruling: ARCHITECT-ANSWER-FINAL-GATE.md item 4b, applying slice-4 Flag 1
+// (ARCHITECT-ANSWER-CUTOVER-SLICE4.md) — synthesising a tool_use from a
+// tool_call_id match is exactly what Decision B forbids, and prepareCallMessages
+// runs validateWindowGroups first and RETURNS BEFORE repairHistory on any orphan
+// result or incomplete group, so the synthesis and the idempotent re-invocation
+// are unreachable in production. Developer 4 deletes repair.go and the call with
+// this wave.
+//
+// WHY THE COUNTER WAS 0 (the ruling's caveat, answered): NOT "ReadTranscript
+// stopped returning ToolCalls". The hand-written fixture (newTranscriptFixture)
+// writes raw JSONL lines with no view_membership, and
+// pkg/session/transcript_effects.go::readTranscriptMerged refuses such a line
+// outright ("record %s at %s@%d has no view_membership (an unconverted line; the
+// archive carries no reader default)"). loadTranscriptToolCalls therefore got a
+// read error, returned a nil index, and repair counted the orphan Unrepairable
+// instead of synthesising it.
 
 func TestRepairHistory_OrphanToolUse_DestructiveGetsErrorStub(t *testing.T) {
 	// Assistant declared a write_file tool_use that never got resolved.
