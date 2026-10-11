@@ -396,6 +396,58 @@ describe('D5 — Hide from sidebar', () => {
     })
   })
 
+  it('a NON-conflict hide failure surfaces a visible error toast naming the agent (S4-06)', async () => {
+    apiMocks.updateWorkspace.mockRejectedValue(new ApiError(500, 'storage exploded'))
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    await openRowMenu('Mia')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Hide from sidebar' }))
+    })
+
+    // A 500 is NOT a conflict: setHiddenFromSidebar rethrows anything that is
+    // not 409, so there is no refetch and no retry — the failure goes straight
+    // to the caller's toast.
+    expect(apiMocks.fetchWorkspace).not.toHaveBeenCalled()
+    expect(apiMocks.updateWorkspace).toHaveBeenCalledTimes(1)
+    const toast = useUiStore.getState().toasts.at(-1)
+    expect(toast?.variant).toBe('error')
+    expect(toast?.message).toContain('Could not hide Mia')
+    expect(toast?.message).toContain('storage exploded')
+  })
+
+  it('"Show" recovers from a 409 exactly as Hide does: refetch, retry once with the fresh revision (S4-06)', async () => {
+    apiMocks.updateWorkspace
+      .mockRejectedValueOnce(new ApiError(409, 'workspace changed elsewhere'))
+      .mockResolvedValueOnce(workspaceWith({ mia: miaMember, jim: jimMember }))
+    const miaHidden: WorkspaceMemberConfig = { hidden_from_sidebar: true }
+    const jimHidden: WorkspaceMemberConfig = { hidden_from_sidebar: true }
+    // The FRESH record must still show both members HIDDEN, or the retry is
+    // correctly skipped: setHiddenFromSidebar only re-sends the ids the fresh
+    // record still disagrees about, and "already agrees" means "not hidden".
+    apiMocks.fetchWorkspace.mockResolvedValue(
+      workspaceWith({ mia: miaHidden, jim: jimHidden }, { revision: FRESH_REV }),
+    )
+    register(miaHidden, MIA_MAIN)
+    register(jimHidden, JIM_MAIN)
+    renderList({ workspace: workspaceWith({ mia: miaHidden, jim: jimHidden }) })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Show' }))
+    })
+
+    expect(apiMocks.fetchWorkspace).toHaveBeenCalledTimes(1)
+    expect(apiMocks.updateWorkspace).toHaveBeenCalledTimes(2)
+    expect(apiMocks.updateWorkspace).toHaveBeenLastCalledWith(WS, {
+      revision: FRESH_REV,
+      member_configs: {
+        mia: { hidden_from_sidebar: false },
+        jim: { hidden_from_sidebar: false },
+      },
+    })
+    expect(useUiStore.getState().toasts, 'a recovered conflict is not an error').toEqual([])
+  })
+
   it('on 409 refetches the workspace and retries ONCE with the fresh revision', async () => {
     apiMocks.updateWorkspace
       .mockRejectedValueOnce(new ApiError(409, 'workspace changed elsewhere'))
@@ -506,6 +558,29 @@ describe('D4/D8 — Remove', () => {
     // three API seams this suite mocks are the entire request surface the
     // action can reach (R2: removal never deletes the main chat).
     expect(apiMocks.fetchWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('a FAILED Remove surfaces the rejection and does not claim success (S4-05)', async () => {
+    apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
+    apiMocks.updateWorkspace.mockRejectedValue(new ApiError(409, 'workspace changed elsewhere'))
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    await openRowMenu('Mia')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    })
+
+    // The rejection must NOT be swallowed: dropping confirmRemove's .catch
+    // would leave a 409/422/network failure completely silent, which is
+    // exactly what the review flagged.
+    const toast = useUiStore.getState().toasts.at(-1)
+    expect(toast?.variant).toBe('error')
+    expect(toast?.message).toContain('Could not remove Mia')
+    expect(toast?.message).toContain('workspace changed elsewhere')
+    // ...and a failed removal must not refresh the roster as if it had landed.
+    expect(invalidateSpy).not.toHaveBeenCalled()
   })
 
   it('removing the selected member clears the remembered binding BEFORE recovery runs, so entry does not short-circuit', async () => {
