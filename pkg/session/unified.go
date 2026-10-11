@@ -356,7 +356,7 @@ func (us *UnifiedStore) BaseDir() string {
 // step. It defaults to fileutil.WriteFileAtomic; tests override it to force
 // a deterministic write failure (the MB-1 cache/disk-divergence regression
 // guard) without depending on OS permission enforcement — same rationale as
-// removeAllFn above (root bypasses chmod-based failure injection via
+// the other test seams here (root bypasses chmod-based failure injection via
 // CAP_DAC_OVERRIDE in CI).
 var writeFileAtomicFn = fileutil.WriteFileAtomic
 

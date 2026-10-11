@@ -48,18 +48,12 @@ func TestSessionCoreU12_DeleteCleansOwnedDataBeforeRemovingRecord(t *testing.T) 
 	}
 
 	// One solely-owned session under victim.
-	sessStore, storeErr := session.NewUnifiedStore(filepath.Join(home, "sessions"))
-	if storeErr != nil {
-		t.Fatalf("test setup: open session store: %v", storeErr)
-	}
+	sessStore := liveSessionStore(deps)
 	meta, metaErr := sessStore.NewSession(session.SessionTypeChat, "webchat", "victim")
 	if metaErr != nil {
 		t.Fatalf("test setup: create session: %v", metaErr)
 	}
 	sessionID := meta.ID
-	if err := sessStore.Close(); err != nil {
-		t.Fatalf("test setup: close session store: %v", err)
-	}
 
 	// Read the revision BEFORE breaking the record delete: currentAgentRevision
 	// goes through store.ReadState, which takes the very lock the rig breaks.
