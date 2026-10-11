@@ -355,8 +355,9 @@ describe('D5 — Hide from sidebar', () => {
     expect(screen.queryByRole('group', { name: 'Mia' })).toBeNull()
     // The quiet line: the count as text, and a control named exactly "Show"
     // (the e2e contract — AGENT_ROW_MENU_ITEMS/spec — reads both surfaces).
+    // RTL's ByRole name option already full-matches the accessible name.
     expect(screen.getByText('1 hidden')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Show', exact: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show' })).toBeTruthy()
   })
 
   it('"Show" un-hides every hidden agent of the workspace in one PUT', async () => {
@@ -369,7 +370,7 @@ describe('D5 — Hide from sidebar', () => {
     expect(screen.getByText('2 hidden')).toBeTruthy()
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Show', exact: true }))
+      fireEvent.click(screen.getByRole('button', { name: 'Show' }))
     })
 
     expect(apiMocks.updateWorkspace).toHaveBeenCalledTimes(1)
