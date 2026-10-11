@@ -22,6 +22,13 @@ type State struct {
 	Revision   string
 }
 
+// Team is the team-membership set of the state: the workspace core team plus
+// the endpoints of its delegation graph (TeamSet over this state's own record
+// and edges).
+func (s State) Team() map[string]bool {
+	return TeamSet(s.Workspace.CoreTeam, s.Delegation)
+}
+
 func ValidateRevision(revision string) error {
 	if !workspaceRevisionPattern.MatchString(revision) {
 		return fmt.Errorf("%w: expected 64 lowercase hex characters", ErrInvalidRevision)
