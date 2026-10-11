@@ -32,7 +32,7 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 	// mail-reading roles alongside send_email/reply — the ordinary ask
 	// posture, never a loosening. Admin/hidden roles keep their narrower
 	// mail authority (no commonWork mail reads).
-	commonWork := []string{"read_file", "list_directory", "grep", "list_mounts", "library_list", "library_read", "remember", "recall_memory", "run_retrospective", "recall_conversation", "send_message", "message_parent", "goal_claim", "read_inbox", "search_email", "read_message", "list_email_attachments", "read_email_attachment", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
+	commonWork := []string{"read_file", "list_directory", "grep", "list_mounts", "library_list", "library_read", "remember", "recall_memory", "run_retrospective", "recall_conversation", "send_message", "answer_request", "message_parent", "goal_claim", "read_inbox", "search_email", "read_message", "list_email_attachments", "read_email_attachment", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
 	switch id {
 	case IDMia:
 		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "write_file", "edit_file", "append_file", "search_web", "fetch_url", "send_file", "create_task", "update_task", "list_tasks", "set_todos", "find_skills")...)
@@ -62,7 +62,7 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "list_agents", "get_agent", "get_agent_tools", "create_agent", "update_agent", "delete_agent", "list_models", "find_skills", "list_skills", "install_skill", "create_skill", "edit_skill", "remove_skill", "list_mcp_servers", "get_workspace", "list_workspaces", "update_workspace")...)
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount")
 	case IDAdmin:
-		grant(allow, "remember", "recall_memory", "run_retrospective", "recall_conversation", "AskUserQuestion", "set_goal", "goal_claim", "read_file", "write_file", "edit_file", "append_file", "list_directory", "grep", "list_mounts", "send_message", "add_mcp_server", "list_mcp_servers", "list_providers", "configure_provider", "test_provider", "list_models", "list_channels", "configure_channel", "enable_channel", "test_channel", "run_doctor", "get_usage")
+		grant(allow, "remember", "recall_memory", "run_retrospective", "recall_conversation", "AskUserQuestion", "set_goal", "goal_claim", "read_file", "write_file", "edit_file", "append_file", "list_directory", "grep", "list_mounts", "send_message", "answer_request", "add_mcp_server", "list_mcp_servers", "list_providers", "configure_provider", "test_provider", "list_models", "list_channels", "configure_channel", "enable_channel", "test_channel", "run_doctor", "get_usage")
 		grant(allow, "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list")
 		// environment_setup (ADR-090 ES-FR-01): Ask — explicit stored entry
 		// (deliberate posture). Admin's cross-workspace FILESYSTEM authority

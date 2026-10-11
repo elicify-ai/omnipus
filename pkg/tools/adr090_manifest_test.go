@@ -8,7 +8,7 @@ import (
 
 func TestADR090_GlobalVisibility37(t *testing.T) {
 	wantFull := []string{
-		"AskUserQuestion", "Skill", "append_file", "bash", "create_plan", "create_task", "delegate", "edit_file",
+		"AskUserQuestion", "Skill", "answer_request", "append_file", "bash", "create_plan", "create_task", "delegate", "edit_file",
 		"execute_plan", "fetch_url", "get_workspace", "goal_claim", "grep", "inspect_session", "library_list", "library_read",
 		"list_agents", "list_directory", "list_jobs", "list_mounts", "list_tasks", "message_parent", "plan_correct", "read_file",
 		"recall_conversation", "recall_memory", "remember", "search_web", "send_file", "send_message", "set_goal", "set_todos",

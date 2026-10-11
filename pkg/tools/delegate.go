@@ -569,6 +569,14 @@ func (t *DelegateTool) Description() string {
 		"child finishes, asks a question, or hits a problem. Check on it with delegate status, " +
 		"redirect it with delegate redirect, stop it with delegate stop_all. A delegation is " +
 		"force-stopped after timeout_seconds (default 1800s / 30 min) if it has not finished by then. " +
+		"A run has two modes. Without a goal (the default) the helper is done when it returns a non-empty " +
+		"final answer and none of its own helpers are still running; an empty answer is a failure. With a " +
+		"goal — pass criteria and dod together, one without the other is refused — the helper works toward " +
+		"them and claims completion with goal_claim, the Judge checks the claim, and the verdict reaches " +
+		"you with the helper's completion message; clear_goal removes the goal later. Set a goal for " +
+		"multi-step work or work you must verify before relying on it; leave it off for a quick lookup or " +
+		"a single action. A helper never inherits your goal or criteria, and it cannot set a goal for " +
+		"itself: only criteria and dod on this call give it one. " +
 		"action=\"status\" checks on a previously-delegated session by its session_id — the only way " +
 		"to address a child; use list_jobs to see everything you have outstanding. " +
 		"action=\"inbox\" drains messages the child has pushed back to you (progress/" +
@@ -693,18 +701,17 @@ func (t *DelegateTool) Parameters() map[string]any {
 			"criteria": map[string]any{
 				"type":  "array",
 				"items": delegateCriterionItemSchema(),
-				"description": "Optional (action=\"run\" only), together with dod: acceptance criteria for " +
-					"this delegation — the outcome-specific checks. Supplying criteria without dod (or dod " +
-					"without criteria) is refused: a goal always has both. Set one for multi-step work or " +
-					"work you must verify before relying on it; leave it off for a quick lookup or a single " +
-					"action.",
+				"description": "Optional (action=\"run\" only), always together with dod: acceptance criteria " +
+					"for this delegation — the outcome-specific checks the helper's completion claim is " +
+					"judged against. Supplying both gives the helper a goal; leave both off to run it without " +
+					"one (see the two modes in the tool description).",
 			},
 			"dod": map[string]any{
 				"type":  "array",
 				"items": delegateCriterionItemSchema(),
-				"description": "Optional (action=\"run\" only), together with criteria: Definition of Done " +
-					"for this delegation — generic standing quality gates, distinct from criteria and never " +
-					"mixed into it (same shape as criteria).",
+				"description": "Optional (action=\"run\" only), always together with criteria: Definition of " +
+					"Done for this delegation — generic standing quality gates, distinct from criteria and " +
+					"never mixed into it (same shape as criteria).",
 			},
 			"snapshot": map[string]any{
 				"type": "object",

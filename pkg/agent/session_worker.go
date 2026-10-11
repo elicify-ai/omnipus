@@ -292,6 +292,7 @@ func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
 	if !w.inTurn.Load() || w.systemTurn.Load() {
 		return false
 	}
+	w.parent.markRequestDelivered(msg.TranscriptEntryID)
 	if err := w.parent.enqueueSteeringFromMessage(msg); err != nil {
 		// A steering-rejected error here means the message was NOT accepted
 		// by the steering path (classify failure, revive failure). It is
@@ -520,6 +521,11 @@ func (w *sessionWorker) runLoop() {
 // so each session worker has its own independent execution path.
 func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage) {
 	al := w.parent
+	// Registered first, so it runs last: after the turn, its response and the
+	// worker's in-turn flag are all settled. An unanswered request gets its one
+	// reminder (request_reminder.go).
+	defer al.remindUnansweredRequests(msg.SessionID)
+	al.markRequestDelivered(msg.TranscriptEntryID)
 	ctx, executionEntry := ordinaryExecutionContext(ctx)
 	defer func() {
 		if err := al.finishExecutionDisposition(executionEntry.disposition); err != nil {
@@ -657,18 +663,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		// normal drain below so nothing strands in the queue. When the probe
 		// does not resolve either, targetErr stays ErrNoContinuationTarget
 		// and the early return below behaves exactly as before.
-		probe := msg
-		if idx := strings.Index(msg.ChatID, ":"); idx > 0 {
-			probe.Channel = msg.ChatID[:idx]
-			probe.ChatID = msg.ChatID[idx+1:]
-		} else {
-			probe.Channel = "cli"
-		}
-		probe.SessionID = msg.AsyncTranscriptSessionID
-		target, targetErr = al.buildContinuationTarget(probe)
-		if targetErr != nil {
-			target = nil
-		}
+		target, targetErr = al.systemContinuationProbeTarget(msg)
 	}
 	if targetErr != nil {
 		if errors.Is(targetErr, ErrNoContinuationTarget) {
@@ -697,16 +692,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 				"chat_id": msg.ChatID,
 				"error":   targetErr.Error(),
 			})
-		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		if pubErr := al.bus.PublishOutbound(notifyCtx, bus.OutboundMessage{
-			Channel: msg.Channel,
-			ChatID:  msg.ChatID,
-			Content: "A problem occurred while checking for further pending instructions in this conversation. If you sent a follow-up message, please resend it.",
-		}); pubErr != nil {
-			logger.WarnCF("agent.worker", "Failed to publish continuation-target-failure notice",
-				map[string]any{"scope": w.scope, "error": pubErr.Error()})
-		}
-		notifyCancel()
+		w.publishContinuationTargetFailureNotice(msg)
 		return
 	}
 	if target == nil {
@@ -756,6 +742,44 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		al.publishResponseIfNeeded(ctx, activeAgent, target.Channel, target.ChatID, finalResponse, target.SessionID)
 		published = true
 	}
+}
+
+// systemContinuationProbeTarget derives the drain target for a system-triggered
+// turn that has no continuation target of its own, from a probe of the session's
+// own user traffic (extracted verbatim from processTurn to keep it under its
+// size budget). When the probe does not resolve either, the target is nil and
+// the error is the probe's.
+func (al *AgentLoop) systemContinuationProbeTarget(msg bus.InboundMessage) (*continuationTarget, error) {
+	probe := msg
+	if idx := strings.Index(msg.ChatID, ":"); idx > 0 {
+		probe.Channel = msg.ChatID[:idx]
+		probe.ChatID = msg.ChatID[idx+1:]
+	} else {
+		probe.Channel = "cli"
+	}
+	probe.SessionID = msg.AsyncTranscriptSessionID
+	target, targetErr := al.buildContinuationTarget(probe)
+	if targetErr != nil {
+		target = nil
+	}
+	return target, targetErr
+}
+
+// publishContinuationTargetFailureNotice tells the user a follow-up may need
+// resending when the steering continuation target could not be built
+// (extracted verbatim from processTurn).
+func (w *sessionWorker) publishContinuationTargetFailureNotice(msg bus.InboundMessage) {
+	al := w.parent
+	notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if pubErr := al.bus.PublishOutbound(notifyCtx, bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: "A problem occurred while checking for further pending instructions in this conversation. If you sent a follow-up message, please resend it.",
+	}); pubErr != nil {
+		logger.WarnCF("agent.worker", "Failed to publish continuation-target-failure notice",
+			map[string]any{"scope": w.scope, "error": pubErr.Error()})
+	}
+	notifyCancel()
 }
 
 // continueDrainRetry is processTurn's drain-loop bounded-retry step (design

@@ -1004,12 +1004,7 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 		// as a session title — use a fixed, human-readable one instead.
 		title = "Workspace setup"
 	} else {
-		titleRunes := []rune(hcm.content)
-		if len(titleRunes) > 60 {
-			title = string(titleRunes[:57]) + "..."
-		} else {
-			title = hcm.content
-		}
+		title = session.TitleFromFirstMessage(hcm.content)
 	}
 	// Stamp the session owner from the authenticated WebSocket user (SEC-2/#406).
 	// wc.userID is set at auth time (FR-073); empty on dev-mode bypass.

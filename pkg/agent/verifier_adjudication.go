@@ -1492,6 +1492,7 @@ agentLoopRunVerifierAdjudicationLoop1:
 			// ts.transcriptSessionID, the value Stop/`/goal clear`'s
 			// RequestCancelForSession actually matches turns on.
 			vs.va.chatID = vs.va.al.newVerifierSessionChatID(vs.va.sessionKey, vs.va.unitID)
+			vs.va.sessionKey = verifierWindowKey(vs.va.sessionKey, vs.va.chatID)
 			if regErr := vs.registry.Register(vs.va.unitID, vs.va.chatID); regErr != nil {
 				// CAS guard (corr-MAJOR-3, G-1): lost the race between the
 				// Lookup pre-check above and this atomic Register — another
@@ -2417,4 +2418,19 @@ func verdictFromJudgeResponse(criterionID string, pc judgeCriterionResponse) tas
 	}
 	v.Provenance = deriveVerdictProvenance(v.EvidenceSource)
 	return v
+}
+
+// verifierWindowKey is the model-window key a verifier turn runs under. The
+// window store derives its directory from the key (owningSessionID), so a key
+// that is not "agent:<id>:session:<session id>" makes the store create a
+// directory named after the key itself - one with window files and no
+// meta.json, which the next boot reports as an unreadable session. Once the
+// verifier's own session exists the window belongs in THAT session's directory.
+// When the session could not be created (chatID is the ad hoc fallback) the
+// original key stays, as before.
+func verifierWindowKey(adHocKey, chatID string) string {
+	if chatID == "" || chatID == "verify:"+adHocKey {
+		return adHocKey
+	}
+	return fmt.Sprintf("agent:%s:session:%s", string(coreagent.IDJudge), chatID)
 }
