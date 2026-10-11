@@ -120,12 +120,12 @@ func TestTurnAssembly_NoSkillBodiesWhenNoneActive(t *testing.T) {
 }
 
 // TestTurnAssembly_LoadedSkillPresentThisTurnOnly (test 34) — a skill
-// activated for one turn (via BuildMessages' activeSkills variadic — the
-// pre-existing "index in context, content on demand" mechanism the Skill
-// tool loads through) appears in THAT turn's system message and nowhere
-// else; a subsequent call on the same ContextBuilder with no activeSkills
-// carries no trace of it. Skill activation is turn-scoped, never persisted
-// onto the ContextBuilder.
+// activated for one turn via BuildMessages' activeSkills variadic (the
+// explicit /<slug> activation path, opts.ForcedSkills) appears in THAT
+// turn's system message and nowhere else; a subsequent call on the same
+// ContextBuilder with no activeSkills carries no trace of it. This covers
+// explicit per-turn activation only: the Skill TOOL does not use this path —
+// its loaded body is an ordinary tool message kept in the session window.
 func TestTurnAssembly_LoadedSkillPresentThisTurnOnly(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md": "# Agent\nTest agent.",
