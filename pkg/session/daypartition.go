@@ -584,6 +584,11 @@ type TranscriptEntry struct {
 // outcome entry — the discriminator replay reads, never Content.
 const SystemSubtypeGoalOutcome = "goal_outcome"
 
+// SystemSubtypeExpiryNotice is the SystemSubtype of the FR-007 agent expiry
+// notice a retention sweep writes when it moves a session's window past expired
+// content.
+const SystemSubtypeExpiryNotice = "expiry_notice"
+
 // ADR-091 D7/I-4 SystemSubtype values for the four persisted sub-agent
 // lifecycle frames — see SubagentStart's own doc comment above.
 const (
