@@ -25,7 +25,7 @@ func (te *TaskExecutor) persistTaskSessionBinding(taskID, sessionID string) (*ta
 		taskID, errors.Join(firstErr, retryErr))
 }
 
-// boundSessionRetryable is StartTaskNow's non-launcher idempotency gate (S1):
+// boundSessionRetryable is the bound-session gate of startTaskNowViaLauncherAs (S1):
 // it decides whether an already-bound session may be returned as-is. Returns nil
 // only when the durable-lifecycle subsystem is unwired (the documented
 // test-harness/degraded-boot seam — dispatch proceeds as before the wave) OR the
