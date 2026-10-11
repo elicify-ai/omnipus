@@ -131,20 +131,54 @@ func TestArchiveExpiry_StrictlyOlderThanCutoffExpires(t *testing.T) {
 }
 
 // FR-007 / BDD-02.3 B05: equal mtime is NOT older-than — the partition survives.
+//
+// QA-CHECK-final-gate Q05: the earlier form left store.now at 2026-03-05 (set by
+// rollDayOne) while ageing the file from the REAL clock, so the fixture never
+// constructed equality — the cutoff was derived from one instant and the mtime
+// from another, and a "delete at the equal cutoff" mutant survived. Both sides
+// now come from ONE fixed clock, and the three cases are derived from it.
 func TestArchiveExpiry_EqualMtimeIsRetained(t *testing.T) {
-	store := mustStore(t, t.TempDir())
-	_, _, rolled := rollDayOne(t, store)
-	ageFileTo(t, rolled, time.Now().Add(-30*24*time.Hour))
+	base := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+	const retention = 30
+	cutoff := base.Add(-retention * 24 * time.Hour)
 
-	notice, err := store.SweepExpired(30)
-	if err != nil {
-		t.Fatalf("sweep: %v", err)
-	}
-	if notice.RemovedPartitions != 0 {
-		t.Fatalf("equal-mtime partition must be retained (strict older-than); got %#v", notice)
-	}
-	if _, err := os.Stat(rolled); err != nil {
-		t.Fatalf("equal-mtime partition was deleted: %v", err)
+	for _, tc := range []struct {
+		name    string
+		mtime   time.Time
+		expired bool
+	}{
+		{"strictly older than the cutoff", cutoff.Add(-time.Second), true},
+		{"exactly at the cutoff", cutoff, false},
+		{"younger than the cutoff", cutoff.Add(time.Second), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := mustStore(t, t.TempDir())
+			_, _, rolled := rollDayOne(t, store)
+			// ONE clock: the cutoff SweepExpired derives and this fixture's mtime
+			// are the same instant, which is what makes the middle case equality.
+			store.now = func() time.Time { return base }
+			ageFileTo(t, rolled, tc.mtime)
+
+			notice, err := store.SweepExpired(retention)
+			if err != nil {
+				t.Fatalf("sweep: %v", err)
+			}
+			if tc.expired {
+				if notice.RemovedPartitions != 1 {
+					t.Fatalf("a partition older than the cutoff must expire; got %#v", notice)
+				}
+				if _, err := os.Stat(rolled); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("expired partition should be gone; stat err=%v", err)
+				}
+				return
+			}
+			if notice.RemovedPartitions != 0 {
+				t.Fatalf("a partition not strictly older than the cutoff must be retained; got %#v", notice)
+			}
+			if _, err := os.Stat(rolled); err != nil {
+				t.Fatalf("partition at/after the cutoff was deleted: %v", err)
+			}
+		})
 	}
 }
 

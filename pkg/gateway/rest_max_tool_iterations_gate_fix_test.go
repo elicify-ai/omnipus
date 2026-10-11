@@ -265,16 +265,28 @@ func TestGateFix_RollbackIncomplete_CarriesCause(t *testing.T) {
 	fixed, _ := cause.(string)
 	require.NotEmpty(t, fixed, "details.cause must be a fixed, non-empty cause class")
 
-	// The fixed text: the product's own rollbackCauseText constant (leak round 6,
-	// REVIEW-mainfix-r6-e14ac89eb T1), never the raw error.
-	assert.Equal(t, rollbackCauseText, fixed,
-		"details.cause must be the fixed cause class, not the raw error text")
+	// QA-CHECK-final-gate Q04: the expected cause class is FROZEN HERE, as a
+	// literal, independently of the production rollbackCauseText constant. The
+	// earlier form compared the response against that constant, so a change
+	// that smuggled a path into the client text moved expected and actual
+	// together and the test still passed (proved by a scratch mutant).
+	const wantCause = "an agent or settings storage write failed; details are in the server log"
+	assert.Equal(t, wantCause, fixed,
+		"details.cause must be the frozen cause class, not the raw error text")
 
-	// The leak: the injected storage error text must reach the client NOWHERE.
-	assert.NotContains(t, fixed, errInjectedIO.Error(),
-		"details.cause leaked the raw storage error text")
-	assert.NotContains(t, w.Body.String(), errInjectedIO.Error(),
-		"the response body leaked the raw storage error text")
+	// Prohibited disclosure, swept over the ENTIRE response — a leak can ride in
+	// on any field, not only details.cause.
+	for _, banned := range []string{
+		errInjectedIO.Error(),       // the injected raw cause
+		"/private/",                 // a macOS realpath prefix
+		"master.key",                // a credential file name
+		".omnipus",                  // the data directory
+		"no such file or directory", // an OS error string
+		"permission denied",         // an OS error string
+	} {
+		assert.NotContains(t, w.Body.String(), banned,
+			"the response body must disclose no %q", banned)
+	}
 }
 
 // Item 5: a committed save whose reload fails is 500
