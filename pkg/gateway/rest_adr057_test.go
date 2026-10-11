@@ -621,6 +621,12 @@ func TestU18DeleteSession_NoLifecycleStore_DegradesToOwnUploadsOnly(t *testing.T
 	defer cleanup()
 	store := api.agentLoop.GetSessionStore()
 	require.NotNil(t, store)
+	// The shared harness now installs a REAL lifecycle store, because the
+	// task start path it wires needs one (S1 M9 + qa shared-harness launcher,
+	// 2982c3b38). This test is about the NIL-store path, so it unwires the
+	// store explicitly instead of relying on a harness default that no longer
+	// exists.
+	api.agentLoop.SetSessionMessagingStores(nil, nil)
 	require.Nil(t, api.agentLoop.GetSessionLifecycleStore(), "fixture: no lifecycle store wired in this test")
 
 	solo, err := store.NewSession(session.SessionTypeChat, "webchat", "u18-agent")

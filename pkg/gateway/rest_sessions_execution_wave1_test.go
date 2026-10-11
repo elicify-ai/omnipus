@@ -139,6 +139,9 @@ func TestSessionList_Execution_OmittedWhenNoRecord(t *testing.T) {
 	t.Run("no store wired", func(t *testing.T) {
 		api, cleanup := newTestRestAPI(t)
 		defer cleanup()
+		// See rest_sessions_test.go: the shared harness wires a real store now,
+		// so the NIL-store path is set up explicitly here.
+		api.agentLoop.SetSessionMessagingStores(nil, nil)
 		require.Nil(t, api.agentLoop.GetSessionLifecycleStore())
 		id := createTestSession(t, api)
 		page, code := u18DoListSessions(t, api, "")
