@@ -1,8 +1,13 @@
 /**
- * BDD-07.1 above the feed. The label is a status element rendered before the
- * message text. ChatScreen reads the active workspace descriptor
+ * BDD-07.1 above the feed, as AMENDED for mains (founder decision
+ * 2026-10-11, amending FR-008 "Main chat has no title suffix"): the header
+ * line for a main session now reads the main's TITLE — "<Agent name> -
+ * Main Session", derived from the agent's CURRENT display name when the
+ * server has not stamped one yet, and following an agent rename without a
+ * reload. ChatScreen reads the active workspace descriptor
  * (sessionByWorkspace[activeWorkspaceId], when its id is the active session)
- * and the seam. Paths (live or replay) do not change the words.
+ * and the seam. Paths (live or replay) do not change the words. Extra chats,
+ * tasks, and helpers are unchanged.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
@@ -11,6 +16,7 @@ import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import type { Agent } from '@/lib/api'
 
 const seam = vi.hoisted(() => ({
   mains: new Set<string>(),
@@ -34,11 +40,22 @@ vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
 
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock())
 
+// Key-aware agents data for the header: the shared ['agents'] payload is
+// mutable per test (rename test flips it) while every OTHER query keeps the
+// exact `data: []` shape this harness always served.
+const agentsQuery = vi.hoisted(() => ({ data: [] as Agent[] }))
+
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
     ...actual,
-    useQuery: () => ({ data: [], isError: false, refetch: vi.fn() }),
+    useQuery: vi.fn((options: { queryKey: unknown[] }) => {
+      const key = JSON.stringify(options.queryKey)
+      if (key === '["agents"]') {
+        return { data: agentsQuery.data, isError: false, refetch: vi.fn() }
+      }
+      return { data: [], isError: false, refetch: vi.fn() }
+    }),
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
   }
@@ -86,7 +103,19 @@ import { ChatScreen } from './ChatScreen'
 
 const WS = 'ws-1'
 
-function seed(sessionId: string, descriptorType: 'chat' | 'task' | 'delegate', title: string): void {
+function agent(id: string, name: string): Agent {
+  return {
+    id,
+    name,
+    type: 'core',
+    locked: true,
+    figure: {} as Agent['figure'],
+    role: {} as Agent['role'],
+    revision: {} as Agent['revision'],
+  } as Agent
+}
+
+function seed(sessionId: string, descriptorType: 'chat' | 'task' | 'delegate' | 'main', title: string | null, agentId: string | null = 'mia'): void {
   const messages = [{
     id: 'msg-user',
     role: 'user' as const,
@@ -102,17 +131,19 @@ function seed(sessionId: string, descriptorType: 'chat' | 'task' | 'delegate', t
   useWorkspacesStore.setState({ activeWorkspaceId: WS })
   useSessionStore.setState({
     activeSessionId: sessionId,
-    activeAgentId: 'mia',
+    activeAgentId: agentId ?? 'mia',
     sessionByWorkspace: {
-      [WS]: { id: sessionId, type: descriptorType, title, agentId: 'mia' },
+      [WS]: { id: sessionId, type: descriptorType, title, agentId },
     },
   })
 }
 
-async function renderScreen(): Promise<void> {
+async function renderScreen(): Promise<ReturnType<typeof render>> {
+  let view!: ReturnType<typeof render>
   await act(async () => {
-    render(<ChatScreen />)
+    view = render(<ChatScreen />)
   })
+  return view
 }
 
 function expectLabelAboveFeed(name: string): void {
@@ -123,6 +154,7 @@ function expectLabelAboveFeed(name: string): void {
 
 beforeEach(() => {
   seam.mains.clear()
+  agentsQuery.data = []
   useConnectionStore.setState({
     isConnected: true,
     liteMode: false,
@@ -133,37 +165,63 @@ beforeEach(() => {
   })
 })
 
-describe('ChatScreen kind label (BDD-07.1)', () => {
-  it('shows "Main chat" above the feed when the seam says this session is the main', async () => {
+describe('ChatScreen kind label (BDD-07.1; mains as amended 2026-10-11)', () => {
+  it('shows "Jim - Main Session" above the feed for an untitled main (FR-008 amended, founder decision 2026-10-11)', async () => {
     seam.mains.add('sid-main')
-    seed('sid-main', 'chat', 'Launch notes')
+    agentsQuery.data = [agent('jim', 'Jim')]
+    seed('sid-main', 'main', null, 'jim')
     await renderScreen()
-    expectLabelAboveFeed('Main chat')
+    expectLabelAboveFeed('Jim - Main Session')
   })
 
-  it('shows "Extra chat — Launch notes" above the feed for an extra', async () => {
+  it('shows the server title for a main that has one', async () => {
+    seam.mains.add('sid-main')
+    agentsQuery.data = [agent('jim', 'Jim')]
+    seed('sid-main', 'main', 'Jim - Main Session', 'jim')
+    await renderScreen()
+    expectLabelAboveFeed('Jim - Main Session')
+  })
+
+  it('follows an agent rename: the header re-derives from the CURRENT name without a reload', async () => {
+    seam.mains.add('sid-main')
+    agentsQuery.data = [agent('jim', 'Jim')]
+    seed('sid-main', 'main', null, 'jim')
+    const view = await renderScreen()
+    expectLabelAboveFeed('Jim - Main Session')
+
+    // The rename lands in the shared agents data (['agents'] cache) and the
+    // header must re-derive on the next render — never a cached label.
+    agentsQuery.data = [agent('jim', 'Jim Prime')]
+    await act(async () => {
+      view.rerender(<ChatScreen />)
+    })
+    expectLabelAboveFeed('Jim Prime - Main Session')
+  })
+
+  it('shows "Extra chat — Launch notes" above the feed for an extra (unchanged)', async () => {
     seed('sid-extra', 'chat', 'Launch notes')
     await renderScreen()
     expectLabelAboveFeed('Extra chat — Launch notes')
   })
 
-  it('shows "Task run" above the feed for a task', async () => {
+  it('shows "Task run" above the feed for a task (unchanged)', async () => {
     seed('sid-task', 'task', 'Deploy')
     await renderScreen()
     expectLabelAboveFeed('Task run')
   })
 
-  it('shows "Helper" above the feed for a subordinate session', async () => {
+  it('shows "Helper" above the feed for a subordinate session (unchanged)', async () => {
     seed('sid-helper', 'delegate', 'Scan')
     await renderScreen()
     expectLabelAboveFeed('Helper')
   })
 
-  it('keeps "Main chat" above the feed while history is replaying', async () => {
+  it('keeps the main’s title above the feed while history is replaying', async () => {
     seam.mains.add('sid-main')
-    seed('sid-main', 'chat', 'Launch notes')
+    agentsQuery.data = [agent('jim', 'Jim')]
+    seed('sid-main', 'main', null, 'jim')
     useChatStore.setState({ isReplaying: true })
     await renderScreen()
-    expectLabelAboveFeed('Main chat')
+    expectLabelAboveFeed('Jim - Main Session')
   })
 })
