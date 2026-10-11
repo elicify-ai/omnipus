@@ -59,8 +59,29 @@ func TestRetentionSweep_NeverDeletesAnIdleMainSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, SessionTypeMain, got.Type)
 	// The live partition is never expired; the older rolled day is.
-	_, err = s.ReadTranscript(meta.ID)
+	entries, err := s.ReadTranscript(meta.ID)
 	require.NoError(t, err)
+	require.Len(t, entries, 1, "the newest day (live partition) is kept, the expired rolled day is gone")
+	require.Equal(t, "mb", entries[0].ID)
+}
+
+// A main directory left holding only an expired rolled day (no live partition)
+// is still not removed: the empty-directory pass never touches a main chat.
+func TestRetentionSweep_MainDirectoryWithOnlyExpiredContentIsKept(t *testing.T) {
+	s := newTestStore(t)
+	meta, err := s.GetOrCreateMainSession("ws-1", "mia")
+	require.NoError(t, err)
+	dir := filepath.Join(s.baseDir, meta.ID)
+	rolled := filepath.Join(dir, "2026-03-04.jsonl")
+	require.NoError(t, os.WriteFile(rolled, []byte("{}\n"), 0o600))
+	ageEverythingUnder(t, dir, 400*24*time.Hour)
+
+	_, err = s.RetentionSweep(90)
+	require.NoError(t, err)
+	_, statErr := os.Stat(rolled)
+	require.True(t, os.IsNotExist(statErr), "instrument check: the expired rolled day was swept")
+	_, statErr = os.Stat(filepath.Join(dir, "meta.json"))
+	require.NoError(t, statErr, "the main identity must survive")
 }
 
 // Control: the same idle history on an ordinary chat is still removed whole, so
