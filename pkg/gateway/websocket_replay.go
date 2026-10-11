@@ -48,8 +48,8 @@ type attachAck struct {
 
 // attachReadTranscript reads a session's history for a snapshot. A var only
 // so a test can make the read fail; never reassigned in production.
-var attachReadTranscript = func(store *session.UnifiedStore, sessionID string) ([]session.TranscriptEntry, error) {
-	return store.ReadTranscriptWithDispositions(sessionID)
+var attachReadTranscript = func(store *session.UnifiedStore, sessionID string) (session.TranscriptView, error) {
+	return store.ReadTranscriptView(sessionID)
 }
 
 // attachAfterBindHook, when set, runs right after an attach has bound the
@@ -194,7 +194,8 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 	// And read it BEFORE session_snapshot (final-review N4): that frame
 	// tells the client to wipe its history for this session, so a read
 	// failure must be answered while the client's current view is intact.
-	entries, err := attachReadTranscript(wh.store, wh.attachID)
+	view, err := attachReadTranscript(wh.store, wh.attachID)
+	entries := view.Entries
 	if err != nil {
 		logsafeWarn("ws: attach_session: could not read transcript", "session_id", wh.attachID, "error", err)
 		wh.failCatchUp("could not read session transcript")
@@ -202,13 +203,17 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 	}
 	bootID := wh.h.hubs.bootID
 	reason := wh.res.Reason
-	wh.directFrame(generated.SessionSnapshotFrame{
+	snapshot := generated.SessionSnapshotFrame{
 		Type:      string(generated.WsFrameTypeSessionSnapshot),
 		SessionId: wh.attachID,
 		Seq:       int64(wh.res.Head),
 		BootId:    &bootID,
 		Reason:    &reason,
-	})
+	}
+	if view.HasEarlier {
+		snapshot.HasEarlierMessages = &view.HasEarlier
+	}
+	wh.directFrame(snapshot)
 	// AFTER the snapshot frame (which wipes the client's history for this
 	// session), so the wipe can never erase pending approvals, the active
 	// turn or goal state (§4.6, review finding 2).

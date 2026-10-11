@@ -560,8 +560,8 @@ func drainWire(t *testing.T, wc *wsConn) []wireFrame {
 func TestAttach_N4_UnreadableHistory_NeverWipesTheClient(t *testing.T) {
 	f := newAttachFixture(t, "turn-n4", "msg-n4")
 	orig := attachReadTranscript
-	attachReadTranscript = func(*session.UnifiedStore, string) ([]session.TranscriptEntry, error) {
-		return nil, assert.AnError
+	attachReadTranscript = func(*session.UnifiedStore, string) (session.TranscriptView, error) {
+		return session.TranscriptView{}, assert.AnError
 	}
 	t.Cleanup(func() { attachReadTranscript = orig })
 	wc := f.newConn("chat-n4")

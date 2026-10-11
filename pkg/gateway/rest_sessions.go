@@ -56,6 +56,22 @@ func jsonSessionDetail(
 	needsAttention *bool,
 	currentBootSeq ...uint64,
 ) {
+	writeSessionDetail(w, meta, messages, false, agentRemoved, ls, needsAttention, currentBootSeq...)
+}
+
+// writeSessionDetail is jsonSessionDetail for a chat-view read: hasEarlier says
+// messages starts at the session's last /clear marker with earlier entries
+// before it (SessionDetail.has_earlier_messages; absent when false).
+func writeSessionDetail(
+	w http.ResponseWriter,
+	meta *session.UnifiedMeta,
+	messages []session.TranscriptEntry,
+	hasEarlier bool,
+	agentRemoved bool,
+	ls *session.LifecycleStore,
+	needsAttention *bool,
+	currentBootSeq ...uint64,
+) {
 	genSession := unifiedMetaToGenSession(meta)
 	genSession.NeedsAttention = needsAttention
 	// C-MAIN: `protected` is computed here as well as in listSessions — the
@@ -70,18 +86,12 @@ func jsonSessionDetail(
 	if messages == nil {
 		messages = []session.TranscriptEntry{}
 	}
-	if agentRemoved {
-		jsonOK(w, struct {
-			Session      gen.Session               `json:"session"`
-			Messages     []session.TranscriptEntry `json:"messages"`
-			AgentRemoved bool                      `json:"agent_removed,omitempty"`
-		}{Session: genSession, Messages: messages, AgentRemoved: agentRemoved})
-		return
-	}
 	jsonOK(w, struct {
-		Session  gen.Session               `json:"session"`
-		Messages []session.TranscriptEntry `json:"messages"`
-	}{Session: genSession, Messages: messages})
+		Session      gen.Session               `json:"session"`
+		Messages     []session.TranscriptEntry `json:"messages"`
+		HasEarlier   bool                      `json:"has_earlier_messages,omitempty"`
+		AgentRemoved bool                      `json:"agent_removed,omitempty"`
+	}{Session: genSession, Messages: messages, HasEarlier: hasEarlier, AgentRemoved: agentRemoved})
 }
 
 // --- Sessions ---
@@ -575,11 +585,12 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
-	messages, err := store.ReadTranscriptWithDispositions(id)
+	view, err := store.ReadTranscriptView(id)
 	if err != nil {
 		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
+	messages := view.Entries
 	// ADR-057 D1/W11 (FR-034/FR-038): a delegated child owns its own real
 	// session (FR-005), so its narration lives in the CHILD's OWN
 	// transcript.jsonl and is simply never present here — the old REST-side
@@ -606,7 +617,7 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
 	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
 	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
-	jsonSessionDetail(w, meta, messages, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), mainNeedsAttention(meta, a.pendingApprovalMains()), a.agentLoop.CurrentBootEpoch())
+	writeSessionDetail(w, meta, messages, view.HasEarlier, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), mainNeedsAttention(meta, a.pendingApprovalMains()), a.agentLoop.CurrentBootEpoch())
 }
 
 func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {
@@ -615,11 +626,12 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 		jsonErr(w, http.StatusNotFound, "session not found")
 		return
 	}
-	messages, err := store.ReadTranscriptWithDispositions(id)
+	view, err := store.ReadTranscriptView(id)
 	if err != nil {
 		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
+	messages := view.Entries
 	// ADR-057 D1/W11 (FR-034/FR-038): see getSession's identical note above —
 	// the old delegate-narration visibility filter is deleted outright, not
 	// reapplied; a child's own entries never land in another session's
@@ -642,6 +654,7 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 	for _, entry := range messages {
 		out = append(out, withWireJudgeVerdict(id, entry))
 	}
+	w.Header().Set("X-Has-Earlier-Messages", strconv.FormatBool(view.HasEarlier))
 	jsonOK(w, out)
 }
 
