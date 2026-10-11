@@ -11,6 +11,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/stretchr/testify/require"
 )
 
 // #1214 item 1: the text a caller sees for a refused steer is curated - no
@@ -98,10 +99,11 @@ func TestSteerRefusal_1214_RefusedTextIsNeverConsumed(t *testing.T) {
 		providers.Message{Role: "user", Content: refused}, "corr-1214-full"); err == nil {
 		t.Fatal("SETUP: the full queue must refuse")
 	}
-	_, _, messages, _, err := f.al.dequeueSteeringItemsForScopeWithFallbackResult(f.child.SessionID)
+	_, _, messages, ids, err := f.al.dequeueSteeringItemsForScopeWithFallbackResult(f.child.SessionID)
 	if err != nil {
 		t.Fatalf("consume: %v", err)
 	}
+	require.Len(t, ids, len(messages), "every consumed message carries its correlation id")
 	for _, m := range messages {
 		if strings.Contains(m.Content, "REFUSED-1214") {
 			t.Fatalf("refused text reached the consumed model input: %q", m.Content)
@@ -129,7 +131,9 @@ func TestSteerRefusal_1214_SteerBeatenByStopEndsSupersededNeverDelivered(t *test
 		t.Fatalf("StopSession: %v", err)
 	}
 	// A late consumer finds nothing to deliver.
-	_, _, messages, _, _ := f.al.dequeueSteeringItemsForScopeWithFallbackResult(f.child.SessionID)
+	_, items, messages, ids, _ := f.al.dequeueSteeringItemsForScopeWithFallbackResult(f.child.SessionID)
+	require.Len(t, ids, len(messages), "every consumed message carries its correlation id")
+	require.Empty(t, items, "a steer beaten by Stop leaves nothing queued for the late consumer")
 	for _, m := range messages {
 		if strings.Contains(m.Content, "Beaten by the Stop") {
 			t.Fatalf("a steer beaten by Stop was consumed: %q", m.Content)

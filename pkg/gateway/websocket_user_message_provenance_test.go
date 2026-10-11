@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -214,21 +215,49 @@ func TestAgentToolTranscriptWrite_MintsNoProvenance(t *testing.T) {
 	assert.Equal(t, userEntryID, records[0]["message_id"], "the single record keys the user's server message id")
 }
 
-// readProvenanceRecordsForTest reads the session's raw provenance record file
-// so a test can count what the store actually wrote.
+// readProvenanceRecordsForTest reads the session's transcript lines and
+// reconstructs each inline provenance record — the same shape
+// session.UnifiedStore.LookupMessageProvenance returns — so a test can count
+// what the store actually wrote.
+//
+// The separate provenance.jsonl is RETIRED (ADR-20260928 D1.4 / session-core
+// Decision A): the trusted source is a PRIVATE member of the message's own
+// transcript line (ArchiveRecord.Source), and the message id is the line's own
+// id. Only chat-membership lines carrying a source count, exactly as
+// message_provenance.go::LookupMessageProvenance filters.
 func readProvenanceRecordsForTest(t *testing.T, store *session.UnifiedStore, sessionID string) []map[string]any {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(store.BaseDir(), sessionID, "provenance.jsonl"))
-	require.NoError(t, err, "the provenance record file must exist after an authenticated append")
-	decoder := json.NewDecoder(bytes.NewReader(raw))
+	dir := filepath.Join(store.BaseDir(), sessionID)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err, "the session directory must exist after an authenticated append")
 	records := []map[string]any{}
-	for {
-		var record map[string]any
-		if decodeErr := decoder.Decode(&record); decodeErr != nil {
-			require.ErrorIs(t, decodeErr, io.EOF, "provenance records must be complete JSONL")
-			break
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
 		}
-		records = append(records, record)
+		raw, readErr := os.ReadFile(filepath.Join(dir, e.Name()))
+		require.NoError(t, readErr)
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var rec map[string]any
+			if json.Unmarshal([]byte(line), &rec) != nil {
+				continue
+			}
+			source, ok := rec["source"].(map[string]any)
+			if !ok || rec["view_membership"] != "chat" {
+				continue
+			}
+			records = append(records, map[string]any{
+				"message_id": rec["id"],
+				"session_id": sessionID,
+				"content":    rec["content"],
+				"principal":  source["principal"],
+				"ordinal":    float64(len(records) + 1),
+			})
+		}
 	}
 	return records
 }

@@ -150,7 +150,7 @@ func assertCaptureAnswerFrame(t *testing.T, raw []byte, kind string, current boo
 		if body["type"] != "error" || body["message"] != "capture ingest offer failed; details are in the server log" {
 			t.Fatalf("current error was lost or leaked the cause: %s", raw)
 		}
-		if strings.Contains(body["message"].(string), "encoder negotiation failed") {
+		if msgText, _ := body["message"].(string); strings.Contains(msgText, "encoder negotiation failed") {
 			t.Fatalf("the error frame leaked the raw encoder cause: %s", raw)
 		}
 	}

@@ -306,10 +306,15 @@ func TestSessionWorker_Enqueue_SystemMessageInboxFull_NotDropped(t *testing.T) {
 	w := newSessionWorker(scope, al, func() {})
 	al.sessionWorkers.Store(scope, w)
 	defer al.sessionWorkers.Delete(scope)
-	// No runLoop: fill the buffered inbox to capacity by hand.
-	for i := 0; i < cap(w.inbox); i++ {
-		w.inbox <- bus.InboundMessage{Channel: "web", ChatID: "c1", Content: fmt.Sprintf("queued %d", i)}
+	// No runLoop: fill the inbox to its real bound through the real enqueue
+	// path. The bound is MaxQueueSize, counted across the channel buffer AND
+	// the overflow list (pushInbox) — not cap(w.inbox), which is only the
+	// small workerInboxBuffer.
+	for i := 0; i < MaxQueueSize; i++ {
+		assert.True(t, w.enqueue(bus.InboundMessage{Channel: "web", ChatID: "c1", Content: fmt.Sprintf("queued %d", i)}),
+			"SETUP: enqueue %d of MaxQueueSize must be accepted", i)
 	}
+	require.Equal(t, MaxQueueSize, len(w.inbox)+len(w.overflow), "SETUP: the inbox must be exactly full")
 
 	sysMsg := bus.InboundMessage{
 		Channel: "system", ChatID: "webchat:c1", Content: "background result",
@@ -317,7 +322,7 @@ func TestSessionWorker_Enqueue_SystemMessageInboxFull_NotDropped(t *testing.T) {
 	}
 	assert.False(t, w.enqueue(sysMsg),
 		"a system message that cannot be queued must be reported as not delivered, not dropped")
-	assert.Equal(t, cap(w.inbox), len(w.inbox), "the refused system message must not displace anything")
+	assert.Equal(t, MaxQueueSize, len(w.inbox)+len(w.overflow), "the refused system message must not displace anything")
 	assert.False(t, al.dispatchSessionWorker(scope, sysMsg),
 		"dispatch must report the system message as not delivered so Run() falls back instead of losing it")
 	select {
@@ -327,8 +332,10 @@ func TestSessionWorker_Enqueue_SystemMessageInboxFull_NotDropped(t *testing.T) {
 	}
 
 	// Control: a user message on the same full inbox keeps the old semantics
-	// (dropped, announced to the user).
-	assert.True(t, w.enqueue(bus.InboundMessage{Channel: "web", ChatID: "c1", Content: "user follow-up"}))
+	// (dropped, announced to the user — enqueue still returns true for a user
+	// drop; only a system message reports not-delivered).
+	assert.True(t, w.enqueue(bus.InboundMessage{Channel: "web", ChatID: "c1", Content: "user follow-up"}),
+		"a user message dropped on a full inbox keeps the old drop-with-reply semantics (true)")
 	select {
 	case out := <-msgBus.OutboundChan():
 		assert.Contains(t, out.Content, "could not be queued")

@@ -37,7 +37,7 @@ func TestChatOnlyEntryNeverEntersTheModelWindow(t *testing.T) {
 
 	view, err := store.WindowView(ctx, key)
 	require.NoError(t, err)
-	var contents []string
+	contents := make([]string, 0, len(view.Live))
 	for _, s := range view.Live {
 		contents = append(contents, s.Message.Content)
 	}

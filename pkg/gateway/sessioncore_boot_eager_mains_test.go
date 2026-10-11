@@ -51,7 +51,7 @@ func TestSessionCoreFR002_FreshBootCreatesMainsForSeededTeam(t *testing.T) {
 		Sessions []map[string]any `json:"sessions"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&page))
-	var ids []string
+	ids := make([]string, 0, len(page.Sessions))
 	for _, s := range page.Sessions {
 		id, _ := s["id"].(string)
 		ids = append(ids, id)

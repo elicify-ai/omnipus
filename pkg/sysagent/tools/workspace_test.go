@@ -1591,7 +1591,7 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 	m := parseSuccess(t, res.ForLLM)
 	if note, present := m["delegation_seeded"]; !present {
 		t.Error("Ray was newly added; its self-edge seed must be noted")
-	} else if !strings.Contains(note.(string), "ray") {
+	} else if noteText, ok := note.(string); !ok || !strings.Contains(noteText, "ray") {
 		t.Errorf("delegation_seeded note should mention ray, got %v", note)
 	}
 

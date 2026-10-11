@@ -239,22 +239,6 @@ func (s adr093StopBeforeDispatch) Dispatch(ctx context.Context, sessionID string
 	return s.inner.Dispatch(ctx, sessionID, gen)
 }
 
-// adr093RefuseLiveSteering returns D2's sentinel when the launch still names
-// a steering session. That is the race ADR-093 D5 names for the task path:
-// the creator was live at the gate and stopped before Launch.
-type adr093RefuseLiveSteering struct{ inner steer.SessionLauncher }
-
-func (s adr093RefuseLiveSteering) Launch(ctx context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {
-	if strings.TrimSpace(req.SteeringSessionID) != "" {
-		return steer.LaunchResult{}, steer.ErrSteeringStopped
-	}
-	return s.inner.Launch(ctx, req)
-}
-
-func (s adr093RefuseLiveSteering) Dispatch(ctx context.Context, sessionID string, gen int) (steer.DispatchResult, error) {
-	return s.inner.Dispatch(ctx, sessionID, gen)
-}
-
 func adr093MakeLifecycleUnreadable(t *testing.T, al *AgentLoop, sessionID string) {
 	t.Helper()
 	path := filepath.Join(al.GetSessionLifecycleStore().Dir(), sessionID+".jsonl")

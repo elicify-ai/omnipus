@@ -60,7 +60,7 @@ func TestMessageInbox_LegacySeqlessEntry_RefusedNotBackfilled(t *testing.T) {
 		t.Fatalf("write legacy inbox file: %v", werr)
 	}
 
-	if _, err := store.Entries(ownerKey); err == nil {
+	if _, readErr := store.Entries(ownerKey); readErr == nil {
 		t.Fatalf("Entries on a sequence-less (legacy) inbox line returned no error — DEL-14/Q3 require " +
 			"legacy input to be refused with a HARD read error (ErrInboxUnsequencedEntry), not silently " +
 			"mapped (backfillSeq must be gone)")
@@ -68,8 +68,8 @@ func TestMessageInbox_LegacySeqlessEntry_RefusedNotBackfilled(t *testing.T) {
 
 	// Positive control: a properly sequenced line reads back cleanly.
 	good := NewMessageInboxStore(t.TempDir())
-	if _, err := good.Append(ownerKey, u4ProgressMessage(t, childID, "current-1")); err != nil {
-		t.Fatalf("Append (positive control): %v", err)
+	if _, appendErr := good.Append(ownerKey, u4ProgressMessage(t, childID, "current-1")); appendErr != nil {
+		t.Fatalf("Append (positive control): %v", appendErr)
 	}
 	entries, err := good.Entries(ownerKey)
 	if err != nil {
@@ -102,8 +102,8 @@ func TestMessageInbox_TornLineStillSkipped(t *testing.T) {
 		t.Fatalf("write torn line: %v", werr)
 	}
 	f.Close()
-	if _, err := store.Append(ownerKey, u4ProgressMessage(t, childID, "p-2")); err != nil {
-		t.Fatalf("Append p-2: %v", err)
+	if _, appendErr := store.Append(ownerKey, u4ProgressMessage(t, childID, "p-2")); appendErr != nil {
+		t.Fatalf("Append p-2: %v", appendErr)
 	}
 
 	entries, err := store.Entries(ownerKey)

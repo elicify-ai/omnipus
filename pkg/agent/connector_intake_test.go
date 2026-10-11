@@ -352,7 +352,7 @@ func TestBoundConnectorPair_NeverMixesConfigGenerations(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if !(p.WorkspaceID == "WA" && p.AgentID == "agentA") && !(p.WorkspaceID == "WB" && p.AgentID == "agentB") {
+		if (p.WorkspaceID != "WA" || p.AgentID != "agentA") && (p.WorkspaceID != "WB" || p.AgentID != "agentB") {
 			hybrids++
 		}
 	}

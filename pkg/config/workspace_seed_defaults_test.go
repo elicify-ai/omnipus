@@ -133,8 +133,8 @@ func TestWorkspaceSeedDefaults_LoadedAsKnownTypedField(t *testing.T) {
 		t.Fatalf("marshal config.json body: %v", err)
 	}
 	path := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(path, body, 0o600); err != nil {
-		t.Fatalf("write config.json: %v", err)
+	if werr := os.WriteFile(path, body, 0o600); werr != nil {
+		t.Fatalf("write config.json: %v", werr)
 	}
 
 	cfg, err := LoadConfig(path)

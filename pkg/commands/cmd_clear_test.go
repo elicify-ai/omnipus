@@ -10,21 +10,20 @@ import (
 )
 
 func TestClearCommand_RegisteredWithoutAliasAndNewStaysRetired(t *testing.T) {
-	var clear *Definition
+	var clearDef *Definition
 	for _, d := range BuiltinDefinitions() {
-		d := d
 		assert.NotEqual(t, "new", d.Name, "/new is retired (FR-031)")
 		assert.NotContains(t, d.Aliases, "new")
 		assert.NotContains(t, d.Aliases, "clear")
 		if d.Name == "clear" {
-			clear = &d
+			clearDef = &d
 		}
 	}
-	require.NotNil(t, clear, "/clear must be a canonical server command")
-	assert.Empty(t, clear.Aliases)
-	assert.False(t, clear.Hidden)
-	assert.Equal(t, DeliveryAgent, clear.EffectiveDelivery(), "the server executes /clear")
-	assert.NotNil(t, clear.Handler)
+	require.NotNil(t, clearDef, "/clear must be a canonical server command")
+	assert.Empty(t, clearDef.Aliases)
+	assert.False(t, clearDef.Hidden)
+	assert.Equal(t, DeliveryAgent, clearDef.EffectiveDelivery(), "the server executes /clear")
+	assert.NotNil(t, clearDef.Handler)
 }
 
 func runClear(t *testing.T, rt *Runtime) (string, error) {
