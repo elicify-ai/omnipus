@@ -43,7 +43,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 			// — a truncated turn that produced literally no content. No
 			// retry, no fallback substitution, no markTurnFailed; finalContent
 			// stays "" and the write choke points below persist a zero-content
-			// entry for MarkLastEntryTruncated to find.
+			// entry for the former post-hoc truncation rewrite to find.
 		} else if rz.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() >= rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations && rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations > 0 {
 			// Genuine failure: tool-iteration ceiling hit without a final response.
 			// markTurnFailed so DoneStats.TurnFailed=true reaches the done frame.
@@ -109,7 +109,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		// When the turn was truncated, stamp Truncated/TruncationReason in
 		// the SAME write as the content — see
 		// appendAssistantTranscriptTruncated's doc comment for why this
-		// replaces the former append-then-MarkLastEntryTruncated two-step
+		// replaces the former append-then-the former post-hoc truncation rewrite two-step
 		// (for the streaming case, finalizeStreamer's own deferred call
 		// does the single-write equivalent after wsStreamer.Finalize
 		// persists its entry).
