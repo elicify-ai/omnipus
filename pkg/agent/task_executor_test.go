@@ -289,6 +289,9 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	// DEL-18: fresh creation owns the task's paired goal record; without one the
+	// run starts with no goal loop.
+	pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
@@ -332,13 +335,12 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 			"must be reachable via GetActiveTurnHookForSession while the dispatch is in flight")
 	}
 
-	// Unblock the fake driver so the dispatch actually returns and its
-	// `defer ts.Finish(false)` runs — the line this test exists to prove.
-	fr.InjectEvent(
-		runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "finished after cancel"}},
-	)
-	fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
-	fr.Cancel() // closes the event channel so drainExternalRun's loop actually exits
+	// The cancel already reached the driver: RequestCancel above closes the
+	// fake runner's event channel (FakeRunner.Cancel is idempotent and
+	// InjectEvent does NOT check for it), so injecting here panics with
+	// "send on closed channel". Nothing more is needed to make the dispatch
+	// return and its `defer ts.Finish(false)` run — the line this test exists
+	// to prove — so the unblock step is gone rather than guarded.
 
 	sessStore := al.GetSessionStore()
 	if sessStore == nil {

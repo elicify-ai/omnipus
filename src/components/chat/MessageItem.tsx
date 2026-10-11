@@ -13,7 +13,7 @@ import { splitMessageParts } from '@/lib/messageParts'
 import { formatErrorDetail } from '@/lib/llm-error'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
-import { ParticipantMessageRow, ReplyHeaderView, usePairedReplyToIds, useParticipantLabelParts } from './ParticipantLabels'
+import { AgentReplyLabel, ParticipantMessageRow, usePairedReplyToIds, useParticipantLabelParts } from './ParticipantLabels'
 import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content.
@@ -208,20 +208,11 @@ export function MessageItem({ message }: MessageItemProps) {
 
       {/* Content */}
       <div className={cn('flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0', isUser ? 'items-end' : undefined)}>
-        {/* Agent label — shown above assistant messages when the agent is
-            known; a reply bubble shows the U8 reply header instead (D4 rows
-            5-6), same helpers as the historical rows. */}
+        {/* Agent label — founder UI feedback 2026-10-11: the small agent mark
+            beside the name (or the U8 reply header), the same AgentReplyLabel
+            the ChatScreen rows use — no status word, no second label style. */}
         {!isUser && (replyHeader || agentName) && (
-          replyHeader ? (
-            <ReplyHeaderView header={replyHeader} />
-          ) : (
-            <span
-              data-testid="agent-label"
-              className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] px-[var(--space-1)] capitalize"
-            >
-              {agentName}
-            </span>
-          )
+          <AgentReplyLabel agent={agent ?? undefined} name={agentName ?? ''} header={replyHeader} />
         )}
         {/* Streaming-with-no-text-yet indicator. Independent of the
             interleaved parts below (splitMessageParts never emits an empty

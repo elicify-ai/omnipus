@@ -190,6 +190,21 @@ func newCompletionContractTask(t *testing.T, al *AgentLoop, agentID, title strin
 // executor logs "task ... has no paired goal record", goal_claim can never
 // complete the run, and the test hangs until its deadline. Pairing here is the
 // fixture doing what the product's own create path does, not a test-only bypass.
+// pairTaskGoalRecordUsingTaskCriteria is pairTaskGoalRecord for tests that
+// bring their OWN acceptance criteria: it never rewrites them (SyncTaskGoalRecord
+// reads the task's persisted criteria as the goal's criteria), it only supplies
+// the Definition of Done a first-time pairing requires.
+func pairTaskGoalRecordUsingTaskCriteria(t *testing.T, al *AgentLoop, taskID string) {
+	t.Helper()
+	stored, err := al.taskStore.Get(taskID)
+	require.NoError(t, err, "fixture: read the task before pairing its goal")
+	require.NoError(t,
+		tools.SyncTaskGoalRecord(
+			resolveGoalRecordStore(), stored, true,
+			[]task.AcceptanceCriterion{planProseCriterion("the work is verified")}, true, nil),
+		"fixture: pair the task's goal record the way fresh creation does")
+}
+
 func pairTaskGoalRecord(t *testing.T, al *AgentLoop, tk *task.Task) {
 	t.Helper()
 	updated, err := al.taskStore.Update(tk.ID, task.Patch{

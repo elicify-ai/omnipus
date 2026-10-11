@@ -65,6 +65,10 @@ func newPlanToolWiringTestLoop(t *testing.T) (*AgentLoop, *AgentInstance, string
 	if !ok {
 		t.Fatal("planner-agent not registered")
 	}
+	// S1 M9: run_task dispatches through the session launcher the gateway
+	// installs at boot; without it StartTaskNow refuses and this wiring smoke
+	// test would only prove the refusal.
+	installTestSessionLauncher(t, al)
 	return al, agentInst, home
 }
 

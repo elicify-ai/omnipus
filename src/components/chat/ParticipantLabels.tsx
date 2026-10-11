@@ -20,10 +20,12 @@ import { useQuery } from '@tanstack/react-query'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Tooltip } from '@/components/ui/tooltip'
 import { AgentMark } from '@/components/agents/AgentMark'
+import type { AgentIdentity } from '@/components/agents/AgentMark'
 import { fetchAgents, fetchWorkspaces } from '@/lib/api'
+import type { Agent } from '@/lib/api'
 import type { ChatMessage } from '@/store/chat'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import type { TruncatedLabel } from './participantLabel'
+import type { ReplyHeader, TruncatedLabel } from './participantLabel'
 import { collectPairedReplyToIds, participantLabel, replyHeaderParts, truncateParticipantLabel } from './participantLabel'
 
 /**
@@ -39,10 +41,13 @@ export function usePairedReplyToIds(messages: readonly { replyToMessageId?: stri
   return useMemo(() => collectPairedReplyToIds(messages ?? []), [messages])
 }
 
-/** Everything a label/header needs from the catalog + current workspace. */
+/** Everything a label/header needs from the catalog + current workspace.
+ * The agents carry their identity fields (figure/role/color) too: the catalog
+ * query returns the full Agent records, and the reply label's AgentMark and
+ * the inline indicator read those fields off the same lookup. */
 export interface ParticipantLabelParts {
-  agents: Array<{ id: string; name: string }>
-  workspaces: Array<{ id: string; name: string }>
+  agents: Array<{ id: string; name: string } & AgentIdentity>
+  workspaces: Array<Pick<Agent, 'id' | 'name'>>
   currentWorkspaceId: string | null
 }
 
@@ -86,6 +91,50 @@ export function ParticipantNameLabel({ label, testId }: { label: TruncatedLabel;
     <Tooltip content={label.full} side="top" data-testid="participant-label-tooltip">
       {span}
     </Tooltip>
+  )
+}
+
+/**
+ * Founder UI feedback 2026-10-11 (point 1) — the agent reply label: the
+ * agent's small AgentMark (the same component the sidebar and the @ menu use,
+ * size 18 — the menu's small size) beside the name, or beside the U8 reply
+ * header ("Ava → Alice · Telegram") on a reply bubble. ONE component for
+ * every reply render path — MessageItem.tsx and ChatScreen.tsx's live row and
+ * VirtualAssistantMessageRow (plain + virtualized) — so the surfaces cannot
+ * drift.
+ *
+ * The label carries NO status word: the founder reads the old inline
+ * "Idle"/"Unavailable" phrasing next to the name as a stray word, so the
+ * label is the mark + the name (header) alone. Status phrasing belongs to the
+ * inline indicator (AgentStatusIndicator) and the connection surfaces.
+ *
+ * The name span stays plain text and CHILDLESS — the mark is a SIBLING of
+ * `agent-label`, never inside it, so the label span's textContent is exactly
+ * the name (the wave1 name-only contract on the label span itself) and
+ * copy/paste reads the name alone.
+ */
+export function AgentReplyLabel({ agent, name, header }: {
+  agent: AgentIdentity | undefined
+  name: string
+  header: ReplyHeader | null
+}) {
+  return (
+    <span className="inline-flex min-w-0 items-center gap-[var(--space-2)]">
+      <span data-testid="agent-label-avatar" className="shrink-0">
+        <AgentMark agent={agent} name={name} size={18} />
+      </span>
+      {header ? (
+        <ReplyHeaderView header={header} />
+      ) : (
+        <span
+          data-testid="agent-label"
+          title={name || undefined}
+          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+        >
+          {name}
+        </span>
+      )}
+    </span>
   )
 }
 

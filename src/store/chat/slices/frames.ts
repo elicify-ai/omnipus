@@ -48,6 +48,20 @@ const SESSION_LIST_REFRESH_FRAMES = new Set([
   'done', 'error', 'subagent_start', 'subagent_state', 'subagent_end', 'catch_up_complete',
 ])
 
+// Frames that do not refresh the session list while their bucket is replaying.
+const REPLAY_DEFERRED_REFRESH_FRAMES = new Set(['subagent_start', 'subagent_state', 'subagent_end'])
+
+// A replay re-delivers every persisted subagent_* row; refreshing the roster
+// per row fired dozens of GET /sessions on sign-in. While the bucket is
+// replaying, only the terminators (done / error / catch_up_complete) refresh —
+// once per batch. Live frames still refresh. Kept at module scope so it adds
+// nothing to handleFrame's grandfathered function budget.
+function refreshSessionListForFrame(frameType: string, bucketReplaying: boolean): void {
+  if (!SESSION_LIST_REFRESH_FRAMES.has(frameType)) return
+  if (bucketReplaying && REPLAY_DEFERRED_REFRESH_FRAMES.has(frameType)) return
+  void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+}
+
 type FrameSlice = Pick<ChatStore, 'handleFrame'>
 type ToolCallResultFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'tool_call_result' }>
 type MessageStatusFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'message_status' }>
@@ -963,9 +977,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         return
       }
 
-      if (SESSION_LIST_REFRESH_FRAMES.has(frame.type)) {
-        void queryClient.invalidateQueries({ queryKey: ['sessions'] })
-      }
+      refreshSessionListForFrame(frame.type, get().sessionsById[targetSid ?? '']?.isReplaying === true)
       if (handleFirstSendFrame({ frame, set, get, withBucket, runtime })) {
         syncForeground()
         return

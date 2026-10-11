@@ -184,7 +184,7 @@ func TestClearWhileBusy_StopsTheTurnThenClears(t *testing.T) {
 
 	full, err := f.store.ReadTranscript(f.sid)
 	require.NoError(t, err)
-	var ids []string
+	ids := make([]string, 0, len(full))
 	for _, e := range full {
 		ids = append(ids, e.ID)
 	}
