@@ -104,6 +104,7 @@ func TestWithSteeredDelegationDepth_NestedTurnNeverInheritsTheParentsGoalMarker(
 	parentRec := &session.LifecycleRecord{SessionID: "session_parent", SteeredBy: steeredBy, GoalRef: "goal-parent"}
 	parentCtx := withSteeredDelegationDepth(context.Background(), parentRec)
 	require.Equal(t, "session_parent", tools.ToolOwnGoalSession(parentCtx), "a launch-goal helper owns its own session's goal")
+	require.Equal(t, 1, tools.ToolDelegationDepth(parentCtx), "a steered helper is one delegation level (S1-12, intended)")
 
 	childNoGoal := &session.LifecycleRecord{SessionID: "session_child", SteeredBy: steeredBy}
 	require.Empty(t, tools.ToolOwnGoalSession(withSteeredDelegationDepth(parentCtx, childNoGoal)),

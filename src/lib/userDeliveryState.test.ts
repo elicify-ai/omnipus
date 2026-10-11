@@ -15,7 +15,7 @@ describe('UserDeliveryState', () => {
 
   it('lists every state exactly once', () => {
     expect([...USER_DELIVERY_STATES].sort()).toEqual(
-      ['discarded', 'failed', 'held', 'not-performed', 'queued', 'received', 'sending', 'unconfirmed', 'working'],
+      ['discarded', 'failed', 'held', 'queued', 'received', 'sending', 'working'],
     )
     expect(new Set(USER_DELIVERY_STATES).size).toBe(USER_DELIVERY_STATES.length)
   })

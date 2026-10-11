@@ -163,6 +163,7 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 		Sender:            a.Sender,
 		Source:            a.Source,
 		AdmittedAt:        time.Now().UTC(),
+		Text:              composeRequestText(requestID, a.SenderLabel, a.Content),
 	}
 	// Capture first: if the append below fails the capture is discarded; if it
 	// were written second, a request the model can see might be unanswerable.

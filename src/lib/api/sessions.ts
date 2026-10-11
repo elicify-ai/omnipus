@@ -327,9 +327,10 @@ export interface UserMessage extends MessageBase { // not-wire-format: SPA-inter
    * interface, so a narrower literal here would collapse the intersection and
    * break every store writer of the transient states ('queued'/'sending'/
    * 'received'/'working'/'failed' — store-only, never produced by the REST
-   * path) and of the two /clear-only settled states ('not-performed' — the
-   * server's "/clear was not performed" refusal; 'unconfirmed' — the bounded
-   * wait expired; delta re-review C1/R1#1, 2026-10-11).
+   * path). Ruling S3-02 deleted the two /clear-only settled states
+   * ('not-performed'/'unconfirmed'): a refusal is the wire's message_status
+   * failed, and a held clear stays queued with no deadline. The union lives in
+   * lib/userDeliveryState.ts, the single source.
    */
   deliveryStatus?: UserDeliveryState
   tool_calls?: never

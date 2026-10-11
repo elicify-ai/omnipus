@@ -181,13 +181,13 @@ export type ChatMessage = Message & {
   /** Ordinary first-send status only; workspace kickoffs never use it. */
   firstSendStatus?: FirstSendStatus
   /**
-   * SPA-only acknowledgement state for a user-authored message. The two
-   * /clear-only terminal states (delta re-review C1/R1#1, 2026-10-11) name
-   * the outcomes no wire state covers: 'not-performed' — the server replied
-   * "/clear was not performed …" (pkg/agent/clear_while_busy.go); and
-   * 'unconfirmed' — the bounded wait ended with the server neither
-   * confirming nor refusing the clear. Both are RESOLVED rows: never
-   * pending-tail, never the offline "will be sent automatically" look.
+   * SPA-only acknowledgement state for a user-authored message. Ruling
+   * S3-02 (2026-10-12): /clear outcomes are wire states — a refusal arrives
+   * as 'failed' (message_status for the /clear's client_message_id, any
+   * refusal path), a done clear applies the fresh marker projection, and a
+   * HELD clear simply stays 'queued' with no deadline. The former
+   * /clear-only 'not-performed' and 'unconfirmed' states (and the 90 s
+   * bounded wait that produced the latter) are deleted.
    */
   deliveryStatus?: UserDeliveryState
   media?: MediaAttachment[]
