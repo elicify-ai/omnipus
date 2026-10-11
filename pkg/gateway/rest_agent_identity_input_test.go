@@ -20,8 +20,8 @@ func TestAgentIdentity_PaletteCaseMatchesStrictValidation(t *testing.T) {
 			for _, tc := range []struct {
 				input, canonical string
 			}{
-				{"#fb923c", "#FB923C"},
-				{"#22d3Ee", "#22D3EE"},
+				{"#fb923c", "#A97142"},
+				{"#22d3Ee", "#4F8A80"},
 				{"#123456", ""}, // Well-formed hex, not in the published palette.
 			} {
 				t.Run(fmt.Sprintf("strict=%t/%s/%s", strict, operation, tc.input), func(t *testing.T) {
@@ -93,7 +93,7 @@ func TestAgentIdentity_CreateNullAndEmptyUseDefaults(t *testing.T) {
 					id, ok := response["id"].(string)
 					require.True(t, ok)
 					stored := savedAgent(t, api, id)
-					for field, expected := range map[string]string{"figure": "Omnipus", "role": "general", "color": "#9CA3AF"} {
+					for field, expected := range map[string]string{"figure": "Omnipus", "role": "general", "color": "#8E9196"} {
 						assert.Equal(t, expected, response[field], "create response default for %s", field)
 						assert.Equal(t, expected, stored[field], "persisted create default for %s", field)
 					}
@@ -143,7 +143,7 @@ func identityInputError(field, operation string, strict bool) map[string]any {
 		allowed := map[string][]string{
 			"figure": {"Robot", "Man", "Woman", "Omnipus", "Monogram"},
 			"role":   {"writer", "designer", "image", "video", "audio", "social", "developer", "data", "analyst", "itops", "automation", "security", "quality", "science", "orchestrator", "project", "product", "sales", "marketing", "finance", "legal", "support", "documents", "researcher", "people", "tutor", "knowledge", "translator", "general", "personal", "office"},
-			"color":  {"#3B82F6", "#38BDF8", "#22D3EE", "#818CF8", "#A78BFA", "#C084FC", "#E879F9", "#F472B6", "#FB923C", "#9CA3AF"},
+			"color":  {"#6E8BA8", "#7A8C9E", "#4F8A80", "#5E6973", "#7B7290", "#B76E79", "#A97142", "#9C8A5B", "#CDBA96", "#8E9196"},
 		}[field]
 		message = "request body does not match schema " + schema + ": value must be one of '" + strings.Join(allowed, "', '") + "'"
 	}

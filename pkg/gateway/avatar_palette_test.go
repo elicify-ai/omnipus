@@ -76,6 +76,26 @@ func TestAvatarPalette_CreateMapsAnOldValue(t *testing.T) {
 	assert.Equal(t, "#9C8A5B", savedAgent(t, api, id)["color"])
 }
 
+// setStoredColor puts a colour into the agent's stored record AND the loaded
+// configuration the read path serves, as an install from before the palette
+// change would present it.
+func setStoredColor(t *testing.T, api *restAPI, id, color string) {
+	t.Helper()
+	_, err := agentstore.New(api.homePath).Update(id, func(a *config.AgentConfig) error {
+		a.Color = color
+		return nil
+	})
+	require.NoError(t, err)
+	cfg := api.agentLoop.GetConfig()
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID == id {
+			cfg.Agents.List[i].Color = color
+			return
+		}
+	}
+	t.Fatalf("agent %s is not in the loaded configuration", id)
+}
+
 // Read: a stored OLD value is returned as the new one (detail and list), and the
 // stored record is left exactly as it was (greenfield: no rewrite).
 func TestAvatarPalette_ReadReturnsTheNewValueAndWritesNothing(t *testing.T) {
@@ -83,11 +103,7 @@ func TestAvatarPalette_ReadReturnsTheNewValueAndWritesNothing(t *testing.T) {
 		t.Run(pair[0], func(t *testing.T) {
 			api := buildExecutorTestAPI(t)
 			id := newPaletteAgent(t, api, "#6E8BA8")
-			_, err := agentstore.New(api.homePath).Update(id, func(a *config.AgentConfig) error {
-				a.Color = pair[0] // an install that predates the new palette
-				return nil
-			})
-			require.NoError(t, err)
+			setStoredColor(t, api, id, pair[0]) // an install that predates the new palette
 
 			assert.Equal(t, pair[1], getAgentObject(t, api, id)["color"], "detail read")
 			assert.Equal(t, pair[1], findListedAgent(t, api, id)["color"], "list read")
@@ -100,10 +116,6 @@ func TestAvatarPalette_ReadReturnsTheNewValueAndWritesNothing(t *testing.T) {
 func TestAvatarPalette_ReadOfAnUnknownStoredValueIsTheDefault(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	id := newPaletteAgent(t, api, "#6E8BA8")
-	_, err := agentstore.New(api.homePath).Update(id, func(a *config.AgentConfig) error {
-		a.Color = "#D4AF37"
-		return nil
-	})
-	require.NoError(t, err)
+	setStoredColor(t, api, id, "#D4AF37")
 	assert.Equal(t, "#8E9196", getAgentObject(t, api, id)["color"])
 }

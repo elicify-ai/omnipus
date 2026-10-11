@@ -505,7 +505,7 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code, "valid worker patch must be accepted; body: %s", w.Body.String())
 		saved, err := agentstore.New(api.homePath).Get(id)
 		require.NoError(t, err)
-		assert.Equal(t, "#FB923C", saved.Color, "a palette hex is stored as given")
+		assert.Equal(t, "#A97142", saved.Color, "a palette hex is stored as given")
 	})
 
 	t.Run("subagent_3p", func(t *testing.T) {
@@ -523,7 +523,7 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code, "valid subagent_3p patch must be accepted; body: %s", w.Body.String())
 		saved, err := agentstore.New(api.homePath).Get(id)
 		require.NoError(t, err)
-		assert.Equal(t, "#FB923C", saved.Color, "a palette hex is stored as given")
+		assert.Equal(t, "#A97142", saved.Color, "a palette hex is stored as given")
 	})
 }
 
@@ -680,7 +680,7 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 			assert.Equal(t, currentUpdatedAt, agentUpdatedAtFromConfig(t, api, "test-agent"))
 			saved, colorErr := agentstore.New(api.homePath).Get("test-agent")
 			require.NoError(t, colorErr)
-			assert.Equal(t, "#3B82F6", saved.Color, "rejected updated_at must not apply the colour")
+			assert.Equal(t, "#6E8BA8", saved.Color, "rejected updated_at must not apply the colour")
 		})
 	}
 }
