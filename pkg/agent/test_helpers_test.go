@@ -129,7 +129,6 @@ func mustNewAgentLoop(
 	// …) passes through. Idempotent and non-clobbering: a test that seeded its
 	// own graph first (seedWorkspaceGraph) is left untouched.
 	seedDefaultDelegationGraphForLoop(t, al)
-	installTestSessionLauncher(t, al)
 	return al
 }
 
