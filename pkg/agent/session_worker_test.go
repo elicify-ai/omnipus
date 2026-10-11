@@ -38,9 +38,15 @@ func newConcurrentTestAgentLoop(t *testing.T) (*AgentLoop, *bus.MessageBus) {
 
 // makeSessionMsg builds a test InboundMessage for the web channel with an
 // explicit SessionID so scope resolution produces deterministic scopes.
+//
+// Channel is "webchat" — the channel production web chat actually uses. It was
+// "web", which S1 M1 (1df385b4f) made isConnectorChannel treat as a CONNECTOR,
+// so the terminal default send was refused and any test relying on it (e.g.
+// TestSessionWorker_PanicStillPublishesTerminalFrame) failed on the fixture's
+// channel name rather than on the behaviour under test.
 func makeSessionMsg(sessionID, content string) bus.InboundMessage {
 	return bus.InboundMessage{
-		Channel: "web",
+		Channel: "webchat",
 		ChatID:  "chat-" + sessionID,
 		Sender: bus.SenderInfo{
 			CanonicalID: "user-" + sessionID,

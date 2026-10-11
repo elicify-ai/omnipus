@@ -39,10 +39,19 @@ import (
 // DENIED when no caller→caller edge exists, and ALLOWED once one does. This is
 // the settled design — the former "eligible native agents need no self-edge"
 // path was deleted.
+//
+// Edge modes use the COLLAPSED vocabulary the delegation store validates
+// ("direct", "task"). These fixtures used to write "background", which is a
+// pkg/config mode NAME, not a valid edge mode — the store dropped every edge
+// as invalid ("delegation edge mode background is invalid (valid: direct,
+// task)"), so every check below denied and the allow-assertions failed while
+// the deny-assertions passed vacuously. The checker still asks for
+// config.DelegationModeBackground; EdgeModeCategory maps that to
+// workspace.ModeDirect, which is what the edge now declares.
 func TestSessionCoreU5a_SelfDelegationRequiresSelfEdge(t *testing.T) {
 	// A graph with a NON-self edge only (mia→ray); deliberately NO mia→mia.
 	home := seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("mia", "ray", []string{"background"}, nil),
+		edge("mia", "ray", []string{"direct"}, nil),
 	})
 	check := buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground)
 
@@ -57,7 +66,7 @@ func TestSessionCoreU5a_SelfDelegationRequiresSelfEdge(t *testing.T) {
 
 	// Add the self-edge: the SAME self-delegation is now authorized.
 	rewriteWorkspaceGraph(t, home, testWS, true, []graphEdge{
-		edge("mia", "mia", []string{"background"}, nil),
+		edge("mia", "mia", []string{"direct"}, nil),
 	})
 	if d := check(ctxWS(testWS, 0), "mia"); d != nil {
 		t.Fatalf("an explicit mia→mia self-edge must authorize self-delegation; got denial %q (%s)", d.Reason, d.Policy)
@@ -92,9 +101,9 @@ func TestSessionCoreU5a_ExternalCLIWorkerCannotCreateHelpers(t *testing.T) {
 	// and extworker→extworker edges. Without a valid edge a denial would prove
 	// nothing about the caller guard (an un-edged target is denied anyway).
 	home := seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("extworker", "mia", []string{"background"}, nil),
-		edge("mia", "extworker", []string{"background"}, nil),
-		edge("extworker", "extworker", []string{"background"}, nil),
+		edge("extworker", "mia", []string{"direct"}, nil),
+		edge("mia", "extworker", []string{"direct"}, nil),
+		edge("extworker", "extworker", []string{"direct"}, nil),
 	})
 
 	// The resolver the production delegate wiring installs: "extworker" is an
@@ -125,7 +134,7 @@ func TestSessionCoreU5a_ExternalCLIWorkerCannotCreateHelpers(t *testing.T) {
 	//    caller→native target on a fresh valid edge is allowed. (Re-write the
 	//    graph so a failure here cannot be blamed on the earlier edge set.)
 	rewriteWorkspaceGraph(t, home, testWS, true, []graphEdge{
-		edge("mia", "ray", []string{"background"}, nil),
+		edge("mia", "ray", []string{"direct"}, nil),
 	})
 	nativeToNative := buildDelegationDenyCheckerForDelegate("mia",
 		config.PerformanceConfig{}, config.DelegationModeBackground,
@@ -194,9 +203,9 @@ func countLifecycleRecords(t *testing.T, al *AgentLoop) int {
 func TestSessionCoreU5a_ExternalCLIWorkerCannotCreateHelpers_RegisteredDelegate(t *testing.T) {
 	const wsID = "01JXU5AREGISTEREDDELEGATE001"
 	seedWorkspaceGraph(t, wsID, true, []graphEdge{
-		edge("extworker", "mia", []string{"background"}, nil),
-		edge("extworker", "extworker", []string{"background"}, nil),
-		edge("mia", "extworker", []string{"background"}, nil),
+		edge("extworker", "mia", []string{"direct"}, nil),
+		edge("extworker", "extworker", []string{"direct"}, nil),
+		edge("mia", "extworker", []string{"direct"}, nil),
 	})
 
 	cfg := minimalTestConfig(t)

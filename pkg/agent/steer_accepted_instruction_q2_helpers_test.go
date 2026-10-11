@@ -180,17 +180,19 @@ func q2ConsumerRequireTail(t *testing.T, fixture q2ConsumerFixture, want []sessi
 }
 
 func q2ConsumerInstruction(messageID, text string) session.TranscriptEntry {
-	// ViewMembership is stamped by the writer, not by this fixture: the
-	// append-only archive's AppendTranscript defaults an unset membership to
-	// ViewMembershipBoth ("an ordinary turn lives in both views",
-	// pkg/session/daypartition.go). The expected entry must therefore carry
-	// the value the writer stores, or the whole-struct comparison against the
-	// durable tail is a guaranteed mismatch.
-	return session.TranscriptEntry{ID: "instruction-" + messageID, Role: "user", Content: text, AgentID: testDefaultAgentID, ViewMembership: session.ViewMembershipBoth}
+	// ViewMembership is stamped by the WRITER, not by this fixture, and the
+	// writer here is the TRANSCRIPT path: AppendTranscriptOnce ->
+	// appendTranscriptLocked stamps ViewMembershipChat on every transcript-only
+	// write (pkg/session/transcript_indexed.go: "a transcript append is a CHAT
+	// record, fixed by the writer API"). The earlier expectation of
+	// ViewMembershipBoth came from the model-append path, which this fixture
+	// never takes — it made the whole-struct comparison against the durable tail
+	// a guaranteed mismatch.
+	return session.TranscriptEntry{ID: "instruction-" + messageID, Role: "user", Content: text, AgentID: testDefaultAgentID, ViewMembership: session.ViewMembershipChat}
 }
 
 func q2ConsumerMarker(messageID string) session.TranscriptEntry {
-	return session.TranscriptEntry{ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system", Content: "consumed " + messageID, AgentID: testDefaultAgentID, ViewMembership: session.ViewMembershipBoth}
+	return session.TranscriptEntry{ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system", Content: "consumed " + messageID, AgentID: testDefaultAgentID, ViewMembership: session.ViewMembershipChat}
 }
 
 func q2ConsumerRequireQueued(t *testing.T, al *AgentLoop, scope string, want []steeringQueueItem) {

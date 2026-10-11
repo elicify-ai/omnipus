@@ -111,6 +111,7 @@ func TestExecuteTask_LifecycleRecord_HappyPathReachesCompleted(t *testing.T) {
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)

@@ -41,6 +41,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // newTestRestAPIWithHomeAndAgent is newTestRestAPIWithHome (rest_extra_test.go)
@@ -447,10 +448,32 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 	})
 
 	t.Run("exhausted recurring task (done, COUNT reached) returns none", func(t *testing.T) {
-		api := newTestRestAPIAlignedStores(t)
+		// A REAL reply, not the bare no-op restMockProvider: the in_progress
+		// transition now launches a real background run, and a provider that
+		// returns an empty response makes every turn end status=error, so the
+		// task re-dispatches until its attempt budget is spent and outlasts
+		// advanceTaskToDone's deadline. taskRunNowSuccessProvider claims
+		// completion the way a native worker must (goal_claim), and the Judge
+		// is bound so the claim can actually reach a met verdict.
+		api := newTestRestAPIAlignedStoresWithProvider(
+			t, &taskRunNowSuccessProvider{}, judgeAgentForTaskRunTests(t))
 		wsID := ensureTestWorkspace(t, api)
 		dtstart := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
 		tsk := createRecurringTaskViaAPI(t, api, wsID, "ExhaustedAndDone", "FREQ=DAILY;COUNT=1", dtstart, "UTC", "")
+		bindMetVerdictJudge(t, api, func() []string {
+			g, err := tools.GoalStoreForTasks(api.taskStore).GetByOwner(gen.GoalOwnerKindTask, tsk.Id)
+			if err != nil || g == nil {
+				return nil
+			}
+			ids := make([]string, 0, len(g.Criteria)+len(g.DoD))
+			for _, c := range g.Criteria {
+				ids = append(ids, c.ID)
+			}
+			for _, c := range g.DoD {
+				ids = append(ids, c.ID)
+			}
+			return ids
+		})
 		advanceTaskToDone(t, api, tsk.Id)
 
 		from := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
