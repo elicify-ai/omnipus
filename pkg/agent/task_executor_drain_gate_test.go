@@ -94,15 +94,21 @@ func TestDrainClosesIntakePermanently(t *testing.T) {
 // unguarded Add appears anywhere in the task_executor*.go family.
 func TestNoUngatedWaitGroupAddOutsideHeldCountSites(t *testing.T) {
 	src := readTaskExecutorSourcesForTest(t)
-	// The ONLY three sites allowed to Add directly:
+	// The ONLY two sites allowed to Add directly:
 	//   enterDispatch  — the gate itself; its Add is the guarded one.
 	//   executeTask    — launches runTask while the caller already holds the
 	//                    entry ExecuteTask/executeTaskPlanVerified took.
-	//   StartTaskNow   — launches runTaskFromInProgress under its own entry.
-	// In the latter two the counter is provably >= 1, so the Add can never be
-	// the 0 -> 1 transition that panics. Everything else must route through
+	// In the latter the counter is provably >= 1, so the Add can never be the
+	// 0 -> 1 transition that panics. Everything else must route through
 	// enterDispatch().
-	const allowed = 3
+	//
+	// The count was THREE until S1 M9 (978c232bc) deleted the launcher-less
+	// task start path: its StartTaskNow launched runTaskFromInProgress under
+	// its own wg entry, and that launch went with it. The remaining start path
+	// (startTaskNowViaLauncherAs -> dispatchLaunchedTask) takes its entry
+	// through enterDispatch() like every other dispatch entry point, so no
+	// exemption is lost — the count simply followed the deleted code.
+	const allowed = 2
 
 	got := strings.Count(src, "te.wg.Add(1)")
 	if got != allowed {
