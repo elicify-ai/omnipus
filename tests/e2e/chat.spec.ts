@@ -1,7 +1,8 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, assistantMessages, userMessages, startNewChat, selectAgent, tokenCounter, waitForConnected } from './fixtures/selectors';
+import { chatInput, assistantMessages, userMessages, selectAgent, tokenCounter, waitForConnected } from './fixtures/selectors';
+import { freshChat } from './fixtures/session-setup';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -104,10 +105,12 @@ test(
 
     // Start a fresh session to avoid stale messages from prior tests.
     // After goto('/') the app may restore the last active session with messages.
-    // startNewChat drives the current new-chat flow (the agent row's
-    // "New chat with <Agent>" action — FR-029; FR-031 deleted "/new"),
-    // resetting to an empty thread so assistantMessages count starts at 0.
-    await startNewChat(page);
+    // freshChat creates the session via the public REST API and deep-links it
+    // (the agent row's "New chat with <Agent>" button this used to click is
+    // removed — founder decision D7; FR-029/FR-031 still govern, and "/new"
+    // stays deleted), resetting to an empty thread so assistantMessages count
+    // starts at 0.
+    await freshChat(page);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
     // Switch to Jim: Mia has "no long enumerations" guardrails and may handoff to
@@ -167,25 +170,29 @@ test(
 // (e) below through selectAgent, which asserts the row's aria-current.
 
 test(
-  '(d) new chat button clears message list and picks a fresh session_id',
+  '(d) fresh chat clears the message list and picks a fresh session_id',
   async ({ page }) => {
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
+    const firstChat = await freshChat(page);
     await input.fill('First message in session');
     await input.press('Enter');
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 60_000 });
 
-    const urlBefore = page.url();
-
-    // The agent row's "New chat with <Agent>" action is the only new-chat
-    // path (FR-029; FR-031 deleted "/new") — startNewChat drives it.
-    await startNewChat(page);
+    // The agent row's "New chat with <Agent>" button this test was named for
+    // is REMOVED (founder decision D7 — capability stays, UI access point
+    // gone); freshChat is the replacement seam. It also lets this test
+    // finally assert what its name always claimed but its dead
+    // `void urlBefore/urlAfter` tail never checked: the fresh chat runs in a
+    // genuinely DIFFERENT session id, not just a cleared thread.
+    const second = await freshChat(page);
 
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
-    const urlAfter = page.url();
-    void urlBefore;
-    void urlAfter;
+    expect(
+      second.sessionId,
+      'the fresh chat must be a NEW session, not the one the first message ran in',
+    ).not.toEqual(firstChat.sessionId);
   },
 );
 
@@ -279,7 +286,7 @@ test(
     await waitForConnected(page, { timeout: 15_000 });
 
     // Fresh session so assistantMessages/userMessages counts start at zero.
-    await startNewChat(page);
+    await freshChat(page);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
     // Go offline — the browser drops the WS (same mechanism verified in

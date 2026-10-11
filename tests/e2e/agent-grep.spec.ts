@@ -35,7 +35,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { startNewChat, waitForConnected } from './fixtures/selectors';
+import { waitForConnected } from './fixtures/selectors';
+import { freshChat } from './fixtures/session-setup';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -210,7 +211,7 @@ test(
 
     console.log(`[agent-grep] Seeded haystack at: ${seededPaths.join(', ')}`);
 
-    await startNewChat(page);
+    await freshChat(page);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
     const input = chatInput(page);

@@ -19,7 +19,8 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { expect, errors, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, selectAgent, startNewChat, selectedAgentRow, waitForConnected } from './fixtures/selectors'
+import { chatInput, selectAgent, selectedAgentRow, waitForConnected } from './fixtures/selectors'
+import { freshChat } from './fixtures/session-setup'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -152,15 +153,6 @@ function listSessionDirs(home: string): string[] {
   }
 }
 
-/** Best-effort mtime (ms) of a path; 0 if it cannot be stat'd. */
-function safeMtimeMs(p: string): number {
-  try {
-    return fs.statSync(p).mtimeMs
-  } catch {
-    return 0
-  }
-}
-
 // ── Shared helper: switch to Jim and trigger a long-running turn ──────────────
 
 /**
@@ -258,7 +250,7 @@ async function waitForActiveStream(page: Page): Promise<void> {
  * streaming-message anchor is present) — so a subsequent cancel always has an
  * incomplete message to mark interrupted.
  */
-async function triggerLongStreamingTurn(page: Page): Promise<void> {
+async function triggerLongStreamingTurn(page: Page): Promise<string> {
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 20_000 })
   // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
@@ -272,11 +264,14 @@ async function triggerLongStreamingTurn(page: Page): Promise<void> {
   // Sidebar row click is the only agent switch since the composer AgentPicker
   // was removed (nav commit e84ac0532; FR-029 no in-chat handover).
   await selectAgent(page, /Jim/i)
-  // Then start a fresh extra chat WITH Jim (the agent-row "New chat" action —
-  // FR-029/FR-031 deleted "/new") so every caller's turn mints its OWN session
-  // dir; without this the send would reuse Jim's already-on-disk main session
-  // and any sessions-dir diff below would find nothing new.
-  await startNewChat(page, /Jim/i)
+  // Then start a fresh chat WITH Jim so every caller's turn runs in its OWN
+  // session. The agent-row "New chat" button this used to click is REMOVED
+  // (founder decision D7 — capability stays, UI access point gone;
+  // FR-029/FR-031 still govern, "/new" stays deleted). freshChat creates the
+  // session via the public REST API and deep-links it, and RETURNS its id —
+  // callers that bind on-disk evidence (transcript/audit rows) to the turn
+  // use the exact id instead of inferring it from a sessions-dir diff.
+  return (await freshChat(page, /Jim/i)).sessionId
 
   await input.fill(LONG_PROSE_PROMPT)
   await input.press('Enter', { timeout: 15_000 })
@@ -553,22 +548,22 @@ async function assertCancelCascadesToSubagent(
   // 2026-10-09, deleted "/new" from the command table AND forbids the SPA
   // from sending it — typing /new now shows a refusal and sends nothing,
   // src/hooks/useSlashMenu.ts RETIRED_COMMAND_NAMES). The /new-palette flow
-  // this block used to drive is therefore gone for good.
-  //
-  // What the fresh chat preserves from the old `/new` semantics: like `/new`,
-  // it only NULLIFIES activeSessionId (startNewSession, src/store/session.ts)
-  // — the SPA mints the session lazily on the first sent message, and the
-  // workspace-scoped chat IA keeps the page at /#/workspaces/<id>/chat (no
-  // session id in the URL). So we still discover THIS turn's session by
-  // diffing the OMNIPUS_HOME/sessions directory before vs. after the turn
-  // (below) — Jim's already-on-disk MAIN session (which selectAgent above
-  // navigated to before resetting) stays in the "before" set, and the only
-  // new dir after the send is this turn's.
-  await startNewChat(page, /Jim/i)
+  // this block used to drive is therefore gone for good. That button itself
+  // is gone too now: founder decision D7 (DECISIONS.md, squad
+  // nav-agent-row-menu-20261011) removed the new-chat UI access point
+  // everywhere — capability stays, button does not. freshChat creates this
+  // turn's session via the public REST API (POST /api/v1/sessions) and
+  // deep-links it through the SPA's own /sessions/<id> route, and RETURNS
+  // the id: the parent session below is KNOWN exactly, not inferred from a
+  // sessions-dir diff (the old lazy-mint flow left no id to bind with). The
+  // selectAgent-first ordering above stays load-bearing — freshChat resolves
+  // /Jim/i through the sidebar row just like the removed button did.
+  const parentSessionId = (await freshChat(page, /Jim/i)).sessionId
   await expect(input).toBeEnabled({ timeout: 20_000 })
 
-  // Snapshot existing session dirs so we can identify the one THIS turn creates
-  // (earlier tests in the same gateway leave their own session dirs behind).
+  // Diagnostics only: dirs present before the turn (earlier tests in the same
+  // gateway leave their own session dirs behind). The turn's session is bound
+  // by the exact id above — this set is no longer the identifier.
   const sessionsBefore = new Set(listSessionDirs(OMNIPUS_HOME))
 
   // The subagent task must keep the descendant RUNNING for several seconds so a
@@ -695,12 +690,14 @@ async function assertCancelCascadesToSubagent(
   // too-early read). Poll on a ceiling well past the observed worst case
   // instead of asserting less.
   //
-  // Discover this turn's session by diffing the sessions dir. A delegated
-  // sub-turn can spawn its own ephemeral session dir, so there may be more than
-  // one new dir — scan them (newest first) for the one whose transcript actually
-  // recorded the cancel (the turn_canceled entry lives in the PARENT session).
-  // Sessions are stored at OMNIPUS_HOME/sessions/<id>/<YYYY-MM-DD>.jsonl
-  // (day-partitioned JSONL); the legacy transcript.jsonl name is also tried.
+ // The turn's PARENT session is known exactly — freshChat created it and
+  // returned its id, and the turn_canceled entry lives in the PARENT session
+  // — so the scan reads exactly that one directory. A delegated sub-turn can
+  // spawn its own ephemeral session dir; those stay OUT of the predicate (an
+  // ephemeral dir can never satisfy it) and are listed only in the failure
+  // diagnostics. Sessions are stored at OMNIPUS_HOME/sessions/<id>/… (the
+  // directory NAME is the session id); day-partitioned <YYYY-MM-DD>.jsonl,
+  // with the legacy transcript.jsonl name also tried.
   const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const sessionsDir = path.join(OMNIPUS_HOME, 'sessions')
 
@@ -712,12 +709,8 @@ async function assertCancelCascadesToSubagent(
   } {
     const sessionsAfter = listSessionDirs(OMNIPUS_HOME)
     const newSessions = sessionsAfter.filter((s) => !sessionsBefore.has(s))
-    // Prefer newly-created dirs; fall back to all sessions if the diff is empty
-    // (e.g. the session dir already existed). Newest mtime first.
-    const scanList = (newSessions.length > 0 ? newSessions : sessionsAfter)
-      .map((s) => ({ s, m: safeMtimeMs(path.join(sessionsDir, s)) }))
-      .sort((a, b) => b.m - a.m)
-      .map((x) => x.s)
+    // Exactly the parent session — the id is known, no inference.
+    const scanList = [parentSessionId]
 
     let entries: TranscriptEntry[] = []
     let chosenSession = ''
@@ -919,16 +912,28 @@ test(
 // because the gateway was cold and the mint happened to land ~1s AFTER the
 // snapshot. A sub-second accidental pass is not coverage.
 
+// ─── 2026-10-11: the diff-based session binding is SUPERSEDED. Founder
+// decision D7 (DECISIONS.md, squad nav-agent-row-menu-20261011) removed the
+// agent-row "New chat" button, and triggerLongStreamingTurn now creates the
+// turn's session via freshChat (public REST POST /api/v1/sessions + the SPA's
+// own /sessions/<id> deep-link route) — which RETURNS the session id. The
+// audit rows below are bound to THAT exact id (was_fired attempt and
+// turn.cancelled must both carry it), which is strictly stronger than the old
+// "session_id ∈ dirs that appeared since the snapshot" set membership: the
+// __pending sentinel still cannot satisfy it, a neighbouring turn's id still
+// cannot either, and the whole eager-mint/snapshot-timing hazard this header
+// documents is gone because nothing is inferred from directory diffs anymore.
+// The snapshot stays only as failure diagnostics.
+
 test(
   'T26 — audit log contains turn_cancel_attempt and turn_canceled entries after cancel',
   async ({ page }) => {
     test.slow()
 
-    // Baselines FIRST — before anything can mount a route and mint a session.
-    // See the "note on WHERE the before snapshot is taken" in this test's header
-    // comment: the session directory is created eagerly on route mount, so any
-    // snapshot taken after page.goto('/') already contains this test's own
-    // session and the newSessions diff silently comes out empty.
+    // sessionsBefore is DIAGNOSTICS now (printed on failure): the turn's
+    // session is bound by the exact id freshChat returns below, so nothing
+    // depends on when a directory minted. The audit-entry cursor below is
+    // still a real baseline — it scopes "rows written since test start".
     const auditPath = path.join(OMNIPUS_HOME, 'system', 'audit.jsonl')
     const sessionsBefore = new Set(listSessionDirs(OMNIPUS_HOME))
     const entriesBefore = readJsonl<AuditEntry>(auditPath).length
@@ -964,13 +969,11 @@ test(
     }
 
     // Start from a clean session — provided by `triggerLongStreamingTurn`
-    // itself: it starts a fresh extra chat via the agent-row "New chat"
-    // action (FR-029/FR-031; the `/new` slash command this test used to type
-    // is deleted — typing it now shows a refusal and sends nothing). That
-    // fresh chat NULLIFIES activeSessionId without minting a session, and it
-    // runs AFTER the sessionsBefore snapshot earlier in this test, so the
-    // session dir that appears on disk after the send is unambiguously THIS
-    // turn's.
+    // itself, which now creates it via freshChat (the agent-row "New chat"
+    // button is removed by founder decision D7; the `/new` slash command
+    // stays deleted too — typing it shows a refusal and sends nothing) and
+    // RETURNS the session id. Binding below uses THAT exact id, so the
+    // assertion no longer depends on when (or whether) a directory appeared.
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 20_000 })
 
@@ -981,7 +984,7 @@ test(
     // unfalsifiable. `triggerLongStreamingTurn` also switches to Jim and asks for a
     // 700-word tool-free essay, so the stream stays live for seconds after this
     // returns and the Stop click lands comfortably mid-turn.
-    await triggerLongStreamingTurn(page)
+    const turnSessionId = await triggerLongStreamingTurn(page)
 
     // Cancel the turn.
     const stopBtn = page.locator('[data-testid="stop-btn"]')
@@ -1007,18 +1010,18 @@ test(
     )
     await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
 
-    // Both lookups below are scoped to a session THIS test created (i.e. a
-    // directory that appeared under OMNIPUS_HOME/sessions since the snapshot taken
-    // at the very top of the test). Sessions live at OMNIPUS_HOME/sessions/<id>/,
-    // so the directory NAME is the session id — the same id the gateway stamps
-    // into the audit rows (pkg/agent/cancel.go:245-250). Two reasons to scope:
+    // Both lookups below are scoped to THIS test's own turn session — the id
+    // freshChat created and returned (Sessions live at
+    // OMNIPUS_HOME/sessions/<id>/; the same id the gateway stamps into the
+    // audit rows, pkg/agent/cancel.go:245-250). Two reasons to scope:
     //
     //  a) It is the anti-sentinel guard. Mutual session_id equality between the
     //     two rows is satisfiable by two rows that are both wrong in the SAME way
     //     — exactly what the pre-2026-07-28 version of this test produced, with
     //     both cancel requests carrying the literal `__pending` sentinel. Binding
-    //     the id to a real on-disk session directory is what makes the assertion
-    //     falsifiable.
+    //     the id to the exact session this test created is what makes the
+    //     assertion falsifiable (equality with turnSessionId — the sentinel can
+    //     never satisfy it).
     //  b) It keeps a neighbouring turn's cancel from being mistaken for ours.
     //     Playwright runs this shard with workers:1 (playwright.config.ts), so no
     //     sibling TEST interleaves — but a leaked turn from an EARLIER test that
@@ -1035,17 +1038,12 @@ test(
     // predicates must hold, we just stop reading too early.
     let attemptEntry: AuditEntry | undefined
     let cancelledEntry: AuditEntry | undefined
-    let newSessions: string[] = []
     let cancelRowSummary: string
     const auditDeadline = Date.now() + 30_000
     for (;;) {
-      newSessions = listSessionDirs(OMNIPUS_HOME).filter((s) => !sessionsBefore.has(s))
       const newEntries = readJsonl<AuditEntry>(auditPath).slice(entriesBefore)
 
-      const isThisTurn = (e: AuditEntry) => {
-        const sid = e.fields?.session_id
-        return typeof sid === 'string' && newSessions.includes(sid)
-      }
+      const isThisTurn = (e: AuditEntry) => e.fields?.session_id === turnSessionId
 
       // Dumped on failure so a no-op cancel (was_fired:false) or a sentinel
       // session_id is immediately legible instead of just "not found".
@@ -1078,22 +1076,23 @@ test(
       await page.waitForTimeout(500)
     }
 
-    // Shared diagnostic tail — every failure below needs the same three facts, and
+    // Shared diagnostic tail — every failure below needs the same facts, and
     // omitting the session lists once already cost a full CI round-trip to explain
     // an "it just says none appeared" failure.
     const diag =
-      `Sessions that appeared during this test: ${JSON.stringify(newSessions)}. ` +
-      `Sessions already present at test start: ${sessionsBefore.size}. ` +
+      `This test's turn session id: ${turnSessionId}. ` +
+      `Sessions already present at test start: ${sessionsBefore.size} ` +
+      `(${JSON.stringify([...sessionsBefore])}). ` +
       `turn.cancel* rows written since test start: ${cancelRowSummary}.`
 
     if (!attemptEntry) {
       throw new Error(
-        'INCOMPLETE: audit log has no turn.cancel.attempt{was_fired:true} for a session this ' +
-          `test created. ${diag} ` +
+        'INCOMPLETE: audit log has no turn.cancel.attempt{was_fired:true} for this test\'s ' +
+          `turn session. ${diag} ` +
           'was_fired:false means the cancel reached the gateway but found no registered turn ' +
-          'to claim (a no-op — the exact pre-2026-07-28 failure); an empty session list means ' +
-          'the SPA never persisted a new session; a session_id outside the list means the turn ' +
-          'ran somewhere else. Traces to: cancel-cross-channel-spec.md T26, US-5.1, FR-18.',
+          'to claim (a no-op — the exact pre-2026-07-28 failure); a session_id other than the ' +
+          "test's own means the turn ran somewhere else. Traces to: " +
+          'cancel-cross-channel-spec.md T26, US-5.1, FR-18.',
       )
     }
 
@@ -1105,9 +1104,8 @@ test(
     }
 
     // Assert: session_id matches between the two entries (US-5 — the attempt and
-    // the completion must describe the same turn). Not implied by the scoping
-    // above: `isThisTurn` only requires membership in newSessions, which can hold
-    // more than one directory (a delegated sub-turn gets its own), so this still
+    // the completion must describe the same turn). Both rows already carry THIS
+    // test's exact turnSessionId (the scoping above), so this equality also
     // rules out an attempt on one session paired with a cancellation of another.
     // session_id is nested under fields (pkg/audit/audit.go Emit structure).
     expect(attemptEntry.fields?.session_id).toBeTruthy()
