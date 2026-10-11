@@ -57,7 +57,7 @@ describe('beginPairExtra — the workspace switch belongs to a started outcome o
     // the new-chat decision must prompt instead of starting.
     useSessionStore.getState().setActiveSession(null, 'ava')
     useChatStore.getState().sendMessage('first message in A')
-    expect(useSessionStore.getState().pendingFirstSend?.sessionId ?? null).toBeNull()
+    expect(useChatStore.getState().pendingFirstSend?.sessionId ?? null).toBeNull()
 
     const navigate = vi.fn()
     const close = vi.fn()

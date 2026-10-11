@@ -19,6 +19,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { makeBucketMessages, useChatStore } from './chat'
+import type { ChatMessage, SessionChatState } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
@@ -87,6 +88,25 @@ function connectWithSendSpy() {
     })
   })
   return send
+}
+
+/** A complete bucket (the chat.test.ts `bucketFor` shape) for one scenario. */
+function bucketFor(msgs: ChatMessage[]): SessionChatState {
+  return {
+    ...makeBucketMessages(msgs),
+    toolCalls: {},
+    toolCallOrder: [],
+    textAtToolCallStart: {},
+    isStreaming: false,
+    isReplaying: false,
+    replayCompletedForSession: null,
+    sessionTokens: 0,
+    sessionCost: 0,
+    rateLimitEvent: null,
+    lastUserMessageAt: null,
+    cancelStage: null,
+    lastReceivedEventTime: null,
+  }
 }
 
 function sentPayloads(send: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
@@ -304,22 +324,14 @@ describe('C8 — the @ address is never dropped silently', () => {
     // retained pendingFirstSend (that path owns retryFirstSend) — the
     // resendMessage scan is what reaches it.
     act(() => {
-      const bucket = makeBucketMessages([
-        {
-          id: 'pending-attempt', role: 'user', content: '@Mia please review X',
-          timestamp: new Date().toISOString(), status: 'error', deliveryStatus: 'failed',
-        },
-      ])
       useChatStore.setState({
         sessionsById: {
-          __pending: {
-            ...bucket,
-            // The fields makeBucketMessages does not carry (clearStreamingState
-            // iterates every bucket's tool-call bookkeeping on the next reset).
-            toolCalls: {},
-            toolCallOrder: [],
-            textAtToolCallStart: {},
-          },
+          __pending: bucketFor([
+            {
+              id: 'pending-attempt', role: 'user', content: '@Mia please review X',
+              timestamp: new Date().toISOString(), status: 'error', deliveryStatus: 'failed',
+            },
+          ]),
         },
         messages: [],
         isStreaming: false,
@@ -399,14 +411,11 @@ describe('C2 — a message-scoped refusal routes to its own chat and never ends 
    * and a mid-turn @-steer row (clientMessageId) appended after the bubble. */
   function seedLiveChat(sid: string, steerClientMessageId: string): void {
     act(() => {
-      const bucket = {
-        ...makeBucketMessages([
+      const bucket: SessionChatState = {
+        ...bucketFor([
           { id: 'asst-1', role: 'assistant', content: 'Working on it…', timestamp: '2026-10-11T10:00:00Z', status: 'streaming', isStreaming: true },
           { id: steerClientMessageId, role: 'user', content: '@Ava also check the logs', timestamp: '2026-10-11T10:00:05Z', status: 'done', deliveryStatus: 'sending' },
         ]),
-        toolCalls: {},
-        toolCallOrder: [],
-        textAtToolCallStart: {},
         isStreaming: true,
         activeTurnId: `turn-${sid}`,
       }
@@ -431,16 +440,10 @@ describe('C2 — a message-scoped refusal routes to its own chat and never ends 
   it('(a) a refusal for chat X lands in X while chat Y is active — Y untouched, X turn intact', () => {
     seedLiveChat(CHAT_X, 'steer-1')
     act(() => {
-      const plainY = {
-        ...makeBucketMessages([
-          { id: 'y-1', role: 'user', content: 'hello', timestamp: '2026-10-11T09:00:00Z', status: 'done', deliveryStatus: 'received' },
-          { id: 'y-2', role: 'assistant', content: 'Hi!', timestamp: '2026-10-11T09:00:10Z', status: 'done', deliveryStatus: 'received' },
-        ]),
-        toolCalls: {},
-        toolCallOrder: [],
-        textAtToolCallStart: {},
-        isStreaming: false,
-      }
+      const plainY: SessionChatState = bucketFor([
+        { id: 'y-1', role: 'user', content: 'hello', timestamp: '2026-10-11T09:00:00Z', status: 'done', deliveryStatus: 'received' },
+        { id: 'y-2', role: 'assistant', content: 'Hi!', timestamp: '2026-10-11T09:00:10Z', status: 'done', deliveryStatus: 'received' },
+      ])
       useChatStore.setState((s) => ({ sessionsById: { ...s.sessionsById, [CHAT_Y]: plainY } }))
       useSessionStore.setState({ activeSessionId: CHAT_Y, activeAgentId: 'jim' })
     })
