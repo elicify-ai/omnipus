@@ -57,8 +57,11 @@ function AdminChatRedirect() {
 
   // The sidebar row's exact entry path (AgentMainRow.openMain → selectSession):
   // attach, switch the active workspace, navigate to the workspace chat route.
-  // No overlay is open on a deep-link arrival, so there is nothing to close.
-  const selectSession = useSelectSession({ agents, workspaces, onClose: () => {} })
+  // replace: true — this is a redirect stub (team-lead ruling 2026-10-11):
+  // a pushed /admin/chat would trap the back button, every Back bouncing off
+  // the stub's redirect again. No overlay is open on a deep-link arrival, so
+  // there is nothing to close.
+  const selectSession = useSelectSession({ agents, workspaces, onClose: () => {}, replace: true })
   const [attemptedId, setAttemptedId] = useState<string | null>(null)
 
   useEffect(() => {

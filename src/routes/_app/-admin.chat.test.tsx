@@ -148,12 +148,14 @@ describe('/admin/chat — redirect stub onto the default workspace Admin main', 
       expect(mockAttachToSession).toHaveBeenCalledWith('main-admin-1', 'main', 'Admin', 'admin')
     })
     expect(mockSetActiveWorkspaceId).toHaveBeenCalledWith('ws-default')
-    expect(mockNavigate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: '/workspaces/$workspaceId/chat',
-        params: { workspaceId: 'ws-default' },
-      }),
-    )
+    // replace: true — team-lead ruling on the nav-adminentry note: a push
+    // would leave /admin/chat in the history, and Back from Admin's main
+    // would bounce straight off the stub again (a back-button trap).
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/chat',
+      params: { workspaceId: 'ws-default' },
+      replace: true,
+    })
     // The one prohibition the brief makes explicit: no standalone session.
     expect(mockCreateSession).not.toHaveBeenCalled()
   })
