@@ -258,7 +258,7 @@ Three protections are fixed in the code on purpose. They guard against malformed
 
 - Usage is measured in tokens. If a provider bill surprises you, the Usage screen tells you which agent and which model drove it, not what it cost.
 - Session retention is 90 days by default, adjustable from 1 to 365 days on the Data tab. Older transcripts are deleted automatically, and that deletion is permanent.
-- **Clear all sessions** on the Data tab deletes every transcript at once. There is no undo; make a backup first if the history matters.
+- **Clear all sessions** on the Data tab deletes every ordinary chat at once. There is no undo; make a backup first if the history matters. Main chats are never deleted this way: a main chat (and the helper sessions that belong to it) goes only together with its agent. A chat that is still running is stopped first; if it will not stop, or it cannot be read or removed, it is kept, and the result tells you how many chats were kept and how many main chats were left alone.
 - Restoring a backup overwrites current data and needs a gateway restart to take effect.
 - A sign-in can expire. The provider row shows the state, and signing in again the same way restores it.
 - Model changes on the Models tab apply on the next turn, with no restart; gateway port changes do need a restart.

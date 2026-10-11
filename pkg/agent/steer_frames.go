@@ -314,6 +314,18 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 	if receipt == nil && state == string(session.LifecycleStopped) && childRec.StopNote != nil {
 		id = fmt.Sprintf("%s:stop:%d", id, childRec.StopNote.Seq)
 	}
+	if receipt == nil && state == string(session.LifecycleQueued) && childRec.ExecutionID == nil {
+		// A same-generation re-queue after a stop (public steering resume) has
+		// no execution identity yet and its stop note is already cleared, so
+		// without a discriminator it would reuse the launch-time `queued` row's
+		// id and put two rows with one id in the parent transcript, which the
+		// chat cannot render. The landed stop it follows is the discriminator:
+		// the child's control sequence only grows, so each re-queue is unique,
+		// and re-delivering the same re-queue yields the same id.
+		if suffix := al.requeueIDSuffix(childRec); suffix != "" {
+			id += suffix
+		}
+	}
 	if receipt != nil {
 		// A single injected round can carry more than one applied steer
 		// (three queued messages -> three receipts, per issue #870's design
@@ -393,6 +405,35 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		SubagentStatePayload{SessionID: parentSessionID, MessageID: id, Frame: frame},
 	)
 	return nil
+}
+
+// requeueIDSuffix names the stop a same-generation re-queue follows: the
+// highest landed-stop sequence of childRec's generation on the control ledger
+// (":resume:<seq>"). It is empty for a child that has never stopped (the
+// launch-time queued row keeps its original id). If the ledger cannot be read
+// the record's own update instant stands in, so a read failure still yields a
+// per-transition id instead of a repeated one.
+func (al *AgentLoop) requeueIDSuffix(childRec *session.LifecycleRecord) string {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return ""
+	}
+	transitions, err := lifecycle.ListStoppedTransitions(childRec.SessionID)
+	if err != nil {
+		logger.WarnCF("agent", "steer: stop history unreadable for a re-queued state row id - using the record update instant",
+			map[string]any{"child_session_id": childRec.SessionID, "error": err.Error()})
+		return fmt.Sprintf(":resume:t%d", childRec.UpdatedAt.UnixNano())
+	}
+	var seq uint64
+	for _, tr := range transitions {
+		if tr.Generation == childRec.Generation && tr.StopSeq > seq {
+			seq = tr.StopSeq
+		}
+	}
+	if seq == 0 {
+		return ""
+	}
+	return fmt.Sprintf(":resume:%d", seq)
 }
 
 // ensureFollowUpSpanStart persists and emits the subagent_start for a

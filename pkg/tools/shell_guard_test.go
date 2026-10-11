@@ -12,6 +12,8 @@ package tools
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -29,7 +31,16 @@ import (
 // secret-path protection at all — the kernel sandbox is the real boundary
 // there (ADR-092 D2) — so restrict=true is the realistic, default posture
 // this test exercises.
+//
+// The two secret-path cases spell the home as `~/.omnipus`, which the guard
+// resolves to $HOME/.omnipus and then judges against the carve-out roots
+// anchored at config.OmnipusHomeDir(). An ambient OMNIPUS_HOME elsewhere moves
+// those roots away from `~/.omnipus` and the cases then (correctly) name an
+// ordinary outside path, so the test pins the premise it assumes.
 func TestBashSafetyGuard_StructuralGuardsSurvive(t *testing.T) {
+	userHome, herr := os.UserHomeDir()
+	require.NoError(t, herr)
+	t.Setenv("OMNIPUS_HOME", filepath.Join(userHome, ".omnipus"))
 	tool, err := NewExecTool(t.TempDir(), true)
 	require.NoError(t, err)
 

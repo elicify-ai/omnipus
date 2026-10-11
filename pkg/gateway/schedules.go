@@ -62,6 +62,11 @@ type scheduledRunner struct {
 	notifs    *notifications.Store
 	getConfig func() *config.Config
 
+	// home is the OMNIPUS_HOME the runner resolves workspaces under; empty (a
+	// runner built without it) resolves config.OmnipusHomeDir(), the same home the
+	// rest of the gateway uses. A test or embedded host sets it directly.
+	home string
+
 	// procTrack records a child PID spawned during a run under the run's session
 	// id (FR-011). It is installed on the ProcessScheduled context so the exec/
 	// shell tools report spawned children; procCleanup later terminates them.
@@ -96,6 +101,14 @@ func newScheduledRunner(
 		r.canceller = c
 	}
 	return r
+}
+
+// homeDir is the OMNIPUS_HOME this runner resolves workspaces under.
+func (r *scheduledRunner) homeDir() string {
+	if r.home != "" {
+		return r.home
+	}
+	return config.OmnipusHomeDir()
 }
 
 // RunScheduled is the owner-aware fire path (FR-001/FR-003/FR-004/FR-013/FR-014).
@@ -574,7 +587,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 		if workspaceID == "" {
 			// A derived-MAIN schedule (FR-017) runs in the owner's main of the
 			// default workspace, the one place a user schedule's main lives.
-			if def, derr := workspace.ResolveDefaultID(config.OmnipusHomeDir()); derr == nil {
+			if def, derr := workspace.ResolveDefaultID(r.homeDir()); derr == nil {
 				workspaceID = def
 			}
 		}
@@ -592,7 +605,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 			if idErr != nil {
 				return "", fmt.Errorf("main session mode: %w", idErr)
 			}
-			_, eligible, gateErr := mainSessionGate(config.OmnipusHomeDir(), r.getConfig(), mainID)
+			_, eligible, gateErr := mainSessionGate(r.homeDir(), r.getConfig(), mainID)
 			if gateErr != nil {
 				return "", fmt.Errorf("main session mode: the owner's workspace could not be read: %w", gateErr)
 			}
@@ -1538,7 +1551,11 @@ func deriveScheduleSessionMode(runIsolated, ownerMainEligible, recurring bool) c
 // not exist, is (false, nil). A read failure is an error: the caller must not
 // guess a main, and must not silently downgrade the schedule either.
 func (a *restAPI) ownerHasEligibleDefaultMain(agentID string) (bool, error) {
-	wsID, err := workspace.ResolveDefaultID(config.OmnipusHomeDir())
+	home := a.homePath
+	if home == "" {
+		home = config.OmnipusHomeDir()
+	}
+	wsID, err := workspace.ResolveDefaultID(home)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNoDefault) {
 			return false, nil
@@ -1548,7 +1565,7 @@ func (a *restAPI) ownerHasEligibleDefaultMain(agentID string) (bool, error) {
 	if wsID == "" {
 		return false, nil
 	}
-	ws, found, err := loadWorkspaceForMain(a.homePath, wsID)
+	ws, found, err := loadWorkspaceForMain(home, wsID)
 	if err != nil {
 		return false, fmt.Errorf("read the default workspace: %w", err)
 	}

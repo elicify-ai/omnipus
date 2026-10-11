@@ -76,7 +76,35 @@ const LONG_PROMPT =
 async function bubbleText(row: import('@playwright/test').Locator): Promise<string> {
   return row.evaluate((el) => {
     const clone = el.cloneNode(true) as HTMLElement
-    clone.querySelectorAll('[data-testid="message-model"]').forEach((n) => n.remove())
+    // Chrome with its own testid: model footer (MessageItem/ChatScreen
+    // "Mirrors MessageItem.tsx" pair), the agent name above assistant
+    // messages, participant/reply headers, and the connection-status chip.
+    clone
+      .querySelectorAll(
+        '[data-testid="message-model"], [data-testid="agent-label"], ' +
+          '[data-testid="participant-label"], [data-testid="reply-header"], ' +
+          '[data-testid="assistant-connection-status"]',
+      )
+      .forEach((n) => n.remove())
+    // Volatile status phrases WITHOUT a testid (AgentStatusIndicator.tsx
+    // exports: IDLE_STATUS_TEXT, UNAVAILABLE_STATUS_TEXT; plus the
+    // thinking placeholder): they prefix the row text and CHANGE across the
+    // exact events this file tests (a network cut flips Idle →
+    // Unavailable/reconnecting), so a whole-row read compared status chrome,
+    // not content — scenario (a) failed on before="AvaIdleThe tide…" vs
+    // after="AvaUnavailable/reconnectingThe tide…" while the essay itself
+    // was byte-identical across the cut (measured locally, lane nav-e2e-ff).
+    // EXACT-text match only, so essay words are never touched.
+    const statusPhrases = new Set(['Idle', 'Unavailable/reconnecting', 'Thinking...'])
+    clone.querySelectorAll('span, div').forEach((n) => {
+      if (statusPhrases.has((n.textContent ?? '').trim()) && n.children.length === 0) n.remove()
+    })
+    // The message text itself renders inside MessageBubble's `.prose-sm`
+    // div on historical rows (MessageItem.tsx — the only prose-sm in
+    // src/components/chat); the live AssistantUI row has none, so read the
+    // chrome-stripped remainder there.
+    const bubbles = Array.from(clone.querySelectorAll('.prose-sm'))
+    if (bubbles.length > 0) return bubbles.map((n) => (n as HTMLElement).innerText).join('\n')
     return (clone as HTMLElement).innerText
   })
 }
@@ -89,8 +117,13 @@ async function startLongTurn(
   await waitForConnected(page)
   await startNewChat(page)
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
+  // Bounded (fail fast): an unbounded fill/press rides the locator default
+  // (config sets no actionTimeout) out to the whole test timeout when a modal
+  // or a dead composer blocks it — the same fail-slow class that burned the
+  // llm-agents shard (run 38112714098). The composer was already asserted
+  // visible+enabled above, so 15s is generous headroom, not a new budget.
   await input.fill(prompt)
-  await input.press('Enter')
+  await input.press('Enter', { timeout: 15_000 })
   await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
   // A completed-only selector waits for done before returning, so it cannot
   // establish the mid-turn precondition b/c require. Other cases retain their
@@ -243,7 +276,14 @@ async function switchToSessionByTitle(page: Page, title: string) {
 // opening, catching a wholesale content swap early with a clearer failure).
 async function assertNoDuplicateOrGapText(page: Page, before: string, after: string, title?: string) {
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
-  expect(norm(after).startsWith(norm(before).slice(0, 60))).toBeTruthy()
+  expect(
+    norm(after).startsWith(norm(before).slice(0, 60)),
+    // Named, with both readings printed: a bare toBeTruthy() made this
+    // failure undiagnosable from the report alone (the two texts are the
+    // whole question — live-streamed prefix vs reloaded final text).
+    `the reloaded final text must begin with the pre-cut streamed prefix — ` +
+      `before=${JSON.stringify(norm(before).slice(0, 160))} after=${JSON.stringify(norm(after).slice(0, 160))}`,
+  ).toBeTruthy()
   await page.reload()
   await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
@@ -445,7 +485,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     // minutes here as the safe default when the knob is NOT set.
     await page.waitForTimeout(31 * 60_000)
     await input.fill('are you still there?')
-    await input.press('Enter')
+    await input.press('Enter', { timeout: 15_000 })
     await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
@@ -524,7 +564,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         // Token delay plus the explicit running precondition make a finite
         // answer long enough to interrupt, and still let its manual retry finish.
         await input.fill(LONG_PROMPT)
-        await input.press('Enter')
+        await input.press('Enter', { timeout: 15_000 })
         await expect(stopButton(page)).toBeVisible({ timeout: 15_000 })
         const liveAnswer = page.locator('[data-message-id]:not(.flex-row-reverse)')
         await expect(liveAnswer).toHaveCount(1, { timeout: 15_000 })
@@ -620,7 +660,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await context.setOffline(true)
     await page.evaluate(() => window.dispatchEvent(new Event('offline')))
     await input.fill('typed while offline')
-    await input.press('Enter')
+    await input.press('Enter', { timeout: 15_000 })
     // Real-browser follow-up (orchestrator): the previous version of this
     // scenario asserted the CONNECTION banner (`connection-status-line`)
     // within 20s of going offline. That contradicts the quiet-disconnect

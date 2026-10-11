@@ -145,6 +145,7 @@ func TestToolChain_RememberRecall(t *testing.T) {
 	remResult := rememberTool.Execute(ctx, map[string]any{
 		"content":  "omnipus uses bleve for full-text search in long-term memory",
 		"category": "reference",
+		"room":     "private",
 	})
 	if remResult.IsError {
 		t.Fatalf("remember: %s", remResult.ForLLM)
@@ -190,6 +191,7 @@ func TestToolChain_RememberRecall_Differentiation(t *testing.T) {
 	r1 := rememberTool.Execute(ctx, map[string]any{
 		"content":  "the project uses golang for all backend logic",
 		"category": "reference",
+		"room":     "private",
 	})
 	if r1.IsError {
 		t.Fatalf("remember golang: %s", r1.ForLLM)
@@ -198,6 +200,7 @@ func TestToolChain_RememberRecall_Differentiation(t *testing.T) {
 	r2 := rememberTool.Execute(ctx, map[string]any{
 		"content":  "the frontend stack uses react and vite",
 		"category": "reference",
+		"room":     "private",
 	})
 	if r2.IsError {
 		t.Fatalf("remember react: %s", r2.ForLLM)
@@ -474,6 +477,7 @@ func TestToolChain_Remember_EmptyContent(t *testing.T) {
 	result := rememberTool.Execute(ctx, map[string]any{
 		"content":  "",
 		"category": "reference",
+		"room":     "private",
 	})
 	if !result.IsError {
 		t.Fatalf("expected error for empty content, got success: %s", result.ForLLM)

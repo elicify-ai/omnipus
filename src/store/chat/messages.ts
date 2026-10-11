@@ -80,7 +80,23 @@ export function clampToolResult(result: unknown): unknown {
 
 /** Return the ordered message array for a bucket. O(N) — call once per reducer, not per frame. */
 export function getMessages(bucket: Pick<SessionChatState, 'messagesById' | 'messageOrder'>): ChatMessage[] {
-  return bucket.messageOrder.map((id) => bucket.messagesById[id]).filter(Boolean)
+  // The single projection every foreground `messages` array passes through
+  // (initial load, live appends, replay, reconnect). assistant-ui throws on a
+  // repeated message id and takes the whole route down, and a persisted
+  // transcript can hold one (a re-queued subagent_state row). Collapse
+  // duplicate ids keeping the LAST occurrence at its position — the later row
+  // is the current one. Walk backwards so the last occurrence is the one seen.
+  const order = bucket.messageOrder
+  const seen = new Set<string>()
+  const out: ChatMessage[] = []
+  for (let i = order.length - 1; i >= 0; i--) {
+    const id = order[i]
+    if (seen.has(id)) continue
+    seen.add(id)
+    const m = bucket.messagesById[id]
+    if (m) out.push(m)
+  }
+  return out.reverse()
 }
 
 /**
@@ -268,4 +284,35 @@ export function advanceEventTime(current: string | null, incoming: string | null
   if (!cur) return incoming
   if (inc.ms !== cur.ms) return inc.ms > cur.ms ? incoming : current
   return inc.subMs > cur.subMs ? incoming : current
+}
+
+/**
+ * True when the bucket's busy flag (`isStreaming`, which draws the composer's
+ * Stop button) has nothing behind it: no message is streaming, no tool call is
+ * running, no turn was announced active, no replay is rebuilding history, and
+ * no steer is waiting for its continuation.
+ * `tool_call_start` sets the flag but carries no turn_id, so a straggler that
+ * lands after a turn already ended (after Stop, after done, after a reconnect)
+ * re-arms it with no later frame to end it - Stop shows while the transcript
+ * shows no activity. Callers release the flag at the points where the evidence
+ * is decided (a tool result, a "no turn in flight" snapshot).
+ */
+export function busyFlagIsUnbacked(
+  b: Pick<SessionChatState, 'isStreaming' | 'isReplaying' | 'activeTurnId' | 'messageOrder' | 'messagesById' | 'toolCalls'>,
+): boolean {
+  if (!b.isStreaming || b.isReplaying || b.activeTurnId) return false
+  if (Object.values(b.toolCalls).some((t) => t.status === 'running')) return false
+  // A mid-turn steer closes the running bubble before the turn's continuation
+  // opens a new one. While the last assistant bubble is that closed-by-steer
+  // one, the turn is still in flight and the flag is backed.
+  for (let i = b.messageOrder.length - 1; i >= 0; i--) {
+    const m = b.messagesById[b.messageOrder[i]]
+    if (m?.role !== 'assistant') continue
+    if (m.closedBySteer) return false
+    break
+  }
+  return !b.messageOrder.some((id) => {
+    const m = b.messagesById[id]
+    return !!m && (m.isStreaming || m.status === 'streaming')
+  })
 }

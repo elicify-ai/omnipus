@@ -421,6 +421,7 @@ func TestIntegration_RememberRecallRoundTrip(t *testing.T) {
 	res1 := remember.Execute(ctxPrivate, map[string]any{
 		"content":  "the deployment key is rotated every 90 days",
 		"category": "key_decision",
+		"room":     "private",
 	})
 	if res1 == nil || res1.IsError {
 		t.Fatalf("recallIT: first remember failed: %+v", res1)
@@ -429,6 +430,7 @@ func TestIntegration_RememberRecallRoundTrip(t *testing.T) {
 	res2 := remember.Execute(ctxPrivate, map[string]any{
 		"content":  "chaos monkey load test revealed a 3s P99 spike",
 		"category": "lesson_learned",
+		"room":     "private",
 	})
 	if res2 == nil || res2.IsError {
 		t.Fatalf("recallIT: second remember failed: %+v", res2)
@@ -478,6 +480,7 @@ func TestIntegration_RememberRecallRoundTrip(t *testing.T) {
 	resShared := remember.Execute(ctxShared, map[string]any{
 		"content":  "shared workspace metric: 99th percentile latency 50ms",
 		"category": "reference",
+		"room":     "shared",
 	})
 	if resShared == nil || resShared.IsError {
 		t.Fatalf("recallIT: shared room remember failed: %+v", resShared)

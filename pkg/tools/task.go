@@ -965,6 +965,19 @@ func (t *TaskCreateTool) resolveTargetWorkspace(ctx context.Context, args map[st
 	return explicit, explicit != own, nil
 }
 
+// resolveWorkspace resolves the target workspace once (idempotent).
+func (tc *taskCreateToolExecute) resolveWorkspace() error {
+	if tc.wsResolved {
+		return nil
+	}
+	id, foreign, err := tc.t.resolveTargetWorkspace(tc.ctx, tc.args)
+	if err != nil {
+		return err
+	}
+	tc.wsID, tc.foreign, tc.wsResolved = id, foreign, true
+	return nil
+}
+
 // requireDestinationMember refuses unless agentID is on the destination
 // workspace's team (core team or an endpoint of its delegation graph). It fails
 // closed: an unset home or an unreadable workspace state is a refusal.
@@ -1002,9 +1015,11 @@ type taskCreateToolExecute struct {
 	// delivered to that workspace's board as not-started work.
 	foreign bool
 	// wsID is the resolved target workspace (the caller's own, or the explicit
-	// destination). It is resolved in validateRequest so the delegation gate and
-	// the landing agree on one workspace.
+	// destination). An explicit one is resolved before the delegation gate so the
+	// gate and the landing agree on one workspace; otherwise buildTask resolves it.
 	wsID string
+	// wsResolved is true once wsID/foreign hold the resolved target.
+	wsResolved bool
 }
 
 func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -1055,16 +1070,19 @@ func (tc *taskCreateToolExecute) validateRequest() (*ToolResult, bool) {
 		return ErrorResult("create_task: cannot resolve the calling agent; refusing to create a delegated task"), true
 	}
 
-	// Resolve the target workspace BEFORE the gate: the delegation graph that
-	// authorizes a delivery is the DESTINATION workspace's, never the caller's
-	// turn workspace (S3 M6). A foreign target is also refused to a caller
-	// that is not on the destination team when it assigns the task to itself —
-	// the task gate's same-agent exemption ("not delegation") is only true on
-	// the caller's own board.
-	var wsErr error
-	tc.wsID, tc.foreign, wsErr = tc.t.resolveTargetWorkspace(tc.ctx, tc.args)
-	if wsErr != nil {
-		return ErrorResult(fmt.Sprintf("task_create failed: %v", wsErr)), true
+	// An EXPLICIT workspace_id is resolved BEFORE the gate: the delegation graph
+	// that authorizes a delivery is the DESTINATION workspace's, never the
+	// caller's turn workspace (S3 M6). Without one the target is the caller's
+	// own workspace and is resolved in buildTask, AFTER the gate and the
+	// criteria checks — authorization first, so a denied caller sees the same
+	// denial whether or not a workspace is bound. A foreign target is also
+	// refused to a caller that is not on the destination team when it assigns
+	// the task to itself: the task gate's same-agent exemption ("not
+	// delegation") is only true on the caller's own board.
+	if _, explicit := tc.args["workspace_id"]; explicit {
+		if wsErr := tc.resolveWorkspace(); wsErr != nil {
+			return ErrorResult(fmt.Sprintf("task_create failed: %v", wsErr)), true
+		}
 	}
 	gateCtx := tc.ctx
 	if tc.foreign {
@@ -1256,6 +1274,9 @@ func (tc *taskCreateToolExecute) prepareContract() (*ToolResult, bool) {
 func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	parentTaskID, _ := tc.args["parent_task_id"].(string)
 
+	if wsErr := tc.resolveWorkspace(); wsErr != nil {
+		return ErrorResult(fmt.Sprintf("task_create failed: %v", wsErr)), true
+	}
 	wsID, foreign := tc.wsID, tc.foreign
 
 	// A delegated task on the caller's OWN board is ready to be picked up by

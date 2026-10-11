@@ -38,6 +38,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // runSteeredTurnBody runs one admitted steered turn and returns the native
@@ -54,6 +55,7 @@ import (
 // degrade into a native run: that is exactly the class of drift this file
 // exists to close.
 func (al *AgentLoop) runSteeredTurnBody(ctx context.Context, rec *session.LifecycleRecord, ts *turnState) (turnResult, error) {
+	ctx = withSteeredDelegationDepth(ctx, rec)
 	kind, dispatchErr := runner.ResolveDispatch(executorConfigOf(ts.agent))
 	if dispatchErr != nil {
 		// F3: a resolver failure must still run the turn teardown. The native
@@ -254,4 +256,31 @@ func steeredExternalCLITimeout(rec *session.LifecycleRecord) time.Duration {
 		}
 	}
 	return defaultSteeredSessionTimeout
+}
+
+// withSteeredDelegationDepth seeds the delegation depth a steered DELEGATE
+// helper's turn runs at, on the same context key the task executor uses
+// (tools.WithDelegationDepth), so the owner-session-only guards that read it
+// (set_goal, goal_claim: work-first goal spec FR-005, ADR-084 JUDGE-FR-090)
+// fire for a helper too. Without it a helper launched with a goal reads depth
+// 0 and could amend the goal record it merely runs under.
+//
+// Only a record that someone steers (SteeredBy != nil) is a helper; an
+// ordinary root stays at depth 0. A task-origin or verifier-origin record is
+// left alone: the task executor seeds its own depth (and the running-task
+// marker goal_claim needs) before its turns, and a verifier is not a helper.
+// A recorded initiator depth larger than 1 is honoured, mirroring
+// TaskExecutor.runDelegationDepth.
+func withSteeredDelegationDepth(ctx context.Context, rec *session.LifecycleRecord) context.Context {
+	if rec == nil || rec.SteeredBy == nil {
+		return ctx
+	}
+	if rec.Origin != nil && (rec.Origin.Kind == session.OriginKindTask || rec.Origin.Kind == session.OriginKindVerifier) {
+		return ctx
+	}
+	depth := 1
+	if rec.InitiatedBy != nil && rec.InitiatedBy.Depth > depth {
+		depth = rec.InitiatedBy.Depth
+	}
+	return tools.WithDelegationDepth(ctx, depth)
 }

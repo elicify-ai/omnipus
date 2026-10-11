@@ -264,6 +264,7 @@ func TestRememberTool_WithinBudget_Succeeds(t *testing.T) {
 		result := tool.Execute(ctx, map[string]any{
 			"content":  "fact " + string(rune('A'+i)),
 			"category": "reference",
+			"room":     "private",
 		})
 		require.NotNil(t, result)
 		assert.False(t, result.IsError, "call %d/5 must succeed: %s", i+1, result.ForLLM)
@@ -296,6 +297,7 @@ func TestRememberTool_OverBudget_DeniedWithRateLimitedError(t *testing.T) {
 		r := tool.Execute(ctx, map[string]any{
 			"content":  "fact",
 			"category": "reference",
+			"room":     "private",
 		})
 		require.False(t, r.IsError, "preflight call %d/2 must succeed: %s", i+1, r.ForLLM)
 	}
@@ -304,6 +306,7 @@ func TestRememberTool_OverBudget_DeniedWithRateLimitedError(t *testing.T) {
 	denied := tool.Execute(ctx, map[string]any{
 		"content":  "third fact",
 		"category": "reference",
+		"room":     "private",
 	})
 	require.True(t, denied.IsError, "third call must return IsError=true")
 	require.Contains(t, denied.ForLLM, `error_kind="rate_limited"`,
@@ -379,11 +382,11 @@ func TestRememberTool_RecoveryAfterRetryAfter(t *testing.T) {
 	// comment above for why 2s makes that safe even on a loaded runner.
 	for i := 0; i < 2; i++ {
 		require.False(t,
-			tool.Execute(ctx, map[string]any{"content": "x", "category": "reference"}).IsError,
+			tool.Execute(ctx, map[string]any{"content": "x", "category": "reference", "room": "private"}).IsError,
 			"setup call %d/2 must succeed", i+1)
 	}
 	require.True(t,
-		tool.Execute(ctx, map[string]any{"content": "x", "category": "reference"}).IsError,
+		tool.Execute(ctx, map[string]any{"content": "x", "category": "reference", "room": "private"}).IsError,
 		"setup proof: bucket exhausted, third call rejected")
 
 	// Poll until the sliding window has expired and the bucket is clear again.
@@ -394,7 +397,7 @@ func TestRememberTool_RecoveryAfterRetryAfter(t *testing.T) {
 	// (recovery must happen) without being brittle about *when* exactly the
 	// window boundary falls.
 	require.Eventually(t, func() bool {
-		r := tool.Execute(ctx, map[string]any{"content": "after recovery", "category": "reference"})
+		r := tool.Execute(ctx, map[string]any{"content": "after recovery", "category": "reference", "room": "private"})
 		return !r.IsError
 	}, 10*time.Second, 10*time.Millisecond,
 		"rate limiter must recover after the %v window expires (clean recovery)", window)
@@ -425,10 +428,10 @@ func TestRememberTool_TwoAgents_ShareCallerIndependentAgent(t *testing.T) {
 	// agent-A exhausts its per-agent bucket.
 	for i := 0; i < 2; i++ {
 		require.False(t,
-			tool.Execute(ctxA, map[string]any{"content": "a", "category": "reference"}).IsError,
+			tool.Execute(ctxA, map[string]any{"content": "a", "category": "reference", "room": "private"}).IsError,
 			"agent-A setup call %d must succeed", i+1)
 	}
-	denied := tool.Execute(ctxA, map[string]any{"content": "a", "category": "reference"})
+	denied := tool.Execute(ctxA, map[string]any{"content": "a", "category": "reference", "room": "private"})
 	require.True(t, denied.IsError, "agent-A third call must be denied (per-agent bucket full)")
 	require.Contains(t, denied.ForLLM, "agent scope")
 
@@ -437,7 +440,7 @@ func TestRememberTool_TwoAgents_ShareCallerIndependentAgent(t *testing.T) {
 	// agent-B's per-agent bucket. The per-caller bucket has used 2
 	// slots so far (out of 10) so caller capacity is also fine.
 	for i := 0; i < 2; i++ {
-		r := tool.Execute(ctxB, map[string]any{"content": "b", "category": "reference"})
+		r := tool.Execute(ctxB, map[string]any{"content": "b", "category": "reference", "room": "private"})
 		assert.False(t, r.IsError,
 			"agent-B call %d/2 under same caller must succeed despite agent-A exhaustion: %s",
 			i+1, r.ForLLM)

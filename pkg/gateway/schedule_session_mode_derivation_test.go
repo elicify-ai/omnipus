@@ -59,6 +59,10 @@ func postSchedule(t *testing.T, api *restAPI, body gen.ScheduleCreate) (*httptes
 // and never a session_mode; the stored mode is the derived one.
 func TestSchedulesAPI_Create_DerivesModeAndHasNoModeOnTheWire(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
+	// The owner's default-main lookup now reads ONE home (the handler's own).
+	// This test's premise is "no eligible main", so give the handler a home
+	// with no default workspace rather than the booted one the owner joined.
+	api.homePath = t.TempDir()
 	every := int64(60000)
 	newBody := func(isolated *bool) gen.ScheduleCreate {
 		b := gen.ScheduleCreate{Name: "n", Message: "m", OwnerAgentId: "mia", RunIsolated: isolated}
