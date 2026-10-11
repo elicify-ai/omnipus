@@ -305,6 +305,11 @@ func (al *AgentLoop) RequestCancel(
 	rc.cancelBackgroundWork()
 
 	if r0, r1, stop := rc.prepareSelectedStopDisposition(); stop {
+		if r1 == nil && !r0.SkippedNewerGeneration {
+			// A queued or idle session settled its Stop without a live turn
+			// to claim: the request still happened.
+			auditCancelAttempt(rc.ctx, rc.auditLogger, rc.sessionID, rc.canceller, r0.Fired, false)
+		}
 		return r0, r1
 	}
 	if r0, r1, stop := rc.claimOrArm(); stop {
@@ -523,13 +528,7 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	}
 
 	// --- Audit: attempt (always, even for duplicate, no-turn, or armed-latch cancels) ---
-	audit.Emit(rc.ctx, rc.auditLogger, audit.EventTurnCancelAttempt, audit.SeverityInfo, map[string]any{
-		"session_id":        rc.sessionID,
-		"canceller_user":    rc.canceller.UserID,
-		"canceller_channel": rc.canceller.Channel,
-		"was_fired":         wasFired,
-		"armed":             armed,
-	})
+	auditCancelAttempt(rc.ctx, rc.auditLogger, rc.sessionID, rc.canceller, wasFired, armed)
 
 	if !wasFired {
 		killedCount := int(atomic.LoadInt64(&rc.backgroundSessionsKilled))
@@ -1357,4 +1356,17 @@ func canceledEntryID(sessionID, turnID string) string {
 		turnID = uuid.NewString()
 	}
 	return sessionID + "_canceled_" + turnID
+}
+
+// auditCancelAttempt writes the turn.cancel.attempt audit row: one per Stop
+// request, whatever the session's state (running, queued, idle, already
+// stopped, completed).
+func auditCancelAttempt(ctx context.Context, logger *audit.Logger, sessionID string, canceller CancelCanceller, wasFired, armed bool) {
+	audit.Emit(ctx, logger, audit.EventTurnCancelAttempt, audit.SeverityInfo, map[string]any{
+		"session_id":        sessionID,
+		"canceller_user":    canceller.UserID,
+		"canceller_channel": canceller.Channel,
+		"was_fired":         wasFired,
+		"armed":             armed,
+	})
 }

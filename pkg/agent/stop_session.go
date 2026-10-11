@@ -227,6 +227,15 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 		return res, err
 	}
 	res.Report, res.Durable = report, true
+	// A repeat Stop on a session that already stopped (or whose run already
+	// completed) never reaches RequestCancel - the cascade has nothing to fire -
+	// but it is still a Stop request, and every request is audited once.
+	mu.Lock()
+	rootReached := swept[req.SessionID]
+	mu.Unlock()
+	if !rootReached && req.Continue == nil {
+		auditCancelAttempt(ctx, al.AuditLogger(), req.SessionID, canceller, false, false)
+	}
 	if req.Tree && req.Continue == nil {
 		// Q13: Stop all kills the background shells of the whole tree, also
 		// of sessions that have no turn left to stop (already stopped by an
