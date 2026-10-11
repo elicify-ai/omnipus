@@ -188,10 +188,15 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 		Content:           entry.Content,
 		SessionID:         receiverSessionID,
 		TranscriptEntryID: requestID,
-		Metadata:          map[string]string{"agent_id": a.Receiver.AgentID, "workspace_id": a.Receiver.WorkspaceID},
-		// Not UserInitiated / OperatorPrompt: a request is not a live human
-		// action on the receiver's session (fail closed for /goal, /loop and
-		// the browser wheel).
+		// A request carries no human authority on the RECEIVER's conversation
+		// (FR-045: no transfer of Stop/grants). It reuses the owner-wake marker:
+		// reviveInboundIsHumanTurn rejects it and prepareOrdinaryExecution admits
+		// it as the non-human principal, which starts the next round of a
+		// finished or idle chat but never continues a stopped one - the request
+		// stays in the transcript (final-gate SG-01). Not UserInitiated /
+		// OperatorPrompt either (fail closed for /goal, /loop and the browser
+		// wheel).
+		Metadata: map[string]string{"agent_id": a.Receiver.AgentID, "workspace_id": a.Receiver.WorkspaceID, ownerWakeMetadataKey: "1"},
 	}); err != nil {
 		// The request is durable in the receiver's main and answerable; only
 		// the turn start failed. Report it rather than hide it.
