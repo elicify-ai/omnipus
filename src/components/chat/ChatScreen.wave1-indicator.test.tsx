@@ -188,7 +188,10 @@ function expectNameOnly(bubble: HTMLElement, name: string) {
 }
 
 function expectMarkMotion(bubble: HTMLElement, motion: 'thinking' | 'working' | 'waiting' | 'none') {
-  const mark = bubble.querySelector('[data-testid="agent-icon"]')
+  // Scoped to the reply-status indicator: the reply label now carries its own
+  // small static AgentMark (founder UI feedback 2026-10-11), so the animated
+  // mark must be found inside the indicator, not merely first in the row.
+  const mark = bubble.querySelector('[data-testid="reply-status-indicator"] [data-testid="agent-icon"]')
   expect(mark, `real ${motion} phase mark`).not.toBeNull()
   expect(mark).toHaveAttribute('data-motion', motion)
   if (motion === 'none') expect(mark?.querySelector('[data-glow]')).toBeNull()
@@ -200,7 +203,10 @@ function expectMarkMotion(bubble: HTMLElement, motion: 'thinking' | 'working' | 
 // R deliberately differs from the active owner's M.
 function expectMonogramReply(bubble: HTMLElement) {
   expectNameOnly(bubble, 'Research Assistant')
-  const mark = within(bubble).getByTestId('agent-icon')
+  // Scoped to the reply-status indicator (the reply label carries its own
+  // small static AgentMark since founder UI feedback 2026-10-11).
+  const indicator = within(bubble).getByTestId('reply-status-indicator')
+  const mark = within(indicator).getByTestId('agent-icon')
   expect(mark).toHaveAttribute('data-figure', 'Monogram')
   for (const layer of ['data-ink', 'data-glow']) {
     const letters = mark.querySelectorAll(`[${layer}] [data-initial]`)
@@ -234,7 +240,7 @@ describe('live inline indicator', () => {
     expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
     expect(bubble.querySelector('.animate-bounce')).toBeNull()
     expect(bubble.querySelector('.w-7')).toBeNull()
-    const mark = bubble.querySelector('[data-art]')
+    const mark = bubble.querySelector('[data-testid="reply-status-indicator"] [data-art]')
     expect(mark?.getAttribute('data-art')).toBe('octopus')
     expect(mark?.querySelector('svg')?.getAttribute('width')).toBe('48')
     expect(mark?.querySelector('[data-ink]')?.getAttribute('style') ?? '').not.toMatch(/opacity:\s*0/)
@@ -249,7 +255,7 @@ describe('live inline indicator', () => {
     expect(within(bubble).queryByText('Mia')).not.toBeInTheDocument()
     expect(useSessionStore.getState().activeAgentId).toBe('agent-1')
     expect(bubble.querySelector('.w-7')).toBeNull()
-    expect(bubble.querySelector('[data-art]')?.getAttribute('data-art')).toBe('man')
+    expect(bubble.querySelector('[data-testid="reply-status-indicator"] [data-art]')?.getAttribute('data-art')).toBe('man')
     expectNameOnly(bubble, 'Jim')
     expectMarkMotion(bubble, 'thinking')
   })
@@ -471,7 +477,7 @@ describe('live inline indicator', () => {
     const bubble = assistantBubble(await mount())
     expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
     expect(bubble.querySelector('.animate-bounce')).toBeNull()
-    expect(bubble.querySelector('[data-art]')?.getAttribute('data-art')).toBe('octopus')
+    expect(bubble.querySelector('[data-testid="reply-status-indicator"] [data-art]')?.getAttribute('data-art')).toBe('octopus')
     expectMarkMotion(bubble, 'none')
     for (let beat = 0; beat < 4; beat++) {
       await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
@@ -580,7 +586,12 @@ describe('plain, replay, and idle bubbles', () => {
     expectNameOnly(bubble, 'Jim')
   })
 
-  it('shows Idle for a resolved chat and does not keep a thinking indicator on the reply', async () => {
+  it('shows no status word and no thinking indicator on a resolved chat’s reply', async () => {
+    // Founder UI feedback 2026-10-11 (point 1): the reply label is the agent
+    // name (plus its small mark) — the old inline "Idle" status word next to
+    // the name read as a stray word and is gone, and a settled reply paints
+    // no indicator at all. Supersedes the former "shows Idle for a resolved
+    // chat" oracle on this file.
     const sid = 'idle-1'
     seedMessages(sid, [{
       id: `${sid}_assistant`,
@@ -594,7 +605,8 @@ describe('plain, replay, and idle bubbles', () => {
     expect(await within(bubble).findByText('Mia')).toBeInTheDocument()
     expect(bubble.textContent).toContain('The answer')
     expect(bubble.querySelector('.animate-bounce')).toBeNull()
-    expect(within(bubble).getByText('Idle')).toBeInTheDocument()
+    expect(within(bubble).queryByText('Idle')).toBeNull()
+    expect(within(bubble).queryByTestId('reply-status-indicator')).toBeNull()
     expectNameOnly(bubble, 'Mia')
   })
 

@@ -2,6 +2,7 @@
 
 import type { ZodType } from 'zod'
 import { z } from 'zod'
+import type { QueryClient } from '@tanstack/react-query'
 import {
   Agent as AgentSchema,
   AgentActivityRun as AgentActivityRunSchema,
@@ -22,6 +23,10 @@ import type {
 } from '@/lib/api/generated/openapi-types'
 import { request } from './http'
 import { requestConfiguration } from './configuration'
+// invalidateAfterAgentCreate invalidates the workspaces LIST keys next to
+// ['agents'] — sibling module, no cycle (workspaces.ts imports neither
+// agents.ts nor this module's barrel).
+import { workspacesQueryKeys } from './workspaces'
 
 // ── Agents ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +132,30 @@ export function fetchAgentActivityRuns(agentId: string): Promise<AgentActivityRu
 
 export function createAgent(data: AgentCreateRequest): Promise<Agent> {
   return requestConfiguration<Agent>('/agents', { method: 'POST', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
+}
+
+// Post-create freshness, ONE shared helper for every agent-create entry point
+// (founder bug 2026-10-11): the sidebar roster is membership-driven
+// (workspaceRoster.ts::memberRoster reads the workspace's core_team +
+// member_configs), so invalidating only ['agents'] left a newly created
+// Main agent's sidebar row waiting for the 30 s workspaces poll. Both the
+// create dialog (CreateAgentModal.tsx onSuccess) and the WS 'agent_created'
+// frame (frames.ts) call this — nobody re-copies the key set.
+//
+// The list keys are spelled per status on purpose: workspacesQueryKeys.list()
+// with NO params produces ['workspaces', undefined], which matches ZERO
+// registered queries under TanStack's partial matching — every real list
+// query is registered as {status:'active'} / {status:'archived'} (the same
+// no-op-invalidate pitfall documented in WorkspaceTeamTab.tsx and
+// WorkspaceSettingsTab.tsx; see also useWorkspaceSetupKickoff.ts).
+//
+// Callers own the client (useQueryClient() in components, the singleton in
+// the WS frame path); fire-and-forget, returns void.
+export function invalidateAfterAgentCreate(client: QueryClient): void {
+  void client.invalidateQueries({ queryKey: ['agents'] })
+  for (const status of ['active', 'archived'] as const) {
+    void client.invalidateQueries({ queryKey: workspacesQueryKeys.list({ status }) })
+  }
 }
 
 export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent> {

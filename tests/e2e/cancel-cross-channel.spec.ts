@@ -246,6 +246,7 @@ async function waitForActiveStream(page: Page): Promise<void> {
         'of real streamed text within 30s — the turn never produced a live stream, so ' +
         'no cancel can land mid-turn. The send, the session binding, or the LLM stream ' +
         'is broken upstream of the cancel behaviour this file tests.',
+      { cause: err },
     )
   }
 }

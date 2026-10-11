@@ -9,6 +9,7 @@ import {
   registerChatClearPendingAutoApprove,
   registerChatAbandonPendingFirstSend,
   registerReadPendingFirstSend,
+  registerIsSessionReplaying,
 } from '@/store/session'
 
 import { registerSyncChatForeground } from '@/store/session'
@@ -19,6 +20,8 @@ registerChatSetReplaying((value) => useChatStore.getState().setReplaying(value))
 registerChatResetForReplay((sessionId) => useChatStore.getState().resetSessionForReplay(sessionId))
 
 registerSyncChatForeground(syncChatForeground)
+
+registerIsSessionReplaying((sessionId) => useChatStore.getState().sessionsById[sessionId]?.isReplaying === true)
 
 // #823 catch-up redesign (BE-DESIGN.md §6.1) — lets session.ts's
 // attachToSession read a bucket's cursor without importing the chat store

@@ -349,15 +349,41 @@ func TestReRunOfTerminatedTaskReactivatesItsGoal(t *testing.T) {
 // not started.
 func seedTaskGoal(t *testing.T, taskID, criterionText, dodText string) *goal.Goal {
 	t.Helper()
+	store := goal.NewStore(config.OmnipusHomeDir())
+	criteria := []task.AcceptanceCriterion{proseCriterion("", criterionText)}
+	dod := []task.AcceptanceCriterion{proseCriterion("", dodText)}
+
+	// A fixture task may ALREADY carry a paired record: the shared
+	// newPlanGateTestTask / newCompletionContractTask helpers pair one the way
+	// DEL-18's fresh-creation path does. Replace that record's criteria and
+	// Definition of Done with the values this helper was asked for instead of
+	// failing on goal.Create's "owner already has a goal record" — the oracle
+	// is the seeded content, not which code path put the record there.
+	if existing, err := store.GetByOwner(generated.GoalOwnerKindTask, taskID); err == nil {
+		if _, uerr := store.Update(existing.GoalID, func(cur *goal.Goal) error {
+			now := time.Now().UTC()
+			if serr := cur.SetCriteria(criteria, now); serr != nil {
+				return serr
+			}
+			return cur.SetDoD(dod, now)
+		}); uerr != nil {
+			t.Fatalf("seedTaskGoal: update existing record: %v", uerr)
+		}
+		updated, gerr := store.GetByOwner(generated.GoalOwnerKindTask, taskID)
+		if gerr != nil {
+			t.Fatalf("seedTaskGoal: read back updated record: %v", gerr)
+		}
+		return updated
+	}
+
 	g, err := goal.New(generated.GoalOwnerKindTask, taskID, generated.GoalSourceTaskExplicit,
 		"make the export endpoint return CSV", "",
-		[]task.AcceptanceCriterion{proseCriterion("", criterionText)},
-		[]task.AcceptanceCriterion{proseCriterion("", dodText)},
+		criteria, dod,
 		config.DefaultGoalMaxRounds, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("seedTaskGoal: goal.New: %v", err)
 	}
-	if cerr := goal.NewStore(config.OmnipusHomeDir()).Create(g); cerr != nil {
+	if cerr := store.Create(g); cerr != nil {
 		t.Fatalf("seedTaskGoal: Create: %v", cerr)
 	}
 	return g

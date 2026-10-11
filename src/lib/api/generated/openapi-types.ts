@@ -1596,8 +1596,8 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Delete all sessions for all agents
-         * @description Removes all session directories across all agent stores. Returns the count of removed sessions and any per-agent warnings.
+         * Delete all chats except main chats
+         * @description Deletes every ordinary chat. Main chats are never deleted (a main chat is deleted only together with its agent), and neither are the helper sessions that belong to a main chat. Each chat is stopped before it is deleted; a chat that will not stop, or whose data cannot be read or removed, is kept. Returns the count of deleted chats and fixed-text warnings that count the chats that were kept and the main chats that were left alone.
          */
         delete: operations["clearAllSessions"];
         options?: never;
@@ -13569,7 +13569,7 @@ export interface components {
         };
         /**
          * ClearAllSessionsResponse
-         * @description Response from DELETE /api/v1/sessions/all (HTTP 200). Reports how many sessions were removed and any non-fatal per-agent errors encountered along the way (partial removal is still possible when warnings are present).
+         * @description Response from DELETE /api/v1/sessions/all (HTTP 200). Reports how many ordinary chats were deleted. Main chats are never deleted (a main chat goes only with its agent), so a "cleared" status does not mean every chat is gone: warnings count the chats that were kept (a turn that would not stop, storage that failed, or data that could not be read) and the main chats left alone.
          */
         ClearAllSessionsResponse: {
             /**
@@ -13577,9 +13577,12 @@ export interface components {
              * @enum {string}
              */
             status: "cleared";
-            /** @example 15 */
+            /**
+             * @description Number of ordinary chats deleted (main chats are not counted).
+             * @example 15
+             */
             count: number;
-            /** @description Per-agent errors (non-fatal — partial removal possible). */
+            /** @description Fixed-text notices, never carrying a session id or path: how many chats were kept because they could not be deleted, and how many main chats were left alone. Absent when every chat was deleted and there are no main chats. */
             warnings?: string[];
         };
         /**

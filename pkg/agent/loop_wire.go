@@ -568,6 +568,9 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 	// operator's current security state. See
 	// docs/internal/false-green-patterns.md §5.
 	agent.Tools.RegisterReplacing(messageTool)
+	// answer_request: the explicit tool for answering a request (the same reply
+	// admission as send_message reply_to, over this very MessageTool).
+	agent.Tools.RegisterReplacing(tools.NewAnswerRequestTool(messageTool))
 
 	// AskUserQuestion (askuserquestion-tool-spec v3, ADR-074 D4b): the
 	// owner-session structured clarification tool. The registry is

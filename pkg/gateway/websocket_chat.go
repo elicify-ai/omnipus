@@ -17,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/validation"
@@ -971,10 +972,7 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 	if home == "" {
 		home = config.OmnipusHomeDir()
 	}
-	if msg := adminChatRefusal(home, hcm.targetAgentID, hcm.workspaceID); msg != "" {
-		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type: string(generated.WsFrameTypeError), Message: msg,
-		})
+	if hcm.refuseAdminChat(home, hcm.targetAgentID, hcm.workspaceID, "") {
 		return true
 	}
 	// No session_id in frame: mint a new session so all subsequent frames have one.
@@ -1004,12 +1002,7 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 		// as a session title — use a fixed, human-readable one instead.
 		title = "Workspace setup"
 	} else {
-		titleRunes := []rune(hcm.content)
-		if len(titleRunes) > 60 {
-			title = string(titleRunes[:57]) + "..."
-		} else {
-			title = hcm.content
-		}
+		title = session.TitleFromFirstMessage(hcm.content)
 	}
 	// Stamp the session owner from the authenticated WebSocket user (SEC-2/#406).
 	// wc.userID is set at auth time (FR-073); empty on dev-mode bypass.
@@ -1100,6 +1093,17 @@ func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
 	// existing binding (e.g. a non-workspace-aware channel message
 	// resuming a workspace-bound session), it just leaves it as-is.
 	if hcm.workspaceID != "" && existingMeta != nil && existingMeta.WorkspaceID != hcm.workspaceID {
+		// Navigation FR-038: an Admin chat lives in the default workspace only; a
+		// frame naming another workspace must not re-bind it there.
+		if sessionIsAdminChat(existingMeta) {
+			home := hcm.h.home
+			if home == "" {
+				home = config.OmnipusHomeDir()
+			}
+			if hcm.refuseAdminChat(home, string(coreagent.IDAdmin), hcm.workspaceID, hcm.sessionID) {
+				return true
+			}
+		}
 		wsCopy := hcm.workspaceID
 		if err := hcm.store.SetMeta(hcm.sessionID, session.MetaPatch{WorkspaceID: &wsCopy}); err != nil {
 			logsafeWarn("ws: could not bind workspace to session", "session_id", hcm.sessionID, "error", err)
@@ -1541,4 +1545,30 @@ func (hcm *wsHandlerHandleChatMessage) addressesExistingHelperOf(workerID string
 		return false
 	}
 	return rec.SteeredBy != nil && rec.AgentID == workerID
+}
+
+// sessionIsAdminChat reports whether meta is a chat owned by the Admin agent.
+func sessionIsAdminChat(meta *session.UnifiedMeta) bool {
+	return meta != nil && len(meta.AgentIDs) > 0 && meta.AgentIDs[0] == string(coreagent.IDAdmin)
+}
+
+// refuseAdminChat applies adminChatRefusal at a WebSocket door: it sends the
+// client ONE error frame and returns true when the Admin chat must not proceed,
+// the refusal text for a user-facing no, the fixed server-failure text for a
+// storage fault. sessionID names the session the frame concerns ("" when none yet).
+func (hcm *wsHandlerHandleChatMessage) refuseAdminChat(home, agentID, workspaceID, sessionID string) bool {
+	msg, fault := adminChatRefusal(home, agentID, workspaceID)
+	if fault != nil {
+		msg = serverFailureText("could not check where Admin's chat may live", fault)
+	}
+	if msg == "" {
+		return false
+	}
+	frame := generated.ErrorFrame{Type: string(generated.WsFrameTypeError), Message: msg}
+	if sessionID != "" {
+		sid := sessionID
+		frame.SessionId = &sid
+	}
+	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), frame)
+	return true
 }

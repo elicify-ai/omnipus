@@ -8,7 +8,7 @@ import { useChatStore } from "@/store/chat";
 import { getPendingFirstSend } from "@/store/chat/first-send";
 import { useConnectionStore } from "@/store/connection";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
-import { useSessionStore, attachSessionCursorFields } from "@/store/session";
+import { useSessionStore, attachSessionCursorFields, attachAlreadyInFlight, noteAttachSent } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
 import { queryClient } from "@/lib/queryClient";
 import type { Session, SessionDetail } from "@/lib/api";
@@ -113,7 +113,7 @@ export function resolveLastActiveAgentId(sessionId: string): string | null {
 // send method — so the reattach logic can be unit-tested without a real
 // WebSocket. Pick keeps the signature exactly in sync with WsConnection.send
 // (typed against ClientFrame) so a real connection is assignable.
-export type ReattachSender = Pick<WsConnection, 'send'>;
+export type ReattachSender = Pick<WsConnection, 'send'> & Partial<Pick<WsConnection, 'socketGeneration'>>;
 
 // Re-binds the active session to a freshly-opened WS connection (the onConnected
 // path). Extracted from the inline handler so the failed-reattach branch can be
@@ -159,16 +159,16 @@ export function reattachActiveSession(
   if (seedAgentId) {
     useSessionStore.getState().setActiveSession(activeSessionId, seedAgentId);
   }
-  // The gateway will confirm catch-up completion (or send a session_snapshot)
-  // — mark the session as replaying symmetrically here (same as in
-  // attachToSession) until that lands.
-  useChatStore.setState({ isReplaying: true });
   // #823 catch-up redesign (BE-DESIGN.md §6.1): send this bucket's own
   // numbered cursor (if any) so the gateway can answer with an incremental
   // catch-up instead of a full replay — the same wiring attachToSession uses
   // (src/store/session.ts::attachSessionCursorFields). A first-ever attach
   // (no cursor yet) sends the bare frame, same as before Step 0 removed the
   // legacy `since` field.
+  // One owner of the initial attach: workspace entry may already have sent
+  // this session's attach_session and its replay is in flight — a second one
+  // would replay the whole transcript again.
+  if (attachAlreadyInFlight(activeSessionId, conn)) return true;
   const sent = conn.send({
     type: "attach_session",
     session_id: activeSessionId,
@@ -176,13 +176,18 @@ export function reattachActiveSession(
   });
   if (!sent) {
     // send() returned false — socket closed between onopen and here. Preserve
-    // local state (do not wipe bucket) and surface an error. Clear the replaying
-    // flag we optimistically set above so the composer re-enables instead of
-    // wedging on a replay that will never arrive.
-    useChatStore.setState({ isReplaying: false });
+    // local state (do not wipe bucket) and surface an error. The replaying
+    // flag is only set after a successful send, so there is nothing to roll
+    // back and the composer stays enabled.
     setConnectionError('Failed to reattach session — please reload');
     return false;
   }
+  // The gateway will confirm catch-up completion (or send a session_snapshot)
+  // — mark the session's BUCKET as replaying (same as attachToSession) until
+  // that lands. The bucket flag, not the flat foreground one, is what the
+  // session-list refresh gate and the in-flight check read.
+  noteAttachSent(activeSessionId, conn);
+  useChatStore.getState().setReplaying(true);
   // #823 catch-up redesign (BE-DESIGN.md §6.1): the bucket is NO LONGER
   // wiped here on success either — the cursor just sent carries it across
   // the reattach. Only an explicit `session_snapshot` frame wipes history

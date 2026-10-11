@@ -20,9 +20,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// ErrDispatchCapReached is returned by StartTaskNow when the global dispatch
-// semaphore is exhausted. Callers (e.g. the REST handler) use errors.Is to
-// distinguish this retryable condition from hard failures.
+// ErrDispatchCapReached is returned by ExecuteTask (since S1 M9) when the global
+// dispatch semaphore is exhausted; StartTaskNow does not return it. Callers
+// (e.g. the REST handler) use errors.Is to distinguish this retryable condition
+// from hard failures.
 var ErrDispatchCapReached = errors.New("task_executor: global dispatch cap reached")
 
 // taskGoalTranscriptWriteFailures is incremented each time one of this
@@ -1232,7 +1233,39 @@ func (te *TaskExecutor) StartTaskNowAs(ctx context.Context, taskID string, initi
 		// (FR-A-010's single task front) went unexercised.
 		return "", errors.New("task_executor: StartTaskNow: no session launcher is installed")
 	}
+	// One task gets at most one running launch: claim the task's run slot
+	// atomically before anything is launched. A concurrent start finds the slot
+	// taken and gets the running session (or a refusal), never a second launch.
+	if !te.reserveRunSlot(t.ID) {
+		if fresh, rerr := te.store.Get(t.ID); rerr == nil && fresh.SessionID != "" {
+			return fresh.SessionID, nil
+		}
+		return "", fmt.Errorf("task_executor: StartTaskNow: task %q is already running (or starting)", t.ID)
+	}
+	defer te.releaseReservedRunSlot(t.ID)
 	return te.startTaskNowViaLauncherAs(ctx, t, initiatedBy)
+}
+
+// reserveRunSlot claims taskID's te.running slot (reserved, no goroutine yet)
+// and reports whether the claim was won.
+func (te *TaskExecutor) reserveRunSlot(taskID string) bool {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+	if _, taken := te.running[taskID]; taken {
+		return false
+	}
+	te.running[taskID] = &taskSlot{reserved: true}
+	return true
+}
+
+// releaseReservedRunSlot drops the reservation if no goroutine took it over
+// (dispatchLaunchedTask replaces a reserved slot with the live one).
+func (te *TaskExecutor) releaseReservedRunSlot(taskID string) {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+	if slot, ok := te.running[taskID]; ok && slot.reserved {
+		delete(te.running, taskID)
+	}
 }
 
 // steeringRefusalError is the task path's ADR-093 D5 surface: Error() is the
@@ -1299,7 +1332,11 @@ func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.T
 	if _, hasMain, mainErr := te.assigneeMain(t); mainErr != nil {
 		return "", mainErr
 	} else if deriveTaskRunMode(t, hasMain) == taskRunMain {
-		return te.launchMainTaskRun(ctx, t, nil, task.RunKindManual, initiatedBy)
+		sessID, err := te.launchMainTaskRun(ctx, t, nil, task.RunKindManual, initiatedBy)
+		if err != nil {
+			return "", te.failTaskBeforeDispatch(t.ID, err)
+		}
+		return sessID, nil
 	}
 	recipients := te.captureRunRecipients(ctx, t, initiatedBy)
 	launched, err := te.launcher.Launch(ctx, steer.LaunchRequest{
@@ -1317,17 +1354,19 @@ func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.T
 		Initiator:   initiatedBy,
 	})
 	if err != nil {
-		return "", te.mapLaunchRefusal(t, "", "launch", err)
+		return "", te.failTaskBeforeDispatch(t.ID, te.mapLaunchRefusal(t, "", "launch", err))
 	}
-	updated, err := te.store.Update(t.ID, task.Patch{SessionID: &launched.SessionID})
+	// #1026: the same retry-once-then-Failed binding ExecuteTask uses; no worker
+	// is dispatched until the durable binding exists.
+	updated, err := te.persistTaskSessionBinding(t.ID, launched.SessionID)
 	if err != nil {
-		return "", fmt.Errorf("task_executor: StartTaskNow: persist session id: %w", err)
+		return "", te.failTaskBeforeDispatch(t.ID, err)
 	}
 	_ = te.activateTaskGoal(updated, launched.SessionID)
 	run := te.openRun(t.ID, nil, task.RunKindManual, launched.SessionID, recipients...)
 	if _, err := te.launcher.Dispatch(ctx, launched.SessionID, launched.Generation); err != nil {
 		te.closeRun(t.ID, run, task.StatusFailed, "dispatch refused: "+err.Error())
-		return "", te.mapLaunchRefusal(t, launched.SessionID, "dispatch", err)
+		return "", te.failTaskBeforeDispatch(t.ID, te.mapLaunchRefusal(t, launched.SessionID, "dispatch", err))
 	}
 	return launched.SessionID, nil
 }
@@ -1350,7 +1389,9 @@ func (te *TaskExecutor) dispatchLaunchedTask(rec *session.LifecycleRecord, execu
 	}
 
 	te.mu.Lock()
-	if _, exists := te.running[t.ID]; exists {
+	// A slot reserved by StartTaskNow for this very launch is taken over; any
+	// other existing slot means the task is already running.
+	if slot, exists := te.running[t.ID]; exists && !slot.reserved {
 		te.mu.Unlock()
 		te.wg.Done()
 		return fmt.Errorf("task_executor: task %q already running", t.ID)
@@ -1360,14 +1401,15 @@ func (te *TaskExecutor) dispatchLaunchedTask(rec *session.LifecycleRecord, execu
 	te.mu.Unlock()
 
 	if t.SessionID != rec.SessionID {
-		updated, updateErr := te.store.Update(t.ID, task.Patch{SessionID: &rec.SessionID})
+		// #1026: retry once, then the Failed disposition, as on every launcher path.
+		updated, updateErr := te.persistTaskSessionBinding(t.ID, rec.SessionID)
 		if updateErr != nil {
 			cancel()
 			te.mu.Lock()
 			delete(te.running, t.ID)
 			te.mu.Unlock()
 			te.wg.Done()
-			return fmt.Errorf("task_executor: bind launched session: %w", updateErr)
+			return te.failTaskBeforeDispatch(t.ID, updateErr)
 		}
 		t = updated
 	}

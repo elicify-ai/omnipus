@@ -116,7 +116,7 @@ func TestSendPeer_AdmitsToEligibleMainWithCaptureAndEnvelope(t *testing.T) {
 	if e.ID != got.RequestID {
 		t.Fatalf("request id %q is not the admitted entry id %q", got.RequestID, e.ID)
 	}
-	if !strings.Contains(e.Content, `reply_to="`+got.RequestID+`"`) || !strings.Contains(e.Content, "please review X") {
+	if !strings.Contains(e.Content, `answer_request tool with request_id="`+got.RequestID+`"`) || !strings.Contains(e.Content, "please review X") {
 		t.Fatalf("envelope must carry the id to reply to and the body; got %q", e.Content)
 	}
 	c, err := f.al.RequestLedger().Resolve(wantMain, addressing.Pair{WorkspaceID: addrWS, AgentID: addrReceiver}, got.RequestID)

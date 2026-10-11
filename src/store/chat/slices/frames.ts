@@ -8,7 +8,7 @@ import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
-import { tasksQueryKeys } from '@/lib/api'
+import { invalidateAfterAgentCreate, tasksQueryKeys } from '@/lib/api'
 import type {
   SubagentStartFrame,
   SubagentEndFrame,
@@ -25,7 +25,7 @@ import {
   readLLMErrorFromFrame,
   sanitizeLegacyErrorMessage,
 } from '@/lib/llm-error'
-import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
+import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { flushHeldClearProjection, settleClearRefetchAfterTurn } from '../clear-refetch'
@@ -48,6 +48,20 @@ const SESSION_LIST_REFRESH_FRAMES = new Set([
   'done', 'error', 'subagent_start', 'subagent_state', 'subagent_end', 'catch_up_complete',
 ])
 
+// Frames that do not refresh the session list while their bucket is replaying.
+const REPLAY_DEFERRED_REFRESH_FRAMES = new Set(['subagent_start', 'subagent_state', 'subagent_end'])
+
+// A replay re-delivers every persisted subagent_* row; refreshing the roster
+// per row fired dozens of GET /sessions on sign-in. While the bucket is
+// replaying, only the terminators (done / error / catch_up_complete) refresh —
+// once per batch. Live frames still refresh. Kept at module scope so it adds
+// nothing to handleFrame's grandfathered function budget.
+function refreshSessionListForFrame(frameType: string, bucketReplaying: boolean): void {
+  if (!SESSION_LIST_REFRESH_FRAMES.has(frameType)) return
+  if (bucketReplaying && REPLAY_DEFERRED_REFRESH_FRAMES.has(frameType)) return
+  void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+}
+
 type FrameSlice = Pick<ChatStore, 'handleFrame'>
 type ToolCallResultFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'tool_call_result' }>
 type MessageStatusFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'message_status' }>
@@ -68,10 +82,33 @@ type TokenFrameType = Extract<Parameters<ChatStore['handleFrame']>[0], { type: '
 // the screen (or the "/clear was not performed" reply resolves it) — an
 // append ack for the command row must not flip it to a sent look midway. A
 // server-reported failure still marks the row for Retry.
+/**
+ * A send the server failed or discarded never starts a turn. Drop the empty
+ * optimistic "thinking" placeholder sendMessage put right after the user row,
+ * then release the busy flag only if nothing else backs it (another running
+ * turn, a streaming bubble, a running tool). A mid-turn steer has no
+ * placeholder, so its discard removes nothing and never stops the running turn.
+ */
+function releaseUnstartedSend(draft: SessionChatState, userMessageId: string): void {
+  const idx = draft.messageOrder.indexOf(userMessageId)
+  const nextId = idx === -1 ? undefined : draft.messageOrder[idx + 1]
+  const next = nextId ? draft.messagesById[nextId] : undefined
+  const ownsLiveTool = !!nextId && Object.values(draft.toolCallOwnerMessageId ?? {}).includes(nextId)
+  const isOptimisticPlaceholder =
+    !!next && next.role === 'assistant' && (next.isStreaming || next.status === 'streaming') &&
+    !next.content && !next.turnId && !next.agentId && !next.tool_calls?.length && !next.spans?.length && !next.media?.length && !ownsLiveTool
+  if (nextId && isOptimisticPlaceholder) {
+    delete draft.messagesById[nextId]
+    draft.messageOrder.splice(idx + 1, 1)
+  }
+  if (busyFlagIsUnbacked(draft)) draft.isStreaming = false
+}
+
 function applyMessageStatusFrame(bucket: SessionChatState, frame: MessageStatusFrame): Partial<SessionChatState> {
   return produce(bucket, (draft) => {
     const message = draft.messagesById[frame.client_message_id] ?? findFirstSendMessage(draft, frame.client_message_id)
     if (!message || message.role !== 'user') return
+    if (frame.state === 'failed' || frame.state === 'discarded') releaseUnstartedSend(draft, message.id)
     if (frame.state !== 'failed' && isClearCommandText(message.content)) return
     message.deliveryStatus = frame.state === 'failed' ? 'failed' : frame.state
     message.status = frame.state === 'failed' ? 'error' : 'done'
@@ -288,6 +325,9 @@ function applyToolCallResultFrame(
     tc.status = frame.status ?? 'success'
     tc.duration_ms = frame.duration_ms
     tc.error = frame.error
+    // The last running tool just finished. If that start was a straggler from a
+    // turn that already ended, nothing is left to clear the busy flag.
+    if (busyFlagIsUnbacked(draft)) draft.isStreaming = false
   }) as Partial<SessionChatState>
 }
 
@@ -937,9 +977,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         return
       }
 
-      if (SESSION_LIST_REFRESH_FRAMES.has(frame.type)) {
-        void queryClient.invalidateQueries({ queryKey: ['sessions'] })
-      }
+      refreshSessionListForFrame(frame.type, get().sessionsById[targetSid ?? '']?.isReplaying === true)
       if (handleFirstSendFrame({ frame, set, get, withBucket, runtime })) {
         syncForeground()
         return
@@ -2522,8 +2560,12 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         // D-107 shape just above. Not debounced like library_changed:
         // creates don't burst, so a direct invalidate matches the other
         // single-shot cases here (task_status_changed/task_run_status).
+        // invalidateAfterAgentCreate (founder bug 2026-10-11) additionally
+        // invalidates the workspaces list queries: the sidebar roster is
+        // membership-driven (core_team + member_configs), so ['agents']
+        // alone left the new agent's row waiting for the 30 s poll.
         case 'agent_created':
-          queryClient.invalidateQueries({ queryKey: ['agents'] })
+          invalidateAfterAgentCreate(queryClient)
           break
 
         // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires

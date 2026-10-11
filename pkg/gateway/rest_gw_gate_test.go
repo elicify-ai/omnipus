@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
-	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -275,7 +274,7 @@ func TestGW_M9_AskUserResumeFailureLogCarriesTheCause(t *testing.T) {
 	reg := askuser.NewRegistry(nil, failingGateDispatcher{err: errors.New("publish to the bus failed: queue wedged")}, askuser.Options{})
 	require.NoError(t, reg.CreatePending(askSetFixture()))
 	t.Cleanup(reg.Quiesce)
-	var frame generated.AskUserAnswerFrame
+	var frame gen.AskUserAnswerFrame
 	require.NoError(t, json.Unmarshal([]byte(`{
 		"type":"ask_user_answer","card_id":"ask_1","session_id":"session_owner_1",
 		"answers":[{"header":"Scope","selected":["Only unanswered"]},{"header":"Deploy","selected":["Staging"]}]
