@@ -259,7 +259,9 @@ func TestGW_M8_UnreadableWorkspaceIsAVisibleLoggedFailure(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, code, "an unreadable workspace is not 'session not found': %s", body)
 	assert.Contains(t, body, "main chat could not be prepared")
-	assert.Contains(t, logBuf.String(), "the workspace could not be read", "the cause must be in the log")
+	rec := findAskUserGatewayLog(t, logBuf, "rest: main session could not be resolved: the workspace could not be read")
+	assert.Equal(t, "ERROR", rec["level"], "an unreadable workspace is logged at error level")
+	assert.NotEmpty(t, rec["error"], "the cause must be in the log")
 	r5AssertClean(t, body, ws, env.home)
 }
 
