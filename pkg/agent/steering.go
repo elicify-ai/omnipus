@@ -11,6 +11,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
@@ -34,6 +35,10 @@ type steeringQueue struct {
 	queues            map[string][]steeringQueueItem
 	closedGenerations map[string]int
 	terminalizing     map[string]*steeringTerminalTransition
+	// aggregateCap is session_messaging.steer_aggregate_body (FR-010): the most
+	// UTF-8 body bytes the ordinary items waiting for ONE scope may add up to.
+	// Guarded by mu; set at boot and on every reload by SetAggregateCap.
+	aggregateCap int
 }
 
 type steeringTerminalTransition struct {
@@ -85,12 +90,45 @@ func newSteeringQueue() *steeringQueue {
 		queues:            make(map[string][]steeringQueueItem),
 		closedGenerations: make(map[string]int),
 		terminalizing:     make(map[string]*steeringTerminalTransition),
+		aggregateCap:      config.DefaultSMSteerAggregateBodyBytes,
 	}
+}
+
+// SetAggregateCap installs the waiting-bytes bound (FR-010). A value below 1
+// restores the shipped default, matching EffectiveSteerAggregateBody.
+func (sq *steeringQueue) SetAggregateCap(n int) {
+	if n < 1 {
+		n = config.DefaultSMSteerAggregateBodyBytes
+	}
+	sq.mu.Lock()
+	sq.aggregateCap = n
+	sq.mu.Unlock()
+}
+
+// exceedsAggregate reports whether admitting item would take the waiting
+// ordinary bytes past the cap. Equal to the cap is accepted. Caller holds mu.
+func (sq *steeringQueue) exceedsAggregate(waiting []steeringQueueItem, item steeringQueueItem) bool {
+	return waitingBodyBytes(waiting)+len(item.message.Content) > sq.aggregateCap
+}
+
+// waitingBodyBytes sums the UTF-8 body bytes of the ordinary (non-wake) items.
+func waitingBodyBytes(items []steeringQueueItem) int {
+	total := 0
+	for _, it := range items {
+		if it.wake == nil {
+			total += len(it.message.Content)
+		}
+	}
+	return total
 }
 
 // errSteeringQueueFull is the refusal for a scope already holding MaxQueueSize
 // items; its text is already a plain, publishable sentence.
 var errSteeringQueueFull = errors.New("steering queue is full")
+
+// errSteeringAggregateFull is the refusal for an ordinary item that would take
+// the bytes already waiting for one scope past steer_aggregate_body (FR-010).
+var errSteeringAggregateFull = errors.New("waiting messages for this chat exceed the allowed total size; wait for the agent to catch up")
 
 var errSteeringScopeClosed = errors.New("steering session finished; use follow_up to continue it")
 
@@ -150,6 +188,9 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 		} else if len(transition.finishingItems) >= MaxQueueSize {
 			sq.mu.Unlock()
 			return false, errSteeringQueueFull
+		} else if sq.exceedsAggregate(transition.finishingItems, item) {
+			sq.mu.Unlock()
+			return false, errSteeringAggregateFull
 		}
 		transition.finishingItems = append(transition.finishingItems, item)
 		sq.mu.Unlock()
@@ -176,6 +217,9 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 	} else if len(queue) >= MaxQueueSize {
 		sq.mu.Unlock()
 		return false, errSteeringQueueFull
+	} else if sq.exceedsAggregate(queue, item) {
+		sq.mu.Unlock()
+		return false, errSteeringAggregateFull
 	}
 	sq.queues[scope] = append(queue, item)
 	sq.mu.Unlock()
