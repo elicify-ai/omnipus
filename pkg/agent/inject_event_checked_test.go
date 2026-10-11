@@ -87,7 +87,7 @@ func TestFakeRunnerInjectEventResultIsNeverDiscarded(t *testing.T) {
 		file, parseErr := parser.ParseFile(fset, path, src, 0)
 		if parseErr != nil {
 			// A file this guard cannot parse is not this guard's finding.
-			return nil
+			return nil //nolint:nilerr // deliberate: the compiler already fails on an unparsable test file
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			if call, ok := n.(*ast.CallExpr); ok && isInjectEventCall(call) {
