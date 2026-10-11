@@ -20825,6 +20825,7 @@ type Message struct {
 	Model *string `json:"model,omitempty"`
 
 	// Participant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+	// Field rule (one flat schema; the server enforces it, the wire type does not): `source` and `agent` are mutually exclusive and keyed on `kind`. kind=human carries `source` and never `agent`; kind=agent carries `agent` and never `source`. A sender that names an agent is always kind=agent, even if it also carries a platform or principal. Readers must treat any other combination as invalid and ignore the unexpected field. `agent` (an AgentAddress) is present iff kind=agent.
 	Participant *struct {
 		// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
 		Agent *struct {
@@ -20839,7 +20840,7 @@ type Message struct {
 		DisplayName string                 `json:"display_name"`
 		Kind        MessageParticipantKind `json:"kind"`
 
-		// Source Present iff kind=human. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
+		// Source Present iff kind=human; absent when kind=agent. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
 		Source *string `json:"source,omitempty"`
 	} `json:"participant,omitempty"`
 
@@ -20847,6 +20848,7 @@ type Message struct {
 	ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
 
 	// ReplyToParticipant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+	// Field rule (one flat schema; the server enforces it, the wire type does not): `source` and `agent` are mutually exclusive and keyed on `kind`. kind=human carries `source` and never `agent`; kind=agent carries `agent` and never `source`. A sender that names an agent is always kind=agent, even if it also carries a platform or principal. Readers must treat any other combination as invalid and ignore the unexpected field. `agent` (an AgentAddress) is present iff kind=agent.
 	ReplyToParticipant *struct {
 		// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
 		Agent *struct {
@@ -20861,7 +20863,7 @@ type Message struct {
 		DisplayName string                        `json:"display_name"`
 		Kind        MessageReplyToParticipantKind `json:"kind"`
 
-		// Source Present iff kind=human. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
+		// Source Present iff kind=human; absent when kind=agent. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
 		Source *string `json:"source,omitempty"`
 	} `json:"reply_to_participant,omitempty"`
 
@@ -24459,6 +24461,7 @@ type SessionDetail struct {
 		Model *string `json:"model,omitempty"`
 
 		// Participant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+		// Field rule (one flat schema; the server enforces it, the wire type does not): `source` and `agent` are mutually exclusive and keyed on `kind`. kind=human carries `source` and never `agent`; kind=agent carries `agent` and never `source`. A sender that names an agent is always kind=agent, even if it also carries a platform or principal. Readers must treat any other combination as invalid and ignore the unexpected field. `agent` (an AgentAddress) is present iff kind=agent.
 		Participant *struct {
 			// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
 			Agent *struct {
@@ -24473,7 +24476,7 @@ type SessionDetail struct {
 			DisplayName string                               `json:"display_name"`
 			Kind        SessionDetailMessagesParticipantKind `json:"kind"`
 
-			// Source Present iff kind=human. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
+			// Source Present iff kind=human; absent when kind=agent. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
 			Source *string `json:"source,omitempty"`
 		} `json:"participant,omitempty"`
 
@@ -24481,6 +24484,7 @@ type SessionDetail struct {
 		ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
 
 		// ReplyToParticipant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+		// Field rule (one flat schema; the server enforces it, the wire type does not): `source` and `agent` are mutually exclusive and keyed on `kind`. kind=human carries `source` and never `agent`; kind=agent carries `agent` and never `source`. A sender that names an agent is always kind=agent, even if it also carries a platform or principal. Readers must treat any other combination as invalid and ignore the unexpected field. `agent` (an AgentAddress) is present iff kind=agent.
 		ReplyToParticipant *struct {
 			// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
 			Agent *struct {
@@ -24495,7 +24499,7 @@ type SessionDetail struct {
 			DisplayName string                                      `json:"display_name"`
 			Kind        SessionDetailMessagesReplyToParticipantKind `json:"kind"`
 
-			// Source Present iff kind=human. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
+			// Source Present iff kind=human; absent when kind=agent. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
 			Source *string `json:"source,omitempty"`
 		} `json:"reply_to_participant,omitempty"`
 

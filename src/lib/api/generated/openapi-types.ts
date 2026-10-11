@@ -17717,13 +17717,14 @@ export interface components {
         /**
          * ChatParticipant
          * @description A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+         *     Field rule (one flat schema; the server enforces it, the wire type does not): `source` and `agent` are mutually exclusive and keyed on `kind`. kind=human carries `source` and never `agent`; kind=agent carries `agent` and never `source`. A sender that names an agent is always kind=agent, even if it also carries a platform or principal. Readers must treat any other combination as invalid and ignore the unexpected field. `agent` (an AgentAddress) is present iff kind=agent.
          */
         ChatParticipant: {
             /** @enum {string} */
             kind: "human" | "agent";
             /** @description Plain text. The server strips control characters before stamping. */
             display_name: string;
-            /** @description Present iff kind=human. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id. */
+            /** @description Present iff kind=human; absent when kind=agent. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id. */
             source?: string;
             agent?: components["schemas"]["AgentAddress"];
         };
