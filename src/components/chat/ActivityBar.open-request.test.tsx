@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ActivityBar } from './ActivityBar'
 import { useSelectSession } from './useSelectSession'
 import { useUiStore } from '@/store/ui'
-import { useSessionStore } from '@/store/session'
+import { clearAttachMarker, useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -71,7 +71,16 @@ describe('activity panel request', () => {
     useUiStore.setState({ activityPanelRequest: null })
     useSessionStore.setState({ activeSessionId: null, attachToSession: originalAttach })
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
-    useChatStore.setState({ messages: [] })
+    // Test isolation for the one-owner attach dedupe (merge b602670a9):
+    // noteAttachSent leaves a module-level marker that in production dies
+    // with the socket (clearAttachMarker on disconnect), and the attach
+    // leaves the bucket replaying until a snapshot ends it. No test here
+    // disconnects, so without this reset a later variant's DELIBERATE
+    // attach of the same session is swallowed as "already in flight" and
+    // its transport send never fires. This restores the production
+    // lifecycle between tests; no assertion below depends on it.
+    clearAttachMarker()
+    useChatStore.setState({ messages: [], isReplaying: false })
   })
 
   afterEach(() => {
