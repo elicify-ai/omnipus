@@ -442,6 +442,10 @@ func checkProvisioningInstruments(t *testing.T, external, manual bool) {
 	var returnedID string
 	var dispatchErr error
 	if manual {
+		// S1 M9 (978c232bc) deleted the launcher-less StartTaskNow path: the only
+		// manual start is the session launcher, so the manual control installs
+		// the real one (as the gateway does at boot) before starting.
+		installTestSessionLauncher(t, f.loop)
 		returnedID, dispatchErr = f.executor.StartTaskNow(context.Background(), f.task.ID)
 	} else {
 		dispatchErr = f.executor.ExecuteTask(context.Background(), f.task.ID, nil)
