@@ -88,18 +88,6 @@ func (f *tgFixture) args(agent, ws string) map[string]any {
 	return a
 }
 
-func (f *tgFixture) onlyTask(t *testing.T) task.Task {
-	t.Helper()
-	all, err := f.store.List(task.Filter{})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(all) != 1 {
-		t.Fatalf("want exactly 1 task, got %d", len(all))
-	}
-	return all[0]
-}
-
 // onlyChild returns the single task other than the seeded parent: with
 // parentID set, the one whose ParentTaskID is parentID; with "", the one that
 // has no parent link and is not the seeded parent (the foreign delivery).
