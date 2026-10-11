@@ -48,12 +48,14 @@ import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { Separator } from '@/components/ui/separator'
+import { ClearContextDivider } from './ClearContextDivider'
 import { isClearContextMarker } from '@/lib/clearMarker'
 import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
 import { ParticipantMessageRow, ReplyHeaderView, useParticipantLabelParts } from './ParticipantLabels'
 import { collectPairedReplyToIds, isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
+import { recordSessionHasEarlier } from '@/store/chat/has-earlier'
+import { sessionMessagesHasEarlier } from '@/lib/api'
 import { pendingClearRefetches, pendingRedirectSids } from '@/store/chat/runtime-state'
 import { stampToolCallOffset } from '@/store/chat/session'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
@@ -1032,35 +1034,6 @@ export function VirtualUserMessageRow({
           />
         )}
         {(!message.firstSendStatus || message.firstSendStatus === 'saved') && <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />}
-      </div>
-    </div>
-  )
-}
-
-/**
- * FR-030/031 (U10b): the quiet divider the chat view shows for the ONE
- * system entry a successful /clear appends server-side ("Conversation
- * context cleared", type system, role system, view_membership chat —
- * pkg/agent/clear_session.go). It reads as a separation in the conversation,
- * never as a message: hairline rules (the catalogued Separator primitive)
- * flanking the marker text, muted type, no bubble. The live SystemMessage
- * path and the virtualizer path both route the marker here so the two
- * surfaces cannot drift.
- */
-function ClearContextDivider({ messageId, content }: { messageId: string; content: string }) {
-  return (
-    <div
-      data-message-role="system"
-      data-message-id={messageId}
-      data-testid="clear-context-divider"
-      className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)]"
-    >
-      <div className="min-w-0 flex-1">
-        <Separator />
-      </div>
-      <span className="whitespace-nowrap text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{content}</span>
-      <div className="min-w-0 flex-1">
-        <Separator />
       </div>
     </div>
   )
@@ -3110,6 +3083,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const {
     data: historyData,
     isError: historyError,
+    error: historyFetchError,
     refetch: refetchHistory,
   } = useQuery({
     queryKey: ['messages', activeSessionId],
@@ -3126,6 +3100,18 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
     refetchOnMount: !isConnected,
   })
 
+  // D5 (audit joint-merge 2026-10-09): a 404 from the history read is the
+  // ONE truthful "this session is gone" signal — a deleted agent's cascade
+  // deletes its solely-owned main chat, and the workspace Chat tab attaches
+  // it with no route-level guard (unlike the deep-link route's
+  // SessionNotFound). On that confirmed 404 the existing agent-removed
+  // banner explains the dead surface; the composer is already unreachable
+  // here (the history-error branch replaces the whole thread+composer with
+  // the Retry screen), so no send can fail as a turn error against a
+  // nonexistent session. A transport failure (status 0 / 5xx) is NOT
+  // deletion and gets no banner.
+  const sessionGone = historyError && (historyFetchError as { status?: number } | null | undefined)?.status === 404
+
   // WS attach_session + streamReplay is the authoritative history loader.
   // Skip the REST-based setMessages overwrite when WS replay is active OR has already
   // populated the store — otherwise the filter below strips tool_call frames already
@@ -3137,6 +3123,10 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const replayCompletedForSession = useChatStore((s) => s.replayCompletedForSession)
   useEffect(() => {
     if (!historyData) return
+    // Founder ruling 2026-10-11: the messages read's X-Has-Earlier-Messages
+    // header (carried by fetchSessionMessages) feeds the quiet
+    // "Earlier messages are saved." line above the clear divider.
+    recordSessionHasEarlier(activeSessionId, sessionMessagesHasEarlier[activeSessionId ?? ''] === true)
     // Don't overwrite during replay — WS frames are the source of truth.
     if (isReplaying) return
     // Don't overwrite if WS replay already completed for this session.
@@ -3211,8 +3201,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
       className="flex flex-col absolute inset-0 overflow-hidden"
       data-active-session-id={activeSessionId ?? ''}
     >
-      {/* Agent-removed banner — shown when the session's agent has been deleted (#103) */}
-      {agentRemoved && (
+      {/* Agent-removed banner — shown when the session's agent has been deleted (#103), or the session itself is gone (D5) */}
+      {(agentRemoved || sessionGone) && (
         <div
           data-testid="agent-removed-banner"
           className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 flex items-center gap-[var(--space-2)]"

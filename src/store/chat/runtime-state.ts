@@ -57,6 +57,15 @@ export interface PendingClearRefresh {
   armedAt: number
   /** A successfully fetched projection held back because the bucket was busy; applied once it goes idle. */
   heldProjection?: ChatMessage[]
+  /**
+   * Ids of the /clear marker rows the session's view already carried when
+   * this operation was armed (founder ruling 2026-10-11). The server keeps
+   * NO link between a /clear row and the marker it produced
+   * (pkg/session/transcript_view.go::sinceLastClear), so the marker itself —
+   * by identity — is the only acceptance signal, and a marker already known
+   * at arm time belongs to an EARLIER clear, never to this one.
+   */
+  knownMarkerIds?: string[]
   /** Re-reads that did not settle this operation (no own user row, or no marker yet). Bounded by MAX_UNRESOLVED_READS in clear-refetch.ts. */
   unresolvedReads?: number
   /** True once the user was told an application failure is being retried, so it is said once. */

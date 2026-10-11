@@ -19,7 +19,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
-import { isClearCommandText } from '@/lib/clearMarker'
+import { isClearCommandText, isClearContextMarker } from '@/lib/clearMarker'
 import { resolveAddressedAgent } from '../recipientSend'
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
@@ -45,7 +45,11 @@ function beginSend(content: string, opts?: { clientMessageId?: string; queuedAt?
  * that MessageStatusFrame will later echo back (#823 state A). `mediaRefs`
  * (review finding 17) is stored alongside the display-only `media` so a
  * later `resendMessage` call can resend the SAME attachments — `media`
- * alone carries no wire-usable ref, see ChatMessage.mediaRefs' doc comment. */
+ * alone carries no wire-usable ref, see ChatMessage.mediaRefs' doc comment.
+ * Founder ruling 2026-10-11: a /clear shows as QUEUED from the moment it is
+ * sent — idle or mid-turn — and stays queued until the server's clear lands
+ * and the fresh view replaces the screen (or the "/clear was not performed"
+ * reply resolves the row); it never wears the transient "sending" look. */
 function buildQueuedUserMessage(
   sessionId: string,
   content: string,
@@ -54,6 +58,7 @@ function buildQueuedUserMessage(
   attachments: MediaAttachment[] = [],
   mediaRefs: string[] = [],
 ): ChatMessage {
+  const isClear = isClearCommandText(content)
   return {
     id: clientMessageId,
     session_id: sessionId,
@@ -61,7 +66,7 @@ function buildQueuedUserMessage(
     content,
     timestamp: queuedAt,
     status: 'done',
-    deliveryStatus: 'sending',
+    deliveryStatus: isClear ? 'queued' : 'sending',
     ...(attachments.length > 0 ? { media: attachments } : {}),
     ...(mediaRefs.length > 0 ? { mediaRefs } : {}),
   }
@@ -107,9 +112,17 @@ function handleFailedSteerSend(
  * transcript re-read the command owes the view (the server's marker entry is
  * never pushed live). One shared arm for EVERY path that can put a /clear on
  * the wire: the normal sendMessage branches and the Retry/resend path. A
- * send that failed never reaches here, so a failed send arms nothing. */
+ * send that failed never reaches here, so a failed send arms nothing.
+ * Founder ruling 2026-10-11: the arm also snapshots the marker ids the
+ * session's view already carries — the server keeps no link between a /clear
+ * row and the marker it produced, so the acceptance keys on a marker the
+ * view did not already have (clear-refetch.ts::projectionCarriesFreshMarker). */
 function armClearRefreshForSend(sessionId: string, clientMessageId: string, get: StoreApi<ChatStore>['getState']): void {
-  armClearRefresh(sessionId, clientMessageId, get().sessionsById[sessionId]?.activeTurnId ?? null)
+  const bucket = get().sessionsById[sessionId]
+  const knownMarkerIds = bucket
+    ? bucket.messageOrder.filter((id) => isClearContextMarker(bucket.messagesById[id] ?? {}))
+    : []
+  armClearRefresh(sessionId, clientMessageId, bucket?.activeTurnId ?? null, knownMarkerIds)
 }
 
 /** The @-recipient on an outbound frame (founder decision 2026-10-11 Q1 B —

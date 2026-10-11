@@ -70,14 +70,20 @@ function rawSystem(id: string, content: string, ts: string): Record<string, unkn
   return { id, role: 'system', content, timestamp: ts, agent_id: 'jim', status: 'ok' }
 }
 
-/** The server's projection once clear #N has executed: its own user row (echoing
- * the send's client_message_id), the reply, and the ONE marker entry after it. */
-function rawPostClearProjection(clearClientMessageId: string, n: number): Record<string, unknown>[] {
+/** The server's projection once clear #N has executed — RE-ANCHORED per the
+ * nav-clearview brief (T7, 2026-10-11) to what the server ACTUALLY returns
+ * since commit 446452300: the chat view starts AT the last /clear marker
+ * (pkg/session/transcript_view.go::sinceLastClear), so the /clear command
+ * row and everything before it sit in the cleared part and are NOT served —
+ * the view is the marker row first, then whatever came after it. The old
+ * fixture (own user row + reply + marker) was a 3-row window the server
+ * never produced. No server link exists between the /clear row and its
+ * marker; acceptance keys on the marker itself (clear-refetch.ts). */
+function rawPostClearProjection(_clearClientMessageId: string, n: number): Record<string, unknown>[] {
   const t = (s: number) => `2026-10-10T00:00:0${s}Z`
   return [
-    rawUser(`srv-u-clear-${n}`, clearClientMessageId, '/clear', t(0)),
+    rawSystem(`srv-clear-marker-${n}`, MARKER_TEXT, t(0)),
     rawAssistant(`srv-a-reply-${n}`, SUCCESS_REPLY, t(1)),
-    rawSystem(`srv-clear-marker-${n}`, MARKER_TEXT, t(2)),
   ]
 }
 
@@ -166,7 +172,7 @@ afterEach(() => {
 })
 
 describe('/clear re-read — arming, grammar, and the real adapter (C1/D3/D4, T5)', () => {
-  it('an idle /clear re-reads at its reply turn; the marker lands; the optimistic bubble correlates away (D4)', async () => {
+  it('an idle /clear re-reads at its reply turn; the marker lands FIRST; the fresh view replaces the screen (D4)', async () => {
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
     requestMock.mockImplementation(async () => rawPostClearProjection(sentClientMessageId(), 1))
 
@@ -178,14 +184,17 @@ describe('/clear re-read — arming, grammar, and the real adapter (C1/D3/D4, T5
     })
     await vi.waitFor(() => {
       const b = bucket()
+      // The fresh view REPLACES the screen (founder ruling 2026-10-11): the
+      // /clear bubble is gone — the marker row stands where the command's
+      // effect begins — and no pre-clear row survives.
       const clearBubbles = b.messageOrder.filter((id) => b.messagesById[id]?.content === '/clear')
-      expect(clearBubbles).toHaveLength(1)
+      expect(clearBubbles).toHaveLength(0)
       expect(b.messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
-      // The projection leads the view, in the server's order (the V1 live
-      // tail may follow it with local rows — here, the finalized local
-      // assistant placeholder).
-      expect(b.messageOrder.slice(0, 3)).toEqual(['srv-u-clear-1', 'srv-a-reply-1', 'srv-clear-marker-1'])
-      for (const id of b.messageOrder.slice(3)) {
+      // The divider is the FIRST row of the fresh view, then the server's
+      // reply (the V1 live tail may follow with local rows — here, the
+      // finalized local assistant placeholder).
+      expect(b.messageOrder.slice(0, 2)).toEqual(['srv-clear-marker-1', 'srv-a-reply-1'])
+      for (const id of b.messageOrder.slice(2)) {
         const extra = b.messagesById[id]!
         expect(extra.role).toBe('assistant')
         expect(extra.content).toBe('')
@@ -648,6 +657,61 @@ describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent
     expect(requestMock).toHaveBeenCalledTimes(MAX_UNRESOLVED_READS)
   })
 
+  it('audit D2: a REFUSED /clear — the local-only rows above the /clear bubble survive (nothing was cleared)', async () => {
+    // A failed message sits ABOVE the /clear bubble when the /clear is sent.
+    // The refusal writes no marker; the server's view never moves; the
+    // refusal reply arrives LIVE (webchatChannel.Send → token + done), not
+    // through this read. So the marker-less projection must apply NOTHING:
+    // the failed row and its Retry must still be on screen.
+    seedBucket([
+      localMessage({ id: 'failed-local', role: 'user', content: 'failed earlier question', status: 'error', deliveryStatus: 'failed' }),
+      localMessage({ id: 'u-1', role: 'user', content: 'earlier question' }),
+    ])
+    requestMock.mockImplementation(async () => rawRefusedProjection(sentClientMessageId(0)))
+
+    useChatStore.getState().sendMessage('/clear')
+    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
+
+    await vi.waitFor(() => {
+      expect(requestMock).toHaveBeenCalledTimes(1)
+    })
+    await new Promise((r) => setTimeout(r, 15))
+    const b = bucket()
+    // The failed row — above the /clear bubble — did not vanish.
+    expect(b.messageOrder).toContain('failed-local')
+    expect(b.messagesById['failed-local']).toMatchObject({ status: 'error', deliveryStatus: 'failed' })
+    expect(b.messageOrder).toContain('u-1')
+    // Nothing was cleared: no marker row is in the view, and the /clear
+    // bubble is still there (it resolves when the live refusal reply lands).
+    expect(b.messageOrder.filter((id) => b.messagesById[id]?.content === MARKER_TEXT)).toHaveLength(0)
+    expect(b.messageOrder.some((id) => b.messagesById[id]?.content === '/clear')).toBe(true)
+  })
+
+  it('founder ruling: the /clear row shows QUEUED from the send and stays queued while the clear is in flight', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    requestMock.mockImplementation(async () => rawPostClearProjection(sentClientMessageId(), 1))
+
+    useChatStore.getState().sendMessage('/clear')
+    const cmid = sentClientMessageId()
+    expect(bucket().messagesById[cmid]).toMatchObject({ content: '/clear', deliveryStatus: 'queued' })
+
+    // The command row's append ack must not flip the queued look midway —
+    // the row stays queued until the server's clear lands and the fresh
+    // view replaces the screen.
+    useChatStore.getState().handleFrame({
+      type: 'message_status', session_id: SID, client_message_id: cmid, state: 'received', seq: 1,
+    } as ServerFrame)
+    expect(bucket().messagesById[cmid]?.deliveryStatus).toBe('queued')
+
+    // The clear lands: the fresh view replaces the screen — the queued row
+    // is gone, the divider stands.
+    useChatStore.getState().handleFrame(doneFrame('turn-clear', 2))
+    await vi.waitFor(() => {
+      expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
+    })
+    expect(bucket().messageOrder).not.toContain(cmid)
+  })
+
   it('founder ruling: /clear shows a fresh conversation, deletes nothing, and leaves nothing armed', async () => {
     seedBucket([
       localMessage({ id: 'u-old', role: 'user', content: 'an old question', deliveryStatus: 'received' }),
@@ -658,11 +722,11 @@ describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent
     useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
     await vi.waitFor(() => expect(pendingClearRefetches[SID]).toBeUndefined())
 
-    // The screen is a new conversation: this /clear, its reply, the divider. Nothing older.
+    // The screen is a new conversation: the divider FIRST, then the reply. Nothing older.
     const order = bucket().messageOrder
-    expect(order.slice(0, 3)).toEqual(['srv-u-clear-1', 'srv-a-reply-1', 'srv-clear-marker-1'])
+    expect(order.slice(0, 2)).toEqual(['srv-clear-marker-1', 'srv-a-reply-1'])
     // Only the finalized empty live assistant placeholder may follow; no pre-clear row.
-    for (const id of order.slice(3)) expect(bucket().messagesById[id]).toMatchObject({ role: 'assistant', content: '' })
+    for (const id of order.slice(2)) expect(bucket().messagesById[id]).toMatchObject({ role: 'assistant', content: '' })
     expect(order).not.toContain('u-old')
     expect(order).not.toContain('a-old')
     // Nothing was deleted: the SPA only read the transcript (GET), never wrote or deleted.

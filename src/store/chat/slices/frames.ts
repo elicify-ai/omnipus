@@ -18,6 +18,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { logDiagnostic } from '@/lib/telemetry'
 import { normalizeTruncationReason } from '@/lib/truncation'
+import { isClearCommandText } from '@/lib/clearMarker'
 import {
   getLLMErrorDisplay,
   readEntryIdFromFrame,
@@ -62,10 +63,16 @@ type TokenFrameType = Extract<Parameters<ChatStore['handleFrame']>[0], { type: '
 
 // #823 state A: received/working/failed map onto the user message's own
 // deliveryStatus.
+// Founder ruling 2026-10-11: a /clear row shows as QUEUED from its send and
+// stays queued until the server's clear lands and the fresh view replaces
+// the screen (or the "/clear was not performed" reply resolves it) — an
+// append ack for the command row must not flip it to a sent look midway. A
+// server-reported failure still marks the row for Retry.
 function applyMessageStatusFrame(bucket: SessionChatState, frame: MessageStatusFrame): Partial<SessionChatState> {
   return produce(bucket, (draft) => {
     const message = draft.messagesById[frame.client_message_id] ?? findFirstSendMessage(draft, frame.client_message_id)
     if (!message || message.role !== 'user') return
+    if (frame.state !== 'failed' && isClearCommandText(message.content)) return
     message.deliveryStatus = frame.state === 'failed' ? 'failed' : frame.state
     message.status = frame.state === 'failed' ? 'error' : 'done'
   }) as Partial<SessionChatState>

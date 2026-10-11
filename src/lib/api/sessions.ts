@@ -1041,6 +1041,16 @@ function parseWireMessageList(items: unknown[], endpoint: string): Message[] {
   return messages
 }
 
+// The chat-view read's X-Has-Earlier-Messages response header (contracts/
+// openapi.yaml GET /sessions/{id}/messages — "true" when the body starts at
+// the session's last /clear marker and earlier transcript entries exist
+// before it; the header is always present on a success response). Keyed by
+// session id, written by fetchSessionMessages and read by the chat state
+// writers (src/store/chat/has-earlier.ts consumers) after their read — the
+// smallest header channel that changes no caller's signature or return
+// shape. lib cannot import the store, so the flag hops through here.
+export const sessionMessagesHasEarlier: Record<string, boolean | undefined> = {}
+
 export async function fetchSessionMessages(sessionId: string): Promise<Message[]> {
   // Top-level shape assertion only: the body must be an array. A non-array
   // body (an error page, a wholly different endpoint shape) is a genuine
@@ -1052,6 +1062,7 @@ export async function fetchSessionMessages(sessionId: string): Promise<Message[]
     path,
     undefined,
     z.array(z.unknown()) as ZodType<unknown[]>,
+    (headers) => { sessionMessagesHasEarlier[sessionId] = headers.get('X-Has-Earlier-Messages') === 'true' },
   )
   return parseWireMessageList(rawItems, `GET /api/v1${path}`)
 }
@@ -1060,6 +1071,8 @@ export interface SessionDetail { // not-wire-format: SPA-internal detail type. U
   session: Session
   messages: Message[]
   agent_removed?: boolean
+  /** Mirrors the generated SessionDetail.has_earlier_messages: messages starts at the session's last /clear marker and earlier transcript entries exist before it (cleared context). Absent (or false) when messages is the whole transcript. */
+  has_earlier_messages?: boolean
 }
 
 export async function fetchSessionDetail(sessionId: string): Promise<SessionDetail> {
@@ -1072,11 +1085,12 @@ export async function fetchSessionDetail(sessionId: string): Promise<SessionDeta
   // (Issue 3 / library-uat HIGH finding — see the block comment above
   // fetchSessionMessages for the full rationale and the placeholder
   // judgment call).
-  type RawSessionDetailShape = { session: RawSession; messages: unknown[]; agent_removed?: boolean }
+  type RawSessionDetailShape = { session: RawSession; messages: unknown[]; agent_removed?: boolean; has_earlier_messages?: boolean }
   const shapeSchema = z.object({
     session: WireSessionSchema,
     messages: z.array(z.unknown()),
     agent_removed: z.boolean().optional(),
+    has_earlier_messages: z.boolean().optional(),
   })
   const path = `/sessions/${encodeURIComponent(sessionId)}`
   const raw = await request<RawSessionDetailShape>(
@@ -1088,6 +1102,7 @@ export async function fetchSessionDetail(sessionId: string): Promise<SessionDeta
     session: rawToSession(raw.session),
     messages: parseWireMessageList(raw.messages, `GET /api/v1${path}`),
     agent_removed: raw.agent_removed,
+    has_earlier_messages: raw.has_earlier_messages,
   }
 }
 

@@ -160,7 +160,7 @@ export function SessionRow({ session, isActive, isHighlighted, onSelect, onRenam
         aria-disabled={deleting || session.protected === true}
         className={cn('h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] aria-disabled:opacity-30 aria-disabled:cursor-not-allowed aria-disabled:hover:text-[var(--color-muted)] aria-disabled:hover:bg-transparent', COARSE_TARGET)}
         aria-label={`Delete ${title}`}
-        title={session.protected ? 'Protected (heartbeat)' : deleting ? 'Deleting…' : 'Delete'}
+        title={session.protected ? 'Main chat — protected' : deleting ? 'Deleting…' : 'Delete'}
       >
         <Trash size={13} />
       </IconButton>
