@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -188,14 +189,24 @@ func (s *Store) runsDayFilePath(taskID string, at time.Time) string {
 	return filepath.Join(s.runsDir(taskID), at.UTC().Format("2006-01-02")+".jsonl")
 }
 
-// newRunID mints a ULID-based run identifier (lexically sortable,
-// time-ordered) using a fresh crypto-random entropy source per call —
-// mirrors pkg/session.NewSessionID rather than the package-level monotonic
-// ulid.Make() source used elsewhere in the codebase (e.g.
-// pkg/sysagent/tools/task.go), so concurrent run creation across goroutines
-// never contends on a shared monotonic reader.
+// runIDEntropy is the monotonic ULID entropy source for newRunID. ListRuns
+// breaks a StartedAt tie (RFC 3339 has second resolution) on RunID, so run IDs
+// must sort in mint order even when two are minted in the same millisecond: a
+// fresh random suffix per call only orders IDs across milliseconds. The
+// monotonic reader increments the suffix inside one millisecond; the mutex
+// is held for a single small read, so concurrent run creation does not queue
+// behind anything slow.
+var (
+	runIDMu      sync.Mutex
+	runIDEntropy = ulid.Monotonic(crand.Reader, 0)
+)
+
+// newRunID mints a ULID-based run identifier (lexically sortable, time-ordered,
+// and strictly increasing in mint order within this process).
 func newRunID() (string, error) {
-	id, err := ulid.New(ulid.Timestamp(time.Now()), crand.Reader)
+	runIDMu.Lock()
+	defer runIDMu.Unlock()
+	id, err := ulid.New(ulid.Timestamp(time.Now()), runIDEntropy)
 	if err != nil {
 		return "", fmt.Errorf("task: generate run id: %w", err)
 	}
