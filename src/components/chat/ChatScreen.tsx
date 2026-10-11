@@ -51,7 +51,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ClearContextDivider } from './ClearContextDivider'
 import { isClearContextMarker } from '@/lib/clearMarker'
 import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
-import { ParticipantMessageRow, ReplyHeaderView, useParticipantLabelParts } from './ParticipantLabels'
+import { AgentReplyLabel, ParticipantMessageRow, useParticipantLabelParts } from './ParticipantLabels'
 import { collectPairedReplyToIds, isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
 import { recordSessionHasEarlier } from '@/store/chat/has-earlier'
@@ -88,7 +88,6 @@ import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
-  IDLE_STATUS_TEXT,
   feedMarkLabel,
   showsFeedMark,
   useReplySlotPhase,
@@ -1302,9 +1301,16 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     goalLabel: emptyPlaceholderLabel,
     idleEligible: isLastAssistant && !message.isStreaming,
   })
-  const showMark =
-    showsFeedMark(replyPhase) &&
-    (showEmptyPlaceholder || replyPhase.kind === 'waiting' || replyPhase.kind === 'unavailable')
+  // 1b (founder UI feedback 2026-10-11): while THIS reply is streaming, the
+  // inline indicator never disappears — streamed text, a visible tool card,
+  // or a reconnecting link change only the phrase and the motion, never the
+  // mark's presence (previously the mark was gated to the empty-placeholder /
+  // waiting / unavailable windows and vanished the moment real content
+  // showed). A settled row paints only a still-pending approval/question:
+  // no "Idle" word and no "Unavailable/reconnecting" word on a finished
+  // reply — connection state has its own surfaces
+  // (ChatConnectionStatusLine / UnavailableChatNotice).
+  const showMark = showsFeedMark(replyPhase) && (replyPhase.kind === 'waiting' || !!message.isStreaming)
 
   return (
     <div
@@ -1316,34 +1322,12 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     >
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {(replyHeader || agentDisplayName) && (
-          <span className="inline-flex items-center gap-[var(--space-2)]">
-            {replyHeader ? (
-              <ReplyHeaderView header={replyHeader} />
-            ) : (
-              <span
-                data-testid="agent-label"
-                title={agentDisplayName ?? undefined}
-                className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
-              >
-                {agentDisplayName}
-              </span>
-            )}
-            {replyPhase.kind === 'idle' && (
-              <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{IDLE_STATUS_TEXT}</span>
-            )}
-          </span>
+          // Founder UI feedback 2026-10-11: the label is the small agent mark
+          // beside the name (or the U8 reply header) — and nothing else. The
+          // old inline "Idle" status word next to the name is gone.
+          <AgentReplyLabel agent={agent} name={agentDisplayName ?? ''} header={replyHeader} />
         )}
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
-          {showMark && showsFeedMark(replyPhase) && (
-            <AgentStatusIndicator
-              phase={replyPhase.kind}
-              label={feedMarkLabel(replyPhase)}
-              figure={agent?.figure}
-              role={agent?.role}
-              color={agent?.color}
-              name={agent?.name ?? ''}
-            />
-          )}
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
             <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-2)]">
@@ -1415,6 +1399,20 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
               liteMode,
             })
           })}
+          {/* Inline indicator — 1b (founder UI feedback 2026-10-11): rendered
+              AFTER the parts, pinned at the bottom of the running reply, in
+              the position where the next text/tool will appear. While
+              message.isStreaming it never unmounts (see showMark above). */}
+          {showMark && (
+            <AgentStatusIndicator
+              phase={replyPhase.kind}
+              label={feedMarkLabel(replyPhase)}
+              figure={agent?.figure}
+              role={agent?.role}
+              color={agent?.color}
+              name={agent?.name ?? ''}
+            />
+          )}
         </div>
 
         {/* Action bar — always visible at reduced opacity, fully opaque on hover.
@@ -1862,13 +1860,9 @@ function AssistantMessage() {
     >
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
-          <span
-            data-testid="agent-label"
-            title={agentDisplayName}
-            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
-          >
-            {agentDisplayName}
-          </span>
+          // Founder UI feedback 2026-10-11: same label as the settled rows —
+          // small agent mark beside the name, no status word.
+          <AgentReplyLabel agent={agent} name={agentDisplayName} header={null} />
         )}
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
           {showEmptyPlaceholder ? (
