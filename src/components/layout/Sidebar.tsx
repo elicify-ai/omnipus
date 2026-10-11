@@ -20,7 +20,6 @@ import {
   UserCircle,
   Files,
   FolderOpen,
-  Shield,
 } from '@phosphor-icons/react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
@@ -54,8 +53,11 @@ import { GodModeSidebarPill } from './GodModeIndicators'
 // two meaning different things under the same label).
 // (Per-workspace work — chat, tasks, calendar, team — lives inside the
 // workspace tabs, not the sidebar.)
+// No "Admin chat" entry here anymore (founder request 2026-10-11): Admin has
+// ONE main chat, in the default workspace (ADR-20261007), reached from that
+// workspace's agent rows below like any other agent — never a standalone
+// Assets link. /admin/chat survives only as a redirect stub for old links.
 const ASSET_ITEMS = [
-  { to: '/admin/chat', label: 'Admin chat', Icon: Shield },
   { to: '/agents', label: 'Agents', Icon: Robot },
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
   { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },

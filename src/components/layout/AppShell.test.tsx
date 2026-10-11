@@ -752,7 +752,8 @@ describe('AppShell — god-mode banner removal (2026-09-25)', () => {
 // other state — off, unknown (fetch error), loading, bypass; no amber variant
 // exists anywhere. Because it mounts from the shell (not from any screen's
 // header), it covers routes with no sidebar button too — Library, the
-// live-browser view, admin chat. In this file Outlet renders null, which is
+// live-browser view, the /admin/chat redirect stub. In this file Outlet
+// renders null, which is
 // exactly that no-screen-chrome shape: asserting the dot here IS the "present
 // on a route without ScreenHeader" case.
 //
@@ -857,7 +858,7 @@ function registerCornerDotHooks() {
 describe('AppShell — God Mode corner dot visibility (2026-09-25)', () => {
   registerCornerDotHooks()
 
-  it('shows the corner dot when god-mode is on and the sidebar is hidden (no ScreenHeader — the Library/live-browser/admin-chat shape)', async () => {
+  it('shows the corner dot when god-mode is on and the sidebar is hidden (no ScreenHeader — the Library/live-browser/admin-chat-redirect shape)', async () => {
     mockShellFetches()
     // Default sidebar store state: closed overlay, unpinned → not visible.
     useSidebarStore.setState({ isOpen: false, isPinned: false })
