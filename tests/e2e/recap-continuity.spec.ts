@@ -71,7 +71,7 @@ interface MemorySettingsWire {
   memory_retros_days?: number;
 }
 
-async function authHeaders(page: Page): Promise<Record<string, string>> {
+async function authHeaders(): Promise<Record<string, string>> {
   const state = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf-8')) as {
     cookies?: { name: string; value: string }[];
   };
@@ -81,7 +81,7 @@ async function authHeaders(page: Page): Promise<Record<string, string>> {
 
 async function putMemorySettings(page: Page, body: MemorySettingsWire): Promise<void> {
   const resp = await page.request.put(`${BASE_URL}/api/v1/settings/memory`, {
-    headers: await authHeaders(page),
+    headers: await authHeaders(),
     data: JSON.stringify(body),
   });
   expect(resp.ok(), `PUT /api/v1/settings/memory failed: ${resp.status()} ${await resp.text()}`).toBe(true);
@@ -89,7 +89,7 @@ async function putMemorySettings(page: Page, body: MemorySettingsWire): Promise<
 
 /** The default chat agent's id, from the roster the SPA itself uses. */
 async function resolveDefaultAgentID(page: Page): Promise<string> {
-  const resp = await page.request.get(`${BASE_URL}/api/v1/agents`, { headers: await authHeaders(page) });
+  const resp = await page.request.get(`${BASE_URL}/api/v1/agents`, { headers: await authHeaders() });
   expect(resp.ok(), 'GET /api/v1/agents must answer').toBe(true);
   const body = (await resp.json()) as { agents?: { id: string; type?: string }[] };
   const chat = (body.agents || []).find((a) => !a.type || a.type === 'core' || a.type === 'custom');
@@ -126,7 +126,7 @@ let baseline: MemorySettingsWire | null = null;
 
 test.beforeEach(async ({ page }) => {
   const resp = await page.request.get(`${BASE_URL}/api/v1/settings/memory`, {
-    headers: await authHeaders(page),
+    headers: await authHeaders(),
   });
   baseline = resp.ok() ? ((await resp.json()) as MemorySettingsWire) : null;
 });
