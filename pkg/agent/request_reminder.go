@@ -30,6 +30,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // requestReminderMetadataKey marks the reminder inbound (alongside the
@@ -152,8 +153,17 @@ func (al *AgentLoop) receiverStopped(sessionID string) bool {
 		return false
 	}
 	rec, err := lc.Load(sessionID)
+	if errors.Is(err, session.ErrLifecycleNotFound) {
+		return false // an ordinary chat that never ran a steered turn
+	}
 	if err != nil {
-		return false
+		// The record cannot be read, so "running" is unknown: say held. The
+		// request is durably kept either way and its note ("delivered when it
+		// runs again") is true whatever the state; admitting silently would
+		// tell the asker it was seen.
+		logger.WarnCF("agent", "receiver lifecycle record unreadable; the request is reported as held",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return true
 	}
 	return rec.Stopped()
 }

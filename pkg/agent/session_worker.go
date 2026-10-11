@@ -234,14 +234,27 @@ func newSessionWorker(scope string, parent *AgentLoop, admissionRelease func()) 
 // including a user message dropped on a full inbox (that drop is announced to
 // the user, exactly as before).
 func (w *sessionWorker) enqueue(msg bus.InboundMessage) bool {
+	handled, _ := w.enqueueOrRetry(msg)
+	return handled
+}
+
+// enqueueOrRetry is enqueue that also reports retry: the worker began exiting
+// between the dispatcher's check and the push, so it will never drain the
+// message and nothing was queued or answered. The dispatcher re-dispatches it
+// to a fresh worker (dispatchSessionWorker); it is NOT a full inbox, and the
+// person gets no "busy" reply for it.
+func (w *sessionWorker) enqueueOrRetry(msg bus.InboundMessage) (handled, retry bool) {
 	if w.deferClearUntilStopped(msg) {
-		return true
+		return true, false
 	}
 	if w.trySteerIntoLiveTurn(msg) {
-		return true
+		return true, false
 	}
 	if w.pushInbox(msg) {
-		return true
+		return true, false
+	}
+	if w.exiting.Load() {
+		return false, true
 	}
 	if msg.Channel == "system" {
 		logger.WarnCF("agent.worker", "Session worker inbox full — system message not queued; falling back to unserialized dispatch",
@@ -250,7 +263,7 @@ func (w *sessionWorker) enqueue(msg bus.InboundMessage) bool {
 				"chat_id":    msg.ChatID,
 				"session_id": msg.AsyncTranscriptSessionID,
 			})
-		return false
+		return false, false
 	}
 	logger.WarnCF("agent.worker", "Session worker inbox full — dropping message",
 		map[string]any{
@@ -269,7 +282,7 @@ func (w *sessionWorker) enqueue(msg bus.InboundMessage) bool {
 		logger.WarnCF("agent.worker", "Failed to send inbox-full reply",
 			map[string]any{"channel": msg.Channel, "error": pubErr.Error()})
 	}
-	return true
+	return true, false
 }
 
 // trySteerIntoLiveTurn routes msg into the live turn's steering queue when
@@ -354,7 +367,11 @@ func (al *AgentLoop) dispatchSessionWorker(scope string, msg bus.InboundMessage)
 				map[string]any{"scope": scope, "got_type": fmt.Sprintf("%T", existing)})
 			// Fall through to spawn a replacement, same as a dying worker.
 		} else if !w.exiting.Load() {
-			return w.enqueue(msg)
+			if handled, retry := w.enqueueOrRetry(msg); !retry {
+				return handled
+			}
+			// The worker started exiting after the check above: fall through
+			// to spawn its replacement.
 		}
 		// Dying worker (or corrupted entry) — fall through to spawn replacement.
 	}
@@ -442,7 +459,10 @@ func (al *AgentLoop) dispatchSystemMessageToSessionWorker(msg bus.InboundMessage
 		return true
 	})
 	if live != nil {
-		return live.enqueue(msg)
+		if handled, retry := live.enqueueOrRetry(msg); !retry {
+			return handled
+		}
+		// It started exiting meanwhile: resolve the scope below instead.
 	}
 
 	// 2. No live worker — resolve the scope this session's own user traffic

@@ -319,3 +319,21 @@ func TestHeldRequest_UnreadableAsker_StaysHeldNotDiscarded(t *testing.T) {
 		t.Fatalf("a request whose asker is unreadable must not be delivered yet: %+v", in)
 	}
 }
+
+// S1-13: a receiver whose lifecycle record cannot be read is not reported as
+// running: the asker is told its request is held, not that it was seen.
+func TestHeldRequest_UnreadableReceiverRecord_IsReportedAsHeld(t *testing.T) {
+	f := newAddrFixture(t)
+	dir := t.TempDir()
+	f.al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), session.NewLifecycleStore(dir))
+	main, err := f.al.GetSessionStore().GetOrCreateMainSession(addrWS, addrReceiver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, main.ID+".jsonl"), []byte("{torn\n{also torn\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, held := heldAsk(t, f, "sender-session"); !held {
+		t.Fatal("an unreadable receiver record was reported as not held: the asker is told its request was seen")
+	}
+}
