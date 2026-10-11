@@ -672,6 +672,7 @@ async function assertCancelInterrupted(page: Page): Promise<void> {
   // Left at 10s deliberately: it passes 6/6 including under load, and raising a
   // green timeout on a hunch is how real regressions get masked. But do NOT
   // derive a new budget from the old claim — measure the ladder instead.
+  const stopBtn = page.locator('[data-testid="stop-btn"]')
   await expect(stopBtn).not.toBeVisible({ timeout: 10_000 })
   await expect(chatInput(page)).toBeEnabled({ timeout: 10_000 })
   const interruptedLabels = page.locator('text=(interrupted)')
