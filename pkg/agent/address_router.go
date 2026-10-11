@@ -142,7 +142,7 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	}
 	meta, err := store.GetOrCreateMainSession(a.Receiver.WorkspaceID, a.Receiver.AgentID)
 	if err != nil {
-		return "", "", fmt.Errorf("%w: receiver main session: %w", ErrPeerRefused, err)
+		return "", "", storageRefusal("the receiver's conversation could not be prepared", err, ErrPeerRefused)
 	}
 	receiverSessionID = meta.ID
 	requestID = uuid.New().String()
@@ -158,7 +158,7 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	// Capture first: if the append below fails the capture is discarded; if it
 	// were written second, a request the model can see might be unanswerable.
 	if err := ledger.Put(capture); err != nil {
-		return "", "", fmt.Errorf("%w: %w", ErrPeerRefused, err)
+		return "", "", storageRefusal("the request could not be recorded", err, ErrPeerRefused)
 	}
 	entry := session.TranscriptEntry{
 		ID:        requestID,
@@ -175,7 +175,7 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 			logger.WarnCF("agent", "request capture could not be discarded after a failed append",
 				map[string]any{"request_id": requestID, "error": dErr.Error()})
 		}
-		return "", "", fmt.Errorf("%w: could not record the request: %w", ErrPeerRefused, err)
+		return "", "", storageRefusal("the request could not be recorded", err, ErrPeerRefused)
 	}
 	al.publishUserEntry(receiverSessionID, entry)
 
@@ -188,10 +188,15 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 		Content:           entry.Content,
 		SessionID:         receiverSessionID,
 		TranscriptEntryID: requestID,
-		Metadata:          map[string]string{"agent_id": a.Receiver.AgentID, "workspace_id": a.Receiver.WorkspaceID},
-		// Not UserInitiated / OperatorPrompt: a request is not a live human
-		// action on the receiver's session (fail closed for /goal, /loop and
-		// the browser wheel).
+		// A request carries no human authority on the RECEIVER's conversation
+		// (FR-045: no transfer of Stop/grants). It reuses the owner-wake marker:
+		// reviveInboundIsHumanTurn rejects it and prepareOrdinaryExecution admits
+		// it as the non-human principal, which starts the next round of a
+		// finished or idle chat but never continues a stopped one - the request
+		// stays in the transcript (final-gate SG-01). Not UserInitiated /
+		// OperatorPrompt either (fail closed for /goal, /loop and the browser
+		// wheel).
+		Metadata: map[string]string{"agent_id": a.Receiver.AgentID, "workspace_id": a.Receiver.WorkspaceID, ownerWakeMetadataKey: "1"},
 	}); err != nil {
 		// The request is durable in the receiver's main and answerable; only
 		// the turn start failed. Report it rather than hide it.
@@ -272,7 +277,7 @@ func (al *AgentLoop) checkPeerAdmission(ctx context.Context, receiver addressing
 	}
 	ok, err := deps.PairEligible(receiver.WorkspaceID, receiver.AgentID)
 	if err != nil {
-		return false, fmt.Errorf("%w: membership could not be read: %w", ErrPeerRefused, err)
+		return false, storageRefusal("the receiver's membership could not be checked", err, ErrPeerRefused)
 	}
 	if !ok {
 		return false, fmt.Errorf("%w: %s/%s is not an eligible main (not a current member, a worker, or a system agent)",
@@ -295,7 +300,7 @@ func (al *AgentLoop) recheckReceiverAdmission(ctx context.Context, receiver addr
 	}
 	ok, err := deps.PairEligible(receiver.WorkspaceID, receiver.AgentID)
 	if err != nil {
-		return fmt.Errorf("%w: membership could not be read: %w", ErrPeerRefused, err)
+		return storageRefusal("the receiver's membership could not be checked", err, ErrPeerRefused)
 	}
 	if !ok {
 		return fmt.Errorf("%w: %s/%s is no longer an eligible main", ErrPeerRefused, receiver.WorkspaceID, receiver.AgentID)
@@ -409,14 +414,31 @@ func (r AddressRouter) Reply(ctx context.Context, req tools.ReplyRequest) (tools
 	}
 }
 
+// storageRefusal turns a server-side storage or configuration failure into the
+// fixed text the model, the tool transcript and the WebSocket result carry
+// (SG-03). The cause - a ledger path, an internal file name, a parse or OS error -
+// goes to the error log only. sentinel, when non-nil, stays in the error chain so
+// errors.Is keeps working for callers.
+func storageRefusal(what string, cause error, sentinel error) error {
+	logger.ErrorCF("agent", "addressed message: server-side failure",
+		map[string]any{"what": what, "error": cause.Error()})
+	text := what + ". Check that session storage is available and writable, then try again; details are in the server log"
+	if sentinel != nil {
+		return fmt.Errorf("%w: %s", sentinel, text)
+	}
+	return errors.New(text)
+}
+
 func replyRefusal(err error) error {
 	switch {
 	case errors.Is(err, addressing.ErrUnknownRequest):
 		return errors.New("no such request is waiting for an answer from you in this conversation")
 	case errors.Is(err, addressing.ErrDiscarded):
 		return errors.New("that request was discarded before it was delivered and can no longer be answered")
+	case errors.Is(err, addressing.ErrUnusableCorrelation):
+		return err // fixed text, no path or cause
 	default:
-		return err
+		return storageRefusal("the record of this request could not be read", err, nil)
 	}
 }
 
@@ -486,7 +508,7 @@ func (al *AgentLoop) replyIntoConversation(c addressing.Capture, responder addre
 		ReplyToParticipant: participantFromSender(c.Sender, al.agentDisplayName),
 	}
 	if err := store.AppendTranscriptStrict(c.Source.SessionID, entry); err != nil {
-		return tools.ReplyReceipt{}, fmt.Errorf("the reply could not be saved: %w", err)
+		return tools.ReplyReceipt{}, storageRefusal("the reply could not be saved", err, nil)
 	}
 	if deps := al.loadAddressDeps(); deps != nil {
 		deps.PublishGuestReply(c.Source.SessionID, entry)

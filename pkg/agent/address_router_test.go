@@ -285,8 +285,8 @@ func conversationSetup(t *testing.T, f *addrFixture, senderAgent addressing.Pair
 	}
 	// The source chat belongs to the captured owner pair (workspace AND agent).
 	ws := addrWS
-	if err := store.SetMeta(src.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
-		t.Fatal(err)
+	if setErr := store.SetMeta(src.ID, session.MetaPatch{WorkspaceID: &ws}); setErr != nil {
+		t.Fatal(setErr)
 	}
 	recv, err := store.GetOrCreateMainSession(addrWS, addrReceiver)
 	if err != nil {
@@ -382,18 +382,18 @@ func TestReply_MixedSourcesAddressEachOriginalSenderOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	wsID := addrWS
-	if err := store.SetMeta(webSrc.ID, session.MetaPatch{WorkspaceID: &wsID}); err != nil {
-		t.Fatal(err)
+	if setErr := store.SetMeta(webSrc.ID, session.MetaPatch{WorkspaceID: &wsID}); setErr != nil {
+		t.Fatal(setErr)
 	}
 	owner := addressing.Pair{WorkspaceID: addrWS, AgentID: "ann"}
 	put := func(id string, src addressing.Source, sender addressing.Sender) {
 		t.Helper()
-		if err := f.al.RequestLedger().Put(addressing.Capture{
+		if putErr := f.al.RequestLedger().Put(addressing.Capture{
 			RequestID: id, ReceiverSessionID: recv.ID,
 			Receiver: addressing.Pair{WorkspaceID: addrWS, AgentID: addrReceiver},
 			Sender:   sender, Source: src, AdmittedAt: time.Now().UTC(),
-		}); err != nil {
-			t.Fatal(err)
+		}); putErr != nil {
+			t.Fatal(putErr)
 		}
 	}
 	put("u-web", addressing.Source{Kind: addressing.SourceConversation, Owner: owner, SessionID: webSrc.ID},
@@ -407,8 +407,8 @@ func TestReply_MixedSourcesAddressEachOriginalSenderOnly(t *testing.T) {
 		t.Helper()
 		req := f.replyReq(recv.ID, id)
 		req.Content = text
-		if _, err := f.r.Reply(context.Background(), req); err != nil {
-			t.Fatalf("reply to %s: %v", id, err)
+		if _, replyErr := f.r.Reply(context.Background(), req); replyErr != nil {
+			t.Fatalf("reply to %s: %v", id, replyErr)
 		}
 	}
 

@@ -106,6 +106,18 @@ In the simpler message-list fallback, live tool activity appears against the rep
 
 The mark's figure and badge stay fully opaque. With normal motion they gently change size, and a separate glow animates behind them; Working also has a moving highlight. If your system requests reduced motion, these loops stop and the thinking phrase stops rotating. The name and current phrase remain visible.
 
+### Who each message is from
+
+Your own messages sit on the right with no name. Every other message in the conversation carries a name above its text:
+
+- A message that arrived from a chat platform — Telegram, Slack, and the like — shows who sent it and where it came from, for example **Alice · Telegram**. The source is always shown for messages from outside the web app, so a Telegram user called Dan can never be mistaken for you.
+- A message another agent sent into this conversation (for example a request from a teammate agent in another workspace) shows that agent's current name, plus the workspace it belongs to when that is not the workspace you are looking at — for example **Mia · Atlas**.
+- A name longer than about 40 characters is shortened with an ellipsis; point at it, or focus it with the keyboard, to see the full name.
+
+Names are plain text. A name that contains characters that look like formatting shows them exactly as written, never styled.
+
+When an agent answers someone — for example a reply that goes back out to a message that arrived on Telegram — the reply shows **Ava → Alice · Telegram** above the text: who answered, and who it went to. If a reply records only that it was a reply, without who it went to, it shows **Ava → reply** instead. The tool card for the send that produced such a reply is hidden from the conversation, because the reply itself already shows what was sent and to whom; while that answer is still streaming in live, the card can remain until the reply finishes.
+
 A failure or refusal routed to an existing chat appears in that conversation, including when no reply has started. It does not turn into an app-wide connection banner when you open another conversation or start a new chat. Connection and routing-protocol failures remain separate app-wide problems.
 
 Chat follows the current gateway connection. Once a replacement connection opens, an older connection closing does not disable the message box or interrupt the current reply. A genuine connection loss still triggers reconnect and reloads the chat's missing history.
@@ -116,7 +128,7 @@ While a turn is running, the message box stays yours:
 
 | Control | What it does |
 |---|---|
-| **Enter** (with text typed) | Sends your message into the running turn — the agent takes it into account without stopping. A send button with the same effect appears next to Stop. |
+| **Enter** (with text typed) | During a native working turn, sending a message steers that turn without stopping it. A live external-CLI helper is different: the message interrupts its subprocess and continues the same CLI conversation with the new instruction. Stopped or finished helpers follow their documented resume rules. Stop can discard an instruction that was accepted but not yet consumed; delivery is not a guarantee that its work already ran. A send button with the same effect appears next to Stop. |
 | **Stop** or **Escape** | The first activation asks only this chat's current turn to stop and shows **Stopping...**. A second activation in the same chat within three seconds confirms Stop all, including its helpers. |
 | Activity pill | Below the message box: the Agents number counts helpers whose current state is running. Select it to open the Activity panel. **Running now** excludes stopped and finished helpers; queued helpers and helpers waiting for an answer have their own sections. Stopped helpers remain inspectable with **Open**, without a growing elapsed timer or a failed-work label. A resumed helper returns to Running now when its state is running again. |
 
@@ -249,7 +261,7 @@ App-wide settings live behind **Settings** in the account menu, on tabs from pro
 ## Limits and things to watch
 
 - The sidebar starts closed unless you pinned it. **Show sidebar** (the hamburger in the header) appears only while the sidebar is off screen and shows it without pinning. **Pin sidebar**, inside the sidebar, appears at 1024 pixels and wider and docks it for this and future visits; **Unpin sidebar** removes the dock — a sidebar opened during this visit stays open as an overlay until a click outside closes it, and one that was visible only because of the saved pin closes when you unpin. While it is open but not pinned, Escape, a click outside, or choosing a destination closes it, and a pin saved on a wider window stays saved. When focus is outside a field or text editor, **Cmd+B** (Mac) or **Ctrl+B** (Windows and Linux) hides a visible sidebar and shows a hidden one. Inside a field or editor, the shortcut stays with that control.
-- Sending mid-turn steers the running turn; it does not queue a message for afterwards. To let the agent finish first, wait for the reply before sending.
+- During a native working turn, sending a message steers that turn without stopping it. A live external-CLI helper is different: the message interrupts its subprocess and continues the same CLI conversation with the new instruction. Stopped or finished helpers follow their documented resume rules. Stop can discard an instruction that was accepted but not yet consumed; delivery is not a guarantee that its work already ran. Sending mid-turn does not queue a message for afterwards; to let the agent finish first, wait for the reply before sending.
 - Stop is a request, not a switch: the agent halts where it is, and work already finished stays finished.
 - The activity pill disappears when everything has ended successfully. A failed background item keeps it visible, so failures do not vanish silently.
 - The **Library** and **Mail** entries open panels beside Chat on wider screens, rather than separate workspace pages; on narrower screens a panel takes over the chat area.

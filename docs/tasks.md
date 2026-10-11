@@ -85,7 +85,7 @@ The Board has one column per status; the List has a Status column.
 
 | Status | What it means | How it changes |
 |---|---|---|
-| Inbox | Captured, not triaged | Every new task lands here |
+| Inbox | Captured, not triaged | Tasks created through the web form begin in Inbox. Agent-created tasks in the agent's current workspace begin in Next. Tasks delivered by an agent to another workspace begin in Inbox, awaiting local pickup. |
 | Next | Triaged and ready | You move it, or an agent does |
 | In Progress | A run is working on it | You start it, or a plan reaches it |
 | Blocked | A dependency is unmet | Set and cleared automatically |

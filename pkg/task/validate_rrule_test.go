@@ -295,5 +295,4 @@ func TestValidateTrigger_RruleInputBounds(t *testing.T) {
 		err := ValidateTrigger(tr)
 		require.NoError(t, err, "COUNT=100000 is exactly at the cap and must be accepted")
 	})
-
 }

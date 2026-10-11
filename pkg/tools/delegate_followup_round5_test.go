@@ -21,8 +21,9 @@ import (
 )
 
 // failingEnqueueSink fails the native steer enqueue with a store-level error.
+// It implements DelegateSteeringSink's single method itself, so it embeds no
+// other sink (the embedded fakeSteeringSink was never read — `unused`).
 type failingEnqueueSink struct {
-	fakeSteeringSink
 	err error
 }
 
@@ -30,13 +31,13 @@ func (s *failingEnqueueSink) EnqueueSteeringMessage(string, string, providers.Me
 	return "", s.err
 }
 
-var lateStoreFault = &fs.PathError{Op: "open", Path: "/home/op/.omnipus/session_lifecycle/child.jsonl", Err: fs.ErrPermission}
+var errLateStoreFault = &fs.PathError{Op: "open", Path: "/home/op/.omnipus/session_lifecycle/child.jsonl", Err: fs.ErrPermission}
 
 // Oracle: a native live steer whose enqueue fails with a store error shows a
 // fixed sentence, keeps the cause reachable, and delivers nothing.
 func TestDelegateSteer_NativeEnqueueFault_LeaksNoPath(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
-	sink := &failingEnqueueSink{err: lateStoreFault}
+	sink := &failingEnqueueSink{err: errLateStoreFault}
 	tool.SetSteeringSink(sink)
 	seedRedirectChild(t, lc, "child-native-late", session.LifecycleRunning, false)
 
@@ -46,7 +47,7 @@ func TestDelegateSteer_NativeEnqueueFault_LeaksNoPath(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("a failed enqueue must be an error, got: %s", res.ForLLM)
 	}
-	requireNoStoreDetail(t, res.ForLLM, lateStoreFault.Path)
+	requireNoStoreDetail(t, res.ForLLM, errLateStoreFault.Path)
 	if !errors.Is(res.Err, fs.ErrPermission) {
 		t.Errorf("the cause must stay reachable through errors.Is, got %v", res.Err)
 	}
@@ -56,7 +57,7 @@ func TestDelegateSteer_NativeEnqueueFault_LeaksNoPath(t *testing.T) {
 // named not_steerable prefix but not the store detail.
 func TestDelegateSteer_ExternalDeliveryFault_LeaksNoPath(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
-	tool.SetSteeringSink(&cliDelivererSink{deliverErr: lateStoreFault})
+	tool.SetSteeringSink(&cliDelivererSink{deliverErr: errLateStoreFault})
 	seedRedirectChild(t, lc, "child-3p-late", session.LifecycleRunning, true)
 
 	res := tool.Execute(WithTranscriptSessionID(context.Background(), "parent-1"), map[string]any{
@@ -65,7 +66,7 @@ func TestDelegateSteer_ExternalDeliveryFault_LeaksNoPath(t *testing.T) {
 	if !res.IsError || !strings.Contains(res.ForLLM, "not_steerable") {
 		t.Fatalf("want the named not_steerable error, got (%v, %q)", res.IsError, res.ForLLM)
 	}
-	requireNoStoreDetail(t, res.ForLLM, lateStoreFault.Path)
+	requireNoStoreDetail(t, res.ForLLM, errLateStoreFault.Path)
 	if !errors.Is(res.Err, fs.ErrPermission) {
 		t.Errorf("the cause must stay reachable through errors.Is, got %v", res.Err)
 	}
@@ -75,7 +76,7 @@ func TestDelegateSteer_ExternalDeliveryFault_LeaksNoPath(t *testing.T) {
 // written (the caller needs it to act).
 func TestDelegateSteer_ExternalDeliveryAuthoredRefusalStaysVisible(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
-	tool.SetSteeringSink(&cliDelivererSink{deliverErr: curatedRefusalStub{"session child-3p-auth has no live external CLI conversation to deliver to"}})
+	tool.SetSteeringSink(&cliDelivererSink{deliverErr: curatedRefusalError{"session child-3p-auth has no live external CLI conversation to deliver to"}})
 	seedRedirectChild(t, lc, "child-3p-auth", session.LifecycleRunning, true)
 
 	res := tool.Execute(WithTranscriptSessionID(context.Background(), "parent-1"), map[string]any{

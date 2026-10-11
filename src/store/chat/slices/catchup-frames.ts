@@ -250,6 +250,12 @@ export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: C
           content: userMsgFrame.content,
           timestamp: userMsgFrame.timestamp,
           deliveryStatus: 'received',
+          // U8/F15/F17 — server-written left-side entries (bound-connector
+          // input, peer requests) carry the participant display record; the
+          // web user's own echo carries none (F17), so its presence is the
+          // own-vs-other discriminator the thread renders by. Forwarded
+          // verbatim — the replay path stamps the identical field.
+          ...(userMsgFrame.participant ? { participant: userMsgFrame.participant } : {}),
         }
         return produce(b, (draft) => {
           draft.messagesById[newMsg.id] = newMsg

@@ -180,7 +180,7 @@ func TestDelegateTool_Resume_3P_RefusalIsVisibleAndStartsNothing(t *testing.T) {
 	launcher := &dispatchCountingLauncher{}
 	// The agent's revival refusals are authored sentences (curatedTurnError); the
 	// stand-in carries the same RefusalText capability so the tool shows it as written.
-	sink := &externalSteeringSink{reviveErr: curatedRefusalStub{"the external CLI conversation is no longer available; start a new delegation"}}
+	sink := &externalSteeringSink{reviveErr: curatedRefusalError{"the external CLI conversation is no longer available; start a new delegation"}}
 	tool, lc, _, _ := newADR053TestTool(t)
 	tool.SetSessionLauncher(launcher)
 	tool.SetSteeringSink(sink)

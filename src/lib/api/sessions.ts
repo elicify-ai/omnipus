@@ -278,6 +278,36 @@ interface MessageBase { // not-wire-format
    * see that action's doc comment).
    */
   turnId?: string
+  /**
+   * U8 participant label (session-core F15/F17) — who wrote a user-role
+   * entry. The generated ChatParticipant shape (wire `Message.participant`),
+   * forwarded verbatim by rawToMessage / the replay + user_message reducers:
+   * a server-stamped DISPLAY record (kind, plain-text display_name, source
+   * platform, agent pair) — never an id or a route, and never present on the
+   * web user's own messages (F17: own bubbles carry no label, so its presence
+   * is exactly the own-vs-other discriminator the thread renders by). The
+   * backend strips control characters before stamping (pkg/agent/
+   * participant.go), but this stays PLAIN TEXT at render time — never
+   * markdown or HTML.
+   */
+  participant?: WireMessage['participant']
+  /**
+   * U8 reply pair (F15/F17) — who a reply went to (wire
+   * `Message.reply_to_participant`, camelCase twin per the turnId convention).
+   * Server-stamped from the addressing capture, so the model cannot name a
+   * recipient. Present only on reply entries (assistant role); renders as the
+   * "author → recipient" header.
+   */
+  replyToParticipant?: WireMessage['reply_to_participant']
+  /**
+   * U8 reply pair (F15/F17) — the request id a reply answers (wire
+   * `Message.reply_to_message_id`). Pairs the reply bubble with the
+   * send_message tool call that produced it (whose `reply_to` argument names
+   * the same request id) — the pairing the thread uses to hide that chip —
+   * and, with replyToParticipant absent, degrades the header to
+   * "<author> → reply".
+   */
+  replyToMessageId?: string
 }
 
 export interface UserMessage extends MessageBase { // not-wire-format: SPA-internal user message. Status 'error' means the WS send failed; Retry button re-sends the content.
@@ -481,6 +511,22 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
    * Turn-correlation id (wire `Message.turn_id`) — see MessageBase.turnId.
    */
   turn_id?: string
+  /**
+   * U8 participant label (session-core F15/F17) — wire `Message.participant`,
+   * present on server-written user-role entries only. See
+   * MessageBase.participant for the display-record contract.
+   */
+  participant?: WireMessage['participant']
+  /**
+   * U8 reply pair — wire `Message.reply_to_participant`, present on reply
+   * entries only. See MessageBase.replyToParticipant.
+   */
+  reply_to_participant?: WireMessage['reply_to_participant']
+  /**
+   * U8 reply pair — wire `Message.reply_to_message_id`, the request id the
+   * reply answers. See MessageBase.replyToMessageId.
+   */
+  reply_to_message_id?: string
 }
 
 function rawToToolCall(raw: RawToolCall): ToolCall {
@@ -563,6 +609,12 @@ function rawToMessage(raw: RawMessage): Message {
       // unknown disposition leaves the field undefined and today's rendering
       // unchanged.
       ...(raw.input_disposition?.state === 'discarded' ? { deliveryStatus: 'discarded' as const } : {}),
+      // U8/F15/F17 — the server-stamped participant display record. Present
+      // on server-written entries only (channel participants, peer requests):
+      // the web user's own rows carry none, which is what keeps them
+      // label-free, right-side bubbles. Forwarded verbatim — plain text is
+      // the renderer's contract, never parsed as markup.
+      ...(raw.participant ? { participant: raw.participant } : {}),
     } satisfies UserMessage
   }
   if (role === 'system') {
@@ -625,6 +677,11 @@ function rawToMessage(raw: RawMessage): Message {
     ...(raw.turn_id ? { turnId: raw.turn_id } : {}),
     ...(modelField ? { model: modelField } : {}),
     ...(raw.truncated ? { truncated: true as const, truncationReason } : {}),
+    // U8/F15/F17 — the reply pair: who the answer went to (server-held
+    // capture, never model input) and the request id it answers (the chip
+    // pairing key). Forwarded verbatim; absent on every non-reply entry.
+    ...(raw.reply_to_message_id ? { replyToMessageId: raw.reply_to_message_id } : {}),
+    ...(raw.reply_to_participant ? { replyToParticipant: raw.reply_to_participant } : {}),
   } satisfies AssistantMessage
 }
 

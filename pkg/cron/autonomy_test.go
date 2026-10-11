@@ -2,9 +2,7 @@ package cron
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -404,21 +402,6 @@ func reArm(t *testing.T, cs *CronService, id string, ms int64) {
 		}
 	}
 	t.Fatalf("reArm: job %s not found", id)
-}
-
-func seedStore(t *testing.T, path string, jobs []CronJob) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	st := CronStore{Version: 1, Jobs: jobs}
-	data, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // TestRunNow_DispatchesThroughLane verifies RunNow fires a single job

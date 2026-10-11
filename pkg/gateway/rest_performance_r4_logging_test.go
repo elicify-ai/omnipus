@@ -90,7 +90,11 @@ func TestPerformancePut_ConfigWriteFailure_LogsUnderlyingCause(t *testing.T) {
 
 	w := mtiPutPerf(t, api, `{"max_parallel_agents":3}`)
 	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "config.json: invalid JSON", "the response keeps the fixed cause class")
+	// rest_performance_max_tool_iterations.go::configWriteFailure is the fixed,
+	// credential-free cause class ("the cause class only: the file could not be
+	// read, parsed or written") — a JSON syntax failure reads
+	// "the settings file is not valid JSON", never the path.
+	assert.Contains(t, w.Body.String(), "the settings file is not valid JSON", "the response keeps the fixed cause class")
 	assert.NotContains(t, w.Body.String(), "invalid character", "the response must not carry the raw cause")
 
 	logs.mu.Lock()
@@ -103,6 +107,6 @@ func TestPerformancePut_ConfigWriteFailure_LogsUnderlyingCause(t *testing.T) {
 		}
 	}
 	require.Len(t, lines, 1, "the write failure must be logged once; logs:\n%s", all)
-	assert.Contains(t, lines[0], "config.json: invalid JSON", "the log line keeps the cause class: %s", lines[0])
+	assert.Contains(t, lines[0], "the settings file is not valid JSON", "the log line keeps the cause class: %s", lines[0])
 	assert.Contains(t, lines[0], "invalid character", "the log line carries the underlying error: %s", lines[0])
 }

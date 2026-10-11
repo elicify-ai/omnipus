@@ -1,74 +1,67 @@
-# pkg/memory — session-transcript store (the name is a misnomer)
+# pkg/memory — session-core model-window types (the name is a misnomer)
 
-Persistent per-session transcript storage: an append-only `{key}.jsonl`
-archive plus a `{key}.meta.json` sidecar (Skip/Count/Projection/Hydrated).
+Shared value types and scanner interfaces for a session's model context window
+and its addressed archive. It holds NO storage code: the archive, the window
+checkpoints and every durability rule live in `pkg/session`
+(`archive_backend.go::archiveBackend`, `archive_day_store.go::ArchiveDayStore`).
 NOT agent long-term memory, NOT the knowledge base, and NOT the SQLite
-properties index (that is `pkg/records/propindex`). Interfaces:
-`store.go::Store`; sole production consumer: `pkg/session`'s
-`jsonl_backend.go::JSONLBackend`.
+properties index (that is `pkg/records/propindex`). Sole production consumer:
+`pkg/session` (and `pkg/agent` through it). Everything here is internal
+persistence state, never a gateway wire type.
+
+What is here (four files, nothing else):
+
+- `archived_message.go::ArchivedMessage` (a `providers.Message` plus `TS`) and
+  `EncodedLineBound` (8 MB, 0.8 x the 10 MB `maxLineSize`).
+- `window.go::WindowState` (Skip/Count/AnchorLine/Projection, with `Clone`),
+  `ArchiveSpan`, `ErrWindowChanged`.
+- `projection.go::ProjectionState`, `ProjectionKey`, `ProjectionSet`,
+  `ProjectionMeta`, `RecordAddress`.
+- `archive_range.go::ArchiveRangeScanner` and `EvictedArchiveScanner`
+  (implemented by `pkg/session/archive_backend.go::archiveBackend`).
 
 ## Running tests here
 
+The only test file is the DEL-09 absence guard:
+
 `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run
-'^TestCrashRecovery_PartialLine$' ./pkg/memory/`
+'^TestSessionCoreConv_Del09MigrateFromJSONIsAbsent$' ./pkg/memory/`
 
-## Compact is production-forbidden
+Behaviour tests for everything these types describe live in `pkg/session`
+(for example `archive_backend_test.go::TestArchiveBackend_RollbackIsNonDestructive`).
 
-`jsonl.go::Compact` MUST NOT be called from any Save path — it destroys
-the recall archive (FR-005). Test-only; there is no production caller. An
-agent "reclaiming disk" through Compact permanently deletes every evicted
-turn that recall depends on. Same warning on `store.go::StoreWriter`.
+## The old JSONL store is gone — do not look for it
 
-## SetHistory is hydration-only; RollbackWindow is the only undo
+The JSONL store (`jsonl.go`/`store.go`: `Store`, `StoreWriter`, `JSONLStore`,
+`Compact`, `SetHistory`, `ErrArchiveNotEmpty`) and `migration.go::MigrateFromJSON`
+were deleted (session-core DEL-09 / DEL-12). Nothing replaces `Compact`: no
+production path rewrites or shrinks an archive, and an agent "reclaiming disk"
+must not invent one — evicted lines are what recall depends on (FR-005).
+`pkg/session/unified_conv.go` (the one-time saved-chat cutover) is the sole
+legacy reader. Guard: `sessioncore_conv_del09_test.go`.
 
-- `SetHistory` refuses any archive with ≥1 line
-  (`projection.go::ErrArchiveNotEmpty`) and never touches Skip.
-- That refusal is load-bearing: a first-fill caller treats
-  `errors.Is(err, ErrArchiveNotEmpty)` as its already-imported signal (the
-  deleted `migration.go::MigrateFromJSON` relied on exactly this).
-- `window.go::RollbackWindow` is the SOLE rollback primitive (session-core
-  FR-006 / DEL-12). It is non-destructive: it restores the turn-start
-  cursor/anchor/projection AND records the appended span in
-  `sessionMeta.Retracted`, a RETAINED-but-EXCLUDED effect. The archive never
-  shrinks — the aborted bytes stay on disk for recall while `WindowHistory`
-  omits them from every provider request. A SetHistory-based rollback would
-  instead reset Skip to 0, permanently deleting evicted turns (SC-001), and
-  the old truncating primitive is gone.
-- `RollbackWindow` restores state even when it excludes no bytes (nothing was
-  appended): pkg/agent's `windowTrim` can advance Skip mid-turn, and a no-op
-  rollback must still undo that. This is pkg/memory's only relationship to
-  windowTrim — the function itself lives in pkg/agent; see that package's
-  CLAUDE.md.
+## Rollback is non-destructive and lives in pkg/session
 
-## Durability contract
+`pkg/session/archive_backend.go::archiveBackend.RollbackWindow` (reached through
+`context_window.go::UnifiedStore.RollbackWindow`) is the SOLE rollback
+primitive (session-core FR-006 / DEL-12). It restores the turn-start
+cursor/anchor/projection AND records the appended ordinal span as an
+`ArchiveSpan` in the backend meta's `Retracted` list — RETAINED on disk but
+EXCLUDED from every provider request. The archive never shrinks; spans stay
+exact because the archive is append-only and never renumbered. It restores
+state even when it retracts nothing (`pkg/agent`'s `windowTrim` can advance
+Skip mid-turn, and a no-op rollback must still undo that); the trim itself
+lives in `pkg/agent` — see that package's CLAUDE.md.
 
-- Appends: striped per-session lock (`task.StripedLock`, 64 shards) +
-  `O_APPEND` + fsync per line, then one meta update.
-- Meta writes and full rewrites go through `fileutil.WriteFileAtomic`
-  (temp + fsync + rename).
-- Crash ordering: meta is written BEFORE file rewrites in
-  SetHistory/Compact, so the failure direction is always
-  "too many messages", never data loss; Skip paths reconcile
-  `meta.Count` against the real line count (`countLines`).
-- Malformed lines (partial crash writes) are logged and skipped, never
-  fatal — `readMessages` and `ScanArchive` keep index parity. Scanner cap
-  10 MB; the exported `jsonl.go::EncodedLineBound` (8 MB) is the upstream
-  choke point.
+`ErrWindowChanged` is the compare-and-set failure of
+`archiveBackend.commitWindow`: the stored window no longer equals the caller's
+`before` state.
 
 ## ProjectionKey is composite because tool_call_ids repeat
 
 `projection.go::ProjectionKey`: providers reuse tool_call_ids (B-29b —
-`call_0` every turn), so the archive line index is what makes the address
+`call_0` every turn), so the archive-line ordinal is what makes the address
 exact; keying by id alone silently addresses the wrong turn's result.
-Pre-`capped_failure` entries read back as `ProjectionCapped`; legacy
-archive lines unmarshal with `TS == 0`, meaning "unknown/earlier", never
-an error.
-
-## migration.go was deleted (session-core DEL-09)
-
-`migration.go` and its `MigrateFromJSON` general importer are gone. CONV
-(`pkg/session/unified_conv.go`, the one-time saved-chat cutover) is now the
-sole legacy reader; the `pkg/agent/instance.go` startup path no longer calls
-`MigrateFromJSON`. `SetHistory` still refuses a non-empty archive exactly as
-the deleted importer relied on, and that refusal remains load-bearing for any
-other first-fill caller.
+Entries written before `ProjectionCappedFailure` existed read back as
+`ProjectionCapped`; archive messages without a timestamp unmarshal with
+`TS == 0`, meaning "unknown/earlier", never an error.
