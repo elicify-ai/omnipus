@@ -699,3 +699,41 @@ describe('D6 — Edit', () => {
     expect(useUiStore.getState().editAgentWorkspaceId, 'Admin is not a member: no workspace context').toBeNull()
   })
 })
+
+describe('S4-11/T4 — Remove, remembered-but-not-selected', () => {
+  it('clears the remembered binding WITHOUT running entry recovery when the open chat belongs to another agent', async () => {
+    apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
+    apiMocks.updateWorkspace.mockResolvedValue(workspaceWith({ jim: jimMember }, { core_team: ['jim'] }))
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    // The workspace REMEMBERS Mia's chat, but the OPEN chat is Jim's. The two
+    // halves of AgentRowMenu::confirmRemove's branch disagree on purpose:
+    // remembersRemoved=true, ownsSelectedChat=false.
+    act(() => {
+      useSessionStore.setState({
+        activeSessionId: JIM_MAIN,
+        activeAgentId: 'jim',
+        sessionByWorkspace: {
+          ...useSessionStore.getState().sessionByWorkspace,
+          [WS]: { id: MIA_MAIN, type: 'chat', title: 'Mia main', agentId: 'mia' },
+        },
+      })
+    })
+
+    await openRowMenu('Mia')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    })
+
+    // The stale pointer to the removed member's chat is cleared...
+    expect(useSessionStore.getState().sessionByWorkspace[WS] ?? null).toBeNull()
+    // ...but entry recovery must NOT run: the person is sitting on ANOTHER
+    // agent's chat, and running recovery here would yank them off it.
+    expect(
+      entrySpy,
+      'a remembered-but-not-selected removal must not re-run workspace entry',
+    ).not.toHaveBeenCalled()
+  })
+})
