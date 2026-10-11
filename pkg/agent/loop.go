@@ -2668,23 +2668,38 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 // rows that addressed the now-evicted slots; no archive byte is touched, so
 // recall by tool_call_id and the [capped]/[emptied] marks keep resolving.
 func clearSessionWindow(sessions session.SessionStore, sessionKey string) error {
+	_, err := clearSessionWindowReversible(sessions, sessionKey)
+	return err
+}
+
+// clearSessionWindowReversible is clearSessionWindow that also returns the undo
+// for the move it made, so /clear can put the window back if its divider cannot
+// be recorded (all or nothing).
+func clearSessionWindowReversible(sessions session.SessionStore, sessionKey string) (undo func() error, err error) {
 	store, ok := sessions.(session.ContextWindowStore)
 	if !ok {
-		return fmt.Errorf("session store does not support atomic context checkpoints")
+		return nil, fmt.Errorf("session store does not support atomic context checkpoints")
 	}
 	ctx := context.Background()
 	view, err := store.WindowView(ctx, sessionKey)
 	if err != nil {
-		return fmt.Errorf("read window: %w", err)
+		return nil, fmt.Errorf("read window: %w", err)
 	}
 	after := view.State.Clone()
 	after.Skip = after.Count
 	after.ClearFloor = after.Count
+	after.DropExpiryNote = true
 	after.AnchorLine = nil
 	after.Projection.Entries = memory.ProjectionSet{}
 	after.Projection.SourceRunes = map[memory.ProjectionKey]int{}
 	after.Projection.TranscriptAddr = map[memory.ProjectionKey]memory.RecordAddress{}
-	return store.CommitWindow(ctx, sessionKey, view.State, after)
+	if err := store.CommitWindow(ctx, sessionKey, view.State, after); err != nil {
+		return nil, err
+	}
+	before := view.State.Clone()
+	moved := after.Clone()
+	moved.DropExpiryNote = false
+	return func() error { return store.RestoreWindow(ctx, sessionKey, moved, before) }, nil
 }
 
 // isNativeSearchProvider reports whether the given LLM provider implements

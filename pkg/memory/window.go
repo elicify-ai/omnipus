@@ -12,8 +12,13 @@ type WindowState struct {
 	// but never feed the next request (no breadcrumb snippets of them). 0 when
 	// the session was never cleared.
 	ClearFloor int
-	AnchorLine *int
-	Projection ProjectionMeta
+	// DropExpiryNote asks a commit to drop the retention notice stored with the
+	// window. A /clear sets it: when the window is already empty the clear moves
+	// neither the cursor nor the floor, so nothing else would tell the commit.
+	// It is a one-shot request, never stored and never part of the state compare.
+	DropExpiryNote bool
+	AnchorLine     *int
+	Projection     ProjectionMeta
 }
 
 func (w WindowState) Clone() WindowState {
