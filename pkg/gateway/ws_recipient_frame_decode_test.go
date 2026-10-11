@@ -43,6 +43,10 @@ const recipientDecodeWorkspace = "ws-recipient-decode"
 func newRecipientDecodeFixture(t *testing.T) (*WSHandler, *bus.MessageBus, *wsConn, string) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	// Isolate OMNIPUS_HOME FIRST: this fixture reads config.OmnipusHomeDir() for
+	// the workspace file the REAL gatewayAddressDeps consults, and
+	// ensureIsolatedTestOmnipusHome only isolates when the variable is EMPTY.
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	msgBus := bus.NewMessageBus()
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
