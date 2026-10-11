@@ -31,7 +31,7 @@
  * fetchWorkspaceDelegation).
  */
 import type { ReactNode } from 'react'
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/lib/api-error'
 import type {
@@ -300,20 +300,17 @@ describe('D1/D2 — one ⋯ trigger and the catalogued menu', () => {
     await openRowMenu('Mia')
     const menu = screen.getByRole('menu')
 
-    await act(async () => {
-      fireEvent.keyDown(menu, { key: 'ArrowDown' })
-    })
-    expect(menuItems()[0]).toHaveFocus()
+    // Radix's roving focus moves focus inside a setTimeout (react-roving-focus
+    // RovingFocusGroupItem.onKeyDown), so the outcome is awaited, not assumed
+    // synchronous.
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    await waitFor(() => expect(menuItems()[0]).toHaveFocus())
 
-    await act(async () => {
-      fireEvent.keyDown(menu, { key: 'ArrowDown' })
-    })
-    expect(menuItems()[1]).toHaveFocus()
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    await waitFor(() => expect(menuItems()[1]).toHaveFocus())
 
-    await act(async () => {
-      fireEvent.keyDown(menu, { key: 'Escape' })
-    })
-    expect(screen.queryByRole('menu')).toBeNull()
+    fireEvent.keyDown(menu, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
   })
 })
 
