@@ -537,6 +537,24 @@ afterEach(async () => {
   expect(unsupportedHttp, 'no unexpected HTTP may be converted into an apparent lifecycle RED').toEqual([])
 })
 
+// Per-test budget for this file, overriding the global 30s testTimeout for its
+// tests. Derivation (nav-load2 dispatch, 2026-10-11): the first test died on
+// the 30s budget under machine load ~128 ("Test timed out in 30000ms" at
+// 31672ms, receipt u8-vt.log) while passing 8/8 in isolation. Measured on this
+// tree under residual lane load ~40-65 with an 8-minute budget: every test
+// completes and the cold first test alone takes 17.07s (receipt
+// nav-load2-iso-closepresence-tt8m-20261011.log) — it pays three loadApp()
+// calls, each a vi.resetModules() plus full production module-graph
+// re-execution, plus a route import: the in-body-import class vite.config.ts's
+// testTimeout comment documents at 20-30s cold under contention (#616). A
+// timed-out test also poisons the rest of the file — its orphaned
+// continuations interleave with the next test's realm globals, observed here
+// as empty-<div /> mount cascades. 90s is ~5x the measured 17s cold start at
+// load 40-65 and ~3x the load-128 bust, matching the 90s precedent of
+// ed9af1e10 for designed-expensive tests; a true hang still never completes
+// within it.
+const LOAD_BUDGET_MS = 90_000
+
 describe('closePresenceOrder: real source restoration and delayed child presence leave', () => {
   const orders = [
     { label: 'positive watcher leave-first restores the source exactly once', mode: 'watcher', leaveFirst: true, workspaceId: A },
@@ -625,7 +643,7 @@ describe('closePresenceOrder: real source restoration and delayed child presence
     } finally {
       unsubscribe()
     }
-  })
+  }, LOAD_BUDGET_MS)
 
   it('negative no-close control rejects a false restoration oracle while the owned child remains live', async () => {
     const session = await openSession()
@@ -639,7 +657,7 @@ describe('closePresenceOrder: real source restoration and delayed child presence
     expect(actual.presence).toEqual([opaqueIdentity(A)])
     expect(() => assertDockedTasks(actual, A), 'instrument must REJECT the deliberately wrong no-close restoration claim').toThrowError(/FR-018: owned-close source must contain the same Tasks dock/)
     printOrderReceipt('negative no-close oracle rejected', actual)
-  })
+  }, LOAD_BUDGET_MS)
 
   it('negative foreign-owner Back is rejected by the real owner handler and by the false-restoration oracle', async () => {
     const session = await openSession()
@@ -671,7 +689,7 @@ describe('closePresenceOrder: real source restoration and delayed child presence
     expect(actual.presence).toEqual([opaqueIdentity(A)])
     expect(() => assertDockedTasks(actual, A), 'instrument must REJECT the deliberately wrong foreign-owner restoration claim').toThrowError(/FR-018: owned-close source must contain the same Tasks dock/)
     printOrderReceipt('negative foreign-owner oracle rejected', actual)
-  })
+  }, LOAD_BUDGET_MS)
 
   it('negative truly live matching manual tab retains duplicate-dock prevention and a working Switch after owned child leave', async () => {
     const session = await openSession()
@@ -707,7 +725,7 @@ describe('closePresenceOrder: real source restoration and delayed child presence
     expect(sourceSnapshot(session).activePanel).toBeNull()
     expect(session.open).toHaveBeenCalledTimes(1)
     printOrderReceipt('negative live-other Switch preserved', actual)
-  })
+  }, LOAD_BUDGET_MS)
 
   it('negative different-panel source is preserved with owned-close before the delayed leave', async () => {
     const session = await openSession()
@@ -732,5 +750,5 @@ describe('closePresenceOrder: real source restoration and delayed child presence
     expect(actual.presence).toEqual([])
     expect(actual.switchActions).toEqual([])
     printOrderReceipt('negative different-panel preserved', actual)
-  })
+  }, LOAD_BUDGET_MS)
 })
