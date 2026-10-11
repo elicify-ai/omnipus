@@ -394,13 +394,14 @@ func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.Ru
 
 // runForSession picks up the run its dispatcher already opened for taskSessionID
 // (a MAIN or launcher-front run is opened BEFORE dispatch, with its captured
-// recipients) and only opens a manual run when there is none — the
-// StartTaskNow path, whose recipients ride the detached context.
+// recipients) and only opens a manual run (with none) when there is none. The
+// StartTaskNow path that used to carry recipients on a detached context was
+// deleted with the launcher-less start (S1 M9), so nothing sets them here.
 func (te *TaskExecutor) runForSession(ctx context.Context, t *task.Task, taskSessionID string) *activeRun {
 	if existing, err := te.store.OpenRunForSession(t.ID, taskSessionID); err == nil && existing != nil {
 		return &activeRun{runID: existing.RunID, occurrenceMs: existing.OccurrenceMs, recipients: existing.RecipientSessionIDs}
 	}
-	return te.openRun(t.ID, nil, task.RunKindManual, taskSessionID, runRecipientsFrom(ctx)...)
+	return te.openRun(t.ID, nil, task.RunKindManual, taskSessionID)
 }
 
 // closeRun best-effort closes run's TaskRun record with the given terminal

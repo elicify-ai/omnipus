@@ -136,22 +136,6 @@ func (te *TaskExecutor) captureRunRecipients(ctx context.Context, t *task.Task, 
 	return out
 }
 
-// runRecipientsKey carries a run's captured recipients across the detach from
-// the caller's context (StartTaskNow runs the task on a fresh root context).
-type runRecipientsKey struct{}
-
-func withRunRecipients(ctx context.Context, recipients []string) context.Context {
-	if len(recipients) == 0 {
-		return ctx
-	}
-	return context.WithValue(ctx, runRecipientsKey{}, append([]string(nil), recipients...))
-}
-
-func runRecipientsFrom(ctx context.Context) []string {
-	v, _ := ctx.Value(runRecipientsKey{}).([]string)
-	return v
-}
-
 // launchMainTaskRun starts one MAIN run: a fresh real child of the assignee's
 // main (the steering session), bound to the task, with its run opened under the
 // captured recipients before the child is dispatched. Returns the child's
