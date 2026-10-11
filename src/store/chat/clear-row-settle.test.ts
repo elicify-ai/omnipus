@@ -32,7 +32,7 @@ import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
 import { ApiError } from '@/lib/api-error'
 import { pendingClearRefetches, clearConfirmTimers } from './runtime-state'
-import { MAX_UNRESOLVED_READS } from './clear-refetch'
+import { CLEAR_CONFIRM_TIMEOUT_MS, MAX_UNRESOLVED_READS } from './clear-refetch'
 import { useUiStore } from '@/store/ui'
 import type { ServerFrame } from '@/lib/ws'
 import type { ChatMessage } from './types'
@@ -326,14 +326,26 @@ describe('R1#1 — a /clear the server never confirms nor refuses resolves after
     useChatStore.getState().handleFrame(doneFrame('turn-clear-1', 1))
     // (The read is async under fake timers; retire it synchronously instead.)
     expect(pendingClearRefetches[SID]).toBeTruthy()
-    // A second /clear is sent while the first read is outstanding.
+
+    // Time passes, but NOT yet past the first operation's own bound.
+    vi.advanceTimersByTime(CLEAR_CONFIRM_TIMEOUT_MS / 2)
+
+    // A second /clear is sent while the first read is outstanding: it REPLACES
+    // the pending operation, so its bound runs a full window from NOW. Both
+    // operations are deliberately NOT at the same fake time — that is what makes
+    // a stale timer distinguishable from the live one.
     useChatStore.getState().sendMessage('/clear')
     const cmid2 = sentClientMessageId(1)
     expect(pendingClearRefetches[SID]?.clientMessageId).toBe(cmid2)
 
-    // The bound fires long after: only the SECOND operation is still armed,
-    // so only its row may resolve.
-    vi.advanceTimersByTime(120_000)
+    // Past the FIRST operation's bound, well short of the second's. A stale
+    // timer that survived the replacement would resolve cmid2 here.
+    vi.advanceTimersByTime(CLEAR_CONFIRM_TIMEOUT_MS / 2 + 10_000)
+    expect(bucket().messagesById[cmid2]?.deliveryStatus).not.toBe('unconfirmed')
+    expect(pendingClearRefetches[SID]?.clientMessageId).toBe(cmid2)
+
+    // Only the SECOND operation's own bound resolves its row.
+    vi.advanceTimersByTime(CLEAR_CONFIRM_TIMEOUT_MS)
     expect(bucket().messagesById[cmid2]?.deliveryStatus).toBe('unconfirmed')
     expect(pendingClearRefetches[SID]).toBeUndefined()
     expect(cmid1).not.toBe(cmid2)
