@@ -1138,7 +1138,7 @@ type AgentSessionStore interface {
 func CheckAgentDeleteRevision(omnipusHome, agentID, revision string) error {
 	st, err := agentstore.New(omnipusHome).ReadState(agentID)
 	if err != nil || st == nil {
-		return nil
+		return nil //nolint:nilerr // An unreadable or missing record is decided by the cascade's idempotent retry and DeleteState, not by this read-only comparison.
 	}
 	if st.Revision != revision {
 		return fmt.Errorf("%w: expected %s, current %s", agentstore.ErrRevisionConflict, revision, st.Revision)

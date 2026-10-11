@@ -735,48 +735,7 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 		}
 		newRegistry.EvaluateDefaultAgentHealth(cfg.Agents.Defaults.DefaultAgentID, cfg.SkippedAgentIDs)
 
-		// Re-run the SAME wiring ReloadProviderAndConfig runs against a
-		// freshly-built registry, against this one instead. registerSharedTools
-		// et al. iterate registry.ListAgentIDs()/GetAgent() themselves, so this
-		// re-touches the other N-1 agents' tool registrations too (idempotent —
-		// same config, same singleton deps, so "cheap" per the issue's own
-		// design note) while giving the one new/updated instance full parity.
-		registerSharedTools(al, cfg, al.bus, newRegistry, provider)
-		if al.tier13Deps != nil {
-			al.wireTier13DepsLocked(newRegistry, *al.tier13Deps, cfg)
-		}
-		al.wireExecToolDepsOn(newRegistry, cfg)
-		if al.sysagentDeps != nil {
-			al.wireSysagentDepsLocked(newRegistry, al.sysagentDeps)
-		}
-		if al.auditLogger != nil {
-			al.wireMemoryAuditLoggerOn(newRegistry, al.auditLogger)
-		}
-		if al.memoryRateLimiter != nil {
-			al.wireMemoryRateLimiterOn(newRegistry, al.memoryRateLimiter)
-		}
-		wireDelegationInjectors(al, newRegistry)
-		wireWorkingDirInjectors(al, newRegistry)
-		// ADR-072 R1 fix regression (live UAT, 2026-09-02): wireProjectShelfResolvers
-		// was only ever called once, from NewAgentLoop at boot — unlike its
-		// siblings above, it was never re-applied here, so a mounted project's
-		// skills silently stopped resolving for every agent after the FIRST
-		// config reload of the process (onboarding itself triggers one, so this
-		// hit nearly every real install). Mirror the siblings' re-wiring.
-		wireProjectShelfResolvers(al, newRegistry)
-		// MediaStore is deliberately left nil by registerSharedTools' send_file
-		// wiring (see its own doc comment) because it may not exist yet on the
-		// very first wiring pass inside NewAgentLoop; every real reload
-		// re-applies it afterward via SetMediaStore. Mirror that here so every
-		// agent touched by the re-wiring above doesn't transiently lose media
-		// capability relative to a full reload's end state.
-		if ms := al.GetMediaStore(); ms != nil {
-			for _, aid := range newRegistry.ListAgentIDs() {
-				if inst, ok := newRegistry.GetAgent(aid); ok {
-					inst.Tools.SetMediaStore(ms)
-				}
-			}
-		}
+		al.rewireFastUpsertRegistry(newRegistry, cfg, provider)
 
 		al.mu.Lock()
 		if al.registry != oldRegistry || al.configGen.Load() != oldGen {
@@ -868,6 +827,56 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 		"upsert agent fast: gave up after %d attempts racing concurrent registry publishers",
 		maxFastUpsertAttempts,
 	)
+}
+
+// rewireFastUpsertRegistry re-runs, against the registry UpsertAgentFast just
+// built, the same wiring pass a full ReloadProviderAndConfig runs against a
+// freshly built one. It is the body UpsertAgentFast used to inline (extracted
+// only to keep that function under its complexity pin); behaviour and call
+// order are unchanged.
+func (al *AgentLoop) rewireFastUpsertRegistry(newRegistry *AgentRegistry, cfg *config.Config, provider providers.LLMProvider) {
+	// Re-run the SAME wiring ReloadProviderAndConfig runs against a
+	// freshly-built registry, against this one instead. registerSharedTools
+	// et al. iterate registry.ListAgentIDs()/GetAgent() themselves, so this
+	// re-touches the other N-1 agents' tool registrations too (idempotent —
+	// same config, same singleton deps, so "cheap" per the issue's own
+	// design note) while giving the one new/updated instance full parity.
+	registerSharedTools(al, cfg, al.bus, newRegistry, provider)
+	if al.tier13Deps != nil {
+		al.wireTier13DepsLocked(newRegistry, *al.tier13Deps, cfg)
+	}
+	al.wireExecToolDepsOn(newRegistry, cfg)
+	if al.sysagentDeps != nil {
+		al.wireSysagentDepsLocked(newRegistry, al.sysagentDeps)
+	}
+	if al.auditLogger != nil {
+		al.wireMemoryAuditLoggerOn(newRegistry, al.auditLogger)
+	}
+	if al.memoryRateLimiter != nil {
+		al.wireMemoryRateLimiterOn(newRegistry, al.memoryRateLimiter)
+	}
+	wireDelegationInjectors(al, newRegistry)
+	wireWorkingDirInjectors(al, newRegistry)
+	// ADR-072 R1 fix regression (live UAT, 2026-09-02): wireProjectShelfResolvers
+	// was only ever called once, from NewAgentLoop at boot — unlike its
+	// siblings above, it was never re-applied here, so a mounted project's
+	// skills silently stopped resolving for every agent after the FIRST
+	// config reload of the process (onboarding itself triggers one, so this
+	// hit nearly every real install). Mirror the siblings' re-wiring.
+	wireProjectShelfResolvers(al, newRegistry)
+	// MediaStore is deliberately left nil by registerSharedTools' send_file
+	// wiring (see its own doc comment) because it may not exist yet on the
+	// very first wiring pass inside NewAgentLoop; every real reload
+	// re-applies it afterward via SetMediaStore. Mirror that here so every
+	// agent touched by the re-wiring above doesn't transiently lose media
+	// capability relative to a full reload's end state.
+	if ms := al.GetMediaStore(); ms != nil {
+		for _, aid := range newRegistry.ListAgentIDs() {
+			if inst, ok := newRegistry.GetAgent(aid); ok {
+				inst.Tools.SetMediaStore(ms)
+			}
+		}
+	}
 }
 
 // RemoveAgent deletes a single agent instance from the registry (post
