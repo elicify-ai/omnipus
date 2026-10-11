@@ -267,9 +267,16 @@ func (h *WSHandler) handleChatMessageToRecipient(
 	// Schema validation is optional, but the client-id bound is not. Reject
 	// before resolution, persistence, or the deferred status/cache cleanup.
 	if utf8.RuneCountInString(clientMessageID) > maxClientMessageIDChars {
+		const tooLong = "client_message_id must be at most 128 characters"
+		if recipient != nil {
+			// An @-recipient send names its chat; the invalid id cannot be echoed
+			// or ticked, so only the chat is tagged.
+			h.sendRecipientRefusal(wc, frameSessionID, "", tooLong)
+			return
+		}
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "client_message_id must be at most 128 characters",
+			Message: tooLong,
 		})
 		return
 	}
@@ -280,10 +287,7 @@ func (h *WSHandler) handleChatMessageToRecipient(
 		msg, approved := h.refuseRecipient(ctx, frameSessionID, setupKickoff, *recipient)
 		recipientAskApproved = approved
 		if msg != "" {
-			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: msg,
-			})
+			h.sendRecipientRefusal(wc, frameSessionID, clientMessageID, msg)
 			return
 		}
 	}

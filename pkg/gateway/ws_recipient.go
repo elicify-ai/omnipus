@@ -87,12 +87,7 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 		// fail closed rather than record an empty owner that skips the
 		// return-time binding check.
 		logsafeWarn("ws: could not read the source chat to bind the request", "session_id", srcID, "error", metaErr)
-		sid := srcID
-		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:      string(generated.WsFrameTypeError),
-			Message:   "the request could not be delivered to that agent",
-			SessionId: &sid,
-		})
+		hcm.h.sendRecipientRefusal(hcm.wc, srcID, hcm.clientMessageID, "the request could not be delivered to that agent")
 		return
 	}
 	{
@@ -137,15 +132,58 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 	}
 	if err != nil {
 		logsafeWarn("ws: could not deliver the request to the recipient", "session_id", srcID, "error", err)
-		sid := srcID
-		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:      string(generated.WsFrameTypeError),
-			Message:   "the request could not be delivered to that agent",
-			SessionId: &sid,
-		})
+		if hcm.sessionID == "" {
+			hcm.h.sendRecipientRefusal(hcm.wc, srcID, hcm.clientMessageID, "the request could not be delivered to that agent")
+		} else {
+			// The message was already saved and echoed; the deferred failed tick
+			// (hcm.sessionID is set) reconciles the row after this error.
+			hcm.h.sendRecipientRefusalError(hcm.wc, srcID, hcm.clientMessageID, "the request could not be delivered to that agent")
+		}
 		return
 	}
 	hcm.admitted = true
+}
+
+// sendRecipientRefusalError sends the message-scoped refusal of an @-recipient
+// send to the sender's connection (delta-review C2; contract ErrorFrame). It is
+// tagged with the sender's chat (sessionID) and the message's client_message_id
+// so the SPA files the notice in that chat, reconciles the row, and does NOT
+// treat it as the end of the chat's running turn. Tags are set only when the
+// chat is known (a refusal for a missing session_id stays global) and
+// client_message_id only together with the chat.
+func (h *WSHandler) sendRecipientRefusalError(wc *wsConn, sessionID, clientMessageID, message string) {
+	frame := generated.ErrorFrame{
+		Type:    string(generated.WsFrameTypeError),
+		Message: message,
+	}
+	if sessionID != "" {
+		sid := sessionID
+		frame.SessionId = &sid
+		if clientMessageID != "" {
+			cid := clientMessageID
+			frame.ClientMessageId = &cid
+		}
+	}
+	sendConnGenFrame(wc, string(generated.WsFrameTypeError), frame)
+}
+
+// sendRecipientRefusal is sendRecipientRefusalError followed by the sender
+// row's message_status "failed" tick, published through the session hub (the
+// sender's tab also gets it when it is not bound), in the same error-then-tick
+// order as websocket_chat.go::sendAppendFailureError. The refusal runs before
+// the message is saved, so the deferred tick of the intake is not armed and
+// the tick is published here. No tick without both ids.
+func (h *WSHandler) sendRecipientRefusal(wc *wsConn, sessionID, clientMessageID, message string) {
+	h.sendRecipientRefusalError(wc, sessionID, clientMessageID, message)
+	if sessionID == "" || clientMessageID == "" {
+		return
+	}
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
+		Type:            string(generated.WsFrameTypeMessageStatus),
+		SessionId:       sessionID,
+		ClientMessageId: clientMessageID,
+		State:           "failed",
+	}, wc)
 }
 
 // errRecipientSourceRefused marks a BeforeCommit abort whose user-facing error
