@@ -196,10 +196,10 @@ func (p *windowCheckpoint) shortenResult(i int, halve bool) (bool, error) {
 	return true, nil
 }
 
-func breadcrumbForWindow(ctx context.Context, slots slotsBefore, skip int) (string, error) {
+func breadcrumbForWindow(ctx context.Context, slots slotsBefore, floor, skip int) (string, error) {
 	// The checkpoint may stage a newer Skip than the snapshot's. Render that
 	// exact prefix through the ordinal index, newest evicted slot first.
-	return buildArchiveBreadcrumb(ctx, slots, skip)
+	return buildArchiveBreadcrumbFrom(ctx, slots, floor, skip)
 }
 
 func (p *windowCheckpoint) rebuildBreadcrumb(ctx context.Context) error {
@@ -207,7 +207,7 @@ func (p *windowCheckpoint) rebuildBreadcrumb(ctx context.Context) error {
 		return nil
 	}
 	old := p.breadcrumb
-	next, err := breadcrumbForWindow(ctx, p.slots, p.state.Skip)
+	next, err := breadcrumbForWindow(ctx, p.slots, p.state.ClearFloor, p.state.Skip)
 	if err != nil {
 		return err
 	}

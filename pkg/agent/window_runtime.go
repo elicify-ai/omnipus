@@ -20,16 +20,46 @@ const (
 	// windowProducerUser is the person's (or relayed) input admitted to the
 	// model at the turn's start or injected as steering.
 	windowProducerUser
+	// windowProducerConnector is input a bound connector delivered to a main.
+	windowProducerConnector
+	// windowProducerParent is input a delegating parent sent to the steered
+	// (helper) session the turn runs in.
+	windowProducerParent
 )
 
 func (p windowProducer) modelAppend(msg providers.Message, agentID string) session.ModelAppend {
 	in := session.ModelAppend{Message: msg, ViewMembership: session.ViewMembershipModel, AgentID: agentID}
-	if p == windowProducerAssistant {
+	switch p {
+	case windowProducerAssistant:
 		in.Source = session.EntrySource{Kind: "agent"}
-	} else {
+	case windowProducerConnector:
+		in.Source = session.EntrySource{Kind: "connector"}
+	case windowProducerParent:
+		in.Source = session.EntrySource{Kind: "parent"}
+	default:
 		in.Source = session.EntrySource{Kind: "user"}
 	}
 	return in
+}
+
+// inputProducer classifies the non-assistant input a turn admits, from what the
+// server knows about the session - never from the message role (Decision A,
+// T15/N3): a steered (delegated) session's input comes from its parent, a main
+// fed by a bound connector gets connector input, everything else is a person's.
+func (al *AgentLoop) inputProducer(ts *turnState) windowProducer {
+	sessionID := ts.transcriptSessionID
+	if sessionID == "" {
+		sessionID = ts.sessionKey
+	}
+	if lc := al.GetSessionLifecycleStore(); lc != nil && sessionID != "" {
+		if rec, err := lc.Load(sessionID); err == nil && rec != nil && rec.SteeredBy != nil {
+			return windowProducerParent
+		}
+	}
+	if al.mainConnectorTurn(ts.channel, sessionID) {
+		return windowProducerConnector
+	}
+	return windowProducerUser
 }
 
 // appendWindowMessage admits structural and control messages through the same

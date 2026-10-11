@@ -717,7 +717,7 @@ func (al *AgentLoop) runTaskExternalCLIOnce(
 	// the onCancelFinish callback RequestCancel installs via
 	// SetOnCancelFinish (pkg/agent/cancel.go). Without it, a cancel here
 	// claimed cancelFired (CancelOutcome{Fired: true}) but produced NO
-	// turn_canceled transcript entry, NO MarkLastEntryTruncated, and NO
+	// turn_canceled transcript entry, NO the former post-hoc truncation rewrite, and NO
 	// audit.EventTurnCancelled — silently contradicting this function's own
 	// doc comment above, which already (incorrectly, until this fix)
 	// described the callback as firing.

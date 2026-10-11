@@ -360,56 +360,6 @@ func (te *TaskExecutor) getLifecycleStore() *session.LifecycleStore {
 	return te.lifecycleStore
 }
 
-// mintTaskLifecycleRecord persists the initial durable S2 lifecycle record
-// (ADR-053, state=queued) for the freshly-created task-dispatch session
-// sessionID — closing the FR-118/G-13 producer gap described on the
-// lifecycleStore field's doc comment. Called synchronously by BOTH
-// task-session creation chokepoints — createTaskSessionSync (used by
-// ExecuteTask, and therefore by every one of CheckQueuedTasks,
-// advanceBlockedTasks, SpawnTriggeredRun, and plan-member dispatch via
-// executeTaskPlanVerified) and StartTaskNow's own inline session-creation
-// block — so EVERY task-dispatch path gets a record, not just one of them.
-//
-// OwnerScopeKind: a plan-member task (t.PlanID != "") names its plan as the
-// durable owner (OwnerScopePlan/t.PlanID) — the same discriminator a plan's
-// own OWNER/SUPERVISION sessions use (pkg/agent/plan_engine.go's
-// mintPlanSession, out of this wave's write-set/scope). A standalone task
-// has no single owning session, so it takes the same OwnerScopeHuman
-// default pkg/tools/delegate.go's own top-level (non-parented) mint uses.
-// ParentAgentID/SteeringSessionID are deliberately left empty: a task
-// dispatch is not a `delegate.run` call, so there is no delegating parent to
-// attribute — and leaving SteeringSessionID empty also means
-// verifyCallerOwnsSession (pkg/tools/delegate.go) fails closed if some
-// caller ever names a task's session_id in a delegate.* admin action
-// (cancel/steer/respond/follow_up/peek/inbox), preserving today's behavior
-// where such a call found no record at all.
-//
-// Is3P is stamped from the task's assigned agent's resolved executor kind —
-// runner.ResolveDispatch(executorConfigOf(agent)), the SAME gate
-// SteerLauncher.Launch resolves a steered child's runtime through (and the
-// same gate the body dispatch consults: steer_turn_body.go's
-// runSteeredTurnBody, task_executor_run.go's processTaskDirectExternalCLI).
-// One resolution, one source of the fact. Before this, the launcher paths
-// stamped the field but THIS producer — the task/plan-member dispatch
-// chokepoint — did not, so an external-CLI task-mode session ran the CLI while
-// carrying is_3p=false, and every 3P refusal in pkg/tools read the wrong value
-// for it.
-//
-// Failure contract: an UNRESOLVABLE executor kind (the resolver failing —
-// reserved remote-a2a, or any unknown kind) OR a Persist failure is RETURNED,
-// never logged-and-continued. Both callers propagate the error through their
-// existing truthful pre-dispatch failure path (executeTask's
-// failTaskBeforeDispatch via createTaskSessionSync; StartTaskNow's own
-// identical handling), so no task run ever begins with an unpersisted or
-// mismatched classification. The ONE deliberate no-op is an unwired lifecycle
-// store (ls == nil): that is the test-harness/degraded-boot seam where the
-// durable-lifecycle subsystem is absent entirely, not a persistence failure —
-// dispatch proceeds exactly as before this wave
-// (TestMintTaskLifecycleRecord_NilStore_NoOp pins that).
-func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) error {
-	return te.mintTaskLifecycleRecordFor(sessionID, t, nil)
-}
-
 // mintTaskLifecycleRecordFor is mintTaskLifecycleRecord for a run an agent
 // started: initiatedBy (already authorized by authorizeInitiatedRun) is
 // stamped on the record so the run's later delegations and run_task /
@@ -1275,182 +1225,14 @@ func (te *TaskExecutor) StartTaskNowAs(ctx context.Context, taskID string, initi
 		}
 		initiatedBy = ib
 	}
-	if te.launcher != nil {
-		return te.startTaskNowViaLauncherAs(ctx, t, initiatedBy)
+	if te.launcher == nil {
+		// The gateway always installs the launcher at boot (SetSessionLauncher);
+		// a second, launcher-less start path was removed because production never
+		// took it, which let tests of that path stay green while the real one
+		// (FR-A-010's single task front) went unexercised.
+		return "", errors.New("task_executor: StartTaskNow: no session launcher is installed")
 	}
-
-	// Idempotency guard. A bound session is returned ONLY when its durable
-	// classification record exists AND the task is not Failed (S1): a second
-	// StartTaskNow after a failed pre-dispatch setup must return an error and
-	// start nothing, never (sessionID, nil) for a binding whose classification
-	// was never persisted. The launcher path above re-dispatches an existing
-	// binding and errors truthfully when it cannot; this mirrors that for the
-	// non-launcher path.
-	if t.SessionID != "" {
-		if gErr := te.boundSessionRetryable(t); gErr != nil {
-			return "", gErr
-		}
-		return t.SessionID, nil
-	}
-
-	// Atomically claim the slot: under a single te.mu critical section, re-check
-	// whether a goroutine is already running AND insert a sentinel cancel so
-	// competing concurrent callers observe the slot as taken before we unlock.
-	// This closes the TOCTOU window where two concurrent StartTaskNow calls could
-	// both pass the running-check before either one registered its goroutine.
-	//
-	// A nil sentinel marks "slot reserved, cancel not yet set". The goroutine
-	// replaces it with the real cancel before returning. If setup fails we delete
-	// the slot so the task is not permanently locked.
-	te.mu.Lock()
-	if _, alreadyRunning := te.running[taskID]; alreadyRunning {
-		te.mu.Unlock()
-		// A goroutine is live (or starting up); the session_id may have been
-		// written by now — re-read.
-		fresh, rerr := te.store.Get(taskID)
-		if rerr == nil && fresh.SessionID != "" {
-			return fresh.SessionID, nil
-		}
-		return "", fmt.Errorf("task_executor: StartTaskNow: task %q goroutine already running", taskID)
-	}
-	// Reserve the slot explicitly so competing callers bail at the check above.
-	// reserved=true, cancel=nil: slot is claimed but the goroutine has not started yet.
-	te.running[taskID] = &taskSlot{reserved: true}
-	te.mu.Unlock()
-
-	// releaseSlot removes the reservation if setup fails so future callers can
-	// retry. A no-op after the goroutine successfully replaces the sentinel.
-	slotReleased := false
-	releaseSlot := func() {
-		if !slotReleased {
-			slotReleased = true
-			te.mu.Lock()
-			delete(te.running, taskID)
-			te.mu.Unlock()
-		}
-	}
-	defer releaseSlot()
-
-	// Check that the assigned agent is known.
-	registry := te.agentLoop.GetRegistry()
-	if registry == nil {
-		return "", fmt.Errorf("task_executor: StartTaskNow: agent registry is not available")
-	}
-	if _, ok := registry.GetAgent(t.AgentID); !ok {
-		return "", fmt.Errorf("task_executor: StartTaskNow: agent %q not found for task %q", t.AgentID, taskID)
-	}
-
-	te.syncDispatchCapacity()
-	ok, release := te.dispatchSema.TryAcquire()
-	if !ok {
-		return "", fmt.Errorf(
-			"%w (%d/%d in flight), retry later",
-			ErrDispatchCapReached,
-			te.dispatchSema.InFlight(), te.dispatchSema.Cap(),
-		)
-	}
-
-	// Create the session synchronously so we can return the session_id to the
-	// caller before the goroutine starts.
-	sessStore := te.agentLoop.GetSessionStore()
-	var taskSessionID string
-	if sessStore != nil {
-		meta, sessErr := sessStore.NewSession(session.SessionTypeTask, "system", t.AgentID)
-		if sessErr != nil {
-			release()
-			return "", fmt.Errorf("task_executor: StartTaskNow: create session for task %q: %w", taskID, sessErr)
-		}
-		taskSessionID = meta.ID
-
-		title := t.Title
-		tid := t.ID
-		wsID := t.WorkspaceID
-		metaPatch := session.MetaPatch{Title: &title, TaskID: &tid}
-		if wsID != "" {
-			metaPatch.WorkspaceID = &wsID
-		}
-		if setErr := sessStore.SetMeta(meta.ID, metaPatch); setErr != nil {
-			logger.ErrorCF("task_executor", "StartTaskNow: could not set task session meta",
-				map[string]any{"task_id": taskID, "error": setErr.Error()})
-		}
-		// S1: mint the durable S2 lifecycle record BEFORE binding the session —
-		// the binding is the commit point, so a session_id lands on the task only
-		// once its classification was persisted. See mintTaskLifecycleRecord's
-		// doc comment. StartTaskNow is the SECOND (and only other) task-session
-		// creation chokepoint besides createTaskSessionSync; both call this so
-		// every dispatch path gets a record. A resolver/persist failure is
-		// PROPAGATED through the truthful pre-dispatch failure
-		// (failTaskBeforeDispatch): the run is refused, never started on an
-		// unpersisted/mismatched classification.
-		if mintErr := te.mintTaskLifecycleRecordFor(taskSessionID, t, initiatedBy); mintErr != nil {
-			release()
-			return "", te.failTaskBeforeDispatch(taskID, mintErr)
-		}
-		updated, updateErr := te.persistTaskSessionBinding(taskID, taskSessionID)
-		if updateErr != nil {
-			release()
-			return "", te.failTaskBeforeDispatch(taskID, updateErr)
-		}
-		t = updated
-		if err := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
-			ID:        t.ID + "-prompt",
-			Role:      "user",
-			Content:   te.buildPrompt(t),
-			Timestamp: time.Now().UTC(),
-		}); err != nil {
-			taskGoalTranscriptWriteFailures.Add(1)
-			logger.WarnCF("task_executor", "StartTaskNow: transcript write failed",
-				map[string]any{"task_id": taskID, "session_id": taskSessionID, "error": err.Error()})
-		}
-		// GOAL-FR-010/FR-012 (E12): see activateTaskGoal's doc comment —
-		// StartTaskNow is the second of the two task-session-creation
-		// chokepoints and must activate the task's goal record exactly like
-		// createTaskSessionSync does. The error is reported by
-		// activateTaskGoal itself (ERROR log + a line in the task's own
-		// transcript) and is not fatal to the run — see the sibling call in
-		// createTaskSessionSync.
-		_ = te.activateTaskGoal(t, taskSessionID)
-	} else {
-		release()
-		return "", fmt.Errorf("task_executor: StartTaskNow: agent store %q not found for task %q", t.AgentID, taskID)
-	}
-
-	te.emitStatusChanged(t, task.StatusInProgress)
-
-	// Detach from the caller's context (typically an HTTP request context that
-	// gets canceled as soon as the response is sent). The goroutine must outlive
-	// the HTTP request; the explicit cancel stored in te.running[taskID] is the
-	// intended cancellation path (a future "cancel task" API).
-	//
-	// D-08/FR-057: StartTaskNow has two callers with different attended-ness —
-	// the REST "Run now"/"Start Task" handlers (rest_tasks.go, a literal user
-	// click, ctx carries no AutoDenyAsk marker so this defaults false/attended)
-	// and the run_task AGENT TOOL (pkg/tools/run_task.go), whose ctx is the
-	// calling turn's own execCtx and so already carries whatever AutoDenyAsk
-	// that turn was stamped with (true if the calling turn is itself headless,
-	// e.g. a task dispatched via run_task from inside a Calendar-triggered
-	// run). Read it from the caller's ctx BEFORE detaching to Background()
-	// below, or the value is silently lost and the child always defaults
-	// attended regardless of its caller.
-	//
-	// Replace the reserved slot (inserted above, cancel==nil, reserved==true)
-	// with a live slot (cancel set, reserved==false) under the same mutex so
-	// any concurrent reader always observes a consistent, named state.
-	autoDenyAsk := tools.ToolAutoDenyAsk(ctx)
-	// FR-019: the run's recipients are captured from THIS caller's context (the
-	// starter agent) before the detach below drops it.
-	runRecipients := te.captureRunRecipients(ctx, t, initiatedBy)
-	taskCtx, cancel := context.WithCancel(context.Background())
-	taskCtx = tools.WithAutoDenyAsk(taskCtx, autoDenyAsk)
-	taskCtx = withRunRecipients(taskCtx, runRecipients)
-	te.mu.Lock()
-	te.running[taskID] = &taskSlot{cancel: cancel, reserved: false}
-	te.mu.Unlock()
-	slotReleased = true // goroutine now owns the slot; don't let releaseSlot clear it
-
-	te.wg.Add(1)
-	go te.runTaskFromInProgress(taskCtx, t, taskSessionID, cancel, release)
-	return taskSessionID, nil
+	return te.startTaskNowViaLauncherAs(ctx, t, initiatedBy)
 }
 
 // steeringRefusalError is the task path's ADR-093 D5 surface: Error() is the
@@ -1476,12 +1258,6 @@ func newSteeringRefusalError(err error) error {
 		sentence = steer.SteeringRevivalFailedMessage
 	}
 	return &steeringRefusalError{sentence: sentence, cause: err}
-}
-
-// startTaskNowViaLauncher is FR-A-010's single task front: Launch+Dispatch
-// for a task without a session and Dispatch alone for an existing session.
-func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Task) (string, error) {
-	return te.startTaskNowViaLauncherAs(ctx, t, nil)
 }
 
 // startTaskNowViaLauncherAs is startTaskNowViaLauncher carrying the

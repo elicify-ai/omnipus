@@ -43,7 +43,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 			// — a truncated turn that produced literally no content. No
 			// retry, no fallback substitution, no markTurnFailed; finalContent
 			// stays "" and the write choke points below persist a zero-content
-			// entry for MarkLastEntryTruncated to find.
+			// entry for the former post-hoc truncation rewrite to find.
 		} else if rz.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() >= rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations && rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations > 0 {
 			// Genuine failure: tool-iteration ceiling hit without a final response.
 			// markTurnFailed so DoneStats.TurnFailed=true reaches the done frame.
@@ -109,7 +109,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		// When the turn was truncated, stamp Truncated/TruncationReason in
 		// the SAME write as the content — see
 		// appendAssistantTranscriptTruncated's doc comment for why this
-		// replaces the former append-then-MarkLastEntryTruncated two-step
+		// replaces the former append-then-the former post-hoc truncation rewrite two-step
 		// (for the streaming case, finalizeStreamer's own deferred call
 		// does the single-write equivalent after wsStreamer.Finalize
 		// persists its entry).
@@ -723,7 +723,7 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 			Content: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,
 			Media:   append([]string(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.media...),
 		}
-		if _, err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(rootMsg, windowProducerUser); err != nil {
+		if _, err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(rootMsg, rp.rc.rx.rr.rq.ri.rf.rt.al.inputProducer(rp.rc.rx.rr.rq.ri.rf.rt.ts)); err != nil {
 			rt := rp.rc.rx.rr.rq.ri.rf.rt
 			var status TurnEndStatus
 			rp.rc.ret0, status, rp.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
@@ -918,17 +918,15 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 	return agentLoopRunTurnRequestNext
 }
 
-// prepareCallMessages repairs history and injects the current ephemeral instruction messages.
+// prepareCallMessages refuses a malformed tool-call history and injects the
+// current ephemeral instruction messages. The window-group check is the only
+// tool-structure gate: a bad history is refused here, never repaired.
 func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 	repairedHistory := rq.ri.messages
 	if err := validateWindowGroups(repairedHistory); err != nil {
 		rq.ri.rf.rt.ts.setContextWindowError(err)
 		rq.ri.rf.callMessages = repairedHistory
 		return
-	}
-	if rq.ri.rf.rt.ts.opts.TranscriptStore != nil && rq.ri.rf.rt.ts.opts.TranscriptSessionID != "" && rq.ri.rf.rt.ts.agent != nil && rq.ri.rf.rt.ts.agent.Tools != nil {
-		repaired, _ := repairHistory(rq.ri.rf.rt.turnCtx, rq.ri.messages, rq.ri.rf.rt.ts.opts.TranscriptStore, rq.ri.rf.rt.ts.opts.TranscriptSessionID, rq.ri.rf.rt.ts.agent.Tools, rq.ri.rf.rt.ts.agent.ID, rq.ri.rf.rt.ts.agent.LoadToolPolicy())
-		repairedHistory = repaired
 	}
 
 	rq.ri.rf.callMessages = repairedHistory
@@ -1270,7 +1268,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		for i, pm := range ri.pendingMessages {
 			// Persist original compact media refs before using the resolved
 			// provider-only message. Failed admission cannot emit an applied receipt.
-			if _, err := ri.rf.rt.ts.appendWindowMessage(pm, windowProducerUser); err != nil {
+			if _, err := ri.rf.rt.ts.appendWindowMessage(pm, ri.rf.rt.al.inputProducer(ri.rf.rt.ts)); err != nil {
 				var status TurnEndStatus
 				ri.ret0, status, ri.ret1 = ri.rf.rt.al.contextWindowTurnExit(ri.rf.rt.ts, ri.rf.rt.iteration, ri.rf.rt.llmModel, err)
 				ri.turnStatus = status

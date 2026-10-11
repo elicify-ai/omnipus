@@ -34,6 +34,7 @@
 import type { Session, SessionDetail } from '@/lib/api'
 import type { AttachSessionFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
+import { logDiagnostic } from '@/lib/telemetry'
 import {
   attachAckFields,
   attentionBoundOfFrame,
@@ -71,6 +72,12 @@ function documentIsHidden(): boolean {
  * snapshot and the session_state mark that the answer began — a completion
  * that arrives before any answer frame belongs to an OLDER open of the same
  * session and must never touch the current record (R3).
+ *
+ * Two flags carry that state on the record: `answerSeen` (an attention answer
+ * for THIS open has been noted; without it a completion either belongs to an
+ * older open and is ignored, or closes the record as boundless) and
+ * `boundClosed` (the single capture opportunity has been used, whether or not
+ * it yielded a number). A completion alone never sets the bound.
  */
 export function noteServerAttentionFrame(sessionId: string, frame: unknown): void {
   snapshotBySession.set(sessionId, frame)
@@ -189,4 +196,5 @@ export function acknowledgeShownCatchUp(sessionId: string): void {
   // Send the frozen bound. A failed send keeps the record (I4); the next
   // completion or cache event retries through these same guards.
   if (sendCaptured(sessionId, attachAckFields(current.bound))) current.sent = true
+  else logDiagnostic('foregroundAckSendFailed', { sessionId })
 }

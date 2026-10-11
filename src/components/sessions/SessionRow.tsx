@@ -1,6 +1,6 @@
 // One session row in the Sessions view. Actions are siblings, never nested
-// buttons. Identity on the row stays the agent header's existing mark until
-// AgentIcon lands (FE-1); this row does not fetch an agent.
+// buttons. This row shows no agent mark and does not fetch an agent; the
+// agent header above the group carries identity.
 
 import { useEffect, useRef, useState } from 'react'
 import { Check, PencilSimple, Trash, X } from '@phosphor-icons/react'

@@ -48,6 +48,7 @@ func TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable(t *testin
 	convSeedLegacyChatDir(t, sessionsDir, id, "mia", "jim", "Old saved chat", "", created, updated)
 	convSeedLegacyTranscript(t, sessionsDir, id, "legacy-m1", "old hello", "mia", created)
 
+	require.NoError(t, CutoverSavedChatsAtBoot(sessionsDir), "the explicit boot step runs before any store is opened")
 	store, err := NewUnifiedStoreWithHome(sessionsDir, home)
 	require.NoError(t, err, "boot over a pre-cutover saved chat must succeed")
 	t.Cleanup(func() { _ = store.Close() })
@@ -108,6 +109,7 @@ func TestSessionCoreConv_SecondBootIsIdempotentAndAddsNoSecondIdentity(t *testin
 
 	convSeedLegacyChatDir(t, sessionsDir, id, "mia", "jim", "Idempotent chat", "", created, created)
 
+	require.NoError(t, CutoverSavedChatsAtBoot(sessionsDir), "the explicit boot step runs before any store is opened")
 	s1, err := NewUnifiedStoreWithHome(sessionsDir, home)
 	require.NoError(t, err)
 	docAfterFirst := convReadMetaDoc(t, sessionsDir, id)
@@ -117,6 +119,7 @@ func TestSessionCoreConv_SecondBootIsIdempotentAndAddsNoSecondIdentity(t *testin
 	require.NoError(t, err)
 	require.NoError(t, s1.Close())
 
+	require.NoError(t, CutoverSavedChatsAtBoot(sessionsDir), "the explicit boot step runs before any store is opened")
 	s2, err := NewUnifiedStoreWithHome(sessionsDir, home)
 	require.NoError(t, err, "a second boot over a converted install must succeed")
 	t.Cleanup(func() { _ = s2.Close() })
@@ -150,6 +153,7 @@ func TestSessionCoreConv_InterruptedBootRetiresTheCompletedSourceWithoutDuplicat
 	convSeedLegacyChatDir(t, sessionsDir, id, "mia", "", "Interrupted chat", "", created, created)
 	convWriteBytes(t, filepath.Join(sessionsDir, id, "context.jsonl"), convLegacyJSONL("interrupted hello"))
 
+	require.NoError(t, CutoverSavedChatsAtBoot(sessionsDir), "the explicit boot step runs before any store is opened")
 	store, err := NewUnifiedStoreWithHome(sessionsDir, home)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
@@ -176,10 +180,7 @@ func TestSessionCoreConv_CorruptSavedChatSurfacesVisibleFailureAndRetainsSource(
 	corrupt := []byte("{not json")
 	convWriteBytes(t, filepath.Join(sessionsDir, id, "meta.json"), corrupt)
 
-	store, err := NewUnifiedStoreWithHome(sessionsDir, home)
-	if store != nil {
-		_ = store.Close()
-	}
+	err := CutoverSavedChatsAtBoot(sessionsDir)
 	require.Error(t, err,
 		"CONV Failure: an unreadable saved chat must surface a visible cutover error, not be skipped-with-success")
 
@@ -197,6 +198,7 @@ func TestSessionCoreConv_FreshInstallIsANoOpWithZeroWrites(t *testing.T) {
 	sessionsDir := filepath.Join(home, "sessions")
 	require.NoError(t, os.MkdirAll(sessionsDir, 0o700))
 
+	require.NoError(t, CutoverSavedChatsAtBoot(sessionsDir), "the explicit boot step runs before any store is opened")
 	store, err := NewUnifiedStoreWithHome(sessionsDir, home)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
@@ -220,6 +222,7 @@ func TestSessionCoreConv_ConversionMintsNoMainAndPromotesNoHeartbeat(t *testing.
 	// heartbeat-typed record must be left as-is, never promoted.
 	convSeedLegacyChatDir(t, sessionsDir, "hb-1", "mia", "", "Heartbeat record", string(SessionTypeHeartbeat), created, created)
 
+	require.NoError(t, CutoverSavedChatsAtBoot(sessionsDir), "the explicit boot step runs before any store is opened")
 	store, err := NewUnifiedStoreWithHome(sessionsDir, home)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })

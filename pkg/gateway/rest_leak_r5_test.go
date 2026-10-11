@@ -53,13 +53,57 @@ func r5AssertClean(t *testing.T, body string, extra ...string) {
 }
 
 // r5Block chmods path for the test and restores it on cleanup.
-func r5Block(t *testing.T, path string, mode os.FileMode) {
+// r5Block makes path unusable in a way that holds for EVERY caller: a regular
+// FILE where a directory is needed (ENOTDIR), or a DIRECTORY where a file is
+// needed (EISDIR). The earlier form — chmod 0o000 — does not bind a root
+// runner and is ignored on Windows, so the arrange could silently become a
+// no-op and the test would then pass for the wrong reason; it also only checked
+// that the path existed, so it could not prove the failure had been injected.
+// This form does, by construction.
+func r5Block(t *testing.T, path string) {
+	t.Helper()
+	blockPathForEveryCaller(t, path)
+}
+
+// blockPathForEveryCaller makes path unusable in a way the KERNEL enforces for
+// every caller: a regular FILE where a directory is needed (ENOTDIR), or a
+// DIRECTORY where a file is needed (EISDIR). Neither depends on a permission
+// bit, so both bind a root runner and both work on Windows — unlike
+// chmod 0o000, which root ignores and Windows does not honour for reads. The
+// arrange also PROVES itself: the returned restore puts the original bytes or
+// directory back, and the injection is a real, different filesystem object.
+func blockPathForEveryCaller(t *testing.T, path string) func() {
 	t.Helper()
 	info, err := os.Stat(path)
 	require.NoError(t, err, "instrument check: %s must exist before it is blocked", path)
-	orig := info.Mode().Perm()
-	require.NoError(t, os.Chmod(path, mode))
-	t.Cleanup(func() { _ = os.Chmod(path, orig) })
+	if info.IsDir() {
+		moved := path + ".blocked"
+		require.NoError(t, os.RemoveAll(moved))
+		require.NoError(t, os.Rename(path, moved), "instrument: move the directory aside")
+		require.NoError(t, os.WriteFile(path, []byte("blocked"), 0o600))
+		restore := func() {
+			_ = os.Remove(path)
+			_ = os.Rename(moved, path)
+		}
+		t.Cleanup(restore)
+		// Prove the arrange BITES: the directory can no longer be listed.
+		_, listErr := os.ReadDir(path)
+		require.Error(t, listErr, "instrument: the blocked directory must not be listable")
+		return restore
+	}
+	saved, err := os.ReadFile(path)
+	require.NoError(t, err, "instrument: read the file before blocking it")
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Mkdir(path, 0o700))
+	restore := func() {
+		_ = os.RemoveAll(path)
+		_ = os.WriteFile(path, saved, 0o600)
+	}
+	t.Cleanup(restore)
+	// Prove the arrange BITES: the file can no longer be read.
+	_, readErr := os.ReadFile(path)
+	require.Error(t, readErr, "instrument: the blocked file must not be readable")
+	return restore
 }
 
 // hostileLimitStore fails MutateState with an error that carries an agent id,
@@ -109,7 +153,7 @@ func TestR5_F2_RollbackIncompleteCauseIsFixedText(t *testing.T) {
 // F4: a failed config write names no file.
 func TestR5_F4_PerformanceConfigWriteFailureNamesNoFile(t *testing.T) {
 	api := newLimitAPI(t, 300)
-	r5Block(t, filepath.Join(api.homePath, "config.json"), 0o000)
+	r5Block(t, filepath.Join(api.homePath, "config.json"))
 
 	w := putPerformanceJSON(t, api, `{"max_tool_iterations":400}`, true)
 
@@ -148,7 +192,7 @@ func TestR5_F1_WorkspaceUploadStorageFailuresAreFixedText(t *testing.T) {
 		api := newWorkspaceLibraryTestAPI(t)
 		mediaDir := filepath.Join(api.homePath, "workspaces", "ws-r5b", "media")
 		require.NoError(t, os.MkdirAll(mediaDir, 0o700))
-		r5Block(t, mediaDir, 0o500)
+		r5Block(t, mediaDir)
 		rr := r5Upload(t, api, "ws-r5b")
 		require.Equal(t, http.StatusInternalServerError, rr.Code, rr.Body.String())
 		r5AssertClean(t, rr.Body.String(), "ws-r5b")
@@ -158,7 +202,7 @@ func TestR5_F1_WorkspaceUploadStorageFailuresAreFixedText(t *testing.T) {
 		wsDir := filepath.Join(api.homePath, "workspaces", "ws-r5c")
 		workDir := filepath.Join(wsDir, "work")
 		require.NoError(t, os.MkdirAll(workDir, 0o700))
-		r5Block(t, workDir, 0o500)
+		r5Block(t, workDir)
 		rr := r5Upload(t, api, "ws-r5c")
 		require.Equal(t, http.StatusInternalServerError, rr.Code, rr.Body.String())
 		r5AssertClean(t, rr.Body.String(), "ws-r5c")
@@ -172,7 +216,7 @@ func TestR5_F1_DefaultModelSaveFailureIsFixedText(t *testing.T) {
 		{Name: "after", Provider: "provider-b", Model: "model-after", APIBase: "https://b.example/v1", Protocol: "openai-compatible"},
 	}
 	api, tmpDir, _ := newDefaultModelAPI(t, config.DefaultModel{Provider: "provider-a", Model: "model-before"}, rows, &restMockProvider{})
-	r5Block(t, filepath.Join(tmpDir, "config.json"), 0o000)
+	r5Block(t, filepath.Join(tmpDir, "config.json"))
 	w := doDefaultModel(api, http.MethodPut, `{"provider":"provider-b","model":"model-after"}`)
 	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
 	r5AssertClean(t, w.Body.String(), tmpDir)
@@ -212,7 +256,7 @@ func TestR5_F1_WebSocketStopFailureIsFixedText(t *testing.T) {
 		SessionID: sid, Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeHuman,
 		WorkspaceID: "ws-1", AgentID: "ann",
 	}))
-	r5Block(t, filepath.Join(lc.Dir(), sid+".jsonl"), 0o000)
+	r5Block(t, filepath.Join(lc.Dir(), sid+".jsonl"))
 	wc := makeTestConn()
 
 	h.handleCancelWithScope(wc, sid, false)
@@ -249,7 +293,7 @@ func TestR5_F1_KnowledgeDetectionDiagnosticIsFixedText(t *testing.T) {
 	api, ws := buildLibraryTestAPI(t)
 	vault := filepath.Join(workDir(api, ws), "vault")
 	makeKnowledgeBase(t, vault, "Vault")
-	r5Block(t, vault, 0o000)
+	r5Block(t, vault)
 
 	w := knowledgeGet(t, api, "/api/v1/library/"+ws+"/knowledge?path=vault")
 
@@ -289,7 +333,7 @@ func TestR5_F1_ExecutorSmokeTestPreparationFailureIsFixedText(t *testing.T) {
 	defer cleanup()
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
-	r5Block(t, home, 0o500)
+	r5Block(t, home)
 	stub := writeScript(t, "#!/bin/sh\nexit 0\n")
 
 	w := httptest.NewRecorder()
@@ -342,7 +386,7 @@ func TestR5_F4_UserProfileFailureNamesNoFile(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
-	r5Block(t, home, 0o500)
+	r5Block(t, home)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/user-context", strings.NewReader(`{"content":"hello"}`))
 	r.Header.Set("Content-Type", "application/json")

@@ -177,7 +177,9 @@ function ActivityRow({
     : undefined
   const statusLine = item.kind === 'not_delivered'
     ? item.text
-    : pendingApproval
+    : item.kind === 'task' && item.stale
+      ? "Couldn't refresh this run. It may already have finished."
+      : pendingApproval
       ? `awaiting approval: ${pendingApproval.toolName}`
       : (rawStatusLine ?? fallbackStatusLine)
 

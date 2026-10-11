@@ -1094,43 +1094,6 @@ func (ts *turnState) executionIdentity() (runID string, bootSeq uint64) {
 	return ts.executionRunID, ts.executionBootSeq
 }
 
-// getAnyActiveTurnState returns any active turn state (for backward compatibility)
-func (al *AgentLoop) getAnyActiveTurnState() *turnState {
-	var firstTS *turnState
-	al.activeTurnStates.Range(func(key, value any) bool {
-		ts, ok := value.(*turnState)
-		if !ok {
-			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
-				map[string]any{"key": key, "got_type": fmt.Sprintf("%T", value)})
-			return true // keep scanning for a valid entry
-		}
-		firstTS = ts
-		return false // stop after first
-	})
-	return firstTS
-}
-
-func (al *AgentLoop) GetActiveTurn() *ActiveTurnInfo {
-	// For backward compatibility, return the first active turn found
-	// In the new architecture, there can be multiple concurrent turns
-	var firstTS *turnState
-	al.activeTurnStates.Range(func(key, value any) bool {
-		ts, ok := value.(*turnState)
-		if !ok {
-			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
-				map[string]any{"key": key, "got_type": fmt.Sprintf("%T", value)})
-			return true // keep scanning for a valid entry
-		}
-		firstTS = ts
-		return false // stop after first
-	})
-	if firstTS == nil {
-		return nil
-	}
-	info := firstTS.snapshot()
-	return &info
-}
-
 // GetActiveAgentIDs returns the IDs of all agents that currently have an active turn.
 // Used by the REST API to report real-time agent status.
 func (al *AgentLoop) GetActiveAgentIDs() []string {

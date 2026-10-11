@@ -327,3 +327,32 @@ func TestArchiveBackend_CommitWindowRefusesSkipRegression(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, restored.State.Skip)
 }
+
+// A /clear records its floor: persisted, restored by a fresh backend over the
+// same directory, part of the compare-and-set, and never above Skip.
+func TestArchiveBackend_ClearFloorPersistsAndIsChecked(t *testing.T) {
+	b := newTestBackend(t)
+	const key = "sess-1"
+	ctx := context.Background()
+	for _, m := range []providers.Message{userMsg("m1"), asstMsg("m2"), userMsg("m3")} {
+		require.NoError(t, b.appendMessage(key, m))
+	}
+	snap, err := b.WindowView(ctx, key)
+	require.NoError(t, err)
+	before := snap.State
+
+	bad := before
+	bad.Skip, bad.ClearFloor = 1, 2
+	require.Error(t, b.CommitWindow(ctx, key, before, bad), "a floor above Skip is refused")
+
+	after := before
+	after.Skip, after.ClearFloor = after.Count, after.Count
+	require.NoError(t, b.CommitWindow(ctx, key, before, after))
+	require.Error(t, b.CommitWindow(ctx, key, before, after), "the stale snapshot no longer matches (floor is part of the CAS)")
+
+	fresh := newArchiveBackend(b.baseDir)
+	got, err := fresh.WindowView(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, 3, got.State.ClearFloor)
+	require.Equal(t, 3, got.State.Skip)
+}

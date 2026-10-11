@@ -15,7 +15,6 @@ package session
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -72,10 +71,16 @@ func (us *UnifiedStore) transcriptPartitionPaths(sessionID string) ([]string, er
 	var days []dayFile
 	current := ""
 	for _, e := range entries {
+		name := e.Name()
 		if e.IsDir() {
+			// Any other subdirectory (uploads, ...) is not archive content. A
+			// directory where a partition belongs is a corrupt store: skipping
+			// it would report the transcript as empty.
+			if name == transcriptFileName || transcriptDayPattern.MatchString(name) {
+				return nil, fmt.Errorf("unified_store: transcript partition %q in session %q is a directory, not a file", name, sessionID)
+			}
 			continue
 		}
-		name := e.Name()
 		if name == transcriptFileName {
 			current = name
 			continue
@@ -98,11 +103,4 @@ func (us *UnifiedStore) transcriptPartitionPaths(sessionID string) ([]string, er
 		paths = append(paths, filepath.Join(dir, current))
 	}
 	return paths, nil
-}
-
-// warnOnStrayDayPartition logs when a day-partition path cannot be listed —
-// a read that silently drops a partition would hide retained history.
-func warnOnStrayDayPartition(sessionID string, err error) {
-	slog.Warn("unified_store: transcript partition list failed; reading current partition only",
-		"session_id", sessionID, "error", err)
 }

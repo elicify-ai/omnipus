@@ -61,7 +61,7 @@ func newWindowCheckpoint(ctx context.Context, ts *turnState, msgs []providers.Me
 	ts.mu.RLock()
 	p.notice = ts.windowNotice.clone()
 	ts.mu.RUnlock()
-	if p.breadcrumb, err = breadcrumbForWindow(ctx, p.slots, snap.State.Skip); err != nil {
+	if p.breadcrumb, err = breadcrumbForWindow(ctx, p.slots, snap.State.ClearFloor, snap.State.Skip); err != nil {
 		return nil, nil, err
 	}
 	p.recallAt, p.recallLen = recallBlockPosition(ts, msgs)

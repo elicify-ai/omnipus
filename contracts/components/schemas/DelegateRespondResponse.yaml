@@ -4,7 +4,7 @@ description: >
   Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement
   only. A native answer routes into the child's turn; an external-CLI answer
   reaches the same CLI conversation by interrupt and resume, or is refused.
-  No corrective session is created, so `corrective_session` is never set.
+  No session is created or replaced by a respond.
 required:
   - acknowledged
 additionalProperties: false
@@ -13,5 +13,3 @@ properties:
     type: boolean
     description: True when the response was accepted and routed by `correlation_id`.
     example: true
-  corrective_session:
-    $ref: './DelegateSessionResponse.yaml'

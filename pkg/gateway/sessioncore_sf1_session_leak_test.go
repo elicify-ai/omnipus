@@ -41,15 +41,26 @@ func sf1Do(env *u1Env, method, path, body string) (int, string) {
 }
 
 // sf1Block makes path unreadable/unwritable for the test and returns the restore.
-func sf1Block(t *testing.T, path string, mode os.FileMode) func() {
+// sf1Block makes path unusable for EVERY caller — see
+// blockPathForEveryCaller for why a permission bit does not qualify. The
+// returned func restores the original bytes/contents early; t.Cleanup does the
+// same at test end, and both are safe to call twice.
+// sf1BlockParent blocks the DIRECTORY that holds path instead of path itself.
+// It is needed where the reader tolerates a directory where a file is expected:
+// the transcript reader lists the session directory and SKIPS directory
+// entries, so replacing transcript.jsonl with a directory yields an empty,
+// error-free read. Making the session directory a regular file raises ENOTDIR
+// for every caller — root and Windows included — which is the read fault this
+// case needs. (That the transcript reader silently treats a directory at
+// transcript.jsonl as an empty transcript is reported as a product finding.)
+func sf1BlockParent(t *testing.T, path string) func() {
 	t.Helper()
-	info, err := os.Stat(path)
-	require.NoError(t, err, "instrument check: %s must exist before it is blocked", path)
-	orig := info.Mode().Perm()
-	require.NoError(t, os.Chmod(path, mode))
-	restore := func() { _ = os.Chmod(path, orig) }
-	t.Cleanup(restore)
-	return restore
+	return blockPathForEveryCaller(t, filepath.Dir(path))
+}
+
+func sf1Block(t *testing.T, path string) func() {
+	t.Helper()
+	return blockPathForEveryCaller(t, path)
 }
 
 func sf1AssertFixedStorageMessage(t *testing.T, env *u1Env, code int, body, op string, forbidden ...string) {
@@ -82,7 +93,7 @@ func TestSF1_UnreadableTranscriptOfAValidMainLeaksNothing(t *testing.T) {
 	require.NoError(t, env.store(t).AppendTranscript(id, session.TranscriptEntry{
 		ID: "leak-m1", Role: "user", Content: "hello", AgentID: "mia", Timestamp: time.Now().UTC(),
 	}))
-	sf1Block(t, filepath.Join(env.store(t).BaseDir(), id, "transcript.jsonl"), 0o000)
+	sf1BlockParent(t, filepath.Join(env.store(t).BaseDir(), id, "transcript.jsonl"))
 
 	code, body := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
 	sf1AssertFixedStorageMessage(t, env, code, body, "read", ws, "mia", "transcript")
@@ -113,7 +124,7 @@ func TestSF1_UnreadableMetadataLeaksNothingAndAbsentStays404(t *testing.T) {
 func TestSF1_RenameStorageFailureLeaksNothing(t *testing.T) {
 	env := u1NewEnv(t, false)
 	id := sf1NewChat(t, env)
-	sf1Block(t, filepath.Join(env.store(t).BaseDir(), id), 0o500)
+	sf1Block(t, filepath.Join(env.store(t).BaseDir(), id))
 	code, body := sf1Do(env, http.MethodPut, "/api/v1/sessions/"+id, `{"title":"new title"}`)
 	sf1AssertFixedStorageMessage(t, env, code, body, "renamed", id)
 }
@@ -121,14 +132,14 @@ func TestSF1_RenameStorageFailureLeaksNothing(t *testing.T) {
 func TestSF1_DeleteStorageFailureLeaksNothing(t *testing.T) {
 	env := u1NewEnv(t, false)
 	id := sf1NewChat(t, env)
-	sf1Block(t, env.store(t).BaseDir(), 0o500)
+	sf1Block(t, env.store(t).BaseDir())
 	code, body := sf1Do(env, http.MethodDelete, "/api/v1/sessions/"+id, "")
 	sf1AssertFixedStorageMessage(t, env, code, body, "deleted", id)
 }
 
 func TestSF1_CreateStorageFailureLeaksNothing(t *testing.T) {
 	env := u1NewEnv(t, false)
-	sf1Block(t, env.store(t).BaseDir(), 0o500)
+	sf1Block(t, env.store(t).BaseDir())
 	code, body := sf1Do(env, http.MethodPost, "/api/v1/sessions", `{"type":"chat","agent_id":"mia"}`)
 	sf1AssertFixedStorageMessage(t, env, code, body, "created")
 }
@@ -145,7 +156,7 @@ func TestSF1_DeleteWithUnreadableLifecycleJournalLeaksNothingAndRefuses(t *testi
 		SessionID: id, Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeHuman,
 		WorkspaceID: "ws-leak", AgentID: "mia",
 	}))
-	sf1Block(t, filepath.Join(lc.Dir(), id+".jsonl"), 0o000)
+	sf1Block(t, filepath.Join(lc.Dir(), id+".jsonl"))
 
 	code, body := sf1Do(env, http.MethodDelete, "/api/v1/sessions/"+id, "")
 	assert.Equal(t, http.StatusInternalServerError, code, body)
@@ -189,7 +200,7 @@ func TestSF1_StopBeforeDeleteFailureShapesNeverEchoTheCause(t *testing.T) {
 func TestSF1_ListAgentSessionsStorageFailureLeaksNothing(t *testing.T) {
 	env := u1NewEnv(t, false)
 	sf1NewChat(t, env)
-	sf1Block(t, env.store(t).BaseDir(), 0o000)
+	sf1Block(t, env.store(t).BaseDir())
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/mia/sessions", nil)
 	r.URL.Path = "/api/v1/agents/mia/sessions"

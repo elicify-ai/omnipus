@@ -238,13 +238,13 @@ Two limits on what the key does:
 
 ### Steer, respond and redirect message size
 
-When one agent sends a message into another's turn — `delegate` with `action: steer`, `respond`, or `redirect` — the message is bounded by the keys below in the `session_messaging` block of `config.json`:
+When one agent sends a message into another's turn — `delegate` with `action: steer`, `respond`, or `redirect` — the message is bounded by these keys in the `session_messaging` block of `config.json`:
 
 - `steer_body` — the largest message body, in bytes. Default **65,536**.
 - `steer_rate` — how many steer, respond or redirect messages one agent may send to the same target per minute. Default **60**.
-- `steer_aggregate_body` — the summed body size, in bytes, of the ordinary messages waiting for one target. Default **1,048,576** (1 MiB); a value below 1 means the default. It is meant to bite before the 200-item queue cap does (200 × 65,536 bytes is about 12.9 MiB). *Not yet enforced:* in this build the key is accepted and defaulted in the config, but no message-intake code reads it, so it does not yet refuse anything (`pkg/config/session_messaging.go::SessionMessagingConfig.EffectiveSteerAggregateBody` has no caller outside tests).
+- `steer_aggregate_body` — the most message bytes that may be waiting for one conversation at once, added up across its waiting ordinary messages. Default **1,048,576** (1 MiB). A message that would take the waiting total past this is refused with a named error and is never trimmed; the total comes back down as the agent reads what is waiting. At most 200 messages may wait for one conversation, whichever limit is reached first. Wake-ups and other control messages do not count.
 
-`steer_body` and `steer_rate` are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. A message beyond either of those two bounds is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these two keys.
+All are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. A message beyond any bound is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these keys.
 
 ### Safety stops that are not settings
 

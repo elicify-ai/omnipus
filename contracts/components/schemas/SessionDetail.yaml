@@ -17,6 +17,14 @@ properties:
     description: >
       Ordered list of transcript entries for this session.
       Capped at 100000 messages to bound response payload size.
+  has_earlier_messages:
+    type: boolean
+    description: >
+      True when messages starts at the session's last /clear marker and earlier
+      transcript entries exist before it (cleared context). Absent (or false) when
+      messages is the whole transcript. The earlier entries are kept in the archive
+      and remain reachable by recall; they are simply not part of the chat view.
+    example: false
   agent_removed:
     type: boolean
     description: >

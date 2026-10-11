@@ -1874,27 +1874,27 @@ func releaseMainSessionsForWorkspace(al mainSessionAccessor, ws storedWorkspace)
 	if store == nil {
 		return
 	}
-	cfg := al.GetConfig()
-	pairs := append([]string{}, ws.CoreTeam...)
-	if ws.IsDefault {
-		pairs = append(pairs, string(coreagent.IDAdmin))
+	// Final-gate M7: every main that names this workspace goes, found by scanning
+	// the store for the workspace's main-id prefix - not only the pairs the team
+	// lists TODAY. A member removed earlier keeps its identity (FR-003) and would
+	// otherwise outlive the workspace as an unlisted orphan.
+	metas, err := store.ListSessions()
+	if err != nil {
+		logsafeWarn("workspace delete: could not list sessions to release the workspace's mains",
+			"workspace_id", ws.ID, "error", err)
+		return
 	}
-	for _, agentID := range pairs {
-		if !mainSessionPairEligible(cfg, ws, agentID) {
+	for _, m := range metas {
+		if m == nil {
 			continue
 		}
-		sessionID, err := session.MainSessionID(ws.ID, agentID)
-		if err != nil {
-			logsafeWarn("workspace delete: main session id not computable",
-				"workspace_id", ws.ID, "agent_id", agentID, "error", err)
+		wsID, _, isMain := session.SplitMainSessionID(m.ID)
+		if !isMain || wsID != ws.ID {
 			continue
 		}
-		if _, err := store.GetMeta(sessionID); err != nil {
-			continue // never existed in this store: nothing to release
-		}
-		if err := store.DeleteSession(sessionID); err != nil {
+		if err := store.DeleteSession(m.ID); err != nil {
 			logsafeWarn("workspace delete: failed to delete main session",
-				"workspace_id", ws.ID, "agent_id", agentID, "session_id", sessionID, "error", err)
+				"workspace_id", ws.ID, "session_id", m.ID, "error", err)
 		}
 	}
 }

@@ -159,6 +159,7 @@ type ModelTokens = {
 type SessionDetail = {
   session: Session;
   messages: Array<Message>;
+  has_earlier_messages?: boolean | undefined;
   agent_removed?: boolean | undefined;
 };
 type Message = {
@@ -3132,24 +3133,6 @@ type DelegateNotDeliveredSummary = {
   last_kind: string;
   last_at: string;
 };
-type DelegateRespondResponse = {
-  acknowledged: boolean;
-  corrective_session?: DelegateSessionResponse | undefined;
-};
-type DelegateSessionResponse = {
-  session_id: string;
-  generation: number;
-  queue_position?: number | undefined;
-  resumed_from?: (string | null) | undefined;
-  is_3p: boolean;
-  state:
-    | "queued"
-    | "running"
-    | "needs_input"
-    | "stopped"
-    | "completed"
-    | "failed";
-};
 type MessageParentRequest =
   | MessageParentProgress
   | MessageParentCheckpoint
@@ -3784,6 +3767,7 @@ export const Message: z.ZodType<Message> = z.object({
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
   messages: z.array(Message).max(100000),
+  has_earlier_messages: z.boolean().optional(),
   agent_removed: z.boolean().optional(),
 });
 export const SessionRenameRequest = z.object({
@@ -7310,7 +7294,7 @@ export const SessionMessageSteer = z.object({
   created_at: z.string().datetime({ offset: true }),
   sender_identity: z.string().min(1),
   untrusted_origin: z.boolean(),
-  text: z.string().max(16384),
+  text: z.string().max(65536),
   correlation_id: z.string().optional(),
 }) satisfies z.ZodType<SessionMessageSteer>;
 export const SessionMessageRespond = z.object(
@@ -7325,7 +7309,7 @@ export const SessionMessageRespond = z.object(
     created_at: z.string().datetime({ offset: true }),
     sender_identity: z.string().min(1),
     untrusted_origin: z.boolean(),
-    text: z.string().max(16384),
+    text: z.string().max(65536),
     correlation_id: z.string().min(1),
   }
 ) satisfies z.ZodType<SessionMessageRespond>;
@@ -7527,14 +7511,14 @@ export const DelegateInboxAckAction =
 export const DelegateSteerAction = z.object({
   action: z.literal("steer"),
   session_id: z.string().min(1),
-  text: z.string().min(1).max(16384),
+  text: z.string().min(1).max(65536),
   correlation_id: z.string().optional(),
 }) satisfies z.ZodType<DelegateSteerAction>;
 export const DelegateRespondAction = z.object(
   {
     action: z.literal("respond"),
     session_id: z.string().min(1),
-    text: z.string().min(1).max(16384),
+    text: z.string().min(1).max(65536),
     correlation_id: z.string().min(1),
   }
 ) satisfies z.ZodType<DelegateRespondAction>;
@@ -7572,22 +7556,21 @@ export const DelegateActionRequest =
     DelegateRedirectAction,
     DelegatePeekAction,
   ]) satisfies z.ZodType<DelegateActionRequest>;
-export const DelegateSessionResponse: z.ZodType<DelegateSessionResponse> =
-  z.object({
-    session_id: z.string().min(1),
-    generation: z.number().int().gte(0),
-    queue_position: z.number().int().gte(0).optional(),
-    resumed_from: z.string().nullish(),
-    is_3p: z.boolean(),
-    state: z.enum([
-      "queued",
-      "running",
-      "needs_input",
-      "stopped",
-      "completed",
-      "failed",
-    ]),
-  });
+export const DelegateSessionResponse = z.object({
+  session_id: z.string().min(1),
+  generation: z.number().int().gte(0),
+  queue_position: z.number().int().gte(0).optional(),
+  resumed_from: z.string().nullish(),
+  is_3p: z.boolean(),
+  state: z.enum([
+    "queued",
+    "running",
+    "needs_input",
+    "stopped",
+    "completed",
+    "failed",
+  ]),
+});
 export const DelegateStatusResponse: z.ZodType<DelegateStatusResponse> =
   z.object({
     session: SessionLifecycleRecord,
@@ -7630,11 +7613,7 @@ export const DelegateInboxResponse: z.ZodType<DelegateInboxResponse> = z.object(
     not_delivered: DelegateNotDeliveredSummary.optional(),
   }
 );
-export const DelegateRespondResponse: z.ZodType<DelegateRespondResponse> =
-  z.object({
-    acknowledged: z.boolean(),
-    corrective_session: DelegateSessionResponse.optional(),
-  });
+export const DelegateRespondResponse = z.object({ acknowledged: z.boolean() });
 export const DelegatePeekResponse = z.object({
   session_id: z.string().min(1),
   state: z.enum([
@@ -13463,7 +13442,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "get",
     path: "/sessions/:id/messages",
     alias: "getSessionMessages",
-    description: `Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed.
+    description: `Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed. The list starts at the session&#x27;s last /clear marker (the marker itself is the first entry); the X-Has-Earlier-Messages response header says whether earlier entries exist before that point.
 `,
     requestFormat: "json",
     parameters: [
@@ -17798,6 +17777,7 @@ export const SessionSnapshotFrame = z
     session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
     boot_id: z.string().optional(),
+    has_earlier_messages: z.boolean().optional(),
     reason: z.enum(["cursor_ahead", "retention_exceeded", "unknown_position", "boot_mismatch"]).optional(),
   })
   .strict();

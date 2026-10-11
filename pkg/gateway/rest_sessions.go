@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +57,22 @@ func jsonSessionDetail(
 	needsAttention *bool,
 	currentBootSeq ...uint64,
 ) {
+	writeSessionDetail(w, meta, messages, false, agentRemoved, ls, needsAttention, currentBootSeq...)
+}
+
+// writeSessionDetail is jsonSessionDetail for a chat-view read: hasEarlier says
+// messages starts at the session's last /clear marker with earlier entries
+// before it (SessionDetail.has_earlier_messages; absent when false).
+func writeSessionDetail(
+	w http.ResponseWriter,
+	meta *session.UnifiedMeta,
+	messages []session.TranscriptEntry,
+	hasEarlier bool,
+	agentRemoved bool,
+	ls *session.LifecycleStore,
+	needsAttention *bool,
+	currentBootSeq ...uint64,
+) {
 	genSession := unifiedMetaToGenSession(meta)
 	genSession.NeedsAttention = needsAttention
 	// C-MAIN: `protected` is computed here as well as in listSessions — the
@@ -70,18 +87,12 @@ func jsonSessionDetail(
 	if messages == nil {
 		messages = []session.TranscriptEntry{}
 	}
-	if agentRemoved {
-		jsonOK(w, struct {
-			Session      gen.Session               `json:"session"`
-			Messages     []session.TranscriptEntry `json:"messages"`
-			AgentRemoved bool                      `json:"agent_removed,omitempty"`
-		}{Session: genSession, Messages: messages, AgentRemoved: agentRemoved})
-		return
-	}
 	jsonOK(w, struct {
-		Session  gen.Session               `json:"session"`
-		Messages []session.TranscriptEntry `json:"messages"`
-	}{Session: genSession, Messages: messages})
+		Session      gen.Session               `json:"session"`
+		Messages     []session.TranscriptEntry `json:"messages"`
+		HasEarlier   bool                      `json:"has_earlier_messages,omitempty"`
+		AgentRemoved bool                      `json:"agent_removed,omitempty"`
+	}{Session: genSession, Messages: messages, HasEarlier: hasEarlier, AgentRemoved: agentRemoved})
 }
 
 // --- Sessions ---
@@ -575,11 +586,12 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
-	messages, err := store.ReadTranscriptWithDispositions(id)
+	view, err := store.ReadTranscriptView(id)
 	if err != nil {
 		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
+	messages := view.Entries
 	// ADR-057 D1/W11 (FR-034/FR-038): a delegated child owns its own real
 	// session (FR-005), so its narration lives in the CHILD's OWN
 	// transcript.jsonl and is simply never present here — the old REST-side
@@ -606,20 +618,26 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
 	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
 	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
-	jsonSessionDetail(w, meta, messages, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), mainNeedsAttention(meta, a.pendingApprovalMains()), a.agentLoop.CurrentBootEpoch())
+	writeSessionDetail(w, meta, messages, view.HasEarlier, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), mainNeedsAttention(meta, a.pendingApprovalMains()), a.agentLoop.CurrentBootEpoch())
 }
 
 func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {
+	// Final-gate M4: a main the pair is no longer entitled to is not readable
+	// here any more than it is listed.
+	if !a.gateMainRead(w, id) {
+		return
+	}
 	store := a.resolveSessionStore(id)
 	if store == nil {
 		jsonErr(w, http.StatusNotFound, "session not found")
 		return
 	}
-	messages, err := store.ReadTranscriptWithDispositions(id)
+	view, err := store.ReadTranscriptView(id)
 	if err != nil {
 		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
+	messages := view.Entries
 	// ADR-057 D1/W11 (FR-034/FR-038): see getSession's identical note above —
 	// the old delegate-narration visibility filter is deleted outright, not
 	// reapplied; a child's own entries never land in another session's
@@ -642,6 +660,7 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 	for _, entry := range messages {
 		out = append(out, withWireJudgeVerdict(id, entry))
 	}
+	w.Header().Set("X-Has-Earlier-Messages", strconv.FormatBool(view.HasEarlier))
 	jsonOK(w, out)
 }
 
@@ -701,6 +720,9 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 	// otherwise-valid title over the limit.
 	if len(req.Title) > 256 {
 		jsonErr(w, http.StatusBadRequest, "title too long (max 256 characters)")
+		return
+	}
+	if !a.gateMainRead(w, id) { // final-gate M4
 		return
 	}
 	store := a.resolveSessionStore(id)
@@ -790,7 +812,18 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 		jsonErr(w, http.StatusInternalServerError, summary)
 		return
 	}
+	if err := a.removeStoppedSession(store, id); err != nil {
+		jsonSessionStorageError(w, "deleted", id, err)
+		return
+	}
+	jsonOK(w, map[string]bool{"success": true})
+}
 
+// removeStoppedSession deletes a session whose Stop has ALREADY completed, and
+// the references to it: its helper descendants' uploads, the retained
+// external-CLI drivers, and the in-memory media refs. It is the second half of
+// deleteSession, shared with DELETE /sessions/all so the two cannot drift.
+func (a *restAPI) removeStoppedSession(store *session.UnifiedStore, id string) error {
 	// ADR-057 W18b (FR-071/BDD-78): resolve id's full descendant set BEFORE
 	// deleting anything, over the DURABLE lifecycle store — every delegation,
 	// live or not, has a LifecycleRecord (User Story 4), so this walk is
@@ -809,8 +842,7 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 	}
 
 	if err := store.DeleteSession(id); err != nil {
-		jsonSessionStorageError(w, "deleted", id, err)
-		return
+		return err
 	}
 	// N6: the session is gone, so drop any retained external-CLI driver (and its
 	// option/env snapshot) for it and every deleted descendant.
@@ -854,8 +886,7 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 				"session_id", id, "error", err)
 		}
 	}
-
-	jsonOK(w, map[string]bool{"success": true})
+	return nil
 }
 
 // firstChatTargetAgentID returns the ID of the first chat-target agent in the
@@ -1035,6 +1066,12 @@ const stopBeforeDeleteFailedText = "Stop before delete failed; nothing was delet
 	"Check that session storage is available and writable, then retry. Details are in the server log."
 
 func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
+	return a.stopBeforeDeleteFor(r.Context(), id, actorUsername(r))
+}
+
+// stopBeforeDeleteFor is stopBeforeDelete without a request: the agent-delete
+// cascade (REST and tool) stops an agent's sessions through the same Stop.
+func (a *restAPI) stopBeforeDeleteFor(ctx context.Context, id, actor string) string {
 	if a.agentLoop == nil {
 		return ""
 	}
@@ -1042,9 +1079,9 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 	if a.stopSession != nil {
 		stop = a.stopSession
 	}
-	res, err := stop(r.Context(), agent.StopRequest{
+	res, err := stop(ctx, agent.StopRequest{
 		SessionID: id,
-		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: actorUsername(r)},
+		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: actor},
 		Channel:   "web",
 		Tree:      true,
 	})
@@ -1072,7 +1109,7 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 			cancelIncompleteSubtreeSummary(res.Report), len(stillRunning))
 	}
 	ids := append([]string{id}, res.Report.Reached...)
-	if live := a.agentLoop.AwaitStoppedTurns(r.Context(), ids); len(live) > 0 {
+	if live := a.agentLoop.AwaitStoppedTurns(ctx, ids); len(live) > 0 {
 		slog.Warn("rest: delete session: sessions still running after the forced Stop; deletion refused",
 			"session_id", id, "still_running", live)
 		return fmt.Sprintf("Stop before delete incomplete: %d session(s) still running after the forced stop; nothing was deleted",

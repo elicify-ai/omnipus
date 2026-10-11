@@ -6,6 +6,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { logDiagnostic } from '@/lib/telemetry'
+import { forgetClearRefresh } from '@/store/chat/clear-refetch'
 import { noteForegroundAttach } from '@/store/session/foregroundAck'
 import { runStartNewSession, type NewChatOutcome, type NewChatStartArg } from '@/store/session/newChatFlow'
 import type { NewChatPrompt } from '@/store/session/newChatFlow'
@@ -600,6 +601,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   pruneSessionDescriptor: (sessionId) => {
+    // A deleted session can no longer owe a /clear transcript re-read.
+    forgetClearRefresh(sessionId)
     const changedWorkspaceIds: string[] = []
     set((state) => {
       const next: Record<string, WorkspaceSessionDescriptor | null> = {}

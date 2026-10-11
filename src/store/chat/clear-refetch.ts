@@ -37,6 +37,16 @@
 //       an obsolete response — one whose operation has since been replaced —
 //       is ignored outright.
 //
+//   E1  The intent is BOUNDED. A refused /clear writes no marker, and a read
+//       can keep missing the operation's own row; neither may leave the refresh
+//       armed forever (every later turn would re-read the whole transcript).
+//       After MAX_UNRESOLVED_READS re-reads that settle nothing, the intent is
+//       dropped and the user is told. A session that is deleted drops its
+//       intent too (forgetClearRefresh).
+//   E2  No branch fails silently. A history Retry that reads but cannot settle
+//       the operation, an application failure, and the expiry each show a
+//       toast; the diagnostics stay for triage.
+//
 // Nothing here clears anything locally, ever: a projection that does not
 // carry this operation's marker (the clear has not executed server-side yet,
 // or the clear was refused — a refusal writes no marker) is merged honestly,
@@ -46,6 +56,7 @@ import { queryClient } from '@/lib/queryClient'
 import { fetchSessionMessages } from '@/lib/api'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
+import { useUiStore } from '@/store/ui'
 import { isClearContextMarker } from '@/lib/clearMarker'
 import type { ChatMessage, SessionChatState } from './types'
 import { pendingClearRefetches, type PendingClearRefresh } from './runtime-state'
@@ -61,6 +72,35 @@ type WithBucket = (
  * normal sendMessage branches and the Retry/resend path); a send that never
  * reached the connection arms nothing.
  */
+/** Re-reads allowed to settle an operation before the intent is dropped (E1). */
+export const MAX_UNRESOLVED_READS = 3
+
+function tell(message: string): void {
+  useUiStore.getState().addToast({ message, variant: 'warning' })
+}
+
+/** Drops a session's refresh intent — called when the session itself is deleted. */
+export function forgetClearRefresh(sid: string): void {
+  delete pendingClearRefetches[sid]
+}
+
+/**
+ * E1/E2: a re-read that could not settle the operation (no own user row, or no
+ * marker for it). Counts toward expiry; at the bound the intent is dropped and
+ * the user is told the clear was not confirmed. A user-initiated Retry that
+ * still cannot settle says so immediately.
+ */
+function noteUnresolved(sid: string, op: PendingClearRefresh, userInitiated: boolean): void {
+  op.unresolvedReads = (op.unresolvedReads ?? 0) + 1
+  if (op.unresolvedReads >= MAX_UNRESOLVED_READS) {
+    if (pendingClearRefetches[sid] === op) delete pendingClearRefetches[sid]
+    logDiagnostic('clearRefetchExpired', { sessionId: sid, operationId: op.clientMessageId, reads: op.unresolvedReads })
+    tell("The server did not confirm your /clear, so this chat's context may not have been cleared. Send /clear again if you still want a fresh start.")
+    return
+  }
+  if (userInitiated) tell("Can't confirm the /clear result yet. It will be checked again after the next reply.")
+}
+
 export function armClearRefresh(sid: string, clientMessageId: string, activeTurnId: string | null): void {
   pendingClearRefetches[sid] = {
     clientMessageId,
@@ -107,10 +147,10 @@ export function flushHeldClearProjection(sid: string, withBucket: WithBucket): v
  */
 export function retryClearTranscriptRead(sid: string, withBucket: WithBucket): void {
   if (!pendingClearRefetches[sid]) return
-  void runClearRefetch(sid, withBucket)
+  void runClearRefetch(sid, withBucket, true)
 }
 
-async function runClearRefetch(sid: string, withBucket: WithBucket): Promise<void> {
+async function runClearRefetch(sid: string, withBucket: WithBucket, userInitiated = false): Promise<void> {
   // D2: capture the operation BEFORE awaiting anything. A newer /clear
   // replaces the session's pending intent object, which makes this read's
   // response obsolete no matter what it contains.
@@ -133,7 +173,7 @@ async function runClearRefetch(sid: string, withBucket: WithBucket): Promise<voi
       logDiagnostic('clearRefetchSuperseded', { sessionId: sid, operationId: op.clientMessageId })
       return
     }
-    applyProjection(sid, op, fresh, withBucket)
+    applyProjection(sid, op, fresh, withBucket, userInitiated)
   } catch (error) {
     // C2/D5: a READ failure is distinct from an application failure. Nothing
     // stale is applied, the diagnostic carries the operation and the error's
@@ -149,13 +189,14 @@ async function runClearRefetch(sid: string, withBucket: WithBucket): Promise<voi
   }
 }
 
-function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[], withBucket: WithBucket): void {
+function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[], withBucket: WithBucket, userInitiated = false): void {
   // D2: a response that does not even contain THIS operation's own /clear
   // user row predates the operation (it was answered before the server saw
   // this /clear) — it is not this operation's view. Apply nothing; the
   // intent survives and the next opportunity re-reads.
   if (!projectionContainsOwnUserRow(fresh, op.clientMessageId)) {
     logDiagnostic('clearRefetchPredatesOperation', { sessionId: sid, operationId: op.clientMessageId })
+    noteUnresolved(sid, op, userInitiated)
     return
   }
   let markerApplied = false
@@ -182,6 +223,10 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
       operationId: op.clientMessageId,
       message: error instanceof Error ? error.message : String(error),
     })
+    if (!op.applyFailureShown) {
+      op.applyFailureShown = true
+      tell("Couldn't refresh this chat after /clear. It will be retried after the next reply.")
+    }
     return
   }
   if (deferred) return
@@ -198,6 +243,7 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
     // the clear lands.
     op.heldProjection = undefined
     logDiagnostic('clearRefetchNoMarkerYet', { sessionId: sid, operationId: op.clientMessageId })
+    noteUnresolved(sid, op, userInitiated)
   }
 }
 

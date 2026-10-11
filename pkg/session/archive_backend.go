@@ -50,6 +50,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/oklog/ulid/v2"
@@ -129,6 +130,7 @@ func owningSessionID(key string) string {
 type archiveBackendMeta struct {
 	Skip       int                    `json:"skip"`
 	Count      int                    `json:"count"`
+	ClearFloor int                    `json:"clear_floor,omitempty"`
 	AnchorLine *int                   `json:"anchor_archive_line,omitempty"`
 	Retracted  []memory.ArchiveSpan   `json:"retracted,omitempty"`
 	Projection []archiveProjectionRow `json:"projection,omitempty"`
@@ -274,7 +276,8 @@ func (b *archiveBackend) commitWindow(ctx context.Context, key string, before, a
 		return memory.ErrWindowChanged
 	}
 	if after.Count != before.Count || after.Count != n || after.Skip < 0 ||
-		(!restore && after.Skip < before.Skip) || after.Skip > after.Count {
+		(!restore && after.Skip < before.Skip) || after.Skip > after.Count ||
+		after.ClearFloor < 0 || after.ClearFloor > after.Skip {
 		return errors.New("archive_backend: invalid checkpoint cursor")
 	}
 	if err := validateWindowAnchor(store, after); err != nil {
@@ -282,6 +285,7 @@ func (b *archiveBackend) commitWindow(ctx context.Context, key string, before, a
 	}
 	meta.Skip = after.Skip
 	meta.Count = after.Count
+	meta.ClearFloor = after.ClearFloor
 	meta.AnchorLine = cloneIntPtr(after.AnchorLine)
 	meta.Projection = metaFromProjection(after.Projection)
 	if err := b.saveMetaLocked(key, meta); err != nil {
@@ -317,6 +321,7 @@ func (b *archiveBackend) RollbackWindow(ctx context.Context, key string, start m
 	meta.Retracted = archiveRetractSpan(meta.Retracted, start.Count, n)
 	meta.Skip = start.Skip
 	meta.Count = n
+	meta.ClearFloor = start.ClearFloor
 	meta.AnchorLine = cloneIntPtr(start.AnchorLine)
 	meta.Projection = metaFromProjection(start.Projection)
 	return b.saveMetaLocked(key, meta)
@@ -647,7 +652,7 @@ func (b *archiveBackend) viewLocked(key string) (WindowView, error) {
 	if meta.Skip < 0 || meta.Skip > n {
 		return WindowView{}, errors.New("archive_backend: invalid context window cursor")
 	}
-	state := memory.WindowState{Skip: meta.Skip, Count: meta.Count, AnchorLine: cloneIntPtr(meta.AnchorLine),
+	state := memory.WindowState{Skip: meta.Skip, Count: meta.Count, ClearFloor: meta.ClearFloor, AnchorLine: cloneIntPtr(meta.AnchorLine),
 		Projection: projectionFromMeta(meta)}
 	if anchorErr := validateWindowAnchor(store, state); anchorErr != nil {
 		return WindowView{}, anchorErr
@@ -718,7 +723,17 @@ func (b *archiveBackend) leadLocked(store *ArchiveDayStore, skip int) ([]ModelSl
 	}
 	rows = rows[start:]
 	out := make([]ModelSlot, 0, len(rows))
+	present := make(map[string]bool)
 	for _, row := range rows {
+		// Lead rows are context before the window; one whose partition was expired
+		// by retention is gone for good and is left out rather than failing the read.
+		ok, err := store.rowResolvable(row, present)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
 		slot, _, err := loadSlot(store, row)
 		if err != nil {
 			return nil, err
@@ -830,12 +845,8 @@ func (b *archiveBackend) saveMetaLocked(key string, m archiveBackendMeta) error 
 	if err != nil {
 		return fmt.Errorf("archive_backend: encode meta: %w", err)
 	}
-	tmp := filepath.Join(dir, archiveBackendMetaFile+".tmp")
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err := fileutil.WriteFileAtomic(filepath.Join(dir, archiveBackendMetaFile), data, 0o600); err != nil {
 		return fmt.Errorf("archive_backend: write meta: %w", err)
-	}
-	if err := os.Rename(tmp, filepath.Join(dir, archiveBackendMetaFile)); err != nil {
-		return fmt.Errorf("archive_backend: rename meta: %w", err)
 	}
 	return nil
 }
@@ -991,7 +1002,7 @@ func validateWindowAnchor(store *ArchiveDayStore, state memory.WindowState) erro
 // windowStateEqual compares a persisted meta to a WindowState (cursor + anchor +
 // projection), the compare half of the commit CAS.
 func windowStateEqual(meta archiveBackendMeta, state memory.WindowState) bool {
-	if meta.Skip != state.Skip || meta.Count != state.Count {
+	if meta.Skip != state.Skip || meta.Count != state.Count || meta.ClearFloor != state.ClearFloor {
 		return false
 	}
 	if !intPtrEqual(meta.AnchorLine, state.AnchorLine) {

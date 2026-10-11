@@ -5,7 +5,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import { ActivityPanel } from './ActivityPanel'
-import type { ActivityItem } from '@/hooks/useRunningActivity'
+import type { ActivityItem, TaskRunActivityItem } from '@/hooks/useRunningActivity'
 
 vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
@@ -32,6 +32,14 @@ describe('Activity — task run sections', () => {
   it('omits the Open control for a run with no session yet', () => {
     render(<ActivityPanel open onOpenChange={() => {}} running={[run('a', 'running')]} recentlyFinished={[]} />)
     expect(screen.queryByTestId('activity-row-open')).toBeNull()
+  })
+})
+
+describe('Activity — stale task run row', () => {
+  it('says a run may already have finished when the poll failed', () => {
+    const item: ActivityItem = { ...(run('a', 'running') as TaskRunActivityItem), stale: true }
+    render(<ActivityPanel open onOpenChange={() => {}} running={[item]} recentlyFinished={[]} />)
+    expect(screen.getByTestId('activity-row-status-line')).toHaveTextContent(/may already have finished/i)
   })
 })
 

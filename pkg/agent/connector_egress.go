@@ -42,16 +42,26 @@ func isConnectorChannel(channel string) bool {
 
 // mainConnectorTurn reports whether a turn on (channel, sessionID) runs in a
 // main session fed by a connector - the only case the reply_to-only rule covers.
+//
+// It fails CLOSED: when the session's type cannot be determined (no store, or the
+// metadata read fails) a connector turn is treated as a main's, so the rule still
+// applies and the reply is refused rather than sent to whichever chat started the
+// turn. A session that is readable and not a main is the only way out.
 func (al *AgentLoop) mainConnectorTurn(channel, sessionID string) bool {
 	if !isConnectorChannel(channel) || sessionID == "" {
 		return false
 	}
 	store := al.GetSessionStore()
 	if store == nil {
-		return false
+		return true
 	}
 	meta, err := store.GetMeta(sessionID)
-	return err == nil && meta != nil && meta.Type == session.SessionTypeMain
+	if err != nil || meta == nil {
+		logger.WarnCF("agent", "connector turn session type unreadable - treating it as a main (reply_to-only)",
+			map[string]any{"channel": channel, "session_id": sessionID, "error": errString(err)})
+		return true
+	}
+	return meta.Type == session.SessionTypeMain
 }
 
 // sessionErrorPublisher is the optional gateway seam that shows an error frame to

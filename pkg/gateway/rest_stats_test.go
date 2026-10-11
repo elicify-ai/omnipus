@@ -674,13 +674,6 @@ func TestHandleTokenStats_PartialFlag(t *testing.T) {
 	//      partial:true, partial_error_count >= 1.
 	// Traces to: rest_stats.go:239-242, 251 — errs slice drives both fields.
 	t.Run("partial_unreadable_sessions_dir", func(t *testing.T) {
-		// chmod 000 does not block root (root bypasses DAC permission checks), so
-		// os.ReadDir would still succeed and no partial error would surface. Skip
-		// when running as root (e.g. some CI runners) rather than false-fail.
-		if os.Geteuid() == 0 {
-			t.Skip("chmod-based permission test is a no-op as root")
-		}
-
 		api := newTestRestAPIWithHome(t)
 
 		// Locate the shared sessions directory.
@@ -692,16 +685,10 @@ func TestHandleTokenStats_PartialFlag(t *testing.T) {
 		// Ensure the sessions directory exists so chmod has a target.
 		require.NoError(t, os.MkdirAll(sessionsDir, 0o700))
 
-		// Register cleanup to restore permissions BEFORE t.TempDir() removes the
-		// parent tree — otherwise RemoveAll would fail on a mode-000 directory.
-		t.Cleanup(func() {
-			// Restore read+execute so the cleanup can descend into the tree.
-			_ = os.Chmod(sessionsDir, 0o700)
-		})
-
-		// Remove read and execute bits → os.ReadDir(sessionsDir) returns EACCES.
-		require.NoError(t, os.Chmod(sessionsDir, 0o000),
-			"chmod 000 on sessions dir must succeed (running as non-root)")
+		// A regular FILE where the directory is needed: os.ReadDir(sessionsDir)
+		// then fails with ENOTDIR for every caller — root and Windows included —
+		// unlike chmod 0o000, which root ignores and Windows does not honour.
+		blockPathForEveryCaller(t, sessionsDir)
 
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens", nil)

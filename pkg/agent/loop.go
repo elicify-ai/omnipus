@@ -725,6 +725,15 @@ func NewAgentLoop(
 	}
 
 	nal.initializeCore()
+	if err := nal.registry.InitErr(); err != nil {
+		// An agent that cannot get its session store must not boot as an empty
+		// registry with a log line. This loop owns the store: give it back.
+		if relErr := releaseSharedSessionStore(nal.sharedStore); relErr != nil {
+			logger.ErrorCF("agent", "Failed to close shared session store",
+				map[string]any{"error": relErr.Error()})
+		}
+		return nil, fmt.Errorf("agent registry: %w", err)
+	}
 
 	if r0, stop, r1 := nal.initializeAudit(); stop {
 		return r0, r1
@@ -1187,7 +1196,7 @@ func (al *AgentLoop) Close() {
 	// received its first message. Safe to call even when nil (degraded boot,
 	// loop.go's own error-logged "shared session store unavailable" branch).
 	if al.sharedSessionStore != nil {
-		if err := releaseSharedSessionStore(al.homePath, al.sharedSessionStore); err != nil {
+		if err := releaseSharedSessionStore(al.sharedSessionStore); err != nil {
 			logger.ErrorCF("agent", "Failed to close shared session store",
 				map[string]any{"error": err.Error()})
 		}
@@ -2075,12 +2084,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// between clearActiveTurn and Finish. finalizeStreamer is what calls
 	// wsStreamer.Finalize(), which writes the assistant transcript entry
 	// (FIX 1). Finish's onCancelFinish callback (pkg/agent/cancel.go) is what
-	// writes the turn_canceled entry AND calls MarkLastEntryTruncated to flag
-	// the assistant entry. Both depend on the assistant entry already
-	// existing in transcript.jsonl:
-	//   - MarkLastEntryTruncated's backward-walk finds nothing to flag if the
-	//     assistant entry isn't there yet (silently succeeds as a no-op —
-	//     Truncated never gets set).
+	// writes the turn_canceled entry. The assistant entry carries its own
+	// Truncated flag, written in the same append by the finalizing streamer, so
+	// the cancel entry and the correlation below both depend on that assistant
+	// entry already existing in transcript.jsonl:
+	//   - without it there is no entry to carry Truncated, and the cancel entry
+	//     would describe a message that was never persisted.
 	//   - The frontend's turn_canceled -> assistant-message replay
 	//     correlation (chatTurnCanceledNoMatch) requires the assistant
 	//     ReplayMessageFrame to have already arrived on the wire before the
@@ -2664,6 +2673,7 @@ func clearSessionWindow(sessions session.SessionStore, sessionKey string) error 
 	}
 	after := view.State.Clone()
 	after.Skip = after.Count
+	after.ClearFloor = after.Count
 	after.AnchorLine = nil
 	after.Projection.Entries = memory.ProjectionSet{}
 	after.Projection.SourceRunes = map[memory.ProjectionKey]int{}

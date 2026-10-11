@@ -451,15 +451,17 @@ type CatchUpCompleteFrame struct {
 	Type      string `json:"type"`
 }
 
-// ChatParticipant — Server-made display record of a chat participant (F15). Display only: no ids, no route. Mirrors contracts/components/schemas/ChatParticipant.yaml.
+// ChatParticipant — Server-made display record of a chat participant (F15). Display only: no ids, no route. Mirrors contracts/components/schemas/ChatParticipant.yaml. `source` is present iff kind=human and `agent` iff kind=agent; they are mutually exclusive. The server enforces this; readers ignore any other combination.
 type ChatParticipant struct {
+	// Present iff kind=agent; absent when kind=human.
 	Agent *struct {
 		AgentId     string `json:"agent_id"`
 		WorkspaceId string `json:"workspace_id"`
 	} `json:"agent,omitempty"`
-	DisplayName string  `json:"display_name"`
-	Kind        string  `json:"kind"`
-	Source      *string `json:"source,omitempty"`
+	DisplayName string `json:"display_name"`
+	Kind        string `json:"kind"`
+	// Present iff kind=human; absent when kind=agent.
+	Source *string `json:"source,omitempty"`
 }
 
 // CommandSegmentInfo — ADR-092 D3/D4. One segment of the bash command awaiting approval, split with the same splitter and program resolution the bash tool itself uses (splitShellSegments / shellCommandHeadDetailed, through the tool's own D3 evaluator), listed inside ToolApprovalRequiredFrame.segments. Every segment of the command is listed, in order, because one decision approves or denies the whole call; the server records no per-segment grant for a chained command. On Windows the whole command is one segment (FR-041).
@@ -1095,6 +1097,8 @@ type SessionModeUpdatedFrame struct {
 type SessionSnapshotFrame struct {
 	// The gateway process that produced this snapshot.
 	BootId *string `json:"boot_id,omitempty"`
+	// True when the replay that follows starts at the session's last /clear marker and earlier transcript entries exist before it (cleared context). Absent (or false) when the replay is the whole transcript.
+	HasEarlierMessages *bool `json:"has_earlier_messages,omitempty"`
 	// Why a snapshot was sent instead of an incremental catch-up. boot_mismatch is checked first and always wins over the other three reasons.
 	Reason *string `json:"reason,omitempty"`
 	// The session's high-water sequence number at snapshot time. Mirrored on the terminal catch_up_complete frame.
