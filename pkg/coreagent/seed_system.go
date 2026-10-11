@@ -755,7 +755,7 @@ func Judge() *CoreAgent {
 			"not a chat persona.",
 		Figure: DefaultFigure,
 		Role:   DefaultRole,
-		Color:  "#3B82F6",
+		Color:  "#6E8BA8",
 		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }
@@ -790,7 +790,7 @@ func PlanSupervisor() *CoreAgent {
 			"correction per wake; not a chat persona.",
 		Figure: DefaultFigure,
 		Role:   DefaultRole,
-		Color:  "#22D3EE",
+		Color:  "#4F8A80",
 		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }
