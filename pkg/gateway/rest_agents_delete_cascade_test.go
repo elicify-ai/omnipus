@@ -62,11 +62,12 @@ func TestDeleteAgent_CleanupFailure_KeepsRecordVisibleAndReturnsPartial(t *testi
 
 	// A sole-owned session: the session-cleanup step (which runs FIRST) must
 	// delete it even though the later workspace step fails.
-	sessStore, err := session.NewUnifiedStore(filepath.Join(api.homePath, "sessions"))
-	require.NoError(t, err)
+	// The loop's ONE live store: the cascade no longer opens a store of its own
+	// (DEL-10), so the fixture creates the session through it.
+	sessStore := api.agentLoop.GetSessionStore()
+	require.NotNil(t, sessStore)
 	meta, err := sessStore.NewSession(session.SessionTypeChat, "webchat", created.Id)
 	require.NoError(t, err)
-	require.NoError(t, sessStore.Close())
 
 	// Force a cleanup failure in the workspace step: a corrupt workspace record
 	// makes cascadeCleanAgentWorkspaceReferences report a warning, so the
@@ -98,7 +99,7 @@ func TestDeleteAgent_CleanupFailure_KeepsRecordVisibleAndReturnsPartial(t *testi
 
 	// Cleanup-first: the sole-owned session was already deleted by the earlier
 	// session step, before the failed workspace step.
-	if _, err := os.Stat(filepath.Join(api.homePath, "sessions", meta.ID)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(sessStore.BaseDir(), meta.ID)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("session %s must be cleaned before the record is (stat err=%v)", meta.ID, err)
 	}
 }

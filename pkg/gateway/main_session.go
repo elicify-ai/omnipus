@@ -149,7 +149,13 @@ func mainSessionGate(home string, cfg *config.Config, id string) (isMain, eligib
 // sending the client one error frame) when the id names a main whose pair is no
 // longer entitled to it, or whose workspace cannot be read. It creates nothing.
 func (h *WSHandler) mainSessionAllowed(wc *wsConn, id string) bool {
-	isMain, eligible, err := mainSessionGate(h.home, h.agentLoop.GetConfig(), id)
+	// h.home is set at gateway boot; a handler built without it (tests) resolves
+	// the same OMNIPUS_HOME the rest of the gateway does - never the working directory.
+	home := h.home
+	if home == "" {
+		home = config.OmnipusHomeDir()
+	}
+	isMain, eligible, err := mainSessionGate(home, h.agentLoop.GetConfig(), id)
 	if err != nil {
 		slog.Error("ws: main eligibility: the workspace could not be read", "session_id", id, "error", err)
 		sid := id

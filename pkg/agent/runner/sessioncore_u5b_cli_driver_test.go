@@ -123,10 +123,12 @@ func u5bRunInvocations(t *testing.T, argsLog, runMarker string) []string {
 // BDD-05.6 / FR-043: a driver whose Input cannot be delivered to any live
 // native conversation MUST refuse visibly — never the current documented
 // no-op that silently discards the text and returns nil.
+// PORTABLE on purpose: this body builds the three drivers and calls Input. It
+// creates no stub script and runs no subprocess, so the "stub uses a POSIX shell
+// script" reason that used to skip it on Windows did not describe it. Issue
+// #1256 records the founder's Windows exclusion for the two OTHER tests in this
+// file, which really do drive u5bStubScript; the exclusion is not broadened here.
 func TestSessionCoreU5b_InputWithoutLiveNativeConversationMustRefuseVisibly(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("stub uses a POSIX shell script")
-	}
 	for _, tc := range u5bCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			d := tc.newD()

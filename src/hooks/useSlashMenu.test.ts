@@ -1358,10 +1358,13 @@ describe('useSlashMenu — composerRuntime subscription resync (Fix A, bugfixes3
     expect(result.current.slashOpen).toBe(true)
     expect(result.current.isMentionMode).toBe(false)
 
-    // A leading "@" is not a menu. The mirror may hold it; the menu stays shut.
+    // A leading "@" opens the agent-mention menu again (founder decision
+    // 2026-10-11 Q1 B, reversing the FR-007 cutover for addressing). "@x"
+    // matches no agent name, so the menu has zero rows and stays visually
+    // shut — but the mode itself is on.
     setExternalText('@x')
     act(() => result.current.onInputChange('@x'))
-    expect(result.current.isMentionMode).toBe(false)
+    expect(result.current.isMentionMode).toBe(true)
     expect(result.current.shouldShowSlash).toBe(false)
 
     setExternalText('')
@@ -1462,5 +1465,308 @@ describe('useSlashMenu — prefix-then-substring matching (deferred item 4)', ()
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('/ag'))
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['/agents'])
+  })
+})
+
+// ── "@" agent-mention menu — restored (founder decision 2026-10-11 Q1 B) ────
+//
+// The old agent-mention menu (commit 103c5fd0, release/v0.1.1) is ported back
+// onto the current composer with ONE behaviour change: selecting an agent no
+// longer switches the active agent or chat (FR-029 — no in-chat handover).
+// It inserts "@<Agent name> " into the composer and marks that agent as the
+// message's recipient, derived from the leading "@<Name>" prefix at SEND time
+// (src/lib/recipientAddress.ts; the wire side is covered by
+// src/store/chat.recipient-send.test.ts).
+describe('useSlashMenu — "@" agent-mention menu (restored, founder decision 2026-10-11 Q1 B)', () => {
+  it('shows nothing for "@" mid-text — only a leading "@" triggers (same rule as "/")', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('hello @x'))
+    expect(result.current.shouldShowSlash).toBe(false)
+    expect(result.current.isMentionMode).toBe(false)
+    expect(result.current.slashItems).toHaveLength(0)
+  })
+
+  it('a bare "@" opens the menu listing every scoped chat agent (worker excluded) with section "agents"', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.isMentionMode).toBe(true)
+    expect(result.current.shouldShowSlash).toBe(true)
+    // Alphabetical by name — "Jim" < "Mars" < "Mia" — rather than API/array
+    // order (mockAgents declares mia, jim, mars).
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim', 'mars', 'mia'])
+    expect(result.current.slashItems.every((i) => i.section === 'agents')).toBe(true)
+    expect(result.current.slashItems.map((i) => i.label)).toEqual(['@Jim', '@Mars', '@Mia'])
+  })
+
+  it('the SECOND typed character (the first after "@") already filters the list', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashItems).toHaveLength(3)
+    act(() => result.current.onInputChange('@m'))
+    // Prefix-then-substring ranking: "Mars"/"Mia" prefix-match "m"
+    // (alphabetical within the prefix rank: "Mars" < "Mia"); "Jim" also
+    // matches via the substring rank ("jim" contains "m"), ranked after both.
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mars', 'mia', 'jim'])
+  })
+
+  it('filtering is case-insensitive by NAME prefix — "@M" matches identically to "@m"', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@M'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mars', 'mia', 'jim'])
+  })
+
+  it('matches by agent NAME (prefix or substring) only — a divergent id does not leak a match', () => {
+    mentionAgentsOverride = [
+      ...mockAgents,
+      makeAgent({ id: 'ops-7', name: 'Marcus', type: 'Main', status: 'active', description: 'Support' }),
+    ]
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+
+    act(() => result.current.onInputChange('@marc'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['ops-7'])
+
+    // Does NOT match by the divergent ID prefix ("ops-7" starts with "op",
+    // but the name "Marcus" does not) — even under substring matching.
+    act(() => result.current.onInputChange('@op'))
+    expect(result.current.slashItems).toHaveLength(0)
+
+    // Substring rank still finds "Marcus" for "@arc", the divergent id never
+    // consulted.
+    act(() => result.current.onInputChange('@arc'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['ops-7'])
+  })
+
+  it('EXCLUDES the agent that owns the current chat — addressing yourself is meaningless', () => {
+    act(() => {
+      useSessionStore.setState({ activeAgentId: 'mars' })
+    })
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim', 'mia'])
+  })
+
+  it('excludes worker agents regardless of a matching name (the "max" fixture is a Subagent)', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@max'))
+    expect(result.current.slashItems).toHaveLength(0)
+    expect(result.current.shouldShowSlash).toBe(false)
+  })
+
+  it('hides the menu entirely when no agent matches the filter', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@zzz'))
+    expect(result.current.slashItems).toHaveLength(0)
+    expect(result.current.shouldShowSlash).toBe(false)
+  })
+
+  it('a commands-fetch error does NOT force the "@" menu open (LOW S8 fallback is "/"-only)', () => {
+    commandsQueryIsError = true
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@zzz'))
+    expect(result.current.shouldShowSlash).toBe(false)
+  })
+
+  it('deleting back to empty input closes the menu', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@m'))
+    expect(result.current.slashOpen).toBe(true)
+    act(() => result.current.onInputChange(''))
+    expect(result.current.slashOpen).toBe(false)
+    expect(result.current.shouldShowSlash).toBe(false)
+  })
+
+  it('ArrowDown/ArrowUp cycle the highlight across agent rows, same as the "/" menu', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashHighlight).toBe(0)
+
+    const down = { key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(down))
+    expect(result.current.slashHighlight).toBe(1)
+
+    const up = { key: 'ArrowUp', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(up))
+    act(() => result.current.handleKeyDown(up))
+    expect(result.current.slashHighlight).toBe(result.current.slashItems.length - 1)
+  })
+
+  it('Escape closes the "@" menu', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashOpen).toBe(true)
+    act(() => result.current.handleKeyDown({ key: 'Escape', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashOpen).toBe(false)
+  })
+
+  it('Enter on the highlighted row inserts "@<Name> " into the composer and does NOT change the active agent or session', () => {
+    act(() => {
+      useSessionStore.setState({ activeAgentId: 'jim', activeSessionId: 'sess_123', activeAgentType: 'core' })
+    })
+    const composerRuntime = makeComposerRuntime('@m')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('@m'))
+    // '@m' matches ['mars', 'mia'] in alphabetical order — highlight 0 is 'mars'.
+    act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+
+    // The ONE behaviour change vs the old menu: no agent switch, no chat
+    // switch (FR-029). The selection only writes "@<Name> " into the composer
+    // (the recipient is derived from this prefix at send time).
+    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    expect(useSessionStore.getState().activeAgentType).toBe('core')
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_123')
+    expect(composerRuntime.setText).toHaveBeenLastCalledWith('@Mars ')
+    expect(result.current.inputValue).toBe('@Mars ')
+    expect(result.current.slashOpen).toBe(false)
+  })
+
+  it('clicking (onSelect) a row inserts the same "@<Name> " prefix — the mouse path matches Enter', () => {
+    act(() => {
+      useSessionStore.setState({ activeAgentId: null, activeSessionId: 'sess_click' })
+    })
+    const composerRuntime = makeComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('@ji'))
+    const item = result.current.slashItems.find((i) => i.key === 'jim')!
+    act(() => item.onSelect())
+
+    expect(useSessionStore.getState().activeAgentId).toBeNull()
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_click')
+    expect(composerRuntime.setText).toHaveBeenLastCalledWith('@Jim ')
+    expect(result.current.inputValue).toBe('@Jim ')
+    expect(result.current.slashOpen).toBe(false)
+  })
+
+  it('selection carries the agent row data the render layer needs (label, description, whole agent for AgentMark)', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@mia'))
+    const item = result.current.slashItems[0]
+    expect(item.label).toBe('@Mia')
+    expect(item.description).toBe('Assistant')
+    expect(item.agent?.id).toBe('mia')
+    expect(item.agent?.name).toBe('Mia')
+  })
+
+  it('selection sets the sr-only announcement ("Message addressed to <Name>")', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    expect(result.current.mentionAnnouncement).toBeNull()
+    act(() => result.current.onInputChange('@j'))
+    act(() => result.current.slashItems[0].onSelect())
+    expect(result.current.mentionAnnouncement).toBe('Jim')
+  })
+
+  it('"/" and "@" triggers never mix — "/" still shows commands+skills, unaffected by agent data', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/'))
+    expect(result.current.isMentionMode).toBe(false)
+    expect(result.current.slashItems.every((i) => i.section === 'commands' || i.section === 'skills')).toBe(true)
+  })
+
+  it('Enter-select calls preventDefault on the keydown event (guards the select+send double-fire)', () => {
+    const composerRuntime = makeComposerRuntime('@m')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('@m'))
+
+    const enterEvent = { key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(enterEvent))
+
+    expect(enterEvent.preventDefault).toHaveBeenCalledTimes(1)
+    // Prove the selection itself actually ran too — preventDefault firing
+    // in isolation would be a hollow assertion.
+    expect(result.current.inputValue).toBe('@Mars ')
+  })
+
+  it('highlight resets to 0 when narrowing the filter shrinks the list (guards the out-of-range no-op)', () => {
+    const composerRuntime = makeComposerRuntime('@j')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    act(() => result.current.onInputChange('@'))
+    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashHighlight).toBe(2)
+    expect(result.current.slashItems[2].key).toBe('mia')
+
+    act(() => result.current.onInputChange('@j'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim'])
+    expect(result.current.slashHighlight).toBe(0)
+
+    act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.inputValue).toBe('@Jim ')
+  })
+
+  it('Escape closes the menu, then typing the next character reopens it', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashOpen).toBe(true)
+
+    act(() => result.current.handleKeyDown({ key: 'Escape', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashOpen).toBe(false)
+
+    act(() => result.current.onInputChange('@m'))
+    expect(result.current.slashOpen).toBe(true)
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mars', 'mia', 'jim'])
+  })
+
+  it('while streaming, "@" still lists every scoped agent — no available_while_streaming filtering', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams({ isStreaming: true })))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim', 'mars', 'mia'])
+    expect(result.current.slashItems.every((i) => i.section === 'agents')).toBe(true)
+  })
+
+  it('interceptClientCommand returns false for an "@"-prefixed message — never intercepted as a command', () => {
+    const composerRuntime = makeComposerRuntime('@mia')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(false)
+    expect(composerRuntime.setText).not.toHaveBeenCalled()
+  })
+
+  describe('mention-list cap + hidden count', () => {
+    function tenAgentsFixture() {
+      return Array.from({ length: 10 }, (_, i) =>
+        makeAgent({ id: `ag${String(i + 1).padStart(2, '0')}`, name: `Agent${String(i + 1).padStart(2, '0')}`, type: 'Main', status: 'active' }))
+    }
+
+    it('10 scoped agents show exactly 8 alphabetically-ordered rows for a bare "@", plus agentsHiddenCount=2', () => {
+      mentionAgentsOverride = tenAgentsFixture()
+      const { result } = renderHook(() => useSlashMenu(baseParams()))
+
+      act(() => result.current.onInputChange('@'))
+      expect(result.current.slashItems).toHaveLength(8)
+      expect(result.current.slashItems.map((i) => i.key)).toEqual([
+        'ag01', 'ag02', 'ag03', 'ag04', 'ag05', 'ag06', 'ag07', 'ag08',
+      ])
+      expect(result.current.agentsHiddenCount).toBe(2)
+    })
+
+    it('narrowing to a filter with 9 remaining matches still hides 1 (agentsHiddenCount=1)', () => {
+      mentionAgentsOverride = tenAgentsFixture()
+      const { result } = renderHook(() => useSlashMenu(baseParams()))
+
+      act(() => result.current.onInputChange('@agent0'))
+      expect(result.current.slashItems).toHaveLength(8)
+      expect(result.current.slashItems.map((i) => i.key)).not.toContain('ag10')
+      expect(result.current.agentsHiddenCount).toBe(1)
+    })
+
+    it('narrowing further to ≤8 matches drops agentsHiddenCount back to 0', () => {
+      mentionAgentsOverride = tenAgentsFixture()
+      const { result } = renderHook(() => useSlashMenu(baseParams()))
+
+      act(() => result.current.onInputChange('@agent1'))
+      expect(result.current.slashItems.map((i) => i.key)).toEqual(['ag10'])
+      expect(result.current.agentsHiddenCount).toBe(0)
+    })
+  })
+
+  it('backspacing from a narrowed filter back to bare "@" re-shows the full agent list', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@mi'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia'])
+
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim', 'mars', 'mia'])
   })
 })

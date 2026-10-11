@@ -5,6 +5,7 @@ import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
 import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
+import { recipientAddressHoldsQueue } from './recipientSend'
 import { registerWorkspaceEntryQueueResume } from '@/store/session/workspaceEntryFlow'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -282,6 +283,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
     if (pendingDrainQueue.length === 0 || isStreaming || firstSendBlocksQueue(get())) return
     // Gate BEFORE the pop: sendMessage may refuse an unresolved destination.
     if (blockSendForWorkspaceEntry('drain')) return
+    // @-recipient hold (founder 2026-10-11 Q1 B) — also BEFORE the pop: a
+    // queued @-addressed message must not drain into an unaddressed first
+    // send (recipient is valid only together with session_id, and dropping
+    // the addressing silently is forbidden). The hold releases as soon as a
+    // session exists, and the message then drains WITH its recipient.
+    if (recipientAddressHoldsQueue(typeof pendingDrainQueue[0] === 'string' ? pendingDrainQueue[0] : pendingDrainQueue[0]?.content)) return
     const [next, ...rest] = pendingDrainQueue
     set({ pendingDrainQueue: rest })
     drainQueuedMessage(get, next)

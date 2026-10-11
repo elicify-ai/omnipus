@@ -71,3 +71,19 @@ export function agentKindFlags(agent: {
     isSystem: isSystemType(type),
   }
 }
+
+// ── Chat eligibility ────────────────────────────────────────────────────────
+
+// Moved here (2026-10-11) from src/hooks/useChatAgents.ts — the predicate is
+// pure and lib-level consumers of the restored @-mention addressing
+// (src/lib/recipientAddress.ts) need it without a hooks-module import.
+// useChatAgents re-exports it, so its own callers are unchanged.
+const CHAT_BUILTIN_IDS = new Set(['mia', 'jim', 'ava', 'admin'])
+
+export function isChatEligibleAgent(agent: {
+  type: string | null | undefined
+  id: string
+}): boolean {
+  if (agent.type === 'core') return CHAT_BUILTIN_IDS.has(agent.id)
+  return agent.type === 'Main'
+}

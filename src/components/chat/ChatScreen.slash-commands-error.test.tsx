@@ -228,18 +228,19 @@ describe('Slash menu — commands query error (LOW S8)', () => {
     expect(screen.getByText('/web-research')).toBeInTheDocument()
   })
 
-  // Fix 1 (bugfixes3 review, highest priority): the render gate previously
-  // read `commandsError && !isSkillsFilter` only — missing the
-  // `!isMentionMode` clause useSlashMenu's own shouldShowSlash fallback
-  // already applies. A commands-fetch error has nothing to do with the "@"
-  // agent-mention menu, so the row must never appear there.
-  it('typing @ does not open a menu, so the commands-error row is not shown', async () => {
+  // Fix 1 (bugfixes3 review, highest priority), updated by founder decision
+  // 2026-10-11 Q1 B: the "@" agent-mention menu is restored, and the render
+  // gate still reads `commandsError && !isSkillsFilter && !isMentionMode` —
+  // a commands-fetch error has nothing to do with the "@" menu, so the row
+  // must never appear there even while that menu is open.
+  it('typing @ opens the agent menu, and the commands-error row is not shown there', async () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
     act(() => { fireEvent.change(input, { target: { value: '@' } }) })
 
-    expect(screen.queryByTestId('slash-menu')).not.toBeInTheDocument()
+    expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
+    expect(screen.getByTestId('agent-mention-item')).toBeInTheDocument()
     expect(screen.queryByTestId('slash-commands-error')).not.toBeInTheDocument()
     expect(screen.queryByText('Commands unavailable')).not.toBeInTheDocument()
   })

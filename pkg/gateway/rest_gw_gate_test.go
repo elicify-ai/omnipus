@@ -256,7 +256,7 @@ func TestGW_M8_UnreadableWorkspaceIsAVisibleLoggedFailure(t *testing.T) {
 	id := u1MainID(ws, "mia")
 	code, _ := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
 	require.Equal(t, http.StatusOK, code, "precondition")
-	r5Block(t, filepath.Join(env.home, "workspaces", ws+".json"), 0o000)
+	r5Block(t, filepath.Join(env.home, "workspaces", ws+".json"))
 
 	code, body := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
 
@@ -464,4 +464,23 @@ func TestGW_AgentDelete_StopsSessionsFirstAndKeepsTheRecordIfOneWillNotStop(t *t
 	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	_, getErr = store.GetMeta(meta.ID)
 	assert.Error(t, getErr, "the retried delete removes the session")
+}
+
+// Control for the WebSocket door: an ELIGIBLE member's main still attaches (the
+// removed-member case above is refused; this proves the gate is not a blanket refusal).
+func TestGW_M4_EligibleMainStillAttachesOverWebSocket(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JGWGATEM4WS0000000000003"
+	env.seedWorkspace(t, ws, false, "mia")
+	id := u1MainID(ws, "mia")
+	code, _ := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
+	require.Equal(t, http.StatusOK, code)
+	h := newWSHandler(bus.NewMessageBus(), env.api.agentLoop, "")
+	t.Cleanup(h.Wait)
+	wc := makeTestConn()
+
+	h.handleAttachSession(context.Background(), "chat-m4c", id, nil, wc)
+
+	frames := drainConnFrames(wc)
+	assert.Contains(t, frames, "catch_up_complete", "an eligible main attaches: %s", frames)
 }

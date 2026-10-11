@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
@@ -16,6 +17,10 @@ import (
 func TestMain(m *testing.M) {
 	testutil.RegisterGatewayRunner(RunContext)
 	code := m.Run()
+	if leaked := leakedPackageDirFiles(); len(leaked) > 0 && code == 0 {
+		println("gateway TestMain: a test wrote into the package directory instead of its temp home:", strings.Join(leaked, ", "))
+		code = 1
+	}
 	// Hygiene guard (2026-09-14, after a CI debug session where the real
 	// failure text never reached the log): a test that silences the console
 	// via logger.DisableConsole and never runs its restore func leaves EVERY
