@@ -24,6 +24,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // startTime records when the gateway process started, used by GET /api/v1/about.
@@ -685,35 +686,71 @@ func clearSessionsWarning(agentID string) string {
 }
 
 // HandleClearSessions handles DELETE /api/v1/sessions/all.
-// HandleClearSessions removes every session from the one shared session store.
+//
+// Founder ruling (S2 #6): "a main chat can only be deleted when the main agent
+// is deleted" - so this NEVER deletes a main; its history is kept. Every other
+// chat is deleted one by one through the same path a single delete uses: the
+// session's tree is Stopped first (a chat that will not stop is kept and
+// reported, nothing half-deleted), then removed together with its helper
+// descendants' uploads, retained external-CLI drivers and in-memory media refs.
 func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	totalRemoved := 0
-	var warnings []string
 	store := a.agentLoop.GetSessionStore()
 	if store == nil {
 		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
 		return
 	}
-	n, err := store.ClearAll()
+	metas, err := store.ListSessions()
 	if err != nil {
-		// Fixed text: the cause (paths, OS error) is in the error log, never in
-		// the response.
-		slog.Error("rest: clear sessions", "error", err)
-		warnings = append(warnings, clearSessionsWarning("shared"))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not list sessions", err)
+		return
 	}
-	totalRemoved += n
+	removed, kept := 0, 0
+	for _, m := range metas {
+		if m == nil {
+			continue
+		}
+		// A main is never deleted here; a session whose protection cannot be
+		// decided is not deleted either (fail closed, as single delete does).
+		if m.Type == session.SessionTypeMain {
+			continue
+		}
+		if prot := computeSessionProtected(m); prot != nil && *prot {
+			continue
+		}
+		if summary := a.stopBeforeDelete(r, m.ID); summary != "" {
+			slog.Warn("rest: clear sessions: Stop incomplete; this chat is kept",
+				"session_id", m.ID, "summary", summary)
+			kept++
+			continue
+		}
+		if err := a.removeStoppedSession(store, m.ID); err != nil {
+			slog.Error("rest: clear sessions: could not delete a chat; it is kept",
+				"session_id", m.ID, "error", err)
+			kept++
+			continue
+		}
+		removed++
+	}
 	resp := gen.ClearAllSessionsResponse{
 		Status: gen.ClearAllSessionsResponseStatusCleared,
-		Count:  totalRemoved,
+		Count:  removed,
 	}
-	if len(warnings) > 0 {
+	if kept > 0 {
+		warnings := []string{clearSessionsKeptWarning(kept)}
 		resp.Warnings = &warnings
 	}
 	jsonOK(w, resp)
+}
+
+// clearSessionsKeptWarning is the fixed warning for chats delete-all could not
+// remove (a Stop that did not complete, or a storage failure). It names no
+// session id, path or cause; those are in the server log.
+func clearSessionsKeptWarning(n int) string {
+	return fmt.Sprintf("%d chat(s) could not be deleted and were kept (a running turn did not stop, or storage failed); see the server log", n)
 }
 
 // HandleAbout handles GET /api/v1/about.

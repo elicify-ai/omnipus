@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -359,6 +360,8 @@ func (s *wsStreamer) SetMessageID(messageID string) {
 // association from a specific goal. Each wsStreamer instance is single-use for
 // one turn, so clearing back to "" never blanks a previously-stamped value in
 // practice.
+var _ agent.GoalIDStreamer = (*wsStreamer)(nil) // M11: compile-time link to turn_stream.go
+
 func (s *wsStreamer) SetGoalID(goalID string) {
 	s.statsMu.Lock()
 	s.goalID = goalID
