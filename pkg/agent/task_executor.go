@@ -1400,14 +1400,15 @@ func (te *TaskExecutor) dispatchLaunchedTask(rec *session.LifecycleRecord, execu
 	te.mu.Unlock()
 
 	if t.SessionID != rec.SessionID {
-		updated, updateErr := te.store.Update(t.ID, task.Patch{SessionID: &rec.SessionID})
+		// #1026: retry once, then the Failed disposition, as on every launcher path.
+		updated, updateErr := te.persistTaskSessionBinding(t.ID, rec.SessionID)
 		if updateErr != nil {
 			cancel()
 			te.mu.Lock()
 			delete(te.running, t.ID)
 			te.mu.Unlock()
 			te.wg.Done()
-			return fmt.Errorf("task_executor: bind launched session: %w", updateErr)
+			return te.failTaskBeforeDispatch(t.ID, updateErr)
 		}
 		t = updated
 	}
