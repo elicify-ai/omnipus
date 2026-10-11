@@ -20,11 +20,21 @@ func (p *r5RootOwnerProvider) Chat(_ context.Context, messages []providers.Messa
 
 func r5AdmitRoot(t *testing.T) (*AgentLoop, *session.LifecycleRecord, *r1CompletionProvider) {
 	t.Helper()
+	return r5AdmitRootWithAnswers(t, "partial root work", "root resumed exactly once")
+}
+
+// r5AdmitRootWithAnswers is r5AdmitRoot with the provider's full answer script
+// staged BEFORE the first turn starts. A test that needs more than the default
+// two answers must stage them here: appending to answers/release or replacing
+// entered after Launch races the running turn's Chat call (the provider reads
+// those fields without a lock once the turn is in flight).
+func r5AdmitRootWithAnswers(t *testing.T, answers ...string) (*AgentLoop, *session.LifecycleRecord, *r1CompletionProvider) {
+	t.Helper()
 	al, _ := newSteerAL(t)
 	wireSteerCompletionDeps(t, al)
-	provider := &r1CompletionProvider{
-		answers: []string{"partial root work", "root resumed exactly once"},
-		entered: make(chan int, 2), release: []chan struct{}{make(chan struct{}), make(chan struct{})},
+	provider := &r1CompletionProvider{answers: answers, entered: make(chan int, len(answers))}
+	for range answers {
+		provider.release = append(provider.release, make(chan struct{}))
 	}
 	inst, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
 	if !ok {
