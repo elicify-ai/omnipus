@@ -113,6 +113,19 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// below never deletes them.
 	expiryErr := us.expireArchiveSessions(retentionDays, &removed, touchedSessionDirs)
 
+	// A main chat is deleted only with its agent (founder rule). Retention still
+	// expires a main chat's old rolled content above (FR-007), but never deletes
+	// its live partition, its identity (meta.json) or its directory.
+	protectedMain := make(map[string]bool)
+	isProtected := func(sessionID string) bool {
+		if p, ok := protectedMain[sessionID]; ok {
+			return p
+		}
+		p := us.retentionProtected(sessionID)
+		protectedMain[sessionID] = p
+		return p
+	}
+
 	err := filepath.WalkDir(us.baseDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if path == us.baseDir {
@@ -143,6 +156,9 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		}
 		if parts[0] != ".context" && transcriptDayPattern.MatchString(d.Name()) {
 			return nil // a rolled day partition: owned by expireArchiveSessions
+		}
+		if parts[0] != ".context" && isProtected(parts[0]) {
+			return nil
 		}
 
 		info, err := d.Info()
@@ -195,6 +211,9 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// child file is removed, breaking any post-deletion mtime comparison.
 	uploadsRoot := us.uploadsRoot() // home-rooted per ADR-017 D5 / N-B fix
 	for sessDir := range touchedSessionDirs {
+		if isProtected(filepath.Base(sessDir)) {
+			continue
+		}
 		entries, readErr := os.ReadDir(sessDir)
 		if readErr != nil {
 			continue
@@ -285,4 +304,21 @@ func (us *UnifiedStore) expireArchiveSessions(retentionDays int, removed *int, t
 		}
 	}
 	return errs
+}
+
+// retentionProtected reports whether retention must leave a session's files and
+// directory alone: a main chat, or a session whose identity cannot be read (an
+// unknown session is never deleted on a guess). The caller holds every session
+// shard.
+func (us *UnifiedStore) retentionProtected(sessionID string) bool {
+	meta, err := us.readMetaLocked(sessionID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+		slog.Warn("session: retention_sweep: cannot read session identity; leaving it untouched",
+			"session_id", sessionID, "error", err)
+		return true
+	}
+	return meta.Type == SessionTypeMain
 }
