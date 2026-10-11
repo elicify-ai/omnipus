@@ -41,7 +41,7 @@ func TestSeedfix_RunRetrospective_NotDeniedForConversationalBuiltins(t *testing.
 func TestSeedfix_MiaSeedDelegatesToWorker(t *testing.T) {
 	dp := coreagent.SeedDelegationEdges(coreagent.IDMia)
 	require.NotNil(t, dp)
-	var targets []string
+	targets := make([]string, 0, len(dp.To))
 	for _, r := range dp.To {
 		targets = append(targets, r.ID)
 	}

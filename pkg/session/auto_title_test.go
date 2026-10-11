@@ -51,7 +51,7 @@ func TestSetTitleIfEmpty(t *testing.T) {
 	// A title set by hand survives.
 	hand, _ := us.NewSession(SessionTypeChat, "web", "jim")
 	mine := "My own name"
-	if err := us.SetMeta(hand.ID, MetaPatch{Title: &mine}); err != nil {
+	if err = us.SetMeta(hand.ID, MetaPatch{Title: &mine}); err != nil {
 		t.Fatalf("hand title: %v", err)
 	}
 	if wrote, _ := us.SetTitleIfEmpty(hand.ID, "auto"); wrote {
