@@ -109,9 +109,11 @@ export function AgentRowMenu({
           <DropdownMenuItem
             disabled
             // D8: the refusal must never be a silent no-op. The reason rides
-            // three surfaces: this title (what assistive tech and the e2e
-            // reason-reader see), the described-by link below, and the
-            // visible caption inside the item.
+            // three surfaces: this title (what the e2e reason-reader and
+            // assistive tech see), the described-by link below, and the
+            // visible caption inside the item. The caption is aria-hidden so
+            // the item's accessible NAME stays exactly "Remove" — the reason
+            // is the item's DESCRIPTION (aria-describedby), not its name.
             title={removeReason}
             aria-describedby={`agent-row-remove-reason-${agentId}`}
           >
@@ -119,6 +121,7 @@ export function AgentRowMenu({
               <span>Remove</span>
               <span
                 id={`agent-row-remove-reason-${agentId}`}
+                aria-hidden="true"
                 className="whitespace-normal text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
               >
                 {removeReason}
