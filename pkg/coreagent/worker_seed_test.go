@@ -153,10 +153,11 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 		seedModesToEdgeModes(jimDP.Modes),
 		"Jim's seeded modes, translated onto a workspace graph edge, must collapse to [direct, task]")
 
-	// Settled design: every non-system agent ships a single self-edge — Mia,
-	// Ava, Admin and Researcher included (Admin's is dropped from any workspace
+	// Settled design: every non-system agent ships a single self-edge — Ava,
+	// Admin and Researcher included (Mia ships her self-edge PLUS the
+	// General Purpose edge, seedfix gap 6; see seedfix_retro_mia_test.go) (Admin's is dropped from any workspace
 	// graph because Admin is off-team, but the SEED must still carry it).
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDAva, coreagent.IDAdmin, coreagent.IDResearcher} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDAva, coreagent.IDAdmin, coreagent.IDResearcher} {
 		idp := coreagent.SeedDelegationEdges(id)
 		require.NotNil(t, idp, "%s must ship a default self-edge", id)
 		assert.Len(t, idp.To, 1, "%s ships exactly one edge (its self-edge)", id)
