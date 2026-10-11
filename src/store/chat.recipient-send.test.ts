@@ -18,7 +18,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
-import { useChatStore } from './chat'
+import { makeBucketMessages, useChatStore } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
@@ -288,5 +288,95 @@ describe('first-send payloads never carry a recipient', () => {
     expect(sentPayloads(send)[0]).toMatchObject({ type: 'message', content: '@Mia please review X' })
     expect(sentPayloads(send)[0].recipient).toBeUndefined()
     expect(sentPayloads(send)[0].session_id).toBeUndefined()
+  })
+})
+
+// C8 (R3 delta re-review, SFH F6): the @ address must never be dropped
+// SILENTLY. Two corners did exactly that: a Retry from the '__pending'
+// first-send bucket (no session for the pair to ride on — the frame went out
+// unaddressed), and an agents cache that has never resolved at send time
+// (no candidates — every @ read as ordinary text). The rule for both: carry
+// the recipient correctly, or block VISIBLY the way the composer blocks an
+// @-send in a brand-new chat.
+describe('C8 — the @ address is never dropped silently', () => {
+  it("a Retry from the '__pending' first-send bucket of an @-message is refused visibly, not sent unaddressed", () => {
+    // A failed @-send sitting in the '__pending' bucket, no longer the
+    // retained pendingFirstSend (that path owns retryFirstSend) — the
+    // resendMessage scan is what reaches it.
+    act(() => {
+      const bucket = makeBucketMessages([
+        {
+          id: 'pending-attempt', role: 'user', content: '@Mia please review X',
+          timestamp: new Date().toISOString(), status: 'error', deliveryStatus: 'failed',
+        },
+      ])
+      useChatStore.setState({
+        sessionsById: {
+          __pending: {
+            ...bucket,
+            // The fields makeBucketMessages does not carry (clearStreamingState
+            // iterates every bucket's tool-call bookkeeping on the next reset).
+            toolCalls: {},
+            toolCallOrder: [],
+            textAtToolCallStart: {},
+          },
+        },
+        messages: [],
+        isStreaming: false,
+        isReplaying: false,
+      })
+      useSessionStore.setState({ activeSessionId: '__pending', activeAgentId: 'jim' })
+    })
+    const send = connectWithSendSpy()
+
+    act(() => { useChatStore.getState().resendMessage('pending-attempt') })
+
+    // Nothing went out unaddressed; the warning names the addressee; the
+    // row stays failed so Retry remains available for when a session exists.
+    expect(send).not.toHaveBeenCalled()
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'warning' && t.message.includes('@Mia'))).toBe(true)
+    const row = useChatStore.getState().sessionsById['__pending']?.messagesById['pending-attempt']
+    expect(row?.deliveryStatus).toBe('failed')
+  })
+
+  it('an @-queued message holds when the agents cache has never resolved — it does not drain unaddressed', () => {
+    // The team list has never resolved in this tab (fresh mount, evicted
+    // cache): the address cannot be checked.
+    act(() => { queryClient.removeQueries({ queryKey: ['agents'] }) })
+    expect(queryClient.getQueryData(['agents'])).toBeUndefined()
+
+    act(() => { useChatStore.getState().sendMessage('@Mia please review X') }) // offline → queued
+    expect(useChatStore.getState().outboundQueue).toHaveLength(1)
+
+    const send = connectWithSendSpy()
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+
+    expect(send).not.toHaveBeenCalled()
+    expect(useChatStore.getState().pendingDrainQueue).toHaveLength(1)
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'warning' && t.message.includes('@Mia'))).toBe(true)
+  })
+
+  it('a Retry with an agents cache that has never resolved is refused visibly, not sent unaddressed', () => {
+    act(() => { useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'jim' }) })
+    // The row fails with the cache LOADED (the store-level send is defence
+    // in depth); by retry time the cache has been evicted/removed.
+    const send = vi.fn().mockReturnValue(false)
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
+        isConnected: true,
+        connectionError: null,
+      })
+    })
+    act(() => { useChatStore.getState().sendMessage('@Mia please review X') })
+    const failed = useChatStore.getState().messages.find((m) => m.role === 'user')!
+
+    act(() => { queryClient.removeQueries({ queryKey: ['agents'] }) })
+    const retrySend = connectWithSendSpy()
+    act(() => { useChatStore.getState().resendMessage(failed.id) })
+
+    expect(retrySend).not.toHaveBeenCalled()
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'warning' && t.message.includes('@Mia'))).toBe(true)
+    expect(failed.deliveryStatus).toBe('failed')
   })
 })
