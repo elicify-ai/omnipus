@@ -1,14 +1,31 @@
 // clear-row-settle.test.ts — the /clear row's EXIT on every settle outcome
-// (delta re-review findings C1, C6, C12; R1#1 SPA side).
+// (delta re-review findings C1, C6, C12; architect ruling S3-02 —
+// /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/
+// combined-review/ARCHITECT-RULINGS.md, "S3-02 … three signals and no timer").
 //
 // Oracles:
-//   C1  (R3-CONSOLIDATED) — after a refusal ("/clear was not performed …"),
-//       a discard (message_status discarded), a failed delivery or the
-//       expiry bound, the row must resolve to a non-pending state with
-//       honest copy — never the offline "Not sent yet, will be sent
-//       automatically" text. Founder rulings stay untouched: the row shows
-//       QUEUED at once, `received`/`working` never flip it midway, and a
-//       confirmed clear still replaces the screen with the fresh view.
+//   Wire-signal contract (ruling S3-02) — the wire is the source of truth,
+//       three signals, NO timer:
+//     1. Refused / not performed: the server publishes message_status
+//        {state: 'failed'} for the /clear's client_message_id (any refusal
+//        path — busy-turn failure, helper-session refusal, or a plain
+//        failure). The SPA never parses the assistant text; the row shows
+//        the failed state honestly and the refresh intent retires. A
+//        journaled failed replayed by reconnect catch-up resolves it the
+//        same way.
+//     2. Done: the clear-marker row stays the success signal (pinned in
+//        clear-transcript-refetch.test.ts).
+//     3. Held (stopped agent, busy-turn wait): NO terminal signal — the row
+//        stays queued with NO deadline. Nothing may time it out, resolve it
+//        or toast about it.
+//   C1  (R3-CONSOLIDATED) — a discard (message_status discarded) or a
+//       failed delivery resolves the row to a non-pending state with honest
+//       copy — never the offline "Not sent yet, will be sent automatically"
+//       text. Founder rulings stay untouched: the row shows QUEUED at once,
+//       `received`/`working` never flip it midway, and a confirmed clear
+//       still replaces the screen with the fresh view.
+//   Ownership (S3-11's kept semantics) — an OLDER operation's settle never
+//       touches a newer /clear's own intent.
 //   C6  (R3-CONSOLIDATED) — a failed post-clear re-read is visible through
 //       the EXISTING failed-history-read state (the shared ['messages', sid]
 //       query error the screen renders with Retry — clear-refetch.ts's own
@@ -17,9 +34,11 @@
 //   C12 (R3-CONSOLIDATED) — mergeServerProjection must keep local
 //       unconfirmed rows even when the /clear row cannot be found in the
 //       bucket.
-//   R1#1 (R1-CONSOLIDATED, HIGH, SPA side) — a /clear the server never
-//       confirms nor refuses (the lost-clear case) resolves to "not
-//       confirmed" after a bounded wait, with no screen change.
+//   Retired with the ruling: the 90 s bounded wait (CLEAR_CONFIRM_TIMEOUT_MS),
+//       the "unconfirmed" row state and its false "did not confirm" toast,
+//       and the "/clear was not performed" text-prefix refusal parse — the
+//       timer-based and text-based oracles below were deleted with them
+//       (the steer authorises retiring the tests that pinned them).
 //
 // What is real: the chat store's send/frame paths and the real React Query
 // client. What is stubbed: the HTTP edge ('@/lib/api/http' request) and the
@@ -31,8 +50,7 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
 import { ApiError } from '@/lib/api-error'
-import { pendingClearRefetches, clearConfirmTimers } from './runtime-state'
-import { MAX_UNRESOLVED_READS } from './clear-refetch'
+import { pendingClearRefetches } from './runtime-state'
 import { useUiStore } from '@/store/ui'
 import type { ServerFrame } from '@/lib/ws'
 import type { ChatMessage } from './types'
@@ -50,9 +68,6 @@ vi.mock('@/lib/api/http', async (importOriginal) => {
 const SID = 'sess-clear-settle'
 const MARKER_TEXT = 'Conversation context cleared'
 const SUCCESS_REPLY = 'Context cleared. The conversation and its history are kept; the assistant continues from here with a fresh context.'
-// pkg/agent/clear_while_busy.go::clearNotPerformedReply — the refusal the
-// server publishes when the running turn could not be stopped.
-const NOT_PERFORMED_REPLY = '/clear was not performed: the turn could not be stopped. Nothing was cleared; send /clear again.'
 
 function rawUser(id: string, clientMessageId: string | undefined, content: string, ts: string): Record<string, unknown> {
   return { id, role: 'user', content, timestamp: ts, agent_id: 'jim', status: 'ok', ...(clientMessageId ? { client_message_id: clientMessageId } : {}) }
@@ -152,7 +167,6 @@ beforeEach(() => {
   requestMock.mockReset()
   queryClient.removeQueries()
   delete pendingClearRefetches[SID]
-  delete clearConfirmTimers[SID]
   vi.spyOn(useUiStore.getState(), 'addToast').mockImplementation(((t: { message: string }) => { toasts.push(t.message) }) as never)
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'jim', activeAgentType: null })
   useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {} } as never)
@@ -166,7 +180,6 @@ afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
   delete pendingClearRefetches[SID]
-  delete clearConfirmTimers[SID]
 })
 
 describe('C1 — the /clear row exits on every settle outcome', () => {
@@ -200,7 +213,7 @@ describe('C1 — the /clear row exits on every settle outcome', () => {
     expect(requestMock).not.toHaveBeenCalled()
   })
 
-  it('a refused /clear — the "/clear was not performed" reply — resolves the row to not-performed and retires the operation', async () => {
+  it('a refused /clear — the server message_status failed — shows the failed row and retires the operation (ruling signal 1)', async () => {
     seedBucket(
       // The live turn's bubble carries its turn id — its own tokens stamped
       // it (frames.ts resolveTokenBubbleByMessageId), as in production.
@@ -210,44 +223,73 @@ describe('C1 — the /clear row exits on every settle outcome', () => {
 
     useChatStore.getState().sendMessage('/clear')
     const cmid = sentClientMessageId(0)
+    expect(pendingClearRefetches[SID]).toBeTruthy()
 
-    // The stopped turn settles first.
-    useChatStore.getState().handleFrame(doneFrame('turn-A', 1))
-    await new Promise((r) => setTimeout(r, 10))
-    expect(requestMock).not.toHaveBeenCalled()
-
-    // The refusal is published as its own token+done pair — and the done can
-    // carry the STOPPED turn's id (pkg/gateway/webchat_channel.go::Send
-    // reuses the recorded turn identity), exactly as in production.
-    useChatStore.getState().handleFrame({
-      type: 'token', session_id: SID, content: NOT_PERFORMED_REPLY, message_id: 'msg-refusal', turn_id: 'turn-A', agent_id: 'jim', seq: 2,
-    } as ServerFrame)
-    useChatStore.getState().handleFrame({
-      type: 'done', session_id: SID, message_id: 'msg-refusal', turn_id: 'turn-A', seq: 3, stats: { tokens: 12, cost: 0 },
-    } as ServerFrame)
+    // The refusal signal is the wire state itself — the explanatory text may
+    // ride along as an ordinary assistant reply, but the SPA keys on the
+    // failed message_status for the /clear's client_message_id.
+    useChatStore.getState().handleFrame(statusFrame(cmid, 'failed', 1))
 
     const row = bucket().messagesById[clearRowId(cmid)]
-    expect(row?.deliveryStatus).toBe('not-performed')
-    // Nothing was cleared — the transcript re-read would find no marker and
-    // spin to a "did not confirm" toast that contradicts the reply on screen.
+    // The row shows the failed state honestly — never a queued look, never
+    // an invented "not performed"/"not confirmed" state.
+    expect(row?.deliveryStatus).toBe('failed')
+    expect(row?.status).toBe('error')
+    // The intent retires with the refusal: nothing armed, and a later turn
+    // end therefore reads nothing and toasts nothing.
     expect(pendingClearRefetches[SID]).toBeUndefined()
     expect(requestMock).not.toHaveBeenCalled()
-    // The refusal reply itself stays visible, and no expiry toast ever fires.
-    expect(bucket().messageOrder.some((id) => bucket().messagesById[id]?.content === NOT_PERFORMED_REPLY)).toBe(true)
-    useChatStore.getState().handleFrame(doneFrame('turn-later', 4))
+    useChatStore.getState().handleFrame(doneFrame('turn-later', 2))
     await new Promise((r) => setTimeout(r, 20))
+    expect(requestMock).not.toHaveBeenCalled()
     expect(toasts).toEqual([])
+
+    // The honest repair is Retry: resending the failed row re-arms a FRESH
+    // operation for the new send.
+    useChatStore.getState().resendMessage(clearRowId(cmid))
+    expect(sentFrames).toHaveLength(2)
+    expect(pendingClearRefetches[SID]?.clientMessageId).toBe(sentClientMessageId(1))
   })
 
-  it('a server-reported FAILED /clear still marks the row for Retry (existing path, pinned)', async () => {
+  it('a refused /clear whose reply text matches NO known prefix still retires on the failed status (N11 — no text parsing)', async () => {
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
     useChatStore.getState().sendMessage('/clear')
     const cmid = sentClientMessageId(0)
 
-    useChatStore.getState().handleFrame(statusFrame(cmid, 'failed', 1))
-    const row = bucket().messagesById[clearRowId(cmid)]
-    expect(row?.deliveryStatus).toBe('failed')
-    expect(row?.status).toBe('error')
+    // Helper-session refusals (N11) word their reply differently; under the
+    // ruling the wire state alone decides, whatever the text says.
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: '/clear is not available in helper chats.', message_id: 'msg-refusal', turn_id: 'turn-ref', agent_id: 'jim', seq: 1,
+    } as ServerFrame)
+    useChatStore.getState().handleFrame(doneFrame('turn-ref', 2))
+    await new Promise((r) => setTimeout(r, 10))
+    useChatStore.getState().handleFrame(statusFrame(cmid, 'failed', 3))
+
+    expect(bucket().messagesById[clearRowId(cmid)]?.deliveryStatus).toBe('failed')
+    expect(pendingClearRefetches[SID]).toBeUndefined()
+  })
+
+  it('an OLDER /clear operation\'s settle never touches a NEWER /clear\'s intent (S3-11 ownership, pinned)', async () => {
+    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+    useChatStore.getState().sendMessage('/clear')
+    const cmid1 = sentClientMessageId(0)
+    expect(pendingClearRefetches[SID]?.clientMessageId).toBe(cmid1)
+
+    // A second /clear replaces the first operation outright.
+    useChatStore.getState().sendMessage('/clear')
+    const cmid2 = sentClientMessageId(1)
+    expect(pendingClearRefetches[SID]?.clientMessageId).toBe(cmid2)
+
+    // The FIRST send's failed status arrives late (a straggler, or the
+    // journaled replay of an earlier attempt): it retires only an operation
+    // that still owns the slot — never the newer one.
+    useChatStore.getState().handleFrame(statusFrame(cmid1, 'failed', 1))
+    expect(pendingClearRefetches[SID]?.clientMessageId).toBe(cmid2)
+    expect(bucket().messagesById[clearRowId(cmid2)]?.deliveryStatus).toBe('queued')
+
+    // And the newer operation's own failed status still retires it.
+    useChatStore.getState().handleFrame(statusFrame(cmid2, 'failed', 2))
+    expect(pendingClearRefetches[SID]).toBeUndefined()
   })
 
   it('founder ruling: received/working still never flip the queued look midway (guard against the discard change)', () => {
@@ -262,10 +304,12 @@ describe('C1 — the /clear row exits on every settle outcome', () => {
     expect(pendingClearRefetches[SID]).toBeTruthy()
   })
 
-  it(`a projection that cannot settle still expires at the read bound and resolves the row (max ${MAX_UNRESOLVED_READS} reads)`, async () => {
+  it('a projection that cannot settle yet keeps the intent armed — reads continue on later turn ends (no read bound)', async () => {
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
     // The server kept the /clear row and replied, but no marker — the read
-    // can never settle this operation.
+    // cannot settle this operation yet. Under the ruling there is NO bound:
+    // the row stays queued and every later turn end re-reads, until a wire
+    // signal (marker or failed) resolves the operation.
     requestMock.mockImplementation(async () => [
       rawUser('srv-u-refused', sentClientMessageId(0), '/clear', '2026-10-11T00:00:00Z'),
       rawAssistant('srv-a-refused', 'The clear was refused.', '2026-10-11T00:00:01Z'),
@@ -273,70 +317,62 @@ describe('C1 — the /clear row exits on every settle outcome', () => {
     useChatStore.getState().sendMessage('/clear')
     const cmid = sentClientMessageId(0)
 
-    for (let turn = 1; turn <= MAX_UNRESOLVED_READS; turn++) {
+    for (let turn = 1; turn <= 3; turn++) {
       expect(pendingClearRefetches[SID], `still armed before read ${turn}`).toBeTruthy()
       useChatStore.getState().handleFrame(doneFrame(`turn-refused-${turn}`, turn))
       await vi.waitFor(() => expect(requestMock).toHaveBeenCalledTimes(turn))
       await new Promise((r) => setTimeout(r, 15))
     }
-    expect(pendingClearRefetches[SID]).toBeUndefined()
-    expect(toasts.some((t) => /did not confirm your \/clear/i.test(t))).toBe(true)
-    // R1#1's row half at the read bound: the row is no longer pending.
-    expect(bucket().messagesById[clearRowId(cmid)]?.deliveryStatus).toBe('unconfirmed')
+    // Still armed, still queued, and NEVER a false "did not confirm" toast.
+    expect(pendingClearRefetches[SID]).toBeTruthy()
+    expect(bucket().messagesById[clearRowId(cmid)]?.deliveryStatus).toBe('queued')
+    expect(toasts).toEqual([])
   })
 })
 
-describe('R1#1 — a /clear the server never confirms nor refuses resolves after a bounded wait', () => {
-  it('resolves the row to unconfirmed with no screen change, tells the user once, and leaves nothing armed', () => {
+describe('ruling signal 3 — a HELD clear stays queued indefinitely, with no toast', () => {
+  it('a /clear the server neither confirms nor refuses stays queued past any deadline — no timer, no toast, no read', () => {
     vi.useFakeTimers()
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
     useChatStore.getState().sendMessage('/clear')
     const cmid = sentClientMessageId(0)
     expect(bucket().messagesById[cmid]).toMatchObject({ deliveryStatus: 'queued' })
 
-    // Well inside the bound: still queued, nothing invented.
-    vi.advanceTimersByTime(30_000)
+    // Far past the retired 90 s bound: the server legitimately holds the
+    // clear (stopped agent, busy-turn wait). The queued look is a founder
+    // ruling; nothing may time it out.
+    vi.advanceTimersByTime(10 * 60_000)
     expect(bucket().messagesById[cmid]?.deliveryStatus).toBe('queued')
-    expect(pendingClearRefetches[SID]).toBeTruthy()
-
-    // Past the bound: the row resolves — "not confirmed — send /clear again"
-    // — with NO screen change (no fabricated marker, no view wipe).
-    vi.advanceTimersByTime(60_000)
-    expect(bucket().messagesById[cmid]?.deliveryStatus).toBe('unconfirmed')
-    expect(bucket().messagesById[cmid]?.status).toBe('done')
-    expect(pendingClearRefetches[SID]).toBeUndefined()
-    expect(toasts.some((t) => /did not confirm your \/clear/i.test(t))).toBe(true)
+    expect(pendingClearRefetches[SID], 'the intent stays armed for when the clear executes').toBeTruthy()
+    expect(toasts).toEqual([])
+    // No screen change was invented either.
     const b = bucket()
     expect(b.messageOrder.filter((id) => b.messagesById[id]?.content === MARKER_TEXT)).toHaveLength(0)
     expect(b.messageOrder).toContain('u-1')
-
-    // And nothing reads afterwards: a later turn end re-reads nothing.
-    const reads = requestMock.mock.calls.length
-    useChatStore.getState().handleFrame(doneFrame('turn-much-later', 1))
-    expect(requestMock.mock.calls.length).toBe(reads)
+    // And with no turn ended, nothing read.
+    expect(requestMock).not.toHaveBeenCalled()
   })
+})
 
-  it('a /clear the bound would fire on resolves only its OWN row — a newer /clear keeps its own operation', () => {
-    vi.useFakeTimers()
+describe('reconnect catch-up — a journaled failed resolves the intent (ruling signal 1)', () => {
+  it('the journaled message_status failed, replayed after a reconnect, retires the armed intent', async () => {
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
     useChatStore.getState().sendMessage('/clear')
-    const cmid1 = sentClientMessageId(0)
-    // The first /clear's fresh view lands: the operation retires normally.
-    requestMock.mockImplementation(async () => rawPostClearProjection(1))
-    useChatStore.getState().handleFrame(doneFrame('turn-clear-1', 1))
-    // (The read is async under fake timers; retire it synchronously instead.)
+    const cmid = sentClientMessageId(0)
     expect(pendingClearRefetches[SID]).toBeTruthy()
-    // A second /clear is sent while the first read is outstanding.
-    useChatStore.getState().sendMessage('/clear')
-    const cmid2 = sentClientMessageId(1)
-    expect(pendingClearRefetches[SID]?.clientMessageId).toBe(cmid2)
 
-    // The bound fires long after: only the SECOND operation is still armed,
-    // so only its row may resolve.
-    vi.advanceTimersByTime(120_000)
-    expect(bucket().messagesById[cmid2]?.deliveryStatus).toBe('unconfirmed')
+    // The connection dropped before any signal arrived; on reconnect the
+    // journaled failed is replayed through the same frame reducer (the seq
+    // advances past what the bucket had seen).
+    useChatStore.getState().handleFrame(statusFrame(cmid, 'failed', 7))
+
+    expect(bucket().messagesById[clearRowId(cmid)]?.deliveryStatus).toBe('failed')
     expect(pendingClearRefetches[SID]).toBeUndefined()
-    expect(cmid1).not.toBe(cmid2)
+    expect(toasts).toEqual([])
+    // A later turn end reads nothing — the operation is settled.
+    useChatStore.getState().handleFrame(doneFrame('turn-after-reconnect', 8))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(requestMock).not.toHaveBeenCalled()
   })
 })
 
