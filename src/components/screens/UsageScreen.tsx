@@ -8,8 +8,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
-import { fetchTokenStats, fetchSessions, tokenStatsQueryKeys, type TokenStatsPeriod, type Session } from '@/lib/api'
+import { fetchTokenStats, fetchSessions, fetchAgents, tokenStatsQueryKeys, type TokenStatsPeriod, type Session } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
+import { sessionDisplayTitle } from '@/lib/nav/sessionDisplayTitle'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 
 export { formatTokens }
@@ -209,7 +210,7 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
                     tabIndex={0}
                     className="truncate min-w-0 hover:text-[var(--color-accent)] transition-colors"
                   >
-                    {row.title || 'Untitled'}
+                    {row.title}
                   </Link>
                   {row.type === 'verifier' && (
                     <Badge
@@ -294,6 +295,14 @@ export function UsageScreen() {
     staleTime: 30_000,
   })
 
+  // The agents roster — SAME ['agents'] query key the Sessions and Search
+  // modal uses — backs the main-session display title (founder feedback
+  // 2026-10-11, point 4): an untitled main reads "<Agent> - Main Session",
+  // derived from the agent's CURRENT name, so a rename flows through this
+  // shared cache without a reload. A failed roster degrades to "Unknown
+  // agent - Main Session" — never "Untitled" on a main.
+  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+
   const isLoading = statsLoading || sessionsLoading
 
   // Derive totals.
@@ -333,12 +342,17 @@ export function UsageScreen() {
   const modelMax = modelItems[0]?.tokens ?? 0
 
   // By-session items — use sessions list (includes verifier sessions, see
-  // the fetchSessions call above) with total_tokens.
+  // the fetchSessions call above) with total_tokens. Title resolves through
+  // sessionDisplayTitle (founder feedback 2026-10-11, point 4): server title
+  // when present; an untitled MAIN reads "<Agent> - Main Session" from the
+  // agent's CURRENT display name — recomputed every render off the live
+  // agents query, never cached, so a rename updates the row. Non-main
+  // sessions keep "Untitled".
   const sessionRows: SessionRow[] = sessions
     .filter((s) => s.total_tokens != null && s.total_tokens > 0)
     .map((s) => ({
       id: s.id,
-      title: s.title || 'Untitled',
+      title: sessionDisplayTitle(s, agents.find((a) => a.id === s.agent_id)?.name, 'Untitled'),
       tokens: s.total_tokens ?? 0,
       type: s.type,
     }))

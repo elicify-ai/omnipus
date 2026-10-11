@@ -217,6 +217,8 @@ If the required session or workspace list cannot be loaded, the error names what
 
 Each real session row shows its title above its status, kind, when it started, and when it was last active. On a phone, the title wraps rather than being squeezed beside the metadata, so chats with the same opening words remain distinguishable. Its token count appears when known and the screen is wide enough. A stored zero is shown as 0; a missing count is not invented.
 
+A main chat's title is always **<Agent name> - Main Session** — for example **Jim - Main Session**. The server sets that title and keeps it current when the agent is renamed; while a saved main chat has no title yet, Omnipus derives the same string from the agent's current name, so a rename shows up without a reload. A main chat is never shown as **Untitled**. Every other chat keeps its own title: one without a title yet shows **Untitled session** until the server titles it.
+
 | Status | When you see it |
 |---|---|
 | **Working** | The server's lifecycle record says it is working, and it is not queued. |
