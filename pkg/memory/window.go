@@ -5,8 +5,13 @@ import "errors"
 // WindowState is internal context-view persistence, never a gateway wire type.
 // AnchorLine addresses the original user message when it lies before Skip.
 type WindowState struct {
-	Skip       int
-	Count      int
+	Skip  int
+	Count int
+	// ClearFloor is the ordinal a /clear moved the window to. Slots below it are
+	// the cleared part of the conversation: they stay in the archive for recall
+	// but never feed the next request (no breadcrumb snippets of them). 0 when
+	// the session was never cleared.
+	ClearFloor int
 	AnchorLine *int
 	Projection ProjectionMeta
 }
