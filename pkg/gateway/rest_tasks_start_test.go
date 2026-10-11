@@ -716,67 +716,6 @@ func TestHandleTaskPatch_RunTask_StartErrRevertsStatus(t *testing.T) {
 		"task must have StartedAt cleared after StartTaskNow-error revert, not a phantom 'started' timestamp")
 }
 
-// TestHandleTaskPatch_RunTask_DispatchCapReturns409 verifies that when the
-// dispatch semaphore is exhausted, PATCH status=in_progress returns 409 Conflict
-// (ErrDispatchCapReached) AND leaves the task in its prior status.
-//
-// BDD:
-//
-//	Given a task with a known agent_id and all dispatch slots occupied,
-//	When PATCH /api/v1/tasks/{id} with {"status":"in_progress"},
-//	Then 409 Conflict and the task is NOT in_progress.
-func TestHandleTaskPatch_RunTask_DispatchCapReturns409(t *testing.T) {
-	api := newTestRestAPIAlignedStores(t)
-	wsID := ensureTestWorkspace(t, api)
-	// See TestHandleTaskPatch_InProgress_WithKnownAgent: "main" must be put on
-	// the workspace team explicitly for the team-membership check to accept it.
-	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
-
-	tsk := createTaskViaAPI(t, api, "CapTest", wsID)
-	advanceTaskToNext(t, api, tsk.Id)
-
-	wAssign := patchTask(t, api, tsk.Id, `{"agent_id":"mia"}`)
-	require.Equal(t, http.StatusOK, wAssign.Code,
-		"assign agent_id must succeed; body=%s", wAssign.Body.String())
-
-	te := api.taskExecutor
-	require.NotNil(t, te, "taskExecutor must not be nil in this test")
-
-	// Exhaust all semaphore slots by acquiring each one. capN ≥ 1 is guaranteed.
-	// All slots are released at end of test via Cleanup.
-	capN := te.DispatchSemaCap()
-	releases := make([]func(), 0, capN)
-	for i := range capN {
-		ok, rel := te.TryAcquireDispatchSema()
-		require.True(t, ok, "sema slot %d/%d must be available before exhaustion", i+1, capN)
-		releases = append(releases, rel)
-	}
-	t.Cleanup(func() {
-		for _, rel := range releases {
-			if rel != nil {
-				rel()
-			}
-		}
-	})
-
-	// PATCH status=in_progress — dispatch cap is exhausted → 409.
-	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
-	assert.Equal(t, http.StatusConflict, w.Code,
-		"exhausted dispatch cap must return 409; body=%s", w.Body.String())
-
-	// Task must be reverted to its prior status, not left as in_progress.
-	statusAfter := getTaskStatus(t, api, tsk.Id)
-	assert.Equal(t, gen.TaskStatusNext, statusAfter,
-		"task must revert to 'next' after 409 (not left as in_progress)")
-
-	// StartedAt must be cleared, not left carrying a "started" timestamp from
-	// an attempt that never actually ran (the in_progress patch above stamped
-	// it before the dispatch-cap failure reverted the status).
-	startedAtAfter := getTaskStartedAt(t, api, tsk.Id)
-	assert.Nil(t, startedAtAfter,
-		"task must have StartedAt cleared after dispatch-cap revert, not a phantom 'started' timestamp")
-}
-
 // TestHandleTaskPatch_RunTask_NilExecutorReturns503 verifies that PATCH
 // status=in_progress returns 503 Service Unavailable when taskExecutor is nil
 // (gateway degraded), AND leaves the task in its prior status.

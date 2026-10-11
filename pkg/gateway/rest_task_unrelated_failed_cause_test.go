@@ -141,9 +141,9 @@ func (f *restUnrelatedFailedCauseFault) snapshot() []task.Task {
 // TestHandleTaskPatch_SessionBindingFailureRemainsFailed (that fixture's
 // store only ever reaches Failed with the SAME cause the executor returns —
 // the real executor's failTaskBeforeDispatch always persists exactly the
-// error it also returns) and TestHandleTaskPatch_RunTask_DispatchCapReturns409
-// (its fresh status never reaches Failed at all — the dispatch-cap guard
-// trips before any store write). Only a differing stored cause exercises the
+// error it also returns) and the plan-gate 409 cases (their fresh status never
+// reaches Failed at all — the guard trips before any store write). Only a
+// differing stored cause exercises the
 // equality itself. This fixture reuses the SAME gatewayTaskAtomicWriter seam
 // installRESTBindingWriteFault already established (no new mock shape),
 // substituting only the Failed write's committed bytes.
