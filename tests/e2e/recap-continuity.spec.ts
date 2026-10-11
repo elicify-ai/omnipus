@@ -128,6 +128,12 @@ async function pollLastSession(page: Page, agentId: string, needle: string): Pro
 let baseline: MemorySettingsWire | null = null;
 
 test.beforeEach(async ({ page }) => {
+  // PR #1260 (E2E ui-heavy): the hook read the gateway settings BEFORE any
+  // navigation, so the page was still on about:blank and originOf() refused —
+  // every attempt failed at line 131 with a message that (misleadingly) named
+  // freshChat. Playwright hands a test a blank page; open the app first, the
+  // same way every spec that reads the page's own origin does.
+  await page.goto('/');
   const resp = await page.request.get(`${originOf(page)}/api/v1/settings/memory`, {
     headers: await pageCsrfHeaders(page),
   });
@@ -165,7 +171,9 @@ test(
       idle_timeout_minutes: IDLE_TIMEOUT_MINUTES,
     });
 
-    await page.goto('/');
+    // The app is already open (test.beforeEach navigated to '/' so the
+    // settings read could resolve the page's origin); this is the readiness
+    // assertion, kept as it was.
     await expect(chatInput(page)).toBeVisible({ timeout: 20_000 });
 
     // The session this test drives, and the agent it belongs to. `freshChat`
