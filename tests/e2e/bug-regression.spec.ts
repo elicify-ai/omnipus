@@ -581,7 +581,7 @@ function requireBugHarnessHome(): void {
 // outbound `message` frame carried no `session_id`, and the gateway
 // minted a brand-new session in the shared store (attributed to the
 // default agent) instead of resuming the seeded one. Fixed by waiting
-// for the WS `done` frame that closes out `attach_session`'s replay
+// for the WS `catch_up_complete` frame that closes out `attach_session`'s catch-up
 // before sending anything — see the `expect.poll` below, right before
 // the follow-up is sent. Two harness-only bugs (unrelated to the
 // product) had to be fixed to even reach that race: the agent-creation
@@ -734,24 +734,26 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     // to the default agent) instead of resuming this one, and
     // `attach_session` for the real seeded session only goes out afterward.
     // That race, not an empty seeded transcript, is the actual, confirmed
-    // cause of this test's original failure. The server's `done` frame
-    // closing out `attach_session`'s replay (of the seeded transcript entry
-    // above) is the one genuine "session attached" signal in the WS
-    // vocabulary — there is no separate ack frame type for it.
+    // cause of this test's original failure. Since the #823 catch-up redesign
+    // the terminal frame of an attach_session response (incremental AND
+    // snapshot path) is `catch_up_complete` (contracts/asyncapi.yaml,
+    // receiveCatchUpComplete) - NOT `done`, which now only ends a TURN. This
+    // wait used to key on `done` and timed out on every run once the
+    // redesign landed: the same "attach finished" signal, renamed.
     await expect
       .poll(
         () =>
           receivedFrames.some((raw) => {
             try {
               const frame = JSON.parse(raw) as { type?: string; session_id?: string }
-              return frame.type === 'done' && frame.session_id === sessionID
+              return frame.type === 'catch_up_complete' && frame.session_id === sessionID
             } catch {
               return false
             }
           }),
         {
           timeout: 15_000,
-          message: `expected a WS 'done' frame for session ${sessionID} confirming attach_session's replay completed before sending a follow-up`,
+          message: `expected a WS 'catch_up_complete' frame for session ${sessionID} confirming attach_session's catch-up completed before sending a follow-up`,
         },
       )
       .toBe(true)

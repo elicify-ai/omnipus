@@ -135,6 +135,27 @@ export async function openSidebar(page: Page): Promise<void> {
 }
 
 /**
+ * Close the sidebar if it is open, the way a user does (Cmd/Ctrl+B - NOT
+ * Escape, which cancels a running turn). An unpinned sidebar renders a
+ * full-page click-catcher (Sidebar.tsx, the `absolute inset-0 z-30` backdrop)
+ * that intercepts every pointer event on the chat - "<div aria-hidden> intercepts
+ * pointer events" on the Stop button in cancel-cross-channel T21 - so a helper
+ * that opened the sidebar must not leave it open. A sidebar that is already
+ * closing (row click -> exit animation) gets a short grace period first.
+ */
+export async function closeSidebar(page: Page): Promise<void> {
+  const nav = page.locator('nav[aria-label="Main navigation"], [role="dialog"][aria-label="Main navigation"]');
+  try {
+    await nav.first().waitFor({ state: 'hidden', timeout: 2_000 });
+    return;
+  } catch (err) {
+    if (!(err instanceof errors.TimeoutError)) throw err;
+  }
+  await page.keyboard.press('ControlOrMeta+b');
+  await nav.first().waitFor({ state: 'hidden', timeout: 5_000 });
+}
+
+/**
  * Locate an agent row's group (role="group" aria-label="<Agent name>") and
  * make it RESOLVABLE — sidebar opened, workspace roster expanded — WITHOUT
  * waiting for the row itself. Use this when the row may legitimately be
@@ -244,6 +265,8 @@ export const selectAgent = async (
         'selected row confirmed the switch — the active chat did not move',
     ).toHaveAttribute('aria-label', name, { timeout: 10_000 });
   }
+  // Leave the sidebar the way a row click normally does: closed (see closeSidebar).
+  await closeSidebar(page);
 };
 
 // ── Agent-row "⋯" menu (founder decision D1/D2, squad nav-agent-row-menu-20261011) ──

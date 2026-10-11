@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { expect, errors, type Page, type Locator } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, openSidebar, selectAgent, selectedAgentRow, waitForConnected } from './fixtures/selectors'
+import { chatInput, closeSidebar, openSidebar, selectAgent, selectedAgentRow, waitForConnected } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -622,6 +622,9 @@ async function cancelSendAndStop(
       'by her seeded policy (pkg/coreagent/core.go), so a silent revert to her ' +
       'makes the delegation impossible rather than merely slow (RC6)',
   ).toHaveAttribute('aria-label', /Jim/i, { timeout: 10_000 })
+  // Back to the state a user is in while typing: the open sidebar's click-catcher
+  // would otherwise swallow the Stop click later in this test.
+  await closeSidebar(page)
 
   await input.press('Enter', { timeout: 15_000 })
 
