@@ -195,6 +195,8 @@ func TestDeltaGW_ClearAll_KeepsHelperSessionsOfAKeptMain(t *testing.T) {
 	env.api.agentLoop.SetSessionMessagingStores(nil, ls)
 	helper := u18NewChild(t, env.store(t), "delta-helper-of-main", mainID)
 	u18PersistLifecycleChild(t, ls, helper.ID, mainID)
+	// A finished helper: linked to its main by the session's parent link only.
+	finished := u18NewChild(t, env.store(t), "delta-finished-helper", mainID)
 	loose := sf1NewChat(t, env)
 	listed, lerr := env.store(t).ListSessions()
 	require.NoError(t, lerr)
@@ -209,6 +211,8 @@ func TestDeltaGW_ClearAll_KeepsHelperSessionsOfAKeptMain(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, body)
 	_, err := env.store(t).GetMeta(helper.ID)
 	assert.NoError(t, err, "a kept main's helper session must survive delete-all")
+	_, err = env.store(t).GetMeta(finished.ID)
+	assert.NoError(t, err, "a kept main's finished helper session must survive delete-all")
 	_, err = env.store(t).GetMeta(loose)
 	assert.Error(t, err, "instrument check: an ordinary chat is still deleted")
 }
