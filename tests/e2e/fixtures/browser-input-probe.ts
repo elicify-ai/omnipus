@@ -987,7 +987,7 @@ async function beginBrowserInputProbe(
     }));
     viewerClockBrackets.push({ label, ...clock });
   };
-  let baselineWire = 0;
+  const baselineWire = 0;
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("websocket", (socket) => {
     if (!new URL(socket.url()).pathname.endsWith("/browser/ws")) return;
@@ -1028,7 +1028,7 @@ async function beginBrowserInputProbe(
       wire.push({ at: Date.now(), direction: "closed", type: "socket_closed" }),
     );
   });
-  let state: PixelState = {
+  const state: PixelState = {
     count: 0,
     hash: 0,
     last: 0,
