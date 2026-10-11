@@ -291,6 +291,9 @@ func (b *archiveBackend) commitWindow(ctx context.Context, key string, before, a
 	if after.DropExpiryNote || after.ClearFloor > meta.ClearFloor {
 		meta.ExpiryNote = "" // a /clear starts over: nothing before it is announced
 	}
+	if after.RestoreExpiryNote != "" {
+		meta.ExpiryNote = after.RestoreExpiryNote // the undo of that /clear
+	}
 	meta.ClearFloor = after.ClearFloor
 	meta.AnchorLine = cloneIntPtr(after.AnchorLine)
 	meta.Projection = metaFromProjection(after.Projection)

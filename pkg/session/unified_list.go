@@ -20,7 +20,8 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 }
 
 // UnreadableSessionIDs returns the ids of session directories on disk whose
-// meta.json cannot be read or parsed. ListSessions logs and SKIPS such a
+// meta.json exists but cannot be read or parsed (a directory with no meta.json
+// is not a session and is not listed). ListSessions logs and SKIPS such a
 // directory, so a caller that must account for every session on disk (delete-all)
 // needs this to report what it could not see. Directories already loaded into the
 // cache are readable by construction. A missing base directory is the empty state.
@@ -50,6 +51,11 @@ func (us *UnifiedStore) UnreadableSessionIDs() ([]string, error) {
 		h := us.lockSession(name)
 		_, readErr := us.readMetaLocked(name)
 		h.Unlock()
+		if errors.Is(readErr, os.ErrNotExist) {
+			// No meta.json at all: never a session (boot skips it as safe to
+			// delete), so it is not an unreadable chat delete-all must keep.
+			continue
+		}
 		if readErr != nil {
 			bad = append(bad, name)
 		}

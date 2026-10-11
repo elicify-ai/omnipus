@@ -119,6 +119,10 @@ type Capture struct {
 	// request. A request admitted while the receiver is stopped stays
 	// undelivered (held) until the receiver runs again.
 	Delivered bool `json:"delivered,omitempty"`
+	// Text is the request exactly as the receiver's model reads it. A request
+	// held for a stopped receiver is delivered from here when the receiver runs
+	// again; the transcript entry alone does not reach the model.
+	Text string `json:"text,omitempty"`
 }
 
 // Validate checks a capture is complete enough to route an answer.
