@@ -15,13 +15,13 @@ import (
 func mainOwnerReply(t *testing.T, f *addrFixture) (string, error) {
 	t.Helper()
 	recv, _ := conversationSetup(t, f, addressing.Pair{})
-	ownerMain, err := f.al.GetSessionStore().GetOrCreateMainSession(addrWS, "ann")
-	if err != nil {
-		t.Fatal(err)
+	ownerMain, mainErr := f.al.GetSessionStore().GetOrCreateMainSession(addrWS, "ann")
+	if mainErr != nil {
+		t.Fatal(mainErr)
 	}
-	c, err := f.al.RequestLedger().Resolve(recv, addressing.Pair{WorkspaceID: addrWS, AgentID: addrReceiver}, "q7")
-	if err != nil {
-		t.Fatal(err)
+	c, ledgerErr := f.al.RequestLedger().Resolve(recv, addressing.Pair{WorkspaceID: addrWS, AgentID: addrReceiver}, "q7")
+	if ledgerErr != nil {
+		t.Fatal(ledgerErr)
 	}
 	c.Source.SessionID = ownerMain.ID
 	c.RequestID = "q9"

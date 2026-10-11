@@ -123,7 +123,8 @@ func orphanACAssertStandaloneOrphan(t *testing.T, prefix []providers.Message, su
 	require.Error(t, aerr, "admission must refuse a tool result that names no issuing assistant")
 
 	// (ii) the send boundary refuses the same sequence, built in memory.
-	seq := []providers.Message{{Role: "system", Content: "PINNED instruction must remain"}}
+	seq := make([]providers.Message, 0, 1+len(prefix)+len(suffix))
+	seq = append(seq, providers.Message{Role: "system", Content: "PINNED instruction must remain"})
 	seq = append(seq, prefix...)
 	seq = append(seq, suffix...)
 	r, provider := cwR1OpenAI(t, 0)

@@ -13,7 +13,7 @@ import (
 // the process-wide registry happens to hold first. Session A is active; a steer
 // for session B (which has no live turn) must be reported against B.
 func TestSteeringEnqueue_InterruptReceivedIsAttributedToTheSteeredSession(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al and cleanup are used
 	defer cleanup()
 
 	tsA := &turnState{turnID: "turn-of-A", sessionKey: "sess-A", agentID: "agent-A", finishedChan: make(chan struct{})}
@@ -36,7 +36,7 @@ func TestSteeringEnqueue_InterruptReceivedIsAttributedToTheSteeredSession(t *tes
 // Control: when the steered scope DOES have a live turn, the event is attributed
 // to that turn.
 func TestSteeringEnqueue_InterruptReceivedUsesTheScopesOwnLiveTurn(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al and cleanup are used
 	defer cleanup()
 	tsB := &turnState{turnID: "turn-of-B", sessionKey: "sess-B", agentID: "agent-B", finishedChan: make(chan struct{})}
 	al.activeTurnStates.Store("sess-B", tsB)
