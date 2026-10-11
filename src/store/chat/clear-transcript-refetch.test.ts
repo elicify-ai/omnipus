@@ -648,6 +648,36 @@ describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent
     expect(requestMock).toHaveBeenCalledTimes(MAX_UNRESOLVED_READS)
   })
 
+  it('founder ruling: /clear shows a fresh conversation, deletes nothing, and leaves nothing armed', async () => {
+    seedBucket([
+      localMessage({ id: 'u-old', role: 'user', content: 'an old question', deliveryStatus: 'received' }),
+      localMessage({ id: 'a-old', role: 'assistant', content: 'an old answer' }),
+    ])
+    requestMock.mockImplementation(async () => rawPostClearProjection(sentClientMessageId(0), 1))
+    useChatStore.getState().sendMessage('/clear')
+    useChatStore.getState().handleFrame(doneFrame('turn-clear', 1))
+    await vi.waitFor(() => expect(pendingClearRefetches[SID]).toBeUndefined())
+
+    // The screen is a new conversation: this /clear, its reply, the divider. Nothing older.
+    const order = bucket().messageOrder
+    expect(order.slice(0, 3)).toEqual(['srv-u-clear-1', 'srv-a-reply-1', 'srv-clear-marker-1'])
+    // Only the finalized empty live assistant placeholder may follow; no pre-clear row.
+    for (const id of order.slice(3)) expect(bucket().messagesById[id]).toMatchObject({ role: 'assistant', content: '' })
+    expect(order).not.toContain('u-old')
+    expect(order).not.toContain('a-old')
+    // Nothing was deleted: the SPA only read the transcript (GET), never wrote or deleted.
+    for (const call of requestMock.mock.calls) {
+      const init = call[1] as { method?: string } | undefined
+      expect(init?.method ?? 'GET').toBe('GET')
+      expect(String(call[0])).toBe(`/sessions/${SID}/messages`)
+    }
+    // Nothing left armed: later turns re-read nothing.
+    const reads = requestMock.mock.calls.length
+    useChatStore.getState().handleFrame(doneFrame('turn-later', 2))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(requestMock).toHaveBeenCalledTimes(reads)
+  })
+
   it('a history Retry that reads but cannot settle the operation says so instead of going quiet', async () => {
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
     requestMock.mockImplementation(async () => rawRefusedProjection(sentClientMessageId(0)))
