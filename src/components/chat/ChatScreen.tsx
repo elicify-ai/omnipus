@@ -98,6 +98,8 @@ import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
 import { useSlashMenu, SECTION_CAP } from '@/hooks/useSlashMenu'
+import { ComposerMenu } from './composer/ComposerMenu'
+import { recipientAddressBlocked } from '@/store/chat/recipientSend'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import { useCancelState } from '@/hooks/useCancelState'
 import {
@@ -2178,10 +2180,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // no skill items either) — an empty bordered box with nothing in it.
   // Gate on whatever will actually render: at least one item, OR the exact
   // condition the error row's own JSX uses below (kept identical on
-  // purpose so the two can't drift apart).
+  // purpose so the two can't drift apart). The error row is also hidden in
+  // "@" mention mode (restored — founder decision 2026-10-11 Q1 B): a
+  // commands-fetch error has nothing to do with the agent list.
   const hasMenuContent =
     slashMenu.slashItems.length > 0 ||
-    (slashMenu.commandsError && !slashMenu.isSkillsFilter)
+    (slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode)
 
   // Deferred item 2: single source of truth for "the menu is actually
   // mounted right now" — reused by the render gate below, the combobox
@@ -2218,9 +2222,13 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // truth for the currently-active capped section's overflow state, shared
   // by the VISIBLE "+N more" footer row below AND its sr-only announcement
   // mirror (menuFooterAnnouncement) — computed once so the two can never say
-  // different things. Only skills are capped (commands has no cap). The "@"
-  // agent menu is gone (FR-007).
-  const activeSectionHiddenCount = slashMenu.skillsHiddenCount
+  // different things. Only skills and agents are capped (commands has no
+  // cap), and the "/" and "@" triggers are mutually exclusive by construction
+  // (see useSlashMenu.ts's file header), so `isMentionMode` alone picks the
+  // right count.
+  const activeSectionHiddenCount = slashMenu.isMentionMode
+    ? slashMenu.agentsHiddenCount
+    : slashMenu.skillsHiddenCount
   // Cap-footer copy (gate 2 LOW): in the "/skills" special-filter state (D9
   // — exact input "/skills" shows every skill, capped, ignoring "skills"
   // itself as a filter string), "keep typing to narrow" is impossible advice
@@ -2349,11 +2357,33 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // don't support mid-run sends — ours explicitly does (the gateway queues
   // and injects mid-turn messages server-side), so this drives the send
   // explicitly instead of going through the gated presentational path.
+  //
+  // @-recipient no-session block (founder decision 2026-10-11 Q1 B): a
+  // leading "@<Agent name>" address is only sendable FROM an existing chat —
+  // the server refuses a recipient that arrives without session_id
+  // (pkg/gateway/ws_recipient.go::refuseRecipient), and sending the message
+  // unaddressed would silently drop the addressing. recipientAddressBlocked
+  // resolves the address from the live composer text and, when this chat has
+  // no session yet ('__pending' included), shows the composer's standard
+  // blocked-send warning and returns non-null. The caller preventDefaults /
+  // early-returns WITHOUT clearing anything: the runtime only empties the
+  // composer on a send that actually proceeds (verified —
+  // BaseComposerRuntimeCore.send calls _emptyTextAndAttachments before
+  // handleSend, so a pre-submit refusal here is the only way to keep the
+  // text), which is exactly "never silently drop the message or the @".
+  function recipientAddressBlockedNow(): boolean {
+    const text = composerRuntime.getState().text ?? slashMenu.inputValue
+    return recipientAddressBlocked(text) !== null
+  }
   function submitMidStreamMessage() {
     // Mirrors ComposerPrimitive.Root's onSubmit below: a typed client
     // command (e.g. "/cancel") still intercepts locally instead of steering
     // into the running turn as chat text.
     if (slashMenu.interceptClientCommand()) return
+    // A steer mid-FIRST-turn ('__pending') has no session for an @-recipient
+    // to ride on — block visibly and keep the text (the ordinary first-send
+    // block below covers the idle case).
+    if (recipientAddressBlockedNow()) return
     // BaseComposerRuntimeCore.send() no-ops on its own `canSend` check
     // (empty composer / isSendDisabled, which trims) — no separate emptiness
     // guard is needed before calling it, matching the native Enter/click-Send
@@ -2460,6 +2490,18 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       onDrop={attachDisabled ? undefined : fileUpload.onDrop}
     >
       <UnavailableChatNotice />
+      {/* a11y HIGH (Fix 2, restored with the menu — founder decision
+          2026-10-11 Q1 B): selecting an agent via "@" changes ONLY the
+          composer text (the "@<Name> " address prefix — the recipient is
+          derived from it at send time), which a screen reader does not
+          announce on change. Mirrors the sr-only aria-live pattern of the
+          message list so a mention selection is announced like any other
+          chat event. Re-selecting the SAME agent leaves the string
+          unchanged (no re-announce) — nothing actually changed. */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only" data-testid="agent-mention-announcement">
+        {slashMenu.mentionAnnouncement && <span>Message addressed to {slashMenu.mentionAnnouncement}</span>}
+      </div>
+
       {/* SR gap (gate 4 MODERATE): the "Commands unavailable" error row
           inside the listbox below is deliberately `role="presentation"` —
           excluded from the listbox's accessible option children (see that
@@ -2479,7 +2521,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           `aria-atomic="true"`, matching the pattern above explicitly for
           clarity. */}
       <div role="status" aria-atomic="true" className="sr-only" data-testid="slash-menu-status">
-        {menuIsRendered && slashMenu.commandsError && !slashMenu.isSkillsFilter && (
+        {menuIsRendered && slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
           <span>Commands unavailable</span>
         )}
         {menuIsRendered && menuFooterAnnouncement && <span>{menuFooterAnnouncement}</span>}
@@ -2492,176 +2534,20 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       )}
 
 
-      {/* Slash command + skills dropdown (FR-005). "/" opens Commands+Skills.
-          The "@" agent menu is gone (FR-007): a leading "@" does not open
-          this list and does not switch the agent.
-          F6: unified slashItems.map() — emits a section header on each section
-          transition, making the `section` field load-bearing and removing the
-          duplicate render blocks + the off-by-one `globalIndex` variable.
-          FR-014/R3: skill items show their argument_hint as muted help text.
-          Fix E / deferred item 2: gated on `menuIsRendered` (declared above,
-          alongside `slashMenu`), which folds in `hasMenuContent` —
-          `shouldShowSlash` alone can be true with nothing to actually
-          render; see that constant's own comment.
-
-          Deferred item 2 (W3C APG combobox pattern): this container is the
-          combobox's `listbox` — `role="listbox"`, a stable `id` the
-          textarea's `aria-controls` points to, and an `aria-label` since the
-          listbox has no visible heading of its own (its rows have section
-          headers, but the LISTBOX itself doesn't). Rows below are
-          `role="option"` with `tabIndex={-1}` (NOT 0 — see the row's own
-          comment) and `aria-selected`; the textarea (ChatScreen.tsx's
-          ComposerPrimitive.Input, below) carries
-          `aria-activedescendant={composer-option-${slashHighlight}}` so
-          screen readers announce the highlighted row without moving DOM
-          focus off the input, per APG's combobox-with-listbox-popup
-          pattern. */}
-      {menuIsRendered && (
-        <div
-          data-testid="slash-menu"
-          id="composer-slash-menu"
-          role="listbox"
-          aria-label="Commands and skills"
-          // max-h + scroll: the menu opens UPWARD from the composer, so a tall
-          // list (many commands + skills) pushed its top rows above the
-          // viewport. 40dvh caps it to the visible area; overflow-y scrolls.
-          className="mb-[var(--space-2)] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] overflow-hidden shadow-2xl max-h-[40dvh] overflow-y-auto overscroll-contain"
-        >
-          {/* LOW S8: fetchCommands('web') errored — surface the gap instead
-              of letting every backend command silently vanish from the
-              palette. Hidden during the "/skills" filter (D9 already hides
-              the whole Commands section there, so an error row would be a
-              non-sequitur). Muted styling matches SearchModal's own
-              query-error row (src/components/search/SearchModal.tsx).
-              Hidden during the "/skills" filter only. The "@" mention menu
-              this row used to stay out of is gone (FR-007).
-              Deferred item 2: `role="presentation"` — this row is
-              informational text, not a selectable listbox option; without
-              this it would silently pollute the `listbox`'s accessible
-              children with a non-option row. */}
-          {slashMenu.commandsError && !slashMenu.isSkillsFilter && (
-            <div
-              data-testid="slash-commands-error"
-              role="presentation"
-              className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] italic"
-            >
-              Commands unavailable
-            </div>
-          )}
-          {slashMenu.slashItems.map((item, globalIndex) => {
-            const prevSection = globalIndex > 0 ? slashMenu.slashItems[globalIndex - 1].section : null
-            const isFirstInSection = item.section !== prevSection
-            const nextSection = globalIndex < slashMenu.slashItems.length - 1 ? slashMenu.slashItems[globalIndex + 1].section : null
-            const isLastInSection = item.section !== nextSection
-            // Deferred item 3: the section's overflow count, rendered as a
-            // muted footer row right after that section's last visible row.
-            // Only skills/agents are capped (commands has no cap — see
-            // useSlashMenu.ts) — 0 for commands, so the footer simply never
-            // renders there.
-            const sectionHiddenCount = item.section === 'skills' ? slashMenu.skillsHiddenCount : 0
-            return (
-              <React.Fragment key={item.key}>
-                {isFirstInSection && (
-                  <div
-                    role="presentation"
-                    className={cn(
-                      'px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
-                      globalIndex === 0
-                        ? 'border-b border-[var(--color-border)]'
-                        : 'border-t border-[var(--color-border)]',
-                    )}>
-                    {item.section === 'commands' ? 'Commands' : 'Skills'}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  id={`composer-option-${globalIndex}`}
-                  role="option"
-                  aria-selected={globalIndex === clampedSlashHighlight}
-                  // Deferred item 2 (APG combobox pattern, amends the eb4de2a2
-                  // blanket tabIndex=0 stamp for THIS widget specifically):
-                  // options inside a combobox's listbox popup are NOT
-                  // separately tabbable — focus stays on the textarea the
-                  // whole time the menu is open (that's the entire point of
-                  // aria-activedescendant), and ArrowUp/ArrowDown move the
-                  // active-descendant highlight without ever moving real DOM
-                  // focus. tabIndex=0 here was actively harmful: Tab-focusing
-                  // a row started the textarea's 150ms blur-close timer
-                  // (onInputBlur, useSlashMenu.ts), which unmounted the menu
-                  // out from under the just-focused row and dropped focus to
-                  // `body` — a keyboard dead end. Selection still works via
-                  // onMouseDown (mouse) and Enter (keyboard, through the
-                  // textarea's own onKeyDown → slashMenu.handleKeyDown) —
-                  // neither depends on this button ever receiving focus.
-                  tabIndex={-1}
-                  // Fix 11: semantic highlight marker — lets a test assert the
-                  // highlighted row without depending on the visual class
-                  // string below (which stays purely presentational; `undefined`
-                  // when not highlighted, so the attribute doesn't render at all
-                  // rather than serializing as `data-highlighted="false"`).
-                  data-highlighted={globalIndex === clampedSlashHighlight || undefined}
-                  className={cn(
-                    'w-full flex items-baseline gap-[var(--space-2-5)] px-[var(--space-2-5)] py-[var(--space-2)] text-left transition-colors',
-                    globalIndex === clampedSlashHighlight
-                      ? 'bg-[var(--color-accent)]/10 text-[var(--color-secondary)]'
-                      : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-                  )}
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    item.onSelect()
-                    // Click-selecting a slash item must land focus back in the
-                    // input (keyboard selection never loses it; mouse would).
-                    focusChatInput()
-                  }}
-                  onMouseEnter={() => slashMenu.onHoverItem(globalIndex)}
-                >
-                  {/* Fixed-width label column so descriptions align across rows
-                      (a two-column table, not per-row flow). 9.5rem fits the
-                      longest current label; truncate guards outliers. */}
-                  <span className="w-[9.5rem] shrink-0 truncate font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)]">{item.label}</span>
-                  <span className="text-[length:var(--type-caption-size)] flex-1 min-w-0 truncate">{item.description}</span>
-                  {/* FR-014/R3: show argument_hint as muted help text for skills;
-                      SD-C7 extends this to `delivery: agent` commands (e.g. /goal, /loop). */}
-                  {(item.section === 'skills' || item.section === 'commands') && item.argumentHint && (
-                    <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
-                      {item.argumentHint}
-                    </span>
-                  )}
-                </button>
-                {/* Deferred item 3: "+N more" footer — rendered right after
-                    the LAST visible row of a capped section that still has
-                    overflow. Deliberately `role="presentation"` and OUTSIDE
-                    `slashMenu.slashItems` entirely (not just visually
-                    de-emphasized) — it is not part of `globalIndex`'s
-                    sequence, so it can never receive an
-                    `id="composer-option-N"`, can never be `aria-selected`,
-                    and ArrowUp/ArrowDown (which cycle modulo
-                    `slashItems.length`) can never land the highlight on it. */}
-                {isLastInSection && sectionHiddenCount > 0 && (
-                  <div
-                    data-testid="slash-menu-footer"
-                    role="presentation"
-                    className="px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
-                  >
-                    {/* Cap-footer copy fix (gate 2 LOW): `footerCopy` (declared
-                        above, alongside `menuIsRendered`) already accounts for
-                        the "/skills" special-filter state, where "keep typing
-                        to narrow" is impossible advice — see its own comment.
-                        `sectionHiddenCount > 0` here is guaranteed to equal the
-                        `activeSectionHiddenCount` `footerCopy` was computed
-                        from (only one capped section can be rendering a footer
-                        at a time — "/" caps skills, "@" caps agents, and the
-                        two triggers are mutually exclusive), so reusing the
-                        single shared value here (rather than re-deriving the
-                        copy per-row) is exactly correct, not a coincidence. */}
-                    {footerCopy}
-                  </div>
-                )}
-              </React.Fragment>
-            )
-          })}
-        </div>
-      )}
+      {/* Slash command + skills + agent-mention partitioned dropdown
+          (FR-005; the "@" trigger restored by founder decision 2026-10-11
+          Q1 B). Rendered by ComposerMenu — moved verbatim out of this file
+          (2026-10-11), which sits over the size budget and may only shrink;
+          the ARIA listbox row markup moved with it, including the reviewed
+          raw-<button> retention now registered for ComposerMenu.tsx in the
+          design-system ledger. */}
+      <ComposerMenu
+        slashMenu={slashMenu}
+        menuIsRendered={menuIsRendered}
+        clampedSlashHighlight={clampedSlashHighlight}
+        footerCopy={footerCopy}
+        focusChatInput={focusChatInput}
+      />
 
       {/* Context row — per-message scope (attach · agent · model · tokens).
           Renders BARE on the black shell, deliberately outside the card
@@ -2732,6 +2618,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               e.preventDefault()
               return
             }
+            // @-recipient no-session block (see recipientAddressBlockedNow's
+            // comment above): refused visibly, text kept — never submitted.
+            if (recipientAddressBlockedNow()) {
+              e.preventDefault()
+              return
+            }
             // Fix 4: resync the text mirror after a real send. assistant-ui's
             // composerRuntime clears its own text on a successful submit
             // WITHOUT firing the textarea's onChange (no synthetic change
@@ -2739,11 +2631,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // `slashMenu.inputValue` — which only updates via onInputChange —
             // kept the just-sent text even though the visible textarea was
             // now empty. A subsequent ArrowDown then read that stale mirror
-            // and reopened the slash menu. The "@" agent menu this used to
-            // reopen is gone (FR-007). Only reached here when the send actually
-            // proceeded (neither the isStreaming guard nor
-            // interceptClientCommand() intercepted it above), so this can't
-            // clear the mirror out from under a blocked/intercepted send.
+            // and reopened the slash menu (the "@" agent-mention menu —
+            // restored 2026-10-11, founder decision Q1 B — included). Only
+            // reached here when the send actually proceeded (neither the
+            // isStreaming guard, interceptClientCommand(), nor the
+            // @-recipient block intercepted it above), so this can't clear
+            // the mirror out from under a blocked/intercepted send.
             slashMenu.onInputChange('')
           }}
         >
@@ -2997,6 +2890,14 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               tabIndex={6}
               onClick={(e) => {
                 if (slashMenu.interceptClientCommand()) {
+                  e.preventDefault()
+                  return
+                }
+                // @-recipient no-session block (same contract as onSubmit's):
+                // preventDefault stops the primitive's own composer.send()
+                // (composeEventHandlers honours it — see the J correction
+                // note above), so the composer text is kept.
+                if (recipientAddressBlockedNow()) {
                   e.preventDefault()
                 }
               }}

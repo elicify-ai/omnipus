@@ -4,20 +4,34 @@
 // ~862-line body (Wave 3 structural refactor) — behavior is unchanged, only
 // ownership moved.
 //
-// A leading "@" does not open a menu and does not switch the agent (FR-007).
-// `isMentionMode` stays false and `mentionAnnouncement` stays null so callers
-// that still read those fields observe the cutover instead of a missing
-// property.
+// Also owns the `@` agent-mention menu — a second leading-character trigger
+// that reuses this hook's plumbing rather than living in a parallel hook,
+// because this hook is already the single owner of the composer's text
+// mirror AND the menu's keyboard nav; a second hook would need to duplicate
+// both (and would race this one for the mirror) to add its own trigger. The
+// two triggers are mutually exclusive by construction — `inputValue` cannot
+// simultaneously start with "/" and "@" — so `slashItems` simply swaps its
+// source list depending on which (if either) fired.
+//
+// The mention menu was restored by founder decision 2026-10-11 Q1 B ("clone
+// the skill and slash command picker and fill it with a different list, the
+// agent names"), reversing spec FR-007's cutover for ADDRESSING ONLY. The
+// one behaviour change vs the pre-cutover menu (FR-029, no in-chat handover):
+// selecting an agent does NOT switch the active agent or chat — it inserts
+// the exact text `@<Agent name> ` into the composer, and the recipient is
+// derived from that leading prefix at SEND time
+// (src/lib/recipientAddress.ts + src/store/chat/recipientSend.ts).
 //
 // Owns the composer's text mirror (`inputValue`) — AssistantUI's
 // `composerRuntime` is the actual source of truth for what gets sent, but
 // this hook needs a React-reactive copy of the current text to: gate
-// whether the menu should be showing (`inputValue.startsWith('/')`),
-// decide whether the ghost-text overlay should render, and filter the
-// palette. Every place that needs to change the composer's text (selecting
-// a command or skill, running a client command, the plain onChange handler)
-// goes through this hook's actions so `composerRuntime.setText(...)` and
-// the local mirror never drift apart — see each action below.
+// whether the menu should be showing (`inputValue.startsWith('/')` or
+// `startsWith('@')`), decide whether the ghost-text overlay should render,
+// and filter the palette. Every place that needs to change the composer's
+// text (selecting a command/skill/agent, running a client command, the
+// plain onChange handler) goes through this hook's actions so
+// `composerRuntime.setText(...)` and the local mirror never drift apart —
+// see each action below.
 //
 // The `/cancel` client command needs to drive the Stop button's visual
 // state, which is owned by the sibling `useCancelState` hook — the caller
@@ -33,20 +47,23 @@ import type { ComposerRuntime } from '@assistant-ui/react'
 import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { generateId } from '@/lib/constants'
 import { fetchCommands, fetchSkills } from '@/lib/api'
-import type { SlashCommand, Skill } from '@/lib/api'
+import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import type { ChatMessage } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
+import { useChatAgents } from '@/hooks/useChatAgents'
 import { logDiagnostic } from '@/lib/telemetry'
 
-// ── Slash/skill palette item shape ─────────────────────────────────────
+// ── Slash/skill/agent palette item shape ────────────────────────────────────
 
 export interface SlashItem {
   key: string
   label: string
   description: string
-  section: 'commands' | 'skills'
+  section: 'commands' | 'skills' | 'agents'
   argumentHint?: string
+  /** Agent-row-only (section === 'agents') — the agent itself, for the render layer's AgentMark. */
+  agent?: Agent
   onSelect: () => void
 }
 
@@ -114,9 +131,11 @@ export interface UseSlashMenuResult {
   /** D9: true when the input is exactly "/skills" — Commands section (and its error row) are hidden while this filter is active. */
   isSkillsFilter: boolean
   /**
-   * Always false. A leading "@" no longer opens an agent menu or switches
-   * the active agent (FR-007). Kept on the result so callers observe the
-   * cutover instead of a missing field.
+   * True when the input starts with "@" (leading position, same gate as the
+   * slash trigger) — `slashItems` is agent rows only while this is true.
+   * Restored by founder decision 2026-10-11 Q1 B (was stubbed to a constant
+   * false by the FR-007 cutover). Selection never switches the agent — see
+   * the file header.
    */
   isMentionMode: boolean
   /**
@@ -128,15 +147,23 @@ export interface UseSlashMenuResult {
    * there's more to narrow toward instead of assuming those 8 are everything.
    */
   skillsHiddenCount: number
-  /** Always 0. The "@" agent menu is gone (FR-007), so nothing is hidden past a cap. */
+  /** The "@" mention menu's own version of `skillsHiddenCount` — how many matching agents exist beyond the 8-row cap. */
   agentsHiddenCount: number
-  /** Always null. "@" no longer switches the agent, so there is nothing to announce (FR-007). */
+  /**
+   * The just-selected agent's display name, set the instant a mention row is
+   * selected — null before any selection has happened. The OLD menu's
+   * announcement said "Now chatting with X" because selection switched the
+   * chat; the restored menu never switches (FR-029), and the caller renders
+   * this as "Message addressed to X" in the sr-only aria-live region so the
+   * selection's only effect (the composer text) is announced to screen-reader
+   * users.
+   */
   mentionAnnouncement: string | null
   /** True when the ghost-text overlay should render (value is exactly `/<skillId> ` right after that skill was selected from the menu). */
   showGhostText: boolean
   /** The ghost text to display — the skill's argument_hint if it declared one, else the generic placeholder. */
   ghostText: string
-  /** Composer textarea onChange — updates the mirror, clears a stale ghost, and opens/closes the menu on the leading "/" or "@". */
+  /** Composer textarea onChange — updates the mirror, clears a stale ghost, and opens/closes the menu on the leading "/" or "@" (the mention trigger is back — founder decision 2026-10-11 Q1 B). */
   onInputChange: (val: string) => void
   /** Composer textarea onBlur — clears ghost text and closes the menu (delayed so a mouseDown on a menu item fires first). */
   onInputBlur: () => void
@@ -182,7 +209,8 @@ const GHOST_TEXT_PLACEHOLDER = '<message>'
 
 // Deferred item 3: both capped sections (skills, agents) cap at this many
 // visible rows — kept as a single named constant so the render layer
-// (ChatScreen.tsx) and this hook's hidden-count math can't drift apart.
+// (composer/ComposerMenu.tsx) and this hook's hidden-count math can't drift
+// apart.
 // Exported (Cap-footer copy fix, gate 2 LOW): ChatScreen.tsx's footer-copy
 // derivation ("Showing 8 of N skills" in the /skills special-filter state)
 // also needs this exact number — importing it there keeps the two
@@ -593,6 +621,9 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // Same ref-mirror rationale as ghostSkillIdRef, for the command ghost pair.
   const ghostCommandLabelRef = useRef(ghostCommandLabel)
   ghostCommandLabelRef.current = ghostCommandLabel
+  // Fix 2: the just-selected mention agent's name — see
+  // mentionAnnouncement's doc comment on UseSlashMenuResult.
+  const [mentionAnnouncement, setMentionAnnouncement] = useState<string | null>(null)
 
   // #472 root-cause fix (trace-evidenced slash-menu self-close race) — the
   // pending timer id `onInputBlur` schedules below (setTimeout(closeSlash,
@@ -729,7 +760,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       // field changes before any further keystroke) and is left alone here
       // — fixing it is out of this task's scope (a close race, not a
       // reopen race) and not evidenced in the #472 trace.
-      if (runtimeText.startsWith('/')) {
+      if (runtimeText.startsWith('/') || runtimeText.startsWith('@')) {
         setSlashOpen(true)
       } else {
         closeSlash()
@@ -745,11 +776,59 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     return inputValue.slice(1).toLowerCase() // the text after "/"
   })()
 
+  // Mirrors menuFilter for the "@" trigger — leading position only, same
+  // isReplaying/inputEnabled gate. "hello @x" must NOT trigger: only a
+  // leading "@" (index 0 of the raw input) opens the mention menu. Restored
+  // by founder decision 2026-10-11 Q1 B.
+  const mentionFilter = (() => {
+    if (!inputValue.startsWith('@') || isReplaying || !inputEnabled) return null
+    return inputValue.slice(1).toLowerCase() // the text after "@"
+  })()
+
   const isSkillsFilter = menuFilter === 'skills'
-  // FR-007: a leading "@" is ordinary text. Never an agent menu.
-  const isMentionMode = false
-  const agentsHiddenCount = 0
-  const mentionAnnouncement = null
+  const isMentionMode = mentionFilter !== null
+
+  // Mention candidates: the SAME agent list and scoping the composer surfaces
+  // elsewhere (useChatAgents — the ready, non-worker, chat-eligible,
+  // workspace-scoped list with the ADR-090 Admin standalone exemption), with
+  // one restored-menu difference: the agent that OWNS the current chat is
+  // excluded — addressing yourself is meaningless, and selection no longer
+  // switches agents (FR-029), so there is no active-agent marker either.
+  // Reactive slice only (Fix 5): activeAgentId is the one session-store field
+  // this hook reads reactively; everything else is used as the hook returns it.
+  const { chatAgents } = useChatAgents()
+  const activeAgentId = useSessionStore((s) => s.activeAgentId)
+  const mentionCandidates = useMemo(
+    () => chatAgents.filter((agent) => agent.id !== activeAgentId),
+    [chatAgents, activeAgentId],
+  )
+
+  // Sorted by name (localeCompare) BEFORE ranking/capping — same rationale as
+  // sortedSkills: deterministic cap survivors, alphabetical reads within a
+  // rank. Memoized on the candidates' identity so the sort runs once per
+  // agents-list change, not once per composer keystroke.
+  const sortedAgents = useMemo(
+    () => [...mentionCandidates].sort((a, b) => a.name.localeCompare(b.name)),
+    [mentionCandidates],
+  )
+  // NAME only — no id clause (Fix 7, unchanged from the pre-cutover menu):
+  // user-created agent ids are UUIDs/arbitrary, so matching the id too would
+  // surface agents whose visible name has nothing to do with what was typed.
+  const matchedAgents: Agent[] = (() => {
+    if (mentionFilter === null) return []
+    return rankByFilter(sortedAgents, mentionFilter, (a, lf) => matchRank(a.name, lf))
+  })()
+  // Overflow count for the "@" menu's own "+N more" footer.
+  const agentsHiddenCount = Math.max(0, matchedAgents.length - SECTION_CAP)
+  const agentItems: SlashItem[] = matchedAgents.slice(0, SECTION_CAP).map((agent) => ({
+    key: agent.id,
+    label: `@${agent.name}`,
+    description: agent.description || agent.model || '',
+    section: 'agents' as const,
+    agent,
+    onSelect: () => selectMentionAgent(agent),
+  }))
+
 
   // Commands section — hidden when typing "/skills" (D9)
   //
@@ -827,12 +906,22 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     }
   })
 
-  const slashItems: SlashItem[] = [...visibleCommandItems, ...visibleSkillMenuItems]
+  // Unified list for keyboard nav. The "/" and "@" triggers are mutually
+  // exclusive (inputValue can't start with both characters at once), so
+  // mention mode simply swaps in agentItems as the whole list rather than
+  // concatenating — commands/skills never mix with agent rows.
+  const slashItems: SlashItem[] = isMentionMode
+    ? agentItems
+    : [...visibleCommandItems, ...visibleSkillMenuItems]
   // LOW S8: keep the menu open on a commands-query error even when it would
   // otherwise have zero items (e.g. no skills match either) — the caller's
   // "Commands unavailable" row needs somewhere to render. `menuFilter !==
   // null` reuses the same gate (starts with "/", not replaying, enabled) so
-  // this never opens the menu for reasons unrelated to a "/" being typed.
+  // this never opens the menu for reasons unrelated to a "/" being typed —
+  // in particular, it must NOT fire in mention mode: a commands-fetch error
+  // has nothing to do with "@" and must not force that menu open when zero
+  // agents match. `slashItems.length > 0` alone already covers "agents
+  // matched" for mention mode, since agentItems IS slashItems there.
   const shouldShowSlash =
     (slashItems.length > 0 || (commandsError && menuFilter !== null)) && !isReplaying && inputEnabled
 
@@ -976,6 +1065,36 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     setGhostSkillId(id)
     setGhostArgumentHint(argumentHint ?? null)
     closeSlash()
+  }
+
+  // selectMentionAgent — called when the user selects an agent from the "@"
+  // mention menu (Enter or click). Restored by founder decision 2026-10-11
+  // Q1 B with the ONE behaviour change (FR-029, no in-chat handover): the
+  // selection NEVER touches the session store — no setActiveSession, no
+  // selectAgent — the chat stays exactly where it is. Instead it replaces
+  // the leading "@<typed>" with the exact text `@<Agent name> ` (the
+  // mention menu only ever opens on a leading "@", so replacing the whole
+  // text IS replacing the leading prefix), which marks that agent as the
+  // message's recipient: the recipient is derived from this exact prefix at
+  // SEND time (src/store/chat/recipientSend.ts →
+  // src/lib/recipientAddress.ts) and rides the WS MessageFrame together
+  // with the chat's session_id. The @-text itself travels verbatim in the
+  // content; editing or deleting the prefix before sending simply sends no
+  // recipient (the derivation is not sticky — it re-runs from the text on
+  // every send).
+  //
+  // Unlike the pre-cutover menu there is nothing to reconcile with
+  // AgentPicker: no store write means no external-switch drift, and the
+  // announcement (Fix 2) never goes stale.
+  function selectMentionAgent(agent: Agent) {
+    const text = `@${agent.name} `
+    composerRuntime.setText(text)
+    setInputValue(text)
+    closeSlash()
+    // Fix 2 (a11y), restated for the restored menu: the selection's only
+    // effect is the composer text, which screen readers do not announce on
+    // change — the caller renders this name in the sr-only aria-live region.
+    setMentionAnnouncement(agent.name)
   }
 
   // Send-path interception: before AssistantUI's onNew fires, check if the
@@ -1176,9 +1295,11 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       setGhostCommandLabel(null)
       setGhostCommandArgumentHint(null)
     }
-    // Leading "/" opens the command/skill palette. A leading "@" does not
-    // (FR-007) — it is ordinary composer text and must not open this menu.
-    if (val.startsWith('/')) {
+    // Leading "/" opens the command/skill palette; a leading "@" opens the
+    // agent-mention menu again (founder decision 2026-10-11 Q1 B, restoring
+    // what the FR-007 cutover removed). Only a LEADING character opens —
+    // "hello @x" is ordinary composer text.
+    if (val.startsWith('/') || val.startsWith('@')) {
       setSlashOpen(true)
     } else {
       closeSlash()

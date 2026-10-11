@@ -295,17 +295,24 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
   })
 })
 
-describe('Composer combobox ARIA — a leading @ does not open a menu (FR-007)', () => {
-  it('typing @ does not expand the combobox or mount agent rows', () => {
+// Updated from the retired rule by founder decision 2026-10-11 Q1 B (the
+// FR-007 cutover is reversed for addressing): a leading "@" opens the
+// agent-mention menu again, as a combobox with the agent rows as options.
+describe('Composer combobox ARIA — a leading @ opens the agent menu', () => {
+  it('typing @ expands the combobox and mounts one option row per scoped agent', () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('chat-input')
 
     act(() => { fireEvent.change(input, { target: { value: '@' } }) })
 
-    expect(input).not.toHaveAttribute('aria-expanded', 'true')
-    expect(screen.queryByTestId('slash-menu')).toBeNull()
-    expect(screen.queryByTestId('agent-mention-item')).toBeNull()
-    expect(screen.queryByText('@Alpha')).toBeNull()
+    expect(input).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
+    expect(screen.getAllByTestId('agent-mention-item')).toHaveLength(2)
+    expect(screen.getByText('@Alpha')).toBeInTheDocument()
+    expect(screen.getByText('@Bravo')).toBeInTheDocument()
+    // The highlighted option is wired through aria-activedescendant exactly
+    // as in "/" mode.
+    expect(input.getAttribute('aria-activedescendant')).toBe('composer-option-0')
   })
 })
 

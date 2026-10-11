@@ -1,8 +1,9 @@
 // useChatAgents — shared agent-list query + scoping. The composer agent
-// picker and the `@` mention menu are gone (FR-007). The remaining production
-// caller is useWorkspaceSetupKickoff. The query and the scoping stay so that
-// caller and the hook's own tests keep one definition: ONE
-// `['agents']` react-query cache entry and IDENTICAL scoping
+// picker is gone (FR-007); the `@` mention menu is BACK (founder decision
+// 2026-10-11 Q1 B) and consumes this hook again, exactly as it did before the
+// cutover. Production callers: useWorkspaceSetupKickoff and the mention menu
+// (src/hooks/useSlashMenu.ts). The query and the scoping stay in one
+// definition: ONE `['agents']` react-query cache entry and IDENTICAL scoping
 // (ready-to-chat status, worker exclusion, active workspace's core_team,
 // plus the ADR-090 Admin standalone-operator exemption from TEAM scoping)
 // instead of two hand-rolled copies of the same filter drifting apart.
@@ -36,12 +37,12 @@ import type { Agent, Workspace } from '@/lib/api'
 // once both queries have resolved.
 const EMPTY_AGENTS: Agent[] = []
 const EMPTY_WORKSPACES: Workspace[] = []
-const CHAT_BUILTIN_IDS = new Set(['mia', 'jim', 'ava', 'admin'])
 
-export function isChatEligibleAgent(agent: Agent): boolean {
-  if (agent.type === 'core') return CHAT_BUILTIN_IDS.has(agent.id)
-  return agent.type === 'Main'
-}
+// Moved to src/lib/agentKind.ts (2026-10-11) so the lib-level @-recipient
+// derivation can reuse the ONE predicate without a hooks-module import;
+// re-exported here so this module's existing callers are unchanged.
+import { isChatEligibleAgent } from '@/lib/agentKind'
+export { isChatEligibleAgent }
 
 // ADR-090 FR-001 / §2.2: Admin is a chat-able CORE agent with "no team
 // membership". Team-add surfaces refuse an Admin membership; chat surfaces

@@ -6,8 +6,12 @@
  * /new is RETIRED: even a stale server that still advertises it must not
  * reach the SPA's surface — the palette never lists it, and a typed /new is
  * refused visibly without anything being sent and without a session being
- * started. A leading "@" does not switch the agent. /resume and /workspace
- * stay the existing web-only entries; this file does not remove them.
+ * started. A leading "@" opens the agent-mention menu again (founder decision
+ * 2026-10-11 Q1 B, reversing the FR-007 cutover for addressing only):
+ * selecting an agent inserts "@<Name> " into the composer and addresses the
+ * MESSAGE — it never switches the active agent or chat. /resume and
+ * /workspace stay the existing web-only entries; this file does not remove
+ * them.
  */
 import type { KeyboardEvent } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -298,24 +302,35 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
     },
   )
 
-  it('a leading @ does not switch the agent', () => {
+  // Updated from the retired rule by founder decision 2026-10-11 Q1 B (the
+  // FR-007 cutover is reversed for addressing only): a leading "@" opens the
+  // agent-mention menu, and selecting an agent inserts "@<Name> " into the
+  // composer WITHOUT switching the active agent or chat (FR-029) — the
+  // recipient rides the send frame, derived from the prefix at send time.
+  it('a leading @ opens the agent menu, and selecting inserts @<Name> without switching the agent', () => {
+    const composerRuntime = runtime('@mi')
     const { result } = renderHook(() => useSlashMenu({
       isStreaming: false,
       isReplaying: false,
       inputEnabled: true,
-      composerRuntime: runtime('@mi') as unknown as ComposerRuntime,
+      composerRuntime: composerRuntime as unknown as ComposerRuntime,
       appendMessage: vi.fn(),
       cancelIfStreaming: vi.fn(),
       sendRedirectFrame: vi.fn(),
       activateStop: vi.fn(),
     }))
     act(() => result.current.onInputChange('@mi'))
-    expect(result.current.isMentionMode).toBe(false)
-    // The 'agents' section no longer exists in the SlashItem type; this runtime
-    // guard still proves no agent row is produced if one were ever re-added.
-    expect(result.current.slashItems.filter((item) => (item.section as string) === 'agents')).toEqual([])
+    expect(result.current.isMentionMode).toBe(true)
+    // "@mi" prefix-matches Mia's NAME only — the filter is name-based.
+    expect(result.current.slashItems.map((item) => item.key)).toEqual(['mia'])
+    expect(result.current.slashItems.every((item) => item.section === 'agents')).toBe(true)
     act(() => result.current.handleKeyDown(enter()))
+    // The composer now carries the exact address prefix; the recipient is
+    // derived from it at send time (src/lib/recipientAddress.ts).
+    expect(composerRuntime.setText).toHaveBeenCalledWith('@Mia ')
+    expect(composerRuntime.current()).toBe('@Mia ')
+    // FR-029: no chat handover — the active agent and session are untouched.
     expect(useSessionStore.getState().activeAgentId).toBeNull()
-    expect(result.current.mentionAnnouncement).toBeNull()
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
   })
 })
