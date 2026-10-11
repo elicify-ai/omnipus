@@ -349,7 +349,10 @@ describe('D5 — Hide from sidebar', () => {
     rerender(workspaceWith({ mia: miaHidden, jim: jimMember }))
 
     expect(screen.queryByRole('group', { name: 'Mia' })).toBeNull()
-    expect(screen.getByRole('button', { name: '1 hidden · Show' })).toBeTruthy()
+    // The quiet line: the count as text, and a control named exactly "Show"
+    // (the e2e contract — AGENT_ROW_MENU_ITEMS/spec — reads both surfaces).
+    expect(screen.getByText('1 hidden')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show', exact: true })).toBeTruthy()
   })
 
   it('"Show" un-hides every hidden agent of the workspace in one PUT', async () => {
@@ -359,9 +362,10 @@ describe('D5 — Hide from sidebar', () => {
     register(miaHidden, MIA_MAIN)
     register(jimHidden, JIM_MAIN)
     renderList({ workspace: workspaceWith({ mia: miaHidden, jim: jimHidden }) })
+    expect(screen.getByText('2 hidden')).toBeTruthy()
 
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '2 hidden · Show' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Show', exact: true }))
     })
 
     expect(apiMocks.updateWorkspace).toHaveBeenCalledTimes(1)
@@ -495,6 +499,22 @@ describe('D4/D8 — Remove', () => {
     const remove = screen.getByRole('menuitem', { name: /Remove/ })
     expect(remove).toHaveAttribute('data-disabled')
     expect(remove.textContent).toContain('default workspace')
+    await act(async () => {
+      fireEvent.click(remove)
+    })
+    expect(apiMocks.updateWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('Remove is disabled with a visible reason for the workspace default agent (Team-panel parity)', async () => {
+    const defaultJim = makeAgent({ id: 'jim', name: 'Jim', type: 'core', default: true })
+    renderList({
+      workspace: workspaceWith({ mia: miaMember, jim: jimMember }),
+      agents: [mia, defaultJim],
+    })
+    await openRowMenu('Jim')
+    const remove = screen.getByRole('menuitem', { name: /Remove/ })
+    expect(remove).toHaveAttribute('data-disabled')
+    expect(remove.textContent).toContain('Jim is the default agent')
     await act(async () => {
       fireEvent.click(remove)
     })
