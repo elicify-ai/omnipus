@@ -337,16 +337,18 @@ function isServerRunCommand(command: SlashCommand): boolean {
 }
 
 // WC-1 (founder, 2026-10-09): /new is retired. The server does not register
-// or expose it (no hidden alias), the SPA MUST NOT send it to the server,
-// and starting an extra chat is the local agent-row New chat action (FR-031).
-// A typed /new therefore cannot be sent (forbidden), cannot start a session
-// (the retired behavior), and must not be silently swallowed — so it is
-// refused here: the composer is cleared and a visible system reply names
-// both replacements.
+// or expose it (no hidden alias), and the SPA MUST NOT send it to the server.
+// D7 (squad nav-agent-row-menu-20261011) additionally removed the sidebar's
+// new-chat entry, so there is currently NO ordinary UI action that starts an
+// extra chat — the capability stays in code, but the reply must not promise
+// an access point that does not exist (CR F9). A typed /new therefore cannot
+// be sent (forbidden), cannot start a session (the retired behavior), and
+// must not be silently swallowed — so it is refused here: the composer is
+// cleared and a visible system reply says so and names /clear.
 const RETIRED_COMMAND_NAMES = new Set(['new'])
 
 const NEW_RETIREMENT_REPLY =
-  "/new no longer exists. Start an extra chat with the agent row's New chat action, or use /clear to clear this chat's context — the conversation and its history are kept."
+  "/new no longer exists, and there is currently no sidebar entry to start an extra chat. Use /clear to clear this chat's context — the conversation and its history are kept."
 
 /**
  * True when a trimmed composer text invokes a retired command. The server's

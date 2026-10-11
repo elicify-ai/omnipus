@@ -6,7 +6,6 @@ import { workspacesQueryKeys } from '@/lib/api'
 import { queryClient } from '@/lib/queryClient'
 import type { EligibleRow } from '@/lib/nav/eligibleMains'
 import { useSelectSession } from '@/components/chat/useSelectSession'
-import { AgentProfile } from '@/components/agents/AgentProfile'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ErrorState } from '@/components/ui/error-state'
@@ -115,10 +114,6 @@ export function WorkspaceAgentList({
           onOverlayClose={onOverlayClose}
         />
       ))}
-      {/* D6: the unified create/edit flow, store-driven (reads editAgentId) —
-          one instance serves every row's Edit item, exactly as on the Team
-          tab. Renders nothing while closed. */}
-      <AgentProfile />
     </>
   )
 }

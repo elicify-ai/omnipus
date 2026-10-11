@@ -59,7 +59,7 @@ const miaMember: WorkspaceMemberConfig = {}
 const jimMember: WorkspaceMemberConfig = {}
 const adminMember: WorkspaceMemberConfig = {}
 
-const { apiMocks, seam } = vi.hoisted(() => ({
+const { apiMocks, seam, entrySpy } = vi.hoisted(() => ({
   apiMocks: {
     updateWorkspace: vi.fn(),
     fetchWorkspace: vi.fn(),
@@ -69,6 +69,7 @@ const { apiMocks, seam } = vi.hoisted(() => ({
     mains: new Map<object, string>(),
     attention: new Map<string, 'on' | 'off' | 'unknown'>(),
   },
+  entrySpy: vi.fn(),
 }))
 
 vi.mock('@/lib/api', async (importOriginal) => ({
@@ -76,6 +77,17 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   updateWorkspace: apiMocks.updateWorkspace,
   fetchWorkspace: apiMocks.fetchWorkspace,
   fetchWorkspaceDelegation: apiMocks.fetchWorkspaceDelegation,
+}))
+
+vi.mock('@/store/session/workspaceEntryFlow', async (importOriginal) => ({
+  // Real module except the recovery entry itself: the spy records the
+  // workspace's remembered descriptor AT CALL TIME so the test can pin the
+  // removed member's binding being invalidated BEFORE recovery runs.
+  ...await importOriginal<typeof import('@/store/session/workspaceEntryFlow')>(),
+  runWorkspaceEntry: (workspaceId: string) => {
+    entrySpy(workspaceId, useSessionStore.getState().sessionByWorkspace[workspaceId] ?? null)
+    return Promise.resolve()
+  },
 }))
 
 vi.mock('@/components/agents/AgentProfile', () => ({ AgentProfile: () => null }))
@@ -244,6 +256,7 @@ beforeEach(() => {
   apiMocks.updateWorkspace.mockReset()
   apiMocks.fetchWorkspace.mockReset()
   apiMocks.fetchWorkspaceDelegation.mockReset()
+  entrySpy.mockReset()
   invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue([] as never)
   act(() => {
     useUiStore.setState({
@@ -464,10 +477,11 @@ describe('D4/D8 — Remove', () => {
     expect(apiMocks.updateWorkspace).not.toHaveBeenCalled()
   })
 
-  it('confirm PUTs the Team-tab shape — core_team minus the agent, delegation minus its edges — and never deletes sessions', async () => {
+  it('confirm PUTs the Team-tab shape — core_team minus the agent, delegation minus its edges, incoming and outgoing alike — and never deletes sessions', async () => {
     apiMocks.fetchWorkspaceDelegation.mockResolvedValue(
       delegation([
         { from_agent: 'mia', to_agent: 'jim', modes: ['direct'] },
+        { from_agent: 'jim', to_agent: 'mia', modes: ['direct'] },
         { from_agent: 'jim', to_agent: 'jim', modes: ['task'] },
       ]),
     )
@@ -492,6 +506,35 @@ describe('D4/D8 — Remove', () => {
     // three API seams this suite mocks are the entire request surface the
     // action can reach (R2: removal never deletes the main chat).
     expect(apiMocks.fetchWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('removing the selected member clears the remembered binding BEFORE recovery runs, so entry does not short-circuit', async () => {
+    apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
+    apiMocks.updateWorkspace.mockResolvedValue(workspaceWith({ jim: jimMember }, { core_team: ['jim'] }))
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    // Mia's main is the OPEN chat and the workspace's remembered one.
+    act(() => {
+      useSessionStore.setState({
+        activeSessionId: MIA_MAIN,
+        activeAgentId: 'mia',
+        sessionByWorkspace: {
+          ...useSessionStore.getState().sessionByWorkspace,
+          [WS]: { id: MIA_MAIN, type: 'chat', title: 'Mia main', agentId: 'mia' },
+        },
+      })
+    })
+
+    await openRowMenu('Mia')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    })
+
+    expect(entrySpy).toHaveBeenCalledWith(WS, null)
+    // And the binding STAYS explicitly fresh afterwards.
+    expect(useSessionStore.getState().sessionByWorkspace[WS] ?? null).toBeNull()
   })
 
   it('Remove is disabled with a visible reason for a locked built-in on the default workspace', async () => {
@@ -561,5 +604,23 @@ describe('D6 — Edit', () => {
     })
     expect(useUiStore.getState().editAgentId).toBe('mia')
     expect(useUiStore.getState().editAgentWorkspaceId).toBe(WS)
+  })
+
+  it("opens Admin's GLOBAL profile — no workspace-member context, so no Heartbeat tab saving member_configs.admin", async () => {
+    register(adminMember, ADMIN_MAIN)
+    renderList({
+      workspace: workspaceWith(
+        { mia: miaMember },
+        { is_default: true, core_team: ['mia'], admin_main_session_id: ADMIN_MAIN },
+      ),
+      agents: [mia, admin],
+      sessions: [chatSession(MIA_MAIN, 'mia'), chatSession(ADMIN_MAIN, 'admin')],
+    })
+    await openRowMenu('Admin')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }))
+    })
+    expect(useUiStore.getState().editAgentId).toBe('admin')
+    expect(useUiStore.getState().editAgentWorkspaceId, 'Admin is not a member: no workspace context').toBeNull()
   })
 })

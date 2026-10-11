@@ -57,8 +57,11 @@ export function AgentRowMenu({
 
   const openEditor = () => {
     // D6: the unified create/edit flow's Team-tab entry point — the same
-    // store-driven AgentProfile slide-over, no second editor.
-    useUiStore.getState().openEditAgentSlideOver(agentId, workspace.id)
+    // store-driven AgentProfile slide-over, no second editor. Admin is not a
+    // workspace member (CR F8): opening it WITH workspace context would show
+    // the Heartbeat tab and a save would submit member_configs.admin, which
+    // the server refuses with 422 — so Admin gets the global profile.
+    useUiStore.getState().openEditAgentSlideOver(agentId, isAdminRow ? undefined : workspace.id)
   }
 
   const hide = () => {
@@ -69,21 +72,30 @@ export function AgentRowMenu({
 
   const confirmRemove = () => {
     setConfirmOpen(false)
-    void removeWorkspaceMember(workspace, agentId)
-      .then(() => {
-        invalidateWorkspaceRoster()
-        // If the removed row owned the selected chat, re-enter the workspace
-        // — the existing recovery primitive (UnavailableChatNotice's Retry,
-        // the workspace-name click), not a new navigation pattern.
-        const state = useSessionStore.getState()
-        if (
-          state.activeAgentId === agentId
-          && useWorkspacesStore.getState().activeWorkspaceId === workspace.id
-        ) {
-          void runWorkspaceEntry(workspace.id)
-        }
-      })
-      .catch((err: unknown) => surfaceActionError(`Could not remove ${agentName}`, err))
+    void (async () => {
+      await removeWorkspaceMember(workspace, agentId)
+      invalidateWorkspaceRoster()
+      // Invalidate the removed member's remembered/active binding (SFH F3).
+      // workspaceEntryFlow.execute returns immediately when the workspace's
+      // remembered descriptor id still equals activeSessionId — so before any
+      // recovery, the pointer to the removed member's chat is cleared through
+      // the existing selection owner (set to null, "explicitly fresh" — the
+      // retained main session is NOT deleted, and chats of OTHER agents are
+      // untouched). When that chat is also the OPEN one in this workspace,
+      // entry recovery is awaited so it is never detached from the action.
+      const state = useSessionStore.getState()
+      const remembered = state.sessionByWorkspace[workspace.id]
+      const remembersRemoved = remembered?.agentId === agentId
+      const ownsSelectedChat =
+        state.activeAgentId === agentId
+        && useWorkspacesStore.getState().activeWorkspaceId === workspace.id
+      if (remembersRemoved || ownsSelectedChat) {
+        state.setWorkspaceSessionDescriptor(workspace.id, null)
+      }
+      if (ownsSelectedChat) {
+        await runWorkspaceEntry(workspace.id)
+      }
+    })().catch((err: unknown) => surfaceActionError(`Could not remove ${agentName}`, err))
   }
 
   return (
