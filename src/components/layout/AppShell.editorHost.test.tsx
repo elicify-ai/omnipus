@@ -114,8 +114,10 @@ vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
 }))
 
 // The Team tab reads the active workspace from the container's context hook.
+// The factory stays value-free (vi.mock factories are hoisted above this
+// file's top-level constants) — the implementation is set in beforeEach.
 vi.mock('@/components/workspaces/WorkspaceTabContainer', () => ({
-  useActiveWorkspace: vi.fn(() => workspaceFixture()),
+  useActiveWorkspace: vi.fn(),
 }))
 
 const mockRouter = vi.hoisted(() => ({ navigate: vi.fn() }))
@@ -132,24 +134,19 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   }
 })
 
+// Value-free factory (hoisting) — every resolved value is wired in beforeEach.
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAppState: vi.fn(),
     fetchNotifications: vi.fn(),
-    fetchTasks: vi.fn().mockResolvedValue([]),
-    fetchAgents: vi.fn().mockResolvedValue([
-      makeAgent({ id: 'mia', name: 'Mia', type: 'core' }),
-      makeAgent({ id: 'jim', name: 'Jim', type: 'core' }),
-    ]),
-    fetchSessions: vi.fn().mockResolvedValue([
-      chatSession('seam-mia', 'mia'),
-      chatSession('seam-jim', 'jim'),
-    ]),
-    fetchWorkspaces: vi.fn().mockResolvedValue([workspaceFixture()]),
-    fetchWorkspaceDelegation: vi.fn().mockResolvedValue(DELEGATION),
-    fetchGodMode: vi.fn().mockResolvedValue({ enabled: false, available: false, supported: true, persisted: false }),
+    fetchTasks: vi.fn(),
+    fetchAgents: vi.fn(),
+    fetchSessions: vi.fn(),
+    fetchWorkspaces: vi.fn(),
+    fetchWorkspaceDelegation: vi.fn(),
+    fetchGodMode: vi.fn(),
   }
 })
 
@@ -189,7 +186,17 @@ function makeClient() {
 
 import { AppShell } from './AppShell'
 import { WorkspaceTeamTab } from '@/components/workspaces/WorkspaceTeamTab'
-import { fetchAppState, fetchNotifications } from '@/lib/api'
+import {
+  fetchAppState,
+  fetchAgents,
+  fetchGodMode,
+  fetchNotifications,
+  fetchSessions,
+  fetchTasks,
+  fetchWorkspaceDelegation,
+  fetchWorkspaces,
+} from '@/lib/api'
+import { useActiveWorkspace } from '@/components/workspaces/WorkspaceTabContainer'
 
 function TeamTabOutletStub() {
   return <WorkspaceTeamTab workspaceId={WS} />
@@ -205,13 +212,27 @@ function renderShell() {
 
 describe('the agent editor has exactly one host (CR F6)', () => {
   beforeEach(() => {
-    vi.mocked(fetchAppState).mockReset()
-    vi.mocked(fetchNotifications).mockReset()
+    // Wire every mocked fetch's resolved value here (factories stay hoisted
+    // and value-free). The fixture objects double as the seam keys below.
+    const ws = workspaceFixture()
+    const members = ws.member_configs ?? {}
+    const miaAgent = makeAgent({ id: 'mia', name: 'Mia', type: 'core' })
+    const jimAgent = makeAgent({ id: 'jim', name: 'Jim', type: 'core' })
+    vi.mocked(fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+    vi.mocked(fetchTasks).mockResolvedValue([])
+    vi.mocked(fetchAgents).mockResolvedValue([miaAgent, jimAgent])
+    vi.mocked(fetchSessions).mockResolvedValue([
+      chatSession('seam-mia', 'mia'),
+      chatSession('seam-jim', 'jim'),
+    ])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([ws])
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue(DELEGATION)
+    vi.mocked(fetchGodMode).mockResolvedValue({ enabled: false, available: false, supported: true, persisted: false })
+    vi.mocked(useActiveWorkspace).mockReturnValue(ws)
     seam.mains.clear()
     // The sidebar roster validates mains through the seam map keyed by the
     // member-config objects inside workspaceFixture().
-    const ws = workspaceFixture()
-    const members = ws.member_configs ?? {}
     seam.mains.set(members.mia as object, 'seam-mia')
     seam.mains.set(members.jim as object, 'seam-jim')
     act(() => {
@@ -235,9 +256,6 @@ describe('the agent editor has exactly one host (CR F6)', () => {
   })
 
   it('opens exactly ONE agent editor when the row menu asks, however many surfaces render', async () => {
-    vi.mocked(fetchAppState).mockResolvedValue(APP_STATE_OK)
-    vi.mocked(fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
-
     renderShell()
 
     // The sidebar is really mounted: Mia's row carries the ⋯ trigger.
