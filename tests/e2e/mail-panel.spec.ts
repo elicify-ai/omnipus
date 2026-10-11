@@ -49,79 +49,98 @@ const DRAFT_RAW = [
   '',
 ].join('\r\n')
 
-test.describe('Mail panel on the built-in fake server (D36)', () => {
-  let mail: FakeMail
-  let gw: GatewayProcess
-  let workspaceId: string
+let mail: FakeMail
+let gw: GatewayProcess
+let workspaceId: string
 
-  test.beforeAll(async () => {
-    mail = await startFakeMail()
-    gw = await GatewayProcess.start()
-    const created = await gw.apiFetch<{ id: string }>('POST', '/api/v1/workspaces', {
-      name: `Mail ${Date.now()}`,
-      core_team: ['mia'],
-    })
-    if (!created.ok) throw new Error(`create workspace ${created.status}: ${created.raw}`)
-    workspaceId = created.body.id
-    const saved = await gw.apiFetch('PUT', `/api/v1/agents/mia/mailboxes/${workspaceId}`, {
-      enabled: true,
-      imap_host: mail.imapHost,
-      imap_port: mail.imapPort,
-      smtp_host: mail.smtpHost,
-      smtp_port: mail.smtpPort,
-      username: mail.user,
-      password: mail.password,
-      signature_html: '<p>Kind regards</p>',
-    })
-    if (!saved.ok) throw new Error(`configure mailbox ${saved.status}: ${saved.raw}`)
-    await mail.append('INBOX', INBOX_RAW, [])
-    await mail.append('Drafts', DRAFT_RAW, ['\\Draft'])
-    const flagged = await mail.append('INBOX', INBOX_RAW.replace('Quarterly', 'Agent read'), ['\\Seen'])
-    await mail.storeFlags('INBOX', flagged.uid, ['$OmnipusAgentRead'])
+test.beforeAll(async () => {
+  mail = await startFakeMail()
+  gw = await GatewayProcess.start()
+  const created = await gw.apiFetch<{ id: string }>('POST', '/api/v1/workspaces', {
+    name: `Mail ${Date.now()}`,
+    core_team: ['mia'],
   })
-
-  test.afterAll(async () => {
-    await gw?.stop()
-    await mail?.stop()
+  if (!created.ok) throw new Error(`create workspace ${created.status}: ${created.raw}`)
+  workspaceId = created.body.id
+  const saved = await gw.apiFetch('PUT', `/api/v1/agents/mia/mailboxes/${workspaceId}`, {
+    enabled: true,
+    imap_host: mail.imapHost,
+    imap_port: mail.imapPort,
+    smtp_host: mail.smtpHost,
+    smtp_port: mail.smtpPort,
+    username: mail.user,
+    password: mail.password,
+    signature_html: '<p>Kind regards</p>',
   })
+  if (!saved.ok) throw new Error(`configure mailbox ${saved.status}: ${saved.raw}`)
+  await mail.append('INBOX', INBOX_RAW, [])
+  await mail.append('Drafts', DRAFT_RAW, ['\\Draft'])
+  const flagged = await mail.append('INBOX', INBOX_RAW.replace('Quarterly', 'Agent read'), ['\\Seen'])
+  await mail.storeFlags('INBOX', flagged.uid, ['$OmnipusAgentRead'])
+})
 
-  async function mailPage(browser: Browser): Promise<Page> {
-    const context = await browser.newContext({
-      storageState: await gw.browserStorageState(),
-      baseURL: gw.baseURL,
-    })
-    // When a local binary predates this checkout, serve the freshly built SPA
-    // from disk but keep the isolated gateway for real Mail API traffic. CI
-    // leaves this unset and exercises the binary's embedded SPA as usual.
-    const spaDir = process.env.OMNIPUS_MAIL_E2E_SPA_DIR
-    if (spaDir) {
-      if (!existsSync(join(spaDir, 'index.html'))) {
-        throw new Error(`Mail E2E SPA build missing: ${join(spaDir, 'index.html')}`)
-      }
-      await context.route('**/*', async (route) => {
-        const url = new URL(route.request().url())
-        const pathname = url.pathname
-        if (url.origin !== gw.baseURL || (pathname !== '/' && pathname !== '/index.html' && !pathname.startsWith('/assets/'))) {
-          await route.continue()
-          return
-        }
-        const asset = join(spaDir, pathname === '/' ? 'index.html' : pathname.slice(1))
-        if (!existsSync(asset)) throw new Error(`Mail E2E SPA asset missing: ${asset}`)
-        await route.fulfill({ path: asset })
-      })
+test.afterAll(async () => {
+  await gw?.stop()
+  await mail?.stop()
+})
+
+async function mailPage(browser: Browser): Promise<Page> {
+  const context = await browser.newContext({
+    storageState: await gw.browserStorageState(),
+    baseURL: gw.baseURL,
+  })
+  // When a local binary predates this checkout, serve the freshly built SPA
+  // from disk but keep the isolated gateway for real Mail API traffic. CI
+  // leaves this unset and exercises the binary's embedded SPA as usual.
+  const spaDir = process.env.OMNIPUS_MAIL_E2E_SPA_DIR
+  if (spaDir) {
+    if (!existsSync(join(spaDir, 'index.html'))) {
+      throw new Error(`Mail E2E SPA build missing: ${join(spaDir, 'index.html')}`)
     }
-    return context.newPage()
+    await context.route('**/*', async (route) => {
+      const url = new URL(route.request().url())
+      const pathname = url.pathname
+      if (url.origin !== gw.baseURL || (pathname !== '/' && pathname !== '/index.html' && !pathname.startsWith('/assets/'))) {
+        await route.continue()
+        return
+      }
+      const asset = join(spaDir, pathname === '/' ? 'index.html' : pathname.slice(1))
+      if (!existsSync(asset)) throw new Error(`Mail E2E SPA asset missing: ${asset}`)
+      await route.fulfill({ path: asset })
+    })
   }
+  return context.newPage()
+}
 
-  async function openMail(page: Page) {
-    await page.goto(`/#/workspaces/${workspaceId}/chat`)
-    const mailToggle = page.getByTestId('workspace-tab-mail')
-    await expect(mailToggle).toHaveAttribute('aria-pressed', 'false')
-    await mailToggle.click()
-    await expect(mailToggle).toHaveAttribute('aria-pressed', 'true')
-    await expect(page.getByTestId('mail-panel')).toBeVisible()
-  }
+async function openMail(page: Page) {
+  await page.goto(`/#/workspaces/${workspaceId}/chat`)
+  const mailToggle = page.getByTestId('workspace-tab-mail')
+  await expect(mailToggle).toHaveAttribute('aria-pressed', 'false')
+  await mailToggle.click()
+  await expect(mailToggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('mail-panel')).toBeVisible()
+}
 
+function outsideDraft(subject: string, messageId: string, body: string): string {
+  return [
+    'From: mailbox@test.local',
+    'To: alice@test.local',
+    `Subject: ${subject}`,
+    'Date: Mon, 02 Jan 2006 15:04:05 +0000',
+    `Message-ID: <${messageId}>`,
+    'X-Omnipus-Draft: 1',
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=utf-8',
+    '', body, '',
+  ].join('\r\n')
+}
+
+function isDraftDetail(response: { url(): string; request(): { method(): string } }): boolean {
+  return response.request().method() === 'GET'
+    && /\/folders\/drafts\/messages\/[^/]+$/.test(new URL(response.url()).pathname)
+}
+
+test.describe('Mail panel on the built-in fake server (D36)', () => {
   test('reads the seeded inbox message and marks it seen (US-3, US-6)', async ({ browser }) => {
     const page = await mailPage(browser)
     await openMail(page)
@@ -202,6 +221,9 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     await expect(page.getByText('With file')).toBeVisible()
   })
 
+})
+
+test.describe('Mail panel on the built-in fake server (D36)', () => {
   // pr-test-analyzer finding (feature-gate round 1): Mail had no real-browser
   // coverage for the CRIT-001/FR-013 "Escape race" class that
   // panelEscape.ts / _fullscreen.panel.$panelId.tsx already handle for other
@@ -287,6 +309,9 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     await expect(page.getByText('The numbers are in.')).toBeVisible()
   })
 
+})
+
+test.describe('Mail panel on the built-in fake server (D36)', () => {
   // f5f6-round2 Item 1 — CONFIRMED REGRESSION (squad-lead's own browser-check
   // run on this candidate before today's fixes had this step passing).
   // Opening Drafts a SECOND time, after a full compose/edit-draft/send cycle
@@ -489,25 +514,9 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     })
   })
 
-  function outsideDraft(subject: string, messageId: string, body: string): string {
-    return [
-      'From: mailbox@test.local',
-      'To: alice@test.local',
-      `Subject: ${subject}`,
-      'Date: Mon, 02 Jan 2006 15:04:05 +0000',
-      `Message-ID: <${messageId}>`,
-      'X-Omnipus-Draft: 1',
-      'MIME-Version: 1.0',
-      'Content-Type: text/plain; charset=utf-8',
-      '', body, '',
-    ].join('\r\n')
-  }
+})
 
-  function isDraftDetail(response: { url(): string; request(): { method(): string } }): boolean {
-    return response.request().method() === 'GET'
-      && /\/folders\/drafts\/messages\/[^/]+$/.test(new URL(response.url()).pathname)
-  }
-
+test.describe('Mail panel on the built-in fake server (D36)', () => {
   test('opens the updated draft from a stale list after another browser tab saves it', async ({ browser }) => {
     const subject = 'F5 cross-tab draft'
     const messageId = `f5-cross-tab-${Date.now()}@test.local`
