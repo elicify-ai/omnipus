@@ -43,6 +43,12 @@ properties:
       client stores it alongside the seeded seq cursor above (same role as
       SessionStateFrame.boot_id / AttachSessionFrame.boot_id), so a later reconnect can
       tell whether the gateway has restarted since.
+  has_earlier_messages:
+    type: boolean
+    description: >
+      True when the replay that follows starts at the session's last /clear marker and
+      earlier transcript entries exist before it (cleared context). Absent (or false)
+      when the replay is the whole transcript.
   reason:
     type: string
     enum:

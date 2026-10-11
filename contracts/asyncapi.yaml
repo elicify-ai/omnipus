@@ -7299,6 +7299,12 @@ components:
         boot_id:
           type: string
           description: The gateway process that produced this snapshot.
+        has_earlier_messages:
+          type: boolean
+          description: >-
+            True when the replay that follows starts at the session's last /clear marker
+            and earlier transcript entries exist before it (cleared context). Absent (or
+            false) when the replay is the whole transcript.
         reason:
           type: string
           enum:

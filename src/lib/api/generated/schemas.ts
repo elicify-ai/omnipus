@@ -159,6 +159,7 @@ type ModelTokens = {
 type SessionDetail = {
   session: Session;
   messages: Array<Message>;
+  has_earlier_messages?: boolean | undefined;
   agent_removed?: boolean | undefined;
 };
 type Message = {
@@ -3766,6 +3767,7 @@ export const Message: z.ZodType<Message> = z.object({
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
   messages: z.array(Message).max(100000),
+  has_earlier_messages: z.boolean().optional(),
   agent_removed: z.boolean().optional(),
 });
 export const SessionRenameRequest = z.object({
@@ -13440,7 +13442,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "get",
     path: "/sessions/:id/messages",
     alias: "getSessionMessages",
-    description: `Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed.
+    description: `Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed. The list starts at the session&#x27;s last /clear marker (the marker itself is the first entry); the X-Has-Earlier-Messages response header says whether earlier entries exist before that point.
 `,
     requestFormat: "json",
     parameters: [
@@ -17775,6 +17777,7 @@ export const SessionSnapshotFrame = z
     session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
     boot_id: z.string().optional(),
+    has_earlier_messages: z.boolean().optional(),
     reason: z.enum(["cursor_ahead", "retention_exceeded", "unknown_position", "boot_mismatch"]).optional(),
   })
   .strict();

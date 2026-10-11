@@ -1130,6 +1130,7 @@ export interface SessionSnapshotFrame {
   session_id: string;
   seq: number;
   boot_id?: string;
+  has_earlier_messages?: boolean;
   reason?: "cursor_ahead" | "retention_exceeded" | "unknown_position" | "boot_mismatch";
 }
 

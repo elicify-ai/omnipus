@@ -231,6 +231,9 @@ func newSessionWorker(scope string, parent *AgentLoop, admissionRelease func()) 
 // including a user message dropped on a full inbox (that drop is announced to
 // the user, exactly as before).
 func (w *sessionWorker) enqueue(msg bus.InboundMessage) bool {
+	if w.deferClearUntilStopped(msg) {
+		return true
+	}
 	if w.trySteerIntoLiveTurn(msg) {
 		return true
 	}
