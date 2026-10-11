@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { expect, errors, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, selectAgent, selectedAgentRow, waitForConnected } from './fixtures/selectors'
+import { chatInput, openSidebar, selectAgent, selectedAgentRow, waitForConnected } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -606,6 +606,12 @@ async function assertCancelCascadesToSubagent(
   // a rendered-row read with no network round-trip. (The deleted composer
   // picker's label was the old read; the selected sidebar row is the current
   // user-visible signal for the same fact.)
+  // The selected row lives in the sidebar, which is unmounted while closed - and
+  // it IS closed here: selecting a row closes an unpinned sidebar and freshChat's
+  // page.goto reloads the SPA with it closed. Open it the way a user does before
+  // reading the row, or the guard fails "element(s) not found" for a reason that
+  // has nothing to do with the routed agent (T24a/T24b, 6 of 6 runs).
+  await openSidebar(page)
   await expect(
     selectedAgentRow(page),
     'the routed agent must still be Jim at send time — Mia is denied `delegate` ' +
