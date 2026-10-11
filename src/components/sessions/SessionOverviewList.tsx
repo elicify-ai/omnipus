@@ -4,6 +4,7 @@
 import { useMemo, useRef, type ReactNode } from 'react'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import type { Session, SessionTreeNode } from '@/lib/api'
+import { sessionDisplayTitle } from '@/lib/nav/sessionDisplayTitle'
 import { SessionExpandToggle, SessionTree, flattenSessionTree, type SessionTreeFlatRow } from './SessionTree'
 import { FOLD_ID_PREFIX, MISSING_PARENT_ID_PREFIX, UNPLACED_ID_PREFIX, sessionActivation } from './sessionOverview'
 import { SessionRow } from './SessionRow'
@@ -40,6 +41,7 @@ export function SessionOverviewList({
   onDelete,
   isDeleting,
   onEditingChange,
+  agentName,
 }: {
   sessions: Session[]
   childrenByParent: Map<string, Session[]>
@@ -53,6 +55,14 @@ export function SessionOverviewList({
   onDelete: (id: string) => void
   isDeleting: (id: string) => boolean
   onEditingChange: (sessionId: string, editing: boolean) => void
+  /**
+   * Display name of this agent group's agent (founder feedback 2026-10-11,
+   * point 4): an untitled MAIN session reads "<Agent> - Main Session" instead
+   * of "Untitled session", derived from this CURRENT name so a rename flows
+   * through on the next render. Sessions here are grouped by their owner
+   * agent, so a main always belongs to this group's agent.
+   */
+  agentName?: string
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const nodes = useMemo(
@@ -65,6 +75,11 @@ export function SessionOverviewList({
   const renderRow = (row: SessionTreeFlatRow) => {
     const session = row.node.session
     const marker = sessionActivation(session.id) === 'expand'
+    // Display title (founder feedback 2026-10-11, point 4): server title
+    // when present; for an untitled main the "<Agent> - Main Session"
+    // derivation from the CURRENT group agentName — recomputed every render,
+    // never cached. Non-main sessions keep "Untitled session".
+    const title = sessionDisplayTitle(session, agentName, 'Untitled session')
     return (
       <IndentedRow depth={row.depth}>
         {marker ? (
@@ -80,8 +95,8 @@ export function SessionOverviewList({
               <SessionExpandToggle
                 expanded={row.isExpanded}
                 onToggle={() => toggleExpand(session.id)}
-                expandLabel={`Expand ${session.title || 'Untitled session'} delegated sessions`}
-                collapseLabel={`Collapse ${session.title || 'Untitled session'} delegated sessions`}
+                expandLabel={`Expand ${title} delegated sessions`}
+                collapseLabel={`Collapse ${title} delegated sessions`}
               />
             ) : (
               <span className="w-[var(--space-3)] shrink-0" aria-hidden="true" />
@@ -92,10 +107,11 @@ export function SessionOverviewList({
                 isActive={session.id === activeSessionId}
                 isHighlighted={mode === 'sessions' && session.id === highlightedId}
                 onSelect={() => selectSession(session)}
-                onRename={(title) => onRename(session.id, title)}
+                onRename={(nextTitle) => onRename(session.id, nextTitle)}
                 onDelete={() => onDelete(session.id)}
                 deleting={isDeleting(session.id)}
                 onEditingChange={onEditingChange}
+                agentName={agentName}
               />
             </div>
           </>

@@ -567,6 +567,7 @@ export function SearchModal() {
                                   onDelete={(id) => deleteMut.mutate(id)}
                                   isDeleting={(id) => deleteMut.isPending && deleteMut.variables === id}
                                   onEditingChange={handleEditingChange}
+                                  agentName={agentName}
                                 />
                               </div>
                             )}

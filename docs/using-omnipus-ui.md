@@ -85,7 +85,7 @@ The hamburger means **Show sidebar** only; there is no second hamburger for pane
 
 ## The chat area
 
-The chat is a conversation with the workspace's agents. When the open conversation is the one this workspace remembers, a status line above the messages names its kind: **Main chat** for a main chat identified by the matching server update (nothing after it), **Extra chat**, or **Extra chat —** plus the title when that chat has one, **Task run**, or **Helper**. That line stays while older messages are loading. A task transcript that is not the conversation this workspace remembers still shows **Task:** and the task title. Replies stream in; each tool an agent uses appears as a card you can expand or collapse ([tools](tools.md) explains what agents can do). When an agent wants to do something sensitive, an approval dialog asks you to approve it once, deny it, or always allow it — [security](security.md) covers the rules behind it. Each active [goal](goals.md) shows as its own small pill under the message box.
+The chat is a conversation with the workspace's agents. When the open conversation is the one this workspace remembers, a status line above the messages names it: **&lt;Agent name&gt; - Main Session** (for example **Jim - Main Session**) for a main chat identified by the matching server update — the agent's current name, so a rename updates the line — **Extra chat**, or **Extra chat —** plus the title when that chat has one, **Task run**, or **Helper**. That line stays while older messages are loading. A task transcript that is not the conversation this workspace remembers still shows **Task:** and the task title. Replies stream in; each tool an agent uses appears as a card you can expand or collapse ([tools](tools.md) explains what agents can do). When an agent wants to do something sensitive, an approval dialog asks you to approve it once, deny it, or always allow it — [security](security.md) covers the rules behind it. Each active [goal](goals.md) shows as its own small pill under the message box.
 
 ### Who is replying
 
@@ -224,6 +224,8 @@ If agent details cannot be loaded and no saved agent list is available in the op
 If the required session or workspace list cannot be loaded, the error names what failed: **Could not load sessions**, **Could not load workspaces**, or **Could not load sessions and workspaces**. Select **Retry** in that view to retry the failed requests. The list returns when they succeed; another failure keeps a visible error and Retry available.
 
 Each real session row shows its title above its status, kind, when it started, and when it was last active. On a phone, the title wraps rather than being squeezed beside the metadata, so chats with the same opening words remain distinguishable. Its token count appears when known and the screen is wide enough. A stored zero is shown as 0; a missing count is not invented.
+
+A main chat's title is always **<Agent name> - Main Session** — for example **Jim - Main Session**. The server sets that title and keeps it current when the agent is renamed; while a saved main chat has no title yet, Omnipus derives the same string from the agent's current name, so a rename shows up without a reload. A main chat is never shown as **Untitled**. Every other chat keeps its own title: one without a title yet shows **Untitled session** until the server titles it.
 
 | Status | When you see it |
 |---|---|
