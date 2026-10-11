@@ -17,7 +17,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { expect, type Page } from '@playwright/test'
+import { expect, errors, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, selectAgent, startNewChat, selectedAgentRow, waitForConnected } from './fixtures/selectors'
 
@@ -217,14 +217,37 @@ async function waitForActiveStream(page: Page): Promise<void> {
   await expect(stopBtn).toBeVisible({ timeout: 30_000 })
 
   // …AND for the assistant to have actually STREAMED real text.
-  await page.waitForFunction(
-    () => {
-      const el = document.querySelector('[data-testid="streaming-message-anchor"]')
-      const text = (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
-      return text.length > 80
-    },
-    { timeout: 30_000 },
-  )
+  //
+  // FAIL FAST (llm-agents shard, run 38112714098): the { timeout } object
+  // below used to be passed as the SECOND argument of waitForFunction — which
+  // is the pageFunction's `arg`, not its options (signature:
+  // waitForFunction(pageFunction, arg, options)) — so the wait was UNBOUNDED:
+  // whenever the turn never streamed >80 chars into the anchor, this poll
+  // rode the locator default (config sets no actionTimeout) out to the whole
+  // test timeout and every T2x attempt burned 4.7-7.3 min in CI. The 30s
+  // bound is now applied (third argument) and expiry is rethrown with the
+  // predicate spelled out, so a dead stream fails in 30s with the reason
+  // named instead of at the spec timeout.
+  try {
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('[data-testid="streaming-message-anchor"]')
+        const text = (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
+        return text.length > 80
+      },
+      undefined,
+      { timeout: 30_000 },
+    )
+  } catch (err) {
+    if (!(err instanceof errors.TimeoutError)) throw err
+    throw new Error(
+      'waitForActiveStream: the stop button appeared but the streaming anchor ' +
+        '([data-testid="streaming-message-anchor"]) never accumulated more than 80 chars ' +
+        'of real streamed text within 30s — the turn never produced a live stream, so ' +
+        'no cancel can land mid-turn. The send, the session binding, or the LLM stream ' +
+        'is broken upstream of the cancel behaviour this file tests.',
+    )
+  }
 }
 
 /**
@@ -255,7 +278,7 @@ async function triggerLongStreamingTurn(page: Page): Promise<void> {
   await startNewChat(page, /Jim/i)
 
   await input.fill(LONG_PROSE_PROMPT)
-  await input.press('Enter')
+  await input.press('Enter', { timeout: 15_000 })
 
   // Wait until the turn is observably active (see waitForActiveStream's doc
   // comment) before returning — a subsequent cancel always has a real,
@@ -281,7 +304,7 @@ test(
     await triggerLongStreamingTurn(page)
 
     const stopBtn = page.locator('[data-testid="stop-btn"]')
-    await stopBtn.click()
+    await stopBtn.click({ timeout: 15_000 })
 
     // Within 5s: the stop button disappears (streaming ended).
     await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
@@ -320,8 +343,8 @@ test(
     // ChatScreen.tsx has a second textarea (data-testid="chat-input") that
     // owns the slash logic. Use that testid for the type interaction.
     const slashInput = page.locator('[data-testid="chat-input"]')
-    await slashInput.click()
-    await slashInput.type('/c')
+    await slashInput.click({ timeout: 15_000 })
+    await slashInput.type('/c', { timeout: 15_000 })
 
     // Assert the slash menu is shown.
     // ChatScreen renders the dropdown when shouldShowSlash && slashOpen:
@@ -344,7 +367,7 @@ test(
     await expect(cancelMenuItem.first()).toBeVisible({ timeout: 5_000 })
 
     // Click /cancel.
-    await cancelMenuItem.first().click()
+    await cancelMenuItem.first().click({ timeout: 10_000 })
 
     // Assert cancel behavior: stop button disappears, input re-enabled, (interrupted) shown.
     const stopBtn = page.locator('[data-testid="stop-btn"]')
@@ -589,7 +612,7 @@ async function assertCancelCascadesToSubagent(
       'makes the delegation impossible rather than merely slow (RC6)',
   ).toHaveAttribute('aria-label', /Jim/i, { timeout: 10_000 })
 
-  await input.press('Enter')
+  await input.press('Enter', { timeout: 15_000 })
 
   // Wait for the Activity Bar pill to appear — confirms delegation fired
   // (and that the SPA has minted the session on disk).
@@ -616,7 +639,7 @@ async function assertCancelCascadesToSubagent(
   // Click Stop while the subagent is running.
   const stopBtn = page.locator('[data-testid="stop-btn"]')
   await expect(stopBtn).toBeVisible({ timeout: 10_000 })
-  await stopBtn.click()
+  await stopBtn.click({ timeout: 15_000 })
 
   // Assert the parent message shows "(interrupted)". Budget: RequestCancel's
   // own escalation ladder (pkg/agent/cancel.go) is graceful-immediate → 3s
@@ -804,7 +827,7 @@ test(
 
     // Capture the moment of click — the label should change within 100ms.
     // We click and immediately check for the "Stopping..." text.
-    await stopBtn.click()
+    await stopBtn.click({ timeout: 15_000 })
 
     // Within 500ms (generous for flaky environments): button text is "Stopping..."
     // MessageInput.tsx: handleCancel calls setStopLabel('stopping') synchronously
@@ -961,7 +984,7 @@ test(
 
     // Cancel the turn.
     const stopBtn = page.locator('[data-testid="stop-btn"]')
-    await stopBtn.click()
+    await stopBtn.click({ timeout: 15_000 })
 
     // Wait for cancel to complete. Under suite load the stop button can stay
     // on aria-label="Stopping..." after the turn has actually ended (composer
