@@ -40,10 +40,27 @@ import (
 // mustAgentLoopNoWorkspaceSeed for that reason: the no-seed variant still
 // constructs a real agent.AgentLoop, so it still needs isolation even though
 // it never calls ensureTestWorkspaceMembership.
+// ambientOmnipusHome is the OMNIPUS_HOME the test binary STARTED with, captured
+// at package init — before any test can call t.Setenv. It is what distinguishes
+// "this test manages its own home" from "the process happens to export one".
+var ambientOmnipusHome, ambientOmnipusHomeSet = os.LookupEnv("OMNIPUS_HOME")
+
+// ensureIsolatedTestOmnipusHome gives EVERY test its own home. A test that sets
+// OMNIPUS_HOME itself (t.Setenv) has explicitly opted into managing its own
+// home and is left alone.
+//
+// Why the ambient value matters: the earlier form returned early whenever
+// OMNIPUS_HOME was non-empty. With a process-wide OMNIPUS_HOME — an exported
+// CI variable, a developer's shell — every mustAgentLoop test then shared ONE
+// home, so a default workspace or a session written by one test was visible to
+// the next. That is the systemic form of the order-dependent failure
+// TestRunner_SessionMode_MainWithoutWorkspaceRefuses hit. t.Setenv restores the
+// variable at test end, so a test-owned value can only ever be this test's.
 func ensureIsolatedTestOmnipusHome(t *testing.T) {
 	t.Helper()
-	if os.Getenv("OMNIPUS_HOME") != "" {
-		return
+	if cur, ok := os.LookupEnv("OMNIPUS_HOME"); ok &&
+		(!ambientOmnipusHomeSet || cur != ambientOmnipusHome) {
+		return // this test set its own home: explicit opt-in to managing it
 	}
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 }
