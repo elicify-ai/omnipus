@@ -59,7 +59,7 @@ const miaMember: WorkspaceMemberConfig = {}
 const jimMember: WorkspaceMemberConfig = {}
 const adminMember: WorkspaceMemberConfig = {}
 
-const { apiMocks, seam, entrySpy } = vi.hoisted(() => ({
+const { apiMocks, seam, entrySpy, entryResult, telemetryMocks } = vi.hoisted(() => ({
   apiMocks: {
     updateWorkspace: vi.fn(),
     fetchWorkspace: vi.fn(),
@@ -70,6 +70,12 @@ const { apiMocks, seam, entrySpy } = vi.hoisted(() => ({
     attention: new Map<string, 'on' | 'off' | 'unknown'>(),
   },
   entrySpy: vi.fn(),
+  // The recovery entry's OUTCOME, controllable per test: resolves by default,
+  // rejects when a test needs a failed follow-up after a successful removal.
+  entryResult: vi.fn(() => Promise.resolve()),
+  telemetryMocks: {
+    logDiagnostic: vi.fn(),
+  },
 }))
 
 vi.mock('@/lib/api', async (importOriginal) => ({
@@ -79,14 +85,24 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   fetchWorkspaceDelegation: apiMocks.fetchWorkspaceDelegation,
 }))
 
+vi.mock('@/lib/telemetry', async (importOriginal) => ({
+  // Real module except logDiagnostic: the production gate inside it (DEV /
+  // MODE checks) would no-op under vitest, so the spy pins the RECORD the
+  // row actions write — whether a diagnostic was attempted at all — while
+  // the gate's own write-through behaviour stays the telemetry module's.
+  ...await importOriginal<typeof import('@/lib/telemetry')>(),
+  logDiagnostic: telemetryMocks.logDiagnostic,
+}))
+
 vi.mock('@/store/session/workspaceEntryFlow', async (importOriginal) => ({
   // Real module except the recovery entry itself: the spy records the
   // workspace's remembered descriptor AT CALL TIME so the test can pin the
-  // removed member's binding being invalidated BEFORE recovery runs.
+  // removed member's binding being invalidated BEFORE recovery runs, and the
+  // outcome comes from entryResult so a test can fail the follow-up.
   ...await importOriginal<typeof import('@/store/session/workspaceEntryFlow')>(),
   runWorkspaceEntry: (workspaceId: string) => {
     entrySpy(workspaceId, useSessionStore.getState().sessionByWorkspace[workspaceId] ?? null)
-    return Promise.resolve()
+    return entryResult()
   },
 }))
 
@@ -257,6 +273,9 @@ beforeEach(() => {
   apiMocks.fetchWorkspace.mockReset()
   apiMocks.fetchWorkspaceDelegation.mockReset()
   entrySpy.mockReset()
+  entryResult.mockReset()
+  entryResult.mockImplementation(() => Promise.resolve())
+  telemetryMocks.logDiagnostic.mockReset()
   invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue([] as never)
   act(() => {
     useUiStore.setState({
@@ -491,6 +510,45 @@ describe('D5 — Hide from sidebar', () => {
     expect(toast?.message).toContain('workspace changed elsewhere')
   })
 
+  it('a 409 whose fresh record ALREADY agrees succeeds without a second PUT and without an error (explicit, S4-08)', async () => {
+    apiMocks.updateWorkspace
+      .mockRejectedValueOnce(new ApiError(409, 'workspace changed elsewhere'))
+    const miaHidden: WorkspaceMemberConfig = { hidden_from_sidebar: true }
+    register(miaHidden, MIA_MAIN)
+    // The refetched record already carries hidden_from_sidebar for Mia —
+    // another writer applied the hide between our PUT and its conflict.
+    apiMocks.fetchWorkspace.mockResolvedValue(
+      workspaceWith({ mia: miaHidden, jim: jimMember }, { revision: FRESH_REV }),
+    )
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    await openRowMenu('Mia')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Hide from sidebar' }))
+    })
+
+    // Exactly ONE PUT (the conflicted attempt): the fresh record agreeing is
+    // SUCCESS, not a skipped retry — no second PUT is sent, no toast.
+    expect(apiMocks.updateWorkspace).toHaveBeenCalledTimes(1)
+    expect(apiMocks.fetchWorkspace).toHaveBeenCalledTimes(1)
+    expect(useUiStore.getState().toasts, 'already-applied hide is not an error').toEqual([])
+  })
+
+  it('a failed hide writes a persistent diagnostic record, not only a 4 s toast (S4-03)', async () => {
+    apiMocks.updateWorkspace.mockRejectedValue(new Error('network down'))
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    await openRowMenu('Mia')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Hide from sidebar' }))
+    })
+
+    expect(telemetryMocks.logDiagnostic).toHaveBeenCalledWith(
+      'agentRowActionFailed',
+      expect.objectContaining({ action: 'Could not hide Mia', detail: 'network down' }),
+    )
+  })
+
   it("a hidden agent's attention still counts on the collapsed workspace row", () => {
     const miaHidden: WorkspaceMemberConfig = { hidden_from_sidebar: true }
     register(miaHidden, MIA_MAIN)
@@ -562,6 +620,16 @@ describe('D4/D8 — Remove', () => {
 
   it('a FAILED Remove surfaces the rejection and does not claim success (S4-05)', async () => {
     apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
+    // removeWorkspaceMember's 409 path refetches the workspace and retries the
+    // PUT ONCE (S4-07's shared conflict helper), so the fresh record must
+    // resolve — an unmocked fetch leaves removalBody reading core_team off
+    // undefined and the toast carries THAT TypeError instead of the real one.
+    // The fresh record must STILL contain Mia: a record that no longer does
+    // counts as "already removed elsewhere" (S4-08) and resolves as success
+    // without a second PUT, which is not the failure this test is about.
+    apiMocks.fetchWorkspace.mockResolvedValue(
+      workspaceWith({ mia: miaMember, jim: jimMember }, { core_team: ['mia', 'jim'] }),
+    )
     apiMocks.updateWorkspace.mockRejectedValue(new ApiError(409, 'workspace changed elsewhere'))
     renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
     await openRowMenu('Mia')
@@ -581,6 +649,187 @@ describe('D4/D8 — Remove', () => {
     expect(toast?.message).toContain('workspace changed elsewhere')
     // ...and a failed removal must not refresh the roster as if it had landed.
     expect(invalidateSpy).not.toHaveBeenCalled()
+  })
+
+  it('a cached record WITHOUT core_team refetches and builds the body from the fresh list — never core_team: [] (S4-01)', async () => {
+    // The cached record carries no core_team (optional on the wire), so the
+    // roster renders from member_configs keys — exactly the stale-cache shape
+    // the review flagged. The fresh record HAS the team.
+    apiMocks.fetchWorkspace.mockResolvedValue(
+      workspaceWith({ mia: miaMember, jim: jimMember }, { revision: FRESH_REV }),
+    )
+    apiMocks.fetchWorkspaceDelegation.mockResolvedValue(
+      delegation([{ from_agent: 'jim', to_agent: 'jim', modes: ['task'] }]),
+    )
+    apiMocks.updateWorkspace.mockResolvedValue(workspaceWith({ jim: jimMember }))
+    renderList({
+      workspace: workspaceWith({ mia: miaMember, jim: jimMember }, { core_team: undefined }),
+    })
+    await openRowMenu('Mia')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    })
+
+    expect(apiMocks.fetchWorkspace).toHaveBeenCalledWith(WS)
+    expect(apiMocks.updateWorkspace).toHaveBeenCalledTimes(1)
+    // core_team is a full-replacement field: the body MUST carry the fresh
+    // list minus Mia, never a list rebuilt from the missing data.
+    expect(apiMocks.updateWorkspace).toHaveBeenCalledWith(WS, {
+      revision: FRESH_REV,
+      core_team: ['jim'],
+      delegation: [{ from_agent: 'jim', to_agent: 'jim', modes: ['task'] }],
+    })
+  })
+
+  it('a workspace with no core_team even after the refetch refuses visibly and PUTs nothing (S4-01)', async () => {
+    apiMocks.fetchWorkspace.mockResolvedValue(
+      workspaceWith({ mia: miaMember, jim: jimMember }, { core_team: undefined, revision: FRESH_REV }),
+    )
+    // The delegation mock RESOLVES: the flow must reach the refusal decision
+    // with every seam working, so the toast can only be the deliberate
+    // refusal — not a crash upstream of the PUT.
+    apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
+    renderList({
+      workspace: workspaceWith({ mia: miaMember, jim: jimMember }, { core_team: undefined }),
+    })
+    await openRowMenu('Mia')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    })
+
+    // The refetch DID happen (the cached record's missing list is never
+    // trusted); with even the fresh record carrying no team, nothing is PUT
+    // and the refusal is visible with its own wording — not an incidental
+    // crash message.
+    expect(apiMocks.fetchWorkspace).toHaveBeenCalledWith(WS)
+    expect(apiMocks.updateWorkspace).not.toHaveBeenCalled()
+    const toast = useUiStore.getState().toasts.at(-1)
+    expect(toast?.variant).toBe('error')
+    expect(toast?.message).toContain('Could not remove Mia')
+    expect(toast?.message).toContain('team list is unavailable')
+  })
+
+  it('on 409 refetches the workspace and retries ONCE with the fresh revision (same bounded retry as Hide, S4-07)', async () => {
+    apiMocks.updateWorkspace
+      .mockRejectedValueOnce(new ApiError(409, 'workspace changed elsewhere'))
+      .mockResolvedValueOnce(workspaceWith({ jim: jimMember }, { core_team: ['jim'] }))
+    apiMocks.fetchWorkspace.mockResolvedValue(
+      workspaceWith({ mia: miaMember, jim: jimMember }, { revision: FRESH_REV }),
+    )
+    apiMocks.fetchWorkspaceDelegation.mockResolvedValue(
+      delegation([{ from_agent: 'jim', to_agent: 'jim', modes: ['task'] }]),
+    )
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    await openRowMenu('Mia')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    })
+
+    expect(apiMocks.fetchWorkspace).toHaveBeenCalledTimes(1)
+    expect(apiMocks.updateWorkspace).toHaveBeenCalledTimes(2)
+    expect(apiMocks.updateWorkspace).toHaveBeenLastCalledWith(WS, {
+      revision: FRESH_REV,
+      core_team: ['jim'],
+      delegation: [{ from_agent: 'jim', to_agent: 'jim', modes: ['task'] }],
+    })
+    expect(useUiStore.getState().toasts, 'a recovered conflict is not an error').toEqual([])
+  })
+
+  it('a second 409 on Remove shows a visible error toast and stops (S4-07 bound)', async () => {
+    const conflict = () => new ApiError(409, 'workspace changed elsewhere')
+    apiMocks.updateWorkspace.mockRejectedValue(conflict())
+    apiMocks.fetchWorkspace.mockResolvedValue(
+      workspaceWith({ mia: miaMember, jim: jimMember }, { revision: FRESH_REV }),
+    )
+    apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    await openRowMenu('Mia')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    })
+
+    expect(apiMocks.updateWorkspace).toHaveBeenCalledTimes(2)
+    expect(apiMocks.fetchWorkspace).toHaveBeenCalledTimes(1)
+    const toast = useUiStore.getState().toasts.at(-1)
+    expect(toast?.variant).toBe('error')
+    expect(toast?.message).toContain('workspace changed elsewhere')
+  })
+
+  it('a failed RECOVERY after a successful removal reports the true state — removed, not failed (S4-02)', async () => {
+    apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
+    apiMocks.updateWorkspace.mockResolvedValue(workspaceWith({ jim: jimMember }, { core_team: ['jim'] }))
+    entryResult.mockRejectedValueOnce(new Error('entry failed'))
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    // Mia's main is the OPEN chat in this workspace, so recovery runs.
+    act(() => {
+      useSessionStore.setState({
+        activeSessionId: MIA_MAIN,
+        activeAgentId: 'mia',
+      })
+    })
+
+    await openRowMenu('Mia')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    })
+
+    // The removal PUT succeeded — the toast must not say the removal failed.
+    expect(apiMocks.updateWorkspace).toHaveBeenCalledTimes(1)
+    const toast = useUiStore.getState().toasts.at(-1)
+    expect(toast?.variant).toBe('error')
+    expect(toast?.message).toContain('Removed Mia')
+    expect(toast?.message).not.toContain('Could not remove Mia')
+  })
+
+  it('a failed REMOVAL itself still reports "Could not remove" (S4-02 control)', async () => {
+    apiMocks.updateWorkspace.mockRejectedValue(new Error('422: bad request'))
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    await openRowMenu('Mia')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    })
+
+    const toast = useUiStore.getState().toasts.at(-1)
+    expect(toast?.variant).toBe('error')
+    expect(toast?.message).toContain('Could not remove Mia')
+  })
+
+  it('a failed remove writes a persistent diagnostic record, not only a 4 s toast (S4-03)', async () => {
+    // Every seam before the PUT works, so the failure the diagnostic records
+    // is the removal itself, not an incidental crash on the way to it.
+    apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
+    apiMocks.updateWorkspace.mockRejectedValue(new Error('network down'))
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    await openRowMenu('Mia')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    })
+
+    expect(telemetryMocks.logDiagnostic).toHaveBeenCalledWith(
+      'agentRowActionFailed',
+      expect.objectContaining({ action: 'Could not remove Mia', detail: 'network down' }),
+    )
   })
 
   it('removing the selected member clears the remembered binding BEFORE recovery runs, so entry does not short-circuit', async () => {

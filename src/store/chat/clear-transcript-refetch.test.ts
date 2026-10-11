@@ -36,7 +36,7 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { queryClient } from '@/lib/queryClient'
 import { pendingClearRefetches, replayingStartedAt } from './runtime-state'
-import { MAX_UNRESOLVED_READS, retryClearTranscriptRead } from './clear-refetch'
+import { retryClearTranscriptRead } from './clear-refetch'
 import { useUiStore } from '@/store/ui'
 import type { ServerFrame } from '@/lib/ws'
 import type { ChatMessage } from './types'
@@ -630,7 +630,7 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
   })
 })
 
-describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent', () => {
+describe('/clear re-read — E1/E2: refusals are wire states, never silent (ruling S3-02: no bound, no timer)', () => {
   /** What the server answers when it refused the /clear: its own user row and a reply, but NO marker. */
   function rawRefusedProjection(clearClientMessageId: string): Record<string, unknown>[] {
     return [
@@ -647,30 +647,6 @@ describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent
   })
   afterEach(() => {
     delete pendingClearRefetches[SID]
-  })
-
-  async function endTurnAndSettle(turn: number, expectedReads: number): Promise<void> {
-    useChatStore.getState().handleFrame(doneFrame(`turn-refused-${turn}`, turn))
-    await vi.waitFor(() => expect(requestMock).toHaveBeenCalledTimes(expectedReads))
-    await settle()
-  }
-
-  it('drops the intent after the bound, tells the user once, and later turns read nothing', async () => {
-    seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
-    requestMock.mockImplementation(async () => rawRefusedProjection(sentClientMessageId(0)))
-    useChatStore.getState().sendMessage('/clear')
-
-    for (let turn = 1; turn <= MAX_UNRESOLVED_READS; turn++) {
-      expect(pendingClearRefetches[SID], `still armed before read ${turn}`).toBeTruthy()
-      await endTurnAndSettle(turn, turn)
-    }
-    expect(pendingClearRefetches[SID], 'expired at the bound').toBeUndefined()
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0]).toMatch(/did not confirm your \/clear/i)
-
-    useChatStore.getState().handleFrame(doneFrame('turn-after', 99))
-    await settle()
-    expect(requestMock).toHaveBeenCalledTimes(MAX_UNRESOLVED_READS)
   })
 
   it('audit D2: a REFUSED /clear — the local-only rows above the /clear bubble survive (nothing was cleared)', async () => {

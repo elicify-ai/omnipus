@@ -1,6 +1,7 @@
 // messages.ts: Message limits, setup content, tool-result guards, selectors, mutation, and event-time ordering
 
 import type { ToolResultRef, TruncatedResult } from '@/lib/api/generated/asyncapi-types'
+import { logDiagnostic } from '@/lib/telemetry'
 import { evictSpanIndexEntries } from './types'
 import type { ChatMessage, ClientTruncatedResult, SessionChatState } from './types'
 
@@ -89,14 +90,40 @@ export function getMessages(bucket: Pick<SessionChatState, 'messagesById' | 'mes
   const order = bucket.messageOrder
   const seen = new Set<string>()
   const out: ChatMessage[] = []
+  let repeats: Map<string, number> | null = null
   for (let i = order.length - 1; i >= 0; i--) {
     const id = order[i]
-    if (seen.has(id)) continue
+    if (seen.has(id)) {
+      repeats ??= new Map()
+      repeats.set(id, (repeats.get(id) ?? 1) + 1)
+      continue
+    }
     seen.add(id)
     const m = bucket.messagesById[id]
     if (m) out.push(m)
   }
+  if (repeats) reportCollapsedDuplicateIds(repeats)
   return out.reverse()
+}
+
+// The collapse above must not be invisible: a repeated id is a persistence or
+// ordering bug somewhere upstream. This projection runs on every reducer, so
+// each id is reported once (bounded, so a long session cannot grow the set).
+const MAX_REPORTED_DUPLICATE_IDS = 200
+const reportedDuplicateIds = new Set<string>()
+
+function reportCollapsedDuplicateIds(repeats: Map<string, number>): void {
+  for (const [messageId, occurrences] of repeats) {
+    if (reportedDuplicateIds.has(messageId)) continue
+    if (reportedDuplicateIds.size >= MAX_REPORTED_DUPLICATE_IDS) reportedDuplicateIds.clear()
+    reportedDuplicateIds.add(messageId)
+    logDiagnostic('chatDuplicateMessageIdCollapsed', { messageId, occurrences })
+  }
+}
+
+/** Test seam: forget which duplicate ids were already reported. */
+export function resetDuplicateIdReports(): void {
+  reportedDuplicateIds.clear()
 }
 
 /**
@@ -308,6 +335,10 @@ export function busyFlagIsUnbacked(
   for (let i = b.messageOrder.length - 1; i >= 0; i--) {
     const m = b.messagesById[b.messageOrder[i]]
     if (m?.role !== 'assistant') continue
+    // A message-scoped refusal notice (frames.ts, the C2 branch) is an error
+    // bubble appended AFTER the closed-by-steer bubble while that turn keeps
+    // running: it is not the turn's reply, so look past it.
+    if (m.status === 'error' && !m.isStreaming) continue
     if (m.closedBySteer) return false
     break
   }

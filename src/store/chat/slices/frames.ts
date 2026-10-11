@@ -331,13 +331,17 @@ function applyToolCallResultFrame(
     tc.status = frame.status ?? 'success'
     tc.duration_ms = frame.duration_ms
     tc.error = frame.error
-    // The last running tool just finished. If that start re-armed an idle flag
-    // (a straggler from a turn that already ended), nothing is left to clear
-    // it. A call that started while the flag was already up belongs to a turn
-    // in flight: leave the flag to that turn's own terminal frame.
-    const idleArmed = draft.idleArmedToolCalls?.[frame.call_id] === true
-    if (draft.idleArmedToolCalls) delete draft.idleArmedToolCalls[frame.call_id]
-    if (idleArmed && busyFlagIsUnbacked(draft)) draft.isStreaming = false
+    // A start that re-armed an idle flag (a straggler from a turn that already
+    // ended) leaves nothing else to clear it. A call that started while the
+    // flag was already up belongs to a turn in flight: leave the flag to that
+    // turn's own terminal frame. Overlapping stragglers share ONE armed burst:
+    // the marks stay until no tool is running, so whichever call finishes last
+    // releases the flag (a later-started call is not itself idle-armed).
+    const armed = draft.idleArmedToolCalls
+    if (armed && Object.keys(armed).length > 0 && !Object.values(draft.toolCalls).some((t) => t.status === 'running')) {
+      draft.idleArmedToolCalls = {}
+      if (busyFlagIsUnbacked(draft)) draft.isStreaming = false
+    }
   }) as Partial<SessionChatState>
 }
 
@@ -1021,13 +1025,20 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       switch (frame.type) {
         case 'message_status':
           withBucket(targetSid, (bucket) => applyMessageStatusFrame(bucket, frame))
-          // C1 (delta re-review): a DISCARDED /clear never writes its marker —
-          // the transcript re-read it armed would only spin to expiry and then
-          // claim the clear was "not confirmed" after the server already
-          // answered with this discard. Retire the operation it armed; the
-          // client_message_id match is the guard, so a newer /clear's own
-          // operation is untouched (only the armed /clear's id can match).
-          if (frame.state === 'discarded' && targetSid) forgetClearRefreshForSend(targetSid, frame.client_message_id)
+          // C1 + ruling S3-02 signal 1: a /clear the server settles WITHOUT
+          // executing — DISCARDED (stop before delivery) or FAILED (any
+          // refusal path: the busy-turn not-performed case, a helper-session
+          // refusal, a plain failure) — never writes its marker, so the
+          // transcript re-read it armed could only spin and then claim the
+          // clear was "not confirmed" after the server already answered on
+          // the wire. Retire the operation it armed; the client_message_id
+          // match is the guard, so a newer /clear's own operation is
+          // untouched (only the armed /clear's id can match). A HELD clear
+          // (stopped agent, busy-turn wait) sends no terminal state and
+          // stays queued with no deadline — ruling signal 3.
+          if ((frame.state === 'discarded' || frame.state === 'failed') && targetSid) {
+            forgetClearRefreshForSend(targetSid, frame.client_message_id)
+          }
           break
         case 'session_started': {
           // Server minted a new session_id in response to a message sent without one.

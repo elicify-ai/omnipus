@@ -6,8 +6,11 @@
 // chat, content clearMarkerText — and nothing else about the view changes
 // (pkg/agent/clear_session.go::clearConversation, core git 67345b1d7). The
 // chat view renders that one row as a quiet divider and keeps every OTHER
-// system row in its ordinary treatment; a refusal is a plain reply and no
-// marker exists for it.
+// system row in its ordinary treatment. A refusal is a wire state, not a
+// text shape: the server publishes message_status {state: 'failed'} for the
+// /clear's client_message_id, and the explanatory reply stays an ordinary
+// assistant row (architect ruling S3-02 — the SPA never parses refusal text;
+// the former CLEAR_NOT_PERFORMED_PREFIX matcher is deleted with it).
 //
 // The REST transcript projection (rawToMessage) carries the marker's role and
 // content through verbatim, so role + exact content is the discriminator the
@@ -20,26 +23,6 @@ export const CLEAR_MARKER_TEXT = 'Conversation context cleared'
 /** True for the one system entry a successful /clear appends to the chat view. */
 export function isClearContextMarker(message: { role?: string; content?: string | null }): boolean {
   return message.role === 'system' && message.content === CLEAR_MARKER_TEXT
-}
-
-/**
- * The prefix of the assistant reply the server publishes when a /clear typed
- * during a running turn could not be performed
- * (pkg/agent/clear_while_busy.go::clearNotPerformedReply — "/clear was not
- * performed: <reason> Nothing was cleared; send /clear again."). A refusal is
- * a plain reply delivered as an ordinary assistant turn; NO marker is ever
- * written for it. The role check is part of the predicate (same discipline as
- * isClearContextMarker): a user quoting the sentence never matches.
- */
-export const CLEAR_NOT_PERFORMED_PREFIX = '/clear was not performed:'
-
-/** True for the assistant refusal reply a not-performed /clear produces. */
-export function isClearNotPerformedReply(message: { role?: string; content?: string | null }): boolean {
-  return (
-    message.role === 'assistant' &&
-    typeof message.content === 'string' &&
-    message.content.startsWith(CLEAR_NOT_PERFORMED_PREFIX)
-  )
 }
 
 /**

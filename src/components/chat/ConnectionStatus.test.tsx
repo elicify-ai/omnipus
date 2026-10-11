@@ -58,27 +58,10 @@ describe('UserMessageDeliveryStatus', () => {
     expect(container.innerHTML).not.toMatch(/color-(?:error|warning)|\bred-|\borange-|\bamber-/)
   })
 
-  // Delta re-review C1/R1#1: the /clear row's settled outcomes. Each resolves
-  // to a passive, honest chip — never the offline "Not sent yet, will be sent
-  // automatically" look, which would be false (the server has the command).
-  it.each([
-    [
-      'not-performed',
-      'Not performed',
-      'The server received /clear but could not perform it — nothing was cleared. Send /clear again if you still want a fresh start.',
-    ],
-    [
-      'unconfirmed',
-      'Not confirmed',
-      "The server did not confirm this /clear, so the chat's context may not have been cleared. Send /clear again if you still want a fresh start.",
-    ],
-  ] as const)('renders the /clear %s settle outcome with its exact label and tooltip', (state, label, tooltip) => {
-    render(<UserMessageDeliveryStatus state={state} agentName="Mia" latest />)
-
-    const icon = screen.getByRole('button', { name: label })
-    fireEvent.focus(icon)
-    expect(screen.getByRole('tooltip')).toHaveTextContent(tooltip)
-  })
+  // Ruling S3-02 retired the /clear-only 'not-performed' and 'unconfirmed'
+  // states (and their chips): a refusal arrives as the wire's message_status
+  // failed — the standard failed chip below covers it — and a held clear
+  // stays queued with no deadline. No /clear-specific settle chips remain.
 
   it('renders a discarded /clear as "Not applied" — not the never-read wording (delta C1)', () => {
     render(<UserMessageDeliveryStatus state="discarded" agentName="Mia" latest isClearCommand />)
