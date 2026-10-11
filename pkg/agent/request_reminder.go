@@ -45,10 +45,13 @@ func (al *AgentLoop) markRequestDelivered(transcriptEntryID string) {
 func (al *AgentLoop) takeUnansweredRequests(sessionID string) []string {
 	var ids []string
 	al.pendingRequests.Range(func(k, v any) bool {
-		if v.(string) != sessionID {
+		// pendingRequests maps request id -> session id (both strings, written
+		// only by this package); anything else is skipped, never reminded.
+		owner, ownerOK := v.(string)
+		id, idOK := k.(string)
+		if !ownerOK || !idOK || owner != sessionID {
 			return true
 		}
-		id := k.(string)
 		if _, delivered := al.deliveredRequests.Load(id); !delivered {
 			return true // its turn has not run yet: nothing to remind about
 		}
