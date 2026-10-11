@@ -1003,3 +1003,23 @@ func TestDeleteSession_CascadeDeletesUploads_PerAgentStore(t *testing.T) {
 // model-content backend (session-core DEL-10/DEL-12): normal construction
 // neither creates nor reads `.context`, so there is no per-session context
 // file to remove and no `.context` directory to preserve.
+
+// S1-04: a directory with no meta.json is not a session (boot skips it as safe to
+// delete), so delete-all must not report it as an unreadable chat it had to
+// keep; a directory whose meta.json exists but is corrupt still is one.
+func TestUnreadableSessionIDs_OrphanDirectoryIsNotAChat_CorruptMetaIs(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "orphan_no_meta"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "orphan_no_meta", "transcript.jsonl"), []byte("{}\n"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "corrupt_meta"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "corrupt_meta", "meta.json"), []byte("{not json"), 0o600))
+
+	store, err := NewUnifiedStore(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	bad, err := store.UnreadableSessionIDs()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"corrupt_meta"}, bad,
+		"only the directory whose meta.json is corrupt is an unreadable chat; the orphan directory is not a session")
+}

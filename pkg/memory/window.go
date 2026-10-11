@@ -17,8 +17,12 @@ type WindowState struct {
 	// neither the cursor nor the floor, so nothing else would tell the commit.
 	// It is a one-shot request, never stored and never part of the state compare.
 	DropExpiryNote bool
-	AnchorLine     *int
-	Projection     ProjectionMeta
+	// RestoreExpiryNote, set on the state a RestoreWindow puts back, writes this
+	// retention notice back: the undo of a /clear that had dropped it. Like
+	// DropExpiryNote it is a one-shot request, never stored or compared.
+	RestoreExpiryNote string
+	AnchorLine        *int
+	Projection        ProjectionMeta
 }
 
 func (w WindowState) Clone() WindowState {

@@ -50,6 +50,14 @@ func scopeOfType(frames []map[string]any, typ string) []map[string]any {
 
 // scopeMintBoundOwner mints ann's chat in ws-1 and binds the connection to it,
 // draining the owner's own turn from the bus.
+// scopeReaderOnly is scopeMintBoundOwner for a test that needs only the reader.
+func scopeReaderOnly(t *testing.T) *wsHandlerReadLoop {
+	t.Helper()
+	h, reader, _, _ := scopeMintBoundOwner(t)
+	_ = h
+	return reader
+}
+
 func scopeMintBoundOwner(t *testing.T) (*WSHandler, *wsHandlerReadLoop, string, *recipientDeps) {
 	t.Helper()
 	h, b, deps := newRecipientHandler(t)
@@ -137,7 +145,7 @@ func TestRecipientRefusalIsMessageScoped(t *testing.T) {
 // A refusal with no owning chat is the "needs an existing chat" refusal itself:
 // nothing to tag, so it stays global and ticks nothing (decision note).
 func TestRecipientRefusalWithoutOwningChatStaysGlobal(t *testing.T) {
-	_, reader, _, _ := scopeMintBoundOwner(t)
+	reader := scopeReaderOnly(t)
 	frames := scopeSend(t, reader,
 		`{"type":"message","agent_id":"ann","content":"@ray hi","client_message_id":"c2-nochat",`+
 			`"recipient":{"workspace_id":"ws-1","agent_id":"ray"}}`)
