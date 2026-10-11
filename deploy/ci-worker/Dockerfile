@@ -9,6 +9,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NODE_MAJOR=22
 
 # Node 22 + build deps (gcc for the CGO=1 build gate, ripgrep/jq/git/make for scripts) +
+# python3 + python-is-python3: the document-runtime probe (pkg/documentruntime.ProbeArgv)
+# runs `python -m ...`; without it pkg/agent TestNewAgentInstanceWiresDocumentRuntime... sees
+# exit 127. runci.sh also installs them at run time for machines on an older image.
 # Playwright Chromium system deps (libnss3/libnspr4/libgbm1/libasound2/… — the metapackage the
 # `playwright install --with-deps` resolver would install; we pin it here to make the image
 # build deterministic and to keep the system-dep surface auditable in source review).
@@ -18,7 +21,8 @@ RUN set -eux; \
         curl ca-certificates gnupg \
         libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
         libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
-        libgbm1 libasound2 libpango-1.0-0 libcairo2; \
+        libgbm1 libasound2 libpango-1.0-0 libcairo2 \
+        python3 python-is-python3; \
     mkdir -p /etc/apt/keyrings; \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg; \
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list; \
@@ -59,6 +63,12 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN npm install -g @playwright/test@1.61.1 playwright@1.61.1 \
     && playwright install --with-deps chromium firefox webkit \
     && rm -rf /root/.npm /tmp/*
+
+# The non-root user runci.sh re-execs the Go/node test gates as (see ci_prepare there). It is
+# created here so a fresh image needs no run-time useradd; NO `USER` instruction on purpose: the
+# machine's SSH shell and every root-requiring step (git, apt, chown, Xvfb for e2e) stay root,
+# and runci.sh drops to `ci` only for the gates, via runuser.
+RUN useradd -m -s /bin/bash ci
 
 # Persistent caches live on the mounted volume (/cache) so repeat runs are fast.
 ENV GOPATH=/cache/go \

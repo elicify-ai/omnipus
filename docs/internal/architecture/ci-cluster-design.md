@@ -124,6 +124,16 @@ watching for throttle-induced timing flakes, which are the more dangerous outcom
 RED trains people to ignore a gate; see the e2e trap history in `deploy/ci-worker/CLAUDE.md`).
 Until those numbers exist, all tiers stay on `performance`.
 
+**Reality check (2026-10-12, `fly machine status`): that is NOT what is deployed.** Only
+`080d74db170408` is `performance` 8x/16 GB. The other four machines (`d8d3977c946558`,
+`d8d0d90a1e9648`, `78113d4f329908`, `48ee71eb1e9768`) are `shared` 8x/16 GB. The measurement
+this section asks for happened by accident: the full e2e gate on a shared machine ran 2 h at
+load around 21 and starved (the baseline failed nearly everything), and `embed-build` (npm ci,
+SPA build, mipsle link checks) took ~46 min on a shared machine against minutes on the
+performance one. Shared 8x is therefore not a substitute for performance 8x for the sustained
+tiers (`go`, `e2e`). Whether to resize is a cost decision for the founder; this document only
+records what is true.
+
 ## Configuration surface
 
 | Env | Meaning | Default |
