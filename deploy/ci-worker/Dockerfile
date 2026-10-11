@@ -64,6 +64,12 @@ RUN npm install -g @playwright/test@1.61.1 playwright@1.61.1 \
     && playwright install --with-deps chromium firefox webkit \
     && rm -rf /root/.npm /tmp/*
 
+# The non-root user runci.sh re-execs the Go/node test gates as (see ci_prepare there). It is
+# created here so a fresh image needs no run-time useradd; NO `USER` instruction on purpose: the
+# machine's SSH shell and every root-requiring step (git, apt, chown, Xvfb for e2e) stay root,
+# and runci.sh drops to `ci` only for the gates, via runuser.
+RUN useradd -m -s /bin/bash ci
+
 # Persistent caches live on the mounted volume (/cache) so repeat runs are fast.
 ENV GOPATH=/cache/go \
     GOCACHE=/cache/go-build \

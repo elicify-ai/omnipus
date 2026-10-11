@@ -110,6 +110,12 @@ log() { printf '\n\033[1;36m=== %s ===\033[0m\n' "$*"; }
 rc=0; step() { local name="$1"; shift; log "$name"; "$@"; local e=$?; printf '\033[1m%s -> exit %d\033[0m\n' "$name" "$e"; [ $e -ne 0 ] && rc=1; return 0; }
 
 # --- sync repo ---
+# The checkout is owned by the non-root `ci` user after a run (ci_prepare), so root's
+# own git must be told that is fine - otherwise the next run's fetch dies with
+# "detected dubious ownership". Idempotent.
+if [ -z "${RUNCI_AS_CI:-}" ] && ! git config --global --get-all safe.directory 2>/dev/null | grep -qx '\*'; then
+  git config --global --add safe.directory '*'
+fi
 if [ -n "${RUNCI_AS_CI:-}" ]; then
   cd "$REPO_DIR" || exit 2     # the root parent already fetched and checked out
 else
@@ -128,6 +134,15 @@ TARGET="$(git rev-parse --verify --quiet "origin/$REF^{commit}" || git rev-parse
 [ -z "$TARGET" ] && { echo "cannot resolve ref $REF"; exit 2; }
 git checkout -f "$TARGET" || exit 2
 git reset --hard "$TARGET" --quiet || true
+# `checkout -f` + `reset --hard` leave UNTRACKED files behind, and this checkout
+# is persistent: files an older revision's tests wrote into the tree (the gateway
+# entities/agents/*.lock) survive for ever, and the package TestMain guard
+# ("a test wrote into the package directory") then blames the CURRENT run for
+# them. `git clean -fdx` makes every run start from exactly the committed tree.
+# Excluded because they are expensive and safe to keep: node_modules (npm ci's
+# output; runci still checks it against package-lock.json). The Go/npm/Playwright
+# caches live outside the tree (/cache/go-build, /cache/go, /cache/npm).
+git clean -fdxq -e node_modules || echo "WARNING: git clean failed - stale untracked files may remain in the checkout"
 echo "HEAD: $(git rev-parse --short HEAD) $(git log -1 --format='%s')"
 fi
 
