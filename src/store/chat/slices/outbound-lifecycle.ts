@@ -20,6 +20,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
 import { isClearCommandText } from '@/lib/clearMarker'
+import { resolveAddressedAgent } from '../recipientSend'
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
@@ -111,6 +112,20 @@ function armClearRefreshForSend(sessionId: string, clientMessageId: string, get:
   armClearRefresh(sessionId, clientMessageId, get().sessionsById[sessionId]?.activeTurnId ?? null)
 }
 
+/** The @-recipient on an outbound frame (founder decision 2026-10-11 Q1 B —
+ * the restored @ agent menu addresses the MESSAGE; FR-029, no in-chat
+ * handover). Derived AT SEND TIME from the leading "@<Agent name>" prefix of
+ * the content, so it is not sticky: an edited prefix sends no recipient and
+ * the @-text travels verbatim either way. Attaching it is legal ONLY next to
+ * a session_id (contracts/asyncapi.yaml MessageFrame.recipient — the server
+ * refuses the pair alone), so every caller attaches it only in the
+ * session-carrying payloads; the composer's own visible block
+ * (ChatScreen's recipientAddressBlocked) is what stops an @-addressed
+ * submit in a brand-new chat long before this line. */
+function outgoingRecipient(content: string): { workspace_id: string; agent_id: string } | null {
+  return resolveAddressedAgent(content)?.recipient ?? null
+}
+
 /** Review finding 17: resends messageId IN PLACE — same id, original
  * mediaRefs, no duplicate bubble — replacing the old `sendMessage(content)`
  * "Try again" call, which minted a fresh id (duplicate bubble) and threaded
@@ -187,6 +202,14 @@ function performResendMessage(
     client_message_id: messageId,
     agent_id: useSessionStore.getState().activeAgentId ?? undefined,
     ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
+    // Recipient re-derived from the kept content at resend time. A '__pending'
+    // target has no session for the pair to ride on, so the recipient is
+    // omitted there (the recipient-only-with-session_id wire rule) — a corner
+    // the retained-first-send retry path (`retryFirstSend`) normally owns.
+    ...(targetSid !== '__pending' ? (() => {
+      const recipient = outgoingRecipient(content)
+      return recipient ? { recipient } : {}
+    })() : {}),
   }
   get()._validateOutboundFrame(payload, targetSid)
   const sent = connection.send(payload)
@@ -507,6 +530,13 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             agent_id: activeAgentId ?? undefined,
             ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
             ...metadataFrame,
+            // @-addressed steer (founder 2026-10-11 Q1 B): legal here — a
+            // steer always carries a real session_id ('__pending' steers are
+            // enqueued above, never put on the wire).
+            ...(() => {
+              const recipient = outgoingRecipient(content)
+              return recipient ? { recipient } : {}
+            })(),
           }
           get()._validateOutboundFrame(steerPayload, activeSessionId)
           const steerSent = connection.send(steerPayload)
@@ -648,6 +678,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
+          // @-addressed ordinary send (founder 2026-10-11 Q1 B): the pair
+          // rides WITH this session_id, never alone.
+          ...(() => {
+            const recipient = outgoingRecipient(content)
+            return recipient ? { recipient } : {}
+          })(),
         }
         get()._validateOutboundFrame(payload, activeSessionId)
         const sent = connection.send(payload)
