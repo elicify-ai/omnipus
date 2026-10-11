@@ -280,7 +280,7 @@ type agentLoopRequestCancel struct {
 //   - approval auto-deny (via hooks.CancelPendingApprovals)
 //   - cancel_stage frame emission (via hooks.SendStageFrame)
 //   - session status → interrupted (via hooks.SetSessionInterrupted)
-//   - transcript MarkLastEntryTruncated + turn_canceled entry on Finish
+//   - turn_canceled entry on Finish (its assistant entry is already written with the truncation flag, in one write)
 //   - turn_canceled audit on Finish
 //   - 3s timer → hard abort (InterruptSessionHard(sessionID, ScopeSubtree, hint))
 //   - 3s after the hard abort → detached / MarkAbandoned + turn_cancel_stuck audit
@@ -571,7 +571,7 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 	// which wakes the agent goroutine. That goroutine may call Finish() before we
 	// reach SetOnCancelFinish below. If that happens, Finish() sees cancelFired==true
 	// but onCancelFinish==nil and returns without invoking the callback — the
-	// transcript entry, audit event, and MarkLastEntryTruncated are permanently lost.
+	// transcript entry, audit event and truncation flag are permanently lost.
 	//
 	// Fix: collect the descendants list now (same predicate as Interrupt),
 	// build the callback closure with the pre-computed list, register it via

@@ -533,7 +533,7 @@ func (al *AgentLoop) preserveTruncatedAccumulator(ts *turnState) {
 	}
 	// ADR-087 D4a/D4b: stamp Truncated/TruncationReason in the SAME write as
 	// the content — see appendAssistantTranscriptTruncated's doc comment.
-	// This replaces the former append-then-MarkLastEntryTruncated two-step,
+	// This replaces the former append-then-the former post-hoc truncation rewrite two-step,
 	// which reopened and rewrote the whole transcript.jsonl just to stamp
 	// two fields on the entry constructed one call earlier.
 	ts.appendAssistantTranscriptTruncated(accumulated, truncationReasonMaxOutputTokens)

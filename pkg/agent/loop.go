@@ -2084,12 +2084,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// between clearActiveTurn and Finish. finalizeStreamer is what calls
 	// wsStreamer.Finalize(), which writes the assistant transcript entry
 	// (FIX 1). Finish's onCancelFinish callback (pkg/agent/cancel.go) is what
-	// writes the turn_canceled entry AND calls MarkLastEntryTruncated to flag
-	// the assistant entry. Both depend on the assistant entry already
-	// existing in transcript.jsonl:
-	//   - MarkLastEntryTruncated's backward-walk finds nothing to flag if the
-	//     assistant entry isn't there yet (silently succeeds as a no-op —
-	//     Truncated never gets set).
+	// writes the turn_canceled entry. The assistant entry carries its own
+	// Truncated flag, written in the same append by the finalizing streamer, so
+	// the cancel entry and the correlation below both depend on that assistant
+	// entry already existing in transcript.jsonl:
+	//   - without it there is no entry to carry Truncated, and the cancel entry
+	//     would describe a message that was never persisted.
 	//   - The frontend's turn_canceled -> assistant-message replay
 	//     correlation (chatTurnCanceledNoMatch) requires the assistant
 	//     ReplayMessageFrame to have already arrived on the wire before the

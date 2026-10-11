@@ -81,7 +81,7 @@ func (ts *turnState) stampStreamerProducerAgentID(streamer bus.Streamer) {
 // carries no TurnID at all — confirmed via live verification to break BOTH
 // the frontend's turn_canceled -> assistant-message replay correlation
 // (chatTurnCanceledNoMatch fires on every reload after a mid-stream cancel)
-// and MarkLastEntryTruncated's own turn-scoped backward-walk matching
+// and the former truncation rewrite's own turn-scoped backward-walk matching
 // (pkg/session/unified.go), silently disabling the Truncated flag for every
 // real cancel.
 //
@@ -279,7 +279,7 @@ type streamerContinuationSetter interface {
 // streamer's own Finalize call is the choke point that actually persists the
 // assistant transcript entry, so it must stamp Truncated/TruncationReason
 // itself, on the SAME write, rather than have finalizeStreamer call
-// MarkLastEntryTruncated AFTER Finalize returns. That post-hoc call was
+// the former post-hoc truncation rewrite AFTER Finalize returns. That post-hoc call was
 // confirmed live-broken two ways: for a D4a zero-content turn, Finalize's own
 // `content != ""` gate wrote no entry at all, so the backward-walk found
 // nothing to flag (silent no-op — replay showed no assistant entry, and the
@@ -371,7 +371,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// assistant transcript entry — including the D4a zero-content case,
 		// which Finalize's own content-gate previously skipped writing an
 		// entry for at all. This REPLACES the old post-hoc
-		// MarkLastEntryTruncated call that used to run AFTER Finalize
+		// the former post-hoc truncation rewrite call that used to run AFTER Finalize
 		// returned: on the streamed path that call either found no entry to
 		// flag (D4a: Finalize wrote nothing) or, worse, walked back and
 		// mis-stamped an EARLIER same-turn narration entry sharing this
@@ -380,7 +380,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// non-streaming path (loop.go's own write choke point, gated on
 		// !hasActiveStreamer) now has an equivalent single-write fix of its
 		// own — appendAssistantTranscriptTruncated — so neither path calls
-		// MarkLastEntryTruncated post-hoc anymore; this streamer probe only
+		// the former post-hoc truncation rewrite post-hoc anymore; this streamer probe only
 		// covers the streamed case.
 		if truncReason != "" {
 			if tset, ok := s.(streamerTruncationSetter); ok {

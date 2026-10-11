@@ -28,11 +28,9 @@
 //	        how many tool results follow the same assistant.
 //
 // Design rationale:
-//   - Rule D fixes the transcript-less-path orphan gap: repairHistory
-//     (repair.go) only runs when TranscriptStore != nil && TranscriptSessionID != ""
-//     (loop.go ~L5269). The background-task path (processSystemMessage, loop.go
-//     ~L4597) has no TranscriptStore → repair is skipped. Even when repair runs,
-//     it returns orphans unchanged when the transcript is unreachable. A true
+//   - Rule D fixes the transcript-less-path orphan gap: the
+//     background-task path (processSystemMessage) has no TranscriptStore, so
+//     no transcript lookup could ever help it. A true
 //     orphan role:"tool" reaching the Anthropic/OpenAI serializer causes HTTP 400.
 //   - Rule D must NOT drop paired tool results: 3 parallel tool results that
 //     are all paired to one assistant's 3 ToolCalls are all kept (F1 fix still
@@ -171,7 +169,7 @@ func appendOrMergePlainText(out []providers.Message, m providers.Message) []prov
 	}
 	if len(m.Media) > 0 {
 		// Clone before append to avoid writing into the source message's backing
-		// array when cap(last.Media) > len(last.Media) (FIX 3 — matches repair.go:157-159).
+		// array when cap(last.Media) > len(last.Media).
 		last.Media = append(append([]string(nil), last.Media...), m.Media...)
 	}
 	if m.ReasoningContent != "" && last.ReasoningContent == "" {

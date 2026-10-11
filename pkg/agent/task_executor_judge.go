@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -460,6 +461,9 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 	}
 	deliverer := te.agentLoop.getUpwardDeliverer()
 	if deliverer == nil {
+		for _, recipient := range run.recipients {
+			te.recordNoticeLoss(t, recipient, "no upward deliverer is wired")
+		}
 		return
 	}
 
@@ -476,8 +480,7 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 				SenderIdentity: t.AgentID, Fatal: true,
 				Text: header + "\n\nempty_answer: the task produced no result",
 			}); err != nil {
-				logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode empty-answer error failed",
-					map[string]any{"task_id": t.ID, "error": err.Error()})
+				te.recordNoticeLossAll(t, run, "the notice could not be encoded: "+err.Error())
 				return
 			}
 		} else {
@@ -487,8 +490,7 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 				SenderIdentity: t.AgentID, Mode: generated.SessionMessageHandbackModeFinal,
 				ResultSoFar: header + "\n\n" + t.Result, Artifacts: []string{}, OpenQuestions: []string{},
 			}); err != nil {
-				logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode handback failed",
-					map[string]any{"task_id": t.ID, "error": err.Error()})
+				te.recordNoticeLossAll(t, run, "the notice could not be encoded: "+err.Error())
 				return
 			}
 		}
@@ -501,8 +503,7 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 			MessageId: t.ID, SessionId: t.SessionID, CreatedAt: now, Depth: 1,
 			SenderIdentity: t.AgentID, Fatal: true, Text: header + "\n\n" + t.Result,
 		}); err != nil {
-			logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode failed-error failed",
-				map[string]any{"task_id": t.ID, "error": err.Error()})
+			te.recordNoticeLossAll(t, run, "the notice could not be encoded: "+err.Error())
 			return
 		}
 	default:
@@ -511,14 +512,17 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 	}
 
 	for _, recipient := range run.recipients {
-		if !te.recipientStillVisible(t, recipient) {
+		visible, lost := te.recipientStillVisible(t, recipient)
+		if lost != nil {
+			te.recordNoticeLoss(t, recipient, lost.Error())
+		}
+		if !visible {
 			continue
 		}
 		event := steer.UpwardEvent{ChildSessionID: t.SessionID, Outcome: outcome, Message: sm, RecipientSessionID: recipient}
 		delivery, err := deliverer.Deliver(ctx, event)
 		if err != nil {
-			logger.WarnCF("task_executor", "deliverTaskCompletionUpward: Deliver failed",
-				map[string]any{"task_id": t.ID, "session_id": t.SessionID, "recipient": recipient, "error": err.Error()})
+			te.recordNoticeLoss(t, recipient, "delivery failed: "+err.Error())
 			continue
 		}
 		generation := 0
@@ -531,27 +535,47 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 
 // recipientStillVisible re-checks, at send time, that a captured recipient is
 // still an eligible visible main (BDD-01.3/06.4). A recipient that is no longer
-// eligible, or whose eligibility cannot be read, is skipped and logged: no
-// wake, no substitute.
-func (te *TaskExecutor) recipientStillVisible(t *task.Task, recipient string) bool {
+// eligible is skipped and logged (by design: no wake, no substitute). A
+// recipient whose eligibility cannot be DETERMINED is skipped too, but the
+// returned error says the notice was lost, so the caller records it.
+func (te *TaskExecutor) recipientStillVisible(t *task.Task, recipient string) (visible bool, lost error) {
 	workspaceID, agentID, ok := session.SplitMainSessionID(recipient)
 	if !ok || te.mainResolver == nil {
-		logger.WarnCF("task_executor", "run notice skipped: the recipient is not a resolvable main",
-			map[string]any{"task_id": t.ID, "recipient": recipient})
-		return false
+		return false, errors.New("the recipient is not a resolvable main")
 	}
 	id, eligible, err := te.mainResolver.EligibleMain(workspaceID, agentID)
 	if err != nil {
-		logger.ErrorCF("task_executor", "run notice skipped: the recipient's main could not be resolved",
-			map[string]any{"task_id": t.ID, "recipient": recipient, "error": err.Error()})
-		return false
+		return false, fmt.Errorf("the recipient's main could not be resolved: %w", err)
 	}
 	if !eligible || id != recipient {
 		logger.InfoCF("task_executor", "run notice skipped: the recipient is hidden or removed",
 			map[string]any{"task_id": t.ID, "recipient": recipient})
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
+}
+
+// taskNoticeLosses counts completion notices to a task's starter that were owed
+// but could not be delivered.
+var taskNoticeLosses atomic.Int64
+
+// recordNoticeLossAll records the loss of the notice for every captured
+// recipient of run.
+func (te *TaskExecutor) recordNoticeLossAll(t *task.Task, run *activeRun, reason string) {
+	for _, recipient := range run.recipients {
+		te.recordNoticeLoss(t, recipient, reason)
+	}
+}
+
+// recordNoticeLoss makes a lost completion notice VISIBLE instead of log-only:
+// it counts it, logs it at error level and writes a system line into the task's
+// own transcript, so the loss is recorded on the task and not only in a log.
+func (te *TaskExecutor) recordNoticeLoss(t *task.Task, recipient, reason string) {
+	taskNoticeLosses.Add(1)
+	logger.ErrorCF("task_executor", "task completion notice could not be delivered",
+		map[string]any{"task_id": t.ID, "session_id": t.SessionID, "recipient": recipient, "reason": reason})
+	te.appendRunSystemTranscript(t, t.SessionID, te.agentLoop.GetSessionStore(),
+		fmt.Sprintf("The completion notice for %s could not be delivered: %s.", recipient, reason))
 }
 
 // readyBlockedCandidates returns the IDs of all `next` tasks that list

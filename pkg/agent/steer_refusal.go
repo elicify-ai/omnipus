@@ -46,6 +46,8 @@ func curateSteerRefusal(scope string, err error) error {
 		// Already a plain sentence; the joined error may also carry a ledger
 		// write failure's text, so only the sentence is shown.
 		return &steerRefusalError{text: errSteeringQueueFull.Error(), cause: err}
+	case errors.Is(err, errSteeringAggregateFull):
+		return &steerRefusalError{text: errSteeringAggregateFull.Error(), cause: err}
 	case errors.Is(err, session.ErrLifecycleNotFound):
 		return &steerRefusalError{text: "no such helper session", cause: err}
 	}
