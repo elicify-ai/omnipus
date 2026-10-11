@@ -14,6 +14,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -104,5 +106,50 @@ func TestVerifierSessionType_ChatIDIsAPreCreatedSessionNotAnAdHocString(t *testi
 	}
 	if meta.Title != "Verifier: task:t-precreate" {
 		t.Errorf("pre-created session Title = %q, want %q", meta.Title, "Verifier: task:t-precreate")
+	}
+}
+
+// Every directory in the session store is a session with a meta.json. A real
+// adjudication used to leave an extra "agent:judge:verify:<uuid>" directory
+// (window files only, no meta.json) because the verifier's model-window key was
+// an ad hoc string, not the verifier session's own id; at the next boot the
+// store reported it unreadable (founder's gateway, 2026-10-11).
+func TestVerifierAdjudication_LeavesNoDirectoryWithoutAMeta(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{
+			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"ok"}]}`,
+		}, nil
+	}}
+
+	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+		Scope:           task.VerdictScopeTask,
+		TaskID:          "t-no-orphan",
+		AssigneeAgentID: "native-agent",
+		Criteria:        []task.AcceptanceCriterion{proseCriterion("c1", "x")},
+		Attempt:         1,
+		ClaimText:       "done",
+	})
+	if result.Unavailable || !result.Verdict.Met {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+
+	base := al.GetSessionStore().BaseDir()
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDirs := 0
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == ".context" {
+			continue
+		}
+		sessionDirs++
+		if _, statErr := os.Stat(filepath.Join(base, e.Name(), "meta.json")); statErr != nil {
+			t.Errorf("session directory %q has no meta.json (%v): its files were written for a window key that is not a session", e.Name(), statErr)
+		}
+	}
+	if sessionDirs == 0 {
+		t.Fatal("instrument check: the adjudication left no session directory at all")
 	}
 }
