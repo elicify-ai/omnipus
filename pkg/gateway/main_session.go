@@ -264,8 +264,10 @@ func (a *restAPI) ensureMainsForTeam(ws storedWorkspace) error {
 	return errors.Join(errs...)
 }
 
-// resolveMainSessionForRead is the lookup/attach gate for a session id that
-// names a main pair. It returns true only when the pair is eligible AND its
+// resolveMainSessionForRead is the lookup gate that also ESTABLISHES a main for a
+// session id that names an entitled pair (getSession). The read-only door gate
+// every other path uses is mainSessionGate (REST: gateMainRead, WebSocket:
+// mainSessionAllowed); this one creates, so it is deliberately separate. It returns true only when the pair is eligible AND its
 // main resolves to a matching stored identity — creating it when it does not
 // exist yet (BDD-01.1: a lookup is one of the paths that establishes the one
 // main of an eligible pair).
