@@ -188,6 +188,67 @@ describe('C3: a straggler tool call after a discarded send', () => {
   })
 })
 
+describe('S3-03: two overlapping straggler tool calls after a turn ended', () => {
+  const startOf = (id: string) => ({ type: 'tool_call_start', call_id: id, tool: 'bash', params: {} })
+  const resultOf = (id: string) => ({ type: 'tool_call_result', call_id: id, tool: 'bash', result: 'ok', status: 'success' })
+
+  it.each([
+    ['first started finishes first', ['a', 'b']],
+    ['second started finishes first', ['b', 'a']],
+  ] as const)('releases Stop once the last straggler finishes (%s)', (_label, finishOrder) => {
+    feed(TOKEN, DONE)
+    feed(startOf('a'), startOf('b'))
+    expect(anyRunningTool()).toBe(true)
+    feed(resultOf(finishOrder[0]))
+    expect(bucket().isStreaming, 'one straggler still runs, Stop stays').toBe(true)
+    feed(resultOf(finishOrder[1]))
+    expect(anyRunningTool()).toBe(false)
+    expect(bucket().isStreaming, 'Stop must not stay up with no activity').toBe(false)
+  })
+
+  it('leaves no idle-armed bookkeeping behind once the burst is released', () => {
+    feed(TOKEN, DONE)
+    feed(startOf('a'), startOf('b'), resultOf('a'), resultOf('b'))
+    expect(Object.keys(bucket().sessionsById[SID]?.idleArmedToolCalls ?? {})).toEqual([])
+  })
+
+  it('negative control: a live turn tool burst never blinks Stop off', () => {
+    feed(TOKEN)
+    act(() => {
+      const b = useChatStore.getState().sessionsById[SID]
+      const id = b.messageOrder[b.messageOrder.length - 1]
+      useChatStore.setState({
+        sessionsById: { ...useChatStore.getState().sessionsById, [SID]: { ...b, isStreaming: true, messagesById: { ...b.messagesById, [id]: { ...b.messagesById[id], isStreaming: false, status: 'done' } } } },
+      } as never)
+    })
+    feed(startOf('a'), startOf('b'), resultOf('a'), resultOf('b'))
+    expect(bucket().isStreaming, 'the turn is still in flight').toBe(true)
+  })
+})
+
+describe('S2-04 (SPA half): a tagged message-scoped save/conflict refusal never drops Stop', () => {
+  let sent: Array<Record<string, unknown>> = []
+  beforeEach(() => {
+    sent = []
+    useConnectionStore.setState({
+      connection: { send: (p: unknown) => { sent.push(p as Record<string, unknown>); return true }, close: () => {} } as never,
+      isConnected: true,
+    } as never)
+  })
+
+  it.each(['Could not save message', 'Delivery not confirmed'])('%s tagged with session_id + client_message_id keeps the running turn', (message) => {
+    feed(TOKEN)
+    act(() => { useChatStore.getState().sendMessage('steer me') })
+    expect(sent).toHaveLength(1)
+    const cid = String(sent[0].client_message_id)
+    feed({ type: 'error', message, client_message_id: cid }, { type: 'message_status', client_message_id: cid, state: 'failed' })
+    expect(bucket().isStreaming, 'the turn the steer was sent into keeps running').toBe(true)
+    expect(bucket().messages.find((m) => m.content === 'working')?.status, 'the reply bubble is not turned into the error').not.toBe('error')
+    expect(bucket().messages.find((m) => m.role === 'user')?.deliveryStatus).toBe('failed')
+    expect(bucket().messages.some((m) => m.role === 'assistant' && m.status === 'error' && m.content === message)).toBe(true)
+  })
+})
+
 describe('C11: no Stop blink between a mid-turn tool result and the next token', () => {
   it('a live turn whose last bubble is already finalized keeps the flag up after a tool result', () => {
     // Turn is running (flag armed by the user's send), the last assistant bubble

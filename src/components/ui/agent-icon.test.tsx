@@ -75,8 +75,8 @@ const SIZES = [18, 26, 40, 48] as const
 // The colour attribute has to live in a named function, and the numeric
 // literal has to be written in this file. The `it` callbacks below are
 // anonymous, and an anonymous callback that writes
-// `color={AgentColor.options[0]}` is still ts-colors/unsupported. A call
-// into src/test/agentPalette.ts prints against the wrong file. Indices are
+// `color={AgentColor.options[0]}` is still ts-colors/unsupported. A helper in
+// another file would print the finding against that file. Indices are
 // the generated enum's order (founder decision 2026-10-11,
 // AVATAR-PALETTE-DECISION.md): Steel blue 0, Verdigris 2, Graphite violet 4,
 // Champagne 8, Pewter 9.

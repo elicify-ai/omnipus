@@ -14,6 +14,7 @@ import type {
   LLMError as GeneratedLLMError,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
+import type { UserDeliveryState } from '@/lib/userDeliveryState'
 
 /**
  * #823 catch-up redesign (BE-DESIGN.md §6.1) — the SPA's per-session
@@ -188,7 +189,7 @@ export type ChatMessage = Message & {
    * confirming nor refusing the clear. Both are RESOLVED rows: never
    * pending-tail, never the offline "will be sent automatically" look.
    */
-  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded' | 'not-performed' | 'unconfirmed'
+  deliveryStatus?: UserDeliveryState
   media?: MediaAttachment[]
   /**
    * Review finding 17 — the `media://` refs (opts.mediaRefs) this user
@@ -440,7 +441,8 @@ export interface SessionChatState {
    * that already ended (after Stop, done, a discarded send); a start that finds
    * the flag already up belongs to a turn in flight. The result releases the
    * flag only for an idle-armed call (see busyFlagIsUnbacked), so a mid-turn
-   * tool result never blinks Stop off. Entries are removed at the call's result.
+   * tool result never blinks Stop off. Overlapping stragglers form one burst:
+   * the marks are cleared together when no tool is running any more.
    */
   idleArmedToolCalls?: Record<string, true>
   toolCalls: Record<string, ToolCall & { call_id: string }>
