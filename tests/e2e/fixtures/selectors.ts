@@ -115,7 +115,12 @@ export const selectedAgentRow = (page: Page) =>
 export async function openSidebar(page: Page): Promise<void> {
   const nav = page.locator('nav[aria-label="Main navigation"]');
   if (!(await nav.isVisible())) {
-    await page.getByRole('button', { name: 'Show sidebar', exact: true }).click();
+    // Bounded so a missing/covered hamburger fails in seconds with a message
+    // naming the target, instead of riding the locator's unbounded default
+    // (config sets no actionTimeout) out to the whole test timeout.
+    await page
+      .getByRole('button', { name: 'Show sidebar', exact: true })
+      .click({ timeout: 15_000 });
   }
   await nav.waitFor({ state: 'visible', timeout: 15_000 });
 }
@@ -140,7 +145,9 @@ export async function agentRowGroup(
   const disclosure = workspaceDisclosureButton(page, workspace);
   await disclosure.waitFor({ state: 'visible', timeout: 15_000 });
   if ((await disclosure.getAttribute('aria-expanded')) === 'false') {
-    await disclosure.click();
+    // Bounded: a disclosure that never becomes clickable (overlay, rerender
+    // churn) must fail here, named, in seconds — not at the test timeout.
+    await disclosure.click({ timeout: 15_000 });
   }
   const row = page
     .getByRole('group', { name: workspace, exact: true })
@@ -177,10 +184,38 @@ export const selectAgent = async (
   // .tsx:348-387: main button, then "Past sessions with X", then "New chat
   // with X" — an order the component's own vitest tests pin).
   const mainButton = row.locator('.sidebar-agent-row button').first();
-  await mainButton.click();
-  // Assert the switch took effect (see the doc comment): the row's main
-  // button is aria-current exactly while this agent owns the selected chat.
-  await expect(mainButton).toHaveAttribute('aria-current', 'true', { timeout: 5_000 });
+  // Bounded: a click that never lands (row detached mid-attach, overlay)
+  // fails here, named, in seconds — the unbounded default burned whole test
+  // timeouts on CI (llm-agents, run 38112714098).
+  await mainButton.click({ timeout: 15_000 });
+  // Assert the switch took effect: the row's main button carries aria-current
+  // exactly while this agent owns the selected chat (WorkspaceAgentList
+  // .tsx:355). RACE: clicking the row also CLOSES an unpinned sidebar
+  // (useSelectSession calls onClose before navigate — Sidebar.tsx wires
+  // onOverlayClose to close()), so the row unmounts after its exit animation
+  // and the aria-current poll can legitimately lose to the unmount ("element(s)
+  // not found" — reproduced locally and in CI llm-chat run 38115921651, and
+  // passing on retry). The check is therefore TWO-SURFACED, same oracle, same
+  // strength: (1) the row's aria-current before any unmount, then (2) if the
+  // sidebar closed, REOPEN it the way a user does and read the row's
+  // data-selected instead — the same store-driven "this agent owns the
+  // selected chat" truth, independent of the close timing.
+  try {
+    await expect(mainButton).toHaveAttribute('aria-current', 'true', { timeout: 5_000 });
+  } catch (err) {
+    if (!(err instanceof errors.TimeoutError)) throw err;
+    // Fall through to the second surface whether the sidebar closed OR the
+    // row was transiently replaced while it stayed open — both lose the
+    // aria-current poll without the switch having failed.
+    const nav = page.locator('nav[aria-label="Main navigation"]');
+    if (!(await nav.isVisible())) await openSidebar(page);
+    const stillSelected = selectedAgentRow(page);
+    await expect(
+      stillSelected,
+      `selectAgent: clicked ${String(name)}'s row but neither its aria-current nor the ` +
+        'selected row confirmed the switch — the active chat did not move',
+    ).toHaveAttribute('aria-label', name, { timeout: 10_000 });
+  }
 };
 
 /**
@@ -228,30 +263,80 @@ export const startNewChat = async (
         .first();
     }
   }
-  const agentName = await row.getAttribute('aria-label');
+  const agentName = await row.getAttribute('aria-label', { timeout: 15_000 });
   if (!agentName) {
     throw new Error(
       'startNewChat: could not resolve an agent row to click — no "New chat with …" ' +
         `label could be derived (name=${String(name)})`,
     );
   }
-  // The row's icon actions are hover-revealed (agent-row.css: opacity 0 until
-  // the row is hovered/focused/selected) — hover first, the way a user does.
-  await row.locator('.sidebar-agent-row').hover();
-  await row
-    .getByRole('button', { name: new RegExp(`^New chat with ${escapeRegExp(agentName)}$`) })
-    .click();
+  // Click the row's "New chat with <Agent>" button DIRECTLY — never a strip
+  // hover first. The hover this used to do is the fail-slow defect behind the
+  // llm-agents shard burning whole spec timeouts (CI run 38112714098: every
+  // cancel-cross-channel T2x attempt died at exactly its test timeout — 4.7m
+  // for the slow() tests, 6.2m/7.3m for T24a/b; reproduced locally on T21 as
+  // "locator.hover: Test timeout of 270000ms exceeded" looping "element is
+  // not stable" / "element was detached"): startNewChat runs right after the
+  // row was clicked, while the sidebar is animating (exit/re-enter slide) and
+  // the row's attention halo (attention.css sidebar-attention-halo-loop, a
+  // 1.6s infinite scale pulse) keeps boxes moving; Playwright's hover demands
+  // a stable box across two frames and retries FOREVER by default (config
+  // sets no actionTimeout). The click needs no hover: agent-row.css reveals
+  // the actions when the row is hovered, focus-within, OR SELECTED
+  // ([data-selected='true'] .sidebar-agent-actions { opacity: 1 }), and the
+  // click itself moves the pointer onto the row, :hover-revealing them.
+  //
+  // The click is OUTCOME-VERIFIED rather than trusted blind, because a
+  // LANDING click closes the sidebar (beginPairExtra → closeOverlay →
+  // Sidebar's onOverlayClose) and detaches the button mid-action — Playwright
+  // reports that as a click timeout even though the fresh chat started
+  // (observed in the same local T21 run: the failure screenshot showed the
+  // fresh, empty Jim chat while the click "timed out"). Bounded retries; the
+  // OUTCOME between attempts decides: the confirm dialog up, or the sidebar
+  // closed (closeOverlay only runs on the 'started' outcome — pairExtra.ts),
+  // means the new-chat flow is under way. Overall budget 20s: bounded, named,
+  // and far below every caller's test timeout.
+  const newChatButton = row.getByRole('button', {
+    name: new RegExp(`^New chat with ${escapeRegExp(agentName)}$`),
+  });
+  const nav = page.locator('nav[aria-label="Main navigation"]');
+  const dialog = page.getByRole('alertdialog', { name: 'Start a new chat?' });
+  const clickBudget = Date.now() + 20_000;
+  for (;;) {
+    try {
+      await newChatButton.click({ timeout: 5_000 });
+      break;
+    } catch (err) {
+      // Outcome first: a landed click either raised the dialog ('prompt') or
+      // closed the sidebar ('started' — closeOverlay only runs there).
+      const dialogUp = await dialog.isVisible().catch(() => false);
+      const navVisible = await nav.isVisible().catch(() => true);
+      if (dialogUp || !navVisible) break;
+      if (!(err instanceof errors.TimeoutError) || Date.now() >= clickBudget) {
+        throw new Error(
+          `startNewChat: the "New chat with ${agentName}" button never produced a landing ` +
+            `click within its 20s budget (sidebar ${navVisible ? 'still open' : 'closed'}, ` +
+            `dialog ${dialogUp ? 'up' : 'not up'}) — the roster row kept animating/detaching ` +
+            'so Playwright could not complete the action. Original error: ' +
+            (err instanceof Error ? err.message : String(err)),
+        );
+      }
+      // Otherwise the click genuinely has not landed yet — retry.
+    }
+  }
 
   // Confirm dialog — only when an unconfirmed first send is pending; confirm
   // it (the caller asked for a FRESH chat) and wait for the question to
-  // settle. When no dialog ever appears this resolves immediately.
-  const dialog = page.getByRole('alertdialog', { name: 'Start a new chat?' });
+  // settle. When no dialog ever appears this resolves immediately. (`dialog`
+  // is declared above, next to the click whose outcome it verifies.)
   try {
     await dialog.waitFor({ state: 'visible', timeout: 3_000 });
   } catch {
     return; // no unconfirmed send — the extra chat started directly
   }
-  await dialog.getByRole('button', { name: 'Start a new chat', exact: true }).click();
+  await dialog
+    .getByRole('button', { name: 'Start a new chat', exact: true })
+    .click({ timeout: 10_000 });
   await expect(dialog).toHaveCount(0, { timeout: 10_000 });
 };
 
