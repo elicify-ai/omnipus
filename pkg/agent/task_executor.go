@@ -20,9 +20,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// ErrDispatchCapReached is returned by StartTaskNow when the global dispatch
-// semaphore is exhausted. Callers (e.g. the REST handler) use errors.Is to
-// distinguish this retryable condition from hard failures.
+// ErrDispatchCapReached is returned by ExecuteTask (since S1 M9) when the global
+// dispatch semaphore is exhausted; StartTaskNow does not return it. Callers
+// (e.g. the REST handler) use errors.Is to distinguish this retryable condition
+// from hard failures.
 var ErrDispatchCapReached = errors.New("task_executor: global dispatch cap reached")
 
 // taskGoalTranscriptWriteFailures is incremented each time one of this
