@@ -213,9 +213,18 @@ func (ts *turnState) stampStreamerMessageID(streamer bus.Streamer) {
 // method — non-webchat streamers (telegram, wecom, sse) are untouched; only
 // wsStreamer implements SetGoalID.
 func (ts *turnState) stampStreamerGoalID(streamer bus.Streamer) {
-	if gid, ok := streamer.(interface{ SetGoalID(goalID string) }); ok {
+	if gid, ok := streamer.(GoalIDStreamer); ok {
 		gid.SetGoalID(ts.goalID)
 	}
+}
+
+// GoalIDStreamer is the optional capability a Streamer implements to receive the
+// goal the turn was dispatched under (FR-039). It is a NAMED, exported interface
+// so the one implementer (the gateway's wsStreamer) can assert it at compile time:
+// a renamed or re-signed SetGoalID there fails the build instead of silently
+// dropping goal_id from stream frames (final-gate M11).
+type GoalIDStreamer interface {
+	SetGoalID(goalID string)
 }
 
 // streamerStatsSetter is an optional interface a Streamer may implement to

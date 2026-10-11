@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,8 +20,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -175,4 +180,139 @@ func TestGW_M4_EligibleMainStillServed(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	code, body := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id+"/messages", "")
 	assert.Equal(t, http.StatusOK, code, body)
+}
+
+// M5 (finding 5): a scheduled main-mode run re-checks the owner's entitlement
+// when it FIRES. A derived-main user schedule whose owner has since left the team
+// must refuse - not write into the hidden main nor mint one.
+func TestGW_M5_ScheduledMainRunRefusesAnIneligibleOwner(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	saveWS := func(team ...string) {
+		require.NoError(t, writeWorkspaceFile(home, storedWorkspace{
+			ID: "W5", Name: "W5", Status: "active", IsDefault: true, CoreTeam: team,
+			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+		}))
+	}
+	r, exec, _, _ := newRunnerHarness(t, baseConfig(), map[string]bool{"mia": true})
+	job := &cron.CronJob{ID: "m5", Name: "user schedule", AgentID: "mia", CreatedBy: "alice",
+		SessionMode: cron.SessionModeMain, Payload: cron.CronPayload{Message: "do it"}}
+	const mainID = "main-session-W5+mia"
+
+	saveWS() // the owner is NOT on the team
+	sid, err := r.pickSession(job, "mia")
+	require.Error(t, err, "an ineligible owner's main-mode run must refuse")
+	assert.Empty(t, sid)
+	_, getErr := exec.store.GetMeta(mainID)
+	assert.Error(t, getErr, "no main may be minted for an ineligible owner")
+
+	saveWS("mia") // control: eligible again
+	sid, err = r.pickSession(job, "mia")
+	require.NoError(t, err)
+	assert.Equal(t, mainID, sid)
+}
+
+// M7 (finding 7): deleting a workspace removes the mains of members removed
+// earlier too (their identity is retained on removal), not only today's team.
+func TestGW_M7_WorkspaceDeleteReleasesMainsOfEarlierRemovedMembers(t *testing.T) {
+	env := u1NewEnv(t, false, config.AgentConfig{ID: "ray"})
+	const ws = "01JGWGATEM7WS0000000000001"
+	env.seedWorkspace(t, ws, false, "mia", "ray")
+	for _, id := range []string{u1MainID(ws, "mia"), u1MainID(ws, "ray")} {
+		code, _ := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
+		require.Equal(t, http.StatusOK, code, "precondition: %s opens", id)
+	}
+	env.seedWorkspace(t, ws, false, "mia") // ray is removed; its main is retained
+	_, err := env.store(t).GetMeta(u1MainID(ws, "ray"))
+	require.NoError(t, err, "instrument check: the removed member's main still exists")
+	// A main of ANOTHER workspace must survive.
+	const other = "01JGWGATEM7WS0000000000002"
+	env.seedWorkspace(t, other, false, "mia")
+	code, _ := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+u1MainID(other, "mia"), "")
+	require.Equal(t, http.StatusOK, code)
+
+	stored, err := readWorkspaceFile(env.home, ws)
+	require.NoError(t, err)
+	releaseMainSessionsForWorkspace(env.api.agentLoop, stored)
+
+	_, err = env.store(t).GetMeta(u1MainID(ws, "mia"))
+	assert.Error(t, err, "the current member's main goes")
+	_, err = env.store(t).GetMeta(u1MainID(ws, "ray"))
+	assert.Error(t, err, "the earlier-removed member's main must go too")
+	_, err = env.store(t).GetMeta(u1MainID(other, "mia"))
+	assert.NoError(t, err, "another workspace's main must survive")
+}
+
+// M8 (finding 8): an unreadable workspace record is a visible, logged failure on
+// the main's own lookup - not the plain 404 of a chat that does not exist.
+func TestGW_M8_UnreadableWorkspaceIsAVisibleLoggedFailure(t *testing.T) {
+	logBuf := captureSlogJSON(t)
+	env := u1NewEnv(t, false)
+	const ws = "01JGWGATEM8WS0000000000001"
+	env.seedWorkspace(t, ws, false, "mia")
+	id := u1MainID(ws, "mia")
+	code, _ := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
+	require.Equal(t, http.StatusOK, code, "precondition")
+	r5Block(t, filepath.Join(env.home, "workspaces", ws+".json"), 0o000)
+
+	code, body := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
+
+	assert.Equal(t, http.StatusInternalServerError, code, "an unreadable workspace is not 'session not found': %s", body)
+	assert.Contains(t, body, "main chat could not be prepared")
+	assert.Contains(t, logBuf.String(), "the workspace could not be read", "the cause must be in the log")
+	r5AssertClean(t, body, ws, env.home)
+}
+
+// M9 (finding 9): the accepted-answer-but-resume-failed log record carries the
+// real cause for the operator; the client frame stays fixed text.
+func TestGW_M9_AskUserResumeFailureLogCarriesTheCause(t *testing.T) {
+	logBuf := captureSlogJSON(t)
+	reg := askuser.NewRegistry(nil, failingGateDispatcher{err: errors.New("publish to the bus failed: queue wedged")}, askuser.Options{})
+	require.NoError(t, reg.CreatePending(askSetFixture()))
+	t.Cleanup(reg.Quiesce)
+	var frame generated.AskUserAnswerFrame
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"type":"ask_user_answer","card_id":"ask_1","session_id":"session_owner_1",
+		"answers":[{"header":"Scope","selected":["Only unanswered"]},{"header":"Deploy","selected":["Staging"]}]
+	}`), &frame))
+	wc := &wsConn{userID: "daniel", sendCh: make(chan []byte, 4)}
+
+	(&WSHandler{askUserReg: reg}).handleAskUserAnswer(wc, frame)
+
+	record := findAskUserGatewayLog(t, logBuf, "ws: ask_user_answer accepted; resume failed")
+	assert.Contains(t, record["error"], "queue wedged", "the operator needs the real cause in the log")
+	r5AssertClean(t, drainConnFrames(wc), "queue wedged")
+}
+
+type failingGateDispatcher struct{ err error }
+
+func (f failingGateDispatcher) DispatchResume(*askuser.PendingSet, string) error { return f.err }
+
+// M10 (finding 10): a schedule whose default workspace cannot be READ is not
+// silently saved as continue/isolated; the create fails visibly.
+func TestGW_M10_ScheduleModeIsNotSilentlyDowngradedOnAReadFailure(t *testing.T) {
+	// OMNIPUS_HOME first: newSchedulesTestAPI builds an agent loop, which reads
+	// $OMNIPUS_HOME - without this it would open the developer's real data.
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	api, cs := newSchedulesTestAPI(t)
+	api.homePath = home
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "workspaces"), 0o700))
+	// Parses as a default workspace record, but not as a stored workspace.
+	require.NoError(t, os.WriteFile(filepath.Join(home, "workspaces", "01JGWGATEM10WS000000000001.json"),
+		[]byte(`{"id":"01JGWGATEM10WS000000000001","is_default":true,"core_team":"not-a-list"}`), 0o600))
+	every := int64(60000)
+	body := gen.ScheduleCreate{Name: "n", Message: "m", OwnerAgentId: "mia"}
+	body.Trigger.Kind = "every"
+	body.Trigger.EveryMs = &every
+	raw, err := json.Marshal(body)
+	require.NoError(t, err)
+	r := withUser(httptest.NewRequest(http.MethodPost, "/api/v1/schedules", bytes.NewBuffer(raw)), "alice")
+	w := httptest.NewRecorder()
+
+	api.HandleSchedules(w, r)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code, "a read failure must not be saved as a downgraded mode: %s", w.Body.String())
+	assert.Empty(t, cs.ListJobs(true), "no schedule may be saved")
+	r5AssertClean(t, w.Body.String(), "01JGWGATEM10WS000000000001", home)
 }
