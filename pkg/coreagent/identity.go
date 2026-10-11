@@ -99,31 +99,6 @@ func WireIdentity(figure, role, color string) (generated.AgentFigure, generated.
 	return fig, outRole, outColor
 }
 
-// RoleFromLegacyIcon maps a stored Phosphor icon name to a role slug.
-// The five spec keys are matched after trim and lower-case, without stripping
-// hyphens. After that same fold, an icon that is exactly one of the 31 slugs
-// is kept. Anything else is general.
-func RoleFromLegacyIcon(icon string) string {
-	folded := strings.ToLower(strings.TrimSpace(icon))
-	switch folded {
-	case "code":
-		return string(generated.AgentRoleDeveloper)
-	case "chat":
-		return string(generated.AgentRoleGeneral)
-	case "magnifyingglass":
-		return string(generated.AgentRoleResearcher)
-	case "pencilsimple":
-		return string(generated.AgentRoleWriter)
-	case "shield":
-		return string(generated.AgentRoleSecurity)
-	}
-	// Same fold as the five keys. "Writer" is the slug writer; "magnifying-glass" is not.
-	if generated.AgentRole(folded).Valid() {
-		return folded
-	}
-	return DefaultRole
-}
-
 // migrateUnenforcedAgentIdentity rewrites figure and role on agents SeedConfig
 // does not enforce (not a compiled built-in, not a system agent). A value
 // already in the enum is left alone. Colour is never written: a stored colour

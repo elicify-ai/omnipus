@@ -25,43 +25,6 @@ import (
 // does not exercise the strict-less-than tie branch. That gap is left for
 // CHECK; the case below only pins the rounded midpoint.
 
-func TestRoleFromLegacyIcon_I14CaseFoldHyphenAndSlug(t *testing.T) {
-	// DS-I I14 labels, stored as the slugs in ARCH-DECISIONS 1.3.
-	// Case-fold is trim + lower case, hyphens kept (ARCH 2.5).
-	// A value that is already one of the 31 slugs is kept.
-	// "magnifying-glass" is not the five-key "magnifyingglass".
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{in: "Code", want: "developer"},
-		{in: "code", want: "developer"},
-		{in: "CODE", want: "developer"},
-		{in: " Code ", want: "developer"},
-		{in: "Chat", want: "general"},
-		{in: "MagnifyingGlass", want: "researcher"},
-		{in: "magnifyingglass", want: "researcher"},
-		{in: "PencilSimple", want: "writer"},
-		{in: "Shield", want: "security"},
-		{in: "shield", want: "security"},
-		{in: "magnifying-glass", want: "general"},
-		{in: "pencil-simple", want: "general"},
-		{in: "Robot", want: "general"},
-		{in: "books", want: "general"},
-		{in: "", want: "general"},
-		{in: "Brain", want: "general"},
-		{in: "General assistant", want: "general"},
-		{in: "developer", want: "developer"},
-		{in: "Writer", want: "writer"},
-		{in: "security", want: "security"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.in, func(t *testing.T) {
-			assert.Equal(t, tc.want, RoleFromLegacyIcon(tc.in))
-		})
-	}
-}
-
 func TestSeedConfig_BuiltInsEnforceCanonicalTriplesAndSecondCallIsStable(t *testing.T) {
 	// ARCH-DECISIONS 2.4. Figure is Omnipus for every row. Role is the icon
 	// map, not the agent's name (Researcher stays general). The agent `icon`
