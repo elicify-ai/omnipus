@@ -249,6 +249,38 @@ describe('S2-04 (SPA half): a tagged message-scoped save/conflict refusal never 
   })
 })
 
+describe('F1: a held @-message', () => {
+  let sent: Array<Record<string, unknown>> = []
+  beforeEach(() => {
+    sent = []
+    useConnectionStore.setState({
+      connection: { send: (p: unknown) => { sent.push(p as Record<string, unknown>); return true }, close: () => {} } as never,
+      isConnected: true,
+    } as never)
+  })
+  const userRow = () => bucket().messages.find((m) => m.role === 'user')!
+
+  it('held marks the row without ending the sender\'s turn, then the tick moves on', () => {
+    feed(TOKEN)
+    act(() => { useChatStore.getState().sendMessage('also ask Mia') })
+    const cid = String(sent[0].client_message_id)
+    feed({ type: 'message_status', client_message_id: cid, state: 'held' })
+    expect(userRow().deliveryStatus).toBe('held')
+    expect(userRow().status).toBe('done')
+    expect(bucket().isStreaming, 'held is waiting, not a failure: Stop stays').toBe(true)
+    feed({ type: 'message_status', client_message_id: cid, state: 'working' })
+    expect(userRow().deliveryStatus).toBe('working')
+  })
+
+  it('held on an idle send keeps its placeholder and busy flag (only failed/discarded release)', () => {
+    act(() => { useChatStore.getState().sendMessage('hello') })
+    const cid = String(sent[0].client_message_id)
+    feed({ type: 'message_status', client_message_id: cid, state: 'held' })
+    expect(bucket().isStreaming).toBe(true)
+    expect(userRow().deliveryStatus).toBe('held')
+  })
+})
+
 describe('C11: no Stop blink between a mid-turn tool result and the next token', () => {
   it('a live turn whose last bubble is already finalized keeps the flag up after a tool result', () => {
     // Turn is running (flag armed by the user's send), the last assistant bubble

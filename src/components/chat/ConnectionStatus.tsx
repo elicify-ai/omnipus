@@ -196,6 +196,13 @@ function deliveryStateCopy(
       icon: <Clock size={14} aria-hidden="true" />,
     }
   }
+  if (state === 'held') {
+    return {
+      label: `Waiting \u2014 delivered when ${agentName} runs again`,
+      tooltip: `${agentName} is stopped. Your message is saved and will be delivered when ${agentName} runs again.`,
+      icon: <Clock size={14} aria-hidden="true" />,
+    }
+  }
   if (state === 'received') {
     return {
       label: 'Received',
