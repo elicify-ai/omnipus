@@ -12,6 +12,7 @@ import type { Session } from '@/lib/api'
 import { formatRelative } from '@/lib/formatRelative'
 import { formatTokens } from '@/lib/formatTokens'
 import { cn } from '@/lib/utils'
+import { isMainSession } from '@/lib/nav/sessionCoreSeam'
 import { sessionDisplayTitle } from '@/lib/nav/sessionDisplayTitle'
 import { backgroundCommandSentence, sessionKindLabel, sessionStatusLabel, type SessionStatusTone } from './sessionLabels'
 
@@ -160,15 +161,23 @@ export function SessionRow({ session, isActive, isHighlighted, onSelect, onRenam
           )}
         </div>
       </Button>
-      <IconButton
-        ref={renameButtonRef}
-        onClick={() => { setVal(session.title || ''); setEditing(true) }}
-        className={cn('h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)]', COARSE_TARGET)}
-        aria-label={`Rename ${title}`}
-        title="Rename"
-      >
-        <PencilSimple size={13} />
-      </IconButton>
+      {/* NO Rename on a main (team-lead steer, 2026-10-11): core now fixes a
+          main's title server-side and rejects renames with 409 "a main
+          session's title is fixed" (core commit 9b9ef5935), so the affordance
+          is hidden outright. This pencil is the ONLY rename affordance in the
+          SPA, so hiding it here hides rename everywhere. Pinned by
+          SessionRow.main-rename.test.tsx. */}
+      {!isMainSession(session) && (
+        <IconButton
+          ref={renameButtonRef}
+          onClick={() => { setVal(session.title || ''); setEditing(true) }}
+          className={cn('h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)]', COARSE_TARGET)}
+          aria-label={`Rename ${title}`}
+          title="Rename"
+        >
+          <PencilSimple size={13} />
+        </IconButton>
+      )}
       <IconButton
         onClick={() => {
           if (deleting || session.protected === true) return
