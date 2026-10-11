@@ -283,7 +283,9 @@ type replyingProvider struct {
 	text  string
 }
 
-func newStoppableProviderReplying(text string) *replyingProvider { return &replyingProvider{text: text} }
+func newStoppableProviderReplying(text string) *replyingProvider {
+	return &replyingProvider{text: text}
+}
 
 func (p *replyingProvider) Chat(context.Context, []providers.Message, []providers.ToolDefinition, string, map[string]any) (*providers.LLMResponse, error) {
 	p.mu.Lock()
