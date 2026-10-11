@@ -104,7 +104,6 @@ pkg/records/view_format_test.go	TestView_TreeExpressesDisjunction	36
 pkg/vaultimport/view_formula.go	buildV2LeafNode	36
 scripts/gen-asyncapi-go/main.go	resolveGoType	36
 pkg/agent/breadcrumb.go	extractEntities	35
-pkg/agent/registry.go	AgentLoop.UpsertAgentFast	35
 pkg/filegrep/filegrep.go	state.scanFile	35
 pkg/gateway/rest_channels.go	restAPI.HandleChannels	35
 pkg/gateway/rest_knowledge.go	restAPI.handleKnowledge	35
