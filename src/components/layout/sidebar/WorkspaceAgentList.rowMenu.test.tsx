@@ -302,11 +302,14 @@ describe('D1/D2 — one ⋯ trigger and the catalogued menu', () => {
 
     // Radix's roving focus moves focus inside a setTimeout (react-roving-focus
     // RovingFocusGroupItem.onKeyDown), so the outcome is awaited, not assumed
-    // synchronous.
+    // synchronous. A real keyboard's keydown lands on the FOCUSED element:
+    // the first ArrowDown enters from the menu content, later ones must fire
+    // on the focused item — the group handler ignores events whose target is
+    // not itself, and the ITEM's handler is what computes "next from here".
     fireEvent.keyDown(menu, { key: 'ArrowDown' })
     await waitFor(() => expect(menuItems()[0]).toHaveFocus())
 
-    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    fireEvent.keyDown(menuItems()[0], { key: 'ArrowDown' })
     await waitFor(() => expect(menuItems()[1]).toHaveFocus())
 
     fireEvent.keyDown(menu, { key: 'Escape' })
