@@ -1104,6 +1104,22 @@ type AgentDeleteCascadeResult struct {
 	DeletionErr error
 }
 
+// CheckAgentDeleteRevision is the read-only revision comparison a delete does
+// before any cleanup. It returns agentstore.ErrRevisionConflict (wrapped) when
+// the agent's current revision differs from the caller's. An unreadable or
+// missing record is not decided here: the cascade keeps its idempotent-retry
+// behaviour and DeleteState reports it.
+func CheckAgentDeleteRevision(omnipusHome, agentID, revision string) error {
+	st, err := agentstore.New(omnipusHome).ReadState(agentID)
+	if err != nil || st == nil {
+		return nil
+	}
+	if st.Revision != revision {
+		return fmt.Errorf("%w: expected %s, current %s", agentstore.ErrRevisionConflict, revision, st.Revision)
+	}
+	return nil
+}
+
 // RunAgentDeleteCascade performs FR-037/C-DELETE's cleanup-first, record-last
 // agent delete cascade — the SAME sequence BOTH the delete_agent tool and the
 // REST DELETE /api/v1/agents/{id} handler run, so the two entry points cannot
@@ -1124,6 +1140,16 @@ type AgentDeleteCascadeResult struct {
 // so both callers pass identical inputs.
 func RunAgentDeleteCascade(omnipusHome, agentID, revision string) AgentDeleteCascadeResult {
 	res := AgentDeleteCascadeResult{Warnings: make([]string, 0, 3)}
+
+	// Final-gate H1: a stale revision refuses BEFORE any destructive step. The
+	// cleanup below deletes sessions and unassigns tasks, and DeleteState (the
+	// authoritative, atomic comparison) runs last - without this read-only
+	// pre-check a stale delete destroyed the agent's data and then answered
+	// 409 with the agent still alive.
+	if err := CheckAgentDeleteRevision(omnipusHome, agentID, revision); err != nil {
+		res.DeletionErr = err
+		return res
+	}
 
 	// Step 1a: delete every session in the SHARED session store
 	// ($OMNIPUS_HOME/sessions/) that belongs SOLELY to this agent, together

@@ -1221,6 +1221,12 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Final-gate H1: a stale revision is refused here too, BEFORE the goals are
+	// ended (that is destructive as well) and before the shared cascade runs.
+	if err := systools.CheckAgentDeleteRevision(a.homePath, id, revision); err != nil {
+		jsonErr(w, http.StatusConflict, err.Error())
+		return
+	}
 	// UAT E-3 / ADR-086 D9: end the active goals this agent was working as an
 	// honest `cleared` transition naming the deleted agent — never leave them
 	// active for the keeper to push at a missing agent (which re-homed them
