@@ -1,7 +1,7 @@
 // Sessions view — cross-workspace session overview (Wave 1).
 // All / Running uses the existing segmented control. FilterMenu and ViewSwitch
 // belong to the tasks-panel squad and are not built here.
-// Row identity stays the agent header's current mark until AgentIcon (FE-1) lands.
+// Row identity is the agent header's mark; session rows carry none.
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { useNavigate } from '@tanstack/react-router'

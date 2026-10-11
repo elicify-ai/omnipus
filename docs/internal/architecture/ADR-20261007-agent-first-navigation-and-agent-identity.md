@@ -278,7 +278,7 @@ Keep the greenfield/delete-superseded rule outside that expressly bounded migrat
 
 ### D11 — Immediate cleanup; later workspace-qualified messaging
 
-**F::Q10 decides the cutover now:** remove `/new`, `/agents` picker openers, generic extra-chat bypasses and mention-driven switching with the sidebar. Rename `/resume` to `/sessions` across registry/client/help/docs, with no old alias. `@` suggestions are unavailable until proper messaging lands. `/clear` must never retain a new-session action or alias, even while its complete safe-point behavior remains backend-dependent. Preserve New chat’s first-send recovery/abandonment guard (F::Q10; B::D8/DEL-F01–F02; E4).
+**F::Q10 decides the cutover now:** remove `/new`, `/agents` picker openers, generic extra-chat bypasses and mention-driven switching with the sidebar. Rename `/resume` to `/sessions` across registry/client/help/docs, with no old alias. `@` suggestions are unavailable until proper messaging lands. **Correction — 2026-10-11 (architect, founder reversal):** the founder reversed this clause ("b, it is not new at all check in the repo, particular the agent picker with @ we had before and it was working perfect, you could clone actually the skill and slash command picker and fill it with a different list, the agent names, do not reinvent"). Single-recipient `@` now reuses the release/v0.1.1 mention menu (`103c5fd01`) without its switch action and sends the existing `MessageFrame.recipient` pair plus `session_id` to `pkg/gateway/websocket_chat.go::handleChatMessageToRecipient`; candidates are current-workspace eligible conversation agents minus the chat's own agent and workers/system agents, plus Admin's default-workspace pair (F::Q12). Multi-recipient and arbitrary other-workspace selection stay in the row below. Spec: agent-first-navigation-spec.md FR-007/FR-038, 2026-10-11 amendment. `/clear` must never retain a new-session action or alias, even while its complete safe-point behavior remains backend-dependent. Preserve New chat’s first-send recovery/abandonment guard (F::Q10; B::D8/DEL-F01–F02; E4).
 
 | Later or companion work | Frontend direction |
 |---|---|
@@ -399,7 +399,7 @@ This is the author’s correction evidence, **not an independent gate verdict** 
 | Q6 / Q7 | No avatar uploads/GIFs in first squad; later placement/design decision, D9/D11. |
 | Q8 | Wireframe nearest-hue/Grey rule approved; thresholds/ties/examples in specification for approval; canonical seeds included, D9/D10. |
 | Q9 FINAL + approved wireframe | Inline animated AgentIcon/name/phrase replaces old thinking indicator; name-only bubbles; addressed responder shown. No composer status line, D8. |
-| Q10 | Remove old paths now; /resume → /sessions; @ unavailable until messaging; /clear never creates a new session, D11. |
+| Q10 | Remove old paths now; /resume → /sessions; @ unavailable until messaging (**reversed 2026-10-11**: single-recipient `@` without switching, D11 correction); /clear never creates a new session, D11. |
 | Q11 + 17:15 | THIS-cutover install/upgrade migration preserves saved-chat reachability/continuation and heartbeat→main. Backend dependency, D10. |
 | Q12 + 17:15/17:25 | Admin default-workspace main, shown there and explicitly pair-addressable elsewhere; no fake membership. Backend dependency, D5/D10/D11. |
 | 17:25 address rule | Always workspace + agent ID; current workspace default, another workspace chosen explicitly. D11. |

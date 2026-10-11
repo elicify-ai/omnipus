@@ -699,7 +699,7 @@ func (t *TaskCreateTool) Description() string {
 		"action you can do yourself, just do it — starting a child costs time and one of a limited number " +
 		"of concurrent slots. " +
 		"This is a DELEGATION: it passes the same delegation-policy gate (trust set + modes + depth) as " +
-		"any other delegation, and is refused if you are not authorized to delegate to the assignee. " +
+		"any other delegation, and is refused if you are not authorized to delegate to the assignee; creating a task assigned to yourself needs no self-edge (starting it through run_task does). " +
 		"criteria AND dod are BOTH REQUIRED: at least one acceptance criterion and at least one " +
 		"definition-of-done item — a task created with either missing is rejected (GOAL-FR-021). " +
 		"criteria are the outcome-specific checks for THIS task; dod are the generic standing quality " +
@@ -707,8 +707,9 @@ func (t *TaskCreateTool) Description() string {
 		"authoring either, load the define-goal skill (via the Skill tool) and follow its quality bar. " +
 		"If every criterion is kind=check, the assignee's effective bash policy " +
 		"must be allow, or the create is rejected as structurally unsatisfiable (a machine check that can " +
-		"never run can never adjudicate MET). The task lands as a visible card on the workspace board in " +
-		"status `next` (triaged and dispatchable) — never `inbox`."
+		"never run can never adjudicate MET). A task created in your own current workspace lands as a visible card in " +
+		"status `next` (triaged and dispatchable), never `inbox`. A task delivered to a DIFFERENT workspace " +
+		"(workspace_id) lands in `inbox` as not-started work for that workspace's team; it launches no run."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -964,6 +965,23 @@ func (t *TaskCreateTool) resolveTargetWorkspace(ctx context.Context, args map[st
 	return explicit, explicit != own, nil
 }
 
+// requireDestinationMember refuses unless agentID is on the destination
+// workspace's team (core team or an endpoint of its delegation graph). It fails
+// closed: an unset home or an unreadable workspace state is a refusal.
+func (t *TaskCreateTool) requireDestinationMember(wsID, agentID string) error {
+	if t.home == "" {
+		return fmt.Errorf("cannot verify membership of workspace %q: no home configured", wsID)
+	}
+	st, err := workspace.ReadState(t.home, wsID)
+	if err != nil {
+		return fmt.Errorf("cannot verify membership of workspace %q: %w", wsID, err)
+	}
+	if !workspace.TeamSet(st.Workspace.CoreTeam, st.Delegation)[agentID] {
+		return fmt.Errorf("agent %q is not on the team of workspace %q", agentID, wsID)
+	}
+	return nil
+}
+
 // taskCreateToolExecute carries the shared state of Execute across its stages.
 type taskCreateToolExecute struct {
 	t          *TaskCreateTool
@@ -983,6 +1001,10 @@ type taskCreateToolExecute struct {
 	// NOT the caller's own workspace (C-TASK-TOOLS/FR-048): the task is
 	// delivered to that workspace's board as not-started work.
 	foreign bool
+	// wsID is the resolved target workspace (the caller's own, or the explicit
+	// destination). It is resolved in validateRequest so the delegation gate and
+	// the landing agree on one workspace.
+	wsID string
 }
 
 func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -1033,6 +1055,27 @@ func (tc *taskCreateToolExecute) validateRequest() (*ToolResult, bool) {
 		return ErrorResult("create_task: cannot resolve the calling agent; refusing to create a delegated task"), true
 	}
 
+	// Resolve the target workspace BEFORE the gate: the delegation graph that
+	// authorizes a delivery is the DESTINATION workspace's, never the caller's
+	// turn workspace (S3 M6). A foreign target is also refused to a caller
+	// that is not on the destination team when it assigns the task to itself —
+	// the task gate's same-agent exemption ("not delegation") is only true on
+	// the caller's own board.
+	var wsErr error
+	tc.wsID, tc.foreign, wsErr = tc.t.resolveTargetWorkspace(tc.ctx, tc.args)
+	if wsErr != nil {
+		return ErrorResult(fmt.Sprintf("task_create failed: %v", wsErr)), true
+	}
+	gateCtx := tc.ctx
+	if tc.foreign {
+		gateCtx = WithWorkspaceID(tc.ctx, tc.wsID)
+		if tc.agentID == tc.callerID {
+			if mErr := tc.t.requireDestinationMember(tc.wsID, tc.callerID); mErr != nil {
+				return ErrorResult(fmt.Sprintf("task_create failed: %v", mErr)), true
+			}
+		}
+	}
+
 	// Delegation policy gate (FR-6.2): trust set + modes ("task") + depth.
 	// ADR-037: the legacy boolean delegateCheck fallback is retired — this is
 	// now the only gate. Checked BEFORE the criteria validation below so an
@@ -1050,7 +1093,7 @@ func (tc *taskCreateToolExecute) validateRequest() (*ToolResult, bool) {
 	// slip). Do NOT "simplify" this back to fail-open — CLAUDE.md Hard
 	// Constraint #6 forbids a silent runtime default here.
 	if tc.t.delegationDeny != nil {
-		if denial := tc.t.delegationDeny(tc.ctx, tc.agentID); denial != nil {
+		if denial := tc.t.delegationDeny(gateCtx, tc.agentID); denial != nil {
 			return DelegationDeniedResult("create_task", denial), true
 		}
 	} else {
@@ -1213,11 +1256,7 @@ func (tc *taskCreateToolExecute) prepareContract() (*ToolResult, bool) {
 func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	parentTaskID, _ := tc.args["parent_task_id"].(string)
 
-	wsID, foreign, err := tc.t.resolveTargetWorkspace(tc.ctx, tc.args)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("task_create failed: %v", err)), true
-	}
-	tc.foreign = foreign
+	wsID, foreign := tc.wsID, tc.foreign
 
 	// A delegated task on the caller's OWN board is ready to be picked up by
 	// the executor: it lands in `next` (triaged & dispatchable) rather than
@@ -1252,8 +1291,6 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	tc.entity = &task.Task{
 		Title:           tc.title,
 		Prompt:          tc.prompt,
-		OriginSessionID: strings.TrimSpace(ToolTranscriptSessionID(tc.ctx)),
-		OriginCallID:    strings.TrimSpace(ToolCallID(tc.ctx)),
 		Action:          task.ActionLLM,
 		AgentID:         tc.agentID,
 		Owner:           owner,
@@ -1266,14 +1303,26 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 		DelegationDepth: tc.childDepth,
 		Criteria:        tc.criteria,
 	}
-	if tc.t.initiatorFn != nil {
-		tc.entity.Initiator = tc.t.initiatorFn(tc.ctx)
-	}
-
-	// Propagate the originating channel so completed tasks can route results back.
-	if channel := ToolChannel(tc.ctx); channel != "" && channel != "webchat" {
-		tc.entity.SourceChannel = channel
-		tc.entity.SourceChatID = ToolChatID(tc.ctx)
+	// A FOREIGN delivery carries no link back to the creator (FR-048/049): not
+	// its session or call, not its chat (the finished task's result text is
+	// published to SourceChannel/SourceChatID, which would cross the workspace
+	// boundary the spec lets only status cross), and not its authority as
+	// Initiator (an automatic start would re-authorize the creator in a
+	// workspace where it has no edge). The creator still reads status through
+	// CreatedByAgentID. The parent link is refused for the same reason.
+	if !foreign {
+		tc.entity.OriginSessionID = strings.TrimSpace(ToolTranscriptSessionID(tc.ctx))
+		tc.entity.OriginCallID = strings.TrimSpace(ToolCallID(tc.ctx))
+		if tc.t.initiatorFn != nil {
+			tc.entity.Initiator = tc.t.initiatorFn(tc.ctx)
+		}
+		// Propagate the originating channel so completed tasks can route results back.
+		if channel := ToolChannel(tc.ctx); channel != "" && channel != "webchat" {
+			tc.entity.SourceChannel = channel
+			tc.entity.SourceChatID = ToolChatID(tc.ctx)
+		}
+	} else {
+		tc.entity.ParentTaskID = ""
 	}
 
 	// Optional blocked_by: mirror admin create. The store's Create validates the
@@ -1355,9 +1404,24 @@ func (tc *taskCreateToolExecute) persistAndRespond() *ToolResult {
 	if gErr := SyncTaskGoalRecord(GoalStoreForTasks(tc.t.store), tc.entity, true, tc.dod, true, tc.t.goalMaxRoundsFn); gErr != nil {
 		slog.Error("create_task: failed to create paired goal record",
 			"task_id", tc.entity.ID, "error", gErr)
+		// Roll the task back: a task with no paired goal can never finish via
+		// goal_claim, and a retry of the same create would duplicate it. Remove
+		// any partially written goal first, then the task.
+		rbErr := RemoveTaskGoalRecords(GoalStoreForTasks(tc.t.store), tc.entity.ID)
+		if _, dErr := tc.t.store.Delete(tc.entity.ID); dErr != nil {
+			rbErr = errors.Join(rbErr, dErr)
+		}
+		if rbErr != nil {
+			slog.Error("create_task: rollback after a failed goal write did not complete",
+				"task_id", tc.entity.ID, "error", rbErr)
+			return ErrorResult(fmt.Sprintf(
+				"task_create failed: its Definition of Done could not be persisted (%v) and the "+
+					"task %q could not be removed (%v); delete it before retrying",
+				gErr, tc.entity.ID, rbErr))
+		}
 		return ErrorResult(fmt.Sprintf(
-			"task_create failed: task %q was created but its Definition of Done could not be "+
-				"persisted: %v", tc.entity.ID, gErr))
+			"task_create failed: its Definition of Done could not be persisted, so no task was "+
+				"created: %v", gErr))
 	}
 
 	if tc.t.onCreate != nil {

@@ -131,7 +131,13 @@ func (p *SearchConnectionProbe) Check(ctx context.Context) (gen.SearchProviderCh
 		req.depth = "medium" // GLM does not support low.
 	}
 	_, err := p.provider.SearchWithCaps(ctx, req)
-	status, classifyErr := p.observation.outcome(ctx, err)
+	// The client may impose a shorter deadline than the gateway context. Its
+	// Do method marks a timer-triggered transport cancellation as a timeout;
+	// that typed error is only available after the provider returns it.
+	var timeout net.Error
+	clientTimedOut := errors.Is(err, context.DeadlineExceeded) ||
+		(errors.As(err, &timeout) && timeout.Timeout())
+	status, classifyErr := p.observation.outcome(ctx, clientTimedOut, err != nil)
 	if classifyErr != nil {
 		return gen.SearchProviderCheckResponse{}, classifyErr
 	}
@@ -204,13 +210,11 @@ func (t *searchCheckTransport) recordReadFailure(err error) {
 	t.networkFailed = !t.oversized
 }
 
-func (t *searchCheckTransport) outcome(ctx context.Context, providerErr error) (gen.SearchProviderCheckResponseStatus, error) {
-	// The client may impose a shorter deadline than the gateway context. Its
-	// Do method marks a timer-triggered transport cancellation as a timeout;
-	// that typed error is only available after the provider returns it.
-	var timeout net.Error
-	clientTimedOut := errors.Is(providerErr, context.DeadlineExceeded) ||
-		(errors.As(providerErr, &timeout) && timeout.Timeout())
+// outcome classifies the observed request. providerFailed is whether the
+// provider call returned an error; it is a finding of the diagnostic (reported
+// as invalid_response), not an error of the diagnostic itself, so the error
+// value is not passed in.
+func (t *searchCheckTransport) outcome(ctx context.Context, clientTimedOut, providerFailed bool) (gen.SearchProviderCheckResponseStatus, error) {
 	contextErr := ctx.Err()
 	// A completed transport failure is a diagnostic outcome, not an internal error.
 	requestFailed := t.networkFailed || contextErr != nil
@@ -227,9 +231,7 @@ func (t *searchCheckTransport) outcome(ctx context.Context, providerErr error) (
 		return gen.SearchProviderCheckResponseStatusRateLimited, nil
 	case t.status != http.StatusOK:
 		return gen.SearchProviderCheckResponseStatusProviderError, nil
-	case t.oversized || !t.valid || providerErr != nil:
-		// providerErr is not dropped: it is the diagnostic's own finding, reported
-		// as the invalid_response status the caller returns to the operator.
+	case t.oversized || !t.valid || providerFailed:
 		return gen.SearchProviderCheckResponseStatusInvalidResponse, nil
 	default:
 		return gen.SearchProviderCheckResponseStatusSuccess, nil

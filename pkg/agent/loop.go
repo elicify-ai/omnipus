@@ -725,6 +725,15 @@ func NewAgentLoop(
 	}
 
 	nal.initializeCore()
+	if err := nal.registry.InitErr(); err != nil {
+		// An agent that cannot get its session store must not boot as an empty
+		// registry with a log line. This loop owns the store: give it back.
+		if relErr := releaseSharedSessionStore(nal.sharedStore); relErr != nil {
+			logger.ErrorCF("agent", "Failed to close shared session store",
+				map[string]any{"error": relErr.Error()})
+		}
+		return nil, fmt.Errorf("agent registry: %w", err)
+	}
 
 	if r0, stop, r1 := nal.initializeAudit(); stop {
 		return r0, r1
@@ -1187,7 +1196,7 @@ func (al *AgentLoop) Close() {
 	// received its first message. Safe to call even when nil (degraded boot,
 	// loop.go's own error-logged "shared session store unavailable" branch).
 	if al.sharedSessionStore != nil {
-		if err := releaseSharedSessionStore(al.homePath, al.sharedSessionStore); err != nil {
+		if err := releaseSharedSessionStore(al.sharedSessionStore); err != nil {
 			logger.ErrorCF("agent", "Failed to close shared session store",
 				map[string]any{"error": err.Error()})
 		}

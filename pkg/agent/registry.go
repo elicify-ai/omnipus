@@ -25,6 +25,11 @@ type AgentRegistry struct {
 	mu                   sync.RWMutex
 	defaultAgentOverride string // from config.Agents.Defaults.DefaultAgentID
 
+	// initErr is set when the registry could not be built whole: the shared
+	// session store did not open, or an agent could not be constructed. A caller
+	// that would put this registry in service must check InitErr first.
+	initErr error
+
 	// degraded/degradedReason back MarkDefaultAgentDegraded/DefaultAgentDegraded
 	// (ADR-054 R3): set when the configured default agent's entity record
 	// exists but failed to load. Never gates GetDefaultAgent's own fallback
@@ -57,6 +62,10 @@ func (r *AgentRegistry) SetDefaultAgentOverride(agentID string) {
 	r.defaultAgentOverride = agentID
 }
 
+// InitErr reports why the registry is not whole (nil when it is): the shared
+// session store did not open, or an agent could not be constructed.
+func (r *AgentRegistry) InitErr() error { return r.initErr }
+
 // NewAgentRegistry creates a registry from config, instantiating all agents.
 func NewAgentRegistry(
 	cfg *config.Config,
@@ -76,6 +85,7 @@ func NewAgentRegistry(
 	if _, storeErr := openSharedSessionStore(sessionsHomeFor(cfg)); storeErr != nil {
 		logger.ErrorCF("agent", "No agent registered: the shared session store could not be opened",
 			map[string]any{"error": storeErr.Error()})
+		registry.initErr = storeErr
 		return registry
 	}
 
@@ -97,6 +107,10 @@ func NewAgentRegistry(
 		ac := &cfg.Agents.List[i]
 		id := routing.NormalizeAgentID(ac.ID)
 		instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
+		if instance.initErr != nil {
+			registry.initErr = errors.Join(registry.initErr, fmt.Errorf("agent %q: %w", id, instance.initErr))
+			continue
+		}
 		// Upgrade agent type for runtime-seeded core agents whose config may not
 		// have Type field set (e.g., agents seeded before the Type field was introduced).
 		if instance.AgentType == "custom" && coreagent.IsCoreAgent(id) {
@@ -705,6 +719,9 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 
 		// Same constructor NewAgentRegistry itself uses per agent.
 		instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
+		if instance.initErr != nil {
+			return nil, fmt.Errorf("upsert agent fast: agent %q: %w", id, instance.initErr)
+		}
 		if instance.AgentType == "custom" && coreagent.IsCoreAgent(id) {
 			instance.SetAgentType("core")
 		}

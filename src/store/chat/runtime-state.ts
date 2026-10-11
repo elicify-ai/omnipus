@@ -57,6 +57,10 @@ export interface PendingClearRefresh {
   armedAt: number
   /** A successfully fetched projection held back because the bucket was busy; applied once it goes idle. */
   heldProjection?: ChatMessage[]
+  /** Re-reads that did not settle this operation (no own user row, or no marker yet). Bounded by MAX_UNRESOLVED_READS in clear-refetch.ts. */
+  unresolvedReads?: number
+  /** True once the user was told an application failure is being retried, so it is said once. */
+  applyFailureShown?: boolean
 }
 export const pendingClearRefetches: Record<string, PendingClearRefresh | undefined> = {}
 

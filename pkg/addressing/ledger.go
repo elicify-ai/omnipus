@@ -1,7 +1,7 @@
 package addressing
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +50,9 @@ func (l *Ledger) Put(c Capture) error {
 	if _, statErr := os.Stat(filepath.Dir(p)); statErr != nil {
 		return fmt.Errorf("addressing: receiver session %q is not available: %w", c.ReceiverSessionID, statErr)
 	}
+	if err := repairTornTail(p); err != nil {
+		return err
+	}
 	return fileutil.AppendJSONLSync(p, c)
 }
 
@@ -81,39 +84,79 @@ func (l *Ledger) Discard(sessionID, requestID string) error {
 		return nil
 	}
 	c.Discarded = true
+	if err := repairTornTail(p); err != nil {
+		return err
+	}
 	return fileutil.AppendJSONLSync(p, c)
 }
 
+// repairTornTail makes the ledger end on a record boundary before an append. A
+// final line with no newline is the footprint of an append that was cut short:
+// if it is still a complete JSON record only the newline is missing and it is
+// completed; otherwise the partial bytes were never acknowledged and are cut
+// off. Without this the next record would glue onto the partial line and the
+// ledger would fail closed for the session forever.
+func repairTornTail(path string) error {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("addressing: read ledger: %w", err)
+	}
+	if len(data) == 0 || data[len(data)-1] == '\n' {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("addressing: open ledger: %w", err)
+	}
+	defer f.Close()
+	cut := bytes.LastIndexByte(data, '\n') + 1
+	if json.Valid(data[cut:]) {
+		if _, err := f.WriteAt([]byte{'\n'}, int64(len(data))); err != nil {
+			return fmt.Errorf("addressing: complete ledger record: %w", err)
+		}
+	} else if err := f.Truncate(int64(cut)); err != nil {
+		return fmt.Errorf("addressing: cut torn ledger tail: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("addressing: sync ledger: %w", err)
+	}
+	return nil
+}
+
 func readLatest(path, requestID string) (Capture, bool, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return Capture{}, false, nil
 	}
 	if err != nil {
-		return Capture{}, false, fmt.Errorf("addressing: open ledger: %w", err)
+		return Capture{}, false, fmt.Errorf("addressing: read ledger: %w", err)
 	}
-	defer f.Close()
+	lines := bytes.Split(data, []byte{'\n'})
 	var latest Capture
 	found := false
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
+	for i, raw := range lines {
+		line := bytes.TrimSpace(raw)
+		if len(line) == 0 {
 			continue
 		}
 		var c Capture
-		if err := json.Unmarshal([]byte(line), &c); err != nil {
-			// A torn or corrupt line fails closed: a reply must never be
-			// routed from a ledger that cannot be read faithfully.
+		if err := json.Unmarshal(line, &c); err != nil {
+			if i == len(lines)-1 && !json.Valid(line) {
+				// The unterminated last line is a torn append that was never
+				// acknowledged: it is not a record. Only a newline-terminated line
+				// that cannot be read is corruption.
+				continue
+			}
+			// A corrupt line fails closed: a reply must never be routed from a
+			// ledger that cannot be read faithfully.
 			return Capture{}, false, fmt.Errorf("addressing: ledger %s is unreadable: %w", path, err)
 		}
 		if c.RequestID == requestID {
 			latest, found = c, true
 		}
-	}
-	if err := sc.Err(); err != nil {
-		return Capture{}, false, fmt.Errorf("addressing: read ledger: %w", err)
 	}
 	return latest, found, nil
 }
