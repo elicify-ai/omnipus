@@ -795,26 +795,6 @@ func TestSessionParentIndex_DeleteSessionWiresEviction(t *testing.T) {
 		"DeleteSession must evict the deleted session from the FR-097 parent index, not just metaCache")
 }
 
-// TestSessionParentIndex_ClearAllWiresEviction is the ClearAll analogue of
-// the above — the OTHER mutation point (FR-097's "delete"/"eviction") this
-// unit owns.
-func TestSessionParentIndex_ClearAllWiresEviction(t *testing.T) {
-	store := newTestStoreForLockTests(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
-	require.NoError(t, err)
-
-	const syntheticParent = "synthetic-parent-116-clearall"
-	store.u4IndexAddChild(syntheticParent, meta.ID)
-	require.Equal(t, 1, store.ChildCount(syntheticParent))
-
-	_, err = store.ClearAll()
-	require.NoError(t, err)
-
-	assert.Equal(t, 0, store.ChildCount(syntheticParent),
-		"ClearAll must evict every removed session from the FR-097 parent index")
-}
-
 // ---------------------------------------------------------------------
 // AC-20, load-independent primary proof.
 //

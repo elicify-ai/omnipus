@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -67,11 +66,6 @@ func TestHandleActivity_ReturnsWrappedResponseNoWarning(t *testing.T) {
 // per-agent store this test used to break is gone. The warning therefore names
 // the shared source ("shared"), not a broken agent.
 func TestHandleActivity_PartialFailure_SurfacesWarning(t *testing.T) {
-	if os.Getuid() == 0 {
-		// Root bypasses DAC, so chmod 0o000 does not prevent os.ReadDir. This
-		// mirrors pkg/agent/list_all_sessions_test.go's TestListAllSessions_PartialErrors.
-		t.Skip("permission-based failure injection is ineffective under root; run as non-root")
-	}
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -85,13 +79,15 @@ func TestHandleActivity_PartialFailure_SurfacesWarning(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 
-	// DEL-10: remove all read permission on the SHARED store's base dir so its
-	// ListSessions fails, forcing ListAllSessions to return a partial error.
+	// DEL-10: make the SHARED store's base dir unlistable so its ListSessions
+	// fails, forcing ListAllSessions to return a partial error. The injection is
+	// a regular FILE where a directory is needed (ENOTDIR) rather than chmod
+	// 0o000, which root ignores and Windows does not honour — so this arrange
+	// bites for every caller and needs no environment skip.
 	shared := al.GetSessionStore()
 	require.NotNil(t, shared, "DEL-10: the loop owns one shared session store")
 	baseDir := shared.BaseDir()
-	require.NoError(t, os.Chmod(baseDir, 0o000), "chmod shared base dir")
-	t.Cleanup(func() { _ = os.Chmod(baseDir, 0o700) }) // restore for temp-dir cleanup
+	blockPathForEveryCaller(t, baseDir)
 
 	api := &restAPI{
 		agentLoop: al,

@@ -62,10 +62,7 @@ func TestAgentDelete_CascadeDeletesSoleOwnedSessionAndUploads(t *testing.T) {
 		t.Fatalf("test setup: create agent entity record: %v", err)
 	}
 
-	sessStore, storeErr := session.NewUnifiedStore(filepath.Join(home, "sessions"))
-	if storeErr != nil {
-		t.Fatalf("test setup: open session store: %v", storeErr)
-	}
+	sessStore := liveSessionStore(deps)
 	meta, metaErr := sessStore.NewSession(session.SessionTypeChat, "webchat", "victim")
 	if metaErr != nil {
 		t.Fatalf("test setup: create session: %v", metaErr)
@@ -79,9 +76,6 @@ func TestAgentDelete_CascadeDeletesSoleOwnedSessionAndUploads(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(uploadDir, "file.txt"), []byte("hello"), 0o600); err != nil {
 		t.Fatalf("test setup: write upload file: %v", err)
-	}
-	if err := sessStore.Close(); err != nil {
-		t.Fatalf("test setup: close session store: %v", err)
 	}
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
@@ -124,18 +118,12 @@ func TestAgentDelete_PreservesSharedSession(t *testing.T) {
 		t.Fatalf("test setup: create agent entity record: %v", err)
 	}
 
-	sessStore, storeErr := session.NewUnifiedStore(filepath.Join(home, "sessions"))
-	if storeErr != nil {
-		t.Fatalf("test setup: open session store: %v", storeErr)
-	}
+	sessStore := liveSessionStore(deps)
 	meta, metaErr := sessStore.NewSession(session.SessionTypeChat, "webchat", "victim")
 	if metaErr != nil {
 		t.Fatalf("test setup: create session: %v", metaErr)
 	}
 	sessionID := meta.ID
-	if err := sessStore.Close(); err != nil {
-		t.Fatalf("test setup: close session store: %v", err)
-	}
 	// Make this a MULTI-agent (joined) session: AgentIDs becomes
 	// ["victim","survivor"]. The switch_agent tool and UnifiedStore.SwitchAgent
 	// that used to produce this state are deleted (session-core DEL-07), so the
@@ -157,6 +145,9 @@ func TestAgentDelete_PreservesSharedSession(t *testing.T) {
 	if err := os.WriteFile(metaPath, patched, 0o600); err != nil {
 		t.Fatalf("test setup: write meta.json: %v", err)
 	}
+	// The fixture edited the identity file behind the live store's back: drop the
+	// store's cached meta so it reloads the multi-agent record from disk.
+	sessStore.EvictSessionMeta(sessionID)
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
 		"id":       "victim",
@@ -365,18 +356,12 @@ func TestAgentDelete_RecordDeleteFailure_CleansDataFirstAndStaysVisible(t *testi
 		t.Fatalf("test setup: create agent entity record: %v", err)
 	}
 
-	sessStore, storeErr := session.NewUnifiedStore(filepath.Join(home, "sessions"))
-	if storeErr != nil {
-		t.Fatalf("test setup: open session store: %v", storeErr)
-	}
+	sessStore := liveSessionStore(deps)
 	meta, metaErr := sessStore.NewSession(session.SessionTypeChat, "webchat", "victim")
 	if metaErr != nil {
 		t.Fatalf("test setup: create session: %v", metaErr)
 	}
 	sessionID := meta.ID
-	if err := sessStore.Close(); err != nil {
-		t.Fatalf("test setup: close session store: %v", err)
-	}
 
 	tasksDir := filepath.Join(home, "tasks")
 	if err := os.MkdirAll(tasksDir, 0o700); err != nil {
