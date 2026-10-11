@@ -94,6 +94,9 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
   // server baseline is tracked so a background refetch can adopt server changes
   // without clobbering in-flight edits, and so dirtiness is computed honestly.
   const [editState, setEditState] = useState<TeamEditState | null>(null)
+  // Last committed editState, for the adoption effect to read without an updater.
+  const editStateRef = useRef<TeamEditState | null>(null)
+  useEffect(() => { editStateRef.current = editState }, [editState])
   const baselineRef = useRef<string>('')
   const hydratedRef = useRef(false)
   const revisionRef = useRef(workspace.revision)
@@ -353,31 +356,30 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
     }
     // Background refetch: adopt the new server value only when the user has no
     // pending edits (local state still equals the previous baseline).
-    setEditState((prev) => {
-      if (!prev) {
-        baselineRef.current = nextKey
-        revisionRef.current = delegation.revision
-        return next
-      }
-      const adopt = stateKey(prev) === baselineRef.current
-      if (!adopt) return prev
+    // Decided OUTSIDE a state updater: an updater must be pure (React may run
+    // it twice), and this adoption writes refs and re-bases the autosave.
+    // editStateRef is the last committed editState, so a pending user edit is
+    // seen exactly as the updater form saw it.
+    const prev = editStateRef.current
+    if (!prev) {
       baselineRef.current = nextKey
       revisionRef.current = delegation.revision
-      // SERVER-driven adoption, not a user edit — re-base the autosave onto
-      // the adopted snapshot so the debounced change-detector never sees it
-      // as an edit. Without this, a refetch carrying a changed roster armed
-      // a 500ms echo PUT of the server's own state straight back (measured
-      // under load in the HF2 Team integration tests: the echo PUT failed
-      // CSRF client-side and rendered a persistent error alert inside the
-      // panel after a successful recovery; with a live session it carries
-      // the pre-adoption revision and 409s). Called from inside the updater
-      // deliberately — rebaseline is idempotent, so StrictMode's
-      // double-invoked updater is harmless, and keeping the adopt decision
-      // here avoids re-running this effect on every editState identity
-      // change.
-      rebaseline({ members: next.members, edges: buildSaveEdges(next) })
-      return next
-    })
+      setEditState(next)
+      return
+    }
+    if (stateKey(prev) !== baselineRef.current) return
+    baselineRef.current = nextKey
+    revisionRef.current = delegation.revision
+    // SERVER-driven adoption, not a user edit — re-base the autosave onto
+    // the adopted snapshot so the debounced change-detector never sees it
+    // as an edit. Without this, a refetch carrying a changed roster armed
+    // a 500ms echo PUT of the server's own state straight back (measured
+    // under load in the HF2 Team integration tests: the echo PUT failed
+    // CSRF client-side and rendered a persistent error alert inside the
+    // panel after a successful recovery; with a live session it carries
+    // the pre-adoption revision and 409s).
+    rebaseline({ members: next.members, edges: buildSaveEdges(next) })
+    setEditState(next)
   }, [delegation, workspace.core_team, stateKey, rebaseline])
 
   // ── Derived ───────────────────────────────────────────────────────────────

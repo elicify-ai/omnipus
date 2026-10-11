@@ -171,6 +171,14 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+/**
+ * Let every already-queued promise continuation run, then look. The code under
+ * test is a pure promise chain over a mocked `request` (no timers of its own),
+ * so one macrotask turn drains it completely - the result does not depend on
+ * how long the machine takes, unlike a fixed 10-20 ms sleep.
+ */
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
 describe('/clear re-read — arming, grammar, and the real adapter (C1/D3/D4, T5)', () => {
   it('an idle /clear re-reads at its reply turn; the marker lands FIRST; the fresh view replaces the screen (D4)', async () => {
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
@@ -211,7 +219,7 @@ describe('/clear re-read — arming, grammar, and the real adapter (C1/D3/D4, T5
 
     useChatStore.getState().sendMessage('/clear')
     useChatStore.getState().handleFrame(doneFrame('turn-A', 1))
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     expect(requestMock).not.toHaveBeenCalled()
 
     useChatStore.getState().handleFrame(doneFrame('turn-clear', 2))
@@ -262,12 +270,12 @@ describe('/clear re-read — arming, grammar, and the real adapter (C1/D3/D4, T5
 
     connectionOk = false
     useChatStore.getState().sendMessage('/clear')
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     const failedId = bucket().messageOrder.find((id) => bucket().messagesById[id]?.content === '/clear')
     expect(failedId).toBeTruthy()
     expect(bucket().messagesById[failedId!]?.status).toBe('error')
     useChatStore.getState().handleFrame(doneFrame('turn-z', 1))
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     expect(requestMock).not.toHaveBeenCalled()
 
     connectionOk = true
@@ -310,7 +318,7 @@ describe('/clear re-read — arming, grammar, and the real adapter (C1/D3/D4, T5
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
     useChatStore.getState().sendMessage('hello there')
     useChatStore.getState().handleFrame(doneFrame('turn-x', 1))
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     expect(requestMock).not.toHaveBeenCalled()
   })
 })
@@ -443,7 +451,7 @@ describe('/clear re-read — V1 live tail and D3 window (the view = projection +
 
     connectionOk = false
     useChatStore.getState().sendMessage('follow-up that fails')
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     const failedId = bucket().messageOrder.find((id) => bucket().messagesById[id]?.content === 'follow-up that fails')
     expect(failedId).toBeTruthy()
     expect(bucket().messagesById[failedId!]?.status).toBe('error')
@@ -478,7 +486,7 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
       { isStreaming: true, activeTurnId: 'turn-followup' },
     )
     releaseRead1(rawPostClearProjection(clearCmid, 1))
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     expect(bucket().messagesById['srv-clear-marker-1']).toBeUndefined()
 
     useChatStore.getState().handleFrame(doneFrame('turn-followup', 2))
@@ -488,7 +496,7 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
     // The held projection satisfied the idle transition — one read total.
     expect(requestMock).toHaveBeenCalledTimes(1)
     useChatStore.getState().retryClearTranscript(SID)
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     expect(bucket().messagesById['srv-clear-marker-1']?.content).toBe(MARKER_TEXT)
     expect(requestMock).toHaveBeenCalledTimes(1)
   })
@@ -507,7 +515,7 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
 
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })], { isReplaying: true })
     releaseRead1(rawPostClearProjection(clearCmid, 1))
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     expect(bucket().messagesById['srv-clear-marker-1']).toBeUndefined()
 
     // Replay ends through the REAL catch_up_complete frame — no done, no
@@ -538,13 +546,13 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
     useChatStore.getState().sendMessage('/clear')
     const cmid2 = sentClientMessageId(1)
     useChatStore.getState().handleFrame(doneFrame('turn-2', 2))
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     expect(requestMock).toHaveBeenCalledTimes(1)
 
     // Read #1 (marker #1, before #2 executed) resolves: #2 is not retired,
     // and #1's rows are not presented as #2's post-clear view.
     releaseRead1(rawPostClearProjection(cmid1, 1))
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     expect(bucket().messagesById['srv-clear-marker-2']).toBeUndefined()
 
     // #2's own read then succeeds: its own marker retires it.
@@ -567,7 +575,7 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
     await vi.waitFor(() => {
       expect(requestMock).toHaveBeenCalledTimes(1)
     })
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     // Nothing from the outdated response was applied to the live view.
     expect(bucket().messagesById['srv-u-1']).toBeUndefined()
     expect(bucket().messagesById['srv-clear-marker-1']).toBeUndefined()
@@ -594,7 +602,7 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
     expect(requestMock).toHaveBeenCalledTimes(1)
 
     useChatStore.getState().handleFrame(doneFrame('turn-clear-2', 2))
-    await new Promise((r) => setTimeout(r, 20))
+    await settle()
     expect(requestMock).toHaveBeenCalledTimes(1)
   })
 
@@ -602,14 +610,14 @@ describe('/clear re-read — D1/D2: the held projection and operation ownership'
     seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
     useChatStore.getState().sendMessage('hello there')
     useChatStore.getState().handleFrame(doneFrame('turn-x', 1))
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     expect(requestMock).not.toHaveBeenCalled()
 
     connectionOk = false
     useChatStore.getState().sendMessage('/clear')
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     useChatStore.getState().handleFrame(doneFrame('turn-y', 2))
-    await new Promise((r) => setTimeout(r, 10))
+    await settle()
     expect(requestMock).not.toHaveBeenCalled()
   })
 })
@@ -636,7 +644,7 @@ describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent
   async function endTurnAndSettle(turn: number, expectedReads: number): Promise<void> {
     useChatStore.getState().handleFrame(doneFrame(`turn-refused-${turn}`, turn))
     await vi.waitFor(() => expect(requestMock).toHaveBeenCalledTimes(expectedReads))
-    await new Promise((r) => setTimeout(r, 15))
+    await settle()
   }
 
   it('drops the intent after the bound, tells the user once, and later turns read nothing', async () => {
@@ -653,7 +661,7 @@ describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent
     expect(toasts[0]).toMatch(/did not confirm your \/clear/i)
 
     useChatStore.getState().handleFrame(doneFrame('turn-after', 99))
-    await new Promise((r) => setTimeout(r, 20))
+    await settle()
     expect(requestMock).toHaveBeenCalledTimes(MAX_UNRESOLVED_READS)
   })
 
@@ -675,7 +683,7 @@ describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent
     await vi.waitFor(() => {
       expect(requestMock).toHaveBeenCalledTimes(1)
     })
-    await new Promise((r) => setTimeout(r, 15))
+    await settle()
     const b = bucket()
     // The failed row — above the /clear bubble — did not vanish.
     expect(b.messageOrder).toContain('failed-local')
@@ -738,7 +746,7 @@ describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent
     // Nothing left armed: later turns re-read nothing.
     const reads = requestMock.mock.calls.length
     useChatStore.getState().handleFrame(doneFrame('turn-later', 2))
-    await new Promise((r) => setTimeout(r, 20))
+    await settle()
     expect(requestMock).toHaveBeenCalledTimes(reads)
   })
 
@@ -772,7 +780,7 @@ describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent
     expect(toasts[0]).toMatch(/couldn't refresh this chat/i)
     retryClearTranscriptRead(SID, throwing)
     await vi.waitFor(() => expect(requestMock).toHaveBeenCalledTimes(2))
-    await new Promise((r) => setTimeout(r, 15))
+    await settle()
     expect(toasts, 'said once, not on every retry').toHaveLength(1)
     expect(pendingClearRefetches[SID]?.heldProjection).toBeTruthy()
   })
