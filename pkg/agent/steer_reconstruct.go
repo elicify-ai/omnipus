@@ -151,6 +151,7 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 			for i := len(entries) - 1; i >= 0; i-- {
 				if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
 					opts.UserMessage = entries[i].Content
+					opts.InputAlreadyArchived = true
 					break
 				}
 			}
