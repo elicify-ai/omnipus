@@ -147,6 +147,7 @@ func TestRememberTool_BasicFlow(t *testing.T) {
 	args := map[string]any{
 		"content":  "always use atomic writes",
 		"category": "lesson_learned",
+		"room":     "private",
 	}
 
 	result := tool.Execute(ctx, args)
@@ -438,12 +439,14 @@ func TestRememberTool_Differentiation(t *testing.T) {
 	_ = tool.Execute(ctx, map[string]any{
 		"content":  "first distinct fact",
 		"category": "reference",
+		"room":     "private",
 	})
 	raw1, _ := os.ReadFile(filepath.Join(dir, "test-memory-entries.md"))
 
 	_ = tool.Execute(ctx, map[string]any{
 		"content":  "second distinct fact",
 		"category": "key_decision",
+		"room":     "private",
 	})
 	raw2, _ := os.ReadFile(filepath.Join(dir, "test-memory-entries.md"))
 
@@ -471,6 +474,7 @@ func TestRememberTool_EmptyContentRejected(t *testing.T) {
 	result := tool.Execute(ctx, map[string]any{
 		"content":  "   ",
 		"category": "reference",
+		"room":     "private",
 	})
 	if !result.IsError {
 		t.Errorf("Remember with whitespace-only content should return error, got: %v", result)
