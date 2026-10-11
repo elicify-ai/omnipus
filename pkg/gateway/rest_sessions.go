@@ -610,6 +610,11 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 }
 
 func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {
+	// Final-gate M4: a main the pair is no longer entitled to is not readable
+	// here any more than it is listed.
+	if !a.gateMainRead(w, id) {
+		return
+	}
 	store := a.resolveSessionStore(id)
 	if store == nil {
 		jsonErr(w, http.StatusNotFound, "session not found")
@@ -701,6 +706,9 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 	// otherwise-valid title over the limit.
 	if len(req.Title) > 256 {
 		jsonErr(w, http.StatusBadRequest, "title too long (max 256 characters)")
+		return
+	}
+	if !a.gateMainRead(w, id) { // final-gate M4
 		return
 	}
 	store := a.resolveSessionStore(id)

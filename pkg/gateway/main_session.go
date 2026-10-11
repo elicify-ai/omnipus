@@ -22,6 +22,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
@@ -94,13 +97,94 @@ func mainSessionPairEligible(cfg *config.Config, ws storedWorkspace, agentID str
 
 // workspaceForMainSession loads the workspace a main id names. A pair whose
 // workspace cannot be read has no eligibility information, so it is refused
-// rather than guessed at.
+// rather than guessed at. A workspace that does not exist is the ordinary "not
+// eligible"; a read FAILURE is logged (final-gate M8) so a corrupt or unreadable
+// workspace file is never indistinguishable from a missing one.
 func (a *restAPI) workspaceForMainSession(workspaceID string) (storedWorkspace, bool) {
-	ws, err := readWorkspaceFile(a.homePath, workspaceID)
+	ws, found, err := loadWorkspaceForMain(a.homePath, workspaceID)
 	if err != nil {
+		slog.Error("rest: main eligibility: the workspace could not be read; its mains are hidden until it can be",
+			"workspace_id", workspaceID, "error", err)
 		return storedWorkspace{}, false
 	}
-	return ws, true
+	return ws, found
+}
+
+// loadWorkspaceForMain separates the three outcomes eligibility needs: found,
+// not found (nil error), and a read failure (non-nil error) - the same split
+// address_deps.go::PairEligible and the task resolver already make.
+func loadWorkspaceForMain(home, workspaceID string) (ws storedWorkspace, found bool, err error) {
+	ws, err = readWorkspaceFile(home, workspaceID)
+	if err != nil {
+		if errors.Is(err, errWorkspaceNotFound) {
+			return storedWorkspace{}, false, nil
+		}
+		return storedWorkspace{}, false, err
+	}
+	return ws, true, nil
+}
+
+// mainSessionGate decides whether a session id may be served as a main right
+// now (final-gate M4). isMain is false for any id that is not a computed main
+// id (the caller's ordinary lookup owns it). For a main id, eligible is the same
+// answer the session list gives (mainSessionPairEligible over the current
+// workspace record); err is non-nil only when the workspace record could not be
+// READ, which is neither "eligible" nor "not a member". It creates nothing.
+func mainSessionGate(home string, cfg *config.Config, id string) (isMain, eligible bool, err error) {
+	wsID, agentID, ok := session.SplitMainSessionID(id)
+	if !ok {
+		return false, true, nil
+	}
+	ws, found, err := loadWorkspaceForMain(home, wsID)
+	if err != nil {
+		return true, false, err
+	}
+	if !found {
+		return true, false, nil
+	}
+	return true, mainSessionPairEligible(cfg, ws, agentID), nil
+}
+
+// mainSessionAllowed is the WebSocket door of mainSessionGate: false (after
+// sending the client one error frame) when the id names a main whose pair is no
+// longer entitled to it, or whose workspace cannot be read. It creates nothing.
+func (h *WSHandler) mainSessionAllowed(wc *wsConn, id string) bool {
+	isMain, eligible, err := mainSessionGate(h.home, h.agentLoop.GetConfig(), id)
+	if err != nil {
+		slog.Error("ws: main eligibility: the workspace could not be read", "session_id", id, "error", err)
+		sid := id
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type: string(generated.WsFrameTypeError), SessionId: &sid, Message: errMainChatNotPrepared.Error(),
+		})
+		return false
+	}
+	if isMain && !eligible {
+		sid := id
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type: string(generated.WsFrameTypeError), SessionId: &sid, Message: "session not found",
+		})
+		return false
+	}
+	return true
+}
+
+// gateMainRead is mainSessionGate for the REST read/write doors that must not
+// serve a hidden main. It writes the response and returns false when the caller
+// must stop: 404 for a main whose pair is no longer entitled to it (the same
+// answer as a session that does not exist), a fixed 500 when the workspace
+// record cannot be read.
+func (a *restAPI) gateMainRead(w http.ResponseWriter, id string) bool {
+	isMain, eligible, err := mainSessionGate(a.homePath, a.agentLoop.GetConfig(), id)
+	if err != nil {
+		slog.Error("rest: main eligibility: the workspace could not be read", "session_id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, errMainChatNotPrepared.Error())
+		return false
+	}
+	if isMain && !eligible {
+		jsonErr(w, http.StatusNotFound, "session not found")
+		return false
+	}
+	return true
 }
 
 // ensureMainSession get-or-creates the main for a pair the CALLER has already
@@ -206,8 +290,14 @@ func (a *restAPI) resolveMainSessionForRead(id string) (bool, error) {
 	if !ok {
 		return true, nil // not a computed main id: the ordinary lookup path owns it
 	}
-	ws, ok := a.workspaceForMainSession(wsID)
-	if !ok {
+	ws, found, wsErr := loadWorkspaceForMain(a.homePath, wsID)
+	if wsErr != nil {
+		// BDD-01.4: unreadable metadata is a visible error, not "no such chat".
+		slog.Error("rest: main session could not be resolved: the workspace could not be read",
+			"session_id", id, "workspace_id", wsID, "error", wsErr)
+		return false, errMainChatNotPrepared
+	}
+	if !found {
 		return false, nil
 	}
 	if !mainSessionPairEligible(a.agentLoop.GetConfig(), ws, agentID) {

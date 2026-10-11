@@ -358,6 +358,11 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 			// AgentIDs (PostLoad-backfilled from the legacy single AgentID
 			// field on every read, so this is never empty for a real session).
 			if slices.Contains(m.AgentIDs, agentID) {
+				// Final-gate M4: a main the pair is no longer entitled to is
+				// hidden here exactly as in the session list.
+				if !a.mainSessionVisible(m) {
+					continue
+				}
 				metas = append(metas, m)
 			}
 		}

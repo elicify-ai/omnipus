@@ -134,6 +134,10 @@ func (wh *wsHandlerHandleAttachSession) resolveSession() bool {
 		})
 		return false
 	}
+	// Final-gate M4: a main the pair is no longer entitled to is not attachable.
+	if !wh.h.mainSessionAllowed(wh.wc, wh.attachID) {
+		return false
+	}
 	wh.store = wh.h.resolveSessionStore(wh.attachID)
 	if wh.store == nil {
 		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
