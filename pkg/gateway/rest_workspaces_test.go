@@ -1558,10 +1558,10 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 	bootEdges, storeOK := workspace.LoadDelegation(home, ws.ID)
 	require.True(t, storeOK, "delegation store record must be readable")
 	// 6 ordinary self-rows (one per on-team member) + the 4 Jim cross edges
-	// (jim→ava/worker/planner/researcher) + planner→researcher = 11. The former
+	// (jim→ava/worker/planner/researcher) + planner→researcher + mia→worker = 12. The former
 	// jim→jim / worker→worker policy self edges are now the generic self-rows;
 	// admin's produced self-row is dropped (off-team).
-	assert.Len(t, bootEdges, 11, "the boot default workspace must seed the ordinary self-rows "+
+	assert.Len(t, bootEdges, 12, "the boot default workspace must seed the ordinary self-rows "+
 		"plus the full ADR-090 cross-edge set")
 	assert.False(t, ws.SetupPending,
 		"the boot default workspace must never be setup_pending — it never runs the setup interview")

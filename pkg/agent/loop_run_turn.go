@@ -717,7 +717,7 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 	}
 
 	// Save user message to session
-	if !rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && (strings.TrimSpace(rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage) != "" || len(rp.rc.rx.rr.rq.ri.rf.rt.ts.media) > 0) {
+	if !rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && !rp.rc.rx.rr.rq.ri.rf.rt.ts.userInputInWindow && (strings.TrimSpace(rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage) != "" || len(rp.rc.rx.rr.rq.ri.rf.rt.ts.media) > 0) {
 		rootMsg := providers.Message{
 			Role:    "user",
 			Content: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,

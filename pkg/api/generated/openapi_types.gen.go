@@ -6473,6 +6473,7 @@ func (e MessageSubagentStateType) Valid() bool {
 // Defines values for MessageSystemSubtype.
 const (
 	MessageSystemSubtypeBrowserHandoverNotice MessageSystemSubtype = "browser_handover_notice"
+	MessageSystemSubtypeExpiryNotice          MessageSystemSubtype = "expiry_notice"
 	MessageSystemSubtypeGoalOutcome           MessageSystemSubtype = "goal_outcome"
 	MessageSystemSubtypeSubagentEnd           MessageSystemSubtype = "subagent_end"
 	MessageSystemSubtypeSubagentMessage       MessageSystemSubtype = "subagent_message"
@@ -6484,6 +6485,8 @@ const (
 func (e MessageSystemSubtype) Valid() bool {
 	switch e {
 	case MessageSystemSubtypeBrowserHandoverNotice:
+		return true
+	case MessageSystemSubtypeExpiryNotice:
 		return true
 	case MessageSystemSubtypeGoalOutcome:
 		return true
@@ -10202,6 +10205,7 @@ func (e SessionDetailMessagesSubagentStateType) Valid() bool {
 // Defines values for SessionDetailMessagesSystemSubtype.
 const (
 	SessionDetailMessagesSystemSubtypeBrowserHandoverNotice SessionDetailMessagesSystemSubtype = "browser_handover_notice"
+	SessionDetailMessagesSystemSubtypeExpiryNotice          SessionDetailMessagesSystemSubtype = "expiry_notice"
 	SessionDetailMessagesSystemSubtypeGoalOutcome           SessionDetailMessagesSystemSubtype = "goal_outcome"
 	SessionDetailMessagesSystemSubtypeSubagentEnd           SessionDetailMessagesSystemSubtype = "subagent_end"
 	SessionDetailMessagesSystemSubtypeSubagentMessage       SessionDetailMessagesSystemSubtype = "subagent_message"
@@ -10213,6 +10217,8 @@ const (
 func (e SessionDetailMessagesSystemSubtype) Valid() bool {
 	switch e {
 	case SessionDetailMessagesSystemSubtypeBrowserHandoverNotice:
+		return true
+	case SessionDetailMessagesSystemSubtypeExpiryNotice:
 		return true
 	case SessionDetailMessagesSystemSubtypeGoalOutcome:
 		return true

@@ -6,6 +6,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -205,4 +208,36 @@ func TestClearThenNextRequest_WhileBusy(t *testing.T) {
 		append(preClearWords, "BUSY-TURN-DELTA")...)
 
 	f.recallStillReaches(t)
+}
+
+func TestWithExpiryNote(t *testing.T) {
+	require.Equal(t, "crumb", withExpiryNote("crumb", ""))
+	require.Equal(t, "## Retention notice\nnote", withExpiryNote("", "note"))
+	require.Equal(t, "crumb\n\n## Retention notice\nnote", withExpiryNote("crumb", "note"))
+}
+
+// FR-007 end to end on the real turn path: an expiry notice stored with the
+// window reaches the next request's system prompt.
+func TestExpiryNoticeReachesTheNextRequest(t *testing.T) {
+	f := newClearCtxFixture(t, nil)
+	require.True(t, f.w.enqueue(f.human("first")))
+	waitUntilClear(t, "the first answer", 15*time.Second, func() bool { return f.prov.count() >= 1 })
+	f.waitIdle(t)
+
+	metaPath := filepath.Join(f.store.BaseDir(), f.sid, "backend_meta.json")
+	raw, err := os.ReadFile(metaPath)
+	require.NoError(t, err)
+	var meta map[string]any
+	require.NoError(t, json.Unmarshal(raw, &meta))
+	meta["expiry_note"] = "EXPIRY-NOTE-SENTINEL"
+	raw, err = json.Marshal(meta)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, raw, 0o600))
+
+	before := f.prov.count()
+	require.True(t, f.w.enqueue(f.human("second")))
+	waitUntilClear(t, "the second request", 15*time.Second, func() bool { return f.prov.count() > before })
+	req := f.prov.request(before + 1)
+	require.Equal(t, "system", req[0].Role)
+	require.Contains(t, clearMessageText(req[0]), "## Retention notice\nEXPIRY-NOTE-SENTINEL")
 }

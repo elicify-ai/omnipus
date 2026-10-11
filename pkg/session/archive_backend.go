@@ -128,9 +128,12 @@ func owningSessionID(key string) string {
 
 // archiveBackendMeta is the persisted, content-free backend window state.
 type archiveBackendMeta struct {
-	Skip       int                    `json:"skip"`
-	Count      int                    `json:"count"`
-	ClearFloor int                    `json:"clear_floor,omitempty"`
+	Skip       int `json:"skip"`
+	Count      int `json:"count"`
+	ClearFloor int `json:"clear_floor,omitempty"`
+	// ExpiryNote is the FR-007 agent expiry notice of the last retention expiry
+	// that moved the window cursor. The next requests carry it until a /clear.
+	ExpiryNote string                 `json:"expiry_note,omitempty"`
 	AnchorLine *int                   `json:"anchor_archive_line,omitempty"`
 	Retracted  []memory.ArchiveSpan   `json:"retracted,omitempty"`
 	Projection []archiveProjectionRow `json:"projection,omitempty"`
@@ -285,6 +288,9 @@ func (b *archiveBackend) commitWindow(ctx context.Context, key string, before, a
 	}
 	meta.Skip = after.Skip
 	meta.Count = after.Count
+	if after.ClearFloor > meta.ClearFloor {
+		meta.ExpiryNote = "" // a /clear starts over: nothing before it is announced
+	}
 	meta.ClearFloor = after.ClearFloor
 	meta.AnchorLine = cloneIntPtr(after.AnchorLine)
 	meta.Projection = metaFromProjection(after.Projection)
@@ -666,7 +672,7 @@ func (b *archiveBackend) viewLocked(key string) (WindowView, error) {
 	if err != nil {
 		return WindowView{}, err
 	}
-	view := WindowView{State: state, Excluded: append([]memory.ArchiveSpan(nil), meta.Retracted...)}
+	view := WindowView{State: state, ExpiryNote: meta.ExpiryNote, Excluded: append([]memory.ArchiveSpan(nil), meta.Retracted...)}
 	if meta.Skip > 0 {
 		view.PriorUserTurns = rows[0].UserTurn
 		rows = rows[1:]

@@ -4822,7 +4822,7 @@ export interface components {
              * @example browser_handover_notice
              * @enum {string}
              */
-            system_subtype?: "browser_handover_notice" | "goal_outcome" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
+            system_subtype?: "browser_handover_notice" | "expiry_notice" | "goal_outcome" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
             goal_outcome?: components["schemas"]["GoalOutcome"];
             subagent_start?: components["schemas"]["SubagentStartFrame"];
             subagent_state?: components["schemas"]["SubagentStateFrame"];

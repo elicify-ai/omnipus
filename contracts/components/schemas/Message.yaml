@@ -264,6 +264,7 @@ properties:
     type: string
     enum:
       - browser_handover_notice
+      - expiry_notice
       - goal_outcome
       - subagent_start
       - subagent_state

@@ -976,7 +976,7 @@ func (t *TaskCreateTool) requireDestinationMember(wsID, agentID string) error {
 	if err != nil {
 		return fmt.Errorf("cannot verify membership of workspace %q: %w", wsID, err)
 	}
-	if !workspace.TeamSet(st.Workspace.CoreTeam, st.Delegation)[agentID] {
+	if !st.Team()[agentID] {
 		return fmt.Errorf("agent %q is not on the team of workspace %q", agentID, wsID)
 	}
 	return nil
@@ -1407,17 +1407,23 @@ func (tc *taskCreateToolExecute) persistAndRespond() *ToolResult {
 		// Roll the task back: a task with no paired goal can never finish via
 		// goal_claim, and a retry of the same create would duplicate it. Remove
 		// any partially written goal first, then the task.
-		rbErr := RemoveTaskGoalRecords(GoalStoreForTasks(tc.t.store), tc.entity.ID)
-		if _, dErr := tc.t.store.Delete(tc.entity.ID); dErr != nil {
-			rbErr = errors.Join(rbErr, dErr)
-		}
-		if rbErr != nil {
-			slog.Error("create_task: rollback after a failed goal write did not complete",
-				"task_id", tc.entity.ID, "error", rbErr)
+		goalCleanErr := RemoveTaskGoalRecords(GoalStoreForTasks(tc.t.store), tc.entity.ID)
+		_, delErr := tc.t.store.Delete(tc.entity.ID)
+		switch {
+		case delErr != nil:
+			slog.Error("create_task: rollback after a failed goal write did not remove the task",
+				"task_id", tc.entity.ID, "error", errors.Join(goalCleanErr, delErr))
 			return ErrorResult(fmt.Sprintf(
 				"task_create failed: its Definition of Done could not be persisted (%v) and the "+
 					"task %q could not be removed (%v); delete it before retrying",
-				gErr, tc.entity.ID, rbErr))
+				gErr, tc.entity.ID, errors.Join(goalCleanErr, delErr)))
+		case goalCleanErr != nil:
+			slog.Error("create_task: rollback removed the task but its goal record could not be verified or removed",
+				"task_id", tc.entity.ID, "error", goalCleanErr)
+			return ErrorResult(fmt.Sprintf(
+				"task_create failed: its Definition of Done could not be persisted (%v); the task was "+
+					"removed, but its goal record could not be verified or removed (%v)",
+				gErr, goalCleanErr))
 		}
 		return ErrorResult(fmt.Sprintf(
 			"task_create failed: its Definition of Done could not be persisted, so no task was "+

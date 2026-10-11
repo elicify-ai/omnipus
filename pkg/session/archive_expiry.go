@@ -320,24 +320,50 @@ func (b *archiveBackend) expireSession(sessionID string, retentionDays int) (Exp
 	if err != nil {
 		return notice, err
 	}
-	if err := b.advancePastExpiredLocked(sessionID, store); err != nil {
+	moved, err := b.advancePastExpiredLocked(sessionID, store)
+	if err != nil {
 		return notice, err
 	}
+	if moved.moved {
+		// The window cursor moved past expired content: this is the FR-007 agent
+		// expiry notice (SweepExpired only fills it from a persisted
+		// AddressedWindow, which the live backend does not use).
+		notice.Expired = true
+		notice.WindowEmptied = moved.emptied
+		notice.FirstRetained = moved.first
+		notice.Note = moved.note
+	}
 	return notice, nil
+}
+
+// windowExpiry is what advancePastExpiredLocked did to the live cursor.
+type windowExpiry struct {
+	moved, emptied bool
+	first          *ArchiveAddress // first retained slot; nil when emptied
+	note           string
+}
+
+// expiryNoteText is the FR-007 agent expiry notice for a cursor that moved to
+// newSkip of n slots.
+func expiryNoteText(newSkip, n int) string {
+	if newSkip >= n {
+		return "Retention expired all remaining model content for this conversation; the context window is now empty."
+	}
+	return fmt.Sprintf("Retention expired older conversation content; the context window now starts at the first retained complete group (archive line %d).", newSkip)
 }
 
 // advancePastExpiredLocked moves meta.Skip to the first retained COMPLETE model
 // slot after the last live slot whose record is gone, and drops an anchor whose
 // record is gone. A slot is gone only when its partition is provably absent; any
 // other failure returns an error and changes nothing. b.mu must be held.
-func (b *archiveBackend) advancePastExpiredLocked(key string, store *ArchiveDayStore) error {
+func (b *archiveBackend) advancePastExpiredLocked(key string, store *ArchiveDayStore) (windowExpiry, error) {
 	meta, err := b.loadMetaLocked(key)
 	if err != nil {
-		return err
+		return windowExpiry{}, err
 	}
 	n, err := store.OrdinalCount()
 	if err != nil || n == 0 {
-		return err
+		return windowExpiry{}, err
 	}
 	present := make(map[string]bool)
 	skip := clampSkip(meta.Skip, n)
@@ -345,7 +371,7 @@ func (b *archiveBackend) advancePastExpiredLocked(key string, store *ArchiveDayS
 	for from := skip; from < n; from += scanChunk {
 		rows, err := store.readOrdinalRows(from, min(n, from+scanChunk))
 		if err != nil {
-			return err
+			return windowExpiry{}, err
 		}
 		for _, row := range rows {
 			if retractedOrdinal(meta.Retracted, row.Ordinal) {
@@ -353,7 +379,7 @@ func (b *archiveBackend) advancePastExpiredLocked(key string, store *ArchiveDayS
 			}
 			ok, err := store.rowResolvable(row, present)
 			if err != nil {
-				return err
+				return windowExpiry{}, err
 			}
 			if !ok {
 				lastGone = row.Ordinal
@@ -367,7 +393,7 @@ func (b *archiveBackend) advancePastExpiredLocked(key string, store *ArchiveDayS
 		for newSkip < n {
 			rows, err := store.readOrdinalRows(newSkip, newSkip+1)
 			if err != nil {
-				return err
+				return windowExpiry{}, err
 			}
 			if len(rows) == 0 || rows[0].Role != "tool" {
 				break
@@ -379,24 +405,43 @@ func (b *archiveBackend) advancePastExpiredLocked(key string, store *ArchiveDayS
 	if a := meta.AnchorLine; a != nil && *a >= 0 && *a < n {
 		rows, err := store.readOrdinalRows(*a, *a+1)
 		if err != nil {
-			return err
+			return windowExpiry{}, err
 		}
 		if len(rows) == 1 {
 			ok, err := store.rowResolvable(rows[0], present)
 			if err != nil {
-				return err
+				return windowExpiry{}, err
 			}
 			anchorGone = !ok
 		}
 	}
 	if newSkip == meta.Skip && meta.Count == n && !anchorGone {
-		return nil
+		return windowExpiry{}, nil
+	}
+	out := windowExpiry{}
+	if newSkip > meta.Skip {
+		// Expiry moved the cursor. What lies below it is gone for good, so it is
+		// also the clear floor (the breadcrumb must never try to quote it), and the
+		// agent is told once, here, why its window starts later.
+		out = windowExpiry{moved: true, emptied: newSkip >= n, note: expiryNoteText(newSkip, n)}
+		if newSkip < n {
+			rows, err := store.readOrdinalRows(newSkip, newSkip+1)
+			if err != nil {
+				return windowExpiry{}, err
+			}
+			if len(rows) == 1 {
+				first := rows[0].Slot
+				out.first = &first
+			}
+		}
+		meta.ClearFloor = max(meta.ClearFloor, newSkip)
+		meta.ExpiryNote = out.note
 	}
 	meta.Skip, meta.Count = newSkip, n
 	if anchorGone {
 		meta.AnchorLine = nil
 	}
-	return b.saveMetaLocked(key, meta)
+	return out, b.saveMetaLocked(key, meta)
 }
 
 // rowResolvable reports whether the partitions a model slot reads from (the slot

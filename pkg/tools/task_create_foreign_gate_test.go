@@ -221,6 +221,9 @@ func TestTaskCreate_GoalWriteFailureRollsBackTask(t *testing.T) {
 	if all, err := f.store.List(task.Filter{}); err != nil || len(all) != 0 {
 		t.Fatalf("a failed goal write must roll the task back; err=%v tasks=%d", err, len(all))
 	}
+	if strings.Contains(res.ForLLM, "could not be removed") {
+		t.Errorf("the task WAS removed (asserted above); the error must not claim otherwise: %s", res.ForLLM)
+	}
 	if strings.Contains(res.ForLLM, "was created") {
 		t.Errorf("error must not claim the task exists once it is rolled back: %s", res.ForLLM)
 	}

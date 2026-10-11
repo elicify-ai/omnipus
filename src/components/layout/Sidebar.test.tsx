@@ -267,22 +267,25 @@ describe('Sidebar — overlay rendering when open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // + an Assets section (Admin chat, Agents, Skills & Tools, Connectors, Library) + username trigger.
+    // + an Assets section (Agents, Skills & Tools, Connectors, Library) + username trigger.
     // library-spec.md D-7: "Library" renamed the SECTION to "Assets"; the new
     // nav entry (opens the Library panel) took the "Library" name instead.
     expect(screen.getByRole('group', { name: 'Workspaces' })).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Assets' })).toBeTruthy()
 
-    const adminChat = screen.getByRole('link', { name: 'Admin chat' })
-    expect(adminChat.getAttribute('href')).toBe('/admin/chat')
     expect(screen.getByText('Agents')).toBeTruthy()
     expect(screen.getByText('Skills & Tools')).toBeTruthy()
     expect(screen.getByText('Connectors')).toBeTruthy()
     expect(screen.getByTestId('sidebar-library-button')).toBeTruthy()
     expect(screen.getByTestId('sidebar-profile-trigger')).toBeTruthy()
 
-    // Removed entries must NOT be present.
+    // Removed entries must NOT be present. "Admin chat" was removed from the
+    // sidebar (founder request 2026-10-11): Admin's one main chat lives in
+    // the default workspace's agent rows (ADR-20261007), and /admin/chat is
+    // a redirect stub — never a standalone Assets entry again.
     expect(screen.queryByText('Chat')).toBeNull()
+    expect(screen.queryByText('Admin chat')).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Admin chat' })).toBeNull()
     expect(screen.queryByText('Automations')).toBeNull()
     expect(screen.queryByText('Command Center')).toBeNull()
   })
