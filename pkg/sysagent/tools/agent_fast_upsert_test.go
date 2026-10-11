@@ -110,7 +110,14 @@ func newSysagentFastUpsertDeps(
 		return al.ReloadProviderAndConfig(context.Background(), provider, &newCfg)
 	}
 	return &systools.Deps{
-		Home:   home,
+		Home: home,
+		// The production wiring: the loop's one live session store.
+		DeleteSessionStore: func() systools.AgentSessionStore {
+			if s := al.GetSessionStore(); s != nil {
+				return s
+			}
+			return nil
+		},
 		GetCfg: al.GetConfig,
 		MutateConfig: func(fn func(*config.Config) error) error {
 			return fn(al.GetConfig())

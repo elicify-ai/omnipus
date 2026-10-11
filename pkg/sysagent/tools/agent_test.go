@@ -24,6 +24,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -65,6 +66,7 @@ func newTestDeps(t *testing.T) (*systools.Deps, *config.Config) {
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:        nil,
 	}
+	installLiveSessionStore(t, deps, home)
 	return deps, cfg
 }
 
@@ -143,7 +145,28 @@ func newTestDepsWithHome(t *testing.T) (*systools.Deps, string) {
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:        nil,
 	}
+	installLiveSessionStore(t, deps, home)
 	return deps, home
+}
+
+// installLiveSessionStore gives deps the loop's ONE live session store the
+// agent-delete cascade runs on (DEL-10, architect final-gate item 1: the cascade
+// never opens a store of its own). Tests create their sessions through it
+// (liveSessionStore).
+func installLiveSessionStore(t *testing.T, deps *systools.Deps, home string) {
+	t.Helper()
+	live, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatalf("test setup: open the live session store: %v", err)
+	}
+	t.Cleanup(func() { _ = live.Close() })
+	deps.DeleteSessionStore = func() systools.AgentSessionStore { return live }
+}
+
+// liveSessionStore returns the live shared session store newTestDepsWithHome
+// installed in deps.
+func liveSessionStore(deps *systools.Deps) *session.UnifiedStore {
+	return deps.DeleteSessionStore().(*session.UnifiedStore)
 }
 
 // TestAgentCreate_WithColor verifies that create persists color
@@ -1156,6 +1179,13 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 		},
 		SaveConfigLocked: func(*config.Config) error { return nil },
 		ReloadFunc:       reloadFunc,
+		// The production wiring: the loop's one live session store (DEL-10).
+		DeleteSessionStore: func() systools.AgentSessionStore {
+			if s := al.GetSessionStore(); s != nil {
+				return s
+			}
+			return nil
+		},
 	}
 
 	createResult := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{

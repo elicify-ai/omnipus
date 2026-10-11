@@ -46,7 +46,7 @@ func newPublishWarningDeps(t *testing.T, reloadFunc func() error, upsertFastFunc
 	cfg := config.DefaultConfig()
 	var mu sync.Mutex
 	getCfg := func() *config.Config { return cfg }
-	return &systools.Deps{
+	deps := &systools.Deps{
 		Home:                home,
 		GetCfg:              getCfg,
 		MutateConfig:        testMutateConfig(&mu, getCfg),
@@ -54,6 +54,8 @@ func newPublishWarningDeps(t *testing.T, reloadFunc func() error, upsertFastFunc
 		ReloadFunc:          reloadFunc,
 		UpsertAgentFastFunc: upsertFastFunc,
 	}
+	installLiveSessionStore(t, deps, home)
+	return deps
 }
 
 func TestAgentCreate_UpsertFastFuncFailure_StillSucceeds_WithPublishWarning(t *testing.T) {
