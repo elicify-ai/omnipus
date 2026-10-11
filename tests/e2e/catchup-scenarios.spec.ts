@@ -388,12 +388,26 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       // Switch to a fresh chat B while chat A's turn is still running
       // server-side (the turn never depends on a UI connection, ADR-082 P1 —
       // switching the VIEW away changes nothing about it).
-      // The slash palette filters out /new while streaming. Use the real
-      // sidebar action, which changes the view without stopping chat A.
-      await ensureSidebarOpen(page)
+      // The sidebar "New chat" button this used to click is REMOVED (founder
+      // decision D7 — no New-chat UI entry anywhere; the /new palette item
+      // filters itself out while streaming anyway), so chat B comes from
+      // freshChat: a public-REST create opened through the SPA's own
+      // /#/sessions/<id> deep-link route. That goto is hash-only on the
+      // origin the page is already on, the router is a hash router
+      // (createHashHistory, src/main.tsx), and Playwright defines a
+      // same-URL-different-hash goto as a same-document navigation — so the
+      // view switches WITHOUT the document reload that would clear the
+      // in-memory cursor and reduce the return below to the full-replay
+      // path (the trap the switch-back comment names). The surviving
+      // marker assertion after the return makes that precondition
+      // machine-checked, not argued.
       await expect(stopButton(page), 'the view switches away while chat A is still running').toBeVisible()
-      await sidebarPanel(page).getByRole('button', { name: 'New chat', exact: true }).click()
-      await expect(sidebarPanel(page)).toBeHidden()
+      await page.evaluate(() => { (window as { navCatchupMark?: string }).navCatchupMark = 'scenario-c' })
+      const chatB = await freshChat(page)
+      await expect(
+        page.locator(`[data-active-session-id="${chatB.sessionId}"]`),
+        'the view switched to fresh chat B (bound) without a page reload',
+      ).toBeVisible({ timeout: 15_000 })
       await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
       // Switch back to chat A via the sidebar (not page.goto — a reload would
       // clear the in-memory cursor and defeat the point of this scenario; see
@@ -401,6 +415,15 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       // is never pressed — it cancels the running turn.
       await switchToSessionByTitle(page, titleA)
       await expect(stopButton(page), 'reattach reconstructs the still-running turn').toBeVisible()
+      // The window marker set before the switch survived: no document reload
+      // happened across the away-and-back round trip, so the catch-up below
+      // really exercises the in-memory cursor. A reload would silently turn
+      // this scenario into the post-reload replay path — the exact weaker
+      // behaviour this scenario exists to distinguish — and pass vacuously.
+      await expect(
+        page.evaluate(() => (window as { navCatchupMark?: string }).navCatchupMark),
+        'no reload across the away-and-back switch',
+      ).toBe('scenario-c')
       // Only NOW does the DOM reflect chat A again, so only now does
       // waitTurnDone's stop-button check actually observe chat A's own
       // state — checking it while chat B was active (the previous draft's
