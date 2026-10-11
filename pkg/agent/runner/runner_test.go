@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
@@ -105,7 +106,7 @@ func TestRunner_BidirectionalEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 
 	ch, err := fr.Run(ctx, runner.RunOptions{Input: "do something"})
 	if err != nil {
@@ -175,7 +176,7 @@ func TestRunner_BidirectionalEvents(t *testing.T) {
 // semantics: when no consent handler is registered and a permission request
 // arrives, the decision defaults to deny.
 func TestRunner_PermissionNoHandler_DeniesByDefault(t *testing.T) {
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 
 	// No decisions injected yet — simulates no consent handler.
 	decisions := fr.ReceivedDecisions()
@@ -195,7 +196,7 @@ func TestRunner_PermissionNoHandler_DeniesByDefault(t *testing.T) {
 
 // TestRunner_ConnectionTest verifies that Test() returns the configured result.
 func TestRunner_ConnectionTest(t *testing.T) {
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 	ctx := context.Background()
 
 	// Default: OK=true.
@@ -218,7 +219,7 @@ func TestRunner_ConnectionTest(t *testing.T) {
 // TestRunner_Cancel verifies that Cancel closes the event channel and is idempotent.
 func TestRunner_Cancel(t *testing.T) {
 	ctx := context.Background()
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 	ch, _ := fr.Run(ctx, runner.RunOptions{})
 
 	if fr.IsCancelled() {
@@ -247,7 +248,7 @@ func TestRunner_Cancel(t *testing.T) {
 // TestRunner_Resume verifies the Resume path records the runID.
 func TestRunner_Resume(t *testing.T) {
 	ctx := context.Background()
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 
 	ch, err := fr.Resume(ctx, "run-abc")
 	if err != nil {
@@ -478,7 +479,7 @@ func TestConsentDispatcher_RoutesPermissionRequests(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 	outCh := make(chan runner.RunEvent, 16)
 	handler := &stubConsentHandler{allow: true}
 
@@ -536,7 +537,7 @@ loop:
 // Uses the FakeRunner with context cancellation to simulate timeout.
 func TestRunner_TimeoutTerminates(t *testing.T) {
 	ctx := context.Background()
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 
 	// Start a run with a 50ms timeout via context (not RunOptions, since FakeRunner
 	// doesn't enforce a real timeout — we simulate via ctx).
@@ -576,7 +577,7 @@ func TestRunner_TimeoutTerminates(t *testing.T) {
 // cleanly when its context is canceled.
 func TestConsentDispatcher_ContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 	outCh := make(chan runner.RunEvent, 8)
 	handler := &stubConsentHandler{allow: true}
 

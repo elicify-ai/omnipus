@@ -85,4 +85,25 @@ describe('one owner of the initial attach', () => {
     expect(n).toBe(1)
     spy.mockRestore()
   })
+
+  it('a reconnect (new socket generation on the same connection) re-attaches even while the old replay flag is still up', () => {
+    const { sent, conn } = openConnection()
+    const c = conn as ReattachSender & { socketGeneration: number }
+    c.socketGeneration = 1
+    useSessionStore.setState({ activeSessionId: SID })
+    reattachActiveSession(c, vi.fn())
+    expect(attaches(sent)).toHaveLength(1)
+    c.socketGeneration = 2 // the socket dropped and reopened
+    reattachActiveSession(c, vi.fn())
+    expect(attaches(sent)).toHaveLength(2)
+  })
+
+  it('a different connection object is a different transport: its attach is sent', () => {
+    const a = openConnection()
+    useSessionStore.setState({ activeSessionId: SID })
+    reattachActiveSession(a.conn, vi.fn())
+    const b = openConnection()
+    reattachActiveSession(b.conn, vi.fn())
+    expect(attaches(b.sent)).toHaveLength(1)
+  })
 })

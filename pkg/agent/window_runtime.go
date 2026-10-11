@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -25,6 +27,11 @@ const (
 	// windowProducerParent is input a delegating parent sent to the steered
 	// (helper) session the turn runs in.
 	windowProducerParent
+	// windowProducerAnonymous is input whose origin could not be established
+	// (the lifecycle record that would say a parent sent it was unreadable). It
+	// is archived with the existing "anonymous" source kind: no human is
+	// invented and no authority is implied.
+	windowProducerAnonymous
 )
 
 func (p windowProducer) modelAppend(msg providers.Message, agentID string) session.ModelAppend {
@@ -36,6 +43,8 @@ func (p windowProducer) modelAppend(msg providers.Message, agentID string) sessi
 		in.Source = session.EntrySource{Kind: "connector"}
 	case windowProducerParent:
 		in.Source = session.EntrySource{Kind: "parent"}
+	case windowProducerAnonymous:
+		in.Source = session.EntrySource{Kind: "anonymous"}
 	default:
 		in.Source = session.EntrySource{Kind: "user"}
 	}
@@ -51,13 +60,25 @@ func (al *AgentLoop) inputProducer(ts *turnState) windowProducer {
 	if sessionID == "" {
 		sessionID = ts.sessionKey
 	}
+	unverifiable := false
 	if lc := al.GetSessionLifecycleStore(); lc != nil && sessionID != "" {
-		if rec, err := lc.Load(sessionID); err == nil && rec != nil && rec.SteeredBy != nil {
+		rec, err := lc.Load(sessionID)
+		switch {
+		case err == nil && rec != nil && rec.SteeredBy != nil:
 			return windowProducerParent
+		case err != nil && !errors.Is(err, session.ErrLifecycleNotFound):
+			// No record is a plain chat; a record that exists but cannot be read
+			// is not "no parent" - never label that input a person's (R1 #11).
+			logger.WarnCF("agent", "input producer: lifecycle record unreadable - input is archived as anonymous",
+				map[string]any{"session_id": sessionID, "error": err.Error()})
+			unverifiable = true
 		}
 	}
 	if al.mainConnectorTurn(ts.channel, sessionID) {
 		return windowProducerConnector
+	}
+	if unverifiable {
+		return windowProducerAnonymous
 	}
 	return windowProducerUser
 }
@@ -84,6 +105,9 @@ func (ts *turnState) appendWindowMessage(msg providers.Message, producer windowP
 	slot, _, err := store.AppendModelMessage(ctx, ts.sessionKey, producer.modelAppend(msg, ts.agent.ID))
 	if err != nil {
 		ts.setContextWindowError(err)
+		if msg.Role == "user" {
+			return session.ModelSlot{}, &messageNotSavedError{role: msg.Role, cause: err}
+		}
 		return session.ModelSlot{}, fmt.Errorf("context admission: append %s message: %w", msg.Role, err)
 	}
 	if msg.Role == "assistant" {
@@ -91,6 +115,25 @@ func (ts *turnState) appendWindowMessage(msg providers.Message, producer windowP
 	}
 	return slot, nil
 }
+
+// messageNotSavedReply is the only text a sender sees when its message could
+// not be saved (founder ruling 2026-10-11, R3 retired). The cause goes to the
+// log, never into this text.
+const messageNotSavedReply = "Sorry, I couldn't save your message \u2014 please try again later."
+
+// messageNotSavedError marks a refused turn: the sender's own message could not
+// be appended to the session. Error() keeps the operator-facing detail; the
+// sender-facing text is messageNotSavedReply.
+type messageNotSavedError struct {
+	role  string
+	cause error
+}
+
+func (e *messageNotSavedError) Error() string {
+	return fmt.Sprintf("context admission: append %s message: %v", e.role, e.cause)
+}
+
+func (e *messageNotSavedError) Unwrap() error { return e.cause }
 
 // recordCallIssuers remembers which archive record declared each of msg's tool
 // calls.

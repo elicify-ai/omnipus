@@ -32,6 +32,7 @@ type bindingRunFixture struct {
 	fault    *bindingWriteFault
 	worker   *bindingClaimWorker
 	judge    *bindingMetJudge
+	loop     *agent.AgentLoop
 }
 
 func newBindingRunFixture(t *testing.T, mode bindingFaultMode, failDisposition bool) *bindingRunFixture {
@@ -96,7 +97,7 @@ func newBindingRunFixture(t *testing.T, mode bindingFaultMode, failDisposition b
 	worker.store, worker.taskID = store, stored.ID
 	fault.target(filepath.Join(store.Dir(), stored.ID+".json"))
 	return &bindingRunFixture{store: store, executor: executor, taskID: stored.ID,
-		fault: fault, worker: worker, judge: judge}
+		fault: fault, worker: worker, judge: judge, loop: loop}
 }
 
 func seedBindingWorkspace(t *testing.T, home string) {

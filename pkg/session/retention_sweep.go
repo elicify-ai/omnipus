@@ -298,17 +298,18 @@ func (us *UnifiedStore) expireArchiveSessions(retentionDays int, removed *int, t
 			continue
 		}
 		notice, expErr := us.backend.expireSession(ent.Name(), retentionDays)
-		if expErr != nil {
-			slog.Warn("session: retention_sweep: archive expiry failed", "session_id", ent.Name(), "error", expErr)
-			errs = errors.Join(errs, fmt.Errorf("session %s: %w", ent.Name(), expErr))
-			continue
-		}
+		// Account for what happened even when part of the expiry failed: the
+		// partitions that were removed are gone and the window moved past them.
 		if notice.Note != "" {
 			*notices = append(*notices, expiryNotice{sessionID: ent.Name(), note: notice.Note})
 		}
 		if notice.RemovedPartitions > 0 {
 			*removed += notice.RemovedPartitions
 			touched[filepath.Join(us.baseDir, ent.Name())] = struct{}{}
+		}
+		if expErr != nil {
+			slog.Warn("session: retention_sweep: archive expiry failed", "session_id", ent.Name(), "error", expErr)
+			errs = errors.Join(errs, fmt.Errorf("session %s: %w", ent.Name(), expErr))
 		}
 	}
 	return errs

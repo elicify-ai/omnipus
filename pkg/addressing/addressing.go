@@ -115,6 +115,10 @@ type Capture struct {
 	// Discarded is set when the request was discarded before delivery (Stop
 	// before delivery); a discarded request can no longer be answered.
 	Discarded bool `json:"discarded,omitempty"`
+	// Delivered is set once a running turn of the receiver has been given the
+	// request. A request admitted while the receiver is stopped stays
+	// undelivered (held) until the receiver runs again.
+	Delivered bool `json:"delivered,omitempty"`
 }
 
 // Validate checks a capture is complete enough to route an answer.

@@ -165,9 +165,11 @@ func (te *TaskExecutor) launchMainTaskRun(ctx context.Context, t *task.Task, occ
 	if err != nil {
 		return "", te.mapLaunchRefusal(t, mainID, "launch", err)
 	}
-	updated, err := te.store.Update(t.ID, task.Patch{SessionID: &launched.SessionID})
+	// #1026: retry once like every other launcher path; both callers
+	// (StartTaskNow, executeMainTask) turn the error into the Failed disposition.
+	updated, err := te.persistTaskSessionBinding(t.ID, launched.SessionID)
 	if err != nil {
-		return "", fmt.Errorf("task_executor: persist the main run's session id: %w", err)
+		return "", err
 	}
 	_ = te.activateTaskGoal(updated, launched.SessionID)
 	run := te.openRun(t.ID, occurrenceMs, kind, launched.SessionID, recipients...)

@@ -19,7 +19,7 @@ import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateAgentModal } from './CreateAgentModal'
 import { useUiStore } from '@/store/ui'
-import { createAgent, fetchProviders, fetchRegistryTools, fetchSkills, ApiError } from '@/lib/api'
+import { createAgent, fetchProviders, fetchRegistryTools, fetchSkills, workspacesQueryKeys, ApiError } from '@/lib/api'
 import type { RegistryTool, Skill } from '@/lib/api'
 import type { Provider } from '@/lib/api/generated/openapi-types'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
@@ -536,6 +536,37 @@ describe('CreateAgentModal — submit success path', () => {
     const call = onCreate.mock.calls.at(-1)![0]
     expect(call.type).toBe('subagent_3p')
     expect(call.description).toBe('Runs in claude-code')
+  })
+})
+
+// ── post-create sidebar freshness (founder bug 2026-10-11) ──────────────────
+//
+// The sidebar roster is membership-driven (workspaceRoster.ts::memberRoster
+// reads the workspace's core_team + member_configs), so invalidating only
+// ['agents'] after a create left the new agent's sidebar row waiting for the
+// 30 s workspaces poll. onSuccess must invalidate the workspaces list queries
+// too. Asserted on QUERY STATE (isInvalidated) on the exact keys the sidebar
+// mounts — not on an invalidateQueries spy, which cannot tell a working key
+// from the documented no-op (workspacesQueryKeys.list() with no params
+// matches ZERO registered queries; see WorkspaceTeamTab.tsx's NOTE).
+describe('CreateAgentModal — post-create sidebar freshness', () => {
+  const activeListKey = workspacesQueryKeys.list({ status: 'active' })
+  const archivedListKey = workspacesQueryKeys.list({ status: 'archived' })
+
+  it('creating via the dialog invalidates the workspaces list queries alongside [\'agents\']', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    const { client } = renderModal({ open: true, onClose: vi.fn(), onCreate })
+    client.setQueryData(['agents'], [])
+    client.setQueryData(activeListKey, [])
+    client.setQueryData(archivedListKey, [])
+
+    await fillAndAdvanceToStep3()
+    fireEvent.click(screen.getByTestId('wizard-create'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalled())
+
+    expect(client.getQueryState(['agents'])?.isInvalidated).toBe(true)
+    expect(client.getQueryState(activeListKey)?.isInvalidated).toBe(true)
+    expect(client.getQueryState(archivedListKey)?.isInvalidated).toBe(true)
   })
 })
 

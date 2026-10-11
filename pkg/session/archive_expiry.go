@@ -78,7 +78,9 @@ func (s *ArchiveDayStore) SweepExpired(retentionDays int) (ExpiryNotice, error) 
 	cutoff := s.now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
 	removed, err := s.sweepRolledPartitionsLocked(cutoff)
 	if err != nil {
-		return ExpiryNotice{}, err
+		// What WAS removed is still gone: report it so the caller can move the
+		// window past it, alongside the failure.
+		return ExpiryNotice{RemovedPartitions: removed}, err
 	}
 
 	w, found, err := s.loadWindowLocked()
@@ -142,13 +144,17 @@ func (s *ArchiveDayStore) sweepRolledPartitionsLocked(cutoff time.Time) (int, er
 		if !info.ModTime().Before(cutoff) {
 			continue
 		}
-		if err := os.Remove(filepath.Join(s.dir(), name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := removePartitionFn(filepath.Join(s.dir(), name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return removed, fmt.Errorf("archive: sweep: remove %s: %w", name, err)
 		}
 		removed++
 	}
 	return removed, nil
 }
+
+// removePartitionFn deletes one expired rolled partition. A var so a test can
+// make one removal fail.
+var removePartitionFn = os.Remove
 
 // repairWindowLocked advances a window past content that no longer resolves
 // (its partition was swept) to the first retained COMPLETE group, and reports
@@ -316,12 +322,12 @@ func (b *archiveBackend) expireSession(sessionID string, retentionDays int) (Exp
 	if err != nil {
 		return ExpiryNotice{}, err
 	}
-	notice, err := store.SweepExpired(retentionDays)
-	if err != nil {
-		return notice, err
-	}
-	moved, err := b.advancePastExpiredLocked(sessionID, store)
-	if err != nil {
+	// A failed removal must not stop the cursor following the partitions that
+	// WERE removed (delta review R1 #6): advance whatever the sweep did, and
+	// return both failures.
+	notice, sweepErr := store.SweepExpired(retentionDays)
+	moved, advErr := b.advancePastExpiredLocked(sessionID, store)
+	if err := errors.Join(sweepErr, advErr); err != nil && !moved.moved {
 		return notice, err
 	}
 	if moved.moved {
@@ -333,7 +339,7 @@ func (b *archiveBackend) expireSession(sessionID string, retentionDays int) (Exp
 		notice.FirstRetained = moved.first
 		notice.Note = moved.note
 	}
-	return notice, nil
+	return notice, errors.Join(sweepErr, advErr)
 }
 
 // windowExpiry is what advancePastExpiredLocked did to the live cursor.

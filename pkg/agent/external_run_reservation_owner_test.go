@@ -17,7 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -53,7 +53,7 @@ func seedRetainedExternalChild(t *testing.T, al *AgentLoop) (string, *externalCL
 	sess := al.externalRunSession(childID)
 	sess.mu.Lock()
 	sess.started = true
-	sess.driver = runner.NewFakeRunner()
+	sess.driver = runnertest.NewFakeRunner()
 	sess.mu.Unlock()
 	return childID, sess
 }
@@ -69,7 +69,7 @@ func TestNEW5_ReservationIsOwned_OneCancelDoesNotEndTheOthersHold(t *testing.T) 
 	sess := al.externalRunSession("r4-own")
 	sess.mu.Lock()
 	sess.started = true
-	sess.driver = runner.NewFakeRunner()
+	sess.driver = runnertest.NewFakeRunner()
 	sess.mu.Unlock()
 	rec, err := lc.Load("r4-own")
 	require.NoError(t, err)
