@@ -1265,6 +1265,12 @@ func newSteeringRefusalError(err error) error {
 // launch request, so the child's record carries InitiatedBy.
 func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.Task, initiatedBy *session.InitiatedBy) (string, error) {
 	if t.SessionID != "" {
+		// S1: an already-bound session is dispatched again only when its
+		// durable record exists and the task is not Failed; otherwise refuse
+		// and start nothing (never return (sessionID, nil) for it).
+		if err := te.boundSessionRetryable(t); err != nil {
+			return "", err
+		}
 		generation := 1
 		if lifecycle := te.getLifecycleStore(); lifecycle != nil {
 			if rec, err := lifecycle.Load(t.SessionID); err == nil {

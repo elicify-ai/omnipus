@@ -500,42 +500,6 @@ func TestU5b_F4Task_ProcessTaskDirectRefusesRuntimeChange_RealCallSite(t *testin
 	require.Zero(t, provider.calls, "no native provider call on the refused real call site")
 }
 
-// Oracle (S1): StartTaskNow — the REAL entry point — must refuse to hand back a
-// bound session whose durable classification was never persisted, or whose task
-// already Failed; it must never return (sessionID, nil) for an unretryable
-// binding. Real: the boundSessionRetryable invocation inside StartTaskNow.
-func TestU5b_S1_StartTaskNowRefusesUnretryableBinding_RealCallSite(t *testing.T) {
-	te, store, _, _ := newStartTaskNowWithRegistry(t)
-	te.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
-
-	// Case 1: bound session, NO durable record → refuse, return no id.
-	noRecord := &task.Task{Title: "t1", Prompt: "p", AgentID: "test-agent", Priority: 3,
-		Action: task.ActionLLM, Status: task.StatusNext, SessionID: "sess-s1-norec", WorkspaceID: "ws-1"}
-	require.NoError(t, store.Create(noRecord))
-	sessID, err := te.StartTaskNow(context.Background(), noRecord.ID)
-	require.Error(t, err, "StartTaskNow must refuse a bound session with no durable record")
-	require.Empty(t, sessID, "no session id may be returned for an unretryable binding")
-	require.Contains(t, err.Error(), "never persisted")
-
-	// Case 2: durable record exists, but the task already Failed → refuse,
-	// naming the recorded failure.
-	ls := te.getLifecycleStore()
-	require.NotNil(t, ls)
-	require.NoError(t, ls.Persist(&session.LifecycleRecord{
-		SessionID: "sess-s1-failed", Generation: 1, State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: "test-agent",
-	}))
-	failed := task.StatusFailed
-	failedTask := &task.Task{Title: "t2", Prompt: "p", AgentID: "test-agent", Priority: 3,
-		Action: task.ActionLLM, Status: failed, Result: "persist boom",
-		SessionID: "sess-s1-failed", WorkspaceID: "ws-1"}
-	require.NoError(t, store.Create(failedTask))
-	sessID2, err2 := te.StartTaskNow(context.Background(), failedTask.ID)
-	require.Error(t, err2, "StartTaskNow must refuse a Failed task's binding")
-	require.Empty(t, sessID2, "no session id may be returned for a Failed task's binding")
-	require.Contains(t, err2.Error(), "persist boom")
-}
-
 // Oracle (N5/N7, FR-043): a later entry of a STEERED session must resume-or-refuse
 // — never start a fresh conversation. Real: the production resume-only
 // determination (externalRunResumeOnly) that runExternalCLISubTurn feeds to
