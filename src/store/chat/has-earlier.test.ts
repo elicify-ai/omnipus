@@ -14,7 +14,7 @@ import { useChatStore } from './store'
 import { makeBucketMessages } from './messages'
 import { recordSessionHasEarlier } from './has-earlier'
 import { useConnectionStore } from '@/store/connection'
-import type { ChatMessage } from './types'
+import type { ChatMessage, SessionChatState } from './types'
 
 const SID = 'sess-has-earlier'
 
@@ -44,10 +44,10 @@ function seedBucket(messages: ChatMessage[] = []): void {
   }))
 }
 
-function bucket(): Record<string, unknown> {
+function bucket(): SessionChatState {
   const b = useChatStore.getState().sessionsById[SID]
   expect(b, 'bucket exists').toBeTruthy()
-  return b as Record<string, unknown>
+  return b!
 }
 
 describe('has_earlier_messages → chat state', () => {

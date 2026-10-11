@@ -221,7 +221,6 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
     noteUnresolved(sid, op, userInitiated)
     return
   }
-  let markerApplied = false
   let deferred = false
   try {
     withBucket(sid, (b) => {
@@ -233,7 +232,6 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
         return {}
       }
       const merged = mergeServerProjection(b, fresh, op)
-      markerApplied = true
       return { messagesById: merged.messagesById, messageOrder: merged.messageOrder }
     })
   } catch (error) {
