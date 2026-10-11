@@ -200,11 +200,10 @@ func TestHeldRequest_AskerGone_DroppedNotDeliveredIntoAVoid(t *testing.T) {
 // front of the model - not just flip a flag. The scripted provider asserts the
 // model actually receives the request text.
 func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
-	al, original, provider := r5AdmitRoot(t)
-	// A third scripted answer for the turn that carries the held request.
-	provider.answers = append(provider.answers, "request answered")
-	provider.release = append(provider.release, make(chan struct{}))
-	provider.entered = make(chan int, 3)
+	// A third scripted answer, for the turn that carries the held request, is
+	// staged before the first turn starts so no field is written under a
+	// running provider call.
+	al, original, provider := r5AdmitRootWithAnswers(t, "partial root work", "root resumed exactly once", "request answered")
 	r5StopRoot(t, al, original)
 	provider.open(0)
 	joinGoalFixtureRuns(t, al)
