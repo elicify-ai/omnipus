@@ -173,9 +173,17 @@ afterEach(() => {
 
 /**
  * Let every already-queued promise continuation run, then look. The code under
- * test is a pure promise chain over a mocked `request` (no timers of its own),
- * so one macrotask turn drains it completely - the result does not depend on
- * how long the machine takes, unlike a fixed 10-20 ms sleep.
+ * test is a promise chain over a mocked `request`, so one macrotask turn drains
+ * THAT chain completely - the result does not depend on how long the machine
+ * takes, unlike a fixed 10-20 ms sleep.
+ *
+ * S5-12/N12: one macrotask is NOT a full observation window for a NEGATIVE
+ * assertion. The comment here used to claim the code has "no timers of its
+ * own"; it does - clear-refetch.ts arms setTimeout(onConfirmTimeout) and
+ * frames.ts has gap/replay retry timers - so a regression that issued the read
+ * from a later timer tick would sail past a bare `settle()`. Use this only
+ * where the code under test genuinely has no timer path; the timer-covering
+ * negative in the S5-12 block below advances a fake clock instead.
  */
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -800,5 +808,26 @@ describe('/clear re-read — E1/E2: a refused /clear is bounded and never silent
     expect(pendingClearRefetches[SID]).toBeTruthy()
     useSessionStore.getState().pruneSessionDescriptor(SID)
     expect(pendingClearRefetches[SID]).toBeUndefined()
+  })
+})
+
+describe('S5-12/N12 — a negative is checked past every timer window, not one macrotask', () => {
+  it("a plain message's done arms nothing, checked after 5 s of fake-timer time", async () => {
+    vi.useFakeTimers()
+    try {
+      seedBucket([localMessage({ id: 'u-1', role: 'user', content: 'earlier question' })])
+      useChatStore.getState().sendMessage('hello there')
+      useChatStore.getState().handleFrame(doneFrame('turn-x', 1))
+
+      // A bare `settle()` only proves "not called YET" — every path that could
+      // issue this read later runs from a timer (frames.ts's gap and replay
+      // retries, clear-refetch.ts's own bound), and the shortest of those is
+      // well under this window. Advancing the clock is what turns the negative
+      // into a real claim.
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(requestMock).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
