@@ -18,6 +18,8 @@ properties:
     description: >
       Session this error relates to. Optional: global errors (auth, connection)
       are not tied to a specific session.
+      A message-scoped refusal (client_message_id set, no first_message_error)
+      carries the chat the message was sent from.
   message:
     type: string
     minLength: 1
@@ -27,7 +29,11 @@ properties:
     type: string
     minLength: 1
     maxLength: 128
-    description: The initiating ordinary first message's client-supplied ID.
+    description: >-
+      The client_message_id of the user message this error is about. With first_message_error it is
+      the first-send outcome. Without first_message_error it marks a message-scoped refusal: the
+      named message was refused (for example an @-recipient send) and the error ends no turn, so a
+      client must not treat it as the end of the chat's running turn.
   first_message_error:
     type: string
     enum:
