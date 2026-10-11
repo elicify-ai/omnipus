@@ -472,20 +472,6 @@ func (sq *steeringQueue) lenScope(scope string) int {
 	return len(sq.queues[normalizeSteeringScope(scope)])
 }
 
-// Steer enqueues a user message to be injected into the currently running
-// agent loop. The message will be picked up after the current tool finishes
-// executing, causing any remaining tool calls in the batch to be skipped.
-func (al *AgentLoop) Steer(msg providers.Message) error {
-	scope := ""
-	agentID := ""
-	if ts := al.getAnyActiveTurnState(); ts != nil {
-		scope = ts.sessionKey
-		agentID = ts.agentID
-	}
-	_, _, err := al.enqueueSteeringMessage(scope, agentID, msg, "")
-	return err
-}
-
 // enqueueSteeringFromMessage redirects an inbound bus message into the
 // steering queue for the scope that owns the currently running turn for
 // this message's chat. Used by sessionWorker.enqueue when a same-scope
@@ -1060,7 +1046,10 @@ func (al *AgentLoop) enqueueSteeringItemWithStatus(scope, agentID string, item s
 		Source:    "Steer",
 		TracePath: "turn.interrupt.received",
 	}
-	if ts := al.getAnyActiveTurnState(); ts != nil {
+	// Attribute the event to the turn that owns THIS scope. A process-wide
+	// "first active turn" would report a steer for session B against whichever
+	// session happens to be registered first.
+	if ts := al.getActiveTurnState(normalizeSteeringScope(scope)); ts != nil {
 		meta = ts.eventMeta("Steer", "turn.interrupt.received")
 	} else {
 		if strings.TrimSpace(agentID) != "" {
@@ -1551,27 +1540,6 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		})
 }
 
-func (al *AgentLoop) InterruptGraceful(hint string) error {
-	ts := al.getAnyActiveTurnState()
-	if ts == nil {
-		return fmt.Errorf("no active turn")
-	}
-	if !ts.requestGracefulInterrupt(hint) {
-		return fmt.Errorf("turn %s cannot accept graceful interrupt", ts.turnID)
-	}
-
-	al.emitEvent(
-		EventKindInterruptReceived,
-		ts.eventMeta("InterruptGraceful", "turn.interrupt.received"),
-		InterruptReceivedPayload{
-			Kind:    InterruptKindGraceful,
-			HintLen: len(hint),
-		},
-	)
-
-	return nil
-}
-
 // collectDescendantTurnIDs walks activeTurnStates and returns the turn IDs of
 // every turnState whose routingSessionID matches sessionID. This is the
 // canonical session-match predicate shared by Interrupt's whole-chat cascade
@@ -2036,26 +2004,6 @@ func (al *AgentLoop) sessionTurnsStillAlive(sessionID string) []*turnState {
 	return alive
 }
 
-func (al *AgentLoop) InterruptHard() error {
-	ts := al.getAnyActiveTurnState()
-	if ts == nil {
-		return fmt.Errorf("no active turn")
-	}
-	if !ts.requestHardAbort() {
-		return fmt.Errorf("turn %s is already aborting", ts.turnID)
-	}
-
-	al.emitEvent(
-		EventKindInterruptReceived,
-		ts.eventMeta("InterruptHard", "turn.interrupt.received"),
-		InterruptReceivedPayload{
-			Kind: InterruptKindHard,
-		},
-	)
-
-	return nil
-}
-
 // ====================== SubTurn Result Polling ======================
 //
 // dequeuePendingSubTurnResults was deleted 2026-09-24 as an unreachable
@@ -2070,7 +2018,7 @@ func (al *AgentLoop) InterruptHard() error {
 //
 // Use this when the user explicitly requests immediate termination (e.g., "stop now", "abort").
 // For graceful interruption that allows the agent to finish the current tool and summarize,
-// use Steer() instead.
+// use a session-scoped steer instead.
 func (al *AgentLoop) HardAbort(sessionKey string) error {
 	tsInterface, ok := al.activeTurnStates.Load(sessionKey)
 	if !ok {
@@ -2100,37 +2048,6 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 	}
 
 	return nil
-}
-
-// ====================== Follow-Up Injection ======================
-
-// InjectFollowUp enqueues a message to be automatically processed after the current
-// turn completes. Unlike Steer(), which interrupts the current execution, InjectFollowUp
-// waits for the current turn to finish naturally before processing the message.
-//
-// This is useful for:
-// - Automated workflows that need to chain multiple turns
-// - Background tasks that should run after the main task completes
-// - Scheduled follow-up actions
-//
-// The message will be processed via Continue() when the agent becomes idle.
-func (al *AgentLoop) InjectFollowUp(msg providers.Message) error {
-	// InjectFollowUp uses the same steering queue mechanism as Steer(),
-	// but the semantic difference is in when it's called:
-	// - Steer() is called during active execution to interrupt
-	// - InjectFollowUp() is called when planning future work
-	//
-	// Both end up in the same queue and are processed by Continue()
-	// when the agent is idle.
-	return al.Steer(msg)
-}
-
-// ====================== API Aliases for Design Document Compatibility ======================
-
-// InjectSteering is an alias for Steer() to match the design document naming.
-// It injects a steering message into the currently running agent loop.
-func (al *AgentLoop) InjectSteering(msg providers.Message) error {
-	return al.Steer(msg)
 }
 
 // ====================== ADR-053 S3: Typed SessionMessage Transport ======================
