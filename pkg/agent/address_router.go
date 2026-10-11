@@ -160,6 +160,7 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	if err := ledger.Put(capture); err != nil {
 		return "", "", storageRefusal("the request could not be recorded", err, ErrPeerRefused)
 	}
+	al.pendingRequests.Store(requestID, receiverSessionID)
 	entry := session.TranscriptEntry{
 		ID:        requestID,
 		Role:      "user",
@@ -171,6 +172,7 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 		Participant: participantFromSender(a.Sender, al.agentDisplayName),
 	}
 	if err := store.AppendTranscriptStrict(receiverSessionID, entry); err != nil {
+		al.pendingRequests.Delete(requestID)
 		if dErr := ledger.Discard(receiverSessionID, requestID); dErr != nil {
 			logger.WarnCF("agent", "request capture could not be discarded after a failed append",
 				map[string]any{"request_id": requestID, "error": dErr.Error()})
@@ -212,7 +214,7 @@ func composeRequestText(requestID, senderLabel, body string) string {
 	if strings.TrimSpace(senderLabel) == "" {
 		senderLabel = "a sender"
 	}
-	return fmt.Sprintf("Request %s from %s. To answer it, call send_message with reply_to=%q and your answer as content; "+
+	return fmt.Sprintf("Request %s from %s. To answer it, call the answer_request tool with request_id=%q and your answer as text; "+
 		"a plain reply in this conversation does not reach the sender.\n\n%s", requestID, senderLabel, requestID, body)
 }
 
@@ -404,14 +406,19 @@ func (r AddressRouter) Reply(ctx context.Context, req tools.ReplyRequest) (tools
 	if err != nil {
 		return tools.ReplyReceipt{}, replyRefusal(err)
 	}
+	var receipt tools.ReplyReceipt
 	switch capture.Source.Kind {
 	case addressing.SourceConnector:
-		return al.replyViaConnector(ctx, capture, responder, req)
+		receipt, err = al.replyViaConnector(ctx, capture, responder, req)
 	case addressing.SourceConversation:
-		return al.replyIntoConversation(capture, responder, req)
+		receipt, err = al.replyIntoConversation(capture, responder, req)
 	default:
 		return tools.ReplyReceipt{}, fmt.Errorf("%w", addressing.ErrUnusableCorrelation)
 	}
+	if err == nil {
+		al.pendingRequests.Delete(capture.RequestID) // answered: no reminder owed
+	}
+	return receipt, err
 }
 
 // storageRefusal turns a server-side storage or configuration failure into the
@@ -610,10 +617,15 @@ const ownerWakeMetadataKey = "owner_wake"
 // in one place so the producer and the intake tests share its exact shape.
 func ownerWakeInbound(c addressing.Capture, ownerAgentID, workspaceID string, answer session.TranscriptEntry) bus.InboundMessage {
 	return bus.InboundMessage{
-		Channel:   "webchat",
-		ChatID:    "answer:" + answer.ID,
-		Sender:    bus.SenderInfo{CanonicalID: "answer:" + answer.ID},
-		Content:   fmt.Sprintf("%s answered request %s (see the answer above).", answer.AgentID, c.RequestID),
+		Channel: "webchat",
+		ChatID:  "answer:" + answer.ID,
+		Sender:  bus.SenderInfo{CanonicalID: "answer:" + answer.ID},
+		// The answer BODY rides the wake itself, labelled with who answered and
+		// the request id: the wake is the owner's next model input, so the answer
+		// is in context the moment it arrives with nothing to fetch. The answer
+		// entry in the transcript stays chat-only, so the text is in the model's
+		// context exactly once (peer text is untrusted data, labelled as such).
+		Content:   fmt.Sprintf("%s answered your request %s:\n\n%s", answer.AgentID, c.RequestID, answer.Content),
 		SessionID: c.Source.SessionID,
 		Metadata:  map[string]string{"agent_id": ownerAgentID, "workspace_id": workspaceID, ownerWakeMetadataKey: "1"},
 	}
@@ -627,6 +639,7 @@ func (al *AgentLoop) DiscardRequest(receiverSessionID, requestID string) error {
 	if ledger == nil {
 		return errors.New("session store unavailable")
 	}
+	al.pendingRequests.Delete(requestID) // discarded: it can no longer be answered
 	return ledger.Discard(receiverSessionID, requestID)
 }
 
