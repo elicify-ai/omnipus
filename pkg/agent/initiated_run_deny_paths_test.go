@@ -19,6 +19,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,7 +94,7 @@ func TestAuthorizeInitiatedRunFor_DenyPaths(t *testing.T) {
 				// Instrument: the read must really fail, and not as "not found".
 				_, lerr := ls.Load(tc.ini.SessionID)
 				require.Error(t, lerr, "instrument: the lifecycle read must fail")
-				require.False(t, os.IsNotExist(lerr),
+				require.False(t, errors.Is(lerr, os.ErrNotExist),
 					"instrument: the failure must be a read fault, not a missing record")
 			}
 

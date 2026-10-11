@@ -23,11 +23,12 @@
  *
  * BDD:
  *   Given auto_recap_enabled is true and the idle timeout is one minute
- *   And  a chat session with the default agent
+ *   And  a fresh chat with the agent the sidebar has selected
  *
  *   When the user states a distinctive fact the agent would not otherwise know
  *   And  the session sits idle past the idle timeout
- *   Then last-session.md under agents/<id>/.omnipus/ is written and carries the fact
+ *   Then last-session.md under agents/<THAT agent>/.omnipus/ is written and
+ *        carries the fact
  *
  *   When the user opens a NEW chat with the same agent
  *   And  asks a question only answerable from that recap
@@ -38,24 +39,27 @@
  * FR-028/FR-030 (continuity), pkg/agent/idle_timeout_seam_test.go (the Go half
  * of the same chain), pkg/memrooms/rooms.go (last-session.md path).
  *
- * UNVERIFIED — see the report that delivered it: this environment has no
- * node_modules and no live gateway, so this spec has never been executed. Run
- * it once on the CI cluster before trusting a green from it.
+ * S5 fixes applied here:
+ *   S5-01 — the roster is a BARE ARRAY (contracts listAgents;
+ *           rest_agents.go::listAgents), not `{agents: [...]}`. The agent id no
+ *           longer comes from a hand-rolled roster read at all: `freshChat`
+ *           (fixtures/session-setup.ts) resolves it the way the SPA does.
+ *   S5-02 — every mutating request carries X-CSRF-Token, read from the page's
+ *           own cookie jar (the sibling's pageCsrfHeaders rule). The afterEach
+ *           restore no longer swallows its failure: a swallowed restore leaks a
+ *           one-minute idle timeout into every later spec in the shard.
+ *   S5-03 — the recap file is polled for the agent of the session THIS test
+ *           opened, not the first roster entry, which need not be the page's
+ *           selected agent.
  */
 
 import { test, expect, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 import { chatInput, assistantMessages } from './fixtures/selectors';
-import { freshChat } from './fixtures/session-setup';
+import { freshChat, originOf } from './fixtures/session-setup';
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
 const OMNIPUS_HOME = process.env.OMNIPUS_HOME || path.join(process.env.HOME || '', '.omnipus');
-
-const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
-  ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-  : path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures/.auth/admin.json');
 
 /** One idle timeout of margin on top of the ticker's own minute. */
 const IDLE_TIMEOUT_MINUTES = 1;
@@ -72,36 +76,34 @@ interface MemorySettingsWire {
   memory_retros_days?: number;
 }
 
-async function authHeaders(): Promise<Record<string, string>> {
-  const state = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf-8')) as {
-    cookies?: { name: string; value: string }[];
-  };
-  const cookie = (state.cookies || []).map((c) => `${c.name}=${c.value}`).join('; ');
-  return { 'Content-Type': 'application/json', Cookie: cookie };
+/**
+ * The CSRF token for this page's own session, from the page's cookie jar —
+ * the same rule fixtures/session-setup.ts::pageCsrfHeaders applies, so a
+ * mutating request from a spec is authorised exactly like one from the SPA.
+ * Omitting it is what S5-02 caught: the PUT was rejected, and the swallowed
+ * restore then leaked the settings it was meant to undo.
+ */
+async function pageCsrfHeaders(page: Page): Promise<Record<string, string>> {
+  const cookies = await page.context().cookies();
+  const csrfCookie = cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf');
+  return csrfCookie ? { 'X-CSRF-Token': csrfCookie.value } : {};
 }
 
 async function putMemorySettings(page: Page, body: MemorySettingsWire): Promise<void> {
-  const resp = await page.request.put(`${BASE_URL}/api/v1/settings/memory`, {
-    headers: await authHeaders(),
+  const resp = await page.request.put(`${originOf(page)}/api/v1/settings/memory`, {
+    headers: { 'Content-Type': 'application/json', ...(await pageCsrfHeaders(page)) },
     data: JSON.stringify(body),
   });
-  expect(resp.ok(), `PUT /api/v1/settings/memory failed: ${resp.status()} ${await resp.text()}`).toBe(true);
-}
-
-/** The default chat agent's id, from the roster the SPA itself uses. */
-async function resolveDefaultAgentID(page: Page): Promise<string> {
-  const resp = await page.request.get(`${BASE_URL}/api/v1/agents`, { headers: await authHeaders() });
-  expect(resp.ok(), 'GET /api/v1/agents must answer').toBe(true);
-  const body = (await resp.json()) as { agents?: { id: string; type?: string }[] };
-  const chat = (body.agents || []).find((a) => !a.type || a.type === 'core' || a.type === 'custom');
-  expect(chat, 'the roster must expose a chat-capable agent').toBeTruthy();
-  return chat!.id;
+  expect(
+    resp.ok(),
+    `PUT /api/v1/settings/memory failed: ${resp.status()} ${await resp.text()}`,
+  ).toBe(true);
 }
 
 /**
- * Poll for the recap file. The budget is deliberately larger than the recap
- * pipeline's own overall cap: a budget equal to that cap races the pipeline
- * with zero margin even on the successful path.
+ * Poll for the recap file of THIS test's agent. The budget is deliberately
+ * larger than the recap pipeline's own overall cap: a budget equal to that cap
+ * races the pipeline with zero margin even on the successful path.
  */
 async function pollLastSession(page: Page, agentId: string, needle: string): Promise<string> {
   const lastSessionPath = path.join(OMNIPUS_HOME, 'agents', agentId, '.omnipus', 'last-session.md');
@@ -126,18 +128,20 @@ async function pollLastSession(page: Page, agentId: string, needle: string): Pro
 let baseline: MemorySettingsWire | null = null;
 
 test.beforeEach(async ({ page }) => {
-  const resp = await page.request.get(`${BASE_URL}/api/v1/settings/memory`, {
-    headers: await authHeaders(),
+  const resp = await page.request.get(`${originOf(page)}/api/v1/settings/memory`, {
+    headers: await pageCsrfHeaders(page),
   });
-  baseline = resp.ok() ? ((await resp.json()) as MemorySettingsWire) : null;
+  expect(resp.ok(), `GET /api/v1/settings/memory failed: ${resp.status()}`).toBe(true);
+  baseline = (await resp.json()) as MemorySettingsWire;
 });
 
 test.afterEach(async ({ page }) => {
   if (!baseline) return;
   const b = baseline;
   baseline = null;
-  // Exception-safe restore: these are GLOBAL gateway settings, and a failed
-  // assertion must not leak a one-minute idle timeout to sibling specs.
+  // NOT swallowed (S5-02): these are GLOBAL gateway settings, and a failed
+  // restore leaves a one-minute idle timeout in force for every later spec
+  // sharing this shard's gateway. A restore failure must fail loudly here.
   await putMemorySettings(page, {
     auto_recap_enabled: b.auto_recap_enabled ?? false,
     idle_timeout_minutes: b.idle_timeout_minutes ?? 30,
@@ -145,13 +149,13 @@ test.afterEach(async ({ page }) => {
     bootstrap_recap_max_per_minute: b.bootstrap_recap_max_per_minute ?? 5,
     session_days: b.session_days ?? 90,
     memory_retros_days: b.memory_retros_days ?? 180,
-  }).catch(() => {});
+  });
 });
 
 test(
   'recap_continuity: a fact survives into the next session via last-session.md injection',
   async ({ page }) => {
-    // Worst case: navigation+input ~20s, turn 1 ~90s, the idle wait itself
+    // Worst case: setup ~20s, turn 1 ~90s, the idle wait itself
     // (IDLE_WAIT_MS = 120s), the recap poll 120s, new-session setup ~30s,
     // turn 2 ~90s = ~470s. 900s leaves real headroom for CI jitter.
     test.setTimeout(900_000);
@@ -163,7 +167,11 @@ test(
 
     await page.goto('/');
     await expect(chatInput(page)).toBeVisible({ timeout: 20_000 });
-    const agentId = await resolveDefaultAgentID(page);
+
+    // The session this test drives, and the agent it belongs to. `freshChat`
+    // resolves the agent the SPA has selected and opens a real chat for it, so
+    // the recap file polled below belongs to THIS session's agent (S5-03).
+    const first = await freshChat(page);
 
     // A nonce no model could produce from its own priors: the only way it can
     // reach the second session is through last-session.md.
@@ -175,10 +183,11 @@ test(
 
     // ── The idle ticker, which is the ONLY recap trigger since DEL-08 ────────
     await page.waitForTimeout(IDLE_WAIT_MS);
-    await pollLastSession(page, agentId, nonce);
+    await pollLastSession(page, first.agentId, nonce);
 
     // ── A NEW chat with the same agent: the recap must be injected ──────────
-    await freshChat(page);
+    const second = await freshChat(page, first.agentName);
+    expect(second.sessionId).not.toBe(first.sessionId);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 15_000 });
     const fresh = chatInput(page);
     await fresh.fill('What was the launch codename I told you about? Answer with just the codename.');

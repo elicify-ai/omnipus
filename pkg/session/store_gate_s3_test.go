@@ -71,7 +71,7 @@ func TestRetentionSweep_ExpiredPartitionLeavesAReadableWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, removed, 1)
 	_, statErr := os.Stat(rolled)
-	require.True(t, os.IsNotExist(statErr), "the aged rolled partition must be gone")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "the aged rolled partition must be gone")
 
 	view, err := s.WindowView(context.Background(), sid)
 	require.NoError(t, err, "the window must stay readable after the live retention sweep")
