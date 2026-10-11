@@ -19,6 +19,7 @@ import {
   PARTICIPANT_LABEL_MAX_CHARS,
   collectPairedReplyToIds,
   isSendChipHiddenByReply,
+  participantInitial,
   participantLabel,
   replyHeaderParts,
   sourceLabel,
@@ -190,5 +191,54 @@ describe('F17 (1) — the send_message chip paired with a reply is hidden', () =
 describe('display_name is plain text — the label helpers never transform it', () => {
   it('markdown-ish display_name passes through verbatim (rendering is the row test below)', () => {
     expect(participantLabel(human('**Alice** <b>X</b>', 'slack'), AGENTS, 'ws-main', WORKSPACES)).toBe('**Alice** <b>X</b> · Slack')
+  })
+})
+
+// C9 (R3 delta re-review): the truncation and the avatar initial counted
+// UTF-16 CODE UNITS, so an emoji (astral) name truncated INSIDE a surrogate
+// pair — a broken glyph at the end of the label and a lone-surrogate (blank)
+// avatar initial — and a combined-character name could lose its combining
+// mark. The rule: slicing and counting happen on GRAPHEMES (Intl.Segmenter
+// where the runtime has it, code points as the fallback), never on UTF-16
+// units.
+describe('truncateParticipantLabel / participantInitial — grapheme-safe (C9)', () => {
+  it('an astral (emoji) name truncates on whole-grapheme boundaries, never inside a surrogate pair', () => {
+    const name = '🚀'.repeat(60) // 60 graphemes = 120 UTF-16 units — over the cap either way
+    const t = truncateParticipantLabel(name)
+    expect(t.truncated).toBe(true)
+    expect(t.full).toBe(name)
+    // 39 whole rockets + the ellipsis — the old UTF-16 slice(0, 39) ended
+    // mid-rocket (a lone low surrogate rendered as a broken glyph).
+    expect(t.text).toBe('🚀'.repeat(PARTICIPANT_LABEL_MAX_CHARS - 1) + '…')
+  })
+
+  it('a combined-character name keeps each base + combining mark together when truncated', () => {
+    const name = 'é'.repeat(60) // "é" as e + U+0301 — 60 graphemes, 120 units
+    const t = truncateParticipantLabel(name)
+    expect(t.truncated).toBe(true)
+    // Every truncated character is the full two-code-point grapheme — the
+    // old slice could strand a bare "e" (or a combining mark with no base).
+    expect(t.text).toBe('é'.repeat(PARTICIPANT_LABEL_MAX_CHARS - 1) + '…')
+  })
+
+  it('a name over the cap in UTF-16 units but under it in graphemes is NOT truncated', () => {
+    const name = '🚀'.repeat(30) // 30 graphemes (fits) = 60 UTF-16 units (does not)
+    expect(truncateParticipantLabel(name)).toEqual({ text: name, full: name, truncated: false })
+  })
+
+  it('the avatar initial is the whole first grapheme of an emoji name', () => {
+    expect(participantInitial('🚀 Rocket')).toBe('🚀')
+  })
+
+  it('the avatar initial keeps the combining mark of a combined first character', () => {
+    // "étude" with a combining acute (e + U+0301) on the first letter.
+    // The initial is upper-cased (the pre-existing charAt(0).toUpperCase()
+    // behaviour) AND the combining mark survives — the broken shapes were a
+    // lone surrogate or a stranded mark, not the case.
+    expect(participantInitial('étude Zoé')).toBe('É')
+  })
+
+  it('the avatar initial of an empty name is empty (no crash, no guessing)', () => {
+    expect(participantInitial('')).toBe('')
   })
 })

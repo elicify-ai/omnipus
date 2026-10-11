@@ -1877,6 +1877,50 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               break
             }
 
+            // C2 (contract: ARCHITECT-C2-contract.md, decided 2026-10-11):
+            // a MESSAGE-SCOPED refusal — the frame carries session_id AND
+            // client_message_id and no first_message_error. The server
+            // refused ONE message (an @-addressed send, or any
+            // client_message_id-tagged refusal of a mid-turn send) while the
+            // turn it was sent into KEEPS RUNNING: route to that chat (the
+            // session tag already does that), render the refusal as a notice
+            // bubble, and touch nothing turn-shaped — no streaming-bubble
+            // sweep, no isStreaming=false, no activeTurnId clear, no
+            // markTurnFinished, no drain (a live turn in that chat keeps its
+            // Stop; tagging the session alone still dropped it, which is why
+            // this branch exists). The refused ROW is reconciled by the
+            // paired MessageStatusFrame{failed} (applyMessageStatusFrame).
+            // Nothing is persisted server-side on a refusal, so no
+            // replay/reload can re-deliver this frame; the per-bucket
+            // entry-id check is belt-and-braces dedup. An error frame
+            // without client_message_id keeps today's full turn-ending
+            // behaviour below.
+            if (frameSessionId && frame.client_message_id && !frame.first_message_error) {
+              const refusalSid = frameSessionId
+              withBucket(refusalSid, (b) => {
+                if (errorDedupId && getMessages(b).some((m) => m.errorEntryId === errorDedupId)) return {}
+                const errMsg: ChatMessage = {
+                  id: generateId(),
+                  role: 'assistant',
+                  content: llmError ? translatedMessage : safeMessage,
+                  timestamp: new Date().toISOString(),
+                  status: 'error',
+                  isStreaming: false,
+                  ...(llmError
+                    ? {
+                        errorCode: llmError.code,
+                        ...(errorDetail !== undefined ? { errorDetail } : {}),
+                        ...(errorEntryId ? { errorEntryId } : {}),
+                        ...(llmError.facts ? { errorFacts: llmError.facts } : {}),
+                      }
+                    : {}),
+                }
+                return applyMessageArray([...getMessages(b), errMsg], b)
+              })
+              logDiagnostic('chatMessageScopedRefusal', { sessionId: refusalSid })
+              break
+            }
+
             // C8: a terminal error frame must always resolve the in-flight turn.
             // When the frame can't be routed to a bucket (no active session /
             // missing session_id in production), fall back to a global sweep so

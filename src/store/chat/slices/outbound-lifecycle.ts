@@ -20,7 +20,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
 import { isClearCommandText, isClearContextMarker } from '@/lib/clearMarker'
-import { resolveAddressedAgent } from '../recipientSend'
+import { checkAddressedAgent, recipientAddressResendBlockMessage, recipientAddressUnresolvedBlockMessage, resolveAddressedAgent } from '../recipientSend'
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
@@ -184,6 +184,31 @@ function performResendMessage(
   const content = existing.content
   const mediaRefs = existing.mediaRefs ?? []
   const targetSid = sid
+
+  // C8 (R3 delta re-review): never drop the @ silently on a resend. A
+  // '__pending' target has no session for the recipient pair to ride on (the
+  // recipient-only-with-session_id wire rule), and an agents cache that has
+  // never resolved cannot check the address at all — the old code sent both
+  // unaddressed, a silent drop. Both refuse VISIBLY, the same way the
+  // composer blocks an @-send in a brand-new chat, and the row stays in its
+  // failed state (before the 'sending' reset below) so Retry remains.
+  const addressCheck = checkAddressedAgent(content)
+  if (addressCheck.kind === 'unresolvable') {
+    useUiStore.getState().addToast({
+      message: recipientAddressUnresolvedBlockMessage(addressCheck.nameGuess),
+      variant: 'warning',
+    })
+    logDiagnostic('chatRecipientResendBlockedAgentsUnavailable', { nameGuess: addressCheck.nameGuess })
+    return
+  }
+  if (targetSid === '__pending' && addressCheck.kind === 'addressed') {
+    useUiStore.getState().addToast({
+      message: recipientAddressResendBlockMessage(addressCheck.addressed.agentName),
+      variant: 'warning',
+    })
+    logDiagnostic('chatRecipientResendBlockedNoSession', { agentName: addressCheck.addressed.agentName })
+    return
+  }
 
   // Reset the SAME message in place first — 'sending' — never a second
   // bubble, unlike the pre-fix `sendMessage(content)` call this replaces.

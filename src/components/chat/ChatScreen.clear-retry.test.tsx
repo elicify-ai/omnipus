@@ -20,7 +20,7 @@ import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
-import { ApiError } from '@/lib/api-error'
+import { ApiSchemaError } from '@/lib/api/http'
 import type { WsConnection } from '@/lib/ws'
 import type { ChatMessage } from '@/store/chat'
 import { MockButton, MockTextarea } from '@/test/assistantUiMock'
@@ -68,7 +68,15 @@ function rawPostClear(clearCmid: string): Record<string, unknown>[] {
 function nextMessageResponse(): unknown {
   messageRequests += 1
   const next = messageResponses.shift()
-  if (!next) throw new ApiError(404, 'messages not found')
+  // A non-deletion, NON-RETRIED failure on purpose. This harness stands in
+  // for "the read failed" on an EXISTING chat, and a confirmed 404 now
+  // truthfully means "this chat no longer exists" (C10) — the dead-chat
+  // screen offers no Retry at all. shouldRetryQuery (lib/queryClient) skips
+  // 401/403/404 and ApiSchemaError; a 4xx/5xx body would be retried 3×,
+  // inflating messageRequests and racing the queue. The schema-break error
+  // is the one failure class that surfaces immediately, is NOT deletion,
+  // and keeps the test's intent (a failed read the screen must show).
+  if (!next) throw new ApiSchemaError('GET /api/v1/sessions/x/messages', [{ path: [], message: 'messages read failed' }], [])
   return next()
 }
 
