@@ -134,3 +134,30 @@ func TestGoalClaim_TaskContextBoundToAnotherSessionRefuses(t *testing.T) {
 		})
 	}
 }
+
+// A steered helper launched WITH its own goal runs at delegation depth >= 1 (so
+// set_goal stays refused) but owns that goal: goal_claim on its own session is
+// allowed. A sub-turn that merely runs under another session's goal is not.
+func TestGoalClaim_HelperClaimsItsOwnLaunchGoalButNotAnotherSessions(t *testing.T) {
+	const own = "session_helper_own"
+	access := claimAccess{fakeGoalRecordAccess: newFakeGoalRecordAccess(), bound: map[string]string{own: "goal-helper-1", "session_parent": "goal-parent"}}
+	tool := NewGoalClaimTool(func() GoalRecordAccess { return access })
+	args := map[string]any{"status": "met", "evidence": "done and checked"}
+
+	helper := WithOwnGoalSession(WithDelegationDepth(setGoalCtx(own, "ava"), 1), own)
+	if res := tool.Execute(helper, args); res.IsError {
+		t.Fatalf("a helper must be able to claim its own launch goal: %s", res.ForLLM)
+	}
+
+	// The marker names a different session than the one the turn runs in.
+	other := WithOwnGoalSession(WithDelegationDepth(setGoalCtx("session_parent", "ava"), 1), own)
+	if res := tool.Execute(other, args); !res.IsError || !strings.Contains(res.ForLLM, "owner-session-only") {
+		t.Fatalf("a marker for another session must not let a sub-turn claim this session's goal: %s", res.ForLLM)
+	}
+
+	// No marker: the plain delegated sub-turn is still refused.
+	plain := WithDelegationDepth(setGoalCtx(own, "ava"), 1)
+	if res := tool.Execute(plain, args); !res.IsError || !strings.Contains(res.ForLLM, "owner-session-only") {
+		t.Fatalf("a delegated sub-turn without the marker must stay refused: %s", res.ForLLM)
+	}
+}

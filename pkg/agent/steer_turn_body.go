@@ -282,5 +282,11 @@ func withSteeredDelegationDepth(ctx context.Context, rec *session.LifecycleRecor
 	if rec.InitiatedBy != nil && rec.InitiatedBy.Depth > depth {
 		depth = rec.InitiatedBy.Depth
 	}
-	return tools.WithDelegationDepth(ctx, depth)
+	ctx = tools.WithDelegationDepth(ctx, depth)
+	if rec.GoalRef != "" {
+		// The helper was launched with its own goal in its own session: it may
+		// claim that goal (goal_claim) but, at depth >= 1, still cannot amend it.
+		ctx = tools.WithOwnGoalSession(ctx, rec.SessionID)
+	}
+	return ctx
 }
