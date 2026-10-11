@@ -422,3 +422,80 @@ func currentRevision(home, id string) string {
 	}
 	return state.Revision
 }
+
+// S2-06: the PURE hide/show shortcut in prepareWorkspacePutMembers. A pure hide
+// carries the display flag and nothing else, so the stored heartbeat survives
+// unchanged — and with no enable→disable transition there is nothing to pause
+// for. Without the shortcut the transition test reads wasEnabled=true (the
+// stored heartbeat) against isEnabled=false (the entry omits the heartbeat) and
+// pauses plans for a member whose heartbeat is still running.
+//
+// The companion test below is the control: a real heartbeat disable DOES pause,
+// so this one cannot pass merely because the pause wiring is dead.
+func TestWorkspaceHiddenFlag_PureHideDoesNotPausePlans(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JHIDDENFLAGPAUSE00001"
+	hiddenFlagSeedWorkspace(t, env.home, ws, false, []string{"jim", "mia"}, json.RawMessage(`{
+		"mia": {"heartbeat": {"enabled": true, "interval_minutes": 10, "body": "Mia."}}
+	}`))
+
+	planStore := plan.New(filepath.Join(env.home, "plans"))
+	env.api.planStore = planStore
+	pe := agent.NewPlanEngine(env.api.agentLoop, planStore, env.api.taskStore, env.api.taskExecutor)
+	env.api.agentLoop.SetPlanEngine(pe)
+	t.Cleanup(pe.Stop)
+
+	p := &plan.Plan{Title: "mia plan", WorkspaceID: ws, OwnerAgentID: "mia", State: plan.StateRunning}
+	require.NoError(t, planStore.Create(p), "seed running plan")
+
+	// Pure hide: the flag is present, the heartbeat is absent.
+	w := env.put(t, ws, map[string]any{"member_configs": map[string]any{
+		"mia": map[string]any{"hidden_from_sidebar": true},
+	}})
+	require.Equal(t, http.StatusOK, w.Code, "pure hide PUT body=%s", w.Body.String())
+
+	got, err := planStore.Get(p.ID)
+	require.NoError(t, err, "the plan must still be readable")
+	assert.Equal(t, plan.StateRunning, got.State, "a pure hide must not change the plan's state")
+	assert.Empty(t, got.PausedReason,
+		"S2-06: a pure hide leaves the member's heartbeat enabled, so there is no disable transition to pause for")
+
+	// The shortcut's own premise, asserted rather than assumed: the stored
+	// heartbeat really is unchanged by the pure hide.
+	mc := u1MemberConfig(env.getWorkspace(t, ws), "mia")
+	require.NotNil(t, mc)
+	hb, _ := mc["heartbeat"].(map[string]any)
+	require.NotNil(t, hb, "a pure hide must not clear the heartbeat")
+	assert.Equal(t, true, hb["enabled"], "the stored heartbeat survives the pure hide")
+}
+
+// S2-06 control: an ORDINARY heartbeat disable (the heartbeat IS carried, and
+// disabled) still pauses the owner's running plans. This is what makes the
+// pure-hide assertion above meaningful.
+func TestWorkspaceHiddenFlag_HeartbeatDisableStillPausesPlans(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JHIDDENFLAGPAUSEC00001"
+	hiddenFlagSeedWorkspace(t, env.home, ws, false, []string{"jim", "mia"}, json.RawMessage(`{
+		"mia": {"heartbeat": {"enabled": true, "interval_minutes": 10, "body": "Mia."}}
+	}`))
+
+	planStore := plan.New(filepath.Join(env.home, "plans"))
+	env.api.planStore = planStore
+	pe := agent.NewPlanEngine(env.api.agentLoop, planStore, env.api.taskStore, env.api.taskExecutor)
+	env.api.agentLoop.SetPlanEngine(pe)
+	t.Cleanup(pe.Stop)
+
+	p := &plan.Plan{Title: "mia plan", WorkspaceID: ws, OwnerAgentID: "mia", State: plan.StateRunning}
+	require.NoError(t, planStore.Create(p), "seed running plan")
+
+	w := env.put(t, ws, map[string]any{"member_configs": map[string]any{
+		"mia": map[string]any{"heartbeat": map[string]any{
+			"enabled": false, "interval_minutes": 10, "body": "Mia."}},
+	}})
+	require.Equal(t, http.StatusOK, w.Code, "heartbeat-disable PUT body=%s", w.Body.String())
+
+	got, err := planStore.Get(p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, plan.PausedReasonOwnerDisabled, got.PausedReason,
+		"instrument: a real heartbeat disable must pause the owner's running plans")
+}
