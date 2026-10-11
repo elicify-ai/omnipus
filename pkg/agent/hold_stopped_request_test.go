@@ -97,25 +97,59 @@ func TestHeldRequest_AskingARunnableAgent_IsNotHeld(t *testing.T) {
 func TestHeldRequest_DeliveredWhenTheAgentRunsAgain_AcrossARestart(t *testing.T) {
 	f, recv, asker := heldSetup(t)
 	id, _ := heldAsk(t, f, asker)
+	// The wake admission published while the agent was stopped is dropped.
+	if _, ok := addrDrainInbound(t, f.bus); !ok {
+		t.Fatal("SETUP: no admission wake published")
+	}
 	forgetInMemory(f.al)
 
 	f.al.deliverHeldRequests(recv)
 
+	// Delivery re-publishes the request's wake with its full text; it is NOT
+	// marked delivered until that wake is processed (the model has not seen it).
+	in, ok := addrDrainInbound(t, f.bus)
+	if !ok || in.SessionID != recv || in.TranscriptEntryID != id || in.Metadata[ownerWakeMetadataKey] == "" ||
+		!strings.Contains(in.Content, "please review X") || !strings.Contains(in.Content, id) {
+		t.Fatalf("re-published wake = %+v ok=%v, want the request text for %s as an owner wake", in, ok, id)
+	}
+	if left, _ := f.al.RequestLedger().Undelivered(recv); len(left) != 1 {
+		t.Fatalf("held = %+v, want the request still held until its wake is processed", left)
+	}
+	// While that wake is in flight a further admitted turn does not duplicate it.
+	f.al.deliverHeldRequests(recv)
+	if dup, again := addrDrainInbound(t, f.bus); again {
+		t.Fatalf("a second wake was published while the first is in flight: %+v", dup)
+	}
+
+	// The session processes the wake: that is what marks it delivered.
+	f.al.markRequestDelivered(recv, id)
 	if left, _ := f.al.RequestLedger().Undelivered(recv); len(left) != 0 {
-		t.Fatalf("still held after the agent ran again: %+v", left)
+		t.Fatalf("still held after its wake was processed: %+v", left)
 	}
 	c, ok, err := f.al.RequestLedger().Get(recv, id)
 	if err != nil || !ok || !c.Delivered || c.Discarded {
 		t.Fatalf("capture = %+v ok=%v err=%v, want delivered and answerable", c, ok, err)
 	}
-	// Reminder tracking is back: an unanswered delivered request gets its one nudge.
 	if got := f.al.takeUnansweredRequests(recv); len(got) != 1 || got[0] != id {
-		t.Fatalf("unanswered requests = %v, want [%s] tracked again after delivery", got, id)
+		t.Fatalf("unanswered requests = %v, want [%s] tracked after delivery", got, id)
 	}
-	// Delivery happens once.
+}
+
+// A wake that is dropped again (the agent stopped again) must be re-published by
+// the next admitted turn, not blocked by the in-flight guard.
+func TestHeldRequest_DroppedAgain_IsRepublishedByTheNextTurn(t *testing.T) {
+	f, recv, asker := heldSetup(t)
+	id, _ := heldAsk(t, f, asker)
+	addrDrainInbound(t, f.bus)
+	forgetInMemory(f.al)
 	f.al.deliverHeldRequests(recv)
-	if got := f.al.takeUnansweredRequests(recv); len(got) != 0 {
-		t.Fatalf("second delivery re-tracked the request: %v", got)
+	if _, ok := addrDrainInbound(t, f.bus); !ok {
+		t.Fatal("no wake published")
+	}
+	f.al.heldRepublished.Delete(id) // what the dropped-wake branch does
+	f.al.deliverHeldRequests(recv)
+	if _, ok := addrDrainInbound(t, f.bus); !ok {
+		t.Fatal("the next turn did not re-publish the dropped wake")
 	}
 }
 
@@ -158,10 +192,17 @@ func TestHeldRequest_AskerGone_DroppedNotDeliveredIntoAVoid(t *testing.T) {
 	}
 }
 
-// Wiring: a real resume of a stopped session delivers its held requests, and the
-// model sees the request in the resumed turn.
+// Wiring (S1-01): a real resume of a stopped session delivers its held request
+// TO THE MODEL. A held request's text lives only in the ledger and the chat
+// transcript (the transcript entry is chat-only), so delivery must put it in
+// front of the model - not just flip a flag. The scripted provider asserts the
+// model actually receives the request text.
 func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 	al, original, provider := r5AdmitRoot(t)
+	// A third scripted answer for the turn that carries the held request.
+	provider.answers = append(provider.answers, "request answered")
+	provider.release = append(provider.release, make(chan struct{}))
+	provider.entered = make(chan int, 3)
 	r5StopRoot(t, al, original)
 	provider.open(0)
 	joinGoalFixtureRuns(t, al)
@@ -173,6 +214,7 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 	if err := al.GetSessionStore().SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
 		t.Fatal(err)
 	}
+	const body = "Please summarise the Q3 numbers"
 	c := addressing.Capture{
 		RequestID: "held-1", ReceiverSessionID: original.SessionID,
 		Receiver: addressing.Pair{WorkspaceID: addrWS, AgentID: testDefaultAgentID},
@@ -180,6 +222,7 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 			Kind: addressing.SourceConversation, Owner: addressing.Pair{WorkspaceID: addrWS, AgentID: "ray"}, SessionID: asker.ID,
 		},
 		AdmittedAt: time.Now().UTC(),
+		Text:       composeRequestText("held-1", "agent ray", body),
 	}
 	if err := al.RequestLedger().Put(c); err != nil {
 		t.Fatalf("SETUP: hold a request: %v", err)
@@ -191,13 +234,88 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 		t.Fatalf("resume: %v", err)
 	}
 	r1AwaitProvider(t, provider, 1)
+	provider.open(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
+	// The wake the delivery publishes is processed like any inbound. (Not
+	// preceded by WaitForActiveRequests: that closes intake for good.)
+	provider.open(2)
+	var processed chan struct{}
+	select {
+	case in := <-al.bus.InboundChan():
+		if in.SessionID != original.SessionID || in.TranscriptEntryID != "held-1" {
+			t.Fatalf("delivered wake = %+v, want the held request for the resumed session", in)
+		}
+		processed = make(chan struct{})
+		go func() { defer close(processed); _, _, _ = al.processMessage(ctx, in) }()
+	case <-time.After(5 * time.Second):
+		// The text may instead have been steered straight into the resumed turn.
+	}
+	deadline := time.After(10 * time.Second)
+	seen := func() bool {
+		for _, req := range provider.Requests() {
+			for _, m := range req {
+				if strings.Contains(m.Content, body) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for !seen() {
+		select {
+		case <-deadline:
+			t.Fatalf("the model never received the held request's text; provider calls=%d", len(provider.Requests()))
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 	got, ok, err := al.RequestLedger().Get(original.SessionID, "held-1")
 	if err != nil || !ok || !got.Delivered {
-		t.Fatalf("held request after the resume = %+v ok=%v err=%v, want delivered", got, ok, err)
+		t.Fatalf("held request after the model received it = %+v ok=%v err=%v, want delivered", got, ok, err)
 	}
-	provider.open(1)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	if processed != nil {
+		select {
+		case <-processed:
+		case <-ctx.Done():
+			t.Fatal("the wake's turn did not finish")
+		}
+	}
 	al.WaitForActiveRequestsContext(ctx)
+}
+
+// S1-03: an asker that cannot be READ (a corrupt or unreadable meta file) is not
+// evidence that its conversation is gone. The request stays held, is not
+// discarded, and is retried by the next turn; only a definitively missing asker
+// drops it.
+func TestHeldRequest_UnreadableAsker_StaysHeldNotDiscarded(t *testing.T) {
+	f, recv, _ := heldSetup(t)
+	store := f.al.GetSessionStore()
+	const asker = "session_corrupt_meta_asker"
+	dir := filepath.Join(store.BaseDir(), asker)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := addressing.Capture{
+		RequestID: "held-unreadable", ReceiverSessionID: recv,
+		Receiver: addressing.Pair{WorkspaceID: addrWS, AgentID: addrReceiver},
+		Source:   addressing.Source{Kind: addressing.SourceConversation, SessionID: asker},
+		Text:     composeRequestText("held-unreadable", "agent ray", "body"),
+	}
+	if err := f.al.RequestLedger().Put(c); err != nil {
+		t.Fatal(err)
+	}
+
+	f.al.deliverHeldRequests(recv)
+
+	left, err := f.al.RequestLedger().Undelivered(recv)
+	if err != nil || len(left) != 1 || left[0].RequestID != "held-unreadable" || left[0].Discarded {
+		t.Fatalf("held = %+v err=%v, want the request kept (an unreadable asker is not a gone asker)", left, err)
+	}
+	if in, published := addrDrainInbound(t, f.bus); published {
+		t.Fatalf("a request whose asker is unreadable must not be delivered yet: %+v", in)
+	}
 }

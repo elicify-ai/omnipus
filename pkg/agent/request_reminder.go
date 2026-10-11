@@ -20,7 +20,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -50,6 +52,7 @@ func (al *AgentLoop) markRequestDelivered(sessionID, transcriptEntryID string) {
 		return
 	}
 	al.deliveredRequests.Store(transcriptEntryID, struct{}{})
+	al.heldRepublished.Delete(transcriptEntryID)
 	if sessionID == "" {
 		return
 	}
@@ -156,11 +159,17 @@ func (al *AgentLoop) receiverStopped(sessionID string) bool {
 }
 
 // deliverHeldRequests runs when a turn of sessionID has just been admitted - the
-// receiver "runs again", including a Resume. Every request held for it in the
-// ledger is handed to that turn: the request is already in the conversation the
-// turn reads, so delivery marks it delivered and tracks it for the unanswered
-// reminder. A request whose asker's conversation is gone is discarded and logged
-// instead, never delivered into a void.
+// receiver "runs again", including a Resume. Every request still held for it in
+// the ledger is put in front of the model: its text is published as the same
+// owner-wake inbound the admission would have started, which the session
+// processes like any wake (steered into the live resumed turn, or a turn of its
+// own), and THAT processing marks it delivered (markRequestDelivered). The
+// request's transcript entry is chat-only, so flipping a flag here would leave
+// the model blind to it.
+//
+// A request whose asker's conversation is definitively gone is discarded and
+// logged instead, never delivered into a void. A request whose asker could not
+// be read (a transient error) stays held and is retried by the next turn.
 func (al *AgentLoop) deliverHeldRequests(sessionID string) {
 	ledger := al.RequestLedger()
 	if ledger == nil || sessionID == "" {
@@ -173,8 +182,15 @@ func (al *AgentLoop) deliverHeldRequests(sessionID string) {
 		return
 	}
 	for _, c := range held {
-		if reason := al.askerUnavailable(c); reason != "" {
-			al.settleRequest(c.RequestID)
+		gone, reason, readErr := al.askerStatus(c)
+		if readErr != nil {
+			logger.WarnCF("agent", "held request kept: the asker's conversation could not be read; it is retried on the next turn",
+				map[string]any{"session_id": sessionID, "request_id": c.RequestID, "asker_session_id": c.Source.SessionID, "error": readErr.Error()})
+			continue
+		}
+		if gone {
+			al.pendingRequests.Delete(c.RequestID)
+			al.heldRepublished.Delete(c.RequestID)
 			if dErr := ledger.Discard(sessionID, c.RequestID); dErr != nil {
 				logger.ErrorCF("agent", "a held request with no asker could not be discarded",
 					map[string]any{"session_id": sessionID, "request_id": c.RequestID, "error": dErr.Error()})
@@ -184,27 +200,64 @@ func (al *AgentLoop) deliverHeldRequests(sessionID string) {
 			continue
 		}
 		al.pendingRequests.Store(c.RequestID, sessionID)
-		al.markRequestDelivered(sessionID, c.RequestID)
+		if c.Text == "" {
+			// No stored text (a connector capture, whose message already
+			// arrived as an inbound turn): nothing to republish.
+			al.markRequestDelivered(sessionID, c.RequestID)
+			continue
+		}
+		if _, inFlight := al.heldRepublished.LoadOrStore(c.RequestID, struct{}{}); inFlight {
+			continue // its wake is already on its way
+		}
+		if pubErr := al.publishHeldRequestWake(c); pubErr != nil {
+			al.heldRepublished.Delete(c.RequestID)
+			logger.WarnCF("agent", "held request could not be re-published; it stays held and is retried on the next turn",
+				map[string]any{"session_id": sessionID, "request_id": c.RequestID, "error": pubErr.Error()})
+		}
 	}
 }
 
-// askerUnavailable returns why the answer to c could not reach its asker, or ""
-// when it can. A connector asker lives on the platform and is not checked here.
-func (al *AgentLoop) askerUnavailable(c addressing.Capture) string {
+// publishHeldRequestWake re-publishes the owner wake for a held request, shaped
+// exactly like the one admitRequest publishes.
+func (al *AgentLoop) publishHeldRequestWake(c addressing.Capture) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return al.bus.PublishInbound(ctx, bus.InboundMessage{
+		Channel:           "webchat",
+		ChatID:            "request:" + c.RequestID,
+		Sender:            bus.SenderInfo{CanonicalID: "request:" + c.RequestID},
+		Content:           c.Text,
+		SessionID:         c.ReceiverSessionID,
+		TranscriptEntryID: c.RequestID,
+		Metadata:          map[string]string{"agent_id": c.Receiver.AgentID, "workspace_id": c.Receiver.WorkspaceID, ownerWakeMetadataKey: "1"},
+	})
+}
+
+// askerStatus reports whether the answer to c can no longer reach its asker.
+// gone is a definitive finding (reason says why); readErr is an unreadable
+// asker - not evidence that it is gone. A connector asker lives on the platform
+// and is not checked here.
+func (al *AgentLoop) askerStatus(c addressing.Capture) (gone bool, reason string, readErr error) {
 	if c.Source.Kind != addressing.SourceConversation {
-		return ""
+		return false, "", nil
 	}
 	store := al.GetSessionStore()
 	if store == nil {
-		return "the session store is unavailable"
+		return false, "", errors.New("the session store is unavailable")
 	}
 	meta, err := store.GetMeta(c.Source.SessionID)
-	if err != nil || meta == nil {
-		return "the asker's conversation no longer exists"
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, "the asker's conversation no longer exists", nil
+		}
+		return false, "", err
+	}
+	if meta == nil {
+		return true, "the asker's conversation no longer exists", nil
 	}
 	if !c.Source.Owner.IsZero() &&
 		(meta.AgentID != c.Source.Owner.AgentID || meta.WorkspaceID != c.Source.Owner.WorkspaceID) {
-		return "the asker's conversation no longer belongs to the agent that asked"
+		return true, "the asker's conversation no longer belongs to the agent that asked", nil
 	}
-	return ""
+	return false, "", nil
 }
