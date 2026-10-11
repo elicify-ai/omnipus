@@ -80,7 +80,23 @@ export function clampToolResult(result: unknown): unknown {
 
 /** Return the ordered message array for a bucket. O(N) — call once per reducer, not per frame. */
 export function getMessages(bucket: Pick<SessionChatState, 'messagesById' | 'messageOrder'>): ChatMessage[] {
-  return bucket.messageOrder.map((id) => bucket.messagesById[id]).filter(Boolean)
+  // The single projection every foreground `messages` array passes through
+  // (initial load, live appends, replay, reconnect). assistant-ui throws on a
+  // repeated message id and takes the whole route down, and a persisted
+  // transcript can hold one (a re-queued subagent_state row). Collapse
+  // duplicate ids keeping the LAST occurrence at its position — the later row
+  // is the current one. Walk backwards so the last occurrence is the one seen.
+  const order = bucket.messageOrder
+  const seen = new Set<string>()
+  const out: ChatMessage[] = []
+  for (let i = order.length - 1; i >= 0; i--) {
+    const id = order[i]
+    if (seen.has(id)) continue
+    seen.add(id)
+    const m = bucket.messagesById[id]
+    if (m) out.push(m)
+  }
+  return out.reverse()
 }
 
 /**
