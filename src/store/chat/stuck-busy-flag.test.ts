@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { act } from 'react'
 import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
+import { useConnectionStore } from '@/store/connection'
 import type { ServerFrame } from '@/lib/ws'
 
 const SID = 'stuck-busy-sid'
@@ -88,6 +89,68 @@ describe('busy flag with something behind it stays up (negative controls)', () =
   it('a snapshot that announces an active turn keeps it busy', () => {
     feed(TOKEN, DONE, TOOL_START, TOOL_RESULT)
     feed({ type: 'session_state', user_id: 'u', pending_approvals: [], emitted_at: '2026-10-11T00:00:00Z', active_turn: { turn_id: 't9', agent_id: 'ava' } })
+    expect(bucket().isStreaming).toBe(true)
+  })
+})
+
+// ── A send that never starts a turn ──────────────────────────────────────────
+// sendMessage puts the user row and an empty "thinking" placeholder in the view
+// and raises the busy flag. If the server answers message_status discarded or
+// failed, no turn will follow: that placeholder must go and the flag must drop -
+// unless another turn is genuinely running (a discarded mid-turn steer must
+// never stop or hide it).
+
+describe('a send that is discarded or fails', () => {
+  let sent: Array<Record<string, unknown>> = []
+  const cid = (n = 0) => String(sent[n]?.client_message_id)
+  const placeholders = () => bucket().messages.filter((m) => m.role === 'assistant' && !m.content && (m.isStreaming || m.status === 'streaming'))
+  beforeEach(() => {
+    sent = []
+    useConnectionStore.setState({
+      connection: { send: (p: unknown) => { sent.push(p as Record<string, unknown>); return true }, close: () => {} } as never,
+      isConnected: true,
+    } as never)
+  })
+
+  it.each(['discarded', 'failed'] as const)('while idle: %s removes its own placeholder and releases the busy flag', (state) => {
+    act(() => { useChatStore.getState().sendMessage('hello') })
+    expect(bucket().isStreaming).toBe(true)
+    expect(placeholders()).toHaveLength(1)
+
+    feed({ type: 'message_status', client_message_id: cid(), state })
+    expect(placeholders(), 'no thinking placeholder for a turn that will never start').toHaveLength(0)
+    expect(bucket().isStreaming, 'Stop must not show').toBe(false)
+    const user = bucket().messages.find((m) => m.role === 'user')!
+    expect(user.deliveryStatus).toBe(state)
+  })
+
+  it('while a turn runs: a discarded mid-turn steer neither stops nor hides the running turn', () => {
+    feed(TOKEN)
+    act(() => { useChatStore.getState().sendMessage('also do this') })
+    expect(sent).toHaveLength(1)
+    const before = bucket().messages.map((m) => m.id)
+    feed({ type: 'message_status', client_message_id: cid(), state: 'discarded' })
+
+    expect(bucket().isStreaming, 'the turn is still running').toBe(true)
+    expect(bucket().messages.map((m) => m.id), 'nothing the running turn owns is removed').toEqual(before)
+    expect(bucket().messages.find((m) => m.content === 'working')).toBeTruthy()
+    // and the turn can still continue and finish normally
+    feed({ type: 'token', content: ' more', turn_id: 't1', message_id: 'm1b' }, DONE)
+    expect(bucket().isStreaming).toBe(false)
+  })
+
+  it('a steer that closed the running bubble keeps the flag up when a tool result lands', () => {
+    feed(TOKEN, TOOL_START)
+    act(() => { useChatStore.getState().sendMessage('change course') })
+    feed(TOOL_RESULT)
+    expect(bucket().isStreaming, 'the steered turn is still in flight').toBe(true)
+  })
+
+  it('does not remove a reply that has already started streaming', () => {
+    act(() => { useChatStore.getState().sendMessage('hello') })
+    feed({ type: 'token', content: 'real reply' })
+    feed({ type: 'message_status', client_message_id: cid(), state: 'failed' })
+    expect(bucket().messages.find((m) => m.content === 'real reply')).toBeTruthy()
     expect(bucket().isStreaming).toBe(true)
   })
 })
