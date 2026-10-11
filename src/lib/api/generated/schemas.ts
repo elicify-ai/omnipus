@@ -3132,24 +3132,6 @@ type DelegateNotDeliveredSummary = {
   last_kind: string;
   last_at: string;
 };
-type DelegateRespondResponse = {
-  acknowledged: boolean;
-  corrective_session?: DelegateSessionResponse | undefined;
-};
-type DelegateSessionResponse = {
-  session_id: string;
-  generation: number;
-  queue_position?: number | undefined;
-  resumed_from?: (string | null) | undefined;
-  is_3p: boolean;
-  state:
-    | "queued"
-    | "running"
-    | "needs_input"
-    | "stopped"
-    | "completed"
-    | "failed";
-};
 type MessageParentRequest =
   | MessageParentProgress
   | MessageParentCheckpoint
@@ -7310,7 +7292,7 @@ export const SessionMessageSteer = z.object({
   created_at: z.string().datetime({ offset: true }),
   sender_identity: z.string().min(1),
   untrusted_origin: z.boolean(),
-  text: z.string().max(16384),
+  text: z.string().max(65536),
   correlation_id: z.string().optional(),
 }) satisfies z.ZodType<SessionMessageSteer>;
 export const SessionMessageRespond = z.object(
@@ -7325,7 +7307,7 @@ export const SessionMessageRespond = z.object(
     created_at: z.string().datetime({ offset: true }),
     sender_identity: z.string().min(1),
     untrusted_origin: z.boolean(),
-    text: z.string().max(16384),
+    text: z.string().max(65536),
     correlation_id: z.string().min(1),
   }
 ) satisfies z.ZodType<SessionMessageRespond>;
@@ -7527,14 +7509,14 @@ export const DelegateInboxAckAction =
 export const DelegateSteerAction = z.object({
   action: z.literal("steer"),
   session_id: z.string().min(1),
-  text: z.string().min(1).max(16384),
+  text: z.string().min(1).max(65536),
   correlation_id: z.string().optional(),
 }) satisfies z.ZodType<DelegateSteerAction>;
 export const DelegateRespondAction = z.object(
   {
     action: z.literal("respond"),
     session_id: z.string().min(1),
-    text: z.string().min(1).max(16384),
+    text: z.string().min(1).max(65536),
     correlation_id: z.string().min(1),
   }
 ) satisfies z.ZodType<DelegateRespondAction>;
@@ -7572,22 +7554,21 @@ export const DelegateActionRequest =
     DelegateRedirectAction,
     DelegatePeekAction,
   ]) satisfies z.ZodType<DelegateActionRequest>;
-export const DelegateSessionResponse: z.ZodType<DelegateSessionResponse> =
-  z.object({
-    session_id: z.string().min(1),
-    generation: z.number().int().gte(0),
-    queue_position: z.number().int().gte(0).optional(),
-    resumed_from: z.string().nullish(),
-    is_3p: z.boolean(),
-    state: z.enum([
-      "queued",
-      "running",
-      "needs_input",
-      "stopped",
-      "completed",
-      "failed",
-    ]),
-  });
+export const DelegateSessionResponse = z.object({
+  session_id: z.string().min(1),
+  generation: z.number().int().gte(0),
+  queue_position: z.number().int().gte(0).optional(),
+  resumed_from: z.string().nullish(),
+  is_3p: z.boolean(),
+  state: z.enum([
+    "queued",
+    "running",
+    "needs_input",
+    "stopped",
+    "completed",
+    "failed",
+  ]),
+});
 export const DelegateStatusResponse: z.ZodType<DelegateStatusResponse> =
   z.object({
     session: SessionLifecycleRecord,
@@ -7630,11 +7611,7 @@ export const DelegateInboxResponse: z.ZodType<DelegateInboxResponse> = z.object(
     not_delivered: DelegateNotDeliveredSummary.optional(),
   }
 );
-export const DelegateRespondResponse: z.ZodType<DelegateRespondResponse> =
-  z.object({
-    acknowledged: z.boolean(),
-    corrective_session: DelegateSessionResponse.optional(),
-  });
+export const DelegateRespondResponse = z.object({ acknowledged: z.boolean() });
 export const DelegatePeekResponse = z.object({
   session_id: z.string().min(1),
   state: z.enum([

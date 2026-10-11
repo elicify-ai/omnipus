@@ -2426,36 +2426,6 @@ func (e DelegateRespondActionAction) Valid() bool {
 	}
 }
 
-// Defines values for DelegateRespondResponseCorrectiveSessionState.
-const (
-	DelegateRespondResponseCorrectiveSessionStateCompleted  DelegateRespondResponseCorrectiveSessionState = "completed"
-	DelegateRespondResponseCorrectiveSessionStateFailed     DelegateRespondResponseCorrectiveSessionState = "failed"
-	DelegateRespondResponseCorrectiveSessionStateNeedsInput DelegateRespondResponseCorrectiveSessionState = "needs_input"
-	DelegateRespondResponseCorrectiveSessionStateQueued     DelegateRespondResponseCorrectiveSessionState = "queued"
-	DelegateRespondResponseCorrectiveSessionStateRunning    DelegateRespondResponseCorrectiveSessionState = "running"
-	DelegateRespondResponseCorrectiveSessionStateStopped    DelegateRespondResponseCorrectiveSessionState = "stopped"
-)
-
-// Valid indicates whether the value is a known member of the DelegateRespondResponseCorrectiveSessionState enum.
-func (e DelegateRespondResponseCorrectiveSessionState) Valid() bool {
-	switch e {
-	case DelegateRespondResponseCorrectiveSessionStateCompleted:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStateFailed:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStateNeedsInput:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStateQueued:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStateRunning:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStateStopped:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for DelegateResumeActionAction.
 const (
 	DelegateResumeActionActionResume DelegateResumeActionAction = "resume"
@@ -16377,35 +16347,11 @@ type DelegateRespondAction struct {
 // DelegateRespondActionAction defines model for DelegateRespondAction.Action.
 type DelegateRespondActionAction string
 
-// DelegateRespondResponse Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn; an external-CLI answer reaches the same CLI conversation by interrupt and resume, or is refused. No corrective session is created, so `corrective_session` is never set.
+// DelegateRespondResponse Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn; an external-CLI answer reaches the same CLI conversation by interrupt and resume, or is refused. No session is created or replaced by a respond.
 type DelegateRespondResponse struct {
 	// Acknowledged True when the response was accepted and routed by `correlation_id`.
 	Acknowledged bool `json:"acknowledged"`
-
-	// CorrectiveSession Response shape for a `delegate` action that publishes a child session (`run`). No action creates a replacement session for an existing child: resume and respond continue the same child (an external-CLI child continues the same CLI conversation or the action is refused).
-	CorrectiveSession *struct {
-		// Generation The generation this response corresponds to.
-		Generation int `json:"generation"`
-
-		// Is3p True when this session dispatches via an external CLI runner. Taken from the classification persisted at launch, not re-read from a mutable registry.
-		Is3p bool `json:"is_3p"`
-
-		// QueuePosition 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
-		QueuePosition *int `json:"queue_position,omitempty"`
-
-		// ResumedFrom The prior session id this generation resumed from, when applicable.
-		ResumedFrom *string `json:"resumed_from,omitempty"`
-
-		// SessionId The id of the newly published child session.
-		SessionId string `json:"session_id"`
-
-		// State The newly-spawned/resumed session's initial lifecycle state.
-		State DelegateRespondResponseCorrectiveSessionState `json:"state"`
-	} `json:"corrective_session,omitempty"`
 }
-
-// DelegateRespondResponseCorrectiveSessionState The newly-spawned/resumed session's initial lifecycle state.
-type DelegateRespondResponseCorrectiveSessionState string
 
 // DelegateResumeAction `delegate` tool call, `action: resume` (ADR-20261004, locked decision 4 — renamed from `follow_up` with no alias path). Continues a stopped helper on the same conversation and the same generation, or starts the next round when the helper is done or failed. Native: warm resume of the SAME session; a terminal continuation mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7). 3P: cold — spawns a new session carrying the prior result (external CLIs have no warm-resume primitive).
 type DelegateResumeAction struct {
@@ -17214,7 +17160,7 @@ type DelegateStatusResponseSessionSteeredByAuthorizationMode string
 // DelegateStatusResponseSessionStopByKind Principal kind (agent or human).
 type DelegateStatusResponseSessionStopByKind string
 
-// DelegateSteerAction `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped 6/min, 16 KiB body.
+// DelegateSteerAction `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped (default 60/min) and body-capped (default 65,536 UTF-8 bytes) by session_messaging.steer_rate/steer_body.
 type DelegateSteerAction struct {
 	Action DelegateSteerActionAction `json:"action"`
 
@@ -25593,7 +25539,7 @@ type SessionMessageRevisionEntryKind string
 // SessionMessageRevisionEntryRevisionVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
 type SessionMessageRevisionEntryRevisionVerb string
 
-// SessionMessageSteer SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract Surface). Parent -> child. Mid-run injection applied at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering, INV-3) — never mid-tool, never interleaved with an in-flight verdict write. Rate-capped 6/min, 16 KiB body (session_messaging. steer_rate/steer_body). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+// SessionMessageSteer SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract Surface). Parent -> child. Mid-run injection applied at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering, INV-3) — never mid-tool, never interleaved with an in-flight verdict write. Rate-capped (default 60/min) and body-capped (default 65,536 UTF-8 bytes) by session_messaging.steer_rate/steer_body. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageSteer struct {
 	// CorrelationId Optional — set when this steer is issued alongside/answering a specific open question or blocker.
 	CorrelationId *string                      `json:"correlation_id,omitempty"`

@@ -16468,7 +16468,7 @@ export interface components {
         };
         /**
          * SessionMessageSteer
-         * @description SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract Surface). Parent -> child. Mid-run injection applied at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering, INV-3) — never mid-tool, never interleaved with an in-flight verdict write. Rate-capped 6/min, 16 KiB body (session_messaging. steer_rate/steer_body). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         * @description SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract Surface). Parent -> child. Mid-run injection applied at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering, INV-3) — never mid-tool, never interleaved with an in-flight verdict write. Rate-capped (default 60/min) and body-capped (default 65,536 UTF-8 bytes) by session_messaging.steer_rate/steer_body. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
          */
         SessionMessageSteer: {
             /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WV */
@@ -17162,7 +17162,7 @@ export interface components {
         };
         /**
          * DelegateSteerAction
-         * @description `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped 6/min, 16 KiB body.
+         * @description `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped (default 60/min) and body-capped (default 65,536 UTF-8 bytes) by session_messaging.steer_rate/steer_body.
          */
         DelegateSteerAction: {
             /**
@@ -17424,7 +17424,7 @@ export interface components {
         };
         /**
          * DelegateRespondResponse
-         * @description Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn; an external-CLI answer reaches the same CLI conversation by interrupt and resume, or is refused. No corrective session is created, so `corrective_session` is never set.
+         * @description Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn; an external-CLI answer reaches the same CLI conversation by interrupt and resume, or is refused. No session is created or replaced by a respond.
          */
         DelegateRespondResponse: {
             /**
@@ -17432,7 +17432,6 @@ export interface components {
              * @example true
              */
             acknowledged: boolean;
-            corrective_session?: components["schemas"]["DelegateSessionResponse"];
         };
         /**
          * DelegatePeekResponse
