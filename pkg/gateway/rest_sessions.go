@@ -798,7 +798,18 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 		jsonErr(w, http.StatusInternalServerError, summary)
 		return
 	}
+	if err := a.removeStoppedSession(store, id); err != nil {
+		jsonSessionStorageError(w, "deleted", id, err)
+		return
+	}
+	jsonOK(w, map[string]bool{"success": true})
+}
 
+// removeStoppedSession deletes a session whose Stop has ALREADY completed, and
+// the references to it: its helper descendants' uploads, the retained
+// external-CLI drivers, and the in-memory media refs. It is the second half of
+// deleteSession, shared with DELETE /sessions/all so the two cannot drift.
+func (a *restAPI) removeStoppedSession(store *session.UnifiedStore, id string) error {
 	// ADR-057 W18b (FR-071/BDD-78): resolve id's full descendant set BEFORE
 	// deleting anything, over the DURABLE lifecycle store — every delegation,
 	// live or not, has a LifecycleRecord (User Story 4), so this walk is
@@ -817,8 +828,7 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 	}
 
 	if err := store.DeleteSession(id); err != nil {
-		jsonSessionStorageError(w, "deleted", id, err)
-		return
+		return err
 	}
 	// N6: the session is gone, so drop any retained external-CLI driver (and its
 	// option/env snapshot) for it and every deleted descendant.
@@ -862,8 +872,7 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 				"session_id", id, "error", err)
 		}
 	}
-
-	jsonOK(w, map[string]bool{"success": true})
+	return nil
 }
 
 // firstChatTargetAgentID returns the ID of the first chat-target agent in the

@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
@@ -27,6 +28,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // Final-gate S2 gateway cluster (S2-CONSOLIDATED.md). One test per finding, each
@@ -317,4 +319,90 @@ func TestGW_M10_ScheduleModeIsNotSilentlyDowngradedOnAReadFailure(t *testing.T) 
 	assert.Equal(t, http.StatusInternalServerError, w.Code, "a read failure must not be saved as a downgraded mode: %s", w.Body.String())
 	assert.Empty(t, cs.ListJobs(true), "no schedule may be saved")
 	r5AssertClean(t, w.Body.String(), "01JGWGATEM10WS000000000001", home)
+}
+
+// Founder ruling (S2 #6): "a main chat can only be deleted when the main agent is
+// deleted". DELETE /sessions/all never deletes a main (its history is kept), stops
+// any running turn of the chats it does delete first, and leaves no references.
+func clearAllDo(env *u1Env) (int, string) {
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/sessions/all", nil)
+	w := httptest.NewRecorder()
+	env.api.HandleClearSessions(w, r)
+	return w.Code, w.Body.String()
+}
+
+func TestGW_ClearAll_MainsSurviveWithTheirHistory(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JGWGATECLRWS0000000000001"
+	env.seedWorkspace(t, ws, true, "mia") // the default workspace: Admin owns a main here too
+	mia := u1MainID(ws, "mia")
+	admin := u1MainID(ws, "admin")
+	for _, id := range []string{mia, admin} {
+		code, _ := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
+		require.Equal(t, http.StatusOK, code, "precondition: %s opens", id)
+		require.NoError(t, env.store(t).AppendTranscript(id, session.TranscriptEntry{
+			ID: "keep-" + id, Role: "user", Content: "keep me", AgentID: "mia", Timestamp: time.Now().UTC(),
+		}))
+	}
+	chat := sf1NewChat(t, env)
+
+	code, body := clearAllDo(env)
+
+	require.Equal(t, http.StatusOK, code, body)
+	for _, id := range []string{mia, admin} {
+		entries, err := env.store(t).ReadTranscript(id)
+		require.NoError(t, err, "a main must survive delete-all: %s", id)
+		require.Len(t, entries, 1, "its history is kept")
+		assert.Equal(t, "keep me", entries[0].Content)
+	}
+	_, err := env.store(t).GetMeta(chat)
+	assert.Error(t, err, "an ordinary chat is deleted")
+	var resp gen.ClearAllSessionsResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &resp))
+	assert.Equal(t, 1, resp.Count, "only the ordinary chat was removed")
+}
+
+// Every chat delete-all removes is stopped first, through the same Stop the single
+// delete uses; one whose Stop is incomplete is NOT deleted and is reported.
+func TestGW_ClearAll_StopsEachChatFirstAndKeepsOnesThatWillNotStop(t *testing.T) {
+	env := u1NewEnv(t, false)
+	a, b := sf1NewChat(t, env), sf1NewChat(t, env)
+	var stopped []string
+	env.api.stopSession = func(_ context.Context, req agent.StopRequest) (agent.StopResult, error) {
+		stopped = append(stopped, req.SessionID)
+		if req.SessionID == b {
+			return agent.StopResult{Report: steer.CancelReport{
+				Unreachable: []steer.UnreachableSession{{ID: b, Reason: "wedged"}}}}, nil
+		}
+		return agent.StopResult{}, nil
+	}
+
+	code, body := clearAllDo(env)
+
+	require.Equal(t, http.StatusOK, code, body)
+	assert.ElementsMatch(t, []string{a, b}, stopped, "each chat is stopped before it is deleted")
+	_, errA := env.store(t).GetMeta(a)
+	assert.Error(t, errA, "the stopped chat is deleted")
+	_, errB := env.store(t).GetMeta(b)
+	assert.NoError(t, errB, "a chat that will not stop is not deleted")
+	var resp gen.ClearAllSessionsResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &resp))
+	assert.Equal(t, 1, resp.Count)
+	require.NotNil(t, resp.Warnings, "the kept chat is reported")
+	r5AssertClean(t, body, a, b)
+}
+
+// No references are left to a deleted chat: its uploads go with it.
+func TestGW_ClearAll_RemovesTheDeletedChatsUploads(t *testing.T) {
+	env := u1NewEnv(t, false)
+	chat := sf1NewChat(t, env)
+	up := filepath.Join(filepath.Dir(env.store(t).BaseDir()), "uploads", chat)
+	require.NoError(t, os.MkdirAll(up, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(up, "f.txt"), []byte("x"), 0o600))
+
+	code, body := clearAllDo(env)
+
+	require.Equal(t, http.StatusOK, code, body)
+	_, err := os.Stat(up)
+	assert.True(t, errors.Is(err, os.ErrNotExist), "the deleted chat's uploads must be gone")
 }
