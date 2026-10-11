@@ -13522,7 +13522,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "delete",
     path: "/sessions/all",
     alias: "clearAllSessions",
-    description: `Removes all session directories across all agent stores. Returns the count of removed sessions and any per-agent warnings.
+    description: `Deletes every ordinary chat. Main chats are never deleted (a main chat is deleted only together with its agent), and neither are the helper sessions that belong to a main chat. Each chat is stopped before it is deleted; a chat that will not stop, or whose data cannot be read or removed, is kept. Returns the count of deleted chats and fixed-text warnings that count the chats that were kept and the main chats that were left alone.
 `,
     requestFormat: "json",
     response: ClearAllSessionsResponse,

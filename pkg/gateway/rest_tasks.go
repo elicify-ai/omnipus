@@ -1603,8 +1603,6 @@ func (tp *taskPatch) launchIfStarted() bool {
 			}
 			httpStatus := http.StatusInternalServerError
 			switch {
-			case errors.Is(startErr, agent.ErrDispatchCapReached):
-				httpStatus = http.StatusConflict
 			case errors.Is(startErr, agent.ErrPlanNotExecuting), errors.Is(startErr, agent.ErrPlanStateUnresolvable):
 				// S1 plan-gate follow-up: a PATCH to in_progress on a plan
 				// member whose parent plan is not (or can no longer be

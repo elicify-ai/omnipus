@@ -15,6 +15,8 @@ func leakedPackageDirFiles() []string {
 	var leaked []string
 	for _, rel := range []string{"entities", "sessions", "workspaces", "uploads"} {
 		_ = filepath.Walk(rel, func(path string, info os.FileInfo, err error) error {
+			//nolint:nilerr // an unreadable entry must not abort the sweep: the
+			// assertion is "nothing leaked", and aborting would hide the rest.
 			if err != nil || info == nil || info.IsDir() {
 				return nil
 			}

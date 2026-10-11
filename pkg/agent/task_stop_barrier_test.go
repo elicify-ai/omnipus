@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -319,7 +320,7 @@ func TestTaskRunDispatchFailure_ReleasesItsSlotAndOwner(t *testing.T) {
 // blockingExternalCLIDriver blocks inside Run until its context is cancelled,
 // like a real external CLI process that only a kill ends.
 type blockingExternalCLIDriver struct {
-	*runner.FakeRunner
+	*runnertest.FakeRunner
 	entered chan struct{}
 	once    sync.Once
 }
@@ -335,7 +336,7 @@ func (d *blockingExternalCLIDriver) Run(ctx context.Context, _ runner.RunOptions
 // loop. Its turn must own the same barrier, or a person's Stop is refused for
 // it exactly as in UAT W-03.
 func TestTaskRunStop_ExternalCLIWorker_LandsStopped(t *testing.T) {
-	driver := &blockingExternalCLIDriver{FakeRunner: runner.NewFakeRunner(), entered: make(chan struct{})}
+	driver := &blockingExternalCLIDriver{FakeRunner: runnertest.NewFakeRunner(), entered: make(chan struct{})}
 	previous := newExternalDriver
 	newExternalDriver = func(string, runner.ConsentHandler) (runner.ExternalAgentRunner, error) { return driver, nil }
 	t.Cleanup(func() { newExternalDriver = previous })
@@ -613,6 +614,10 @@ func TestTaskRunStop_WhileTheJudgeDeliberates(t *testing.T) {
 			criteria := []task.AcceptanceCriterion{proseCriterion("c1", "the work is complete")}
 			_, err := f.al.taskStore.Update(f.task.ID, task.Patch{Criteria: &criteria})
 			require.NoError(t, err)
+			// DEL-18: fresh creation owns the task's paired goal record. Without
+			// one the run has no goal loop, the Judge is never asked to deliberate,
+			// and this test can only time out waiting for it.
+			pairTaskGoalRecordUsingTaskCriteria(t, f.al, f.task.ID)
 
 			if front == taskFrontLauncher {
 				inProgress := task.StatusInProgress

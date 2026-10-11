@@ -7,6 +7,7 @@ package gateway
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -101,8 +103,37 @@ func mustAgentLoop(
 	// (pkg/agent/steer_launcher.go::startingRemainingDepth) finds a caller→target
 	// edge for a launched root whose steering session has an identified owner.
 	seedDefaultDelegationGraph(t, testHarnessAgentIDs(cfg))
+	installTestSessionLauncher(t, al)
 	t.Cleanup(al.Close)
 	return al
+}
+
+// installTestSessionLauncher wires the SAME session start path production wires
+// at gateway boot: the session stores, a genuine boot epoch and the real
+// SteerLauncher on the task executor.
+//
+// S1 M9 (978c232bc) deleted the launcher-less task start path and
+// TaskExecutor.StartTaskNow now REFUSES without a launcher. The shared harness
+// installed none, so every gateway task-start test returned
+// 500 "the task could not be started" — the refusal, not the behaviour under
+// test. This is the gateway half of the same fix pkg/agent's mustNewAgentLoop
+// carries.
+func installTestSessionLauncher(t *testing.T, al *agent.AgentLoop) {
+	t.Helper()
+	home := config.OmnipusHomeDir()
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(home, "session_messages")), lifecycle)
+	// Admission refuses an unminted boot epoch; the gateway mints one at boot.
+	boot := session.NewBootEpochStore(home)
+	if _, err := boot.Mint(); err != nil {
+		t.Fatalf("installTestSessionLauncher: mint boot epoch: %v", err)
+	}
+	al.SetBootEpochStore(boot)
+	if te := agent.GetTaskExecutor(al); te != nil {
+		te.SetLifecycleStore(lifecycle)
+		te.SetSessionLauncher(agent.NewSteerLauncher(al))
+	}
 }
 
 // mustAgentLoopNoWorkspaceSeed is mustAgentLoop WITHOUT the ADR-046 P1

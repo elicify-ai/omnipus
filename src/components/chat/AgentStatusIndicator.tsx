@@ -223,7 +223,10 @@ export function AgentStatusIndicator({
   const nameAvailable = drawnFigure !== 'Monogram' || (name ?? '').trim().length > 0
 
   return (
-    <span className="inline-flex items-center gap-[var(--space-2)] py-[var(--space-1)] text-[var(--color-muted)] italic">
+    <span
+      data-testid="reply-status-indicator"
+      className="inline-flex items-center gap-[var(--space-2)] py-[var(--space-1)] text-[var(--color-muted)] italic"
+    >
       {drawnFigure && drawnRole && drawnColor && nameAvailable && (
         <span data-art={FIGURE_ART[drawnFigure].art}>
           <AgentIcon

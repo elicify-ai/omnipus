@@ -8,7 +8,7 @@ import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
-import { tasksQueryKeys } from '@/lib/api'
+import { invalidateAfterAgentCreate, tasksQueryKeys } from '@/lib/api'
 import type {
   SubagentStartFrame,
   SubagentEndFrame,
@@ -47,6 +47,20 @@ import { findFirstSendMessage } from '../first-send'
 const SESSION_LIST_REFRESH_FRAMES = new Set([
   'done', 'error', 'subagent_start', 'subagent_state', 'subagent_end', 'catch_up_complete',
 ])
+
+// Frames that do not refresh the session list while their bucket is replaying.
+const REPLAY_DEFERRED_REFRESH_FRAMES = new Set(['subagent_start', 'subagent_state', 'subagent_end'])
+
+// A replay re-delivers every persisted subagent_* row; refreshing the roster
+// per row fired dozens of GET /sessions on sign-in. While the bucket is
+// replaying, only the terminators (done / error / catch_up_complete) refresh —
+// once per batch. Live frames still refresh. Kept at module scope so it adds
+// nothing to handleFrame's grandfathered function budget.
+function refreshSessionListForFrame(frameType: string, bucketReplaying: boolean): void {
+  if (!SESSION_LIST_REFRESH_FRAMES.has(frameType)) return
+  if (bucketReplaying && REPLAY_DEFERRED_REFRESH_FRAMES.has(frameType)) return
+  void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+}
 
 type FrameSlice = Pick<ChatStore, 'handleFrame'>
 type ToolCallResultFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'tool_call_result' }>
@@ -963,9 +977,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         return
       }
 
-      if (SESSION_LIST_REFRESH_FRAMES.has(frame.type)) {
-        void queryClient.invalidateQueries({ queryKey: ['sessions'] })
-      }
+      refreshSessionListForFrame(frame.type, get().sessionsById[targetSid ?? '']?.isReplaying === true)
       if (handleFirstSendFrame({ frame, set, get, withBucket, runtime })) {
         syncForeground()
         return
@@ -2548,8 +2560,12 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         // D-107 shape just above. Not debounced like library_changed:
         // creates don't burst, so a direct invalidate matches the other
         // single-shot cases here (task_status_changed/task_run_status).
+        // invalidateAfterAgentCreate (founder bug 2026-10-11) additionally
+        // invalidates the workspaces list queries: the sidebar roster is
+        // membership-driven (core_team + member_configs), so ['agents']
+        // alone left the new agent's row waiting for the 30 s poll.
         case 'agent_created':
-          queryClient.invalidateQueries({ queryKey: ['agents'] })
+          invalidateAfterAgentCreate(queryClient)
           break
 
         // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires

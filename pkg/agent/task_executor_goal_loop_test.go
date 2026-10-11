@@ -236,6 +236,7 @@ func TestLegacyCriterialessTask_AttemptAccountingUnchanged_GOALFR023(t *testing.
 			if err := al.taskStore.Create(tk); err != nil {
 				t.Fatalf("create task: %v", err)
 			}
+			pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
 			if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 				t.Fatalf("ExecuteTask: %v", err)
 			}

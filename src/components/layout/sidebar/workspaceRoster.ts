@@ -37,9 +37,23 @@ function memberRoster(workspace: Workspace, agents: Agent[]): EligibleRosterEntr
   const byId = new Map(agents.map((agent) => [agent.id, agent]))
   const configs = workspace.member_configs ?? {}
   const roster: EligibleRosterEntry[] = []
-  for (const [id, member] of Object.entries(configs)) {
+  // Membership is core_team — the authoritative team list. The server OMITS a
+  // member's member_configs entry when its main does not resolve and it has
+  // no stored settings (pkg/gateway/rest_workspaces.go, C-MAIN), so deriving
+  // membership from member_configs keys dropped that member SILENTLY and the
+  // eligible-mains 'main-id-missing' state ("Main chat unavailable") could
+  // never fire for it (founder bug 2026-10-11, agent "omnipus").
+  // member_configs is only the per-member config lookup here; a member whose
+  // config is absent carries `undefined` and lands in missingMainAgentIds via
+  // eligibleMains's own type-filter-first eligibility rules.
+  // Workspaces without a core_team field (optional on the wire) keep the
+  // member_configs-keys behaviour.
+  const memberIds = workspace.core_team ?? Object.keys(configs)
+  for (const id of memberIds) {
     const agent = byId.get(id)
-    if (agent) roster.push({ agent, member })
+    // An id absent from the loaded agents list (not yet loaded / deleted) is
+    // neither a row nor a missing main — it cannot be classified at all.
+    if (agent) roster.push({ agent, member: configs[id] })
   }
   return roster
 }

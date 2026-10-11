@@ -5194,6 +5194,13 @@
       "syntax": "AgentMark#dom-style.color<-AgentColor.options[9]",
       "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): the founder-chosen fallback for an agent that is not loaded is the Omnipus figure in AgentColor.options[9] (#9CA3AF, the documented create-default colour), from the generated AgentColor enum, passed unchanged to AgentIcon — governed agent data, not chrome.",
       "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/MessageItem.tsx",
+      "syntax": "MessageItem#svg-attribute.color<-agent?.color",
+      "reason": "Identity ink on the standalone/embed reply mark (founder UI feedback 2026-10-11: MessageItem joins the shared AgentStatusIndicator). MessageItem reads the responding agent's own color field and passes it unmodified into AgentStatusIndicator, which validates it against its published palette before AgentIcon paints it as currentColor — the same boundary already registered for ChatScreen.tsx's ResolvedAgentMark#svg-attribute.color<-agent?.color and VirtualAssistantMessageRow#svg-attribute.color<-agent?.color. Governed identity data (ADR-20261007, design-system rule 6), not a design-system chrome colour; the component does not choose a colour.",
+      "owner": "user-authored colours exception registry"
     }
   ],
   "reviewedBoundaries": [

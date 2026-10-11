@@ -15847,12 +15847,13 @@ type ChannelTestResponse struct {
 	Success bool `json:"success"`
 }
 
-// ClearAllSessionsResponse Response from DELETE /api/v1/sessions/all (HTTP 200). Reports how many sessions were removed and any non-fatal per-agent errors encountered along the way (partial removal is still possible when warnings are present).
+// ClearAllSessionsResponse Response from DELETE /api/v1/sessions/all (HTTP 200). Reports how many ordinary chats were deleted. Main chats are never deleted (a main chat goes only with its agent), so a "cleared" status does not mean every chat is gone: warnings count the chats that were kept (a turn that would not stop, storage that failed, or data that could not be read) and the main chats left alone.
 type ClearAllSessionsResponse struct {
+	// Count Number of ordinary chats deleted (main chats are not counted).
 	Count  int                            `json:"count"`
 	Status ClearAllSessionsResponseStatus `json:"status"`
 
-	// Warnings Per-agent errors (non-fatal — partial removal possible).
+	// Warnings Fixed-text notices, never carrying a session id or path: how many chats were kept because they could not be deleted, and how many main chats were left alone. Absent when every chat was deleted and there are no main chats.
 	Warnings *[]string `json:"warnings,omitempty"`
 }
 

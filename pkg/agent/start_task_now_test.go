@@ -115,8 +115,17 @@ func TestStartTaskNow_Idempotent_ExistingSessionID(t *testing.T) {
 	require.NotEmpty(t, first)
 
 	second, err := te.StartTaskNow(context.Background(), tk.ID)
-	require.Error(t, err, "a second start while the run is live must be refused, not doubled")
-	require.Empty(t, second, "the refused call must report no session as started")
+	// The invariant that matters is ONE task, ONE session — not which of the two
+	// shapes the start path chooses for the second call. At the time this test
+	// was ported the live run was refused ("an admission is already reserved");
+	// on the merged integration tip the re-dispatch is accepted idempotently.
+	// Both are fine; a SECOND session is not, and that is what is asserted.
+	if err == nil {
+		assert.Equal(t, first, second,
+			"an accepted second start must return the SAME session id, never a new one")
+	} else {
+		assert.Empty(t, second, "the refused call must report no session as started")
+	}
 
 	got, err := store.Get(tk.ID)
 	require.NoError(t, err)

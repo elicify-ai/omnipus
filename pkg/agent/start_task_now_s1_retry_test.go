@@ -47,13 +47,13 @@ func TestS1_StartTaskNowRetryAfterClassificationFailureStartsNothing(t *testing.
 	got, err := store.Get(tk.ID)
 	require.NoError(t, err)
 	require.Empty(t, got.SessionID, "no session may be bound to a task whose classification failed")
-	// DIFFERENCE FROM THE DELETED LAUNCHER-LESS PATH (S1 M9): that path called
-	// failTaskBeforeDispatch on a refused start, so the task ended Failed. The
-	// launcher path returns the refusal to the caller and does NOT touch the
-	// task, which therefore stays where the caller put it (in_progress). The
-	// status is asserted so the difference is visible rather than assumed away;
-	// the question of whether a refused launch SHOULD also fail the task is with
-	// the chief, not silently decided here.
-	require.Equal(t, task.StatusInProgress, got.Status,
-		"the launcher path leaves the task where the caller put it (in_progress)")
+	// A refused launch FAILS the task with the reason, exactly as the deleted
+	// launcher-less path did: S1 M9 (674840dd3, "a refused launch fails the task")
+	// runs failTaskBeforeDispatch on the launcher path. This test first asserted
+	// the opposite (task left in_progress) while that question was open; the
+	// ruling closed it. The visible reason is asserted so a silent Failed with an
+	// empty Result cannot pass.
+	require.Equal(t, task.StatusFailed, got.Status,
+		"a refused launch fails the task (S1 M9 failTaskBeforeDispatch)")
+	require.NotEmpty(t, got.Result, "the Failed task carries the refusal reason")
 }

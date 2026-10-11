@@ -183,7 +183,10 @@ type agentCreateToolExecute struct {
 	newAgent        config.AgentConfig
 	finalID         string
 	joinedWorkspace bool
-	mutation        agentstore.MutationResult
+	// joinedWorkspaceID is the workspace the new agent joined ("" when none); its
+	// mains are provisioned in publishAndRespond, AFTER the live roster has the agent.
+	joinedWorkspaceID string
+	mutation          agentstore.MutationResult
 }
 
 func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
@@ -488,14 +491,8 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 	if wsID := tools.ToolWorkspaceID(ac.ctx); wsID != "" {
 		joined, joinErr := ac.t.joinWorkspaceTeam(wsID, ac.finalID)
 		ac.joinedWorkspace = joined
-		if joined && ac.t.deps.EnsureWorkspaceMains != nil {
-			// Final-gate H2: the member now exists on the team; give it its main
-			// through the path workspace saves use. A failure is logged, not fatal:
-			// the main is re-attempted when its chat is opened.
-			if mainsErr := ac.t.deps.EnsureWorkspaceMains(wsID); mainsErr != nil {
-				slog.Error("sysagent: create_agent: the new member's main chat was not created; it is re-attempted when the chat is opened",
-					"agent_id", ac.finalID, "workspace_id", wsID, "error", mainsErr)
-			}
+		if joined {
+			ac.joinedWorkspaceID = wsID
 		}
 		switch {
 		case joinErr == nil:
@@ -545,6 +542,20 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 		publishWarning = fmt.Sprintf(
 			"agent %q was created but is not yet live: publish failed (%s); it will become routable "+
 				"after the next config reload or gateway restart", ac.finalID, publishErr)
+	}
+
+	// Final-gate H2 / founder-reported 2026-10-11: the member's main chat is
+	// provisioned through the workspace-save path, and that path's eligibility
+	// reads the LIVE roster (an agent absent from it is skipped without error).
+	// So it must run only after publishAgentActivation has put the new agent in
+	// that roster, and before the agent_created notify below so the client's
+	// refetch sees the main. A failure is logged, not fatal: the main is
+	// re-attempted when its chat is opened.
+	if ac.joinedWorkspaceID != "" && ac.t.deps.EnsureWorkspaceMains != nil {
+		if mainsErr := ac.t.deps.EnsureWorkspaceMains(ac.joinedWorkspaceID); mainsErr != nil {
+			slog.Error("sysagent: create_agent: the new member's main chat was not created; it is re-attempted when the chat is opened",
+				"agent_id", ac.finalID, "workspace_id", ac.joinedWorkspaceID, "error", mainsErr)
+		}
 	}
 
 	// agent-picker-freshness fix (#1009), corrected ordering: notify ONLY

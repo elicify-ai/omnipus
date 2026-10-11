@@ -409,6 +409,32 @@ function keepAttachedOwner(
   return sessionId === state.activeSessionId && state.activeAgentId != null
 }
 
+// One owner of the initial attach: workspace entry (attachToSession) and the
+// connect-time reattachActiveSession both send attach_session, and on sign-in
+// both fired for the same session - the gateway replayed the whole transcript
+// twice. A send records the session here together with the connection object
+// and its socket generation; while that session's bucket is still replaying on
+// THAT socket, the other path skips its send. A reconnect is a new socket
+// generation and a different connection object is a different transport, so
+// neither can be mistaken for an attach already in flight; the replay flag
+// ending re-opens it for a deliberate re-attach.
+type AttachTransport = { socketGeneration?: number }
+let _attachSent: { sessionId: string; conn: unknown; generation: number | undefined } | null = null
+let _isSessionReplaying: ((sessionId: string) => boolean) | null = null
+export function registerIsSessionReplaying(fn: (sessionId: string) => boolean): void {
+  _isSessionReplaying = fn
+}
+export function attachAlreadyInFlight(sessionId: string, conn: AttachTransport): boolean {
+  return _attachSent !== null
+    && _attachSent.sessionId === sessionId
+    && _attachSent.conn === conn
+    && _attachSent.generation === conn.socketGeneration
+    && (_isSessionReplaying?.(sessionId) ?? false)
+}
+export function noteAttachSent(sessionId: string, conn: AttachTransport): void {
+  _attachSent = { sessionId, conn, generation: conn.socketGeneration }
+}
+
 function setChatReplaying(value: boolean): void {
   if (_chatSetReplaying) {
     _chatSetReplaying(value)
@@ -498,7 +524,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
     if (connection) {
       // #823 §6.1: send the bucket's cursor; only session_snapshot wipes now (Q3).
-      const sent = connection.send({ type: 'attach_session', session_id: sessionId, ...attachSessionCursorFields(sessionId) })
+      const alreadyInFlight = attachAlreadyInFlight(sessionId, connection)
+      const sent = alreadyInFlight || connection.send({ type: 'attach_session', session_id: sessionId, ...attachSessionCursorFields(sessionId) })
       if (!sent) {
         // Wave-1 Bug 2: leave ALL state, pending Auto choice included, untouched.
         useConnectionStore.getState().setConnectionError(
@@ -534,7 +561,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       syncForeground()
       rememberMainPointer(get, set, sessionId, type)
       noteForegroundAttach(sessionId)
-      setChatReplaying(true)
+      if (!alreadyInFlight) {
+        noteAttachSent(sessionId, connection)
+        setChatReplaying(true)
+      }
       if (entryWasBlocked) queueMicrotask(resumeWorkspaceEntryQueue)
       return true
     } else {

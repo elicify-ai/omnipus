@@ -152,27 +152,31 @@ func mainSessionGate(home string, cfg *config.Config, id string) (isMain, eligib
 const adminStandaloneRefusal = "Admin's chats live in the default workspace; open Admin's main chat there."
 
 // adminChatRefusal enforces navigation FR-038 / "one main per agent per workspace"
-// at the two doors that mint a chat session (POST /sessions and the first
-// WebSocket message): Admin has no team and no standalone, workspace-less
-// session. A chat with Admin is accepted only inside the DEFAULT workspace;
-// anything else (no workspace, another workspace, an unreadable or missing
-// default) returns the refusal text. Other agents return "". home is the
-// OMNIPUS_HOME the workspaces live under.
-func adminChatRefusal(home, agentID, workspaceID string) string {
+// at every door that mints or re-binds a chat session (POST /sessions, the first
+// WebSocket message, and a later frame naming another workspace): Admin has no
+// team and no standalone, workspace-less session. A chat with Admin is accepted
+// only inside the DEFAULT workspace; anything else (no workspace, another
+// workspace, no default yet) returns the refusal text. Other agents return "".
+// home is the OMNIPUS_HOME the workspaces live under.
+//
+// A failure to READ the workspaces (anything but "there is no default yet") is a
+// server fault, returned as the error and never as a refusal: the caller answers
+// it as a 500 with the fixed server-failure text, not as the user-facing 400.
+func adminChatRefusal(home, agentID, workspaceID string) (string, error) {
 	if agentID != string(coreagent.IDAdmin) {
-		return ""
+		return "", nil
 	}
 	def, err := workspace.ResolveDefaultID(home)
 	if err != nil {
-		if !errors.Is(err, workspace.ErrNoDefault) {
-			slog.Error("rest: could not resolve the default workspace for an Admin chat", "error", err)
+		if errors.Is(err, workspace.ErrNoDefault) {
+			return adminStandaloneRefusal, nil
 		}
-		return adminStandaloneRefusal
+		return "", err
 	}
 	if def == "" || strings.TrimSpace(workspaceID) != def {
-		return adminStandaloneRefusal
+		return adminStandaloneRefusal, nil
 	}
-	return ""
+	return "", nil
 }
 
 // mainSessionAllowed is the WebSocket door of mainSessionGate: false (after

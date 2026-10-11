@@ -1579,6 +1579,7 @@ type restAPIHandleWorkspaceDelete struct {
 	actor              string
 	mediaCascadeFailed bool
 	dirRemoveFailed    bool
+	mainsReleaseFailed bool
 }
 
 func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, id string) {
@@ -1704,7 +1705,7 @@ func (rd *restAPIHandleWorkspaceDelete) releaseRuntimeResources() {
 	// workspace's pairs owned. A main lives in the SHARED session store (NOT
 	// under the workspace directory), so RemoveAll of the workspace dir does
 	// not remove it. Best-effort per session.
-	releaseMainSessionsForWorkspace(rd.a.agentLoop, rd.ws)
+	rd.mainsReleaseFailed = !releaseMainSessionsForWorkspace(rd.a.agentLoop, rd.ws)
 
 	// M11: remove every mailbox (config.mailboxes entry + stored credential)
 	// bound to this workspace. Best-effort (logged on failure, never aborts
@@ -1885,6 +1886,7 @@ func (rd *restAPIHandleWorkspaceDelete) auditAndRespond() {
 					"actor":                rd.actor,
 					"media_cascade_failed": rd.mediaCascadeFailed,
 					"dir_remove_failed":    rd.dirRemoveFailed,
+					"mains_release_failed": rd.mainsReleaseFailed,
 				},
 			},
 		); err != nil {
@@ -1905,10 +1907,15 @@ func (rd *restAPIHandleWorkspaceDelete) auditAndRespond() {
 	// this endpoint. The caller can confirm the workspace itself is gone
 	// via a follow-up GET (404) and inspect whatever survives on disk /
 	// in the media library via GET /workspaces/{id}/media.
-	if rd.mediaCascadeFailed || rd.dirRemoveFailed {
+	if rd.mediaCascadeFailed || rd.dirRemoveFailed || rd.mainsReleaseFailed {
 		msg := "workspace deleted, but media library cleanup failed; see server logs"
 		stage := "remove_media"
 		switch {
+		case rd.mainsReleaseFailed:
+			// A main chat that could not be removed is orphaned: the eligibility
+			// gate hides it and nothing else can delete it. Name it first.
+			msg = "workspace deleted, but one or more of its main chats could not be removed; see server logs"
+			stage = "remove_main_chats"
 		case rd.mediaCascadeFailed && rd.dirRemoveFailed:
 			msg = "workspace deleted, but media library cleanup and on-disk directory removal both failed; see server logs"
 			stage = "remove_media_and_directory"
@@ -1941,14 +1948,15 @@ func (rd *restAPIHandleWorkspaceDelete) auditAndRespond() {
 // here): a main lives in the SHARED session store, never under the workspace
 // directory, so removing the workspace directory does not remove it. Best-effort
 // per session: a failure is logged and skipped so one bad identity does not
-// block the rest of the delete.
+// block the rest of the delete, and the function returns false so the caller can
+// report the partial cleanup instead of answering plain success.
 //
 // Membership REMOVAL does not do this (FR-003 retains the identity so a re-add
 // reveals the same id) — only deleting the workspace itself does.
-func releaseMainSessionsForWorkspace(al mainSessionAccessor, ws storedWorkspace) {
+func releaseMainSessionsForWorkspace(al mainSessionAccessor, ws storedWorkspace) (complete bool) {
 	store := al.GetSessionStore()
 	if store == nil {
-		return
+		return true
 	}
 	// Final-gate M7: every main that names this workspace goes, found by scanning
 	// the store for the workspace's main-id prefix - not only the pairs the team
@@ -1958,8 +1966,9 @@ func releaseMainSessionsForWorkspace(al mainSessionAccessor, ws storedWorkspace)
 	if err != nil {
 		logsafeWarn("workspace delete: could not list sessions to release the workspace's mains",
 			"workspace_id", ws.ID, "error", err)
-		return
+		return false
 	}
+	complete = true
 	for _, m := range metas {
 		if m == nil {
 			continue
@@ -1971,8 +1980,10 @@ func releaseMainSessionsForWorkspace(al mainSessionAccessor, ws storedWorkspace)
 		if err := store.DeleteSession(m.ID); err != nil {
 			logsafeWarn("workspace delete: failed to delete main session",
 				"workspace_id", ws.ID, "session_id", m.ID, "error", err)
+			complete = false
 		}
 	}
+	return complete
 }
 
 // deduplicateStrings removes duplicate strings (case-sensitive) while preserving
