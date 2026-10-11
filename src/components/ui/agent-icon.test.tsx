@@ -77,7 +77,9 @@ const SIZES = [18, 26, 40, 48] as const
 // anonymous, and an anonymous callback that writes
 // `color={AgentColor.options[0]}` is still ts-colors/unsupported. A call
 // into src/test/agentPalette.ts prints against the wrong file. Indices are
-// that module's spec order: Azure 0, Cyan 2, Violet 4, Orange 8, Grey 9.
+// the generated enum's order (founder decision 2026-10-11,
+// AVATAR-PALETTE-DECISION.md): Steel blue 0, Verdigris 2, Graphite violet 4,
+// Champagne 8, Pewter 9.
 type Mark = {
   // The 5th figure joins the four drawn figures. The art key is never supplied
   // here — the component derives it from FIGURE_ART, exactly as it does for the four.
@@ -108,23 +110,23 @@ function markFields(props: Mark) {
   }
 }
 
-function iconAzure(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
+function iconSteelBlue(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
   return <AgentIcon {...markFields(props)} color={AgentColor.options[0]} />
 }
 
-function iconOrange(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
+function iconChampagne(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
   return <AgentIcon {...markFields(props)} color={AgentColor.options[8]} />
 }
 
-function iconGrey(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
+function iconPewter(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
   return <AgentIcon {...markFields(props)} color={AgentColor.options[9]} />
 }
 
-function iconCyan(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
+function iconVerdigris(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
   return <AgentIcon {...markFields(props)} color={AgentColor.options[2]} />
 }
 
-function iconViolet(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
+function iconGraphiteViolet(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
   return <AgentIcon {...markFields(props)} color={AgentColor.options[4]} />
 }
 
@@ -165,7 +167,7 @@ describe('AgentIcon', () => {
     const AgentIcon = await loadAgentIcon()
     for (const row of FIGURES) {
       const { container, unmount } = render(
-        iconAzure(AgentIcon, { figure: row.figure, role: 'developer', size: 40 }),
+        iconSteelBlue(AgentIcon, { figure: row.figure, role: 'developer', size: 40 }),
       )
       expect(container.querySelector('[data-art]')?.getAttribute('data-art')).toBe(row.art)
       if (row.figure !== 'Omnipus') {
@@ -180,7 +182,7 @@ describe('AgentIcon', () => {
     const AgentIcon = await loadAgentIcon()
     for (const size of SIZES) {
       const { container, unmount } = render(
-        iconAzure(AgentIcon, { figure: 'Woman', role: 'developer', size }),
+        iconSteelBlue(AgentIcon, { figure: 'Woman', role: 'developer', size }),
       )
       const badge = container.querySelector('[data-role="developer"]')
       expect(badge, `badge at ${size}px`).not.toBeNull()
@@ -196,7 +198,7 @@ describe('AgentIcon', () => {
   it('keeps ink opacity at 1 while a separate glow layer carries thinking motion', async () => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(
-      iconOrange(AgentIcon, { figure: 'Robot', role: 'security', size: 48, motion: 'thinking', reducedMotion: false }),
+      iconChampagne(AgentIcon, { figure: 'Robot', role: 'security', size: 48, motion: 'thinking', reducedMotion: false }),
     )
     const ink = inkOf(container)
     const glow = container.querySelector('[data-glow]')
@@ -219,7 +221,7 @@ describe('AgentIcon', () => {
     async (motion) => {
       const AgentIcon = await loadAgentIcon()
       const { container } = render(
-        iconGrey(AgentIcon, { figure: 'Man', role: 'writer', size: 26, motion, reducedMotion: false }),
+        iconPewter(AgentIcon, { figure: 'Man', role: 'writer', size: 26, motion, reducedMotion: false }),
       )
       const ink = inkOf(container)
       expect(ink).toHaveStyle({ opacity: '1' })
@@ -244,7 +246,7 @@ describe('AgentIcon', () => {
 
   it.each([undefined, false])('selects the same 2.6-second Thinking breath and glow with reducedMotion=%s', async (reducedMotion) => {
     const AgentIcon = await loadAgentIcon()
-    const { container } = render(iconOrange(AgentIcon, { figure: 'Robot', role: 'security', size: 48, motion: 'thinking', reducedMotion }))
+    const { container } = render(iconChampagne(AgentIcon, { figure: 'Robot', role: 'security', size: 48, motion: 'thinking', reducedMotion }))
     expect(selectedAnimationSeconds(inkOf(container))).toBe(2.6)
     expect(selectedAnimationSeconds(container.querySelector('[data-glow]')!)).toBe(2.6)
     expectOpaqueAncestors(inkOf(container))
@@ -253,7 +255,7 @@ describe('AgentIcon', () => {
   it('reduced motion removes animation loops and leaves the ink opaque', async () => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(
-      iconCyan(AgentIcon, { figure: 'Omnipus', role: 'general', size: 18, motion: 'thinking', reducedMotion: true }),
+      iconVerdigris(AgentIcon, { figure: 'Omnipus', role: 'general', size: 18, motion: 'thinking', reducedMotion: true }),
     )
     const ink = inkOf(container)
     expect(ink).toHaveStyle({ opacity: '1' })
@@ -266,14 +268,14 @@ describe('AgentIcon', () => {
   it('hides a decorative mark and names a non-decorative mark with the agent name', async () => {
     const AgentIcon = await loadAgentIcon()
     const decorative = render(
-      iconAzure(AgentIcon, { figure: 'Robot', role: 'developer', size: 26 }),
+      iconSteelBlue(AgentIcon, { figure: 'Robot', role: 'developer', size: 26 }),
     )
     expect(decorative.container.querySelector('[aria-hidden="true"]')).not.toBeNull()
     expect(decorative.queryByRole('img')).toBeNull()
     decorative.unmount()
 
     render(
-      iconAzure(AgentIcon, { figure: 'Robot', role: 'developer', size: 26, name: 'Mia', decorative: false }),
+      iconSteelBlue(AgentIcon, { figure: 'Robot', role: 'developer', size: 26, name: 'Mia', decorative: false }),
     )
     expect(screen.getByRole('img', { name: 'Mia' })).toBeInTheDocument()
     expect(screen.queryByRole('img', { name: 'Developer' })).toBeNull()
@@ -283,7 +285,7 @@ describe('AgentIcon', () => {
   it('does not fetch an agent', async () => {
     const AgentIcon = await loadAgentIcon()
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no network'))
-    render(iconViolet(AgentIcon, { figure: 'Woman', role: 'researcher', size: 40, motion: 'working' }))
+    render(iconGraphiteViolet(AgentIcon, { figure: 'Woman', role: 'researcher', size: 40, motion: 'working' }))
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
@@ -296,7 +298,7 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
   it('draws the initial, the role badge, and the letter inside the badge mask in each layer (AC-7)', async () => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(
-      iconAzure(AgentIcon, {
+      iconSteelBlue(AgentIcon, {
         figure: 'Monogram',
         role: 'developer',
         size: 40,
@@ -345,7 +347,7 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
     ['"x', '?'],
   ])('derives the Monogram initial of %j as %j (AC-8)', async (name, expected) => {
     const AgentIcon = await loadAgentIcon()
-    const { container } = render(iconAzure(AgentIcon, { figure: 'Monogram', role: 'general', size: 40, name }))
+    const { container } = render(iconSteelBlue(AgentIcon, { figure: 'Monogram', role: 'general', size: 40, name }))
     const letter = container.querySelector('[data-initial]')
     expect(letter, 'letter node').not.toBeNull()
     // Attribute AND painted text: a builder that keeps the right data-initial
@@ -358,25 +360,26 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
   it('carries the agent colour on the letter through currentColor, with no neutral-grey path (AC-9)', async () => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(
-      iconAzure(AgentIcon, { figure: 'Monogram', role: 'general', size: 40, name: 'Daniel' }),
+      iconSteelBlue(AgentIcon, { figure: 'Monogram', role: 'general', size: 40, name: 'Daniel' }),
     )
     const mark = container.querySelector('[data-figure="Monogram"]') as Element
-    // Azure is derived independently from the spec hex #3B82F6, never read off
-    // the component's supplied prop. (The literal carries its leading '#' so the
-    // [1,3,5] byte offsets are the RGB channels — without it the oracle computed
-    // rgb(184, 47, 6), which no palette colour equals.)
-    const channels = [1, 3, 5].map((offset) => Number.parseInt('#3B82F6'.slice(offset, offset + 2), 16))
+    // Steel blue is derived independently from the decision hex #6E8BA8
+    // (AVATAR-PALETTE-DECISION.md, 2026-10-11), never read off the
+    // component's supplied prop. (The literal carries its leading '#' so the
+    // [1,3,5] byte offsets are the RGB channels — without it the oracle
+    // computed rgb(184, 47, 6), which no palette colour equals.)
+    const channels = [1, 3, 5].map((offset) => Number.parseInt('#6E8BA8'.slice(offset, offset + 2), 16))
     expect(getComputedStyle(mark).color).toBe(`rgb(${channels.join(', ')})`)
     const letter = container.querySelector('[data-initial]') as Element
     expect(letter.getAttribute('fill')).toBeNull() // inherits currentColor; no fill of its own
     expect(letter.closest('svg')?.getAttribute('fill')).toBe('currentColor')
-    expect(container.innerHTML).not.toContain('#9CA3AF') // the neutral grey is baked nowhere
+    expect(container.innerHTML).not.toContain('#8E9196') // the neutral Pewter is baked nowhere
   })
 
   it('hides a decorative Monogram and names a non-decorative one with the full name (AC-10)', async () => {
     const AgentIcon = await loadAgentIcon()
     const decorative = render(
-      iconAzure(AgentIcon, { figure: 'Monogram', role: 'developer', size: 26, name: 'Danielle' }),
+      iconSteelBlue(AgentIcon, { figure: 'Monogram', role: 'developer', size: 26, name: 'Danielle' }),
     )
     expect(decorative.container.querySelector('[aria-hidden="true"]')).not.toBeNull()
     expect(decorative.queryByRole('img')).toBeNull()
@@ -384,7 +387,7 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
     decorative.unmount()
 
     render(
-      iconAzure(AgentIcon, { figure: 'Monogram', role: 'developer', size: 26, name: 'Danielle', decorative: false }),
+      iconSteelBlue(AgentIcon, { figure: 'Monogram', role: 'developer', size: 26, name: 'Danielle', decorative: false }),
     )
     expect(screen.getByRole('img', { name: 'Danielle' })).toBeInTheDocument()
     expect(screen.queryByRole('img', { name: 'D' })).toBeNull()
@@ -393,7 +396,7 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
   it('animates the Monogram letter with full figure parity and keeps the ink opaque (AC-11)', async () => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(
-      iconOrange(AgentIcon, {
+      iconChampagne(AgentIcon, {
         figure: 'Monogram',
         role: 'security',
         size: 48,
@@ -415,7 +418,7 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
   it('leaves the Monogram still under reduced motion and keeps the ink opaque (AC-11)', async () => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(
-      iconCyan(AgentIcon, {
+      iconVerdigris(AgentIcon, {
         figure: 'Monogram',
         role: 'general',
         size: 18,
@@ -445,7 +448,7 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
   it('renders exactly one letter per layer and injects no stray elements (AC-19)', async () => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(
-      iconAzure(AgentIcon, {
+      iconSteelBlue(AgentIcon, {
         figure: 'Monogram',
         role: 'general',
         size: 40,
@@ -491,7 +494,7 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
   it('renders the Monogram initial through the real escapeMarkup helper, not merely defining it (AC-19)', async () => {
     const AgentIcon = await loadAgentIcon()
     escapeCalls.length = 0
-    render(iconAzure(AgentIcon, { figure: 'Monogram', role: 'general', size: 40, name: 'Daniel' }))
+    render(iconSteelBlue(AgentIcon, { figure: 'Monogram', role: 'general', size: 40, name: 'Daniel' }))
     // Rendering must route the spec-derived mark ('D' for 'Daniel') through the
     // mandatory escape step (ARCH-RULING-monogram D2b/MAJ-3). Dropping the call
     // yields no observation here and fails RED.
@@ -501,7 +504,7 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
   it('renders the Monogram letter with the pinned typography (AC-20)', async () => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(
-      iconAzure(AgentIcon, { figure: 'Monogram', role: 'general', size: 40, name: 'Daniel' }),
+      iconSteelBlue(AgentIcon, { figure: 'Monogram', role: 'general', size: 40, name: 'Daniel' }),
     )
     const letter = container.querySelector('[data-initial]') as Element
     expect(letter).not.toBeNull()

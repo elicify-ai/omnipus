@@ -77,7 +77,7 @@ An agent's mark combines a figure, a small job badge, and a colour. Omnipus show
 |---|---|---|
 | Look (figure) | Omnipus, Man, Robot, Woman, or Monogram — Monogram takes the name's first character after trimming spaces, uppercases it, and displays the result if it is a single letter or digit; otherwise it displays `?` | Omnipus |
 | Role badge | One of the 31 badges below | General assistant |
-| Colour | Azure, Sky, Cyan, Indigo, Violet, Purple, Fuchsia, Pink, Orange, or Grey, in that order | Grey |
+| Colour | Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, or Pewter — ten muted metallic tones, in that order | Pewter |
 
 The role badges are grouped like this:
 
@@ -91,9 +91,9 @@ The role badges are grouped like this:
 
 The editor puts the choices around one large live preview of the mark. **Role badge** is a single dropdown: type to search (for example "dev" finds Developer), and each option shows its badge. **Look** shows the five figures as pictures, drawn in your chosen colour and badge, so you can see each one before you pick it. **Colour** is a row of ten colour dots. In the create form the preview is a draft: it is saved only when creation succeeds. In the edit slide-over, **Basics** offers the same editor and saves changes automatically; its preview and the header mark show your selection immediately, before the save completes. With Monogram selected, the create preview updates the initial as you type, using the rule above; an empty or whitespace-only name shows `?`. In the edit slide-over the mark uses the agent's saved name, so a draft rename is not previewed before its save completes. Check the save indicator before treating an edit as saved. There is no agent-picture or GIF upload; this does not affect attaching files to a chat.
 
-When creating an agent through the API, omitting `figure`, `role`, or `color`, or sending JSON `null` or an empty string for it, chooses that field's create default: `Omnipus`, `general`, or `#9CA3AF`. This applies to Main agents, native workers, and external workers. A non-empty figure or role must match a listed value exactly; a whitespace-only string is not a default request. A listed palette hex accepts either letter case and is saved and returned uppercase, for example `#fb923c` becomes `#FB923C`. An unlisted colour still rejects the request. These rules are the same with optional inbound schema validation enabled or disabled.
+When creating an agent through the API, omitting `figure`, `role`, or `color`, or sending JSON `null` or an empty string for it, chooses that field's create default: `Omnipus`, `general`, or `#8E9196` (Pewter). This applies to Main agents, native workers, and external workers. A non-empty figure or role must match a listed value exactly; a whitespace-only string is not a default request. A listed palette hex accepts either letter case and is saved and returned uppercase, for example `#a97142` becomes `#A97142` (Bronze). An unlisted colour still rejects the request. These rules are the same with optional inbound schema validation enabled or disabled.
 
-When updating an existing agent through the API, omit `figure`, `role`, or `color` to keep its stored value. Sending JSON `null`, an empty string, or another invalid identity value rejects the whole update with HTTP 400: even valid sibling changes are not saved, and the stored fields, display timestamp, and configuration revision stay unchanged. Null does not clear an identity choice or restore a create default. To choose a default again, select it in the editor or send its actual value: `Omnipus`, `general`, or `#9CA3AF`. Differently capitalised or JSON-escaped field names do not bypass null rejection, and a repeated identity field cannot hide a supplied null. Listed colour hexes accept either letter case on update too and are stored uppercase.
+When updating an existing agent through the API, omit `figure`, `role`, or `color` to keep its stored value. Sending JSON `null`, an empty string, or another invalid identity value rejects the whole update with HTTP 400: even valid sibling changes are not saved, and the stored fields, display timestamp, and configuration revision stay unchanged. Null does not clear an identity choice or restore a create default. To choose a default again, select it in the editor or send its actual value: `Omnipus`, `general`, or `#8E9196`. Differently capitalised or JSON-escaped field names do not bypass null rejection, and a repeated identity field cannot hide a supplied null. Listed colour hexes accept either letter case on update too and are stored uppercase.
 
 An incomplete or malformed agent create or update is rejected without saving. Request bodies over 1 MiB (1,048,576 bytes) return HTTP 413, even if their first part looks like complete JSON; a complete valid body at that limit is allowed. A rejected create adds no agent. A rejected update leaves the stored fields, display timestamp, and configuration revision unchanged.
 
@@ -105,19 +105,19 @@ Open a built-in agent's card, then **Basics**: the role badge, look, and colour 
 
 | Built-in agent | Figure | Role badge | Colour |
 |---|---|---|---|
-| Mia | Omnipus | General assistant | Azure |
-| Jim | Omnipus | General assistant | Cyan |
-| Ava | Omnipus | General assistant | Orange |
-| Admin | Omnipus | Security | Pink |
-| Planner | Omnipus | General assistant | Sky |
-| Researcher | Omnipus | General assistant | Violet |
-| General Purpose | Omnipus | General assistant | Grey |
+| Mia | Omnipus | General assistant | Steel blue |
+| Jim | Omnipus | General assistant | Verdigris |
+| Ava | Omnipus | General assistant | Bronze |
+| Admin | Omnipus | Security | Champagne |
+| Planner | Omnipus | General assistant | Titanium |
+| Researcher | Omnipus | General assistant | Graphite violet |
+| General Purpose | Omnipus | General assistant | Pewter |
 
 Agent identity is the figure, role badge and palette colour. The legacy icon is not an editable identity field.
 
 ### Existing agents' identity
 
-Agent identity is the figure, role badge and palette colour. The legacy icon is not an editable identity field. For agents you created, an invalid or missing custom role normalizes to General assistant, not to a badge inferred from an old icon. An invalid or missing figure normalizes to Omnipus. A valid figure or role already chosen stays. Valid palette colours normalize to uppercase; other valid six-digit colours are mapped to the nearest palette hue, with nearly grey or malformed colours becoming Grey. Once these choices are saved, later restarts leave them unchanged rather than repeatedly choosing new colours. Built-in agents use their fixed identities instead (`pkg/coreagent/identity.go::migrateUnenforcedAgentIdentity` applies only to agents Omnipus does not enforce).
+Agent identity is the figure, role badge and palette colour. The legacy icon is not an editable identity field. For agents you created, an invalid or missing custom role normalizes to General assistant, not to a badge inferred from an old icon. An invalid or missing figure normalizes to Omnipus. A valid figure or role already chosen stays. Valid palette colours normalize to uppercase. An agent still storing one of the ten colours of the previous (pre-October 2026) palette is shown its new metallic equivalent automatically — for example the old Orange now shows as Bronze — without the stored file being rewritten; any other stored colour value falls back to the default Pewter. Once these choices are saved, later restarts leave them unchanged rather than repeatedly choosing new colours. Built-in agents use their fixed identities instead (`pkg/coreagent/identity.go::migrateUnenforcedAgentIdentity` applies only to agents Omnipus does not enforce).
 
 ## How to lower one agent's tool-call limit
 

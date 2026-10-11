@@ -7,19 +7,20 @@ import { useUiStore } from '@/store/ui'
 
 // FR-020 / BDD-06.1/06.2. The editor offers the locked vocabulary and a live
 // AgentIcon preview. Draft choices are not a save. There is no upload control.
-// Palette oracles are the spec's ten hexes, not AVATAR_COLORS.
+// Palette oracles are the founder's 2026-10-11 decision table
+// (AVATAR-PALETTE-DECISION.md), not values read off the picker.
 
 const PALETTE: { name: string; hex: string }[] = [
-  { name: 'Azure', hex: '#3B82F6' },
-  { name: 'Sky', hex: '#38BDF8' },
-  { name: 'Cyan', hex: '#22D3EE' },
-  { name: 'Indigo', hex: '#818CF8' },
-  { name: 'Violet', hex: '#A78BFA' },
-  { name: 'Purple', hex: '#C084FC' },
-  { name: 'Fuchsia', hex: '#E879F9' },
-  { name: 'Pink', hex: '#F472B6' },
-  { name: 'Orange', hex: '#FB923C' },
-  { name: 'Grey', hex: '#9CA3AF' },
+  { name: 'Steel blue', hex: '#6E8BA8' },
+  { name: 'Titanium', hex: '#7A8C9E' },
+  { name: 'Verdigris', hex: '#4F8A80' },
+  { name: 'Gunmetal', hex: '#5E6973' },
+  { name: 'Graphite violet', hex: '#7B7290' },
+  { name: 'Rose gold', hex: '#B76E79' },
+  { name: 'Bronze', hex: '#A97142' },
+  { name: 'Antique brass', hex: '#9C8A5B' },
+  { name: 'Champagne', hex: '#CDBA96' },
+  { name: 'Pewter', hex: '#8E9196' },
 ]
 
 beforeAll(() => {
@@ -41,7 +42,7 @@ beforeEach(() => {
 
 describe('identity colour choices', () => {
   it('offers the ten palette colours and not the retired brand swatches', () => {
-    render(<AvatarColorPicker value="#3B82F6" onChange={vi.fn()} />)
+    render(<AvatarColorPicker value="#6E8BA8" onChange={vi.fn()} />)
     for (const swatch of PALETTE) {
       expect(screen.getByRole('button', { name: swatch.name })).toBeInTheDocument()
     }
@@ -53,9 +54,9 @@ describe('identity colour choices', () => {
 
   it('reports the canonical uppercase hex for a chosen swatch', () => {
     const onChange = vi.fn()
-    render(<AvatarColorPicker value="#3B82F6" onChange={onChange} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Sky' }))
-    expect(onChange).toHaveBeenCalledWith('#38BDF8')
+    render(<AvatarColorPicker value="#6E8BA8" onChange={onChange} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Titanium' }))
+    expect(onChange).toHaveBeenCalledWith('#7A8C9E')
   })
 })
 
@@ -70,7 +71,7 @@ describe('create wizard identity preview', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Woman' }))
     fireEvent.click(screen.getByRole('combobox', { name: 'Role badge' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Writer' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Sky' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Titanium' }))
     const preview = document.querySelector('[data-art]')
     expect(preview?.getAttribute('data-art')).toBe('woman')
     expect(document.querySelector('[data-role="writer"]')).not.toBeNull()
@@ -105,7 +106,7 @@ describe('create wizard identity preview', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Woman' }))
     fireEvent.click(screen.getByRole('combobox', { name: 'Role badge' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Writer' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Sky' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Titanium' }))
     expect(onSubmit).not.toHaveBeenCalled()
     fireEvent.click(screen.getByTestId('wizard-next-1'))
     fireEvent.change(await screen.findByTestId('wizard-soul'), { target: { value: 'Write clear release notes.' } })
@@ -114,7 +115,7 @@ describe('create wizard identity preview', () => {
     expect(await screen.findByTestId('wizard-submit-error')).toHaveTextContent('Identity save denied')
     expect(screen.getByRole('alert')).toHaveTextContent('Identity save denied')
     expect(onSubmit).toHaveBeenCalledTimes(1)
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ figure: 'Woman', role: 'writer', color: '#38BDF8' }))
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ figure: 'Woman', role: 'writer', color: '#7A8C9E' }))
     expect(onClose).not.toHaveBeenCalled()
     expect(screen.getByTestId('wizard-stepper')).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('wizard-back'))
@@ -122,7 +123,7 @@ describe('create wizard identity preview', () => {
     expect(await screen.findByTestId('wizard-name')).toHaveValue('Draft helper')
     const mark = document.querySelector('[data-testid="agent-icon"]')
     expect(mark).not.toBeNull()
-    expect(getComputedStyle(mark as Element).color).toBe('rgb(56, 189, 248)') // Spec Sky hex -> RGB.
+    expect(getComputedStyle(mark as Element).color).toBe('rgb(122, 140, 158)') // Spec Titanium hex -> RGB (decision 2026-10-11).
     expect(mark?.querySelector('[data-art="woman"]')).not.toBeNull()
     expect(mark?.querySelector('[data-role="writer"]')).not.toBeNull()
   })

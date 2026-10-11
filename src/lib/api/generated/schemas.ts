@@ -1342,16 +1342,16 @@ type AgentRole =
   | "personal"
   | "office";
 type AgentColor =
-  | "#3B82F6"
-  | "#38BDF8"
-  | "#22D3EE"
-  | "#818CF8"
-  | "#A78BFA"
-  | "#C084FC"
-  | "#E879F9"
-  | "#F472B6"
-  | "#FB923C"
-  | "#9CA3AF";
+  | "#6E8BA8"
+  | "#7A8C9E"
+  | "#4F8A80"
+  | "#5E6973"
+  | "#7B7290"
+  | "#B76E79"
+  | "#A97142"
+  | "#9C8A5B"
+  | "#CDBA96"
+  | "#8E9196";
 type MaxToolIterationsSource = "global" | "agent";
 type AgentToolsCfg = Partial<{
   builtin: {
@@ -3832,16 +3832,16 @@ export const AgentRole = z.enum([
   "office",
 ]);
 export const AgentColor = z.enum([
-  "#3B82F6",
-  "#38BDF8",
-  "#22D3EE",
-  "#818CF8",
-  "#A78BFA",
-  "#C084FC",
-  "#E879F9",
-  "#F472B6",
-  "#FB923C",
-  "#9CA3AF",
+  "#6E8BA8",
+  "#7A8C9E",
+  "#4F8A80",
+  "#5E6973",
+  "#7B7290",
+  "#B76E79",
+  "#A97142",
+  "#9C8A5B",
+  "#CDBA96",
+  "#8E9196",
 ]);
 export const MaxToolIterationsSource = z.enum(["global", "agent"]);
 export const AgentToolsMcpServerBinding: z.ZodType<AgentToolsMcpServerBinding> =

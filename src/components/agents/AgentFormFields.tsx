@@ -26,7 +26,13 @@ const SWATCH_HEXES = [
   AgentColor.options[9],
 ] as const
 
-const SWATCH_NAMES = ['Azure', 'Sky', 'Cyan', 'Indigo', 'Violet', 'Purple', 'Fuchsia', 'Pink', 'Orange', 'Grey'] as const
+// Names and order are the founder's 2026-10-11 avatar palette decision
+// (AVATAR-PALETTE-DECISION.md); the hexes come from the generated AgentColor
+// enum above in the same order.
+const SWATCH_NAMES = [
+  'Steel blue', 'Titanium', 'Verdigris', 'Gunmetal', 'Graphite violet',
+  'Rose gold', 'Bronze', 'Antique brass', 'Champagne', 'Pewter',
+] as const
 
 // ── AgentFormFields ──────────────────────────────────────────────────────────
 //

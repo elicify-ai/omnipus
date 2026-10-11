@@ -2980,8 +2980,8 @@ describe('AgentProfile — locked core agent identity fields: visible read-only 
     expect(description.value).toBe(mockLockedCoreAgent.description)
   })
 
-  it('shows all ten colour choices disabled, with Azure selected for the locked built-in (W1-6)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, color: '#3B82F6' })
+  it('shows all ten colour choices disabled, with Steel blue selected for the locked built-in (W1-6)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, color: '#6E8BA8' })
     renderProfile('mia')
     await screen.findByText('Mia')
     expectLockedIdentityColours(screen.getByRole('tabpanel', { name: 'Basics' }))
@@ -3140,7 +3140,7 @@ describe('AgentProfile — Default-agent toggle visibility (field matrix, W2c)',
 // than accidentally inheriting the built-in locks.
 describe('AgentProfile — unlocked Main agent: interactive identity fields render (isLocked regression guard, W2c)', () => {
   it('renders editable figure, role and colour choices instead of the legacy icon picker (W1-6)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#3B82F6' })
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#6E8BA8' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
     expectEditableIdentityChoices(screen.getByRole('tabpanel', { name: 'Basics' }))

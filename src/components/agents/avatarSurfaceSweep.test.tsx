@@ -33,7 +33,7 @@ const RIVET: Agent = makeAgent({
   type: 'Subagent',
   figure: 'Robot',
   role: 'developer',
-  color: '#3B82F6', // Azure — palette order 1
+  color: '#6E8BA8', // Steel blue — palette order 1 (decision 2026-10-11)
 })
 
 const RIVET_ROLLUP_AGENT = {
@@ -41,7 +41,7 @@ const RIVET_ROLLUP_AGENT = {
   name: 'Rivet',
   figure: 'Robot',
   role: 'developer',
-  color: '#3B82F6', // Azure — palette order 1
+  color: '#6E8BA8', // Steel blue — palette order 1 (decision 2026-10-11)
 } as const
 
 beforeAll(() => {
@@ -74,7 +74,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
-      agentFactory({ id: 'rivet', name: 'Rivet', type: 'Subagent', figure: 'Robot', role: 'developer', color: '#3B82F6' }),
+      agentFactory({ id: 'rivet', name: 'Rivet', type: 'Subagent', figure: 'Robot', role: 'developer', color: '#6E8BA8' }),
     ]),
     fetchPlans: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
@@ -369,7 +369,7 @@ describe('surface sweep — sidebar', () => {
       is_default: true,
       admin_main_session_id: 'seam-opaque-admin-main',
     } as Workspace
-    const admin = makeAgent({ id: 'admin', name: 'Admin', type: 'core', figure: 'Robot', role: 'security', color: '#F472B6' })
+    const admin = makeAgent({ id: 'admin', name: 'Admin', type: 'core', figure: 'Robot', role: 'security', color: '#CDBA96' })
     const { container } = render(
       <WorkspaceAgentList
         projects={[workspace]}

@@ -2,7 +2,9 @@
  * AgentFormFields.test.tsx
  *
  * Tests for the identity primitives the wizard and the edit slide-over share:
- *   - <AvatarColorPicker>  — 10-colour identity palette (Azure..Grey) with semantic aria-labels
+ *   - <AvatarColorPicker>  — 10-colour identity palette (Steel blue..Pewter,
+ *                            the founder's 2026-10-11 metallic decision,
+ *                            AVATAR-PALETTE-DECISION.md) with semantic aria-labels
  *   - <AgentLookPicker>    — the ONE avatar editor (preview, 5 figure pictures,
  *                            searchable Role badge dropdown, 10 colour dots)
  *
@@ -36,27 +38,42 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { AvatarColorPicker, AgentLookPicker } from './AgentFormFields'
+import { AgentColor } from '@/lib/api/generated/schemas'
 
-// SPEC "Locked identity vocabulary" ordered palette (Azure..Grey).
-// Not src/lib/constants.ts AVATAR_COLORS (the retired eight brand swatches)
-// and not a value read off the picker.
+// Founder decision 2026-10-11 (AVATAR-PALETTE-DECISION.md): the ten metallic
+// tones, in the founder's order. Not a value read off the picker.
 const IDENTITY_PALETTE = [
-  { name: 'Azure', hex: '#3B82F6' },
-  { name: 'Sky', hex: '#38BDF8' },
-  { name: 'Cyan', hex: '#22D3EE' },
-  { name: 'Indigo', hex: '#818CF8' },
-  { name: 'Violet', hex: '#A78BFA' },
-  { name: 'Purple', hex: '#C084FC' },
-  { name: 'Fuchsia', hex: '#E879F9' },
-  { name: 'Pink', hex: '#F472B6' },
-  { name: 'Orange', hex: '#FB923C' },
-  { name: 'Grey', hex: '#9CA3AF' },
+  { name: 'Steel blue', hex: '#6E8BA8' },
+  { name: 'Titanium', hex: '#7A8C9E' },
+  { name: 'Verdigris', hex: '#4F8A80' },
+  { name: 'Gunmetal', hex: '#5E6973' },
+  { name: 'Graphite violet', hex: '#7B7290' },
+  { name: 'Rose gold', hex: '#B76E79' },
+  { name: 'Bronze', hex: '#A97142' },
+  { name: 'Antique brass', hex: '#9C8A5B' },
+  { name: 'Champagne', hex: '#CDBA96' },
+  { name: 'Pewter', hex: '#8E9196' },
 ] as const
+
+/** The palette the picker offered before the 2026-10-11 decision, with the
+ *  rgb() forms jsdom serialises inline styles to. Never offered again. */
+const RETIRED_PALETTE: ReadonlyArray<readonly [name: string, hex: string, rgb: string]> = [
+  ['Azure', '#3B82F6', 'rgb(59, 130, 246)'],
+  ['Sky', '#38BDF8', 'rgb(56, 189, 248)'],
+  ['Cyan', '#22D3EE', 'rgb(34, 211, 238)'],
+  ['Indigo', '#818CF8', 'rgb(129, 140, 248)'],
+  ['Violet', '#A78BFA', 'rgb(167, 139, 250)'],
+  ['Purple', '#C084FC', 'rgb(192, 132, 252)'],
+  ['Fuchsia', '#E879F9', 'rgb(232, 121, 249)'],
+  ['Pink', '#F472B6', 'rgb(244, 114, 182)'],
+  ['Orange', '#FB923C', 'rgb(251, 146, 60)'],
+  ['Grey', '#9CA3AF', 'rgb(156, 163, 175)'],
+]
 
 const RETIRED_SWATCH_NAMES = ['Verdant', 'Amethyst', 'Saffron', 'Ember', 'Crimson', 'Slate', 'Forge Gold'] as const
 
 describe('AvatarColorPicker', () => {
-  it('renders one button per identity palette colour (Azure through Grey) and not the retired swatches', () => {
+  it('renders one button per identity palette colour (Steel blue through Pewter) and not the retired swatches', () => {
     // Traces: navigation spec FR-017 / BDD-05.2 — the editor offers the ten
     // ordered palette colours, not the previous eight brand swatches.
     const onChange = vi.fn()
@@ -74,21 +91,22 @@ describe('AvatarColorPicker', () => {
     }
   })
 
-  it('calls onChange with the canonical Sky hex when Sky is clicked', () => {
-    // Traces: FR-017 — the second palette entry is Sky #38BDF8, uppercase.
+  it('calls onChange with the canonical Titanium hex when Titanium is clicked', () => {
+    // Traces: FR-017 — the second palette entry is Titanium #7A8C9E
+    // (founder decision 2026-10-11, AVATAR-PALETTE-DECISION.md), uppercase.
     const onChange = vi.fn()
-    const sky = IDENTITY_PALETTE[1]
+    const titanium = IDENTITY_PALETTE[1]
     render(<AvatarColorPicker value={IDENTITY_PALETTE[0].hex} onChange={onChange} />)
-    fireEvent.click(screen.getByRole('button', { name: sky.name }))
+    fireEvent.click(screen.getByRole('button', { name: titanium.name }))
     expect(onChange).toHaveBeenCalledTimes(1)
-    expect(onChange).toHaveBeenCalledWith(sky.hex)
+    expect(onChange).toHaveBeenCalledWith(titanium.hex)
   })
 
   it('marks the selected swatch with aria-pressed=true (and others false)', () => {
     // Traces: the selected palette swatch is distinguishable. aria-pressed
-    // is the signal for a toggle button. Fuchsia is palette entry 7.
+    // is the signal for a toggle button. Rose gold is palette entry 6.
     const onChange = vi.fn()
-    const selected = IDENTITY_PALETTE[6]
+    const selected = IDENTITY_PALETTE[5]
     render(<AvatarColorPicker value={selected.hex} onChange={onChange} />)
     for (const { name, hex } of IDENTITY_PALETTE) {
       const btn = screen.getByRole('button', { name })
@@ -100,17 +118,39 @@ describe('AvatarColorPicker', () => {
     // Traces: wave5a-wire-ui-spec.md — wizard and profile can share the
     // component without colliding on test ids. The profile uses
     // "avatar-color" (default), so we pick a different prefix here to
-    // assert the prefix actually flows through. Azure is palette entry 1.
+    // assert the prefix actually flows through. Steel blue is palette entry 1.
     const onChange = vi.fn()
-    const azure = IDENTITY_PALETTE[0]
+    const steelBlue = IDENTITY_PALETTE[0]
     render(
       <AvatarColorPicker
-        value={azure.hex}
+        value={steelBlue.hex}
         onChange={onChange}
         testIdPrefix="wizard-color"
       />,
     )
-    expect(screen.getByTestId(`wizard-color-${azure.name}`)).toBeInTheDocument()
+    expect(screen.getByTestId(`wizard-color-${steelBlue.name}`)).toBeInTheDocument()
+  })
+
+  it('offers exactly the ten decision colours in order and never a pre-2026-10-11 colour', () => {
+    // Founder decision 2026-10-11 (AVATAR-PALETTE-DECISION.md): the picker
+    // offers the ten metallic tones in the founder's order and nothing else.
+    // Oracles: the decision table above and the GENERATED AgentColor enum —
+    // never values read off the component.
+    expect([...AgentColor.options]).toEqual(IDENTITY_PALETTE.map((swatch) => swatch.hex))
+    render(<AvatarColorPicker value={IDENTITY_PALETTE[9].hex} onChange={vi.fn()} />)
+    const dots = screen.getAllByRole('button')
+    expect(dots).toHaveLength(IDENTITY_PALETTE.length)
+    IDENTITY_PALETTE.forEach(({ name, hex }, index) => {
+      expect(dots[index], `${name} at decision position ${index + 1}`).toHaveAttribute('aria-label', name)
+      expect(dots[index]).toHaveStyle({ backgroundColor: hex })
+    })
+    // And never an old colour: no pre-decision name is offered and no
+    // pre-decision fill is painted anywhere in the picker's DOM (inline
+    // styles serialise to rgb(), so absence is asserted in that form).
+    for (const [name, , rgb] of RETIRED_PALETTE) {
+      expect(screen.queryByRole('button', { name }), `retired swatch ${name}`).not.toBeInTheDocument()
+      expect(document.body.innerHTML, `retired fill of ${name}`).not.toContain(rgb)
+    }
   })
 })
 
@@ -150,7 +190,7 @@ async function renderLookPicker(overrides: Partial<Parameters<typeof AgentLookPi
       name="Rivet"
       figure="Omnipus"
       role="general"
-      color={IDENTITY_PALETTE[1].hex /* Sky */}
+      color={IDENTITY_PALETTE[1].hex /* Titanium */}
       onFigureChange={onFigureChange}
       onRoleChange={onRoleChange}
       onColorChange={onColorChange}
@@ -169,7 +209,7 @@ describe('AgentLookPicker — pick by picture (founder 2026-10-10)', () => {
     const mark = within(preview).getByTestId('agent-icon')
     expect(mark).toHaveAttribute('data-figure', 'Robot')
     expect(mark.querySelector('g[data-role="developer"]')).not.toBeNull()
-    expect(mark).toHaveStyle({ color: 'rgb(56, 189, 248)' }) // Sky #38BDF8
+    expect(mark).toHaveStyle({ color: 'rgb(122, 140, 158)' }) // Titanium #7A8C9E (decision 2026-10-11)
   })
 
   it('renders exactly five Look thumbnails in the founder order, each drawn in the chosen colour', () => {
@@ -185,7 +225,7 @@ describe('AgentLookPicker — pick by picture (founder 2026-10-10)', () => {
       const mark = within(thumbs[index]).getByTestId('agent-icon')
       expect(mark).toHaveAttribute('data-figure', figure)
       expect(mark.querySelector('g[data-role="security"]')).not.toBeNull()
-      expect(mark).toHaveStyle({ color: 'rgb(56, 189, 248)' }) // Sky — the chosen colour
+      expect(mark).toHaveStyle({ color: 'rgb(122, 140, 158)' }) // Titanium — the chosen colour
     }
   })
 
@@ -240,9 +280,9 @@ describe('AgentLookPicker — pick by picture (founder 2026-10-10)', () => {
     renderLookPicker()
     const dots = screen.getAllByTestId(/^avatar-color-/)
     expect(dots.map((dot) => dot.getAttribute('data-testid'))).toEqual([
-      'avatar-color-Azure', 'avatar-color-Sky', 'avatar-color-Cyan', 'avatar-color-Indigo',
-      'avatar-color-Violet', 'avatar-color-Purple', 'avatar-color-Fuchsia', 'avatar-color-Pink',
-      'avatar-color-Orange', 'avatar-color-Grey',
+      'avatar-color-Steel blue', 'avatar-color-Titanium', 'avatar-color-Verdigris', 'avatar-color-Gunmetal',
+      'avatar-color-Graphite violet', 'avatar-color-Rose gold', 'avatar-color-Bronze', 'avatar-color-Antique brass',
+      'avatar-color-Champagne', 'avatar-color-Pewter',
     ])
   })
 
@@ -254,7 +294,7 @@ describe('AgentLookPicker — pick by picture (founder 2026-10-10)', () => {
     for (const figure of FIGURE_ORDER) {
       expect(screen.getByTestId(`avatar-figure-${figure}`)).toBeDisabled()
     }
-    expect(screen.getByTestId('avatar-color-Azure')).toBeDisabled()
+    expect(screen.getByTestId('avatar-color-Steel blue')).toBeDisabled()
     // Choices stay visible: the preview and all ten dots are still rendered.
     expect(screen.getByTestId('avatar-look-preview')).toBeInTheDocument()
     expect(screen.getAllByTestId(/^avatar-color-/)).toHaveLength(10)
@@ -265,7 +305,7 @@ describe('AgentLookPicker — pick by picture (founder 2026-10-10)', () => {
     const { onColorChange } = await renderLookPicker({ figureLocked: true })
     expect(screen.getByTestId('avatar-figure-Man')).toBeDisabled()
     expect(screen.getByRole('combobox', { name: 'Role badge' })).toBeEnabled()
-    fireEvent.click(screen.getByTestId('avatar-color-Orange'))
-    expect(onColorChange).toHaveBeenCalledWith('#FB923C')
+    fireEvent.click(screen.getByTestId('avatar-color-Bronze'))
+    expect(onColorChange).toHaveBeenCalledWith('#A97142') // Bronze, decision 2026-10-11
   })
 })

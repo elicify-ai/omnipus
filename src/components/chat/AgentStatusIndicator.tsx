@@ -7,6 +7,7 @@ import '@/styles/agent-icon-motion.css'
 
 import { AgentIcon } from '@/components/ui/agent-icon'
 import type { AgentColor, AgentFigure, AgentRole } from '@/lib/api/generated/openapi-types'
+import { AGENT_ICON_PALETTE } from '@/design-system/agent-identity'
 import { FIGURE_ART, ROLE_VOCABULARY } from '@/lib/agentIdentity'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -35,20 +36,14 @@ export const THINKING_PHRASES = [
 export const IDLE_STATUS_TEXT = 'Idle'
 export const UNAVAILABLE_STATUS_TEXT = 'Unavailable/reconnecting'
 
-const PALETTE = [
-  '#3B82F6',
-  '#38BDF8',
-  '#22D3EE',
-  '#818CF8',
-  '#A78BFA',
-  '#C084FC',
-  '#E879F9',
-  '#F472B6',
-  '#FB923C',
-  '#9CA3AF',
-] as const satisfies readonly AgentColor[]
+// The kit's governed identity ink (founder 2026-10-11, AVATAR-PALETTE-
+// DECISION.md) — one list, not a second copy. The annotation plus the
+// assertNever pair below keep this guard compiling only while the kit
+// palette is exactly the generated AgentColor enum. This is the avatar
+// palette behind isPaletteColor, not a D4 task-status palette.
+const IDENTITY_INK: readonly AgentColor[] = AGENT_ICON_PALETTE
 
-type MissingPalette = Exclude<AgentColor, (typeof PALETTE)[number]>
+type MissingPalette = Exclude<AgentColor, (typeof IDENTITY_INK)[number]>
 type AssertNever<T extends never> = T
 type _PaletteCoverage = AssertNever<MissingPalette>
 void (null as unknown as _PaletteCoverage)
@@ -111,7 +106,7 @@ function isRole(value: string | undefined): value is AgentRole {
 }
 
 function isPaletteColor(value: string | undefined): value is AgentColor {
-  return value != null && (PALETTE as readonly string[]).includes(value)
+  return value != null && (IDENTITY_INK as readonly string[]).includes(value)
 }
 
 function waitingCopy(approvalTool: string | null, questionPending: boolean): string {

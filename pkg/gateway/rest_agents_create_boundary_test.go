@@ -166,12 +166,12 @@ func TestCreateAgent_NonNullMembersAndIdentityDefaultsRemainAccepted(t *testing.
 				assert.Equal(t, "Omnipus", string(created.Figure))
 				assert.Equal(t, "general", string(created.Role))
 				require.NotNil(t, created.Color)
-				assert.Equal(t, "#9CA3AF", string(*created.Color))
+				assert.Equal(t, "#8E9196", string(*created.Color))
 				state, err := agentstore.New(api.homePath).ReadState(created.Id)
 				require.NoError(t, err)
 				assert.Equal(t, "Omnipus", state.Agent.Figure)
 				assert.Equal(t, "general", state.Agent.Role)
-				assert.Equal(t, "#9CA3AF", state.Agent.Color)
+				assert.Equal(t, "#8E9196", state.Agent.Color)
 			})
 		}
 	}
