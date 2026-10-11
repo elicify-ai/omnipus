@@ -132,6 +132,7 @@ func TestReloadWiring_MemoryAuditLogger_PersistsAcrossReload(t *testing.T) {
 	result := inst.Tools.ExecuteWithContext(ctx, "remember", map[string]any{
 		"content":  "reload wiring regression check",
 		"category": "reference",
+		"room":     "private",
 	}, "", "", nil)
 	require.False(t, result.IsError, "remember call must succeed: %+v", result)
 
@@ -190,6 +191,7 @@ func TestReloadWiring_MemoryRateLimiter_SameInstancePersistsAcrossReload(t *test
 	result := inst.Tools.ExecuteWithContext(ctx, "remember", map[string]any{
 		"content":  "should be rate limited",
 		"category": "reference",
+		"room":     "private",
 	}, "", "", nil)
 
 	require.True(t, result.IsError,
