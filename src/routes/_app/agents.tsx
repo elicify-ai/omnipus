@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { createFileRoute, Outlet } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
-import { AgentProfile } from '@/components/agents/AgentProfile'
 import { useUiStore } from '@/store/ui'
 
 function AgentsError() {
@@ -33,15 +32,12 @@ function AgentsLayout() {
   // phantom-open that violates the "I closed it" mental model. The cleanup
   // fires on EVERY layout unmount, so this also covers the deep-link route
   // (which navigates to /agents on mount, not away from /agents).
+  // The editor component itself is NOT mounted here: it is store-driven
+  // (reads editAgentId) and hosted ONCE in the app shell — a second host here
+  // opened two simultaneous sheets whenever the sidebar's row-menu Edit sat
+  // next to this route (CR F6).
   useEffect(() => () => useUiStore.getState().closeEditAgentSlideOver(), [])
-  return (
-    <>
-      <Outlet />
-      {/* Mounted once at the layout level so the edit slide-over is reachable
-          from every sub-route. The component reads `editAgentId` from the store. */}
-      <AgentProfile />
-    </>
-  )
+  return <Outlet />
 }
 
 export const Route = createFileRoute('/_app/agents')({
