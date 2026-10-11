@@ -22,13 +22,16 @@ import { fetchWorkspaces, fetchAgents, fetchSessions } from '@/lib/api'
 import type { Agent, Session, Workspace } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
 
-const { mockNavigate, mockCreateSession, mockAttachToSession, mockSetActiveWorkspaceId, mockAddToast } =
+const { mockNavigate, mockCreateSession, mockAttachToSession, mockSetActiveWorkspaceId, mockAddToast, mockSessionState } =
   vi.hoisted(() => ({
     mockNavigate: vi.fn(),
     mockCreateSession: vi.fn(),
     mockAttachToSession: vi.fn(),
     mockSetActiveWorkspaceId: vi.fn(),
     mockAddToast: vi.fn(),
+    // The slice of the session store the stub reads beyond the entry path:
+    // activeSessionId is attachToSession's own success signal (C7).
+    mockSessionState: { activeAgentId: null as string | null, activeSessionId: null as string | null },
   }))
 
 vi.mock('@tanstack/react-router', () => ({
@@ -49,7 +52,8 @@ vi.mock('@/lib/api', () => ({
 // contract: false aborts the selection (no navigation), true proceeds.
 vi.mock('@/store/session', () => {
   const state = {
-    activeAgentId: null as string | null,
+    get activeAgentId() { return mockSessionState.activeAgentId },
+    get activeSessionId() { return mockSessionState.activeSessionId },
     attachToSession: mockAttachToSession,
     setActiveAgentType: vi.fn(),
   }
@@ -120,6 +124,8 @@ let AdminChatRoute: React.ComponentType
 beforeEach(async () => {
   vi.clearAllMocks()
   mockAttachToSession.mockReturnValue(true)
+  mockSessionState.activeAgentId = null
+  mockSessionState.activeSessionId = null
   const module = await import('./admin.chat')
   AdminChatRoute = (module.Route as unknown as { component: React.ComponentType }).component
 })
@@ -227,5 +233,105 @@ describe('/admin/chat — redirect stub onto the default workspace Admin main', 
       expect.objectContaining({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-default' } }),
     )
     expect(mockCreateSession).not.toHaveBeenCalled()
+  })
+
+  // C5 (R3 delta re-review, PTA F3): the attach-refused + Retry branch was
+  // never driven — every fixture attached successfully. attachToSession's
+  // boolean is the real contract: false aborts the selection (toast, no
+  // navigation) and the stub offers Retry.
+  it('a refused attach is visible — the entry toast, the unavailable state and Retry, no navigation', async () => {
+    await mockApi(
+      [makeWorkspace({ admin_main_session_id: 'main-admin-1' })],
+      [ADMIN],
+      [makeAdminMainSession()],
+    )
+    mockAttachToSession.mockReturnValue(false) // the WS send failed mid-reconnect
+    renderRoute()
+
+    expect(await screen.findByRole('status', { name: 'Main chat unavailable' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(mockAttachToSession).toHaveBeenCalledTimes(1)
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(mockCreateSession).not.toHaveBeenCalled()
+    // useSelectSession's own attach-failure toast fired — the refusal is not
+    // silent even before the stub's Retry screen appears.
+    expect(mockAddToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
+  })
+
+  it('Retry after a refused attach re-runs the entry path and lands on the main (C5)', async () => {
+    await mockApi(
+      [makeWorkspace({ admin_main_session_id: 'main-admin-1' })],
+      [ADMIN],
+      [makeAdminMainSession()],
+    )
+    mockAttachToSession.mockReturnValue(false)
+    renderRoute()
+    expect(await screen.findByRole('status', { name: 'Main chat unavailable' })).toBeInTheDocument()
+    const attemptsBeforeRetry = mockAttachToSession.mock.calls.length
+
+    mockAttachToSession.mockReturnValue(true)
+    await act(async () => {
+      screen.getByRole('button', { name: 'Retry' }).click()
+    })
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith(
+        expect.objectContaining({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-default' } }),
+      )
+    })
+    expect(mockAttachToSession.mock.calls.length).toBeGreaterThan(attemptsBeforeRetry)
+    expect(mockCreateSession).not.toHaveBeenCalled()
+  })
+
+  // C5: the stub's own inline default-workspace rule — the seam's
+  // admin_main_session_id is read from the DEFAULT workspace only. A
+  // non-default workspace carrying the field is never entered.
+  it('a non-default workspace carrying admin_main_session_id is never entered', async () => {
+    await mockApi(
+      [
+        makeWorkspace({ id: 'ws-other', name: 'Other', is_default: false, admin_main_session_id: 'main-admin-9' }),
+        makeWorkspace({ admin_main_session_id: undefined }), // the default ws has no main
+      ],
+      [ADMIN],
+      [makeAdminMainSession({ id: 'main-admin-9', workspace_id: 'ws-other' })],
+    )
+    renderRoute()
+
+    expect(await screen.findByRole('status', { name: 'Main chat unavailable' })).toBeInTheDocument()
+    expect(mockAttachToSession).not.toHaveBeenCalled()
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(mockSetActiveWorkspaceId).not.toHaveBeenCalledWith('ws-other')
+    expect(mockCreateSession).not.toHaveBeenCalled()
+  })
+
+  // C7 (R3 delta re-review, CR L-1 / SFH F8): the redirect used to flash
+  // "Main chat unavailable" + Retry for the render between the attempt and
+  // the route swap. A successful attach (the entry path's own outcome
+  // signal: activeSessionId now names the main) must hold the neutral
+  // resolving state instead — "unavailable" is for real failures only.
+  it('a successful entry holds the resolving state — never the unavailable flash (C7)', async () => {
+    await mockApi(
+      [makeWorkspace({ admin_main_session_id: 'main-admin-1' })],
+      [ADMIN],
+      [makeAdminMainSession()],
+    )
+    // The real attachToSession sets the store's activeSessionId; the mock
+    // mirrors that contract.
+    mockAttachToSession.mockImplementation((sid: string) => {
+      mockSessionState.activeSessionId = sid
+      return true
+    })
+    renderRoute()
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith(
+        expect.objectContaining({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-default' } }),
+      )
+    })
+    // Still mounted (the mocked navigate swaps no route): the surface shows
+    // the neutral resolving presentation, and the unavailable state never
+    // flashed.
+    expect(screen.queryByRole('status', { name: 'Main chat unavailable' })).not.toBeInTheDocument()
+    expect(screen.getByText('Restoring your conversation…')).toBeInTheDocument()
   })
 })

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { fetchAgents, fetchSessions, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { adminMainSessionIdOfWorkspace } from '@/lib/nav/sessionCoreSeam'
 import { useSelectSession } from '@/components/chat/useSelectSession'
+import { useSessionStore } from '@/store/session'
 import { Button } from '@/components/ui/button'
 
 // /admin/chat — REDIRECT STUB (repo convention for retired screens, like
@@ -16,8 +17,11 @@ import { Button } from '@/components/ui/button'
 // entry path the sidebar row uses (useSelectSession: attach → workspace
 // switch → the workspace chat route). It NEVER mints a standalone Admin
 // session (the old screen called createSession('admin') on every visit,
-// outside any workspace) and never fakes a membership. When Admin's main
-// cannot be resolved, it shows the sidebar's unavailable state with Retry —
+// outside any workspace) and never fakes a membership. Until resolution is
+// known it shows the neutral "Restoring your conversation…" state (C7) —
+// the old code flashed "Main chat unavailable" + Retry during the
+// mid-navigation window. When Admin's main cannot be resolved (or the
+// attach is refused), it shows the sidebar's unavailable state with Retry —
 // never a blank page.
 const ADMIN_AGENT_ID = 'admin'
 
@@ -63,6 +67,10 @@ function AdminChatRedirect() {
   // there is nothing to close.
   const selectSession = useSelectSession({ agents, workspaces, onClose: () => {}, replace: true })
   const [attemptedId, setAttemptedId] = useState<string | null>(null)
+  // The entry path's own outcome signal: attachToSession sets the store's
+  // activeSessionId to the attached session when the attach is sent, and
+  // leaves it alone when it refuses.
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
 
   useEffect(() => {
     if (!session || attemptedId === session.id) return
@@ -71,10 +79,18 @@ function AdminChatRedirect() {
   }, [session, attemptedId, selectSession])
 
   const pending = workspacesPending || agentsPending || sessionsPending
-  // Still mounted after the attempt ⇒ the attach/navigation did not happen
-  // (its toast already said so) — offer Retry instead of spinning forever.
-  const attemptedButStuck = !!session && attemptedId === session.id
-  const unavailable = attemptedButStuck || (!session && !pending)
+  // C7 (R3 delta re-review): after the attempt the stub is either MID-REDIRECT
+  // (the attach went out and the navigation is in flight) or genuinely stuck
+  // (the attach refused; its toast already said so). Reading the store's
+  // activeSessionId keeps the mid-navigation window on the neutral resolving
+  // state below — the old `attemptedId === session.id` test alone flashed
+  // "Main chat unavailable" + Retry at a redirect that was succeeding.
+  const attemptMade = !!session && attemptedId === session.id
+  const attachProceeded = attemptMade && activeSessionId === session.id
+  // Truly unavailable: nothing to enter (the queries resolved without
+  // Admin's main), or the entry path refused the attach and the stub is
+  // still mounted — offer Retry instead of spinning forever.
+  const unavailable = (!session && !pending) || (attemptMade && !attachProceeded)
 
   const retry = () => {
     setAttemptedId(null)
@@ -106,12 +122,23 @@ function AdminChatRedirect() {
     )
   }
 
+  // Resolving: queries in flight, or the entry attempt mid-redirect. Same
+  // presentation as WorkspaceChatTab's ChatRestoreSkeleton — the shared
+  // wording, the shared spinner shape — because it is the same moment (a
+  // conversation restore in flight); a fourth catalogued loading primitive
+  // for one spinner + caption would not generalize (design-system rule 14,
+  // local-copy reason).
   return (
-    <div className="flex h-full items-center justify-center" aria-live="polite">
+    <div
+      className="flex h-full flex-col items-center justify-center gap-[var(--space-2-5)]"
+      aria-live="polite"
+      data-testid="admin-chat-restoring"
+    >
       <div
-        className="w-6 h-6 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin"
+        className="h-8 w-8 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin"
         aria-hidden="true"
       />
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Restoring your conversation…</p>
     </div>
   )
 }
