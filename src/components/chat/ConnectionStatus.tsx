@@ -17,9 +17,9 @@ import { useChatStore } from '@/store/chat'
 import type { FirstSendStatus } from '@/store/chat/types'
 import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
+import type { UserDeliveryState } from '@/lib/userDeliveryState'
 import { dismissRestartNotice, useRestartInterrupted, useRestartNoticeDismissal } from './useRestartInterrupted'
 
-export type UserDeliveryState = 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded' | 'not-performed' | 'unconfirmed'
 
 const FIRST_SEND_COPY: Record<FirstSendStatus, { label: string; action?: 'Retry' | 'Generate again' }> = {
   sending: { label: 'Sending…' },
@@ -158,37 +158,21 @@ function StatusActionButton({
 
 /**
  * The quiet icon-chip copy for every non-failed, non-first-send delivery
- * state. Extracted so the /clear-specific variants (delta re-review C1/R1#1)
- * read as a table instead of a five-deep ternary:
- *   - 'not-performed' — the server replied "/clear was not performed …":
- *     the row must never keep the offline "Not sent yet, will be sent
- *     automatically" look after the server has answered.
- *   - 'unconfirmed' — the bounded wait (R1#1) ended with the server neither
- *     confirming nor refusing the clear.
+ * state. Extracted so the /clear-specific variant (delta re-review C1)
+ * reads as a table instead of a ternary chain:
  *   - 'discarded' for a /clear — "Not applied": the generic wording says the
  *     text was never read, which is false for a held-then-discarded command.
- * Every one of these is passive (no action button): the honest repair for a
- * /clear is to send /clear again, which the tooltip says.
+ * (Ruling S3-02 deleted the 'not-performed' and 'unconfirmed' variants: a
+ * refused /clear is the wire's message_status failed — the failed chip in
+ * UserMessageDeliveryStatus covers it — and a held clear stays 'queued'
+ * with no deadline.) Both are passive (no action button): the honest repair
+ * for a /clear is to send /clear again, which the tooltip says.
  */
 function deliveryStateCopy(
   state: UserDeliveryState,
   agentName: string,
   isClearCommand: boolean,
 ): { label: string; tooltip: string; icon: React.ReactNode } {
-  if (state === 'not-performed') {
-    return {
-      label: 'Not performed',
-      tooltip: 'The server received /clear but could not perform it — nothing was cleared. Send /clear again if you still want a fresh start.',
-      icon: <Prohibit size={14} aria-hidden="true" />,
-    }
-  }
-  if (state === 'unconfirmed') {
-    return {
-      label: 'Not confirmed',
-      tooltip: "The server did not confirm this /clear, so the chat's context may not have been cleared. Send /clear again if you still want a fresh start.",
-      icon: <Clock size={14} aria-hidden="true" />,
-    }
-  }
   if (state === 'queued') {
     return {
       label: 'Not sent yet, will be sent automatically',

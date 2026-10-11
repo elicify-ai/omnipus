@@ -107,6 +107,7 @@ type AgentLoop struct {
 	pendingRequests   sync.Map
 	deliveredRequests sync.Map // request ids a turn has actually been given
 	remindedRequests  sync.Map
+	heldRepublished   sync.Map // held request ids whose wake has been re-published and not yet processed
 	activeTurnStates  sync.Map // key: sessionKey (string), value: *turnState
 	// externalRunSessions holds the live external-CLI driver per child session
 	// (key: the child's transcript session id (string), value: *externalCLIRunSession)
@@ -2697,6 +2698,7 @@ func clearSessionWindowReversible(sessions session.SessionStore, sessionKey stri
 		return nil, err
 	}
 	before := view.State.Clone()
+	before.RestoreExpiryNote = view.ExpiryNote
 	moved := after.Clone()
 	moved.DropExpiryNote = false
 	return func() error { return store.RestoreWindow(ctx, sessionKey, moved, before) }, nil

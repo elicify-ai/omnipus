@@ -45,6 +45,13 @@ func addrTool() (*MessageTool, *fakePeer, *fakeReply, *bool) {
 	return tool, peer, reply, &ordinarySent
 }
 
+// addrToolOnly is addrTool for a test that needs only the tool, not the fakes.
+func addrToolOnly() *MessageTool {
+	tool, peer, _, _ := addrTool()
+	_ = peer
+	return tool
+}
+
 func TestReplyForm_RoutesWithActingAgentFromContextAndTrimmedID(t *testing.T) {
 	tool, _, reply, sent := addrTool()
 	ctx := WithTranscriptSessionID(u8TurnCtx(), "jim-main")
@@ -255,7 +262,7 @@ func TestPeerSend_HeldReceipt_TellsTheAskerItIsWaiting(t *testing.T) {
 }
 
 func TestPeerSend_NotHeld_ReceiptHasNoWaitingNote(t *testing.T) {
-	tool, _, _, _ := addrTool()
+	tool := addrToolOnly()
 	res := tool.Execute(u8TurnCtx(), map[string]any{"content": "please review X", "workspace_id": "ws-2", "agent_id": "ava"})
 	if res.IsError || strings.Contains(res.ForLLM, "stopped") {
 		t.Fatalf("receipt = %q (error=%v), want a plain admission", res.ForLLM, res.IsError)

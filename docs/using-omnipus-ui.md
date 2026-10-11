@@ -165,17 +165,16 @@ A turn stopped by `/stop-redirect` keeps its partial reply but is not labelled (
 - **The saved history is kept.** Every earlier message stays in the chat's saved history, and the agent can still recall it when a task needs something from before the clear.
 - **The screen starts fresh.** Once the server confirms the clear, the view begins at a quiet **Conversation context cleared** divider, followed by the new conversation. When there is earlier history, a quiet line above the divider says **Earlier messages are saved. The agent can still recall them.** (Reaching those earlier messages on screen is planned separately.) Your `/clear` message itself is not part of the fresh view — the divider stands where the new conversation begins.
 
-The `/clear` row appears in the chat immediately as a queued message. If a reply is being written when you send it, Omnipus does not refuse it: the running reply is stopped first, and then the clear runs. The queued row stays until the clear lands and the fresh view replaces the screen — or until one of the outcomes below resolves it.
+The `/clear` row appears in the chat immediately as a queued message. If a reply is being written when you send it, Omnipus does not refuse it: the running reply is stopped first, and then the clear runs. While the server is holding the clear — a stopped agent that has not run again, or a running reply being stopped — the row simply stays queued, for as long as the hold lasts; there is no time limit after which it is called failed. When the agent runs again, the held clear executes and the fresh view replaces the screen.
 
-When the clear cannot be completed, your `/clear` row says so itself instead of waiting forever: it leaves the queued look and shows a quiet status. Nothing is ever deleted, and every outcome is safe:
+When the server cannot carry the clear out, your `/clear` row leaves the queued look and shows it. Nothing is ever deleted, and every outcome is safe:
 
 | The row shows | When it happens | What it means and what you can do |
 |---|---|---|
-| **Not performed** | The running reply could not be stopped (about half a minute). A reply above the row says **/clear was not performed … Nothing was cleared; send /clear again.** | The server received your `/clear` but could not carry it out. Nothing was cleared. Send `/clear` again if you still want a fresh start. |
+| **Couldn't be sent · Try again** | The server could not carry the clear out — for example, the running reply could not be stopped. The server's reason appears as a normal reply above the row. | Nothing was cleared. Select **Try again** to send the `/clear` again, or type a new `/clear` yourself. |
 | **Not applied** | You stopped the turn and the `/clear` was discarded before it could run. | Nothing was cleared. Sending `/clear` again works normally. |
-| **Not confirmed** | The server neither confirmed nor refused the clear within about a minute and a half — for example, when the chat's worker ended unexpectedly. A warning also appears. | The chat's context may not have been cleared. Nothing on the screen changes. Send `/clear` again if you still want a fresh start. |
 
-The chat also keeps checking the server after later replies, a few times, until the clear is confirmed. If that check cannot read the history, the chat shows **Could not load messages.** and that screen's **Retry** also completes the refresh — you do not need to repeat `/clear`.
+After the `/clear` is sent, the chat checks the server after later replies until the clear is confirmed. If a check cannot read the history, the chat shows **Could not load messages.** and that screen's **Retry** also completes the refresh — you do not need to repeat `/clear`.
 
 `/clear` works in a main or extra chat only. In a helper, worker, delegate or task-child session it refuses with an explanation and changes nothing — no view move, no history change, no new chat. The refusal appears as the command's reply.
 

@@ -173,6 +173,11 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	if errors.Is(prepErr, errOwnerWakeRetained) {
 		// F8: the chat was stopped; the answer stays in its transcript and the
 		// owner is not run. Nothing is reported - a Stop is not a failure.
+		// A re-published held request is dropped again: let the next admitted
+		// turn re-publish it.
+		if msg.TranscriptEntryID != "" {
+			al.heldRepublished.Delete(msg.TranscriptEntryID)
+		}
 		logger.InfoCF("agent", "owner wake dropped: the conversation is stopped; the answer is retained in its transcript",
 			map[string]any{"session_id": msg.SessionID})
 		return "", agent, nil
@@ -180,6 +185,9 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	if prepErr != nil {
 		return "", agent, prepErr
 	}
+	// The turn is admitted: a request this inbound carries is now given to the
+	// model (idempotent with the session worker's own mark).
+	al.markRequestDelivered(msg.SessionID, msg.TranscriptEntryID)
 	d := preparation.execution
 	entry.disposition = d
 	opts.executionDisposition = d
