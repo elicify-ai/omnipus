@@ -266,7 +266,11 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
       const reply = appendMessage.mock.calls[0][0] as { role: string; content: string }
       expect(reply.role).toBe('system')
       expect(reply.content).toContain('no longer exists')
-      expect(reply.content).toContain('New chat')
+      // Founder decision D7 (sidebar agent-row menu, 2026-10-11): the "New chat" UI
+      // entry is removed, so the refusal no longer points to it — it says there is
+      // no sidebar entry for an extra chat and points to /clear instead.
+      expect(reply.content).toContain('no sidebar entry to start an extra chat')
+      expect(reply.content).not.toContain('New chat')
       expect(reply.content).toContain('/clear')
       // The composer text is consumed; nothing reached the wire.
       expect(composerRuntime.setText).toHaveBeenCalledWith('')
