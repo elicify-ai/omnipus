@@ -1,7 +1,8 @@
 # Feature Specification: Agent-first navigation and agent identity
 
 **Created**: 2026-10-07 (UTC)
-Status: In review — sole correction complete; contract/visual dependencies remain. Not implementation approval.
+Status: In review
+**Status note**: sole correction complete; contract/visual dependencies remain. Not implementation approval.
 **Size**: Feature. One frontend specification; backend U1 and this frontend land jointly.
 **Input**: Corrected **Agent-first navigation and agent identity**, D1–D14, at `b6fd39efb5bc4ee5bb77cb6f16be5baeec34265e`, with the newer founder answers below.
 **Worktree**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav`
