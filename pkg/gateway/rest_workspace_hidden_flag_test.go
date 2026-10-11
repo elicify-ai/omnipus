@@ -19,6 +19,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -228,11 +231,18 @@ func TestWorkspaceHiddenFlag_BuiltinRemoveFromDefaultWorkspaceRefused(t *testing
 	w = env.putTeam(t, ws, "jim", "mia")
 	require.Equal(t, http.StatusOK, w.Code, "control: same-team PUT; body=%s", w.Body.String())
 
-	// The guard: dropping built-in Mia from the default workspace is 409.
+	// The guard: dropping built-in Mia from the default workspace is 409 with
+	// the founder-fixed message and machine-readable code (2026-10-11), so
+	// the SPA can tell this permanent refusal apart from a retryable revision
+	// conflict (which carries no code).
 	w = env.putTeam(t, ws, "jim")
 	require.Equal(t, http.StatusConflict, w.Code, "built-in removal from default ws body=%s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "built-in", "the refusal must say why")
-	assert.Contains(t, w.Body.String(), "default workspace", "the refusal must name the default-workspace rule")
+	var errBody map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errBody), "refusal body must be JSON: %s", w.Body.String())
+	assert.Equal(t, "Built-in agents can't be removed from this workspace", errBody["error"],
+		"the refusal must carry the founder-fixed message verbatim")
+	assert.Equal(t, "builtin_roster_default", errBody["code"],
+		"the refusal must carry the documented machine-readable code")
 
 	team, _ := hiddenFlagWorkspaceDiskJSON(t, env.api, ws)["core_team"].([]any)
 	assert.Contains(t, team, "mia", "a refused removal must not persist: Mia stays on the team")
@@ -264,4 +274,151 @@ func TestWorkspaceHiddenFlag_StaleRevisionConflicts(t *testing.T) {
 	require.Equal(t, http.StatusConflict, w.Code, "stale revision body=%s", w.Body.String())
 	assert.Nil(t, hiddenFlagDiskEntry(t, env.api, ws, "mia"),
 		"a revision conflict must not persist the hide")
+}
+
+// ADR addendum 2026-10-11 (founder: "hiding is only hiding"): an entry with
+// NEITHER field ({}) keeps the pre-feature replace behaviour — the stored
+// heartbeat is cleared — while rule 1 still preserves the flag.
+func TestWorkspaceHiddenFlag_EmptyEntryClearsStoredHeartbeat(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JHIDDENFLAGEMPTY000001"
+	hiddenFlagSeedWorkspace(t, env.home, ws, false, []string{"jim", "mia"}, json.RawMessage(`{
+		"mia": {"hidden_from_sidebar": true,
+		        "heartbeat": {"enabled": true, "interval_minutes": 10, "body": "Check tasks."}}
+	}`))
+
+	w := env.put(t, ws, map[string]any{"member_configs": map[string]any{
+		"mia": map[string]any{},
+	}})
+	require.Equal(t, http.StatusOK, w.Code, "empty-entry PUT body=%s", w.Body.String())
+
+	mc := u1MemberConfig(env.getWorkspace(t, ws), "mia")
+	require.NotNil(t, mc)
+	assert.Equal(t, true, mc["hidden_from_sidebar"],
+		"rule 1: the flag is preserved even by an otherwise-empty entry")
+	assert.Nil(t, mc["heartbeat"],
+		"{} keeps the ordinary replace behaviour: the stored heartbeat is cleared")
+	entry := hiddenFlagDiskEntry(t, env.api, ws, "mia")
+	require.NotNil(t, entry)
+	assert.Nil(t, entry["heartbeat"], "the cleared heartbeat is gone from disk too")
+}
+
+// A heartbeat the body DOES carry is replaced wholesale, never merged
+// field-by-field: a partial heartbeat ({enabled:false} only) clears the
+// fields it omits, exactly as the pre-feature replace semantics did.
+func TestWorkspaceHiddenFlag_PartialHeartbeatReplacedNotMerged(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JHIDDENFLAGPARTIAL0001"
+	hiddenFlagSeedWorkspace(t, env.home, ws, false, []string{"jim", "mia"}, json.RawMessage(`{
+		"mia": {"heartbeat": {"enabled": true, "interval_minutes": 10, "body": "Old body."}}
+	}`))
+
+	w := env.put(t, ws, map[string]any{"member_configs": map[string]any{
+		"mia": map[string]any{"heartbeat": map[string]any{"enabled": false}},
+	}})
+	require.Equal(t, http.StatusOK, w.Code, "partial heartbeat PUT body=%s", w.Body.String())
+
+	hb, _ := u1MemberConfig(env.getWorkspace(t, ws), "mia")["heartbeat"].(map[string]any)
+	require.NotNil(t, hb)
+	assert.Equal(t, false, hb["enabled"], "the carried field lands")
+	_, hasInterval := hb["interval_minutes"]
+	assert.False(t, hasInterval, "an omitted heartbeat field is CLEARED (replace), not merged")
+	_, hasBody := hb["body"]
+	assert.False(t, hasBody, "an omitted heartbeat field is CLEARED (replace), not merged")
+}
+
+// Rule 2, show direction: a pure show entry (hidden_from_sidebar:false,
+// heartbeat absent) also leaves the stored heartbeat untouched.
+func TestWorkspaceHiddenFlag_PureShowEntryPreservesHeartbeat(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JHIDDENFLAGSHOW000001"
+	hiddenFlagSeedWorkspace(t, env.home, ws, false, []string{"jim", "mia"}, json.RawMessage(`{
+		"mia": {"hidden_from_sidebar": true,
+		        "heartbeat": {"enabled": true, "interval_minutes": 10, "body": "Check tasks."}}
+	}`))
+
+	w := env.put(t, ws, map[string]any{"member_configs": map[string]any{
+		"mia": map[string]any{"hidden_from_sidebar": false},
+	}})
+	require.Equal(t, http.StatusOK, w.Code, "pure show PUT body=%s", w.Body.String())
+
+	mc := u1MemberConfig(env.getWorkspace(t, ws), "mia")
+	require.NotNil(t, mc)
+	assert.NotEqual(t, true, mc["hidden_from_sidebar"], "the show lands: the member is no longer hidden")
+	assert.NotEqual(t, true, hiddenFlagDiskEntry(t, env.api, ws, "mia")["hidden_from_sidebar"],
+		"disk agrees the member is visible again")
+	hb, _ := mc["heartbeat"].(map[string]any)
+	require.NotNil(t, hb, "a pure show must not change any other setting")
+	assert.Equal(t, true, hb["enabled"], "stored heartbeat survives the pure show")
+}
+
+// Founder ruling 2026-10-11 (S2/F2): the built-in-removal refusal must run
+// BEFORE any side effect. A valid-revision PUT on the default workspace that
+// removes built-in Mia AND disables continuing member Jim's heartbeat is
+// refused 409, and NOTHING changes: the workspace record (Jim's heartbeat
+// stays enabled), the delegation store, and Jim's plan pause state.
+func TestWorkspacePut_BuiltinRemovalRefusalPrecedesPlanEffects(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JHIDDENFLAGREFUSR00001"
+	hiddenFlagSeedWorkspace(t, env.home, ws, true, []string{"jim", "mia"}, json.RawMessage(`{
+		"jim": {"heartbeat": {"enabled": true, "interval_minutes": 10, "body": "Check."}},
+		"mia": {"heartbeat": {"enabled": true, "interval_minutes": 10, "body": "Mia."}}
+	}`))
+
+	// Wire the plan store + a real PlanEngine exactly as production boot does
+	// (rest_plans_test.go::newTestRestAPIWithPlans) so the pause/resume loop in
+	// prepareWorkspacePutMembers is live and a pre-refusal pause would be
+	// observable on the store.
+	planStore := plan.New(filepath.Join(env.home, "plans"))
+	env.api.planStore = planStore
+	pe := agent.NewPlanEngine(env.api.agentLoop, planStore, env.api.taskStore, env.api.taskExecutor)
+	env.api.agentLoop.SetPlanEngine(pe)
+	t.Cleanup(pe.Stop)
+
+	// A RUNNING plan owned by Jim with no pause reason.
+	p := &plan.Plan{Title: "jim plan", WorkspaceID: ws, OwnerAgentID: "jim", State: plan.StateRunning}
+	require.NoError(t, planStore.Create(p), "seed running plan")
+
+	edgesBefore, hadEdgesBefore := workspace.LoadDelegation(env.home, ws)
+
+	// Remove Mia (built-in, default workspace) AND disable Jim's heartbeat in
+	// one request: the refusal must win before the heartbeat disable's pause
+	// side effect fires.
+	body := fmt.Sprintf(`{"revision":%q,"core_team":["jim"],"member_configs":{"jim":{"heartbeat":{"enabled":false,"interval_minutes":10,"body":"Check."}}}}`,
+		currentRevision(env.home, ws))
+	w := hiddenFlagPutRaw(t, env.api, ws, body)
+	require.Equal(t, http.StatusConflict, w.Code, "refusal body=%s", w.Body.String())
+
+	var errBody map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errBody))
+	assert.Equal(t, "builtin_roster_default", errBody["code"], "the 409 carries the refusal code")
+	assert.Equal(t, "Built-in agents can't be removed from this workspace", errBody["error"])
+
+	got, err := planStore.Get(p.ID)
+	require.NoError(t, err, "plan must still be readable")
+	assert.Equal(t, plan.StateRunning, got.State, "plan state untouched by the refusal")
+	assert.Equal(t, "", got.PausedReason,
+		"the plan must NOT be paused: the refusal ran before any plan side effect")
+
+	disk := hiddenFlagWorkspaceDiskJSON(t, env.api, ws)
+	team, _ := disk["core_team"].([]any)
+	assert.Contains(t, team, "mia", "the workspace record is unchanged: Mia stays on the team")
+	jimEntry, _ := disk["member_configs"].(map[string]any)["jim"].(map[string]any)
+	require.NotNil(t, jimEntry)
+	jimHB, _ := jimEntry["heartbeat"].(map[string]any)
+	require.NotNil(t, jimHB, "Jim's stored heartbeat is unchanged")
+	assert.Equal(t, true, jimHB["enabled"], "Jim's heartbeat stays enabled — the disable never persisted")
+
+	edgesAfter, hadEdgesAfter := workspace.LoadDelegation(env.home, ws)
+	assert.Equal(t, hadEdgesBefore, hadEdgesAfter, "delegation store presence unchanged")
+	assert.Equal(t, edgesBefore, edgesAfter, "delegation store contents unchanged")
+}
+
+// currentRevision reads the workspace's current revision for a raw PUT body.
+func currentRevision(home, id string) string {
+	state, err := workspace.ReadState(home, id)
+	if err != nil {
+		return strings.Repeat("0", 64)
+	}
+	return state.Revision
 }
