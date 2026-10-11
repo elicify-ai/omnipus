@@ -9,7 +9,9 @@
 //
 // Pending requests are tracked in memory from admission (peer request or bound
 // connector message) until an accepted answer or a discard. A restart forgets
-// them, so at worst a request admitted before the restart is not reminded.
+// them; a request that no turn had yet been given stays held in the ledger and
+// is tracked again when the receiver's next turn delivers it
+// (deliverHeldRequests).
 // The reminder reuses the owner-wake marker and so carries no human authority:
 // it can start the next round of a finished chat but never continues a
 // stopped one, and it is sent once per request so it cannot loop.
@@ -23,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
@@ -33,10 +36,28 @@ const requestReminderMetadataKey = "request_reminder"
 
 // markRequestDelivered records that a turn has been given the request (its own
 // wake, or steered into a live turn), so a turn ending earlier cannot remind
-// about a request the agent has not seen.
-func (al *AgentLoop) markRequestDelivered(transcriptEntryID string) {
-	if transcriptEntryID != "" {
-		al.deliveredRequests.Store(transcriptEntryID, struct{}{})
+// about a request the agent has not seen. For a tracked request the mark is also
+// written to the ledger: a request that is not marked is still held and is
+// delivered by the receiver's next turn.
+func (al *AgentLoop) markRequestDelivered(sessionID, transcriptEntryID string) {
+	if transcriptEntryID == "" {
+		return
+	}
+	// Every inbound carries a transcript entry id (each human message too); only
+	// a pending request is ever owed a reminder, and admission registers it
+	// BEFORE its turn can run, so anything else is not recorded.
+	if _, tracked := al.pendingRequests.Load(transcriptEntryID); !tracked {
+		return
+	}
+	al.deliveredRequests.Store(transcriptEntryID, struct{}{})
+	if sessionID == "" {
+		return
+	}
+	if ledger := al.RequestLedger(); ledger != nil {
+		if err := ledger.MarkDelivered(sessionID, transcriptEntryID); err != nil {
+			logger.WarnCF("agent", "request delivery could not be recorded; it may be delivered again on the next turn",
+				map[string]any{"session_id": sessionID, "request_id": transcriptEntryID, "error": err.Error()})
+		}
 	}
 }
 
@@ -91,7 +112,12 @@ func (al *AgentLoop) remindUnansweredRequests(sessionID string) {
 		// OperatorPrompt, admitted as the owner-wake principal.
 		Metadata: map[string]string{"agent_id": agentID, requestReminderMetadataKey: "1", ownerWakeMetadataKey: "1"},
 	}); err != nil {
-		logger.WarnCF("agent", "could not remind the agent about unanswered requests",
+		// The reminder never went out: give the one reminder back so a later turn
+		// end retries, instead of leaving the sender waiting for ever.
+		for _, id := range ids {
+			al.remindedRequests.Delete(id)
+		}
+		logger.ErrorCF("agent", "could not remind the agent about unanswered requests - the reminder stays owed",
 			map[string]any{"session_id": sessionID, "requests": ids, "error": err.Error()})
 	}
 }
@@ -103,4 +129,82 @@ func requestReminderText(ids []string) string {
 	}
 	return fmt.Sprintf("Requests %s are still unanswered. Answer each with the answer_request tool "+
 		"(request_id and your answer as text); a plain reply does not reach the sender.", strings.Join(ids, ", "))
+}
+
+// settleRequest ends a request's life in every set that tracks it: answered or
+// discarded, it can owe no reminder and must not be remembered. Without this the
+// delivered and reminded sets grew for the life of the process.
+func (al *AgentLoop) settleRequest(requestID string) {
+	al.pendingRequests.Delete(requestID)
+	al.deliveredRequests.Delete(requestID)
+	al.remindedRequests.Delete(requestID)
+}
+
+// receiverStopped reports whether sessionID's lifecycle record is stopped (a
+// landed stop or an in-flight fence): the state in which a request does not
+// start a turn.
+func (al *AgentLoop) receiverStopped(sessionID string) bool {
+	lc := al.GetSessionLifecycleStore()
+	if lc == nil || sessionID == "" {
+		return false
+	}
+	rec, err := lc.Load(sessionID)
+	if err != nil {
+		return false
+	}
+	return rec.Stopped()
+}
+
+// deliverHeldRequests runs when a turn of sessionID has just been admitted - the
+// receiver "runs again", including a Resume. Every request held for it in the
+// ledger is handed to that turn: the request is already in the conversation the
+// turn reads, so delivery marks it delivered and tracks it for the unanswered
+// reminder. A request whose asker's conversation is gone is discarded and logged
+// instead, never delivered into a void.
+func (al *AgentLoop) deliverHeldRequests(sessionID string) {
+	ledger := al.RequestLedger()
+	if ledger == nil || sessionID == "" {
+		return
+	}
+	held, err := ledger.Undelivered(sessionID)
+	if err != nil {
+		logger.ErrorCF("agent", "held requests could not be read; they stay held",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return
+	}
+	for _, c := range held {
+		if reason := al.askerUnavailable(c); reason != "" {
+			al.settleRequest(c.RequestID)
+			if dErr := ledger.Discard(sessionID, c.RequestID); dErr != nil {
+				logger.ErrorCF("agent", "a held request with no asker could not be discarded",
+					map[string]any{"session_id": sessionID, "request_id": c.RequestID, "error": dErr.Error()})
+			}
+			logger.WarnCF("agent", "held request dropped, not delivered: "+reason,
+				map[string]any{"session_id": sessionID, "request_id": c.RequestID, "asker_session_id": c.Source.SessionID})
+			continue
+		}
+		al.pendingRequests.Store(c.RequestID, sessionID)
+		al.markRequestDelivered(sessionID, c.RequestID)
+	}
+}
+
+// askerUnavailable returns why the answer to c could not reach its asker, or ""
+// when it can. A connector asker lives on the platform and is not checked here.
+func (al *AgentLoop) askerUnavailable(c addressing.Capture) string {
+	if c.Source.Kind != addressing.SourceConversation {
+		return ""
+	}
+	store := al.GetSessionStore()
+	if store == nil {
+		return "the session store is unavailable"
+	}
+	meta, err := store.GetMeta(c.Source.SessionID)
+	if err != nil || meta == nil {
+		return "the asker's conversation no longer exists"
+	}
+	if !c.Source.Owner.IsZero() &&
+		(meta.AgentID != c.Source.Owner.AgentID || meta.WorkspaceID != c.Source.Owner.WorkspaceID) {
+		return "the asker's conversation no longer belongs to the agent that asked"
+	}
+	return ""
 }

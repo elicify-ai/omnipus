@@ -13,34 +13,25 @@
 // nonexistent session). A transport failure (network, 5xx) is NOT deletion
 // and must NOT produce the banner.
 //
-// Boundary note: this file stubs useQuery to hand ChatScreen a real ApiError
-// — the unit under test is ChatScreen's CONSUMPTION of the query error (the
-// status === 404 gate and the read-only wiring). That a 404 HTTP response
-// becomes an ApiError with status 404 is http.ts's existing, separately
-// covered behavior (ApiError.fromResponse), not code introduced here.
+// Boundary note: the REAL react-query (QueryClientProvider, retry off) runs
+// ChatScreen's history query and the REAL isApiError classifies its error; the
+// only stub on that path is the network boundary, fetchSessionMessages, which
+// rejects with a real ApiError. That a 404 HTTP response becomes an ApiError
+// with status 404 is http.ts's existing, separately covered behavior
+// (ApiError.fromResponse), not code introduced here.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, act } from '@testing-library/react'
+import { render, act, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import * as React from 'react'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
 import type { ChatMessage } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { ApiError } from '@/lib/api-error'
-
-const queryMock = vi.hoisted(() => ({ result: { data: undefined as unknown, isError: false, error: null as unknown, refetch: () => {} } }))
+import { fetchSessionMessages } from '@/lib/api'
 
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock())
-
-vi.mock('@tanstack/react-query', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@tanstack/react-query')>()
-  return {
-    ...actual,
-    useQuery: () => queryMock.result,
-    useMutation: () => ({ mutate: vi.fn(), isPending: false }),
-    useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
-  }
-})
 
 vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ navigate: vi.fn() }),
@@ -58,7 +49,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     createSession: vi.fn(),
     uploadFiles: vi.fn(),
     fetchProviders: vi.fn().mockResolvedValue([]),
-    isApiError: vi.fn().mockReturnValue(false),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
   }
@@ -119,17 +109,19 @@ function seedBucket(messages: ChatMessage[]): void {
 }
 
 async function renderScreen(): Promise<HTMLElement> {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   let container!: HTMLElement
   await act(async () => {
-    const result = render(<ChatScreen />)
+    const result = render(<QueryClientProvider client={client}>{<ChatScreen />}</QueryClientProvider>)
     container = result.container
   })
+  // The history error screen appears once the real query has rejected.
+  await waitFor(() => expect(container.textContent).toContain('Could not load messages.'))
   return container
 }
 
 describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5)', () => {
   beforeEach(() => {
-    queryMock.result = { data: undefined, isError: false, error: null, refetch: vi.fn() }
     useConnectionStore.setState({
       isConnected: true,
       liteMode: false,
@@ -149,12 +141,7 @@ describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5
 
   it('a 404 history read shows the read-only banner; the composer is unreachable (no turn-error sends)', async () => {
     seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
-    queryMock.result = {
-      data: undefined,
-      isError: true,
-      error: new ApiError(404, 'session not found'),
-      refetch: vi.fn(),
-    }
+    vi.mocked(fetchSessionMessages).mockRejectedValue(new ApiError(404, 'session not found'))
 
     const container = await renderScreen()
 
@@ -167,16 +154,14 @@ describe('ChatScreen — a deleted session (confirmed 404) renders read-only (D5
 
   it('a transport failure (status 0) is NOT deletion — no read-only banner', async () => {
     seedBucket([{ id: 'u1', role: 'user', status: 'done', content: 'hello', timestamp: new Date().toISOString() }])
-    queryMock.result = {
-      data: undefined,
-      isError: true,
-      error: new ApiError(0, 'Network unavailable. Check your connection.'),
-      refetch: vi.fn(),
-    }
+    vi.mocked(fetchSessionMessages).mockRejectedValue(new ApiError(0, 'Network unavailable. Check your connection.'))
 
     const container = await renderScreen()
 
     expect(container.querySelector('[data-testid="agent-removed-banner"]')).toBeNull()
+    // The error screen itself is shown (renderScreen waited for it), so the
+    // absent composer is the history-error branch, not a branch that stopped rendering.
+    expect(container.textContent).toContain('Could not load messages.')
     expect(container.querySelector('[data-testid="composer-input"]')).toBeNull()
   })
 

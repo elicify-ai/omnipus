@@ -94,7 +94,7 @@ describe('mail dialing GETs — A8 retry=true marker (D29/R2-9, MC-33)', () => {
   })
 
   it('attachment: retry=true appends the marker to the raw fetch URL', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(new Blob(['x']), { status: 200 }))
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('x', { status: 200 }))
     await fetchMailAttachment('ws-1', 'mia', 'inbox', 'uid:12:34', 1, { retry: true })
     expect(lastUrl()).toContain('/attachments/1?retry=true')
     await fetchMailAttachment('ws-1', 'mia', 'inbox', 'uid:12:34', 1)

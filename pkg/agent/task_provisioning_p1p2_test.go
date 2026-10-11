@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -92,7 +93,7 @@ func (p *provisioningProbeTool) Execute(context.Context, map[string]any) *tools.
 }
 
 type provisioningDriver struct {
-	*runner.FakeRunner
+	*runnertest.FakeRunner
 	gate  <-chan struct{}
 	calls atomic.Int32
 }
@@ -219,7 +220,7 @@ func newProvisioningFixture(t *testing.T, external, manual bool) *provisioningFi
 	require.Nil(t, f.executor.goroutineCtxHook, "never replace the real run bodies with the test hook")
 	assertProvisioningSemaphoreControl(t, f.executor)
 
-	f.driver = &provisioningDriver{FakeRunner: runner.NewFakeRunner(), gate: gate}
+	f.driver = &provisioningDriver{FakeRunner: runnertest.NewFakeRunner(), gate: gate}
 	f.driver.InjectEvent(runner.RunEvent{
 		Kind: runner.EventKindOutput,
 		Output: &runner.OutputEvent{
@@ -442,6 +443,10 @@ func checkProvisioningInstruments(t *testing.T, external, manual bool) {
 	var returnedID string
 	var dispatchErr error
 	if manual {
+		// S1 M9 (978c232bc) deleted the launcher-less StartTaskNow path: the only
+		// manual start is the session launcher, so the manual control installs
+		// the real one (as the gateway does at boot) before starting.
+		installTestSessionLauncher(t, f.loop)
 		returnedID, dispatchErr = f.executor.StartTaskNow(context.Background(), f.task.ID)
 	} else {
 		dispatchErr = f.executor.ExecuteTask(context.Background(), f.task.ID, nil)

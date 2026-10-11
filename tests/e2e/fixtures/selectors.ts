@@ -333,12 +333,31 @@ export const startNewChat = async (
   try {
     await dialog.waitFor({ state: 'visible', timeout: 3_000 });
   } catch {
-    return; // no unconfirmed send — the extra chat started directly
+    // no unconfirmed send — the extra chat started directly
+    await assertNewChatIsMounted(page);
+    return;
   }
   await dialog
     .getByRole('button', { name: 'Start a new chat', exact: true })
     .click({ timeout: 10_000 });
   await expect(dialog).toHaveCount(0, { timeout: 10_000 });
+  await assertNewChatIsMounted(page);
+};
+
+/**
+ * assertNewChatIsMounted is the OUTCOME check startNewChat used to lack
+ * (delta-review R2 gap 16): a closed sidebar was treated as proof the chat had
+ * started, because closeOverlay only runs on the 'started' outcome — but that
+ * is an INFERENCE about a different surface, and the caller's empty-thread
+ * assertion was the only real backstop. This asserts the real chat instead: the
+ * new chat's composer is mounted and its thread holds no messages yet, which is
+ * what "a fresh chat started" actually means. Both exits from startNewChat
+ * (a landed click, and the confirm-dialog path) reach a mounted composer.
+ */
+const assertNewChatIsMounted = async (page: Page) => {
+  await expect(chatInput(page)).toBeVisible({ timeout: 15_000 });
+  await expect(assistantMessages(page)).toHaveCount(0, { timeout: 15_000 });
+  await expect(userMessages(page)).toHaveCount(0, { timeout: 15_000 });
 };
 
 /**

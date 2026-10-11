@@ -185,6 +185,17 @@ func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
 	if got := table["bash"]; got != AutoShellMode {
 		t.Errorf("bash class = %s, want shell_mode (bash keeps its own mechanism, §3.7)", got)
 	}
+	// answer_request (founder gap 5, 2026-10-11) rides send_message's class
+	// because it is a thin front for send_message's reply_to form. The COUNT
+	// above cannot catch a wrong class: any other class on this entry keeps the
+	// table at 110 while changing whether the tool auto-runs, so the class is
+	// pinned by VALUE and against its peer.
+	if got := table["answer_request"]; got != AutoRuns {
+		t.Errorf("answer_request class = %s, want runs — it is a thin front for send_message's reply_to form (founder gap 5)", got)
+	}
+	if got, peer := table["answer_request"], table["send_message"]; got != peer {
+		t.Errorf("answer_request class = %s but send_message class = %s — the ruling is that answer_request RIDES send_message's class", got, peer)
+	}
 	for name := range table {
 		if strings.HasPrefix(name, "mcp_") {
 			t.Errorf("table key %q: MCP tools must never be listed (§4)", name)

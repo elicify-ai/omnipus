@@ -26,8 +26,14 @@ func TestSeedfix_RunRetrospective_NotDeniedForConversationalBuiltins(t *testing.
 		coreagent.IDAva, coreagent.IDMia, coreagent.IDJim, coreagent.IDAdmin, coreagent.IDWorker,
 	} {
 		got := resolveFor(t, cfg, string(id), "run_retrospective", nil)
-		assert.Contains(t, []string{"allow", "ask"}, got,
-			"run_retrospective must not resolve deny for %s", id)
+		// The EXACT value, not "allow or ask" (R1 delta T8): a flip between the
+		// two would have gone unnoticed. The shipped ceiling default is allow
+		// (pkg/config/defaults.go) and the seeded role policies grant it
+		// explicitly (pkg/coreagent/role_policies_adr090.go), so allow is what
+		// every conversational built-in must resolve under the fresh-install
+		// ceiling.
+		assert.Equal(t, "allow", got,
+			"run_retrospective must resolve allow for %s (founder ruling M8: default-available to every conversational built-in)", id)
 	}
 }
 

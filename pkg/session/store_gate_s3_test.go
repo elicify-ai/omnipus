@@ -14,6 +14,7 @@ package session
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -255,8 +256,8 @@ func TestArchiveControlFiles_UseTheAtomicWriter(t *testing.T) {
 // M4: when the day partitions cannot be listed, ReadTranscript must fail, not
 // return only the current day as if it were the whole transcript.
 func TestReadTranscript_PartitionListFailureIsAnError(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("needs POSIX directory permissions and a non-root user")
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a symlink; creating one is privileged on Windows")
 	}
 	s, sid := newEffectsSession(t)
 	day := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
@@ -272,8 +273,20 @@ func TestReadTranscript_PartitionListFailureIsAnError(t *testing.T) {
 	require.Len(t, entries, 2, "instrument check: both days are readable while the directory lists")
 
 	dir := filepath.Join(s.baseDir, sid)
-	require.NoError(t, os.Chmod(dir, 0o300)) // searchable but not listable
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	// UID-INDEPENDENT injection (R1 delta T2): replace the session directory
+	// with a SYMLINK to a regular file, so listing it fails with ENOTDIR for
+	// every user. The previous arrangement chmod'ed the directory to 0o300
+	// ("searchable but not listable"), which is IGNORED by root — on any runner
+	// that executes Go tests as root the guard never ran at all, and the test
+	// silently proved nothing.
+	target := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(target, []byte("x"), 0o600))
+	require.NoError(t, os.RemoveAll(dir))
+	require.NoError(t, os.Symlink(target, dir))
+	t.Cleanup(func() { _ = os.Remove(dir) })
+
 	_, err = s.ReadTranscript(sid)
 	require.Error(t, err, "a failed partition listing must not read as a one-day transcript")
+	require.False(t, errors.Is(err, os.ErrNotExist),
+		"the failure must be the unlistable directory, not a missing transcript")
 }

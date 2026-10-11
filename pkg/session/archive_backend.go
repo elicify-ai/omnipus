@@ -288,7 +288,7 @@ func (b *archiveBackend) commitWindow(ctx context.Context, key string, before, a
 	}
 	meta.Skip = after.Skip
 	meta.Count = after.Count
-	if after.ClearFloor > meta.ClearFloor {
+	if after.DropExpiryNote || after.ClearFloor > meta.ClearFloor {
 		meta.ExpiryNote = "" // a /clear starts over: nothing before it is announced
 	}
 	meta.ClearFloor = after.ClearFloor

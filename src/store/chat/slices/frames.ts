@@ -8,7 +8,7 @@ import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
-import { tasksQueryKeys } from '@/lib/api'
+import { invalidateAfterAgentCreate, tasksQueryKeys } from '@/lib/api'
 import type {
   SubagentStartFrame,
   SubagentEndFrame,
@@ -325,9 +325,13 @@ function applyToolCallResultFrame(
     tc.status = frame.status ?? 'success'
     tc.duration_ms = frame.duration_ms
     tc.error = frame.error
-    // The last running tool just finished. If that start was a straggler from a
-    // turn that already ended, nothing is left to clear the busy flag.
-    if (busyFlagIsUnbacked(draft)) draft.isStreaming = false
+    // The last running tool just finished. If that start re-armed an idle flag
+    // (a straggler from a turn that already ended), nothing is left to clear
+    // it. A call that started while the flag was already up belongs to a turn
+    // in flight: leave the flag to that turn's own terminal frame.
+    const idleArmed = draft.idleArmedToolCalls?.[frame.call_id] === true
+    if (draft.idleArmedToolCalls) delete draft.idleArmedToolCalls[frame.call_id]
+    if (idleArmed && busyFlagIsUnbacked(draft)) draft.isStreaming = false
   }) as Partial<SessionChatState>
 }
 
@@ -2241,7 +2245,12 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 // when not already recorded, mirroring existingSnapshot).
                 let ownerMsgId: string | null = null
                 if (!lastMsg || lastMsg.role !== 'assistant') {
-                  const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true, agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined }
+                  // C3: a start landing right behind a user row the server
+                  // discarded/failed is a straggler from the stopped turn, not a
+                  // new one. Its bubble carries the tool but is NOT streaming, so
+                  // it cannot back the busy flag after the result.
+                  const tailUser = rawTail?.role === 'user' && (rawTail.deliveryStatus === 'discarded' || rawTail.deliveryStatus === 'failed')
+                  const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: tailUser ? 'done' : 'streaming', isStreaming: !tailUser, agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined }
                   draft.messagesById[ph.id] = ph
                   draft.messageOrder.push(ph.id)
                   ownerMsgId = ph.id
@@ -2284,7 +2293,10 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     draft.messagesById[lastMsgId].agentId = frame.agent_id
                   }
                 }
-                if (shouldMarkStreaming) draft.isStreaming = true
+                if (shouldMarkStreaming) {
+                  if (!b.isStreaming) (draft.idleArmedToolCalls ??= {})[frame.call_id] = true
+                  draft.isStreaming = true
+                }
                 if (!existingTC || existingTC.status === 'running') {
                   draft.toolCalls[frame.call_id] = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: frame.params, status: 'running' }
                 }
@@ -2604,8 +2616,12 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         // D-107 shape just above. Not debounced like library_changed:
         // creates don't burst, so a direct invalidate matches the other
         // single-shot cases here (task_status_changed/task_run_status).
+        // invalidateAfterAgentCreate (founder bug 2026-10-11) additionally
+        // invalidates the workspaces list queries: the sidebar roster is
+        // membership-driven (core_team + member_configs), so ['agents']
+        // alone left the new agent's row waiting for the 30 s poll.
         case 'agent_created':
-          queryClient.invalidateQueries({ queryKey: ['agents'] })
+          invalidateAfterAgentCreate(queryClient)
           break
 
         // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires

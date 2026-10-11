@@ -570,7 +570,7 @@ type DoneStats struct {
 
 // ErrorFrame — Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped. The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.
 type ErrorFrame struct {
-	// The initiating ordinary first message's client-supplied ID.
+	// The client_message_id of the user message this error is about. With first_message_error it is the first-send outcome. Without first_message_error it marks a message-scoped refusal: the named message was refused (for example an @-recipient send) and the error ends no turn, so a client must not treat it as the end of the chat's running turn.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	// Ordinary ID-bearing first-send outcome. Requires client_message_id. not_saved proves no user entry was written; delivery_unknown means bytes may have reached disk but durable delivery cannot be confirmed. answer_not_started means the entry is durably saved but turn admission failed, and requires its confirmed session_id. General errors and workspace-setup kickoffs omit these first-send fields.
 	FirstMessageError *string `json:"first_message_error,omitempty"`
@@ -579,7 +579,7 @@ type ErrorFrame struct {
 	Payload *ErrorPayload `json:"payload,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Only meaningful when session_id is set — a global error has no session to sequence. Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ErrorFrame.yaml.
 	Seq *int64 `json:"seq,omitempty"`
-	// Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific session.
+	// Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific session. A message-scoped refusal (client_message_id set, no first_message_error) carries the chat the message was sent from.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
 }

@@ -362,6 +362,34 @@ func TestGW_ClearAll_MainsSurviveWithTheirHistory(t *testing.T) {
 	assert.Equal(t, 1, resp.Count, "only the ordinary chat was removed")
 }
 
+// Gap 15 (R2): the mains-helper skip had no fixture, so removing it survived.
+// A chat that BELONGS to a main — here through its own parent link, the second
+// path sessionsBelongingToMains walks — is part of that main's history: it must
+// survive delete-all and must not be counted as removed.
+func TestGW_ClearAll_KeepsAMainsHelperChat(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JGWGATECLRWS0000000000002"
+	env.seedWorkspace(t, ws, true, "mia") // the default workspace: Admin owns a main here too
+	main := u1MainID(ws, "mia")
+	code, _ := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+main, "")
+	require.Equal(t, http.StatusOK, code, "precondition: the main opens")
+
+	helper := sf1NewChat(t, env)
+	parent := main
+	err := env.store(t).SetMeta(helper, session.MetaPatch{ParentSessionID: &parent})
+	require.NoError(t, err, "fixture: link the chat to the main through its own parent")
+
+	code, body := clearAllDo(env)
+	require.Equal(t, http.StatusOK, code, body)
+	var resp gen.ClearAllSessionsResponse
+	require.NoError(t, json.Unmarshal([]byte(body), &resp))
+	assert.Equal(t, 0, resp.Count, "a main's helper is neither removed nor counted")
+
+	if _, err := env.store(t).GetMeta(helper); err != nil {
+		t.Fatalf("a chat belonging to a main must survive delete-all: %v", err)
+	}
+}
+
 // Every chat delete-all removes is stopped first, through the same Stop the single
 // delete uses; one whose Stop is incomplete is NOT deleted and is reported.
 func TestGW_ClearAll_StopsEachChatFirstAndKeepsOnesThatWillNotStop(t *testing.T) {

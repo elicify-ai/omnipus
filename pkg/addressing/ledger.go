@@ -127,16 +127,31 @@ func repairTornTail(path string) error {
 }
 
 func readLatest(path, requestID string) (Capture, bool, error) {
+	all, err := readAllLatest(path)
+	if err != nil {
+		return Capture{}, false, err
+	}
+	for _, c := range all {
+		if c.RequestID == requestID {
+			return c, true, nil
+		}
+	}
+	return Capture{}, false, nil
+}
+
+// readAllLatest returns the latest record of every request id, ordered by the
+// position of each id's first record (admission order).
+func readAllLatest(path string) ([]Capture, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return Capture{}, false, nil
+		return nil, nil
 	}
 	if err != nil {
-		return Capture{}, false, fmt.Errorf("addressing: read ledger: %w", err)
+		return nil, fmt.Errorf("addressing: read ledger: %w", err)
 	}
 	lines := bytes.Split(data, []byte{'\n'})
-	var latest Capture
-	found := false
+	var order []string
+	latest := map[string]Capture{}
 	for i, raw := range lines {
 		line := bytes.TrimSpace(raw)
 		if len(line) == 0 {
@@ -152,13 +167,18 @@ func readLatest(path, requestID string) (Capture, bool, error) {
 			}
 			// A corrupt line fails closed: a reply must never be routed from a
 			// ledger that cannot be read faithfully.
-			return Capture{}, false, fmt.Errorf("addressing: ledger %s is unreadable: %w", path, err)
+			return nil, fmt.Errorf("addressing: ledger %s is unreadable: %w", path, err)
 		}
-		if c.RequestID == requestID {
-			latest, found = c, true
+		if _, seen := latest[c.RequestID]; !seen {
+			order = append(order, c.RequestID)
 		}
+		latest[c.RequestID] = c
 	}
-	return latest, found, nil
+	out := make([]Capture, 0, len(order))
+	for _, id := range order {
+		out = append(out, latest[id])
+	}
+	return out, nil
 }
 
 // Resolve returns the capture the responding agent may answer. The request is
@@ -182,4 +202,47 @@ func (l *Ledger) Resolve(responderSessionID string, responder Pair, requestID st
 		return Capture{}, fmt.Errorf("%w: %w", ErrUnusableCorrelation, err)
 	}
 	return c, nil
+}
+
+// MarkDelivered records, durably, that a turn of the receiver has been given the
+// request. A request that was never captured, or is already delivered, is not an
+// error.
+func (l *Ledger) MarkDelivered(sessionID, requestID string) error {
+	p, err := l.path(sessionID)
+	if err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	c, ok, err := readLatest(p, requestID)
+	if err != nil || !ok || c.Delivered {
+		return err
+	}
+	c.Delivered = true
+	if err := repairTornTail(p); err != nil {
+		return err
+	}
+	return fileutil.AppendJSONLSync(p, c)
+}
+
+// Undelivered lists the session's held requests - captured, not yet given to a
+// running turn, not discarded - in admission order.
+func (l *Ledger) Undelivered(sessionID string) ([]Capture, error) {
+	p, err := l.path(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	all, err := readAllLatest(p)
+	if err != nil {
+		return nil, err
+	}
+	var held []Capture
+	for _, c := range all {
+		if !c.Delivered && !c.Discarded {
+			held = append(held, c)
+		}
+	}
+	return held, nil
 }

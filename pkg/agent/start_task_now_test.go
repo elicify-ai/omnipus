@@ -140,8 +140,13 @@ func TestStartTaskNow_Idempotent_ExistingSessionID(t *testing.T) {
 // already-bound session (refused by steer.Dispatch when the session is not
 // dispatchable) and the run-slot collision is handled inside
 // dispatchLaunchedTask. The concurrency guarantee is covered through the real
-// path by TestStartTaskNow_Idempotent_ExistingSessionID and
-// TestStartTaskNow_NoConcurrentDoubleLaunch.
+// path by TestStartTaskNow_Idempotent_ExistingSessionID (a second start while a
+// run is live) and by gate_s1_m9c_test.go's
+// TestStartTaskNow_BarrierReleasedStartsLaunchOnce_RealLauncher (two callers
+// released on a barrier). This comment pointed at
+// TestStartTaskNow_NoConcurrentDoubleLaunch after that test was deleted (R1
+// delta T3) — the barrier shape it named was uncovered until the m9c test
+// above was added.
 
 // TestStartTaskNow_TaskNotFound verifies that StartTaskNow returns an error for
 // a non-existent task ID.

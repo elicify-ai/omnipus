@@ -83,7 +83,7 @@ func TestUnansweredRequest_GetsOneNonHumanReminder(t *testing.T) {
 	id, sid, _ := answerFixtureRequest(t, f)
 
 	// The receiver's turn has been given the request and ends without answering.
-	f.al.markRequestDelivered(id)
+	f.al.markRequestDelivered(sid, id)
 	f.al.remindUnansweredRequests(sid)
 
 	reminder, ok := addrDrainInbound(t, f.bus)
@@ -112,7 +112,7 @@ func TestReminder_NotSentBeforeTheRequestWasDelivered(t *testing.T) {
 func TestReminder_AnsweredOrDiscardedRequestsOweNone(t *testing.T) {
 	f := newAddrFixture(t)
 	id, sid, _ := answerFixtureRequest(t, f)
-	f.al.markRequestDelivered(id)
+	f.al.markRequestDelivered(sid, id)
 
 	// A real answer through the router (the tool's seam).
 	msg := tools.NewMessageTool()
@@ -132,7 +132,7 @@ func TestReminder_AnsweredOrDiscardedRequestsOweNone(t *testing.T) {
 	}
 
 	id2, sid2, _ := answerFixtureRequest(t, f)
-	f.al.markRequestDelivered(id2)
+	f.al.markRequestDelivered(sid2, id2)
 	require.NoError(t, f.al.DiscardRequest(sid2, id2))
 	f.al.remindUnansweredRequests(sid2)
 	if m, ok := addrDrainInbound(t, f.bus); ok {

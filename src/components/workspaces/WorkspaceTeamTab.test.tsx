@@ -9,7 +9,7 @@
  * graph/GraphView and WorkspaceTeamGraph tests.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Agent, Workspace, WorkspaceDelegation } from '@/lib/api'
@@ -177,6 +177,9 @@ function renderTab(seed?: (client: QueryClient) => void) {
   return { ...utils, client }
 }
 
+// A test that faked timers and failed must not leave them faked for the next one.
+afterEach(() => { vi.useRealTimers() })
+
 beforeEach(() => {
   // Clear call history from the PREVIOUS test — the vi.mock() factory above
   // creates these vi.fn()s once for the whole file, and vitest does not
@@ -280,6 +283,9 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
     const { client } = renderTab()
     await waitFor(() => expect(screen.getByTestId('team-node-jim')).toBeInTheDocument())
 
+    // Fake only the timer the 500 ms autosave debounce uses, so the "past the
+    // debounce" window is advanced explicitly instead of slept through.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     act(() => {
       client.setQueryData<WorkspaceDelegation>(
         workspacesQueryKeys.delegation('ws-1'),
@@ -289,9 +295,8 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
 
     // A revision-only server refresh is not a local graph change and must not
     // cause an echo PUT through the autosave debounce.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 700))
-    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+    vi.useRealTimers()
     expect(updateWorkspace).not.toHaveBeenCalled()
     expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
 
@@ -325,18 +330,20 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
     const { client } = renderTab()
     await waitFor(() => expect(screen.getByTestId('team-node-mia')).toBeInTheDocument())
 
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     act(() => {
       client.setQueryData<WorkspaceDelegation>(
         workspacesQueryKeys.delegation('ws-1'),
         { ...DELEGATION, revision: '3'.repeat(64), team: ['mia', 'jim', 'planner', 'ray'] },
       )
     })
-    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
 
-    // Past the 500ms debounce: no echo PUT of either flavour.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 700))
-    })
+    // Past the 500ms debounce (advanced, not slept): no echo PUT of either
+    // flavour. RTL's waitFor cannot run on faked timers, so advance first and
+    // assert the adopted roster synchronously afterwards.
+    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+    vi.useRealTimers()
+    expect(screen.getByTestId('team-node-ray')).toBeInTheDocument()
     expect(updateWorkspace).not.toHaveBeenCalled()
     expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
   })

@@ -143,6 +143,9 @@ func (w *sessionWorker) waitingInboxCount() int {
 func (w *sessionWorker) pushInbox(msg bus.InboundMessage) bool {
 	w.inboxMu.Lock()
 	defer w.inboxMu.Unlock()
+	if w.exiting.Load() {
+		return false // a dying worker will not drain it; the caller re-dispatches
+	}
 	if len(w.inbox)+len(w.overflow) >= MaxQueueSize {
 		return false
 	}
@@ -292,7 +295,7 @@ func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
 	if !w.inTurn.Load() || w.systemTurn.Load() {
 		return false
 	}
-	w.parent.markRequestDelivered(msg.TranscriptEntryID)
+	w.parent.markRequestDelivered(msg.SessionID, msg.TranscriptEntryID)
 	if err := w.parent.enqueueSteeringFromMessage(msg); err != nil {
 		// A steering-rejected error here means the message was NOT accepted
 		// by the steering path (classify failure, revive failure). It is
@@ -490,7 +493,18 @@ func (w *sessionWorker) runLoop() {
 			w.exiting.Store(true)
 			return
 		case <-idleTimer.C:
+			// Leave only when nothing is waiting, and refuse new pushes from
+			// that moment (exiting is set under inboxMu, the lock pushInbox
+			// holds): a message accepted a heartbeat before the exit is run,
+			// never stranded in a dead inbox.
+			w.inboxMu.Lock()
+			if len(w.inbox)+len(w.overflow) > 0 {
+				w.inboxMu.Unlock()
+				idleTimer.Reset(workerIdleTimeout)
+				continue
+			}
 			w.exiting.Store(true)
+			w.inboxMu.Unlock()
 			logger.DebugCF("agent.worker", "Session worker idle-timeout — exiting",
 				map[string]any{"scope": w.scope})
 			return
@@ -511,6 +525,17 @@ func (w *sessionWorker) runLoop() {
 
 			w.refillInbox()
 			w.processTurn(ctx, msg)
+			// The idle window starts when the worker goes idle, not when it
+			// received the message: a turn longer than workerIdleTimeout must not
+			// leave an already-fired timer that exits the worker the moment the
+			// turn ends (delta review R1 #1, the /clear typed during a long turn).
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(workerIdleTimeout)
 		}
 	}
 }
@@ -525,7 +550,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	// worker's in-turn flag are all settled. An unanswered request gets its one
 	// reminder (request_reminder.go).
 	defer al.remindUnansweredRequests(msg.SessionID)
-	al.markRequestDelivered(msg.TranscriptEntryID)
+	al.markRequestDelivered(msg.SessionID, msg.TranscriptEntryID)
 	ctx, executionEntry := ordinaryExecutionContext(ctx)
 	defer func() {
 		if err := al.finishExecutionDisposition(executionEntry.disposition); err != nil {

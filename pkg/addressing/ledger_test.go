@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -232,5 +233,64 @@ func TestLedger_CompleteRecordMissingNewlineIsKept(t *testing.T) {
 		if _, ok, err := l.Get("jim-main", id); err != nil || !ok {
 			t.Fatalf("%s must survive: ok=%v err=%v", id, ok, err)
 		}
+	}
+}
+
+func heldCapture(id, sess string) Capture {
+	return Capture{
+		RequestID: id, ReceiverSessionID: sess,
+		Receiver: Pair{WorkspaceID: "ws", AgentID: "ava"},
+		Source:   Source{Kind: SourceConversation, SessionID: "asker-session"},
+	}
+}
+
+// Founder ruling 2026-10-11 (R1 #5): a request for a stopped agent is held in the
+// ledger until the agent runs again. Undelivered lists the held ones in admission
+// order; a delivered or discarded request is not held.
+func TestLedger_Undelivered_ListsOnlyHeldRequestsInAdmissionOrder(t *testing.T) {
+	dir := t.TempDir()
+	l := NewLedger(dir)
+	if err := os.MkdirAll(filepath.Join(dir, "recv"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"r1", "r2", "r3", "r4"} {
+		if err := l.Put(heldCapture(id, "recv")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.MarkDelivered("recv", "r2"); err != nil {
+		t.Fatalf("MarkDelivered: %v", err)
+	}
+	if err := l.Discard("recv", "r3"); err != nil {
+		t.Fatal(err)
+	}
+	held, err := l.Undelivered("recv")
+	if err != nil {
+		t.Fatalf("Undelivered: %v", err)
+	}
+	var ids []string
+	for _, c := range held {
+		ids = append(ids, c.RequestID)
+	}
+	if got := strings.Join(ids, ","); got != "r1,r4" {
+		t.Fatalf("held = %q, want r1,r4 (r2 delivered, r3 discarded)", got)
+	}
+	c, ok, err := l.Get("recv", "r2")
+	if err != nil || !ok || !c.Delivered {
+		t.Fatalf("r2 = %+v ok=%v err=%v, want the durable delivered mark", c, ok, err)
+	}
+	// A delivered request that is later discarded stays delivered (no regression).
+	if err := l.Discard("recv", "r2"); err != nil {
+		t.Fatal(err)
+	}
+	if c, _, _ := l.Get("recv", "r2"); !c.Delivered || !c.Discarded {
+		t.Fatalf("r2 after discard = %+v, want delivered and discarded", c)
+	}
+}
+
+func TestLedger_MarkDelivered_UnknownRequestIsNotAnError(t *testing.T) {
+	l := NewLedger(t.TempDir())
+	if err := l.MarkDelivered("nobody", "r9"); err != nil {
+		t.Fatalf("MarkDelivered on an unknown request = %v, want nil", err)
 	}
 }

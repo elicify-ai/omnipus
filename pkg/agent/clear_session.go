@@ -50,14 +50,12 @@ func (al *AgentLoop) clearConversation(
 		}
 	}
 
-	if err := clearSessionWindow(agent.Sessions, sessionKey); err != nil {
+	undo, err := clearSessionWindowReversible(agent.Sessions, sessionKey)
+	if err != nil {
 		return fmt.Errorf("clear: move the context window: %w", err)
 	}
-	// A frozen recall span is pre-clear content injected into every later
-	// request; the next turn must carry none of it. recall_conversation can
-	// still be called again and reads the archive as before.
-	al.dropRecallSpan(sessionKey, "cleared")
 	if store == nil {
+		al.dropRecallSpan(sessionKey, "cleared")
 		return nil
 	}
 	marker := session.TranscriptEntry{
@@ -70,8 +68,18 @@ func (al *AgentLoop) clearConversation(
 		ViewMembership: session.ViewMembershipChat,
 	}
 	if err := store.AppendTranscriptStrict(transcriptSessionID, marker); err != nil {
-		return fmt.Errorf("clear: the context was cleared but the marker could not be recorded: %w", err)
+		// All or nothing: without the divider the person cannot see where the
+		// context was cleared, so the window is put back and nothing changed.
+		if undoErr := undo(); undoErr != nil {
+			return fmt.Errorf("clear: the divider could not be recorded (%w) and the window could not be restored (%v); "+
+				"the context may be cleared without a divider", err, undoErr)
+		}
+		return fmt.Errorf("clear: the divider could not be recorded; nothing was cleared: %w", err)
 	}
+	// A frozen recall span is pre-clear content injected into every later
+	// request; the next turn must carry none of it. recall_conversation can
+	// still be called again and reads the archive as before.
+	al.dropRecallSpan(sessionKey, "cleared")
 	return nil
 }
 
