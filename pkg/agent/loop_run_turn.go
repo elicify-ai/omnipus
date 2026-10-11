@@ -918,17 +918,15 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 	return agentLoopRunTurnRequestNext
 }
 
-// prepareCallMessages repairs history and injects the current ephemeral instruction messages.
+// prepareCallMessages refuses a malformed tool-call history and injects the
+// current ephemeral instruction messages. The window-group check is the only
+// tool-structure gate: a bad history is refused here, never repaired.
 func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 	repairedHistory := rq.ri.messages
 	if err := validateWindowGroups(repairedHistory); err != nil {
 		rq.ri.rf.rt.ts.setContextWindowError(err)
 		rq.ri.rf.callMessages = repairedHistory
 		return
-	}
-	if rq.ri.rf.rt.ts.opts.TranscriptStore != nil && rq.ri.rf.rt.ts.opts.TranscriptSessionID != "" && rq.ri.rf.rt.ts.agent != nil && rq.ri.rf.rt.ts.agent.Tools != nil {
-		repaired, _ := repairHistory(rq.ri.rf.rt.turnCtx, rq.ri.messages, rq.ri.rf.rt.ts.opts.TranscriptStore, rq.ri.rf.rt.ts.opts.TranscriptSessionID, rq.ri.rf.rt.ts.agent.Tools, rq.ri.rf.rt.ts.agent.ID, rq.ri.rf.rt.ts.agent.LoadToolPolicy())
-		repairedHistory = repaired
 	}
 
 	rq.ri.rf.callMessages = repairedHistory

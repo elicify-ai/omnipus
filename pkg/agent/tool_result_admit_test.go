@@ -257,10 +257,9 @@ func TestChokePoint_FilterThenCap_AtRealCuts(t *testing.T) {
 
 // chokePointAllowedFiles are the only non-test files in pkg/agent permitted
 // to construct a role:"tool" providers.Message directly: the choke point
-// itself and the exempt orphan-repair placeholder (bounded by construction).
+// itself.
 var chokePointAllowedFiles = map[string]bool{
 	"tool_result_admit.go": true, // the choke point
-	"repair.go":            true, // exempt: orphan-repair placeholder, bounded by construction
 }
 
 // attachHydrateExemptFunc is the name of the one function in
@@ -728,7 +727,7 @@ func fileCallsFunction(t *testing.T, path, funcName string) bool {
 // call's actual use), not the spelling of one particular way to violate it.
 // The name is kept (rather than renamed to e.g. …ProducerListStructural)
 // because production comments in this package cite it by name
-// (tool_result_admit.go, repair.go, recall_injection.go) and the ADR-066
+// (tool_result_admit.go, recall_injection.go) and the ADR-066
 // spec docs this task is not scoped to edit cite it too; only this
 // function's OWN doc comment needed to stop claiming "grep".
 func TestChokePoint_ProducerListByGrep(t *testing.T) {
@@ -786,9 +785,6 @@ func TestChokePoint_ProducerListByGrep(t *testing.T) {
 		assert.True(t, fileCallsFunction(t, fname, "projectToolResult"),
 			"%s must actually CALL the choke point's cap (projectToolResult), not merely mention it", fname)
 	}
-	repairSrc, err := os.ReadFile("repair.go")
-	require.NoError(t, err)
-	assert.Contains(t, strings.ToLower(string(repairSrc)), "exempt from the choke point", "repair.go must annotate its exemption")
 }
 
 // TestChokePoint_ProducerListByGrep_CatchesTwoPreviouslyInvisibleForms pins

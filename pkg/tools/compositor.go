@@ -218,7 +218,7 @@ func resolveEffectivePolicyWith(
 // tools. It deliberately does NOT apply the scope gate — it is the bare
 // global×agent merge. Callers that need the FULL per-tool verdict (scope +
 // merge) must use EffectiveToolPolicy. Callers that need only the merge
-// (e.g. repair.go H3) use this.
+// use this.
 //
 // A nil cfg has no policy maps to resolve from at all, so it fails closed to
 // "deny" (logged at Error) rather than the historical hardcoded "allow" —
