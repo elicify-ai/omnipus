@@ -23,6 +23,11 @@ vi.mock('@/store/session', () => ({
   // module load; a mock missing it crashes the import (see registerGetSessionCursor's
   // own doc comment, src/store/session.ts).
   registerGetSessionCursor: vi.fn(),
+  // Same class of fix as registerGetSessionCursor above: chat.ts also
+  // registers isSessionReplaying at module load (chat.ts, next to
+  // registerSyncChatForeground) — found red when the targeted
+  // src/store/chat run was taken for the /clear settle fixes, 2026-10-11.
+  registerIsSessionReplaying: vi.fn(),
 }))
 vi.mock('@/store/connection', () => ({
   useConnectionStore: { getState: () => ({ isConnected: false, connection: null }) },

@@ -19,7 +19,7 @@ import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
 import { dismissRestartNotice, useRestartInterrupted, useRestartNoticeDismissal } from './useRestartInterrupted'
 
-export type UserDeliveryState = 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded'
+export type UserDeliveryState = 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded' | 'not-performed' | 'unconfirmed'
 
 const FIRST_SEND_COPY: Record<FirstSendStatus, { label: string; action?: 'Retry' | 'Generate again' }> = {
   sending: { label: 'Sending…' },
@@ -156,6 +156,73 @@ function StatusActionButton({
   )
 }
 
+/**
+ * The quiet icon-chip copy for every non-failed, non-first-send delivery
+ * state. Extracted so the /clear-specific variants (delta re-review C1/R1#1)
+ * read as a table instead of a five-deep ternary:
+ *   - 'not-performed' — the server replied "/clear was not performed …":
+ *     the row must never keep the offline "Not sent yet, will be sent
+ *     automatically" look after the server has answered.
+ *   - 'unconfirmed' — the bounded wait (R1#1) ended with the server neither
+ *     confirming nor refusing the clear.
+ *   - 'discarded' for a /clear — "Not applied": the generic wording says the
+ *     text was never read, which is false for a held-then-discarded command.
+ * Every one of these is passive (no action button): the honest repair for a
+ * /clear is to send /clear again, which the tooltip says.
+ */
+function deliveryStateCopy(
+  state: UserDeliveryState,
+  agentName: string,
+  isClearCommand: boolean,
+): { label: string; tooltip: string; icon: React.ReactNode } {
+  if (state === 'not-performed') {
+    return {
+      label: 'Not performed',
+      tooltip: 'The server received /clear but could not perform it — nothing was cleared. Send /clear again if you still want a fresh start.',
+      icon: <Prohibit size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'unconfirmed') {
+    return {
+      label: 'Not confirmed',
+      tooltip: "The server did not confirm this /clear, so the chat's context may not have been cleared. Send /clear again if you still want a fresh start.",
+      icon: <Clock size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'queued') {
+    return {
+      label: 'Not sent yet, will be sent automatically',
+      tooltip: "Not sent yet — it will be sent automatically as soon as you're back online.",
+      icon: <Clock size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'received') {
+    return {
+      label: 'Received',
+      tooltip: `Received by Omnipus. ${agentName} will pick it up after finishing the current step.`,
+      icon: <Check size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'discarded') {
+    return isClearCommand
+      ? {
+          label: 'Not applied',
+          tooltip: 'You stopped the turn, so this /clear was discarded — nothing was cleared. Send /clear again if you still want a fresh start.',
+          icon: <Prohibit size={14} aria-hidden="true" />,
+        }
+      : {
+          label: 'Not delivered',
+          tooltip: `Not delivered. You stopped ${agentName} before it read this message, so it was discarded.`,
+          icon: <Prohibit size={14} aria-hidden="true" />,
+        }
+  }
+  return {
+    label: `${agentName} is working on it`,
+    tooltip: `${agentName} is working on this.`,
+    icon: <Checks size={14} aria-hidden="true" />,
+  }
+}
+
 export function UserMessageDeliveryStatus({
   state,
   agentName,
@@ -163,6 +230,7 @@ export function UserMessageDeliveryStatus({
   onRetry,
   firstSendStatus,
   onGenerateAgain,
+  isClearCommand = false,
 }: {
   state: UserDeliveryState
   agentName: string
@@ -170,6 +238,10 @@ export function UserMessageDeliveryStatus({
   onRetry?: () => void
   firstSendStatus?: FirstSendStatus
   onGenerateAgain?: () => void
+  /** The message is a /clear command — only the 'discarded' copy changes for
+   * it (delta re-review C1): the generic "not delivered" wording says the
+   * text was never read, which is false for a held-then-discarded /clear. */
+  isClearCommand?: boolean
 }) {
   const connected = useConnectionStore((s) => s.isConnected)
   const busy = useChatStore((s) => s.isStreaming || s.isReplaying)
@@ -224,29 +296,7 @@ export function UserMessageDeliveryStatus({
     )
   }
 
-  const copy = state === 'queued'
-    ? {
-        label: 'Not sent yet, will be sent automatically',
-        tooltip: "Not sent yet — it will be sent automatically as soon as you're back online.",
-        icon: <Clock size={14} aria-hidden="true" />,
-      }
-    : state === 'received'
-      ? {
-          label: 'Received',
-          tooltip: `Received by Omnipus. ${agentName} will pick it up after finishing the current step.`,
-          icon: <Check size={14} aria-hidden="true" />,
-        }
-      : state === 'discarded'
-        ? {
-            label: 'Not delivered',
-            tooltip: `Not delivered. You stopped ${agentName} before it read this message, so it was discarded.`,
-            icon: <Prohibit size={14} aria-hidden="true" />,
-          }
-        : {
-            label: `${agentName} is working on it`,
-            tooltip: `${agentName} is working on this.`,
-            icon: <Checks size={14} aria-hidden="true" />,
-          }
+  const copy = deliveryStateCopy(state, agentName, isClearCommand)
 
   return (
     <div role="status" aria-live="polite" data-testid="user-message-delivery-status" className="flex min-h-8 items-center justify-end">

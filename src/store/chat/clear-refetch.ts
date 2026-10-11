@@ -42,10 +42,19 @@
 //       armed forever (every later turn would re-read the whole transcript).
 //       After MAX_UNRESOLVED_READS re-reads that settle nothing, the intent is
 //       dropped and the user is told. A session that is deleted drops its
-//       intent too (forgetClearRefresh).
+//       intent too (forgetClearRefresh). And because the reads only run on
+//       turn ends, a /clear the server NEVER settles (the lost-clear case,
+//       R1#1) is bounded by wall-clock time as well: CLEAR_CONFIRM_TIMEOUT_MS
+//       after the send, the operation is dropped, the user is told, and the
+//       row resolves to 'unconfirmed' — no screen change.
 //   E2  No branch fails silently. A history Retry that reads but cannot settle
-//       the operation, an application failure, and the expiry each show a
-//       toast; the diagnostics stay for triage.
+//       the operation, an application failure, and each expiry bound show a
+//       toast; a READ failure surfaces as the screen's own history-error state
+//       (V3 below — the shared ['messages', sid] query state, pinned by
+//       clear-row-settle.test.ts); the row itself resolves on every settle
+//       outcome (C1 — refused, discarded, failed, expired, timed out), never
+//       left wearing the offline "will be sent automatically" look forever.
+//       The diagnostics stay for triage.
 //
 // Nothing here clears anything locally, ever: a projection that does not
 // carry a marker unknown at arm time (the clear has not executed
@@ -54,14 +63,16 @@
 // re-reads. The screen moves only when the server's own fresh view
 // (starting at the marker) says it moved.
 
+import { produce } from 'immer'
 import { queryClient } from '@/lib/queryClient'
 import { fetchSessionMessages } from '@/lib/api'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
-import { isClearContextMarker } from '@/lib/clearMarker'
+import { isClearContextMarker, isClearNotPerformedReply } from '@/lib/clearMarker'
 import type { ChatMessage, SessionChatState } from './types'
-import { pendingClearRefetches, type PendingClearRefresh } from './runtime-state'
+import { isPendingTailMessage } from './cursor'
+import { clearConfirmTimers, pendingClearRefetches, type PendingClearRefresh } from './runtime-state'
 
 type WithBucket = (
   sid: string | null,
@@ -77,25 +88,172 @@ type WithBucket = (
 /** Re-reads allowed to settle an operation before the intent is dropped (E1). */
 export const MAX_UNRESOLVED_READS = 3
 
+/**
+ * E1/R1#1 (delta re-review, HIGH — SPA side): the reads above only run on
+ * turn ends, so a /clear the server never settles (the lost-clear case —
+ * stopThenClear pushed the command into a worker that then exited) would
+ * leave the row pending forever with no further turn to count reads. This
+ * wall-clock bound retires the operation and resolves the row instead. It is
+ * comfortably beyond the server's own worst path — pkg/agent's
+ * clearStopSettleTimeout is 30 s and the not-performed reply rides the
+ * settle — so a slow-but-alive clear is never mistaken for a lost one.
+ */
+export const CLEAR_CONFIRM_TIMEOUT_MS = 90_000
+
 function tell(message: string): void {
   useUiStore.getState().addToast({ message, variant: 'warning' })
 }
 
+/**
+ * The one bucket writer the bounded-wait timer resolves rows through,
+ * registered once by the chat store (store.ts). This module cannot import
+ * the store (store.ts imports this module — an import cycle), which is why
+ * every other entry point here takes `withBucket` as a parameter; the timer
+ * callback has no caller to receive one from.
+ */
+let clearRefetchBucketWriter: WithBucket | null = null
+export function setClearRefetchBucketWriter(writer: WithBucket): void {
+  clearRefetchBucketWriter = writer
+}
+
+/** Clears a session's bounded-wait timer (no-op when none is armed). */
+function clearConfirmTimer(sid: string): void {
+  const timer = clearConfirmTimers[sid]
+  if (timer) {
+    clearTimeout(timer)
+    delete clearConfirmTimers[sid]
+  }
+}
+
+/**
+ * Retires a session's refresh intent: the bounded-wait timer goes with it,
+ * and (when `op` is given) only if that operation still owns the slot — a
+ * newer /clear's own operation is never touched by an older one's settle.
+ */
+function dropIntent(sid: string, op?: PendingClearRefresh): void {
+  clearConfirmTimer(sid)
+  if (op ? pendingClearRefetches[sid] === op : true) delete pendingClearRefetches[sid]
+}
+
 /** Drops a session's refresh intent — called when the session itself is deleted. */
 export function forgetClearRefresh(sid: string): void {
-  delete pendingClearRefetches[sid]
+  dropIntent(sid)
+}
+
+/**
+ * C1: a /clear the server DISCARDED (stop before delivery) will never write
+ * its marker — the transcript re-read it armed would only spin to expiry and
+ * then claim the clear was "not confirmed" after the server already answered
+ * with the discard. Retires the intent only when it still belongs to THIS
+ * send; a newer /clear keeps its own operation. Called from the
+ * message_status frame handler.
+ */
+export function forgetClearRefreshForSend(sid: string, clientMessageId: string): void {
+  if (pendingClearRefetches[sid]?.clientMessageId === clientMessageId) dropIntent(sid)
+}
+
+/** The operation's own /clear user row: the optimistic bubble (its id IS the
+ * client_message_id) or the server echo (clientMessageId match). Same
+ * backward scan mergeServerProjection uses — one implementation, no drift. */
+function findClearRowId(bucket: SessionChatState, clientMessageId: string): string | null {
+  for (let i = bucket.messageOrder.length - 1; i >= 0; i--) {
+    const m = bucket.messagesById[bucket.messageOrder[i]]
+    if (m && m.role === 'user' && (m.clientMessageId ?? m.id) === clientMessageId) return bucket.messageOrder[i]
+  }
+  return null
+}
+
+/**
+ * C1: resolves the operation's still-queued /clear row to a terminal,
+ * honest state ('not-performed' | 'unconfirmed'). Only a QUEUED row moves —
+ * a row the discard/failure path already resolved keeps its outcome, and a
+ * resolved row never re-enters the pending tail (cursor.ts's
+ * PENDING_TAIL_STATUSES is deliberately left at queued/sending/failed).
+ */
+function resolveClearRow(sid: string, clientMessageId: string, deliveryStatus: 'not-performed' | 'unconfirmed', withBucket: WithBucket): void {
+  withBucket(sid, (b) => {
+    const rowId = findClearRowId(b, clientMessageId)
+    const row = rowId ? b.messagesById[rowId] : undefined
+    if (!rowId || !row || row.deliveryStatus !== 'queued') return {}
+    return produce(b, (draft) => {
+      const target = draft.messagesById[rowId]
+      target.deliveryStatus = deliveryStatus
+      target.status = 'done'
+    }) as Partial<SessionChatState>
+  })
+}
+
+/**
+ * C1: the server's refusal reply ("/clear was not performed: …") is a plain
+ * assistant turn — tokens + done (pkg/gateway/webchat_channel.go::Send) — so
+ * the settle seam fires for it. A refusal writes NO marker, so without this
+ * check the operation would spin MAX_UNRESOLVED_READS full-transcript reads
+ * and then tell the user "the server did not confirm your /clear" — false:
+ * the server answered, on the screen, right above. Resolves the queued row
+ * to 'not-performed' and retires the operation.
+ */
+function resolveClearRowOnRefusal(sid: string, op: PendingClearRefresh, withBucket: WithBucket): boolean {
+  let refused = false
+  withBucket(sid, (b) => {
+    const rowId = findClearRowId(b, op.clientMessageId)
+    const row = rowId ? b.messagesById[rowId] : undefined
+    if (!rowId || !row || row.deliveryStatus !== 'queued') return {}
+    // The refusal reply renders ABOVE the queued row, not below it: a
+    // brand-new assistant bubble is inserted BEFORE the pending tail
+    // (frames.ts's resolveTokenBubbleByMessageId step-3 mint routes through
+    // insertHistoryMessageId), and replayed history lands there the same
+    // way. Scan the segment between the row and the USER row above it —
+    // bounded there so an EARLIER /clear's refusal, still on screen further
+    // up, can never resolve a newer operation's row.
+    const rowIndex = b.messageOrder.indexOf(rowId)
+    for (let j = rowIndex - 1; j >= 0; j--) {
+      const m = b.messagesById[b.messageOrder[j]]
+      if (!m) continue
+      if (m.role === 'user') break
+      if (isClearNotPerformedReply(m)) {
+        refused = true
+        break
+      }
+    }
+    return {}
+  })
+  if (!refused) return false
+  resolveClearRow(sid, op.clientMessageId, 'not-performed', withBucket)
+  dropIntent(sid, op)
+  logDiagnostic('clearRefetchRefused', { sessionId: sid, operationId: op.clientMessageId })
+  return true
+}
+
+/**
+ * R1#1: the bounded wait fired — the server never confirmed (no marker) nor
+ * refused (no discard, no failure, no not-performed reply) this /clear.
+ * Resolve the row to 'unconfirmed', tell the user once, retire the
+ * operation. NO screen change: nothing is wiped and no marker is invented —
+ * if the clear did execute after all, the next attach/rebuild shows the
+ * server's own fresh view.
+ */
+function onConfirmTimeout(sid: string): void {
+  delete clearConfirmTimers[sid]
+  const op = pendingClearRefetches[sid]
+  if (!op) return
+  if (clearRefetchBucketWriter) resolveClearRow(sid, op.clientMessageId, 'unconfirmed', clearRefetchBucketWriter)
+  logDiagnostic('clearRefetchUnconfirmedTimeout', { sessionId: sid, operationId: op.clientMessageId, afterMs: CLEAR_CONFIRM_TIMEOUT_MS })
+  tell("The server did not confirm your /clear, so this chat's context may not have been cleared. Send /clear again if you still want a fresh start.")
+  dropIntent(sid)
 }
 
 /**
  * E1/E2: a re-read that could not settle the operation (no own user row, or no
- * marker for it). Counts toward expiry; at the bound the intent is dropped and
- * the user is told the clear was not confirmed. A user-initiated Retry that
+ * marker for it). Counts toward expiry; at the bound the intent is dropped,
+ * the row resolves to 'unconfirmed' (C1 — never pending forever), and the
+ * user is told the clear was not confirmed. A user-initiated Retry that
  * still cannot settle says so immediately.
  */
-function noteUnresolved(sid: string, op: PendingClearRefresh, userInitiated: boolean): void {
+function noteUnresolved(sid: string, op: PendingClearRefresh, userInitiated: boolean, withBucket: WithBucket): void {
   op.unresolvedReads = (op.unresolvedReads ?? 0) + 1
   if (op.unresolvedReads >= MAX_UNRESOLVED_READS) {
-    if (pendingClearRefetches[sid] === op) delete pendingClearRefetches[sid]
+    dropIntent(sid, op)
+    resolveClearRow(sid, op.clientMessageId, 'unconfirmed', withBucket)
     logDiagnostic('clearRefetchExpired', { sessionId: sid, operationId: op.clientMessageId, reads: op.unresolvedReads })
     tell("The server did not confirm your /clear, so this chat's context may not have been cleared. Send /clear again if you still want a fresh start.")
     return
@@ -104,12 +262,16 @@ function noteUnresolved(sid: string, op: PendingClearRefresh, userInitiated: boo
 }
 
 export function armClearRefresh(sid: string, clientMessageId: string, activeTurnId: string | null, knownMarkerIds: string[] = []): void {
+  // A replaced operation's bound never fires on the newer row: one timer
+  // slot per session, re-armed here.
+  clearConfirmTimer(sid)
   pendingClearRefetches[sid] = {
     clientMessageId,
     turnIdAtArm: activeTurnId,
     armedAt: Date.now(),
     knownMarkerIds,
   }
+  clearConfirmTimers[sid] = setTimeout(() => onConfirmTimeout(sid), CLEAR_CONFIRM_TIMEOUT_MS)
 }
 
 /**
@@ -126,6 +288,13 @@ export function settleClearRefetchAfterTurn(sid: string, doneTurnId: string | un
   flushHeldClearProjection(sid, withBucket)
   const intent = pendingClearRefetches[sid]
   if (!intent) return
+  // C1: the refusal check runs BEFORE the turnIdAtArm early return below —
+  // the not-performed reply's done can carry the STOPPED turn's id
+  // (pkg/gateway/webchat_channel.go::Send reuses the recorded turn identity
+  // for the fallback delivery), which would otherwise skip this settle
+  // entirely and leave the row queued forever behind a reply that is already
+  // on screen.
+  if (resolveClearRowOnRefusal(sid, intent, withBucket)) return
   if (doneTurnId !== undefined && intent.turnIdAtArm !== null && doneTurnId === intent.turnIdAtArm) return
   void runClearRefetch(sid, withBucket)
 }
@@ -218,7 +387,7 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
   // and the intent survives for the next opportunity.
   if (joinedInFlight || !projectionCarriesFreshMarker(fresh, op)) {
     logDiagnostic('clearRefetchNoMarkerYet', { sessionId: sid, operationId: op.clientMessageId })
-    noteUnresolved(sid, op, userInitiated)
+    noteUnresolved(sid, op, userInitiated, withBucket)
     return
   }
   let deferred = false
@@ -253,7 +422,7 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
   // C4: the intent clears only now — the projection carried this
   // operation's marker (a marker unknown at arm time) and it is in the
   // view: the fresh view starts at the divider.
-  delete pendingClearRefetches[sid]
+  dropIntent(sid, op)
 }
 
 /**
@@ -301,19 +470,31 @@ export function mergeServerProjection(
   }
   // The operation's own /clear user row: the optimistic bubble (its id IS
   // the client_message_id) or the server echo (clientMessageId match).
-  let clearRowIndex = -1
-  for (let i = bucket.messageOrder.length - 1; i >= 0; i--) {
-    const m = bucket.messagesById[bucket.messageOrder[i]]
-    if (m && m.role === 'user' && (m.clientMessageId ?? m.id) === op.clientMessageId) {
-      clearRowIndex = i
-      break
-    }
-  }
+  const clearRowId = findClearRowId(bucket, op.clientMessageId)
+  const clearRowIndex = clearRowId ? bucket.messageOrder.indexOf(clearRowId) : -1
   if (clearRowIndex !== -1) {
     for (let i = clearRowIndex + 1; i < bucket.messageOrder.length; i++) {
       const id = bucket.messageOrder[i]
       const local = bucket.messagesById[id]
       if (!local) continue
+      if (projectionIds.has(id)) continue
+      if (local.clientMessageId && projectionClientMessageIds.has(local.clientMessageId)) continue
+      if (local.role === 'user' && projectionClientMessageIds.has(local.id)) continue
+      messagesById[id] = local
+      messageOrder.push(id)
+    }
+  } else {
+    // C12 (delta re-review, SFH F7): the /clear row could not be found. No
+    // concrete path is known to lose it between the send and the projection,
+    // but if one ever does, the old behaviour silently dropped every local
+    // row from the merged view — including genuinely unconfirmed user input
+    // the server has no window for yet. Keep the unconfirmed tail (still
+    // sending / failed / queued — isPendingTailMessage) after the server's
+    // fresh view instead; it is the same live-tail rule the found-row path
+    // applies, minus the rows the /clear row orders.
+    for (const id of bucket.messageOrder) {
+      const local = bucket.messagesById[id]
+      if (!local || !isPendingTailMessage(local)) continue
       if (projectionIds.has(id)) continue
       if (local.clientMessageId && projectionClientMessageIds.has(local.clientMessageId)) continue
       if (local.role === 'user' && projectionClientMessageIds.has(local.id)) continue

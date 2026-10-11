@@ -325,9 +325,12 @@ export interface UserMessage extends MessageBase { // not-wire-format: SPA-inter
    * interface, so a narrower literal here would collapse the intersection and
    * break every store writer of the transient states ('queued'/'sending'/
    * 'received'/'working'/'failed' — store-only, never produced by the REST
-   * path). Keep both unions in sync deliberately.
+   * path) and of the two /clear-only settled states ('not-performed' — the
+   * server's "/clear was not performed" refusal; 'unconfirmed' — the bounded
+   * wait expired; delta re-review C1/R1#1, 2026-10-11). Keep both unions in
+   * sync deliberately.
    */
-  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded'
+  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded' | 'not-performed' | 'unconfirmed'
   tool_calls?: never
 }
 

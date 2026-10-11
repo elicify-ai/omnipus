@@ -28,7 +28,7 @@ import {
 import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
-import { flushHeldClearProjection, settleClearRefetchAfterTurn } from '../clear-refetch'
+import { flushHeldClearProjection, forgetClearRefreshForSend, settleClearRefetchAfterTurn } from '../clear-refetch'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
 import { gateFrameBySeq, cursorFromTerminalFrame, insertHistoryMessageId, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SessionCursor, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
@@ -79,9 +79,11 @@ type TokenFrameType = Extract<Parameters<ChatStore['handleFrame']>[0], { type: '
 // deliveryStatus.
 // Founder ruling 2026-10-11: a /clear row shows as QUEUED from its send and
 // stays queued until the server's clear lands and the fresh view replaces
-// the screen (or the "/clear was not performed" reply resolves it) — an
-// append ack for the command row must not flip it to a sent look midway. A
-// server-reported failure still marks the row for Retry.
+// the screen (or a settle outcome resolves it) — an append ack for the
+// command row must not flip it to a sent look midway. A server-reported
+// failure still marks the row for Retry, and (delta re-review C1) a DISCARDED
+// is a settle outcome too: the row must resolve, never wait for a marker the
+// discarded clear can never write.
 /**
  * A send the server failed or discarded never starts a turn. Drop the empty
  * optimistic "thinking" placeholder sendMessage put right after the user row,
@@ -109,7 +111,11 @@ function applyMessageStatusFrame(bucket: SessionChatState, frame: MessageStatusF
     const message = draft.messagesById[frame.client_message_id] ?? findFirstSendMessage(draft, frame.client_message_id)
     if (!message || message.role !== 'user') return
     if (frame.state === 'failed' || frame.state === 'discarded') releaseUnstartedSend(draft, message.id)
-    if (frame.state !== 'failed' && isClearCommandText(message.content)) return
+    // Only the IN-FLIGHT states early-return for a /clear row — the founder
+    // ruling pins the queued look while the clear is in flight, not after it
+    // has settled. failed and discarded are settle outcomes: the row must
+    // resolve (C1), never wait forever on a marker that will never come.
+    if (frame.state !== 'failed' && frame.state !== 'discarded' && isClearCommandText(message.content)) return
     message.deliveryStatus = frame.state === 'failed' ? 'failed' : frame.state
     message.status = frame.state === 'failed' ? 'error' : 'done'
   }) as Partial<SessionChatState>
@@ -1011,6 +1017,13 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       switch (frame.type) {
         case 'message_status':
           withBucket(targetSid, (bucket) => applyMessageStatusFrame(bucket, frame))
+          // C1 (delta re-review): a DISCARDED /clear never writes its marker —
+          // the transcript re-read it armed would only spin to expiry and then
+          // claim the clear was "not confirmed" after the server already
+          // answered with this discard. Retire the operation it armed; the
+          // client_message_id match is the guard, so a newer /clear's own
+          // operation is untouched (only the armed /clear's id can match).
+          if (frame.state === 'discarded' && targetSid) forgetClearRefreshForSend(targetSid, frame.client_message_id)
           break
         case 'session_started': {
           // Server minted a new session_id in response to a message sent without one.
