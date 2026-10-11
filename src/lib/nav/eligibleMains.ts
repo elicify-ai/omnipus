@@ -25,7 +25,11 @@ export type EligibleResult = { // not-wire-format: in-browser result of the elig
 
 export type EligibleRosterEntry = { // not-wire-format: local pairing of a generated Agent with its workspace member, used only inside eligible-mains logic
   agent: Agent
-  member: WorkspaceMemberConfig
+  // Membership comes from workspace.core_team; the server OMITS a member's
+  // member_configs entry when its main does not resolve and it has no stored
+  // settings — so an undefined member is a missing main (missingMainAgentIds),
+  // never a silently dropped member.
+  member: WorkspaceMemberConfig | undefined
 }
 
 export type EligibleAdminEntry = { // not-wire-format: the loaded Admin agent plus the seam-read Admin main id; never a membership entry
@@ -61,7 +65,9 @@ function validatedId(id: string | undefined): string | undefined {
   return id
 }
 
-function validatedMainId(member: WorkspaceMemberConfig): string | undefined {
+function validatedMainId(member: WorkspaceMemberConfig | undefined): string | undefined {
+  // mainSessionIdOfMember already treats null/undefined as unavailable — an
+  // absent member config is a missing main id, never a crash.
   return validatedId(mainSessionIdOfMember(member))
 }
 
