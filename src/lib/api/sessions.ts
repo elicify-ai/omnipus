@@ -25,6 +25,7 @@ import type {
   Message as WireMessage,
 } from '@/lib/api/generated/openapi-types'
 import { _recordApiSchemaError, request } from './http'
+import type { UserDeliveryState } from '../userDeliveryState'
 
 // ── Sessions ──────────────────────────────────────────────────────────────────
 
@@ -320,17 +321,17 @@ export interface UserMessage extends MessageBase { // not-wire-format: SPA-inter
    * `input_disposition.state === 'discarded'` on a cold load: Stop discarded
    * this input before it was delivered, and the bubble must show the same
    * quiet "Not delivered" state the live `message_status` frame drives. The
-   * union is nevertheless the FULL deliveryStatus set shared with
-   * ChatMessage (src/store/chat/types.ts): ChatMessage intersects this
+   * type is nevertheless the FULL deliveryStatus set shared with
+   * ChatMessage (src/store/chat/types.ts) - ONE alias in
+   * src/lib/userDeliveryState.ts. ChatMessage intersects this
    * interface, so a narrower literal here would collapse the intersection and
    * break every store writer of the transient states ('queued'/'sending'/
    * 'received'/'working'/'failed' — store-only, never produced by the REST
    * path) and of the two /clear-only settled states ('not-performed' — the
    * server's "/clear was not performed" refusal; 'unconfirmed' — the bounded
-   * wait expired; delta re-review C1/R1#1, 2026-10-11). Keep both unions in
-   * sync deliberately.
+   * wait expired; delta re-review C1/R1#1, 2026-10-11).
    */
-  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded' | 'not-performed' | 'unconfirmed'
+  deliveryStatus?: UserDeliveryState
   tool_calls?: never
 }
 

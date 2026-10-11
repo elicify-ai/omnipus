@@ -419,7 +419,7 @@ function keepAttachedOwner(
 // neither can be mistaken for an attach already in flight; the replay flag
 // ending re-opens it for a deliberate re-attach.
 type AttachTransport = { socketGeneration?: number }
-let _attachSent: { sessionId: string; conn: unknown; generation: number | undefined } | null = null
+let _attachSent: { sessionId: string; conn: AttachTransport; generation: number | undefined } | null = null
 let _isSessionReplaying: ((sessionId: string) => boolean) | null = null
 export function registerIsSessionReplaying(fn: (sessionId: string) => boolean): void {
   _isSessionReplaying = fn

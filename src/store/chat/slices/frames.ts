@@ -331,13 +331,17 @@ function applyToolCallResultFrame(
     tc.status = frame.status ?? 'success'
     tc.duration_ms = frame.duration_ms
     tc.error = frame.error
-    // The last running tool just finished. If that start re-armed an idle flag
-    // (a straggler from a turn that already ended), nothing is left to clear
-    // it. A call that started while the flag was already up belongs to a turn
-    // in flight: leave the flag to that turn's own terminal frame.
-    const idleArmed = draft.idleArmedToolCalls?.[frame.call_id] === true
-    if (draft.idleArmedToolCalls) delete draft.idleArmedToolCalls[frame.call_id]
-    if (idleArmed && busyFlagIsUnbacked(draft)) draft.isStreaming = false
+    // A start that re-armed an idle flag (a straggler from a turn that already
+    // ended) leaves nothing else to clear it. A call that started while the
+    // flag was already up belongs to a turn in flight: leave the flag to that
+    // turn's own terminal frame. Overlapping stragglers share ONE armed burst:
+    // the marks stay until no tool is running, so whichever call finishes last
+    // releases the flag (a later-started call is not itself idle-armed).
+    const armed = draft.idleArmedToolCalls
+    if (armed && Object.keys(armed).length > 0 && !Object.values(draft.toolCalls).some((t) => t.status === 'running')) {
+      draft.idleArmedToolCalls = {}
+      if (busyFlagIsUnbacked(draft)) draft.isStreaming = false
+    }
   }) as Partial<SessionChatState>
 }
 
