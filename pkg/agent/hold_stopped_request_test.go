@@ -211,7 +211,7 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	ws := addrWS
-	if err := al.GetSessionStore().SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
+	if err = al.GetSessionStore().SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
 		t.Fatal(err)
 	}
 	const body = "Please summarise the Q3 numbers"
@@ -224,13 +224,13 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 		AdmittedAt: time.Now().UTC(),
 		Text:       composeRequestText("held-1", "agent ray", body),
 	}
-	if err := al.RequestLedger().Put(c); err != nil {
+	if err = al.RequestLedger().Put(c); err != nil {
 		t.Fatalf("SETUP: hold a request: %v", err)
 	}
 
 	msg := rootHumanMessage(original.SessionID)
 	msg.GatewayUserID = "r5-owner"
-	if err := al.enqueueSteeringFromMessage(msg); err != nil {
+	if err = al.enqueueSteeringFromMessage(msg); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	r1AwaitProvider(t, provider, 1)

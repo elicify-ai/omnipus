@@ -55,7 +55,7 @@ func TestCompleteTask_EmptyAnswerFailsAndDeliversBeforeLifecycleTerminal(t *test
 	deliverer := &lifecycleOrderingDeliverer{lifecycle: lifecycle}
 	al.SetSteerAudienceDeps(nil, nil, deliverer)
 	tk := &task.Task{Title: "empty", Prompt: "x", Action: task.ActionLLM, AgentID: "native-agent", WorkspaceID: "default", Priority: 3, Status: task.StatusInProgress, SessionID: taskSessionID}
-	if err := al.taskStore.Create(tk); err != nil {
+	if err = al.taskStore.Create(tk); err != nil {
 		t.Fatal(err)
 	}
 	// A REAL run: deliverTaskCompletionUpward's own contract is "a nil run (a
