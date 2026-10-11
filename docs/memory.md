@@ -35,7 +35,7 @@ The two rooms:
 
 ## The four memory tools
 
-Every agent has all four. The agent calls them on its own judgment; you trigger them by asking in chat.
+Omnipus provides these four memory tools. Which an agent can use depends on its effective tool policies and runtime. Catalog presence does not grant access. Check the agent's Tools tab before relying on a manual retrospective or another memory action. Automatic recap is a separate setting and is not evidence that `run_retrospective` is granted to every agent. An agent calls the tools it has on its own judgment; you trigger them by asking in chat.
 
 | Tool | What it does | Bounds |
 |---|---|---|

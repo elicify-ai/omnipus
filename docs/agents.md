@@ -113,25 +113,11 @@ Open a built-in agent's card, then **Basics**: the role badge, look, and colour 
 | Researcher | Omnipus | General assistant | Violet |
 | General Purpose | Omnipus | General assistant | Grey |
 
-Legacy icon names, such as Mia's `lightbulb`, remain stored for older displays and appear as a read-only label above the profile's sections. The identity editor no longer has a legacy-icon picker; editing other settings does not clear those names.
+Agent identity is the figure, role badge and palette colour. The legacy icon is not an editable identity field.
 
-### Existing agents on upgrade
+### Existing agents' identity
 
-For agents you created, Omnipus saves the migrated identity when the server starts after upgrade. A valid figure or role already chosen stays. A missing or unrecognised figure becomes Omnipus; a missing or unrecognised role is derived from the old icon name:
-
-| Old icon name | Role badge |
-|---|---|
-| `Code` | Developer |
-| `Chat` | General assistant |
-| `MagnifyingGlass` | Researcher |
-| `PencilSimple` | Writer |
-| `Shield` | Security |
-| A name that already matches a role's stored short name, such as `writer` | That role |
-| Anything else | General assistant |
-
-Icon matching ignores surrounding spaces and letter case, but does not remove hyphens. The old icon name itself is not rewritten.
-
-A colour already in the ten-colour palette stays, with its stored hex code standardised to uppercase. Other valid six-digit hex colours move to the nearest palette hue; nearly grey colours become Grey. Missing or malformed colours also become Grey. Once these choices are saved, later restarts leave them unchanged rather than repeatedly choosing new colours. Built-in agents use their fixed identities instead of this custom-agent migration.
+Agent identity is the figure, role badge and palette colour. The legacy icon is not an editable identity field. For agents you created, an invalid or missing custom role normalizes to General assistant, not to a badge inferred from an old icon. An invalid or missing figure normalizes to Omnipus. A valid figure or role already chosen stays. Valid palette colours normalize to uppercase; other valid six-digit colours are mapped to the nearest palette hue, with nearly grey or malformed colours becoming Grey. Once these choices are saved, later restarts leave them unchanged rather than repeatedly choosing new colours. Built-in agents use their fixed identities instead (`pkg/coreagent/identity.go::migrateUnenforcedAgentIdentity` applies only to agents Omnipus does not enforce).
 
 ## How to lower one agent's tool-call limit
 

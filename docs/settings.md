@@ -209,7 +209,7 @@ Three numbers on the Performance tab govern how much work one agent can hand to 
 
 ### How many agents run at once
 
-`performance.max_parallel_agents` caps how many delegated sessions execute a turn at the same time. When the cap is reached, a new delegation is not refused — it is **queued**, and the delegating agent's tool result tells it its place in line. Queued sessions start in order as slots free up. A `delegate cancel` drops a queued one before it ever starts.
+`performance.max_parallel_agents` caps how many delegated sessions execute a turn at the same time. When the cap is reached, a new delegation is not refused — it is **queued**, and the delegating agent's tool result tells it its place in line. Queued sessions start in order as slots free up. Use `delegate` with `action: "stop_all"` and that child's `session_id` to stop the queued child and its descendants. `cancel` is not a delegate action; `/cancel` is the separate chat command for Stop all.
 
 Leave the field blank and live available memory governs each new turn, reported on the Performance tab as "automatic — bounded by available memory".
 
@@ -238,12 +238,13 @@ Two limits on what the key does:
 
 ### Steer, respond and redirect message size
 
-When one agent sends a message into another's turn — `delegate` with `action: steer`, `respond`, or `redirect` — the message is bounded by two keys in the `session_messaging` block of `config.json`:
+When one agent sends a message into another's turn — `delegate` with `action: steer`, `respond`, or `redirect` — the message is bounded by the keys below in the `session_messaging` block of `config.json`:
 
 - `steer_body` — the largest message body, in bytes. Default **65,536**.
 - `steer_rate` — how many steer, respond or redirect messages one agent may send to the same target per minute. Default **60**.
+- `steer_aggregate_body` — the summed body size, in bytes, of the ordinary messages waiting for one target. Default **1,048,576** (1 MiB); a value below 1 means the default. It is meant to bite before the 200-item queue cap does (200 × 65,536 bytes is about 12.9 MiB). *Not yet enforced:* in this build the key is accepted and defaulted in the config, but no message-intake code reads it, so it does not yet refuse anything (`pkg/config/session_messaging.go::SessionMessagingConfig.EffectiveSteerAggregateBody` has no caller outside tests).
 
-Both are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. A message beyond either bound is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these two keys.
+`steer_body` and `steer_rate` are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. A message beyond either of those two bounds is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these two keys.
 
 ### Safety stops that are not settings
 
