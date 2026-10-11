@@ -120,6 +120,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		}
 	}
 
+	rz.rc.rx.rr.rq.ri.rf.rt.ts.autoTitleAfterFirstReply(rz.rc.rx.finalContent)
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseCompleted)
 	return turnResult{
 		finalContent: rz.rc.rx.finalContent,
