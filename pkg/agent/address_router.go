@@ -491,9 +491,19 @@ func (al *AgentLoop) replyIntoConversation(c addressing.Capture, responder addre
 	if deps := al.loadAddressDeps(); deps != nil {
 		deps.PublishGuestReply(c.Source.SessionID, entry)
 	}
-	al.wakeSourceOwner(c, meta, entry)
-	return tools.ReplyReceipt{ReplyID: entry.ID, Destination: "the conversation it came from"}, nil
+	dest := "the conversation it came from"
+	if wakeErr := al.wakeSourceOwner(c, meta, entry); wakeErr != nil {
+		// The answer is saved and published, so the reply succeeded; only the
+		// asker's wake failed. Say so to the answerer instead of leaving a silent
+		// or log-only loss (one wake per answer, never retried).
+		dest += "; the asker could not be woken now, the answer is saved in that conversation"
+	}
+	return tools.ReplyReceipt{ReplyID: entry.ID, Destination: dest}, nil
 }
+
+// wakeFailures counts owner wakes that were owed after an answer but could not
+// be sent (wiring missing, eligibility unavailable, bus publish failed).
+var wakeFailures atomic.Int64
 
 // wakeSkippedUnreadable counts answers whose owner wake was skipped because
 // the source session's lifecycle record could not be read. Never guessed idle.
@@ -507,7 +517,12 @@ var wakeSkippedUnreadable atomic.Int64
 // revives: the inbound is not UserInitiated, and a stopped conversation, a
 // hidden main or an unreadable record gets no wake - the answer is already
 // durable in the source transcript, which is the retention.
-func (al *AgentLoop) wakeSourceOwner(c addressing.Capture, meta *session.UnifiedMeta, answer session.TranscriptEntry) {
+//
+// It returns nil when the wake was sent or skipped BY DESIGN (stopped, hidden,
+// or no wake owed) and an error when the wake was owed but could not be sent
+// (eligibility unavailable, bus publish failure, wiring missing): the caller
+// reports that to the answerer.
+func (al *AgentLoop) wakeSourceOwner(c addressing.Capture, meta *session.UnifiedMeta, answer session.TranscriptEntry) error {
 	sessionID := c.Source.SessionID
 	if lc := al.GetSessionLifecycleStore(); lc != nil {
 		rec, err := lc.Load(sessionID)
@@ -518,11 +533,11 @@ func (al *AgentLoop) wakeSourceOwner(c addressing.Capture, meta *session.Unified
 			wakeSkippedUnreadable.Add(1)
 			logger.WarnCF("agent", "owner wake skipped: the source session's lifecycle record is unreadable",
 				map[string]any{"request_id": c.RequestID, "session_id": sessionID, "error": err.Error()})
-			return
+			return fmt.Errorf("source lifecycle record unreadable: %w", err)
 		case rec.Stopped():
 			logger.InfoCF("agent", "owner wake skipped: the source conversation is stopped; the answer is retained in its transcript",
 				map[string]any{"request_id": c.RequestID, "session_id": sessionID})
-			return
+			return nil
 		}
 	}
 	workspaceID := c.Source.Owner.WorkspaceID
@@ -532,22 +547,34 @@ func (al *AgentLoop) wakeSourceOwner(c addressing.Capture, meta *session.Unified
 	if meta.Type == session.SessionTypeMain {
 		deps := al.loadAddressDeps()
 		if deps == nil {
-			return
+			wakeFailures.Add(1)
+			logger.ErrorCF("agent", "owner wake not sent: address dependencies are not wired",
+				map[string]any{"request_id": c.RequestID, "session_id": sessionID})
+			return errors.New("address dependencies are not wired")
 		}
 		eligible, err := deps.PairEligible(workspaceID, meta.AgentID)
-		if err != nil || !eligible {
+		if err != nil {
+			wakeFailures.Add(1)
+			logger.ErrorCF("agent", "owner wake not sent: eligibility could not be determined",
+				map[string]any{"request_id": c.RequestID, "session_id": sessionID, "error": err.Error()})
+			return fmt.Errorf("owner eligibility unavailable: %w", err)
+		}
+		if !eligible {
 			logger.InfoCF("agent", "owner wake skipped: the owner's main is not currently eligible",
-				map[string]any{"request_id": c.RequestID, "session_id": sessionID, "error": fmt.Sprint(err)})
-			return
+				map[string]any{"request_id": c.RequestID, "session_id": sessionID})
+			return nil
 		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := al.bus.PublishInbound(ctx, ownerWakeInbound(c, meta.AgentID, workspaceID, answer))
 	if err != nil {
-		logger.WarnCF("agent", "could not wake the conversation owner after an answer",
+		wakeFailures.Add(1)
+		logger.ErrorCF("agent", "could not wake the conversation owner after an answer",
 			map[string]any{"request_id": c.RequestID, "error": err.Error()})
+		return fmt.Errorf("owner wake not published: %w", err)
 	}
+	return nil
 }
 
 // ownerWakeMetadataKey marks an inbound as the owner wake after a guest answer
