@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"strings"
@@ -460,10 +459,8 @@ func (cs *CronService) Stop() {
 	select {
 	case <-done:
 	case <-timer.C:
-		log.Printf(
-			"[cron] Stop(): lane drain timed out after %s — proceeding with in-flight runs still tearing down",
-			drainTimeout,
-		)
+		slog.Warn("cron: Stop() lane drain timed out; proceeding with in-flight runs still tearing down",
+			"timeout", drainTimeout.String())
 	}
 }
 
@@ -593,7 +590,7 @@ func (cs *CronService) dispatch(jobID string) {
 		// slot-acquisition/bookkeeping around it must never crash the gateway.
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[cron] dispatch goroutine recovered from panic for job %s: %v", jobID, r)
+				slog.Error("cron: dispatch goroutine recovered from panic", "job_id", jobID, "panic", fmt.Sprint(r))
 			}
 		}()
 
@@ -660,13 +657,13 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	cs.mu.Unlock()
 
 	if callbackJob == nil {
-		log.Printf("[cron] job %s not found, skipping", jobID)
+		slog.Warn("cron: job not found, skipping", "job_id", jobID)
 		return
 	}
 
 	// Log job execution start
-	log.Printf("[cron] ▶ executing job '%s' (id: %s, schedule: %s, owner: %s)",
-		callbackJob.Name, jobID, callbackJob.Schedule.Kind, callbackJob.AgentID)
+	slog.Info("cron: executing job", "job", callbackJob.Name, "job_id", jobID,
+		"schedule", callbackJob.Schedule.Kind, "owner", callbackJob.AgentID)
 
 	// Apply a per-run deadline (FR-003) derived from the schedule's timeout.
 	runCtx := ctx
@@ -706,7 +703,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 		}
 	}
 	if job == nil {
-		log.Printf("[cron] job %s disappeared before state update", jobID)
+		slog.Warn("cron: job disappeared before state update", "job_id", jobID)
 		return
 	}
 
@@ -740,7 +737,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 		job.State.LastStatus = "timeout"
 		job.State.LastError = errText
 		job.State.ConsecutiveFailures++
-		log.Printf("[cron] ⏱ job '%s' timed out after %dms: %v", job.Name, execDuration, err)
+		slog.Warn("cron: job timed out", "job", job.Name, "duration_ms", execDuration, "error", err)
 	default:
 		status = "error"
 		errText = err.Error()
@@ -748,7 +745,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 		job.State.LastStatus = "error"
 		job.State.LastError = errText
 		job.State.ConsecutiveFailures++
-		log.Printf("[cron] ✗ job '%s' failed after %dms: %v", job.Name, execDuration, err)
+		slog.Warn("cron: job failed", "job", job.Name, "duration_ms", execDuration, "error", err)
 	}
 
 	// Append to inline run history, capped at runHistoryCap.
@@ -771,7 +768,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	nextRunStr := cs.scheduleNextRunUnsafe(job, transient)
 
 	if err == nil {
-		log.Printf("[cron] ✓ job '%s' completed in %dms, next run: %s", job.Name, execDuration, nextRunStr)
+		slog.Info("cron: job completed", "job", job.Name, "duration_ms", execDuration, "next_run", nextRunStr)
 	}
 
 	if err := cs.saveStoreUnsafe(); err != nil {
@@ -791,7 +788,7 @@ func invokeRun(
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("scheduled run panic: %v", r)
-			log.Printf("[cron] ✗ job '%s' (id: %s) panicked: %v", job.Name, job.ID, r)
+			slog.Error("cron: job panicked", "job", job.Name, "job_id", job.ID, "panic", fmt.Sprint(r))
 		}
 	}()
 	if runner != nil {
@@ -855,8 +852,8 @@ func (cs *CronService) scheduleNextRunUnsafe(job *CronJob, transient bool) strin
 		next := cs.clockNowUnsafeMS() + offset
 		job.State.NextRunAtMS = &next
 		job.State.RetryAttempt++
-		log.Printf("[cron] ↻ job '%s' transient failure — retry %d scheduled in %dms",
-			job.Name, job.State.RetryAttempt, offset)
+		slog.Info("cron: job transient failure, retry scheduled", "job", job.Name,
+			"retry", job.State.RetryAttempt, "in_ms", offset)
 		return time.UnixMilli(next).Format("2006-01-02 15:04:05") + " (retry)"
 	}
 
@@ -892,14 +889,14 @@ func (cs *CronService) computeNextRun(schedule *CronSchedule, nowMS int64) *int6
 		now := time.UnixMilli(nowMS)
 		nextTime, err := gronx.NextTickAfter(schedule.Expr, now, false)
 		if err != nil {
-			log.Printf("[cron] failed to compute next run for expr '%s': %v", schedule.Expr, err)
+			slog.Warn("cron: failed to compute next run", "expr", schedule.Expr, "error", err)
 			return nil
 		}
 
 		nextMS := nextTime.UnixMilli()
 		return &nextMS
 	default:
-		log.Printf("[cron] unknown schedule kind '%s'", schedule.Kind)
+		slog.Warn("cron: unknown schedule kind", "kind", schedule.Kind)
 		return nil
 	}
 }
