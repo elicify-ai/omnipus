@@ -89,10 +89,14 @@ func TestAttention_ParentWalkDepthBound(t *testing.T) {
 		SessionMeta: session.SessionMeta{ID: "deep-main"}, Type: session.SessionTypeMain,
 	}
 	prev := "deep-main"
+	firstID := ""
 	for i := 0; i < chain; i++ {
 		id := "h" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 		metas[id] = &session.UnifiedMeta{
 			SessionMeta: session.SessionMeta{ID: id, ParentSessionID: prev}, Type: session.SessionTypeDelegate,
+		}
+		if firstID == "" {
+			firstID = id
 		}
 		prev = id
 	}
@@ -100,7 +104,7 @@ func TestAttention_ParentWalkDepthBound(t *testing.T) {
 
 	// Inside the bound: the walk reaches the main and attributes the approval.
 	// The FIRST helper created sits one hop below the main.
-	near := "h" + string(rune('a'+0%26)) + string(rune('a'+0/26))
+	near := firstID
 	got := pendingApprovalMainsFor(fakeApprovalSource{[]*approvalEntry{{SessionID: near}}}, metaOf(metas))
 	require.False(t, got.unknown, "a walk inside the bound is decided")
 	require.Contains(t, got.mains, "deep-main", "a helper inside the bound is attributed to its main")
