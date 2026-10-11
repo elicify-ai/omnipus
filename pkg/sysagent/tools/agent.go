@@ -1113,6 +1113,23 @@ type AgentDeleteCascadeResult struct {
 	DeletionErr error
 }
 
+// sessionStoreForDelete returns the live store from Deps, or a true nil interface
+// when none is wired (never a typed-nil), so the cascade fails closed.
+func (t *AgentDeleteTool) sessionStoreForDelete() AgentSessionStore {
+	if t.deps == nil || t.deps.DeleteSessionStore == nil {
+		return nil
+	}
+	return t.deps.DeleteSessionStore()
+}
+
+// AgentSessionStore is the narrow view of the loop's ONE live session store the
+// delete cascade needs. The cascade never opens a store (DEL-10: one lock set per
+// directory); its callers pass the shared store in.
+type AgentSessionStore interface {
+	ListSessionsFiltered(keep func(*session.UnifiedMeta) bool) ([]*session.UnifiedMeta, error)
+	DeleteSession(id string) error
+}
+
 // CheckAgentDeleteRevision is the read-only revision comparison a delete does
 // before any cleanup. It returns agentstore.ErrRevisionConflict (wrapped) when
 // the agent's current revision differs from the caller's. An unreadable or
@@ -1147,7 +1164,7 @@ func CheckAgentDeleteRevision(omnipusHome, agentID, revision string) error {
 // omnipusHome is the resolved $OMNIPUS_HOME (see resolveOmnipusHome) and
 // revision the caller's expected record revision. The agent store is built here
 // so both callers pass identical inputs.
-func RunAgentDeleteCascade(omnipusHome, agentID, revision string) AgentDeleteCascadeResult {
+func RunAgentDeleteCascade(omnipusHome, agentID, revision string, sessions AgentSessionStore, stopSession func(sessionID string) string) AgentDeleteCascadeResult {
 	res := AgentDeleteCascadeResult{Warnings: make([]string, 0, 3)}
 
 	// Final-gate H1: a stale revision refuses BEFORE any destructive step. The
@@ -1166,7 +1183,7 @@ func RunAgentDeleteCascade(omnipusHome, agentID, revision string) AgentDeleteCas
 	// session shared with another agent is deliberately left untouched rather
 	// than deleted or partially edited.
 	var w []string
-	res.SessionsDeleted, res.SessionsPreservedShared, w = cascadeDeleteAgentSessions(omnipusHome, agentID)
+	res.SessionsDeleted, res.SessionsPreservedShared, w = cascadeDeleteAgentSessions(sessions, stopSession, agentID)
 	res.Warnings = append(res.Warnings, w...)
 
 	// Step 1b: unassign (never delete) every GTD task currently assigned to
@@ -1206,7 +1223,7 @@ func RunAgentDeleteCascade(omnipusHome, agentID, revision string) AgentDeleteCas
 // revision), a stale revision becomes a REVISION_CONFLICT error, and a clean
 // run returns stop=false so Execute proceeds to reload/respond.
 func (ad *agentDeleteToolExecute) deleteAndCascade() (*tools.ToolResult, bool) {
-	res := RunAgentDeleteCascade(ad.omnipusHome, ad.id, ad.revision)
+	res := RunAgentDeleteCascade(ad.omnipusHome, ad.id, ad.revision, ad.t.sessionStoreForDelete(), ad.t.deps.StopSessionForDelete)
 	ad.cascadeWarnings = res.Warnings
 	ad.sessionsDeleted = res.SessionsDeleted
 	ad.sessionsPreservedShared = res.SessionsPreservedShared
@@ -1393,25 +1410,14 @@ func (ad *agentDeleteToolExecute) respond() *tools.ToolResult {
 // untouched, and any non-fatal per-session failures. Best-effort throughout:
 // one failure does not abort the sweep, matching every other cascade step in
 // AgentDeleteTool.Execute.
-func cascadeDeleteAgentSessions(omnipusHome, agentID string) (deleted, sharedSkipped int, warnings []string) {
-	sessionsDir := filepath.Join(omnipusHome, "sessions")
-	store, err := session.NewUnifiedStore(sessionsDir)
-	if err != nil {
-		return 0, 0, []string{fmt.Sprintf("could not open session store for cascade delete: %v", err)}
+func cascadeDeleteAgentSessions(store AgentSessionStore, stopSession func(sessionID string) string, agentID string) (deleted, sharedSkipped int, warnings []string) {
+	// DEL-10 (architect final-gate item 1): the cascade works on the loop's ONE
+	// live store, passed in by its caller. It never opens a store of its own: a
+	// second store would take different shard locks over the same directory. A
+	// missing store fails the cleanup (the record stays and the delete retries).
+	if store == nil {
+		return 0, 0, []string{"session store unavailable: the agent's sessions could not be cleaned up; retry the delete"}
 	}
-	// Close stops the store's periodic stats-flusher goroutine. This
-	// function constructs a short-lived store instance for the duration of
-	// one delete_agent call (same "fresh store per call" convention this
-	// file already uses for agentstore.New in every Execute), so it must
-	// also tear it down — otherwise every delete_agent call leaks one
-	// ticker goroutine for the life of the process.
-	defer func() {
-		if closeErr := store.Close(); closeErr != nil {
-			slog.Warn("sysagent: cascade session delete: session store close failed",
-				"agent_id", agentID, "error", closeErr)
-		}
-	}()
-
 	metas, err := store.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
 		for _, a := range m.AgentIDs {
 			if a == agentID {
@@ -1421,7 +1427,8 @@ func cascadeDeleteAgentSessions(omnipusHome, agentID string) (deleted, sharedSki
 		return false
 	})
 	if err != nil {
-		return 0, 0, []string{fmt.Sprintf("could not list sessions for cascade delete: %v", err)}
+		slog.Error("sysagent: cascade session delete: list failed", "agent_id", agentID, "error", err)
+		return 0, 0, []string{"could not list the agent's sessions for cleanup; retry the delete"}
 	}
 
 	for _, m := range metas {
@@ -1429,8 +1436,22 @@ func cascadeDeleteAgentSessions(omnipusHome, agentID string) (deleted, sharedSki
 			sharedSkipped++
 			continue
 		}
+		// Stop the session's running work (the session and its helper tree)
+		// BEFORE deleting it, as every other delete surface does. A session that
+		// will not stop is kept and the cleanup fails, so the agent record
+		// stays and the same delete retries.
+		if stopSession != nil {
+			if summary := stopSession(m.ID); summary != "" {
+				slog.Warn("sysagent: cascade session delete: a session did not stop; it is kept",
+					"agent_id", agentID, "session_id", m.ID, "summary", summary)
+				warnings = append(warnings, "a running session of this agent did not stop and was kept; retry the delete once it has stopped")
+				continue
+			}
+		}
 		if delErr := store.DeleteSession(m.ID); delErr != nil {
-			warnings = append(warnings, fmt.Sprintf("could not delete session %s: %v", m.ID, delErr))
+			slog.Error("sysagent: cascade session delete: delete failed",
+				"agent_id", agentID, "session_id", m.ID, "error", delErr)
+			warnings = append(warnings, "a session of this agent could not be deleted; retry the delete")
 			continue
 		}
 		deleted++

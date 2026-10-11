@@ -155,6 +155,9 @@ type services struct {
 	// ensureWorkspaceMains provisions a workspace team's mains (final-gate H2);
 	// set at boot once the REST API exists, read when the system tools are wired.
 	ensureWorkspaceMains func(workspaceID string) error
+	// stopSessionForDelete stops one session's tree before the delete_agent cascade
+	// deletes it; non-empty means it did not stop.
+	stopSessionForDelete func(sessionID string) string
 	CronService          *cron.CronService
 	// LiveLimits is ADR-066 rung 4; retained so shutdown can Close it (abort
 	// in-flight fetches, forbid cache writes) — see agent.LiveLimits.Close.
@@ -1357,6 +1360,15 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// EnsureWorkspaceMains (final-gate H2): create_agent's team join gives the
 		// new member its main chat through the workspace-save path.
 		EnsureWorkspaceMains: rc.runningServices.ensureWorkspaceMains,
+		// DEL-10: the delete_agent cascade uses the loop's one live store and stops
+		// each session first.
+		DeleteSessionStore: func() systools.AgentSessionStore {
+			if s := rc.agentLoop.GetSessionStore(); s != nil {
+				return s
+			}
+			return nil
+		},
+		StopSessionForDelete: rc.runningServices.stopSessionForDelete,
 		// WaitForReloadFunc: AgentDeleteTool's synchronous reload wait (see
 		// systools.Deps.WaitForReloadFunc's doc comment for the delete_agent →
 		// list_agents ghost-listing race this closes). Built on the same

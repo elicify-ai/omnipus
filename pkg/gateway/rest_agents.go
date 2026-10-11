@@ -1140,6 +1140,15 @@ func mergeAgentModelParams(existing *config.AgentModelParams, in *agentModelPara
 // deleteAgent handles DELETE /api/v1/agents/{id}.
 // Removes the agent from config.json and reloads the live config.
 // Core (locked) agents cannot be deleted (403).
+// deleteCascadeStore is the live shared session store as the cascade's narrow
+// interface - a true nil interface when there is none (never a typed-nil).
+func (a *restAPI) deleteCascadeStore() systools.AgentSessionStore {
+	if s := a.agentLoop.GetSessionStore(); s != nil {
+		return s
+	}
+	return nil
+}
+
 func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string) {
 	cfg := a.agentLoop.GetConfig()
 	var found *config.AgentConfig
@@ -1264,7 +1273,10 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	// partly-deleted result the SPA's DeleteAgentControl consumes. Dangling
 	// referrers (bindings, mailboxes, workspace core_team) are surfaced for
 	// repair per D6 rule 2, never silently pruned here.
-	cascade := systools.RunAgentDeleteCascade(a.homePath, id, revision)
+	cascade := systools.RunAgentDeleteCascade(a.homePath, id, revision, a.deleteCascadeStore(),
+		func(sessionID string) string {
+			return a.stopBeforeDeleteFor(r.Context(), sessionID, actorUsername(r))
+		})
 	if cascade.CleanupFailed {
 		writeAgentDeletePartial(w, id, "cleanup", cascade.Warnings)
 		return

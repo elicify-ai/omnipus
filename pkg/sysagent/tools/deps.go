@@ -189,6 +189,17 @@ type Deps struct {
 	// workspace save. Nil in tests or when not wired; callers nil-check. The
 	// gateway wires it to restAPI.ensureWorkspaceMains.
 	EnsureWorkspaceMains func(workspaceID string) error
+
+	// DeleteSessionStore returns the loop's ONE live session store for the
+	// agent-delete cascade (DEL-10). It must not open a store: a nil return (or a
+	// nil field) fails the delete closed, and the same delete can be retried.
+	DeleteSessionStore func() AgentSessionStore
+
+	// StopSessionForDelete stops a session's running work (the session and its
+	// helper tree) before the agent-delete cascade deletes it. It returns a
+	// non-empty summary when the session could not be stopped, which keeps the
+	// session and the agent record. Nil means no stop is available (tests).
+	StopSessionForDelete func(sessionID string) string
 	// MCPStatus reports live per-server connection status so mcp tool results
 	// can be honest about whether a server actually connected rather than
 	// just echoing the config write. status is one of "connected", "error",

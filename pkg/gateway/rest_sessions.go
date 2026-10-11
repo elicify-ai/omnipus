@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1052,6 +1053,12 @@ const stopBeforeDeleteFailedText = "Stop before delete failed; nothing was delet
 	"Check that session storage is available and writable, then retry. Details are in the server log."
 
 func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
+	return a.stopBeforeDeleteFor(r.Context(), id, actorUsername(r))
+}
+
+// stopBeforeDeleteFor is stopBeforeDelete without a request: the agent-delete
+// cascade (REST and tool) stops an agent's sessions through the same Stop.
+func (a *restAPI) stopBeforeDeleteFor(ctx context.Context, id, actor string) string {
 	if a.agentLoop == nil {
 		return ""
 	}
@@ -1059,9 +1066,9 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 	if a.stopSession != nil {
 		stop = a.stopSession
 	}
-	res, err := stop(r.Context(), agent.StopRequest{
+	res, err := stop(ctx, agent.StopRequest{
 		SessionID: id,
-		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: actorUsername(r)},
+		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: actor},
 		Channel:   "web",
 		Tree:      true,
 	})
@@ -1089,7 +1096,7 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 			cancelIncompleteSubtreeSummary(res.Report), len(stillRunning))
 	}
 	ids := append([]string{id}, res.Report.Reached...)
-	if live := a.agentLoop.AwaitStoppedTurns(r.Context(), ids); len(live) > 0 {
+	if live := a.agentLoop.AwaitStoppedTurns(ctx, ids); len(live) > 0 {
 		slog.Warn("rest: delete session: sessions still running after the forced Stop; deletion refused",
 			"session_id", id, "still_running", live)
 		return fmt.Sprintf("Stop before delete incomplete: %d session(s) still running after the forced stop; nothing was deleted",

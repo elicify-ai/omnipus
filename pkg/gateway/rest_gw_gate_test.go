@@ -54,11 +54,12 @@ func TestGW_H1_StaleRevisionAgentDeleteDestroysNothing(t *testing.T) {
 	var created gen.Agent
 	require.NoError(t, json.Unmarshal(createW.Body.Bytes(), &created))
 
-	sessStore, err := session.NewUnifiedStore(filepath.Join(api.homePath, "sessions"))
-	require.NoError(t, err)
+	// The agent's session lives in the loop's ONE live store (the cascade no
+	// longer opens a store of its own - DEL-10).
+	sessStore := api.agentLoop.GetSessionStore()
+	require.NotNil(t, sessStore)
 	meta, err := sessStore.NewSession(session.SessionTypeChat, "webchat", created.Id)
 	require.NoError(t, err)
-	require.NoError(t, sessStore.Close())
 
 	stale := strings.Repeat("0", 64)
 	require.NotEqual(t, stale, created.Revision, "instrument check: the revision must really be stale")
@@ -68,7 +69,7 @@ func TestGW_H1_StaleRevisionAgentDeleteDestroysNothing(t *testing.T) {
 	api.HandleAgents(delW, delR)
 
 	assert.Equal(t, http.StatusConflict, delW.Code, "a stale revision is still a conflict: %s", delW.Body.String())
-	_, statErr := os.Stat(filepath.Join(api.homePath, "sessions", meta.ID))
+	_, statErr := os.Stat(filepath.Join(sessStore.BaseDir(), meta.ID))
 	assert.False(t, errors.Is(statErr, os.ErrNotExist), "the agent's session must NOT be deleted by a refused delete")
 	getW := httptest.NewRecorder()
 	getR := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+created.Id, nil)
@@ -82,7 +83,7 @@ func TestGW_H1_StaleRevisionAgentDeleteDestroysNothing(t *testing.T) {
 	okR.URL.Path = "/api/v1/agents/" + created.Id
 	api.HandleAgents(okW, okR)
 	assert.Equal(t, http.StatusOK, okW.Code, okW.Body.String())
-	_, statErr = os.Stat(filepath.Join(api.homePath, "sessions", meta.ID))
+	_, statErr = os.Stat(filepath.Join(sessStore.BaseDir(), meta.ID))
 	assert.True(t, errors.Is(statErr, os.ErrNotExist), "a valid delete still cleans the session")
 }
 
@@ -405,4 +406,62 @@ func TestGW_ClearAll_RemovesTheDeletedChatsUploads(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, body)
 	_, err := os.Stat(up)
 	assert.True(t, errors.Is(err, os.ErrNotExist), "the deleted chat's uploads must be gone")
+}
+
+// Architect final-gate item 1: DELETE /agents/{id} stops the agent's running work
+// before it deletes the sessions, through the same Stop every delete uses, and a
+// session that will not stop keeps the agent record so the delete can retry.
+func TestGW_AgentDelete_StopsSessionsFirstAndKeepsTheRecordIfOneWillNotStop(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	api.agentLoop.SetReloadFunc(func() error {
+		defer api.agentLoop.ClearReloadPending()
+		return api.refreshConfigAndRewireServices(api.configPath())
+	})
+	createW := httptest.NewRecorder()
+	createR := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(
+		`{"name": "Busy Agent", "type": "Main", "model": "claude-sonnet-4-6", "soul": "I am busy."}`))
+	createR.Header.Set("Content-Type", "application/json")
+	createR.URL.Path = "/api/v1/agents"
+	api.HandleAgents(createW, createR)
+	require.Equal(t, http.StatusCreated, createW.Code, createW.Body.String())
+	var created gen.Agent
+	require.NoError(t, json.Unmarshal(createW.Body.Bytes(), &created))
+	store := api.agentLoop.GetSessionStore()
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", created.Id)
+	require.NoError(t, err)
+	var stopped []string
+	wedged := true
+	api.stopSession = func(_ context.Context, req agent.StopRequest) (agent.StopResult, error) {
+		stopped = append(stopped, req.SessionID)
+		if wedged {
+			return agent.StopResult{Report: steer.CancelReport{
+				Unreachable: []steer.UnreachableSession{{ID: req.SessionID, Reason: "wedged"}}}}, nil
+		}
+		return agent.StopResult{}, nil
+	}
+	del := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+created.Id+"?revision="+created.Revision, nil)
+		r.URL.Path = "/api/v1/agents/" + created.Id
+		api.HandleAgents(w, r)
+		return w
+	}
+
+	w := del()
+
+	assert.Equal(t, []string{meta.ID}, stopped, "the agent's session is stopped before it is deleted")
+	assert.Equal(t, http.StatusInternalServerError, w.Code, "a session that will not stop is a partial, retryable delete: %s", w.Body.String())
+	_, getErr := store.GetMeta(meta.ID)
+	assert.NoError(t, getErr, "a session that did not stop must not be deleted")
+	getW := httptest.NewRecorder()
+	getR := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+created.Id, nil)
+	getR.URL.Path = "/api/v1/agents/" + created.Id
+	api.HandleAgents(getW, getR)
+	assert.Equal(t, http.StatusOK, getW.Code, "the agent record stays so the same delete retries")
+
+	wedged = false // retry once the work has stopped
+	w = del()
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	_, getErr = store.GetMeta(meta.ID)
+	assert.Error(t, getErr, "the retried delete removes the session")
 }

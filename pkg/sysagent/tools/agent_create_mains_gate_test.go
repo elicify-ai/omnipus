@@ -85,7 +85,7 @@ func TestRunAgentDeleteCascade_StaleRevisionDestroysNothing(t *testing.T) {
 	}
 	_ = store.Close()
 
-	out := systools.RunAgentDeleteCascade(home, agentID, strings.Repeat("0", 64))
+	out := systools.RunAgentDeleteCascade(home, agentID, strings.Repeat("0", 64), nil, nil)
 
 	if !errors.Is(out.DeletionErr, agentstore.ErrRevisionConflict) {
 		t.Fatalf("DeletionErr = %v, want a revision conflict", out.DeletionErr)
