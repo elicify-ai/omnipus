@@ -110,8 +110,11 @@ func (al *AgentLoop) admitBoundConnectorInputCtx(ctx context.Context, msg *bus.I
 		return unroutable, fmt.Errorf("connector intake: address deps are not wired")
 	}
 	eligible, eErr := deps.PairEligible(pair.WorkspaceID, pair.AgentID)
-	if eErr != nil || !eligible {
-		return unroutable, fmt.Errorf("connector intake: %s/%s has no eligible main (%w)", pair.WorkspaceID, pair.AgentID, eErr)
+	if eErr != nil {
+		return unroutable, fmt.Errorf("connector intake: eligibility of %s/%s could not be determined: %w", pair.WorkspaceID, pair.AgentID, eErr)
+	}
+	if !eligible {
+		return unroutable, fmt.Errorf("connector intake: %s/%s has no eligible main", pair.WorkspaceID, pair.AgentID)
 	}
 	// 2b. Expand voice parts so the bounds below see the real turn text.
 	if al.boundAudioNeedsTranscription(*msg) {
