@@ -61,7 +61,7 @@ func TestRetention_FailedRemovalStillAdvancesPastWhatWasRemoved(t *testing.T) {
 	require.Equal(t, 1, removed, "the partition that WAS removed still counts")
 
 	_, statErr := os.Stat(filepath.Join(day.dir(), "2026-04-01.jsonl"))
-	require.True(t, os.IsNotExist(statErr), "instrument check: day one was removed")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "instrument check: day one was removed")
 
 	meta, loadErr := store.backend.loadMetaLocked(sid)
 	require.NoError(t, loadErr)
