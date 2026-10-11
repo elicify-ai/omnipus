@@ -83,7 +83,13 @@ func wiredRetentionSession(t *testing.T) (*UnifiedStore, string, *ArchiveDayStor
 //
 // FR-007 / BDD-02.3: the cursor advances to the retained complete group and the
 // next window read resolves, instead of failing "no partition for key" (S3 H1).
-func TestRetention_WiredAgedPartitionBehindALiveWindowIsRepaired(t *testing.T) {
+// wiredModelRetentionSession builds a REAL chat session whose MODEL content goes
+// in through the checked model-append path, so the ordinal index and the
+// backend cursor are published by production code rather than by the fixture.
+// It returns the store, the session id, the archive day store and the rolled
+// day-1 partition path. The archive clock is left at 2026-04-10T00:00:00Z.
+func wiredModelRetentionSession(t *testing.T) (*UnifiedStore, string, *ArchiveDayStore, string) {
+	t.Helper()
 	store := newUnifiedStoreForTest(t)
 	meta, err := store.NewSession(SessionTypeChat, "webchat", "mia")
 	require.NoError(t, err, "fixture: create the session")
@@ -130,6 +136,18 @@ func TestRetention_WiredAgedPartitionBehindALiveWindowIsRepaired(t *testing.T) {
 
 	rolled := filepath.Join(day.dir(), "2026-04-01.jsonl")
 	ageFileTo(t, rolled, time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC))
+	return store, meta.ID, day, rolled
+}
+
+// TestRetention_WiredAgedPartitionBehindALiveWindowIsRepaired is row 1: a real
+// session whose MODEL window still points into an aged rolled partition, with a
+// newer complete group retained.
+//
+// FR-007 / BDD-02.3: the cursor advances to the retained complete group and the
+// next window read resolves, instead of failing "no partition for key" (S3 H1).
+func TestRetention_WiredAgedPartitionBehindALiveWindowIsRepaired(t *testing.T) {
+	store, sid, _, rolled := wiredModelRetentionSession(t)
+	ctx := context.Background()
 
 	removed, err := store.RetentionSweep(7)
 	require.NoError(t, err, "the wired sweep must complete")
@@ -139,13 +157,69 @@ func TestRetention_WiredAgedPartitionBehindALiveWindowIsRepaired(t *testing.T) {
 		t.Fatalf("the aged rolled partition must be gone; stat err=%v", statErr)
 	}
 
-	view, err := store.WindowView(ctx, meta.ID)
+	view, err := store.WindowView(ctx, sid)
 	require.NoError(t, err,
 		"S3 H1: the next window read must resolve, not fail \"no partition for key\"")
 	msgs, ordinals := view.History()
 	require.Len(t, msgs, 1, "the repaired window holds exactly the retained message")
 	assert.Equal(t, []int{3}, ordinals, "the retained slot keeps its ordinal in the index")
 	assert.Equal(t, "day ten user", msgs[0].Content)
+}
+
+// TestRetention_WiredOrdinalIndexIsNotTruncatedByExpiry is row 3 (S3 H3): the
+// expiry pass drops the GONE slots from the live window; it must not truncate
+// the ordinal index itself. Only a genuinely torn tail truncates, and no tail
+// is torn here — the four published ordinals all survive.
+func TestRetention_WiredOrdinalIndexIsNotTruncatedByExpiry(t *testing.T) {
+	store, sid, day, _ := wiredModelRetentionSession(t)
+
+	before, err := day.OrdinalCount()
+	require.NoError(t, err)
+	require.Equal(t, 4, before, "fixture: four model slots were published")
+
+	removed, err := store.RetentionSweep(7)
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+
+	after, err := day.OrdinalCount()
+	require.NoError(t, err)
+	assert.Equal(t, before, after,
+		"S3 H3: an expiry that removes an aged partition must not truncate the ordinal index")
+
+	rows, err := day.readOrdinalRows(0, after)
+	require.NoError(t, err)
+	assert.Len(t, rows, 4, "every published ordinal row must remain addressable")
+
+	view, err := store.WindowView(context.Background(), sid)
+	require.NoError(t, err)
+	msgs, _ := view.History()
+	assert.Len(t, msgs, 1, "only the gone slots leave the live window")
+}
+
+// TestRetention_WiredExpiryNoticeReachesTheSession is row 4 (FR-007: "...with
+// agent expiry notice").
+//
+// BLOCKED: the notice is COMPUTED and then DISCARDED. expireArchiveSessions
+// reads only notice.RemovedPartitions and RetentionSweep returns only a count,
+// so ExpiryNotice.Note / FirstRetained / WindowEmptied have zero production
+// consumers and nothing writes an agent-visible notice anywhere.
+func TestRetention_WiredExpiryNoticeReachesTheSession(t *testing.T) {
+	store, sid, _, _ := wiredModelRetentionSession(t)
+
+	removed, err := store.RetentionSweep(7)
+	require.NoError(t, err)
+	require.Equal(t, 1, removed, "precondition: one partition expired")
+
+	entries, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	for _, e := range entries {
+		if e.SystemSubtype == "context_window_notice" || e.SystemSubtype == "expiry_notice" {
+			return
+		}
+	}
+	t.Fatal("BLOCKED: an expiry removed content but the session carries no agent-visible " +
+		"expiry notice — ExpiryNotice.Note/FirstRetained/WindowEmptied have no production " +
+		"consumer, so FR-007 \"...with agent expiry notice\" is unimplemented")
 }
 
 // TestRetention_WiredTransientReadErrorIsNotExpiry is row 2 (S3 H2): one slot
