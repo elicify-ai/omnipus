@@ -486,10 +486,14 @@ func (mt *messageParentToolExecute) validateContext() (*ToolResult, bool) {
 // prepareMessage validates the lifecycle record and prepares the message's shared routing fields.
 func (mt *messageParentToolExecute) prepareMessage() (*ToolResult, bool) {
 	if mt.err != nil {
-		return ErrorResult(fmt.Sprintf(
-			"message_parent: no durable session record for this session (%v) — message_parent may only be "+
-				"called from within a delegated child session", mt.err,
-		)), true
+		// The load error can carry the lifecycle journal's path and file name;
+		// it goes to the log, the model gets the fixed wording.
+		slog.Error("message_parent: no durable session record", "session_id", mt.childSessionID, "error", mt.err)
+		return ErrorResult(
+			"message_parent: no durable session record for this session — message_parent may only be " +
+				"called from within a delegated child session. If this is a delegated child, check that session " +
+				"storage is available and try again; details are in the server log.",
+		), true
 	}
 	if mt.rec.Is3P {
 		return ErrorResult("message_parent: not available to external-CLI (3P) sessions (D5) — " +
@@ -723,7 +727,12 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 		if text, ok := notDeliveredRefusalText(mt.err); ok {
 			return ErrorResult(text).WithError(mt.err)
 		}
-		return ErrorResult(fmt.Sprintf("message_parent: %v", mt.err)).WithError(mt.err)
+		// Anything that is not a fixed cap refusal is a server-side failure
+		// (the inbox store, the lifecycle store): its text can carry paths and
+		// file names, so it goes to the log and the child gets fixed wording.
+		slog.Error("message_parent: delivery failed", "session_id", mt.childSessionID, "error", mt.err)
+		return ErrorResult("message_parent: the report could not be delivered. " +
+			"Check that session storage is available and writable, then send it again; details are in the server log.").WithError(mt.err)
 	}
 
 	// The wake itself (eligibility, identity, debounce bypass) already
