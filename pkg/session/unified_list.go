@@ -19,6 +19,44 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 	return us.listSessionsFiltered(nil)
 }
 
+// UnreadableSessionIDs returns the ids of session directories on disk whose
+// meta.json cannot be read or parsed. ListSessions logs and SKIPS such a
+// directory, so a caller that must account for every session on disk (delete-all)
+// needs this to report what it could not see. Directories already loaded into the
+// cache are readable by construction. A missing base directory is the empty state.
+func (us *UnifiedStore) UnreadableSessionIDs() ([]string, error) {
+	entries, err := os.ReadDir(us.baseDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unified_store: list unreadable sessions: read base dir %q: %w", us.baseDir, err)
+	}
+	var bad []string
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == ".context" {
+			continue
+		}
+		name := entry.Name()
+		if validateSessionID(name) != nil {
+			continue
+		}
+		us.cacheMu.RLock()
+		_, cached := us.metaCache[name]
+		us.cacheMu.RUnlock()
+		if cached {
+			continue
+		}
+		h := us.lockSession(name)
+		_, readErr := us.readMetaLocked(name)
+		h.Unlock()
+		if readErr != nil {
+			bad = append(bad, name)
+		}
+	}
+	return bad, nil
+}
+
 // ListSessionsFiltered performs the EXACT SAME reconcile + FR-097a prune
 // pass as ListSessions, but clones only the metas for which pred returns
 // true (14-reviewer fix-wave finding #3, MEDIUM perf).

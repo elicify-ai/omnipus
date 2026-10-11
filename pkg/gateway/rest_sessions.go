@@ -971,7 +971,12 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	if req.WorkspaceId != nil {
 		reqWorkspaceID = *req.WorkspaceId
 	}
-	if msg := adminChatRefusal(a.homePath, agentID, reqWorkspaceID); msg != "" {
+	msg, adminFault := adminChatRefusal(a.homePath, agentID, reqWorkspaceID)
+	if adminFault != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not check where Admin's chat may live", adminFault)
+		return
+	}
+	if msg != "" {
 		jsonErr(w, http.StatusBadRequest, msg)
 		return
 	}
