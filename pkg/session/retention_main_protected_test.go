@@ -74,6 +74,14 @@ func TestRetentionSweep_MainDirectoryWithOnlyExpiredContentIsKept(t *testing.T) 
 	dir := filepath.Join(s.baseDir, meta.ID)
 	rolled := filepath.Join(dir, "2026-03-04.jsonl")
 	require.NoError(t, os.WriteFile(rolled, []byte("{}\n"), 0o600))
+	// Leave the rolled day as the ONLY .jsonl in the directory.
+	others, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	require.NoError(t, err)
+	for _, f := range others {
+		if f != rolled {
+			require.NoError(t, os.Remove(f))
+		}
+	}
 	ageEverythingUnder(t, dir, 400*24*time.Hour)
 
 	_, err = s.RetentionSweep(90)
