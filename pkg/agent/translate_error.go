@@ -866,6 +866,18 @@ func TranslateTurnError(err error) LLMError {
 	// producers (steered dispatch, reconstruction, cancel, queued wake) are not
 	// "send it again" cases and keep their own wording. CodeUnknown carries the
 	// curated text; no new wire code is minted for it.
+	// The sender's own message could not be saved (founder ruling 2026-10-11):
+	// the turn is refused and the sender sees only the fixed reply; the store's
+	// error stays in Detail and the log.
+	var notSaved *messageNotSavedError
+	if errors.As(err, &notSaved) {
+		return LLMError{
+			Code:      CodeUnknown,
+			Message:   messageNotSavedReply,
+			Retryable: true,
+			Detail:    buildDetail(nil, err.Error()),
+		}
+	}
 	var admissionRefusal *ordinaryAdmissionRefusalError
 	if errors.Is(err, ErrPreviousExecutionPending) || errors.As(err, &admissionRefusal) {
 		return LLMError{

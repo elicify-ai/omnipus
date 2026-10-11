@@ -105,6 +105,9 @@ func (ts *turnState) appendWindowMessage(msg providers.Message, producer windowP
 	slot, _, err := store.AppendModelMessage(ctx, ts.sessionKey, producer.modelAppend(msg, ts.agent.ID))
 	if err != nil {
 		ts.setContextWindowError(err)
+		if msg.Role == "user" {
+			return session.ModelSlot{}, &messageNotSavedError{role: msg.Role, cause: err}
+		}
 		return session.ModelSlot{}, fmt.Errorf("context admission: append %s message: %w", msg.Role, err)
 	}
 	if msg.Role == "assistant" {
@@ -112,6 +115,25 @@ func (ts *turnState) appendWindowMessage(msg providers.Message, producer windowP
 	}
 	return slot, nil
 }
+
+// messageNotSavedReply is the only text a sender sees when its message could
+// not be saved (founder ruling 2026-10-11, R3 retired). The cause goes to the
+// log, never into this text.
+const messageNotSavedReply = "Sorry, I couldn't save your message \u2014 please try again later."
+
+// messageNotSavedError marks a refused turn: the sender's own message could not
+// be appended to the session. Error() keeps the operator-facing detail; the
+// sender-facing text is messageNotSavedReply.
+type messageNotSavedError struct {
+	role  string
+	cause error
+}
+
+func (e *messageNotSavedError) Error() string {
+	return fmt.Sprintf("context admission: append %s message: %v", e.role, e.cause)
+}
+
+func (e *messageNotSavedError) Unwrap() error { return e.cause }
 
 // recordCallIssuers remembers which archive record declared each of msg's tool
 // calls.
