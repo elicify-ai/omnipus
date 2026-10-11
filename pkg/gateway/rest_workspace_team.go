@@ -113,6 +113,11 @@ func logWorkspacelessAgents(home string, cfg *config.Config) {
 // wire field is absent (nil) so callers preserve merge semantics (absent →
 // unchanged). The server-managed session_id (FR-010, readOnly in the contract)
 // is intentionally NOT read from client input.
+//
+// Tri-state note (ADR-hide-from-sidebar): an absent hidden_from_sidebar maps
+// to false here — the same value as an explicit false. The distinction is
+// restored by applyUpdate's preserve step, which is the only place the stored
+// value is available; this mapper must stay storage-agnostic.
 func workspaceMemberConfigsFromWire(
 	wire *map[string]gen.WorkspaceMemberConfig,
 ) (map[string]workspace.MemberConfig, bool) {
@@ -134,6 +139,9 @@ func workspaceMemberConfigsFromWire(
 				mh.Body = *hb.Body
 			}
 			mc.Heartbeat = mh
+		}
+		if wmc.HiddenFromSidebar != nil {
+			mc.HiddenFromSidebar = *wmc.HiddenFromSidebar
 		}
 		out[agentID] = mc
 	}

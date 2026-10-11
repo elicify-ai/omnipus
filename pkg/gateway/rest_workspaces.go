@@ -466,6 +466,10 @@ func workspaceToWireFrom(
 				}
 				entry.Heartbeat = hbWire
 			}
+			if mc.HiddenFromSidebar {
+				h := true
+				entry.HiddenFromSidebar = &h
+			}
 			if mains != nil {
 				if id := mains(w, agentID); id != "" {
 					entry.MainSessionId = &id
@@ -1114,6 +1118,14 @@ func (rw *restAPIHandleWorkspacePut) prepareWorkspacePutMembers() bool {
 		// used to key on no longer exists (session-core U1, DEL-01).
 		// Best-effort either way: a failure is logged, never blocks the PUT.
 		for agentID, mc := range rw.incomingMC {
+			if mc.Heartbeat == nil {
+				// Heartbeat absent from this body: preserve-when-absent
+				// (ADR-hide-from-sidebar) keeps the stored config as-is, so
+				// there is no enable→disable transition to act on. (It used
+				// to mean "wipe the stored heartbeat", which is why the
+				// disable side effect below fired on omission.)
+				continue
+			}
 			wasEnabled := false
 			if stored, exists := rw.ws.MemberConfigs[agentID]; exists &&
 				stored.Heartbeat != nil {
@@ -1353,6 +1365,21 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 		return true
 	}
 
+	// D8 (ADR-hide-from-sidebar): a core_team PUT that removes a built-in
+	// roster member from the DEFAULT workspace is refused 409 —
+	// ensureBuiltinRosterPresent re-adds every missing built-in to the default
+	// workspace at every boot, so a 200 would make the API lie about a removal
+	// the next restart silently undoes. Built-ins on non-default workspaces
+	// stay removable (nothing re-adds them there), and so does every
+	// non-built-in member here — including custom agents an operator added to
+	// the default team by hand.
+	if rw.ws.IsDefault && rw.req.CoreTeam != nil {
+		if guardErr := rw.refuseBuiltinRosterRemoval(deduplicateStrings(*rw.req.CoreTeam)); guardErr != nil {
+			jsonErr(rw.w, http.StatusConflict, guardErr.Error())
+			return true
+		}
+	}
+
 	// Apply partial update (merge semantics) — track whether anything changed.
 	rw.changed = false
 	if rw.req.Name != nil && *rw.req.Name != rw.ws.Name {
@@ -1398,6 +1425,24 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 			rw.ws.MemberConfigs = make(map[string]workspace.MemberConfig)
 		}
 		for agentID, mc := range rw.incomingMC {
+			// Preserve-when-absent (ADR-hide-from-sidebar): an incoming member
+			// config replaces the stored one ONLY in the fields it actually
+			// carries. A field the body omits keeps the stored value — without
+			// this, the one-click hide body ({"hidden_from_sidebar":true})
+			// would silently wipe the member's stored heartbeat, and a
+			// heartbeat-only body would clear the flag. A heartbeat the body
+			// DOES carry keeps its documented wholesale-replace semantics.
+			// The wire entry (pointer fields) is the tri-state: absent vs
+			// explicit false/unset is exactly what rw.req.MemberConfigs
+			// preserves.
+			wireEntry := (*rw.req.MemberConfigs)[agentID]
+			stored, exists := rw.ws.MemberConfigs[agentID]
+			if wireEntry.HiddenFromSidebar == nil && exists {
+				mc.HiddenFromSidebar = stored.HiddenFromSidebar
+			}
+			if wireEntry.Heartbeat == nil && exists {
+				mc.Heartbeat = stored.Heartbeat
+			}
 			rw.ws.MemberConfigs[agentID] = mc
 		}
 		// GC: drop entries for agents no longer on the effective team. No
@@ -1426,6 +1471,35 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 		}
 	}
 	return false
+}
+
+// refuseBuiltinRosterRemoval names every built-in roster member
+// (defaultWorkspaceTeam(cfg)) that newTeam would remove from the default
+// workspace rw.ws, or nil when the PUT removes none. Called only when
+// rw.ws.IsDefault and a core_team edit is present (D8,
+// ADR-hide-from-sidebar): those are exactly the ids ensureBuiltinRosterPresent
+// would silently re-add at the next boot.
+func (rw *restAPIHandleWorkspacePut) refuseBuiltinRosterRemoval(newTeam []string) error {
+	newSet := make(map[string]bool, len(newTeam))
+	for _, id := range newTeam {
+		newSet[id] = true
+	}
+	current := make(map[string]bool, len(rw.ws.CoreTeam))
+	for _, id := range rw.ws.CoreTeam {
+		current[id] = true
+	}
+	var removed []string
+	for _, id := range defaultWorkspaceTeam(rw.a.agentLoop.GetConfig()) {
+		if current[id] && !newSet[id] {
+			removed = append(removed, id)
+		}
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"built-in roster member(s) %s cannot leave the default workspace: they would be re-added at the next boot",
+		strings.Join(removed, ", "))
 }
 
 // persistAndRespond persists a changed workspace, reconciles schedules, audits, and responds.
