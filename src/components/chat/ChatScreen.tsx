@@ -49,7 +49,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ClearContextDivider } from './ClearContextDivider'
-import { isClearContextMarker } from '@/lib/clearMarker'
+import { isClearCommandText, isClearContextMarker } from '@/lib/clearMarker'
 import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
 import { AgentReplyLabel, ParticipantMessageRow, useParticipantLabelParts } from './ParticipantLabels'
 import { collectPairedReplyToIds, isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
@@ -272,6 +272,7 @@ export function UserMessage() {
             firstSendStatus={storeMessage.firstSendStatus}
             agentName={agentName}
             latest
+            isClearCommand={isClearCommandText(storeMessage.content)}
             onRetry={() => useChatStore.getState().resendMessage(storeMessage.id)}
             onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(storeMessage.id)}
           />
@@ -1028,6 +1029,7 @@ export function VirtualUserMessageRow({
             firstSendStatus={message.firstSendStatus}
             agentName={agentName}
             latest={latest}
+            isClearCommand={isClearCommandText(message.content)}
             onRetry={() => useChatStore.getState().resendMessage(message.id)}
             onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(message.id)}
           />
