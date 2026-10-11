@@ -626,7 +626,7 @@ export function extractPlanCorrectCalls(
  */
 export async function startFreshChatWithAgent(page: Page, agent: RegExp): Promise<void> {
   await page.goto('/')
-  // Fresh chat via freshChat (fixtures/selectors.ts) — the agent row's
+  // Fresh chat via freshChat (fixtures/session-setup.ts) — the agent row's
   // "New chat with <Agent>" button this used to click is REMOVED (founder
   // decision D7, DECISIONS.md squad nav-agent-row-menu-20261011: capability
   // stays, UI access point gone). freshChat creates the session through the

@@ -31,7 +31,7 @@ The four built-in agents cover the everyday jobs.
 | Ava | Builder | Interviews you about what you need, then creates a custom agent with the personality and tools you asked for. |
 | Admin | Operator | Configures connectors, providers, channels, diagnostics and document dependencies. |
 
-All four can hand the conversation to another agent when you ask them to. Ava is also a shortcut for creating agents: skip the form and describe what you want to her in chat.
+Any chat colleague can ask a teammate for help: start a message with `@` and pick the agent, and the request is delivered to that agent's own chat. Omnipus no longer moves your conversation over to another agent. Ava is also a shortcut for creating agents: skip the form and describe what you want to her in chat.
 
 ## How to set your default agent
 
@@ -56,7 +56,7 @@ You create one of three types. The create buttons sit in the section headers of 
 | Subagent (External) | An external command-line tool | Other agents, through delegation | No |
 
 1. Click **+ New Main** or **+ New Subagent** in its section header. For an external worker, click **+ Add Subagent (External)** and pick the command-line tool from the menu; entries for tools not installed on the host are greyed out.
-2. Fill in **Identity**: name, the agent's look (**Role badge**, **Look**, and **Colour**), and model. The preview starts with Omnipus, General assistant, and Grey; leaving these choices untouched saves those defaults when you create the agent. There is no agent-picture upload. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
+2. Fill in **Identity**: name, the agent's look (**Role badge**, **Look**, and **Colour**), and model. The preview starts with Omnipus, General assistant, and Pewter (a grey); leaving these choices untouched saves those defaults when you create the agent. There is no agent-picture upload. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
 3. Fill in **Personality**: the soul, the agent's persona prompt, is required for every type.
 4. Main and Subagent have a third step, **Tools**, for tool permissions, skills, and fallback models. An external worker has no Tools step — it brings its own.
 5. Create the agent. Its card appears in its section.

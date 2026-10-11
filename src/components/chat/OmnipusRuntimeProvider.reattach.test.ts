@@ -5,7 +5,8 @@
 //
 // reattachActiveSession is the helper the onConnected path delegates to. These
 // tests drive it with a fake sender to lock both branches:
-//   - send() === false  → bucket preserved, isReplaying cleared, error surfaced
+//   - send() === false  → bucket preserved, isReplaying stays false (the flag
+//     is armed only on a SUCCESSFUL send), error surfaced
 //   - send() === true   → bucket ALSO preserved (#823 catch-up redesign,
 //     BE-DESIGN.md §6.1 — the numbered cursor carries the bucket across the
 //     reattach; only an explicit session_snapshot frame wipes now)
@@ -69,12 +70,30 @@ describe('reattachActiveSession — failed reattach preserves transcript', () =>
     )
   })
 
-  it('clears isReplaying on a failed reattach so the composer re-enables', () => {
+  // S3-12: this test used to read
+  //   expect(sessionsById[SID]?.isReplaying ?? false).toBe(false)
+  // which passes when the bucket is MISSING (undefined ?? false) and could
+  // never fail for the reason its comment gave: there is no optimistic
+  // isReplaying=true before send() to roll back — the flag is set only AFTER
+  // a successful send (OmnipusRuntimeProvider.tsx, the setReplaying(true)
+  // call on the success path). The assertion now pins the bucket's existence
+  // explicitly, and the companion test below proves the flag is observable on
+  // this exact fixture, so this one cannot pass vacuously.
+  it('a failed reattach leaves isReplaying false — nothing was armed, so nothing to roll back', () => {
     const sender: ReattachSender = { send: vi.fn().mockReturnValue(false) }
     reattachActiveSession(sender, vi.fn())
-    // The optimistic isReplaying=true set before send() must be rolled back —
-    // no replay is coming to flip it false.
-    expect(useChatStore.getState().sessionsById[SID]?.isReplaying ?? false).toBe(false)
+
+    const bucket = useChatStore.getState().sessionsById[SID]
+    expect(bucket, 'the bucket must survive a failed reattach').toBeTruthy()
+    expect(bucket?.isReplaying).toBe(false)
+  })
+
+  it('a SUCCESSFUL reattach does arm isReplaying — the failed case above is not vacuous', () => {
+    const sender: ReattachSender = { send: vi.fn().mockReturnValue(true) }
+    expect(reattachActiveSession(sender, vi.fn())).toBe(true)
+    const bucket = useChatStore.getState().sessionsById[SID]
+    expect(bucket, 'instrument: the same fixture keeps its bucket on success too').toBeTruthy()
+    expect(bucket?.isReplaying, 'the success path is what arms the flag').toBe(true)
   })
 
   // PROVENANCE (#823 catch-up redesign, BE-DESIGN.md §6.1, founder decision

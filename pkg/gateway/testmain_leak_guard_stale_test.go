@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,7 +28,7 @@ func TestRemoveStaleLeakedLocks_RemovesOnlyEmptyLockFiles(t *testing.T) {
 
 	require.Equal(t, []string{stale}, removed)
 	_, err := os.Stat(stale)
-	require.True(t, os.IsNotExist(err), "the empty lock file is removed")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the empty lock file is removed")
 	for _, keep := range []string{withContent, notALock} {
 		_, keepErr := os.Stat(keep)
 		require.NoError(t, keepErr, "%s must survive: only empty *.lock files are swept", keep)

@@ -881,7 +881,7 @@ type MessageFrame struct {
 	Type      string  `json:"type"`
 }
 
-// MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission; discarded (reason stopped_before_delivery) means Stop discarded the input before delivery (session-core FR-024). Emitted only when the client supplied client_message_id.
+// MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission; discarded (reason stopped_before_delivery) means Stop discarded the input before delivery (session-core FR-024); held means an @-recipient request was accepted but the recipient is stopped, so it waits until the recipient runs again (not a failure, not terminal). Emitted only when the client supplied client_message_id.
 type MessageStatusFrame struct {
 	ClientMessageId string `json:"client_message_id"`
 	// Present only with state=discarded: why the input never reached the agent (session-core FR-024).

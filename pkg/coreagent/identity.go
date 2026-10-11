@@ -52,6 +52,17 @@ func CanonicalRole(raw string) (string, bool) {
 	return string(r), true
 }
 
+// PaletteColors lists the avatar palette (AgentColor.yaml) for refusal messages.
+func PaletteColors() []string {
+	return []string{
+		string(generated.AgentColorHash4F8A80), string(generated.AgentColorHash5E6973),
+		string(generated.AgentColorHash6E8BA8), string(generated.AgentColorHash7A8C9E),
+		string(generated.AgentColorHash7B7290), string(generated.AgentColorHash8E9196),
+		string(generated.AgentColorHash9C8A5B), string(generated.AgentColorHashA97142),
+		string(generated.AgentColorHashB76E79), string(generated.AgentColorHashCDBA96),
+	}
+}
+
 // CanonicalColor accepts any letter-case of a palette hex and returns the
 // uppercase enum value; a hex of the previous palette is mapped to its new
 // equivalent (legacyColors). Any other string, including a well-formed hex
@@ -86,31 +97,6 @@ func WireIdentity(figure, role, color string) (generated.AgentFigure, generated.
 		outColor = generated.AgentColor(canon)
 	}
 	return fig, outRole, outColor
-}
-
-// RoleFromLegacyIcon maps a stored Phosphor icon name to a role slug.
-// The five spec keys are matched after trim and lower-case, without stripping
-// hyphens. After that same fold, an icon that is exactly one of the 31 slugs
-// is kept. Anything else is general.
-func RoleFromLegacyIcon(icon string) string {
-	folded := strings.ToLower(strings.TrimSpace(icon))
-	switch folded {
-	case "code":
-		return string(generated.AgentRoleDeveloper)
-	case "chat":
-		return string(generated.AgentRoleGeneral)
-	case "magnifyingglass":
-		return string(generated.AgentRoleResearcher)
-	case "pencilsimple":
-		return string(generated.AgentRoleWriter)
-	case "shield":
-		return string(generated.AgentRoleSecurity)
-	}
-	// Same fold as the five keys. "Writer" is the slug writer; "magnifying-glass" is not.
-	if generated.AgentRole(folded).Valid() {
-		return folded
-	}
-	return DefaultRole
 }
 
 // migrateUnenforcedAgentIdentity rewrites figure and role on agents SeedConfig

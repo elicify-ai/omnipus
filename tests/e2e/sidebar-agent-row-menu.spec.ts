@@ -240,6 +240,22 @@ async function deleteAgentBestEffort(page: Page, agentId: string, agentName: str
   }
 }
 
+/** Best-effort restore of any HIDDEN agent row (D5). Cleanup only — never masks
+ * a test failure. Without it a mid-test failure leaves the agent hidden on the
+ * SERVER, and every later test in this shard that needs its row (Edit, Remove)
+ * then fails for a reason that is not its own (S5-04). */
+async function showHiddenAgentsBestEffort(page: Page): Promise<void> {
+  try {
+    const show = workspaceGroup(page).getByRole('button', { name: 'Show', exact: true })
+    if ((await show.count()) > 0) {
+      await show.click({ timeout: 15_000 })
+      await show.first().waitFor({ state: 'detached', timeout: 15_000 }).catch(() => {})
+    }
+  } catch (cleanupErr) {
+    console.warn(`[D5] cleanup: could not restore a hidden agent: ${String(cleanupErr)}`)
+  }
+}
+
 // Every test starts from the app, ready: the helpers below drive the
 // sidebar's hamburger and roster, which only exist once the SPA is mounted
 // (g1-code-reviewer F4 / g1-pr-test-analyzer F2: the first pass started on
@@ -313,6 +329,22 @@ test.describe('D3 — History opens the past-chats modal', () => {
       'History must open the same past-chats view the "Past sessions" button opened (D3)',
     ).toBeVisible({ timeout: 15_000 })
 
+    // S5-05/F6: "the modal opened" alone cannot catch a History action scoped
+    // to the WRONG agent (or to none). The modal renders an agent-filter chip
+    // whenever searchModalAgentFilter is set (SearchModal.tsx), and that chip
+    // carries a stable, semantic anchor — the "Clear agent filter" button. Pin
+    // both halves: the chip exists (a filter was applied at all) and it names
+    // the row's own agent (it was applied to the RIGHT one).
+    const agentChip = sessionsModal.getByRole('button', { name: 'Clear agent filter' })
+    await expect(
+      agentChip,
+      'History must open the past-chats view SCOPED to the row agent, not an unscoped list',
+    ).toBeVisible({ timeout: 15_000 })
+    await expect(
+      agentChip.locator('..'),
+      "the History filter chip must name the row's own agent",
+    ).toContainText('Jim', { timeout: 15_000 })
+
     await page.keyboard.press('Escape')
     await expect(sessionsModal).toBeHidden({ timeout: 15_000 })
   })
@@ -324,56 +356,62 @@ test.describe('D5 — Hide from sidebar: server-saved, restorable', () => {
   }) => {
     const row = await jimRow(page)
     const menu = await openRowMenu(page, 'Jim')
-    await menu.getByRole('menuitem', { name: 'Hide from sidebar' }).click({ timeout: 15_000 })
+    try {
+      await menu.getByRole('menuitem', { name: 'Hide from sidebar' }).click({ timeout: 15_000 })
 
-    // Jim's row is gone from the roster…
-    await expect(
+      // Jim's row is gone from the roster…
+      await expect(
       row,
       'hiding must remove the agent row from its workspace roster (D5)',
-    ).toHaveCount(0, { timeout: 15_000 })
-    // …Mia is untouched (hide is per-agent, not a roster-wide effect).
-    await expect(await agentRowGroup(page, /Mia/i, WORKSPACE)).toBeVisible({ timeout: 15_000 })
+      ).toHaveCount(0, { timeout: 15_000 })
+      // …Mia is untouched (hide is per-agent, not a roster-wide effect).
+      await expect(await agentRowGroup(page, /Mia/i, WORKSPACE)).toBeVisible({ timeout: 15_000 })
 
-    // …and the workspace group shows the quiet hidden line with its Show
-    // affordance. Copy confirmed against the landed component
-    // (WorkspaceAgentList.tsx WorkspaceBlock): the exact text "<N> hidden"
-    // and a button named exactly "Show" (exact — a substring /Show/i would
-    // also catch the workspace disclosure's "Show My Workspace agents").
-    const group = workspaceGroup(page)
-    await expect(group.getByText('1 hidden', { exact: true })).toBeVisible({ timeout: 15_000 })
-    const showButton = group.getByRole('button', { name: 'Show', exact: true })
-    await expect(showButton, 'the hidden line must offer a way back (D5)').toBeVisible({
+      // …and the workspace group shows the quiet hidden line with its Show
+      // affordance. Copy confirmed against the landed component
+      // (WorkspaceAgentList.tsx WorkspaceBlock): the exact text "<N> hidden"
+      // and a button named exactly "Show" (exact — a substring /Show/i would
+      // also catch the workspace disclosure's "Show My Workspace agents").
+      const group = workspaceGroup(page)
+      await expect(group.getByText('1 hidden', { exact: true })).toBeVisible({ timeout: 15_000 })
+      const showButton = group.getByRole('button', { name: 'Show', exact: true })
+      await expect(showButton, 'the hidden line must offer a way back (D5)').toBeVisible({
       timeout: 15_000,
-    })
+      })
 
-    // D5: saved on the SERVER — a full reload must still hide Jim.
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    const reopenedRow = await jimRow(page)
-    await expect(
+      // D5: saved on the SERVER — a full reload must still hide Jim.
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      const reopenedRow = await jimRow(page)
+      await expect(
       reopenedRow,
       'the hidden state must persist across a reload (D5: saved on the server, not just in the SPA)',
-    ).toHaveCount(0, { timeout: 15_000 })
-    await expect(workspaceGroup(page).getByText('1 hidden', { exact: true })).toBeVisible({
+      ).toHaveCount(0, { timeout: 15_000 })
+      await expect(workspaceGroup(page).getByText('1 hidden', { exact: true })).toBeVisible({
       timeout: 15_000,
-    })
+      })
 
-    // Show brings the agent back.
-    await workspaceGroup(page).getByRole('button', { name: 'Show', exact: true }).click({ timeout: 15_000 })
-    await expect(
+      // Show brings the agent back.
+      await workspaceGroup(page).getByRole('button', { name: 'Show', exact: true }).click({ timeout: 15_000 })
+      await expect(
       await jimRow(page),
       'Show must restore the hidden agent row (D5)',
-    ).toBeVisible({ timeout: 15_000 })
-    // And the quiet line goes away with the last hidden agent.
-    await expect(workspaceGroup(page).getByText('1 hidden', { exact: true })).toHaveCount(0, {
+      ).toBeVisible({ timeout: 15_000 })
+      // And the quiet line goes away with the last hidden agent.
+      await expect(workspaceGroup(page).getByText('1 hidden', { exact: true })).toHaveCount(0, {
       timeout: 15_000,
-    })
+      })
 
-    // And the restore persists too — the roster is back to seeded for the
-    // next test on this gateway (no state leakage).
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    await expect(await jimRow(page), 'the restored row must stay after a reload').toBeVisible({
+      // And the restore persists too — the roster is back to seeded for the
+      // next test on this gateway (no state leakage).
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      await expect(await jimRow(page), 'the restored row must stay after a reload').toBeVisible({
       timeout: 15_000,
-    })
+      })
+    } finally {
+      // A failure anywhere above leaves Jim hidden on the SERVER; restore him
+      // here so the Edit/Remove tests that follow are not poisoned (S5-04).
+      await showHiddenAgentsBestEffort(page)
+    }
   })
 })
 

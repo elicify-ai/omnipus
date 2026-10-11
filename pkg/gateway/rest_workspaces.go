@@ -1073,6 +1073,11 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	if rw.refuseBuiltinRemoval() {
 		return
 	}
+	// Same rule for archiving the default workspace (S2-01): decided before
+	// prepareWorkspacePutMembers can pause any plan.
+	if rw.refuseDefaultArchive() {
+		return
+	}
 	if rw.prepareWorkspacePutMembers() {
 		return
 	}
@@ -1126,7 +1131,7 @@ func (rw *restAPIHandleWorkspacePut) prepareWorkspacePutMembers() bool {
 		// used to key on no longer exists (session-core U1, DEL-01).
 		// Best-effort either way: a failure is logged, never blocks the PUT.
 		for agentID, mc := range rw.incomingMC {
-			if pureHideShowEntry((*rw.req.MemberConfigs)[agentID]) {
+			if incomingMemberConfig(mc, (*rw.req.MemberConfigs)[agentID]).PureHideShow() {
 				// Pure hide/show (flag present, heartbeat absent — ADR
 				// addendum 2026-10-11): the stored heartbeat survives
 				// unchanged, so there is no enable→disable transition to act
@@ -1369,12 +1374,6 @@ func (rw *restAPIHandleWorkspacePut) prepareDelegation(team []string) bool {
 func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 	// FR-1.9: no access gate — owner is attribution only.
 
-	// Default workspace cannot be archived (mirrors the delete-protection guard below).
-	if rw.ws.IsDefault && rw.req.Status != nil && *rw.req.Status == gen.WorkspaceUpdateRequestStatusArchived {
-		jsonErr(rw.w, http.StatusConflict, "cannot archive the default workspace")
-		return true
-	}
-
 	// Apply partial update (merge semantics) — track whether anything changed.
 	rw.changed = false
 	if rw.req.Name != nil && *rw.req.Name != rw.ws.Name {
@@ -1420,28 +1419,12 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 			rw.ws.MemberConfigs = make(map[string]workspace.MemberConfig)
 		}
 		for agentID, mc := range rw.incomingMC {
-			// ADR-hide-from-sidebar addendum 2026-10-11 (founder: "hiding is
-			// only hiding") — the incoming member config REPLACES the stored
-			// one (an omitted heartbeat clears it, with the disable
-			// transition), except exactly two display-flag rules:
-			//   rule 1: hidden_from_sidebar absent => the stored flag is
-			//           preserved (a heartbeat save never un-hides);
-			//   rule 2: a PURE hide/show entry — flag present, heartbeat
-			//           absent (pureHideShowEntry) — preserves the stored
-			//           heartbeat, so hide/show never changes any other
-			//           setting.
-			// An entry with neither field ({}) keeps the ordinary replace
-			// behaviour: the stored heartbeat is cleared, the flag still
-			// preserved by rule 1. The wire entry (pointer fields) is the
-			// tri-state that distinguishes absent from explicit false.
-			wireEntry := (*rw.req.MemberConfigs)[agentID]
+			// The stored-vs-incoming rule (ADR-hide-from-sidebar addendum
+			// 2026-10-11, "hiding is only hiding") lives in pkg/workspace so
+			// every writer shares it; the wire entry's pointer fields are the
+			// tri-state that says which fields the request carried.
 			stored, exists := rw.ws.MemberConfigs[agentID]
-			if wireEntry.HiddenFromSidebar == nil && exists {
-				mc.HiddenFromSidebar = stored.HiddenFromSidebar
-			}
-			if pureHideShowEntry(wireEntry) && exists {
-				mc.Heartbeat = stored.Heartbeat
-			}
+			mc = workspace.MergeMemberConfig(stored, exists, incomingMemberConfig(mc, (*rw.req.MemberConfigs)[agentID]))
 			rw.ws.MemberConfigs[agentID] = mc
 		}
 		// GC: drop entries for agents no longer on the effective team. No
@@ -1472,6 +1455,17 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 	return false
 }
 
+// refuseDefaultArchive refuses archiving the default workspace (mirrors the
+// delete-protection guard). It runs BEFORE prepareWorkspacePutMembers so the
+// 409 leaves plans, delegation and the record untouched.
+func (rw *restAPIHandleWorkspacePut) refuseDefaultArchive() bool {
+	if rw.ws.IsDefault && rw.req.Status != nil && *rw.req.Status == gen.WorkspaceUpdateRequestStatusArchived {
+		jsonErr(rw.w, http.StatusConflict, "cannot archive the default workspace")
+		return true
+	}
+	return false
+}
+
 // refuseBuiltinRemoval is the D8 stage, run BEFORE prepareWorkspacePutMembers
 // so a refusal precedes every side effect (founder ruling 2026-10-11). The
 // rule, its message and its wire code live in pkg/workspace
@@ -1494,14 +1488,14 @@ func (rw *restAPIHandleWorkspacePut) refuseBuiltinRemoval() bool {
 	return false
 }
 
-// pureHideShowEntry reports whether an incoming member_config entry carries
-// ONLY the display flag — hidden_from_sidebar present, heartbeat absent
-// (ADR-hide-from-sidebar addendum 2026-10-11, founder ruling "hiding is only
-// hiding"). applyUpdate and prepareWorkspacePutMembers must agree on it:
-// applyUpdate preserves the stored heartbeat for such an entry, and the
-// pause/resume loop must not fire a transition for it.
-func pureHideShowEntry(entry gen.WorkspaceMemberConfig) bool {
-	return entry.HiddenFromSidebar != nil && entry.Heartbeat == nil
+// incomingMemberConfig pairs the converted config with which wire fields the
+// request carried (pointer fields are absent when nil).
+func incomingMemberConfig(mc workspace.MemberConfig, wire gen.WorkspaceMemberConfig) workspace.IncomingMemberConfig {
+	return workspace.IncomingMemberConfig{
+		Config:           mc,
+		HiddenPresent:    wire.HiddenFromSidebar != nil,
+		HeartbeatPresent: wire.Heartbeat != nil,
+	}
 }
 
 // persistAndRespond persists a changed workspace, reconciles schedules, audits, and responds.

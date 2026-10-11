@@ -177,9 +177,12 @@ describe('ChatScreen kind label (BDD-07.1; mains as amended 2026-10-11)', () => 
   it('shows the server title for a main that has one', async () => {
     seam.mains.add('sid-main')
     agentsQuery.data = [agent('jim', 'Jim')]
-    seed('sid-main', 'main', 'Jim - Main Session', 'jim')
+    // S5-12/Q4: the seeded server title must DIFFER from the derived one
+    // ("Jim - Main Session" for agent name "Jim") — an identical value cannot
+    // tell "the server title won" from "the client re-derived it".
+    seed('sid-main', 'main', 'Jim - Main Session (server-stamped)', 'jim')
     await renderScreen()
-    expectLabelAboveFeed('Jim - Main Session')
+    expectLabelAboveFeed('Jim - Main Session (server-stamped)')
   })
 
   it('follows an agent rename: the header re-derives from the CURRENT name without a reload', async () => {

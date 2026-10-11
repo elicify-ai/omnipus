@@ -227,20 +227,12 @@ func (al *AgentLoop) deliverHeldRequests(sessionID string) {
 	}
 }
 
-// publishHeldRequestWake re-publishes the owner wake for a held request, shaped
-// exactly like the one admitRequest publishes.
+// publishHeldRequestWake re-publishes the owner wake for a held request through
+// the same publishRequestWake the admission uses.
 func (al *AgentLoop) publishHeldRequestWake(c addressing.Capture) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return al.bus.PublishInbound(ctx, bus.InboundMessage{
-		Channel:           "webchat",
-		ChatID:            "request:" + c.RequestID,
-		Sender:            bus.SenderInfo{CanonicalID: "request:" + c.RequestID},
-		Content:           c.Text,
-		SessionID:         c.ReceiverSessionID,
-		TranscriptEntryID: c.RequestID,
-		Metadata:          map[string]string{"agent_id": c.Receiver.AgentID, "workspace_id": c.Receiver.WorkspaceID, ownerWakeMetadataKey: "1"},
-	})
+	return al.publishRequestWake(ctx, c.Receiver, c.RequestID, c.ReceiverSessionID, c.Text)
 }
 
 // askerStatus reports whether the answer to c can no longer reach its asker.

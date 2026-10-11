@@ -53,9 +53,9 @@ func runExternalAndReadStore(t *testing.T, evs []runner.RunEvent) (stored string
 	defer restore()
 	go func() {
 		for _, ev := range evs {
-			fr.InjectEvent(ev)
+			require.NoError(t, fr.InjectEvent(ev))
 		}
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 	_, _ = runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)

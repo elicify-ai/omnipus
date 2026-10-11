@@ -718,7 +718,14 @@ func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 		jsonServerFailure(w, http.StatusInternalServerError, "could not list sessions", err)
 		return
 	}
-	keptWithMain := a.sessionsBelongingToMains(metas)
+	keptWithMain, err := a.sessionsBelongingToMains(metas)
+	if err != nil {
+		// Fail closed (S2-02): with an incomplete helper walk some chats that
+		// belong to a main cannot be told apart from ordinary ones, so nothing
+		// is deleted and the person is not told "cleared".
+		jsonServerFailure(w, http.StatusInternalServerError, "could not determine which chats belong to a main chat; nothing was deleted", err)
+		return
+	}
 	removed, kept, mains := 0, len(unreadable), 0
 	for _, id := range unreadable {
 		slog.Warn("rest: clear sessions: a chat's metadata is unreadable; it is kept", "session_id", id)
@@ -769,8 +776,10 @@ func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 
 // sessionsBelongingToMains returns the ids of every listed session that is a
 // helper of a main chat: a descendant by the durable lifecycle edge, or by the
-// session's own parent link. They are kept with their main.
-func (a *restAPI) sessionsBelongingToMains(metas []*session.UnifiedMeta) map[string]struct{} {
+// session's own parent link. They are kept with their main. A descendant walk
+// that could not be completed is returned as an error (never just logged): the
+// caller must not delete anything on a truncated view.
+func (a *restAPI) sessionsBelongingToMains(metas []*session.UnifiedMeta) (map[string]struct{}, error) {
 	byID := make(map[string]*session.UnifiedMeta, len(metas))
 	for _, m := range metas {
 		if m != nil {
@@ -778,13 +787,14 @@ func (a *restAPI) sessionsBelongingToMains(metas []*session.UnifiedMeta) map[str
 		}
 	}
 	out := make(map[string]struct{})
+	var walkErrs []error
 	for _, m := range metas {
 		if m == nil || m.Type != session.SessionTypeMain {
 			continue
 		}
 		ids, walkErr := agent.CollectDescendantSessionIDs(a.agentLoop.GetSessionLifecycleStore(), m.ID)
 		if walkErr != nil {
-			slog.Warn("rest: clear sessions: a main's helper walk was incomplete", "session_id", m.ID, "error", walkErr)
+			walkErrs = append(walkErrs, walkErr)
 		}
 		for _, id := range ids {
 			out[id] = struct{}{}
@@ -808,7 +818,7 @@ func (a *restAPI) sessionsBelongingToMains(metas []*session.UnifiedMeta) map[str
 			cur = parent
 		}
 	}
-	return out
+	return out, errors.Join(walkErrs...)
 }
 
 // clearSessionsKeptWarning is the fixed warning for chats delete-all could not

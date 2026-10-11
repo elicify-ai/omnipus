@@ -51,7 +51,7 @@ func createCascadeAgent(t *testing.T) (home, agentID, revision string) {
 	t.Helper()
 	deps, home := newTestDepsWithHome(t)
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
-		"name": "Live Store Bot", "description": "to be deleted", "soul": "You help.", "model": "test/model", "color": "#22C55E",
+		"name": "Live Store Bot", "description": "to be deleted", "soul": "You help.", "model": "test/model", "color": "#6E8BA8",
 	})
 	if res.IsError {
 		t.Fatalf("create failed: %s", res.ForLLM)

@@ -27,13 +27,16 @@
 #      so the count is two. The pinned property is unchanged: a new site here
 #      silently changes when the wheel releases.)
 #   2. `bus.MessageBus.PublishInbound` is CALLED (never its own `func`
-#      definition in pkg/bus/bus.go) at EXACTLY EIGHT non-test sites in pkg/
+#      definition in pkg/bus/bus.go) at EXACTLY NINE non-test sites in pkg/
 #      (BROWSER-FR-029a's own text: the PublishInbound census is pinned, so a
 #      new publish site cannot appear un-classified). Verified today:
 #      pkg/agent/async_notifier.go, pkg/agent/loop.go (the goal-loop
 #      follow-up — this ONE call site is legitimate and must stay),
-#      pkg/agent/address_router.go (TWO sites), pkg/agent/connector_egress.go
-#      (the main-connector refusal note), pkg/gateway/websocket_chat.go,
+#      pkg/agent/address_router.go (TWO sites: the request wake, which the
+#      held-request re-publication shares through publishRequestWake, and the
+#      owner wake for an answer), pkg/agent/connector_egress.go (the
+#      main-connector refusal note), pkg/agent/request_reminder.go (the
+#      unanswered-request reminder), pkg/gateway/websocket_chat.go,
 #      pkg/gateway/ws_ask_user.go, pkg/channels/base.go.
 #
 #      Security-lead ruling (OPSITE-connector_egress.md, u8-inbound-20261010):
@@ -49,6 +52,14 @@
 #      sites — they must never set OperatorPrompt=true, and they do not. They
 #      are admitted here as non-operator publishes; a change that flips any of
 #      them to OperatorPrompt=true fails count 1.
+#
+#      Architect ruling 2026-10-12 (combined review): the
+#      pkg/agent/request_reminder.go::remindUnansweredRequests publication, a
+#      server-composed reminder to the receiver, is a legitimate NON-operator
+#      site — owner-wake marker, never OperatorPrompt. The held-request wake
+#      that used to be a tenth site now goes through
+#      address_router.go::publishRequestWake, the same function the admission
+#      uses, so the census is nine.
 #
 # Per C-77: do NOT scan pkg/gateway/websocket.go's ADR-057 FR-089 "W5 audit
 # classification artefact" comment block for OperatorPrompt assignments. That
@@ -184,23 +195,23 @@ if [ "$op_count" -ne 2 ]; then
 fi
 
 echo ""
-echo "PublishInbound call sites: $pi_count (want exactly 8)"
+echo "PublishInbound call sites: $pi_count (want exactly 9)"
 if [ -n "$pi_hits" ]; then
   printf '%s\n' "$pi_hits" | sed 's/^/  /'
 fi
-if [ "$pi_count" -ne 8 ]; then
+if [ "$pi_count" -ne 9 ]; then
   fail=1
 fi
 
 echo ""
 if [ "$fail" -ne 0 ]; then
   echo "ERROR: BROWSER-FR-029/FR-029a's assignment partition is no longer exactly" >&2
-  echo "2 OperatorPrompt=true sites and 8 PublishInbound call sites (see counts" >&2
+  echo "2 OperatorPrompt=true sites and 9 PublishInbound call sites (see counts" >&2
   echo "above). This is the fail-closed browser-wheel release discriminator —" >&2
   echo "a new, un-classified site here silently changes when the wheel releases." >&2
   echo "See docs/internal/specs/browser-control-handover-spec.md FR-029/FR-029a." >&2
   exit 1
 fi
 
-echo "OK: exactly 2 OperatorPrompt=true sites and 8 PublishInbound call sites."
+echo "OK: exactly 2 OperatorPrompt=true sites and 9 PublishInbound call sites."
 exit 0

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -114,23 +115,35 @@ func TestStartTaskNow_Idempotent_ExistingSessionID(t *testing.T) {
 	require.NoError(t, err, "the first start must bind a session")
 	require.NotEmpty(t, first)
 
+	// CHIEF RULING (combined-review S1-05, replacing the earlier either-or):
+	// a second start of a LIVE run returns the SAME session id and starts NO
+	// second run — the founder's "a task cannot start twice". An either-or
+	// oracle cannot pin that, because it passes whichever shape the code
+	// happens to take.
 	second, err := te.StartTaskNow(context.Background(), tk.ID)
-	// The invariant that matters is ONE task, ONE session — not which of the two
-	// shapes the start path chooses for the second call. At the time this test
-	// was ported the live run was refused ("an admission is already reserved");
-	// on the merged integration tip the re-dispatch is accepted idempotently.
-	// Both are fine; a SECOND session is not, and that is what is asserted.
-	if err == nil {
-		assert.Equal(t, first, second,
-			"an accepted second start must return the SAME session id, never a new one")
-	} else {
-		assert.Empty(t, second, "the refused call must report no session as started")
-	}
+	require.NoError(t, err,
+		"a second start of a live run must return the same session, not refuse")
+	assert.Equal(t, first, second, "the second start must return the SAME session id")
 
 	got, err := store.Get(tk.ID)
 	require.NoError(t, err)
 	assert.Equal(t, first, got.SessionID,
-		"no second session may be minted for an already-bound task: the binding must be unchanged")
+		"the task's binding must be unchanged by the second start")
+
+	// ...and no second run was started: the second call must not have minted a
+	// second task session.
+	sessStore := te.agentLoop.GetSessionStore()
+	require.NotNil(t, sessStore, "fixture: the loop must own a session store")
+	metas, err := sessStore.ListSessions()
+	require.NoError(t, err)
+	taskSessions := 0
+	for _, m := range metas {
+		if m != nil && m.Type == session.SessionTypeTask {
+			taskSessions++
+		}
+	}
+	assert.Equal(t, 1, taskSessions,
+		"a second start of a live run must start NO second run: exactly one task session may exist")
 }
 
 // TestStartTaskNow_Idempotent_AlreadyRunning was DELETED (S1 M9, 978c232bc).

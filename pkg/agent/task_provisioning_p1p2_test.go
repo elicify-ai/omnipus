@@ -221,13 +221,13 @@ func newProvisioningFixture(t *testing.T, external, manual bool) *provisioningFi
 	assertProvisioningSemaphoreControl(t, f.executor)
 
 	f.driver = &provisioningDriver{FakeRunner: runnertest.NewFakeRunner(), gate: gate}
-	f.driver.InjectEvent(runner.RunEvent{
+	require.NoError(t, f.driver.InjectEvent(runner.RunEvent{
 		Kind: runner.EventKindOutput,
 		Output: &runner.OutputEvent{
 			Text: "TASK_STATUS: failure\n[goal:reason] provisioning instrument completed",
 		},
-	})
-	f.driver.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+	}))
+	require.NoError(t, f.driver.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 	f.driver.Cancel() // Buffered finite output remains readable; no real process is spawned.
 	previousFactory := newExternalDriver
 	newExternalDriver = func(cli string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {

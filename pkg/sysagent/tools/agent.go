@@ -31,9 +31,6 @@ import (
 // slugRegexp matches characters that should be replaced in agent name → ID conversion.
 var slugRegexp = regexp.MustCompile(`[^a-z0-9]+`)
 
-// hexColorRe validates HTML hex colors like "#22C55E".
-var hexColorRe = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
-
 // toSlug converts a display name to a URL-safe slug ID.
 func toSlug(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
@@ -45,16 +42,20 @@ func toSlug(name string) string {
 	return s
 }
 
-// validateAgentColor returns an error when color is non-empty and not a valid
-// 6-digit hex color. Empty strings pass validation (field is optional).
-func validateAgentColor(s string) error {
+// canonicalAgentColor applies the REST colour rule (coreagent.CanonicalColor,
+// AgentColor.yaml): a palette value in any letter-case is returned uppercase, a
+// previous-palette value is mapped to its new equivalent, and anything else -
+// a well-formed hex outside both sets included - is refused. Empty passes
+// (the field is optional on update); the caller decides whether it is required.
+func canonicalAgentColor(s string) (string, error) {
 	if s == "" {
-		return nil
+		return "", nil
 	}
-	if !hexColorRe.MatchString(s) {
-		return fmt.Errorf("invalid color %q: must match ^#[0-9A-Fa-f]{6}$", s)
+	canon, ok := coreagent.CanonicalColor(s)
+	if !ok {
+		return "", fmt.Errorf("invalid color %q: use one of the palette colors %s", s, strings.Join(coreagent.PaletteColors(), ", "))
 	}
-	return nil
+	return canon, nil
 }
 
 // resolveOmnipusHome returns the effective $OMNIPUS_HOME to use for both the
@@ -95,7 +96,7 @@ func NewAgentCreateTool(d *Deps) *AgentCreateTool { return &AgentCreateTool{deps
 func (t *AgentCreateTool) Name() string           { return "create_agent" }
 func (t *AgentCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentCreateTool) Description() string {
-	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model and color (6-digit hex, e.g. #22C55E) are all required — a malformed color is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
+	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model and color (a palette hex, e.g. #6E8BA8) are all required — a malformed color is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
 }
 
 func (t *AgentCreateTool) Parameters() map[string]any {
@@ -116,7 +117,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Primary LLM model slug (e.g. 'z-ai/glm-5v-turbo')",
 			},
-			"color": map[string]any{"type": "string", "description": "Hex avatar color (e.g. '#22C55E')"},
+			"color": map[string]any{"type": "string", "description": "Avatar color: one of the palette hex values (e.g. '#6E8BA8')"},
 			// Optional — agent type + external-CLI worker runtime.
 			"agent_type": map[string]any{
 				"type":        "string",
@@ -248,9 +249,11 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "model is required", "Provide the LLM model slug")), true
 	}
 	ac.color, _ = ac.args["color"].(string)
-	if err := validateAgentColor(ac.color); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a 6-digit hex color, e.g. #22C55E")), true
+	canonColor, err := canonicalAgentColor(ac.color)
+	if err != nil {
+		return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a palette color, e.g. #6E8BA8")), true
 	}
+	ac.color = canonColor
 
 	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
 	ac.agentType, _ = ac.args["agent_type"].(string)

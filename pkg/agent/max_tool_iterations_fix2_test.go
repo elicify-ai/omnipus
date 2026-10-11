@@ -15,6 +15,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/stretchr/testify/require"
 )
 
 // prepareRunOptions' fallback (instance MaxIterations <= 0) resolves the cap
@@ -47,7 +48,7 @@ func TestExternalDispatch_ZeroInstanceLimit_UsesOwnValueFromLiveRoster(t *testin
 			fr, restore := withFakeDriver(t)
 			defer restore()
 			go func() {
-				fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+				require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 				fr.Cancel()
 			}()
 			if _, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second); err != nil {

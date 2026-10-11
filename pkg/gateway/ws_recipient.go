@@ -103,7 +103,7 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 	if ownerAgent != "" {
 		label = fmt.Sprintf("%s in %s's chat", label, ownerAgent)
 	}
-	_, _, err := hcm.h.agentLoop.AdmitRequest(hcm.ctx, agent.RequestAdmission{
+	held, err := hcm.h.agentLoop.AdmitRequestReportingHeld(hcm.ctx, agent.RequestAdmission{
 		Receiver:    *hcm.recipient,
 		Content:     hcm.content,
 		Sender:      addressing.Sender{Principal: principalOf(hcm)},
@@ -142,6 +142,12 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 		return
 	}
 	hcm.admitted = true
+	if held {
+		// The recipient is stopped: the request waits until it runs again. The
+		// sender's row says so (after "received"); a held request is not a
+		// failure and no later tick reports it as one.
+		hcm.sendMessageStatus("held")
+	}
 }
 
 // sendRecipientRefusalError sends the message-scoped refusal of an @-recipient

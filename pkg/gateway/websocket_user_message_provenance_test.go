@@ -108,11 +108,37 @@ func TestUserMessageAppendFailure_NonFirstStopsTurnAndReportsVisibleError(t *tes
 	require.Len(t, msgBus.InboundChan(), 0,
 		"the failed append must not admit a turn — the previous warn-and-continue is gone")
 
-	_, statErr := os.Stat(filepath.Join(store.BaseDir(), sessionID, "provenance.jsonl"))
-	require.ErrorIs(t, statErr, os.ErrNotExist,
+	// ADR-20260928 D1.4 is the ruling that retired the sidecar ("No separate
+	// best-effort provenance sidecar": the trusted source is a PRIVATE member
+	// of the message's own transcript line, and the message id is the line's
+	// own id — see this file's readProvenanceRecordsForTest). An
+	// os.Stat(.../provenance.jsonl) check is therefore STALE: that file is
+	// never written by any code path any more, so it could not fail for the
+	// reason it named. The claim is checked through the transcript instead.
+	//
+	// Read the session directory the way the store does: the broken
+	// transcript.jsonl is a DIRECTORY here and is skipped, so anything left is
+	// real provenance — and there must be none.
+	require.Empty(t, readProvenanceRecordsForTest(t, store, sessionID),
 		"a failed transcript append must not write provenance")
+
+	// This session's transcript is the deliberately broken directory, so a
+	// lookup must SURFACE the read failure. Answering "no provenance" for a
+	// transcript that could not be read would be the same swallowed-error bug
+	// in a new place.
 	_, found, lookupErr := store.LookupMessageProvenance(sessionID, "no-such-server-message-id")
-	require.NoError(t, lookupErr)
+	require.Error(t, lookupErr,
+		"an unreadable transcript is a read failure, not an empty provenance answer")
+	assert.False(t, found)
+	assert.Contains(t, lookupErr.Error(), "lookup provenance",
+		"the failure must be attributed to the provenance lookup")
+
+	// And on an INTACT session the same lookup answers honestly: not found,
+	// no error — the failed append wrote nothing anywhere.
+	untouched, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err, "fixture: a second, intact session")
+	_, found, lookupErr = store.LookupMessageProvenance(untouched.ID, "no-such-server-message-id")
+	require.NoError(t, lookupErr, "an intact transcript must be readable")
 	assert.False(t, found, "no provenance exists after a failed append")
 }
 

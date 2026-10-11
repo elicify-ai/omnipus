@@ -76,7 +76,7 @@ If Team is already visible and refreshing the workspace fails, the editor stays 
 
 1. Open the workspace's **Team** panel. Each agent on the team appears as a node in a picture.
 2. To grow the team, click **Add agent** and pick from your agents. Membership saves on its own; the indicator in the header shows when it has saved.
-   If you added an agent in another tab or window, return to this tab or expand the workspace in the sidebar. The agent list and this workspace's membership refresh without a page reload. The message box has no agent picker and no `@` menu. If loading workspaces fails, the workspace view is replaced by **Failed to load workspace. Check your connection and try again.** Select **Retry** there.
+   If you added an agent in another tab or window, return to this tab or expand the workspace in the sidebar. The agent list and this workspace's membership refresh without a page reload. The message box has no agent picker beside it: your chat's agent is chosen in the sidebar. Typing `@` at the very start of the message opens a menu to address another agent; it does not switch your chat's agent. If loading workspaces fails, the workspace view is replaced by **Failed to load workspace. Check your connection and try again.** Select **Retry** there.
 3. To trust one agent to delegate to another, drag from the small gold dot on the first agent's node onto the second node. A line appears between them. That line is the trust.
 4. Click the line to tune it with the settings in the table below.
 5. To take trust away, delete the line. Removing an agent from the team removes every line touching it.

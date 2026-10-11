@@ -7298,7 +7298,7 @@ export const SessionMessageSteer = z.object({
   created_at: z.string().datetime({ offset: true }),
   sender_identity: z.string().min(1),
   untrusted_origin: z.boolean(),
-  text: z.string().max(65536),
+  text: z.string(),
   correlation_id: z.string().optional(),
 }) satisfies z.ZodType<SessionMessageSteer>;
 export const SessionMessageRespond = z.object(
@@ -7313,7 +7313,7 @@ export const SessionMessageRespond = z.object(
     created_at: z.string().datetime({ offset: true }),
     sender_identity: z.string().min(1),
     untrusted_origin: z.boolean(),
-    text: z.string().max(65536),
+    text: z.string(),
     correlation_id: z.string().min(1),
   }
 ) satisfies z.ZodType<SessionMessageRespond>;
@@ -7515,14 +7515,14 @@ export const DelegateInboxAckAction =
 export const DelegateSteerAction = z.object({
   action: z.literal("steer"),
   session_id: z.string().min(1),
-  text: z.string().min(1).max(65536),
+  text: z.string().min(1),
   correlation_id: z.string().optional(),
 }) satisfies z.ZodType<DelegateSteerAction>;
 export const DelegateRespondAction = z.object(
   {
     action: z.literal("respond"),
     session_id: z.string().min(1),
-    text: z.string().min(1).max(65536),
+    text: z.string().min(1),
     correlation_id: z.string().min(1),
   }
 ) satisfies z.ZodType<DelegateRespondAction>;
@@ -16614,7 +16614,7 @@ export const MessageStatusFrame = z
     type: z.literal("message_status"),
     session_id: z.string().min(1).max(255),
     client_message_id: z.string().min(1).max(128),
-    state: z.enum(["received", "working", "failed", "discarded"]),
+    state: z.enum(["received", "working", "failed", "discarded", "held"]),
     reason: z.literal("stopped_before_delivery").optional(),
     seq: z.number().int().min(1).optional(),
   })

@@ -368,3 +368,77 @@ func TestClearWhileBusy_TurnLongerThanTheIdleTimeoutStillClears(t *testing.T) {
 	}
 	waitUntilClear(t, "the /clear to happen after the long turn was stopped", 20*time.Second, func() bool { return markers() == 1 })
 }
+
+// S1-07 (1 of 3): the idle window starts when the worker goes IDLE, not when it
+// received the message. The idle timer used to be reset only on a receive, so a
+// turn that outlived workerIdleTimeout left an already-fired timer behind and
+// the worker retired the instant the turn ended. The R1 #1 fix drains and
+// resets the timer after processTurn returns; this test pins exactly that, with
+// an EMPTY inbox at the moment the turn ends, so the only thing that can keep
+// the worker alive is the post-turn reset.
+func TestSessionWorker_LongTurnDoesNotRetireTheWorker(t *testing.T) {
+	old := workerIdleTimeout
+	workerIdleTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { workerIdleTimeout = old })
+
+	prov := newStuckProvider()
+	f := newBusyClearFixture(t, prov)
+	t.Cleanup(func() { close(prov.release) })
+
+	require.True(t, f.w.enqueue(f.human("first question")))
+	select {
+	case <-prov.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first turn never reached the model")
+	}
+	// The turn outlives the idle timeout several times over.
+	time.Sleep(3 * workerIdleTimeout)
+
+	// Let the turn finish and wait until its reply has been published (which
+	// happens inside processTurn, before the timer is reset).
+	prov.release <- struct{}{}
+	waitUntilClear(t, "the long turn's reply", 10*time.Second, func() bool {
+		select {
+		case <-f.out:
+			return true
+		default:
+			return false
+		}
+	})
+
+	// Well under workerIdleTimeout, so a worker that is merely idle cannot have
+	// retired yet — only a stale, already-fired timer could have taken it out.
+	time.Sleep(workerIdleTimeout / 6)
+	require.False(t, f.w.exiting.Load(),
+		"S1-07: a turn longer than the idle timeout must not leave the worker exiting")
+	require.True(t, f.w.enqueue(f.human("second question")),
+		"S1-07: the same worker must still accept the next message after a long turn")
+}
+
+// S1-07 (2 of 3): pushInbox must refuse while the worker is exiting. runLoop
+// sets exiting under inboxMu at the moment it decides to terminate, so a push
+// that loses the race is refused rather than accepted into an inbox nobody
+// drains — the caller then re-dispatches it to a fresh worker. Accepting it
+// would strand the message silently.
+func TestSessionWorker_PushInboxRefusesWhileExiting(t *testing.T) {
+	al, _ := newConcurrentTestAgentLoop(t)
+	defer al.Close()
+
+	w := newSessionWorker("agent:"+testDefaultAgentID+":session:exit-guard", al, func() {})
+	t.Cleanup(w.cancel)
+
+	if !w.pushInbox(makeSessionMsg("exit-guard", "first")) {
+		t.Fatal("instrument: a live worker must accept a push")
+	}
+	if n := w.waitingInboxCount(); n != 1 {
+		t.Fatalf("instrument: the accepted message must be waiting, got %d", n)
+	}
+
+	w.exiting.Store(true)
+	if w.pushInbox(makeSessionMsg("exit-guard", "second")) {
+		t.Fatal("S1-07: a dying worker must refuse the push — accepting it strands the message in an inbox nobody drains")
+	}
+	if n := w.waitingInboxCount(); n != 1 {
+		t.Fatalf("the refused message must not be queued; inbox holds %d", n)
+	}
+}

@@ -148,3 +148,26 @@ func TestWorkspaceUpdateTool_CustomRemovalGCsHiddenFlag(t *testing.T) {
 		}
 	}
 }
+
+// S2-18 (combined review): when the live config cannot be read the roster is
+// unknown, and an unknown roster must not read as "no built-ins to protect".
+// update_workspace refuses a default-workspace team removal it cannot verify
+// (zero write) instead of allowing it.
+func TestWorkspaceUpdateTool_BuiltinRemovalWithoutLiveConfigIsRefused(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "jim", "mia")
+	const wsID = "01JTOOLDEFWSNOCFG000001"
+	seedDefaultWorkspaceRecord(t, home, wsID, `{}`)
+	rev := currentWorkspaceRevision(t, home, wsID)
+	before := readWorkspaceRecordRaw(t, home, wsID)
+	deps.GetCfg = nil
+
+	result := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id": wsID, "revision": rev, "core_team": []any{"jim"},
+	})
+	if !result.IsError {
+		t.Fatalf("a removal that cannot be checked against the roster must be refused; got success: %s", result.ForLLM)
+	}
+	if string(before) != string(readWorkspaceRecordRaw(t, home, wsID)) {
+		t.Fatal("a refused removal must not write")
+	}
+}

@@ -319,11 +319,11 @@ async function openPacedCatchupChat(page: Page): Promise<GatewayProcess> {
   }
 }
 
-test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/')
-  })
+test.beforeEach(async ({ page }) => {
+  await page.goto('/')
+})
 
+test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   test('a: clean network cut mid-turn, 30s, then back — incremental catch-up', async ({ page, context }) => {
     test.setTimeout(420_000)
     const before = await startLongTurn(page)
@@ -456,7 +456,9 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     const after = (await bubbleText(assistantMessages(page2).first())).trim()
     await assertNoDuplicateOrGapText(page2, before, after)
   })
+})
 
+test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   test('e: two tabs on one chat — second tab shows the user message and the identical answer, cursors equal', async ({ page, context }) => {
     test.setTimeout(420_000)
     await startLongTurn(page)
@@ -477,7 +479,9 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   test('f: two chats active during an outage — A incremental, B complete on switch', async ({ page, context }) => {
     test.setTimeout(420_000)
     const beforeA = await startLongTurn(page)
-    await freshChat(page)
+    // startLongTurn opens its OWN fresh chat (it calls freshChat itself), so a
+    // standalone freshChat here only created a second session and abandoned it
+    // (S5-09/F11). Chat B is the one startLongTurn opens below.
     const beforeB = await startLongTurn(page)
     await context.setOffline(true)
     await page.waitForTimeout(45_000)
@@ -515,7 +519,9 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     expect((await bubbleText(assistantMessages(page).first())).trim().length).toBeGreaterThan(0)
   })
+})
 
+test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   // F1: the held-open tab must choose the same single status regardless of
   // whether the optional lifecycle list or the boot-mismatch attach arrives first.
   for (const ordering of ['catch-up first', 'lifecycle first'] as const) {
@@ -674,7 +680,9 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       }
     })
   }
+})
 
+test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   test('i: message typed while offline — appears at the end, then its answer; no duplicate; ticks received → working', async ({ page, context }) => {
     test.setTimeout(180_000)
     const input = chatInput(page)
