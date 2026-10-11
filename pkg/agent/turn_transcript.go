@@ -473,15 +473,6 @@ func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLME
 	ts.writeErrorTranscriptCore(kind, stage, message, code, false, nil, pe...)
 }
 
-func (ts *turnState) writeErrorTranscriptWithAbandonment(
-	kind, stage, message string,
-	code LLMErrorCode,
-	allowAbandoned bool,
-	pe ...*ProviderError,
-) {
-	ts.writeErrorTranscriptCore(kind, stage, message, code, allowAbandoned, nil, pe...)
-}
-
 // writeErrorTranscriptCore is the one error-transcript write engine.
 // providerMessageOverride nil derives the provider_message flag at write
 // time (TranslateLLMError's verdict for THIS write); non-nil is the

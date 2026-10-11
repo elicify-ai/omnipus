@@ -16,21 +16,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// completeSteeredTurn applies the goal-less completion disposition after a
-// real turn exits. Order is D2 CRIT-001's one outcome/publication commit
-// boundary (steer_completion_commit.go): the single lifecycle mutation
-// commits the terminal state AND the protected, unpublished final-delivery
-// outbox tuple FIRST — so terminal-first can no longer lose the child's only
-// result; the exact committed bytes live in the durable outbox — and only the
-// winning commit is then published to the parent and acknowledged through the
-// delivery-only journal.
-func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.LifecycleRecord, result turnResult, runErr error) error {
-	// A synthetic completion retains its selected record's identity. A
-	// caller holding the producing turn uses its immutable handle instead.
-	_, err := al.completeSteeredTurnDurably(ctx, snapshot, result, runErr, al.executionClaimFor(snapshot))
-	return err
-}
-
 // completeSteeredTurnForExecution is completeSteeredTurn's claim-carrying
 // form: the completion presents the producing turn's immutable execution
 // handle (execution_identity.go), so the boundary's identity match has a
@@ -139,26 +124,6 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 		}
 		return al.deliverSteeredCompletionForExecution(ctx, rec, outcome, nextState, answer, failureReason, claim)
 	})
-}
-
-// deliverSteeredCompletion is D2 CRIT-001's boundary wired through the
-// finishing window: the COMMIT (terminal state + protected outbox tuple in
-// one mutation — for a stop disposition, the stopped LANDING) runs first as
-// the window's prepare half; the PUBLISH runs as the transition half, only
-// for a winning commit. A stopped disposition publishes NOTHING in the
-// prepare half — no note rewrite, no parent inbox append, no wake: a
-// lifecycle write fault after the fence must not leak a parent effect. The
-// D6 direct-parent stopped-child notice is published by the transition half
-// AFTER the landing, composed from the control ledger's landed history —
-// which every landing writes, fenced or fence-less (Correction C3) — so an
-// untaken notice re-rings on every delivery pass and at boot until the
-// parent takes it; a notice append failure there leaves the delivery pending
-// and retryable and never un-lands the stop. A stop that had already landed
-// (the losing completion T11 pins) publishes nothing; a non-terminal
-// lifecycle notice keeps its direct delivery.
-func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.LifecycleRecord, outcome steer.Outcome, nextState session.LifecycleState, answer, failureReason string) (bool, error) {
-	// Direct callers carry their selected record, not a later registry lookup.
-	return al.deliverSteeredCompletionForExecution(ctx, rec, outcome, nextState, answer, failureReason, al.executionClaimFor(rec))
 }
 
 // deliverSteeredCompletionForExecution is deliverSteeredCompletion's

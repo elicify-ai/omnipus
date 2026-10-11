@@ -73,15 +73,6 @@ func (al *AgentLoop) boundConnectorPair(msg bus.InboundMessage) (addressing.Pair
 	return addressing.Pair{WorkspaceID: inst.WorkspaceID, AgentID: strings.TrimSpace(identity.ID)}, instanceID, true
 }
 
-// admitBoundConnectorInput is the one intake seam for bound connector input
-// (architect order, U8 open point (a)). It returns ("", nil) when the message is
-// not bound-connector input (unchanged) or was admitted (msg now addressed to
-// the pair's main with its envelope), and a user-facing refusal when it was
-// refused (nothing written, no turn).
-func (al *AgentLoop) admitBoundConnectorInput(msg *bus.InboundMessage) (refusal string, err error) {
-	return al.admitBoundConnectorInputCtx(context.Background(), msg)
-}
-
 // metadataKeyAudioTranscribed marks a message whose voice parts admission has
 // already transcribed, so the turn does not transcribe (and bill, and echo
 // feedback for) them a second time. The turn still sends the deferred

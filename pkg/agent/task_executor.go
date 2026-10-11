@@ -360,56 +360,6 @@ func (te *TaskExecutor) getLifecycleStore() *session.LifecycleStore {
 	return te.lifecycleStore
 }
 
-// mintTaskLifecycleRecord persists the initial durable S2 lifecycle record
-// (ADR-053, state=queued) for the freshly-created task-dispatch session
-// sessionID — closing the FR-118/G-13 producer gap described on the
-// lifecycleStore field's doc comment. Called synchronously by BOTH
-// task-session creation chokepoints — createTaskSessionSync (used by
-// ExecuteTask, and therefore by every one of CheckQueuedTasks,
-// advanceBlockedTasks, SpawnTriggeredRun, and plan-member dispatch via
-// executeTaskPlanVerified) and StartTaskNow's own inline session-creation
-// block — so EVERY task-dispatch path gets a record, not just one of them.
-//
-// OwnerScopeKind: a plan-member task (t.PlanID != "") names its plan as the
-// durable owner (OwnerScopePlan/t.PlanID) — the same discriminator a plan's
-// own OWNER/SUPERVISION sessions use (pkg/agent/plan_engine.go's
-// mintPlanSession, out of this wave's write-set/scope). A standalone task
-// has no single owning session, so it takes the same OwnerScopeHuman
-// default pkg/tools/delegate.go's own top-level (non-parented) mint uses.
-// ParentAgentID/SteeringSessionID are deliberately left empty: a task
-// dispatch is not a `delegate.run` call, so there is no delegating parent to
-// attribute — and leaving SteeringSessionID empty also means
-// verifyCallerOwnsSession (pkg/tools/delegate.go) fails closed if some
-// caller ever names a task's session_id in a delegate.* admin action
-// (cancel/steer/respond/follow_up/peek/inbox), preserving today's behavior
-// where such a call found no record at all.
-//
-// Is3P is stamped from the task's assigned agent's resolved executor kind —
-// runner.ResolveDispatch(executorConfigOf(agent)), the SAME gate
-// SteerLauncher.Launch resolves a steered child's runtime through (and the
-// same gate the body dispatch consults: steer_turn_body.go's
-// runSteeredTurnBody, task_executor_run.go's processTaskDirectExternalCLI).
-// One resolution, one source of the fact. Before this, the launcher paths
-// stamped the field but THIS producer — the task/plan-member dispatch
-// chokepoint — did not, so an external-CLI task-mode session ran the CLI while
-// carrying is_3p=false, and every 3P refusal in pkg/tools read the wrong value
-// for it.
-//
-// Failure contract: an UNRESOLVABLE executor kind (the resolver failing —
-// reserved remote-a2a, or any unknown kind) OR a Persist failure is RETURNED,
-// never logged-and-continued. Both callers propagate the error through their
-// existing truthful pre-dispatch failure path (executeTask's
-// failTaskBeforeDispatch via createTaskSessionSync; StartTaskNow's own
-// identical handling), so no task run ever begins with an unpersisted or
-// mismatched classification. The ONE deliberate no-op is an unwired lifecycle
-// store (ls == nil): that is the test-harness/degraded-boot seam where the
-// durable-lifecycle subsystem is absent entirely, not a persistence failure —
-// dispatch proceeds exactly as before this wave
-// (TestMintTaskLifecycleRecord_NilStore_NoOp pins that).
-func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) error {
-	return te.mintTaskLifecycleRecordFor(sessionID, t, nil)
-}
-
 // mintTaskLifecycleRecordFor is mintTaskLifecycleRecord for a run an agent
 // started: initiatedBy (already authorized by authorizeInitiatedRun) is
 // stamped on the record so the run's later delegations and run_task /
@@ -1308,12 +1258,6 @@ func newSteeringRefusalError(err error) error {
 		sentence = steer.SteeringRevivalFailedMessage
 	}
 	return &steeringRefusalError{sentence: sentence, cause: err}
-}
-
-// startTaskNowViaLauncher is FR-A-010's single task front: Launch+Dispatch
-// for a task without a session and Dispatch alone for an existing session.
-func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Task) (string, error) {
-	return te.startTaskNowViaLauncherAs(ctx, t, nil)
 }
 
 // startTaskNowViaLauncherAs is startTaskNowViaLauncher carrying the
