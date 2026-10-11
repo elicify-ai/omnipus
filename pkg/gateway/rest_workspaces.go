@@ -1073,6 +1073,11 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	if rw.refuseBuiltinRemoval() {
 		return
 	}
+	// Same rule for archiving the default workspace (S2-01): decided before
+	// prepareWorkspacePutMembers can pause any plan.
+	if rw.refuseDefaultArchive() {
+		return
+	}
 	if rw.prepareWorkspacePutMembers() {
 		return
 	}
@@ -1369,12 +1374,6 @@ func (rw *restAPIHandleWorkspacePut) prepareDelegation(team []string) bool {
 func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 	// FR-1.9: no access gate — owner is attribution only.
 
-	// Default workspace cannot be archived (mirrors the delete-protection guard below).
-	if rw.ws.IsDefault && rw.req.Status != nil && *rw.req.Status == gen.WorkspaceUpdateRequestStatusArchived {
-		jsonErr(rw.w, http.StatusConflict, "cannot archive the default workspace")
-		return true
-	}
-
 	// Apply partial update (merge semantics) — track whether anything changed.
 	rw.changed = false
 	if rw.req.Name != nil && *rw.req.Name != rw.ws.Name {
@@ -1468,6 +1467,17 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 				rw.ws.MemberConfigs = pruned
 			}
 		}
+	}
+	return false
+}
+
+// refuseDefaultArchive refuses archiving the default workspace (mirrors the
+// delete-protection guard). It runs BEFORE prepareWorkspacePutMembers so the
+// 409 leaves plans, delegation and the record untouched.
+func (rw *restAPIHandleWorkspacePut) refuseDefaultArchive() bool {
+	if rw.ws.IsDefault && rw.req.Status != nil && *rw.req.Status == gen.WorkspaceUpdateRequestStatusArchived {
+		jsonErr(rw.w, http.StatusConflict, "cannot archive the default workspace")
+		return true
 	}
 	return false
 }
