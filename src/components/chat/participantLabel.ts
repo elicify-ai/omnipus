@@ -85,6 +85,24 @@ export function participantLabel(
 /** F17 (5) — the ~40-character ellipsis cap. */
 export const PARTICIPANT_LABEL_MAX_CHARS = 40
 
+// C9 (R3 delta re-review): names are user input and can carry emoji or
+// combined characters. Counting and slicing UTF-16 code units truncates
+// INSIDE a surrogate pair (a broken glyph) and can strand a combining mark
+// (a bare base letter), and a lone surrogate makes a blank avatar initial.
+// Both helpers therefore work on GRAPHEMES: Intl.Segmenter where the runtime
+// has it (ES2022 Intl — the app's compiled target), a code-point spread as
+// the fallback elsewhere.
+const graphemeSegmenter: Intl.Segmenter | undefined =
+  typeof Intl !== 'undefined' && 'Segmenter' in Intl
+    ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+    : undefined
+
+/** The label's graphemes: segmenter clusters, or code points as the fallback. */
+function graphemesOf(text: string): string[] {
+  if (graphemeSegmenter) return Array.from(graphemeSegmenter.segment(text), (s) => s.segment)
+  return [...text]
+}
+
 /** One truncated label: the visible text, the full text (tooltip), the flag. */
 export interface TruncatedLabel {
   text: string
@@ -94,17 +112,36 @@ export interface TruncatedLabel {
 
 /**
  * F17 (5) — ellipsize at the cap; the FULL text always rides along for the
- * tooltip. Plain text in, plain text out — never parsed as markup.
+ * tooltip. The cap counts GRAPHEMES (an emoji is one character), and the
+ * cut lands on a grapheme boundary. Plain text in, plain text out — never
+ * parsed as markup.
  */
 export function truncateParticipantLabel(label: string): TruncatedLabel {
+  // Cheap UTF-16 pre-check: a string's code-unit length is an UPPER bound on
+  // its grapheme count, so a label at or under the cap in units can never
+  // exceed it in graphemes — skip segmentation on the common short path.
   if (label.length <= PARTICIPANT_LABEL_MAX_CHARS) {
     return { text: label, full: label, truncated: false }
   }
+  const units = graphemesOf(label)
+  if (units.length <= PARTICIPANT_LABEL_MAX_CHARS) {
+    return { text: label, full: label, truncated: false }
+  }
   return {
-    text: label.slice(0, PARTICIPANT_LABEL_MAX_CHARS - 1) + '…',
+    text: units.slice(0, PARTICIPANT_LABEL_MAX_CHARS - 1).join('') + '…',
     full: label,
     truncated: true,
   }
+}
+
+/**
+ * C9 — the avatar's fallback initial: the FIRST GRAPHEME of the display
+ * name, upper-cased. An emoji or combined first character comes out whole —
+ * never a lone surrogate (blank glyph) or a bare base letter.
+ */
+export function participantInitial(displayName: string): string {
+  if (displayName.length === 0) return ''
+  return graphemesOf(displayName)[0]?.toUpperCase() ?? ''
 }
 
 /** One reply header: the author part, the recipient part, its truncation. */

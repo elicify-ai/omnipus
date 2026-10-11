@@ -26,7 +26,7 @@ import type { Agent } from '@/lib/api'
 import type { ChatMessage } from '@/store/chat'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import type { ReplyHeader, TruncatedLabel } from './participantLabel'
-import { collectPairedReplyToIds, participantLabel, replyHeaderParts, truncateParticipantLabel } from './participantLabel'
+import { collectPairedReplyToIds, participantInitial, participantLabel, replyHeaderParts, truncateParticipantLabel } from './participantLabel'
 
 /**
  * F17 (1) — the thread's paired reply_to ids, memoized per messages array.
@@ -205,7 +205,10 @@ export function ParticipantMessageRow({ message }: { message: ChatMessage }) {
       ) : (
         <Avatar size="sm" className="shrink-0">
           <AvatarFallback className="bg-[var(--color-surface-2)] text-[var(--color-muted)]">
-            {participant.display_name.charAt(0).toUpperCase()}
+            {/* C9: the FIRST GRAPHEME, not the first UTF-16 unit — an emoji
+                or combined first character comes out whole instead of as a
+                lone surrogate (a blank glyph). */}
+            {participantInitial(participant.display_name)}
           </AvatarFallback>
         </Avatar>
       )}
