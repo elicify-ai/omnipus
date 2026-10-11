@@ -1131,7 +1131,7 @@ func (rw *restAPIHandleWorkspacePut) prepareWorkspacePutMembers() bool {
 		// used to key on no longer exists (session-core U1, DEL-01).
 		// Best-effort either way: a failure is logged, never blocks the PUT.
 		for agentID, mc := range rw.incomingMC {
-			if pureHideShowEntry((*rw.req.MemberConfigs)[agentID]) {
+			if incomingMemberConfig(mc, (*rw.req.MemberConfigs)[agentID]).PureHideShow() {
 				// Pure hide/show (flag present, heartbeat absent — ADR
 				// addendum 2026-10-11): the stored heartbeat survives
 				// unchanged, so there is no enable→disable transition to act
@@ -1419,28 +1419,12 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 			rw.ws.MemberConfigs = make(map[string]workspace.MemberConfig)
 		}
 		for agentID, mc := range rw.incomingMC {
-			// ADR-hide-from-sidebar addendum 2026-10-11 (founder: "hiding is
-			// only hiding") — the incoming member config REPLACES the stored
-			// one (an omitted heartbeat clears it, with the disable
-			// transition), except exactly two display-flag rules:
-			//   rule 1: hidden_from_sidebar absent => the stored flag is
-			//           preserved (a heartbeat save never un-hides);
-			//   rule 2: a PURE hide/show entry — flag present, heartbeat
-			//           absent (pureHideShowEntry) — preserves the stored
-			//           heartbeat, so hide/show never changes any other
-			//           setting.
-			// An entry with neither field ({}) keeps the ordinary replace
-			// behaviour: the stored heartbeat is cleared, the flag still
-			// preserved by rule 1. The wire entry (pointer fields) is the
-			// tri-state that distinguishes absent from explicit false.
-			wireEntry := (*rw.req.MemberConfigs)[agentID]
+			// The stored-vs-incoming rule (ADR-hide-from-sidebar addendum
+			// 2026-10-11, "hiding is only hiding") lives in pkg/workspace so
+			// every writer shares it; the wire entry's pointer fields are the
+			// tri-state that says which fields the request carried.
 			stored, exists := rw.ws.MemberConfigs[agentID]
-			if wireEntry.HiddenFromSidebar == nil && exists {
-				mc.HiddenFromSidebar = stored.HiddenFromSidebar
-			}
-			if pureHideShowEntry(wireEntry) && exists {
-				mc.Heartbeat = stored.Heartbeat
-			}
+			mc = workspace.MergeMemberConfig(stored, exists, incomingMemberConfig(mc, (*rw.req.MemberConfigs)[agentID]))
 			rw.ws.MemberConfigs[agentID] = mc
 		}
 		// GC: drop entries for agents no longer on the effective team. No
@@ -1504,14 +1488,14 @@ func (rw *restAPIHandleWorkspacePut) refuseBuiltinRemoval() bool {
 	return false
 }
 
-// pureHideShowEntry reports whether an incoming member_config entry carries
-// ONLY the display flag — hidden_from_sidebar present, heartbeat absent
-// (ADR-hide-from-sidebar addendum 2026-10-11, founder ruling "hiding is only
-// hiding"). applyUpdate and prepareWorkspacePutMembers must agree on it:
-// applyUpdate preserves the stored heartbeat for such an entry, and the
-// pause/resume loop must not fire a transition for it.
-func pureHideShowEntry(entry gen.WorkspaceMemberConfig) bool {
-	return entry.HiddenFromSidebar != nil && entry.Heartbeat == nil
+// incomingMemberConfig pairs the converted config with which wire fields the
+// request carried (pointer fields are absent when nil).
+func incomingMemberConfig(mc workspace.MemberConfig, wire gen.WorkspaceMemberConfig) workspace.IncomingMemberConfig {
+	return workspace.IncomingMemberConfig{
+		Config:           mc,
+		HiddenPresent:    wire.HiddenFromSidebar != nil,
+		HeartbeatPresent: wire.Heartbeat != nil,
+	}
 }
 
 // persistAndRespond persists a changed workspace, reconciles schedules, audits, and responds.
