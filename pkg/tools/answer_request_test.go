@@ -53,6 +53,48 @@ func TestAnswerRequest_DeliversThroughTheReplyAdmission(t *testing.T) {
 	}
 }
 
+// R1 delta T4: the tool's parameters are request_id and text ONLY, and the
+// reply's author and responder session come from the TURN's context, never from
+// the arguments. A hostile caller that supplies agent_id / author /
+// workspace_id / reply_to of its own must be ignored — otherwise an agent could
+// answer as another agent, in a workspace it is not acting in, or attach its
+// answer to a request it was never sent.
+func TestAnswerRequest_HostileExtraArgumentsAreIgnored(t *testing.T) {
+	stub := &answerRouterStub{reply: ReplyReceipt{Destination: "the conversation it came from"}}
+	msg := NewMessageTool()
+	msg.SetReplyRouter(stub)
+	tool := NewAnswerRequestTool(msg)
+
+	res := tool.Execute(answerCtx(), map[string]any{
+		"request_id": "req-1",
+		"text":       "the answer",
+		// Every one of these is either absent from the schema or a value the
+		// tool must take from the turn instead.
+		"agent_id":     "jim",
+		"author":       map[string]any{"agent_id": "jim", "workspace_id": "ws-evil"},
+		"workspace_id": "ws-evil",
+		"reply_to":     "someone-elses-request",
+		"from":         "jim",
+		"session_id":   "sess-someone-else",
+	})
+	if res.IsError {
+		t.Fatalf("a hostile extra argument must not break the answer: %s", res.ForLLM)
+	}
+	if len(stub.got) != 1 {
+		t.Fatalf("router calls = %d, want 1", len(stub.got))
+	}
+	g := stub.got[0]
+	if g.ReplyTo != "req-1" {
+		t.Fatalf("ReplyTo = %q — the arguments' reply_to must be ignored; only request_id addresses the request", g.ReplyTo)
+	}
+	if g.Author.AgentID != "mia" || g.Author.WorkspaceID != "ws-1" {
+		t.Fatalf("author = %+v — the author comes from the TURN, never from the arguments", g.Author)
+	}
+	if g.ResponderSessionID != "sess-mia-main" {
+		t.Fatalf("ResponderSessionID = %q, want the turn's session", g.ResponderSessionID)
+	}
+}
+
 func TestAnswerRequest_RefusalsAreVisibleAndSendNothing(t *testing.T) {
 	cases := map[string]map[string]any{
 		"blank id":   {"request_id": "  ", "text": "x"},
