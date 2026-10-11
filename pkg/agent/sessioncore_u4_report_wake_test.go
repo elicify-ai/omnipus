@@ -179,14 +179,14 @@ func TestDeliver_AcceptedReportKind_WakesIdleThenRetainedWhenParentStopped(t *te
 
 	// 2. Parent stops (current generation). A new report must be retained, not
 	// woken, and must not revive the parent.
-	if err := lifecycle.Mutate(parentID, func(rec *session.LifecycleRecord) error {
+	if merr := lifecycle.Mutate(parentID, func(rec *session.LifecycleRecord) error {
 		rec.Stop = &session.Stop{
 			At: time.Now().UTC(), Generation: rec.Generation,
 			By: session.Principal{Kind: session.PrincipalKindHuman, ID: "dan"},
 		}
 		return nil
-	}); err != nil {
-		t.Fatalf("stamp Stop on parent: %v", err)
+	}); merr != nil {
+		t.Fatalf("stamp Stop on parent: %v", merr)
 	}
 	genBefore := u4Generation(t, lifecycle, parentID)
 
@@ -259,8 +259,8 @@ func TestDeliver_ProgressRateCap_RefusedAfterExpansion(t *testing.T) {
 	seedParentAndChild(t, lifecycle, parentID, childID)
 	ctx := context.Background()
 
-	const cap = session.DefaultChildSendRatePerMinute // 10/min (C-LIMIT)
-	for i := 0; i < cap; i++ {
+	const rateCap = session.DefaultChildSendRatePerMinute // 10/min (C-LIMIT)
+	for i := 0; i < rateCap; i++ {
 		d, err := deliverer.Deliver(ctx, u4ProgressEvent(t, childID, fmt.Sprintf("p-%02d", i)))
 		if err != nil {
 			t.Fatalf("Deliver progress #%d (under cap): %v", i, err)
@@ -274,7 +274,7 @@ func TestDeliver_ProgressRateCap_RefusedAfterExpansion(t *testing.T) {
 	_, err := deliverer.Deliver(ctx, u4ProgressEvent(t, childID, "p-over"))
 	if !errors.Is(err, session.ErrInboxRateLimited) {
 		t.Fatalf("progress #%d (over the rate cap) error = %v, want ErrInboxRateLimited — the wake "+
-			"expansion must not widen the preserved rate exemption (FR-012)", cap, err)
+			"expansion must not widen the preserved rate exemption (FR-012)", rateCap, err)
 	}
 }
 

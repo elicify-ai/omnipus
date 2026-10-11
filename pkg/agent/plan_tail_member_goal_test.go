@@ -13,6 +13,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/stretchr/testify/require"
 )
 
 // session-core DEL-18 removed the run-start minting of a goal record for an
@@ -114,5 +115,5 @@ func TestIntentReplay_TailMembersGetPairedGoals(t *testing.T) {
 	if err != nil || after.GoalID != before.GoalID {
 		t.Fatalf("second apply replaced the paired goal: before=%v after=%v err=%v", before.GoalID, after, err)
 	}
-	var _ *goal.Goal = after
+	require.IsType(t, (*goal.Goal)(nil), after, "the store must hand back the concrete goal record type")
 }

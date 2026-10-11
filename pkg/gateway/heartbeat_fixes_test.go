@@ -435,12 +435,11 @@ func TestWorkspaceHeartbeat_FirstFireResolvesTheMain(t *testing.T) {
 	assert.Equal(t, wsID, resolved.WorkspaceID,
 		"the workspace stamp must survive to the fired turn's session meta")
 
-	// Nothing was created in the legacy per-agent store.
-	legacyStore := api.agentLoop.GetSessionStore()
-	require.NotNil(t, legacyStore)
-	legacySessions, err := legacyStore.ListSessions()
-	require.NoError(t, err)
-	assert.Empty(t, legacySessions, "no session should ever land in the legacy per-agent store")
+	// DEL-10: there is exactly ONE session store — the per-agent stores were
+	// deleted, and GetSessionStore() returns that single shared store. The old
+	// "nothing landed in the legacy per-agent store" block read the SAME store
+	// it had just asserted held one session, so it could never pass; the
+	// single-store claim is already pinned by the ListSessions() assertion above.
 }
 
 // ---------------------------------------------------------------------------

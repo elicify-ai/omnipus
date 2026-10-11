@@ -209,7 +209,14 @@ func TestQA4Delete_RequiredStopRefusalPreservesOriginalTranscriptsAndUploads(t *
 			var envelope generated.ErrorResponse
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 			assert.NotEmpty(t, envelope.Error, "refused DELETE must send a visible error to the caller")
-			assert.Contains(t, envelope.Error, failedID, "visible failure must identify the still-live session")
+			// Leak round 7, F4: a delete refused because Stop could not account for
+			// every session lists COUNTS, never session ids — pinned by
+			// rest_leak_r7_test.go::TestR7_F4_DeleteRefusalDoesNotPrintSessionIDs.
+			// This supersedes the pre-r7 wording that named the still-live session.
+			assert.Contains(t, envelope.Error, "1 session(s) still running",
+				"the refusal must report the still-live count, not the id")
+			assert.NotContains(t, envelope.Error, failedID,
+				"a refused DELETE must not print the still-live session id (leak r7 F4)")
 			assert.Contains(t, envelope.Error, "still running", "refused DELETE must explain that Stop did not complete")
 			assert.NoError(t, failedCtx.Err(), "DELETE must have encountered an actual still-running refused execution")
 			failedRec, err := ls.Load(failedID)

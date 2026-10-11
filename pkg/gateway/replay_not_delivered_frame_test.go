@@ -45,7 +45,7 @@ func TestReplay_NotDeliveredFrame_SurvivesReloadAsServerAuthored(t *testing.T) {
 	require.NoError(t, err)
 
 	got := decodeFrameOfType[generated.SubagentMessageFrame](t, sink.frames, "subagent_message")
-	require.Equal(t, "not_delivered", string(got.Kind))
+	require.Equal(t, "not_delivered", got.Kind)
 	require.False(t, got.UntrustedOrigin, "a server-authored line is not marked untrusted")
 	require.Equal(t, parentID, got.SessionId)
 	require.NotNil(t, got.ChildSessionId)

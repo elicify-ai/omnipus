@@ -240,15 +240,6 @@ func TestProcessMessage_WhitespaceAndAttachmentVariant_SeenOnce(t *testing.T) {
 	}
 }
 
-func joinContents(msgs []providers.Message) string {
-	var b strings.Builder
-	for i := range msgs {
-		b.WriteString(msgs[i].Content)
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
 // A turn on a live (non-empty) window and a turn after /clear must also send
 // the newest message once.
 func TestProcessMessage_NewestUserMessageOnce_LiveWindowAndAfterClear(t *testing.T) {
@@ -313,15 +304,3 @@ func TestProcessMessage_NewestUserMessageOnce_AfterRestartEmptyWindow(t *testing
 
 // (TestProcessMessage_ReplyToEarlierLandsAfterQueuedUser_Kept removed above; see the
 // deletion note.)
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
