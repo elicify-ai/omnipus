@@ -62,7 +62,8 @@ describe('attaching to the recorded idle Mia main chat', () => {
     const last = bucket().messages[bucket().messages.length - 1]
     expect(last?.role).toBe('assistant')
     expect(last?.status).toBe('done')
-    expect(bucket().activeTurnId, 'no turn may stay announced active').toBeFalsy()
+    expect(useChatStore.getState().sessionsById[SID]?.activeTurnId,
+      'no turn may stay announced active').toBeFalsy()
   })
 
   it('the same rebuild DOES go busy when the server announces an active turn (instrument check)', () => {
