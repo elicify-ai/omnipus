@@ -271,6 +271,12 @@ type UnifiedStore struct {
 	// CacheLoadFailureCount. Guarded by cacheMu (was: us.mu).
 	cacheLoadFailures int
 
+	// orphanDirs counts directories under the base dir that have no meta.json
+	// at construction time: not sessions (no record to load), so they are
+	// skipped with one clear warning each rather than retried and reported as
+	// unreadable sessions. See OrphanSessionDirCount. Guarded by cacheMu.
+	orphanDirs int
+
 	// parentIndex/childToParent are the ADR-057 FR-097 in-memory parent
 	// index: parentIndex maps a parent session id to the set of its DIRECT
 	// children, and childToParent is its reverse (child id -> parent id),
@@ -331,6 +337,14 @@ type UnifiedStore struct {
 	// only after the in-flight wait (started with whatever interval was
 	// current when the timer was last armed) happens to elapse on its own.
 	flushTimer *time.Timer
+}
+
+// OrphanSessionDirCount returns the number of directories skipped at
+// construction because they hold no meta.json (so are not sessions).
+func (us *UnifiedStore) OrphanSessionDirCount() int {
+	us.cacheMu.RLock()
+	defer us.cacheMu.RUnlock()
+	return us.orphanDirs
 }
 
 // CacheLoadFailureCount returns the number of sessions that failed to load
@@ -486,6 +500,17 @@ func (us *UnifiedStore) loadMetaCacheLocked() {
 		}
 		sessionDir := filepath.Join(us.baseDir, entry.Name())
 		meta, err := readUnifiedMeta(sessionDir)
+		if err != nil && errors.Is(err, os.ErrNotExist) {
+			// No meta.json at all: this directory was never a session (its
+			// files were written for a window key with no session record), so
+			// there is nothing to load and nothing a retry could fix. One clear,
+			// actionable warning; the directory is left alone.
+			us.orphanDirs++
+			slog.Warn("unified_store: skipping a directory with no meta.json - it is not a session "+
+				"(archive files written for a window key that has no session record); it is safe to delete",
+				"dir", sessionDir)
+			continue
+		}
 		if err != nil {
 			// One retry: absorbs a transient boot-time blip before we give up.
 			meta, err = readUnifiedMeta(sessionDir)
