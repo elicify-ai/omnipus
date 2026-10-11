@@ -153,6 +153,9 @@ func TestStopRedirectRoot_R3_ChannelChatMessageNotSavedRefusesTurnWithFixedReply
 // The webchat sender sees the same fixed text as a turn.error frame message, not
 // a silent drop, and never the store's internal error.
 func TestTranslateTurnError_MessageNotSavedIsTheFixedReply(t *testing.T) {
+	if messageNotSavedReply != "Sorry, I couldn't save your message \u2014 please try again later." {
+		t.Errorf("the fixed reply text drifted from the founder ruling: %q", messageNotSavedReply)
+	}
 	cause := errors.New("open /secret/path/transcript.jsonl: permission denied")
 	err := &messageNotSavedError{cause: cause}
 	if got := userVisibleTurnError(err); got != messageNotSavedReply {
