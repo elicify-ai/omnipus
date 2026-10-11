@@ -40,6 +40,7 @@ func TestRememberTool_RealAdapter_PersistsViaMemoryStore(t *testing.T) {
 	res := tool.Execute(ctx, map[string]any{
 		"content":  "single source of truth fact",
 		"category": "key_decision",
+		"room":     "private",
 	})
 	if res == nil || res.IsError {
 		t.Fatalf("Execute failed: %+v", res)
@@ -106,6 +107,7 @@ func TestRememberTool_RealAdapter_RejectsInjection(t *testing.T) {
 	res := tool.Execute(ctx, map[string]any{
 		"content":  "smuggled <!-- next --> marker inside content",
 		"category": "reference",
+		"room":     "private",
 	})
 	if res == nil || !res.IsError {
 		t.Fatal("expected error for content containing HTML comment markers")
@@ -223,6 +225,7 @@ func TestRecallMemoryTool_RealAdapter_SearchesRealStore(t *testing.T) {
 	if res := remember.Execute(ctx, map[string]any{
 		"content":  "kubernetes reconciler backoff notes",
 		"category": "reference",
+		"room":     "private",
 	}); res == nil || res.IsError {
 		t.Fatalf("seed remember: %+v", res)
 	}
@@ -253,6 +256,7 @@ func TestRecallMemoryTool_RealAdapter_SearchesRealStore(t *testing.T) {
 	if res := remember.Execute(ctx, map[string]any{
 		"content":  "operator rotation lesson",
 		"category": "lesson_learned",
+		"room":     "private",
 	}); res == nil || res.IsError {
 		t.Fatalf("second remember: %+v", res)
 	}
@@ -337,6 +341,7 @@ func TestMemory_FileFormat_FullFrontmatter(t *testing.T) {
 	res := remember.Execute(context.Background(), map[string]any{
 		"content":  "test frontmatter completeness",
 		"category": "lesson_learned",
+		"room":     "private",
 	})
 	if res == nil || res.IsError {
 		t.Fatalf("remember failed: %+v", res)
