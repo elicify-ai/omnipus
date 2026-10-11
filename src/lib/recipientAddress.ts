@@ -30,7 +30,7 @@ import { isChatEligibleAgent } from './agentKind'
 export type OutboundRecipient = NonNullable<import('@/lib/api/generated/asyncapi-types').MessageFrame['recipient']>
 
 /** Minimal shape the parse needs; a full Agent satisfies it. */
-export interface NamedCandidate {
+export interface NamedCandidate { // not-wire-format: UI-side parse input narrowed from the generated Agent type, matched against composer text in the browser; never serialized, never sent over the gateway boundary
   id: string
   name: string
 }
