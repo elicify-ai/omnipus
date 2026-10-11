@@ -53,6 +53,10 @@ func (al *AgentLoop) clearConversation(
 	if err := clearSessionWindow(agent.Sessions, sessionKey); err != nil {
 		return fmt.Errorf("clear: move the context window: %w", err)
 	}
+	// A frozen recall span is pre-clear content injected into every later
+	// request; the next turn must carry none of it. recall_conversation can
+	// still be called again and reads the archive as before.
+	al.dropRecallSpan(sessionKey, "cleared")
 	if store == nil {
 		return nil
 	}

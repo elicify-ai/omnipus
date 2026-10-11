@@ -130,6 +130,7 @@ func owningSessionID(key string) string {
 type archiveBackendMeta struct {
 	Skip       int                    `json:"skip"`
 	Count      int                    `json:"count"`
+	ClearFloor int                    `json:"clear_floor,omitempty"`
 	AnchorLine *int                   `json:"anchor_archive_line,omitempty"`
 	Retracted  []memory.ArchiveSpan   `json:"retracted,omitempty"`
 	Projection []archiveProjectionRow `json:"projection,omitempty"`
@@ -275,7 +276,8 @@ func (b *archiveBackend) commitWindow(ctx context.Context, key string, before, a
 		return memory.ErrWindowChanged
 	}
 	if after.Count != before.Count || after.Count != n || after.Skip < 0 ||
-		(!restore && after.Skip < before.Skip) || after.Skip > after.Count {
+		(!restore && after.Skip < before.Skip) || after.Skip > after.Count ||
+		after.ClearFloor < 0 || after.ClearFloor > after.Skip {
 		return errors.New("archive_backend: invalid checkpoint cursor")
 	}
 	if err := validateWindowAnchor(store, after); err != nil {
@@ -283,6 +285,7 @@ func (b *archiveBackend) commitWindow(ctx context.Context, key string, before, a
 	}
 	meta.Skip = after.Skip
 	meta.Count = after.Count
+	meta.ClearFloor = after.ClearFloor
 	meta.AnchorLine = cloneIntPtr(after.AnchorLine)
 	meta.Projection = metaFromProjection(after.Projection)
 	if err := b.saveMetaLocked(key, meta); err != nil {
@@ -318,6 +321,7 @@ func (b *archiveBackend) RollbackWindow(ctx context.Context, key string, start m
 	meta.Retracted = archiveRetractSpan(meta.Retracted, start.Count, n)
 	meta.Skip = start.Skip
 	meta.Count = n
+	meta.ClearFloor = start.ClearFloor
 	meta.AnchorLine = cloneIntPtr(start.AnchorLine)
 	meta.Projection = metaFromProjection(start.Projection)
 	return b.saveMetaLocked(key, meta)
@@ -648,7 +652,7 @@ func (b *archiveBackend) viewLocked(key string) (WindowView, error) {
 	if meta.Skip < 0 || meta.Skip > n {
 		return WindowView{}, errors.New("archive_backend: invalid context window cursor")
 	}
-	state := memory.WindowState{Skip: meta.Skip, Count: meta.Count, AnchorLine: cloneIntPtr(meta.AnchorLine),
+	state := memory.WindowState{Skip: meta.Skip, Count: meta.Count, ClearFloor: meta.ClearFloor, AnchorLine: cloneIntPtr(meta.AnchorLine),
 		Projection: projectionFromMeta(meta)}
 	if anchorErr := validateWindowAnchor(store, state); anchorErr != nil {
 		return WindowView{}, anchorErr
@@ -998,7 +1002,7 @@ func validateWindowAnchor(store *ArchiveDayStore, state memory.WindowState) erro
 // windowStateEqual compares a persisted meta to a WindowState (cursor + anchor +
 // projection), the compare half of the commit CAS.
 func windowStateEqual(meta archiveBackendMeta, state memory.WindowState) bool {
-	if meta.Skip != state.Skip || meta.Count != state.Count {
+	if meta.Skip != state.Skip || meta.Count != state.Count || meta.ClearFloor != state.ClearFloor {
 		return false
 	}
 	if !intPtrEqual(meta.AnchorLine, state.AnchorLine) {

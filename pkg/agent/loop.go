@@ -2673,6 +2673,7 @@ func clearSessionWindow(sessions session.SessionStore, sessionKey string) error 
 	}
 	after := view.State.Clone()
 	after.Skip = after.Count
+	after.ClearFloor = after.Count
 	after.AnchorLine = nil
 	after.Projection.Entries = memory.ProjectionSet{}
 	after.Projection.SourceRunes = map[memory.ProjectionKey]int{}

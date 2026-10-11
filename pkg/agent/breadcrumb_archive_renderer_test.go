@@ -260,3 +260,29 @@ func cwAssertBreadcrumbPointer(t *testing.T, text, callID string, line int) {
 		t.Fatalf("breadcrumb must include exact addressed pointer (tool_call_id=%s, archive_line=%d): %q", callID, line, text)
 	}
 }
+
+// A /clear sets a floor: slots below it are the cleared part and are never
+// quoted, while the slots between the floor and Skip still are, and the recall
+// pointer addresses only the post-floor range.
+func TestArchiveBreadcrumbFromFloorQuotesNothingBelowIt(t *testing.T) {
+	archive := []memory.ArchivedMessage{
+		makeUserMsg("CLEARED-ONE"), makeAssistantMsg("CLEARED-TWO"),
+		makeUserMsg("KEPT-THREE"), makeAssistantMsg("KEPT-FOUR"),
+	}
+	crumb, err := buildArchiveBreadcrumbFrom(context.Background(), denseArchive(archive), 2, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(crumb, "CLEARED") {
+		t.Fatalf("cleared slots must not be quoted: %q", crumb)
+	}
+	if !strings.Contains(crumb, "KEPT-THREE") || !strings.Contains(crumb, "KEPT-FOUR") {
+		t.Fatalf("post-floor evicted slots are still quoted: %q", crumb)
+	}
+	if !strings.Contains(crumb, "archive_range={from:2,to:3}") {
+		t.Fatalf("the pointer addresses only the post-floor range: %q", crumb)
+	}
+	if empty, _ := buildArchiveBreadcrumbFrom(context.Background(), denseArchive(archive), 4, 4); empty != "" {
+		t.Fatalf("skip == floor evicts nothing after the clear: %q", empty)
+	}
+}
