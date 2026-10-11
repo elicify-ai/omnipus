@@ -3,10 +3,14 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/addressing"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -123,12 +127,26 @@ func TestHeldRequest_AskerGone_DroppedNotDeliveredIntoAVoid(t *testing.T) {
 		t.Fatalf("SETUP: delete the asker's chat: %v", err)
 	}
 
+	logPath := filepath.Join(t.TempDir(), "log.jsonl")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("SETUP: enable file logging: %v", err)
+	}
+	restoreConsole := logger.DisableConsole()
 	f.al.deliverHeldRequests(recv)
+	restoreConsole()
+	logger.DisableFileLogging()
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logged), "held request dropped, not delivered") || !strings.Contains(string(logged), id) {
+		t.Fatalf("the drop must be visible in the log with the request id; log = %q", logged)
+	}
 
 	if left, _ := f.al.RequestLedger().Undelivered(recv); len(left) != 0 {
 		t.Fatalf("a request with no asker is still held: %+v", left)
 	}
-	_, err := f.al.RequestLedger().Resolve(recv, addressing.Pair{WorkspaceID: addrWS, AgentID: addrReceiver}, id)
+	_, err = f.al.RequestLedger().Resolve(recv, addressing.Pair{WorkspaceID: addrWS, AgentID: addrReceiver}, id)
 	if !errors.Is(err, addressing.ErrDiscarded) {
 		t.Fatalf("Resolve = %v, want ErrDiscarded: the request must no longer be answerable", err)
 	}
