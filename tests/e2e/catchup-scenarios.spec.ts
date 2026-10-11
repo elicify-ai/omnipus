@@ -477,7 +477,9 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   test('f: two chats active during an outage — A incremental, B complete on switch', async ({ page, context }) => {
     test.setTimeout(420_000)
     const beforeA = await startLongTurn(page)
-    await freshChat(page)
+    // startLongTurn opens its OWN fresh chat (it calls freshChat itself), so a
+    // standalone freshChat here only created a second session and abandoned it
+    // (S5-09/F11). Chat B is the one startLongTurn opens below.
     const beforeB = await startLongTurn(page)
     await context.setOffline(true)
     await page.waitForTimeout(45_000)
