@@ -25,6 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/require"
 )
 
 // drainEventsWithTimeout blocks on sub.C, collecting every event received
@@ -550,10 +551,10 @@ func TestTaskRunHistory_ExecutionErrorBranch_ClosesRunAsFailed(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindError,
 			Err:  &runner.ErrorEvent{Message: "external CLI crashed for run-history test", Fatal: true},
-		})
+		}))
 		fr.Cancel()
 	}()
 

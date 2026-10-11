@@ -25,6 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -208,8 +209,8 @@ func TestDelegateToExternalCLITarget_RunsSharedRunner_NotNativeLoop(t *testing.T
 	})
 
 	// Let the run end cleanly, then wait for the turn to be disposed.
-	fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "cli output here"}})
-	fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+	require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "cli output here"}}))
+	require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 	fr.Cancel()
 
 	waitUntil(t, 5*time.Second, "the steered turn to be cleared from activeTurnStates", func() bool {

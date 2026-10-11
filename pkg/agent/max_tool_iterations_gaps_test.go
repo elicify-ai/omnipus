@@ -25,6 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/stretchr/testify/require"
 )
 
 // ---------------------------------------------------------------------------
@@ -173,7 +174,7 @@ func TestExternalDispatch_ZeroInstanceLimit_ResolvesFromLiveConfig(t *testing.T)
 			fr, restore := withFakeDriver(t)
 			defer restore()
 			go func() {
-				fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+				require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 				fr.Cancel()
 			}()
 			if _, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second); err != nil {

@@ -368,7 +368,7 @@ func TestTaskCompletionContract_External_FailureMarker_FailedWithAgentWords(t *t
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindOutput,
 			Output: &runner.OutputEvent{
 				Text: "Ran into a permissions error partway through.\n" +
@@ -378,8 +378,8 @@ func TestTaskCompletionContract_External_FailureMarker_FailedWithAgentWords(t *t
 					"TASK_STATUS: failure\n" +
 					"TASK_SUMMARY: Blocked by missing write access to the target repo.",
 			},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -424,11 +424,11 @@ func TestTaskCompletionContract_External_NoMarker_FailsClosed_NotAutoDone(t *tes
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind:   runner.EventKindOutput,
 			Output: &runner.OutputEvent{Text: "I did some work but never signaled completion."},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
