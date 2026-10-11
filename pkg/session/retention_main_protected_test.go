@@ -9,6 +9,7 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -87,7 +88,7 @@ func TestRetentionSweep_MainDirectoryWithOnlyExpiredContentIsKept(t *testing.T) 
 	_, err = s.RetentionSweep(90)
 	require.NoError(t, err)
 	_, statErr := os.Stat(rolled)
-	require.True(t, os.IsNotExist(statErr), "instrument check: the expired rolled day was swept")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "instrument check: the expired rolled day was swept")
 	_, statErr = os.Stat(filepath.Join(dir, "meta.json"))
 	require.NoError(t, statErr, "the main identity must survive")
 }
@@ -104,5 +105,5 @@ func TestRetentionSweep_StillDeletesAnIdleOrdinaryChat(t *testing.T) {
 	_, err := s.RetentionSweep(90)
 	require.NoError(t, err)
 	_, statErr := os.Stat(dir)
-	require.True(t, os.IsNotExist(statErr), "an idle ordinary chat is removed")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "an idle ordinary chat is removed")
 }
