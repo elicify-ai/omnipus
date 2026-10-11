@@ -194,7 +194,10 @@ func (t *GoalClaimTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	// that session's owner.
 	const ownerSessionOnly = "goal_claim is owner-session-only: a delegated sub-turn cannot claim " +
 		"this session's goal (ADR-084 JUDGE-FR-090) — report your findings back to the parent instead"
-	if depth := ToolDelegationDepth(ctx); depth > 0 {
+	// A steered helper launched with its own goal runs in its own session and
+	// owns that goal: the marker names that session, so the exemption holds only
+	// for a claim on the session the turn runs in.
+	if depth := ToolDelegationDepth(ctx); depth > 0 && ToolOwnGoalSession(ctx) != sessionID {
 		taskID := ToolRunningTaskID(ctx)
 		if taskID == "" {
 			return ErrorResult(ownerSessionOnly)
