@@ -14,8 +14,10 @@ package session
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -248,4 +250,30 @@ func TestArchiveControlFiles_UseTheAtomicWriter(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 3, n)
 	})
+}
+
+// M4: when the day partitions cannot be listed, ReadTranscript must fail, not
+// return only the current day as if it were the whole transcript.
+func TestReadTranscript_PartitionListFailureIsAnError(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX directory permissions and a non-root user")
+	}
+	s, sid := newEffectsSession(t)
+	day := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	setArchiveDay(s, &day)
+	for i, d := range []time.Time{day, day.AddDate(0, 0, 1)} {
+		*(&day) = d
+		_, err := s.AppendTranscriptAddressed(sid, TranscriptEntry{ID: fmt.Sprintf("m%d", i), Role: "user",
+			Content: fmt.Sprintf("message %d", i), Timestamp: d})
+		require.NoError(t, err)
+	}
+	entries, err := s.ReadTranscript(sid)
+	require.NoError(t, err)
+	require.Len(t, entries, 2, "instrument check: both days are readable while the directory lists")
+
+	dir := filepath.Join(s.baseDir, sid)
+	require.NoError(t, os.Chmod(dir, 0o300)) // searchable but not listable
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	_, err = s.ReadTranscript(sid)
+	require.Error(t, err, "a failed partition listing must not read as a one-day transcript")
 }
