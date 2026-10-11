@@ -435,10 +435,10 @@ func (al *AgentLoop) effectiveGoalCompileWindowTokens() int {
 // goalCompileWindowText renders the bounded session-transcript window fed
 // into a /goal compile call (ADR-079 D1): non-authoritative background
 // context, distinct from and subordinate to the goal statement (INV-3).
-// Mirrors goalSessionWindowText's (verifier_adjudication.go) shared-store-
-// first resolution EXACTLY — same 2026-09-06 UAT fix (live chat sessions are
-// written to the SHARED store first, legacy per-agent store as the old-
-// install fallback) — but passes the COMPILE budget
+// Mirrors goalSessionWindowText's (verifier_adjudication.go) shared-store
+// resolution EXACTLY — same 2026-09-06 UAT fix (live chat sessions are
+// written to the SHARED store; DEL-10 later deleted the per-agent stores) —
+// but passes the COMPILE budget
 // (effectiveGoalCompileWindowTokens) rather than the Judge's
 // effectiveVerifierWindowTokens. The read+render tail itself
 // (sessionWindowText -> renderVerifierWindowText) is fully shared with the

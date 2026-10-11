@@ -389,6 +389,13 @@ const SLOW_RETRY_DELAY_MS = 60_000
 
 export class WsConnection {
   private ws: WebSocket | null = null
+  private _socketGeneration = 0
+  /**
+   * Counts the sockets this connection has opened. A new socket (first connect
+   * or any reconnect) is a new generation, so state tied to one socket - e.g.
+   * "an attach_session is already in flight" - can tell it is stale.
+   */
+  get socketGeneration(): number { return this._socketGeneration }
   /** Fast-phase attempt counter — resets on successful connect. */
   private reconnectAttempts = 0
   /** Slow-phase attempt counter — resets on successful connect. */
@@ -681,6 +688,7 @@ export class WsConnection {
   private _createSocket(): void {
     try {
       this.ws = new WebSocket(getWsUrl())
+      this._socketGeneration++
     } catch (err) {
       this.callbacks.onError(`Failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`)
       return

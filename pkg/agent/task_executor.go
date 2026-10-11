@@ -1356,9 +1356,11 @@ func (te *TaskExecutor) startTaskNowViaLauncherAs(ctx context.Context, t *task.T
 	if err != nil {
 		return "", te.failTaskBeforeDispatch(t.ID, te.mapLaunchRefusal(t, "", "launch", err))
 	}
-	updated, err := te.store.Update(t.ID, task.Patch{SessionID: &launched.SessionID})
+	// #1026: the same retry-once-then-Failed binding ExecuteTask uses; no worker
+	// is dispatched until the durable binding exists.
+	updated, err := te.persistTaskSessionBinding(t.ID, launched.SessionID)
 	if err != nil {
-		return "", fmt.Errorf("task_executor: StartTaskNow: persist session id: %w", err)
+		return "", te.failTaskBeforeDispatch(t.ID, err)
 	}
 	_ = te.activateTaskGoal(updated, launched.SessionID)
 	run := te.openRun(t.ID, nil, task.RunKindManual, launched.SessionID, recipients...)
@@ -1399,14 +1401,15 @@ func (te *TaskExecutor) dispatchLaunchedTask(rec *session.LifecycleRecord, execu
 	te.mu.Unlock()
 
 	if t.SessionID != rec.SessionID {
-		updated, updateErr := te.store.Update(t.ID, task.Patch{SessionID: &rec.SessionID})
+		// #1026: retry once, then the Failed disposition, as on every launcher path.
+		updated, updateErr := te.persistTaskSessionBinding(t.ID, rec.SessionID)
 		if updateErr != nil {
 			cancel()
 			te.mu.Lock()
 			delete(te.running, t.ID)
 			te.mu.Unlock()
 			te.wg.Done()
-			return fmt.Errorf("task_executor: bind launched session: %w", updateErr)
+			return te.failTaskBeforeDispatch(t.ID, updateErr)
 		}
 		t = updated
 	}

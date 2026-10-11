@@ -421,8 +421,8 @@ func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID st
 // empty and the goal Judge fail-closed every criterion with "no evidence"
 // against a session whose transcript plainly held the reply — observed live
 // on the first end-to-end /goal UAT. The shared store is now consulted
-// first; the legacy per-agent store remains as a fallback for old installs
-// whose sessions still live there.
+// only: DEL-10 (a398d3fed) deleted the per-agent stores, so there is no
+// legacy fallback to consult.
 func (al *AgentLoop) goalSessionWindowText(goalSessionID, agentID string) string {
 	if goalSessionID == "" || agentID == "" {
 		logger.WarnCF("agent", "verifier: goal window feed skipped — empty session or agent id",
@@ -464,9 +464,8 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 	if t == nil || t.SessionID == "" {
 		return "" // task has no session yet — not an error, just nothing to feed
 	}
-	// Shared store first (see goalSessionWindowText's STORE RESOLUTION note —
-	// same 2026-09-06 UAT defect class; task sessions are written to the
-	// shared store too), legacy per-agent store as the old-install fallback.
+	// The shared store only (see goalSessionWindowText's STORE RESOLUTION note;
+	// task sessions are written to the shared store too).
 	store := al.GetSessionStore()
 	if store == nil {
 		logger.WarnCF("agent", "verifier: no session store (task window feed)",

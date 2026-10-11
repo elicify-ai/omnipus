@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -247,7 +247,7 @@ func assertRuntimeChangeRefused(
 	t *testing.T,
 	al *AgentLoop,
 	provider *delegateDispatchProvider,
-	fr *runner.FakeRunner,
+	fr *runnertest.FakeRunner,
 	res steer.LaunchResult,
 	wasRuntime, nowRuntime string,
 ) {
