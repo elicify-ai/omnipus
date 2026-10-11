@@ -19,8 +19,12 @@ properties:
     description: >
       Display-only: when true the sidebar omits this member's row in this
       workspace, but the member stays a full team member — messageable,
-      delegable, @-addressable; main and work untouched. Inside an incoming
-      member config, absent => preserve the stored value; heartbeat keeps its
-      wholesale-replace semantics. Off-team entries are garbage-collected, so
-      removing a member clears the flag and re-adding the agent starts
-      visible.
+      delegable, @-addressable; main and work untouched. Merge rules inside an
+      incoming member config: absent => the stored flag is preserved (a
+      heartbeat save never un-hides). Present with heartbeat absent (a pure
+      hide/show) => the stored heartbeat is preserved unchanged. An entry with
+      neither field ({}) keeps the ordinary replace behaviour: the stored
+      heartbeat is cleared and the flag is still preserved by the absent rule.
+      A heartbeat that IS present is always replaced wholesale, never merged
+      field-by-field. Off-team entries are garbage-collected, so removing a
+      member clears the flag and re-adding the agent starts visible.
