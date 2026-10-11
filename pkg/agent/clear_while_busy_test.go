@@ -275,3 +275,25 @@ func TestClearWhenIdle_RunsAsAnOrdinaryCommand(t *testing.T) {
 	waitUntilClear(t, "the /clear marker on an idle worker", 15*time.Second, func() bool { return f.markerCount(t) == 1 })
 	require.Zero(t, prov.callCount(), "a command never reaches the model")
 }
+
+// stoppableProviderReplying answers every call at once with a fixed text.
+type replyingProvider struct {
+	mu    sync.Mutex
+	calls int
+	text  string
+}
+
+func newStoppableProviderReplying(text string) *replyingProvider { return &replyingProvider{text: text} }
+
+func (p *replyingProvider) Chat(context.Context, []providers.Message, []providers.ToolDefinition, string, map[string]any) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.calls++
+	p.mu.Unlock()
+	return &providers.LLMResponse{Content: p.text}, nil
+}
+func (p *replyingProvider) GetDefaultModel() string { return "replying" }
+func (p *replyingProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}

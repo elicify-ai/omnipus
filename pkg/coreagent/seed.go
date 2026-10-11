@@ -96,7 +96,7 @@ var allStaticToolNames = []string{
 	// on an override key absent from it.
 	"list_mounts",
 	"search_web", "fetch_url",
-	"send_message", "send_file",
+	"send_message", "answer_request", "send_file",
 	"find_skills", "install_skill",
 	// Skill (ADR-072 D1): the on-demand skill load/search tool, wired into
 	// this literal alongside ToolSearch below — see its "Structural floor"

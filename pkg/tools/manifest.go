@@ -63,7 +63,7 @@ var fullManifestToolNames = map[string]struct{}{
 	"list_agents": {}, "list_directory": {}, "list_jobs": {}, "list_mounts": {},
 	"list_tasks": {}, "message_parent": {}, "plan_correct": {}, "read_file": {},
 	"recall_conversation": {}, "recall_memory": {}, "remember": {}, "search_web": {},
-	"send_file": {}, "send_message": {}, "set_goal": {}, "set_todos": {},
+	"answer_request": {}, "send_file": {}, "send_message": {}, "set_goal": {}, "set_todos": {},
 	"stop_plan": {}, "update_task": {}, "write_file": {},
 }
 
