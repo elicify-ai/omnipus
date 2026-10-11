@@ -19,6 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -128,7 +129,36 @@ func mustNewAgentLoop(
 	// …) passes through. Idempotent and non-clobbering: a test that seeded its
 	// own graph first (seedWorkspaceGraph) is left untouched.
 	seedDefaultDelegationGraphForLoop(t, al)
+	installTestSessionLauncher(t, al)
 	return al
+}
+
+// installTestSessionLauncher wires the SAME task start path production wires at
+// gateway boot: the session stores, a genuine boot epoch and the real
+// SteerLauncher on the task executor.
+//
+// S1 M9 (978c232bc) deleted the launcher-less task start path and
+// TaskExecutor.StartTaskNow now REFUSES without a launcher
+// ("no session launcher is installed"). A fixture that never installs one
+// therefore fails on the refusal rather than on the behaviour under test.
+// This is the single choke point every shared loop harness in this package
+// passes through.
+//
+// The epoch is minted only when the loop has none, so a fixture that minted
+// its own (or asserts on epoch behaviour) keeps exactly what it set.
+func installTestSessionLauncher(t *testing.T, al *AgentLoop) {
+	t.Helper()
+	home := config.OmnipusHomeDir()
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(home, "session_messages")), lifecycle)
+	if al.bootEpochFor() == 0 {
+		mintGenuineBootEpochForLoop(t, al)
+	}
+	if te := GetTaskExecutor(al); te != nil {
+		te.SetLifecycleStore(lifecycle)
+		te.SetSessionLauncher(NewSteerLauncher(al))
+	}
 }
 
 // ensureTestIsolatedAgentHome gives cfg its own private, per-test home

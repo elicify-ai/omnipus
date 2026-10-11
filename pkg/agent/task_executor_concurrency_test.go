@@ -68,7 +68,12 @@ func TestErrDispatchCapReached_IsDetectable(t *testing.T) {
 		dispatchSema: newDispatchSemaphore(1), // cap=1
 	}
 
-	// Create and advance a task so StartTaskNow can find it.
+	// ExecuteTask claims a `next` task itself (ClaimForRun), and ExecuteTask's
+	// body is the ONLY place that takes the global dispatch cap: S1 M9
+	// (978c232bc) deleted the launcher-less StartTaskNow path, and with it
+	// StartTaskNow's own dispatchSema acquire. ErrDispatchCapReached is
+	// therefore reachable through ExecuteTask, not through StartTaskNow — the
+	// guarantee is unchanged, only the entry point that enforces it is.
 	tk := &task.Task{
 		Title:       "cap-test",
 		Prompt:      "do it",
@@ -76,24 +81,17 @@ func TestErrDispatchCapReached_IsDetectable(t *testing.T) {
 		Action:      task.ActionLLM,
 		Priority:    3,
 		WorkspaceID: "default",
-		Status:      task.StatusInbox,
+		Status:      task.StatusNext,
 	}
 	require.NoError(t, store.Create(tk))
-	nextStatus := task.StatusNext
-	desc := "ready"
-	_, err := store.Update(tk.ID, task.Patch{Status: &nextStatus, Description: &desc})
-	require.NoError(t, err)
-	inProg := task.StatusInProgress
-	_, err = store.Update(tk.ID, task.Patch{Status: &inProg})
-	require.NoError(t, err)
 
-	// Exhaust the single slot before calling StartTaskNow.
+	// Exhaust the single slot before the dispatch.
 	ok, releaseSlot := te.dispatchSema.TryAcquire()
 	require.True(t, ok, "must be able to acquire the only slot before exhaustion")
 	defer releaseSlot()
 
-	_, startErr := te.StartTaskNow(context.Background(), tk.ID)
-	require.Error(t, startErr, "StartTaskNow with exhausted sema must return an error")
+	startErr := te.ExecuteTask(context.Background(), tk.ID, nil)
+	require.Error(t, startErr, "ExecuteTask with exhausted sema must return an error")
 
 	// The caller must be able to distinguish this as ErrDispatchCapReached.
 	assert.True(t, isDispatchCapReached(startErr),
