@@ -87,9 +87,14 @@ describe('feedKindLabel (BDD-07.1, mains as amended 2026-10-11)', () => {
 
   it('a main shows its server title when one is present', async () => {
     seam.mains.add('sid-main')
+    // S5-12/Q4: the server title must DIFFER from the derived one, or the test
+    // cannot tell "the server title won" from "the client re-derived it from
+    // the agent name" — both would render the identical string. With agent
+    // name "Jim" the derived value is "Jim - Main Session", so the server title
+    // here is deliberately something else.
     await expectLabel(
-      session({ id: 'sid-main', title: 'Jim - Main Session', agentName: 'Jim' }),
-      'Jim - Main Session',
+      session({ id: 'sid-main', title: 'Jim - Main Session (server-stamped)', agentName: 'Jim' }),
+      'Jim - Main Session (server-stamped)',
       'server-stamped title wins (core 9b9ef5935 stamps and re-stamps it)',
     )
   })

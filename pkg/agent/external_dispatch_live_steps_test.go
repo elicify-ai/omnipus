@@ -51,19 +51,19 @@ func TestExternalDispatch_ToolCallsAreBroadcastLive(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindToolCall,
 			ToolCall: &runner.ToolCallEvent{
 				CallID: "ext-call-1", ToolName: "write_file", ToolInput: []byte(`{"path":"a.txt"}`),
 			},
-		})
-		fr.InjectEvent(runner.RunEvent{
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindToolResult,
 			ToolResult: &runner.ToolResultEvent{
 				CallID: "ext-call-1", ToolName: "write_file", Output: []byte(`{"ok":true}`),
 			},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -132,9 +132,9 @@ func collectExternalToolEvents(t *testing.T, evs []runner.RunEvent, prep func(al
 	defer restore()
 	go func() {
 		for _, ev := range evs {
-			fr.InjectEvent(ev)
+			require.NoError(t, fr.InjectEvent(ev))
 		}
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 	_, _ = runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)

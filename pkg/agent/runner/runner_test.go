@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/stretchr/testify/require"
 )
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -114,12 +115,12 @@ func TestRunner_BidirectionalEvents(t *testing.T) {
 	}
 
 	// Inject events from the "external process" side.
-	fr.InjectEvent(runner.RunEvent{
+	require.NoError(t, fr.InjectEvent(runner.RunEvent{
 		Kind:   runner.EventKindOutput,
 		RunID:  "run-1",
 		Output: &runner.OutputEvent{Text: "hello"},
-	})
-	fr.InjectEvent(runner.RunEvent{
+	}))
+	require.NoError(t, fr.InjectEvent(runner.RunEvent{
 		Kind:  runner.EventKindPermissionRequest,
 		RunID: "run-1",
 		PermissionRequest: &runner.PermissionRequestEvent{
@@ -127,7 +128,7 @@ func TestRunner_BidirectionalEvents(t *testing.T) {
 			ToolName:    "bash",
 			Description: "run ls /tmp",
 		},
-	})
+	}))
 
 	// Read and verify events.
 	ev1 := <-ch
@@ -165,7 +166,7 @@ func TestRunner_BidirectionalEvents(t *testing.T) {
 	}
 
 	// Inject end event and verify channel closes.
-	fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd, RunID: "run-1"})
+	require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd, RunID: "run-1"}))
 	ev3 := <-ch
 	if ev3.Kind != runner.EventKindEnd {
 		t.Errorf("event[2].Kind = %q, want %q", ev3.Kind, runner.EventKindEnd)
@@ -259,7 +260,7 @@ func TestRunner_Resume(t *testing.T) {
 	}
 
 	// Must be the same channel (FakeRunner wires them together).
-	fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+	require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 	ev := <-ch
 	if ev.Kind != runner.EventKindEnd {
 		t.Errorf("Resume channel event Kind = %q, want end", ev.Kind)

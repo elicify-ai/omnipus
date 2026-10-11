@@ -2,7 +2,7 @@ import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, assistantMessages, userMessages, selectAgent, tokenCounter, waitForConnected } from './fixtures/selectors';
-import { freshChat } from './fixtures/session-setup';
+import { freshChat, originOf } from './fixtures/session-setup';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -22,6 +22,27 @@ import { freshChat } from './fixtures/session-setup';
  * @param page      Playwright page object
  * @param gapMs     How long to watch for the stop button to reappear (default 8s)
  */
+/**
+ * S5-08: read a session's transcript straight from the gateway, so a test can
+ * pin SERVER-side state instead of trusting the SPA's rendered view. Returns
+ * the entries; a non-2xx is an honest red (contract: GET
+ * /api/v1/sessions/{id}/messages → 200 with the transcript entries).
+ */
+async function sessionMessages(
+  page: Page,
+  origin: string,
+  sessionId: string,
+): Promise<Array<{ role?: string; content?: string }>> {
+  const resp = await page.request.get(`${origin}/api/v1/sessions/${sessionId}/messages`);
+  if (!resp.ok()) {
+    throw new Error(
+      `GET /api/v1/sessions/${sessionId}/messages failed: ${resp.status()} ${await resp.text()}`,
+    );
+  }
+  const body = (await resp.json()) as Array<{ role?: string; content?: string }>;
+  return Array.isArray(body) ? body : [];
+}
+
 async function waitForTurnFullyDone(page: Page, gapMs = 8_000): Promise<void> {
   const stopBtn = page.locator('[data-testid="stop-btn"]');
   try {
@@ -181,18 +202,28 @@ test(
 
     // The agent row's "New chat with <Agent>" button this test was named for
     // is REMOVED (founder decision D7 — capability stays, UI access point
-    // gone); freshChat is the replacement seam. It also lets this test
-    // finally assert what its name always claimed but its dead
-    // `void urlBefore/urlAfter` tail never checked: the fresh chat runs in a
-    // genuinely DIFFERENT session id, not just a cleared thread.
+    // gone); freshChat is the replacement seam.
     const second = await freshChat(page);
 
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
+    // S5-08: the old tail asserted only `second.sessionId !== firstChat.sessionId`.
+    // That can NEVER fail — POST /api/v1/sessions mints a fresh id on every
+    // call, so it tested the fixture, not the product. Pin the state that
+    // actually differs: the FIRST chat still owns its message on the server
+    // while the second is genuinely empty. "The same thread with its history
+    // hidden" would make the two reads identical and fail here.
+    const origin = originOf(page);
+    const firstMessages = await sessionMessages(page, origin, firstChat.sessionId);
+    const secondMessages = await sessionMessages(page, origin, second.sessionId);
     expect(
-      second.sessionId,
-      'the fresh chat must be a NEW session, not the one the first message ran in',
-    ).not.toEqual(firstChat.sessionId);
+      firstMessages.filter((m) => m.role === 'user'),
+      'the first chat keeps its user message server-side — the fresh chat did not replace it',
+    ).toHaveLength(1);
+    expect(
+      secondMessages,
+      'the fresh chat is empty on the server too — not the same thread with its history hidden',
+    ).toHaveLength(0);
   },
 );
 
