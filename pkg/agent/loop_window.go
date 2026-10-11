@@ -83,7 +83,7 @@ func (al *AgentLoop) assembleMessages(
 			ts.setContextWindowError(err)
 			return history
 		}
-		breadcrumb, err = breadcrumbForWindow(ctx, storeSlots{store: store, key: ts.sessionKey}, snap.State.Skip)
+		breadcrumb, err = breadcrumbForWindow(ctx, storeSlots{store: store, key: ts.sessionKey}, snap.State.ClearFloor, snap.State.Skip)
 		if err != nil {
 			ts.setContextWindowError(err)
 			return history

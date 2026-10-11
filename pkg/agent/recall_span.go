@@ -21,6 +21,7 @@ var recallSpanDropCounters = map[string]*atomic.Int64{
 	"replaced": new(atomic.Int64),
 	"pressure": new(atomic.Int64),
 	"aged":     new(atomic.Int64),
+	"cleared":  new(atomic.Int64),
 	"other":    new(atomic.Int64),
 }
 
@@ -163,7 +164,8 @@ func (al *AgentLoop) dropRecallSpan(sessionKey, reason string) {
 
 // recordRecallSpanDropped increments recall_span_dropped_total{reason} (FR-018).
 // Known reasons: "replaced" (next recall replaced it), "pressure" (dropped
-// first under budget), "aged" (future turn-age expiry, placeholder).
+// first under budget), "aged" (future turn-age expiry, placeholder), "cleared"
+// (a /clear moved the window past everything the span recalled).
 // Unknown reasons are counted under the dedicated "other" bucket so they are
 // observable without misattributing them to a known cause.
 func recordRecallSpanDropped(reason string) {

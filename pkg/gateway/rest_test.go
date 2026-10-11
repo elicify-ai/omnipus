@@ -129,9 +129,14 @@ func newTestRestAPI(t *testing.T) (*restAPI, func()) {
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 
+	// homePath is the test's own temp home. Left empty, handlers that read the
+	// entity store (listAgents) resolved "entities/agents" against the working
+	// directory and left <id>.lock files under pkg/gateway (see TestMain's leak
+	// guard).
 	api := &restAPI{
 		agentLoop:     al,
 		allowedOrigin: "http://localhost:3000",
+		homePath:      tmpDir,
 	}
 	return api, func() {}
 }

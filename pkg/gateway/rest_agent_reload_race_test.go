@@ -31,6 +31,7 @@ package gateway
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,8 +56,13 @@ import (
 // it is not, and must not become, a time.Sleep in the production fix itself.
 func wireAsyncReload(t *testing.T, api *restAPI, reloadDelay time.Duration) {
 	t.Helper()
+	var done sync.WaitGroup
+	t.Cleanup(done.Wait)
 	api.agentLoop.SetReloadFunc(func() error {
+		api.agentLoop.MarkReloadPending()
+		done.Add(1)
 		go func() {
+			defer done.Done()
 			time.Sleep(reloadDelay)
 			newCfg, err := config.LoadConfig(api.configPath())
 			if err != nil {

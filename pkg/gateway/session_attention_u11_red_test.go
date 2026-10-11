@@ -326,6 +326,12 @@ func u11WSFixture(t *testing.T) (*WSHandler, *session.UnifiedStore, string) {
 	handler := newWSHandler(msgBus, al, "")
 	store := al.GetSessionStore()
 	require.NotNil(t, store)
+	// The main's pair must be entitled to it (the WebSocket attach applies the
+	// same eligibility as the list): seed the workspace record with the member.
+	require.NoError(t, writeWorkspaceFile(tmpDir, storedWorkspace{
+		ID: u11WorkspaceID, Name: "WS", Status: "active", CoreTeam: []string{u11Agent},
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}))
 	main, err := store.GetOrCreateMainSession(u11WorkspaceID, u11Agent)
 	require.NoError(t, err)
 	return handler, store, main.ID

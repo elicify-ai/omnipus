@@ -24,18 +24,26 @@ const breadcrumbReadChunk = 64
 // one that no longer fits (and every oversize one skipped on the way) is
 // omitted, whether or not it would have rendered text.
 func buildArchiveBreadcrumb(ctx context.Context, src slotsBefore, skip int) (string, error) {
-	if skip == 0 {
+	return buildArchiveBreadcrumbFrom(ctx, src, 0, skip)
+}
+
+// buildArchiveBreadcrumbFrom is buildArchiveBreadcrumb for the evicted slots
+// [floor, skip). A /clear sets floor to the slot count it cleared, so nothing
+// from the cleared part is quoted into the next request; it stays in the
+// archive for recall_conversation.
+func buildArchiveBreadcrumbFrom(ctx context.Context, src slotsBefore, floor, skip int) (string, error) {
+	if skip <= floor {
 		return "", nil
 	}
 	capRunes := breadcrumbTokenCap * breadcrumbCharsPerToken
-	reserve := utf8.RuneCountInString(archiveBreadcrumbHeader(maxIntValue()))
+	reserve := utf8.RuneCountInString(archiveBreadcrumbHeaderFrom(floor, maxIntValue()))
 	reserve += utf8.RuneCountInString(fmt.Sprintf("\n+%d earlier ranges", maxIntValue()))
 	budget := capRunes - reserve
 	var entries []string // newest first
 	used, omitted := 0, 0
 fill:
-	for hi := skip - 1; hi >= 0; {
-		lo := max(0, hi-breadcrumbReadChunk+1)
+	for hi := skip - 1; hi >= floor; {
+		lo := max(floor, hi-breadcrumbReadChunk+1)
 		type slotEntry struct {
 			idx, turn int
 			msg       memory.ArchivedMessage
@@ -59,7 +67,7 @@ fill:
 				continue
 			}
 			if used+n > budget {
-				omitted += e.idx + 1 // this slot and everything older
+				omitted += e.idx + 1 - floor // this slot and everything older (down to the floor)
 				break fill
 			}
 			entries = append(entries, text)
@@ -68,7 +76,7 @@ fill:
 		hi = lo - 1
 	}
 	var out strings.Builder
-	out.WriteString(archiveBreadcrumbHeader(skip))
+	out.WriteString(archiveBreadcrumbHeaderFrom(floor, skip))
 	for _, e := range entries {
 		out.WriteByte('\n')
 		out.WriteString(e)
@@ -79,9 +87,11 @@ fill:
 	return out.String(), nil
 }
 
-func archiveBreadcrumbHeader(skip int) string {
+func archiveBreadcrumbHeader(skip int) string { return archiveBreadcrumbHeaderFrom(0, skip) }
+
+func archiveBreadcrumbHeaderFrom(floor, skip int) string {
 	return fmt.Sprintf("## Earlier in this conversation (evicted from the live window)\n"+
-		"Use the recall_conversation tool to read any of these verbatim.\narchive_range={from:0,to:%d}", skip-1)
+		"Use the recall_conversation tool to read any of these verbatim.\narchive_range={from:%d,to:%d}", floor, skip-1)
 }
 
 func archiveBreadcrumbEntry(idx, turn int, msg memory.ArchivedMessage) string {
