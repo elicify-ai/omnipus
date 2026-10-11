@@ -115,6 +115,24 @@ func (s *Store) soulPath(id string) string {
 	return filepath.Join(s.home, "agents", id, "SOUL.md")
 }
 
+// PeekRevision returns id's current revision WITHOUT taking the entity lock - a
+// bare read, like entity.Store.Get. It is for advisory pre-checks that must not
+// depend on the lock (delete_agent's read-only stale-revision check before any
+// cleanup); the authoritative revision comparison is still DeleteState's, under
+// the lock. entity.ErrNotFound when the record is absent; any other error means
+// the record exists but could not be read.
+func (s *Store) PeekRevision(id string) (string, error) {
+	if err := ValidateAgentID(id); err != nil {
+		return "", err
+	}
+	entityPath := filepath.Join(s.inner.Dir(), id+".json")
+	state, _, _, err := readStateFiles(entityPath, s.soulPath(id))
+	if err != nil {
+		return "", err
+	}
+	return state.Revision, nil
+}
+
 func (s *Store) ReadState(id string) (state *State, err error) {
 	if validateErr := ValidateAgentID(id); validateErr != nil {
 		return nil, validateErr

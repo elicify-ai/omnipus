@@ -1603,6 +1603,11 @@ func (tp *taskPatch) launchIfStarted() bool {
 			}
 			httpStatus := http.StatusInternalServerError
 			switch {
+			case errors.Is(startErr, agent.ErrExecutorDraining):
+				// Shutdown, not a fault in the request or the task (architect
+				// ruling R1 #2): the task was reverted above and is startable
+				// after the restart.
+				httpStatus = http.StatusServiceUnavailable
 			case errors.Is(startErr, agent.ErrPlanNotExecuting), errors.Is(startErr, agent.ErrPlanStateUnresolvable):
 				// S1 plan-gate follow-up: a PATCH to in_progress on a plan
 				// member whose parent plan is not (or can no longer be
@@ -1629,6 +1634,9 @@ func (tp *taskPatch) launchIfStarted() bool {
 				// text, the cause is already logged above.
 				jsonServerFailure(tp.w, http.StatusInternalServerError,
 					"the task's plan state could not be verified", startErr)
+			case httpStatus == http.StatusServiceUnavailable:
+				// Fixed text: the raw executor error is only in the Warn log above.
+				jsonErr(tp.w, httpStatus, "the server is shutting down; start the task again after it restarts")
 			case httpStatus == http.StatusConflict:
 				// The remaining 409 classes (dispatch cap, plan not
 				// executing) are domain errors built from fixed text, ids and

@@ -35,9 +35,16 @@ const requestReminderMetadataKey = "request_reminder"
 // wake, or steered into a live turn), so a turn ending earlier cannot remind
 // about a request the agent has not seen.
 func (al *AgentLoop) markRequestDelivered(transcriptEntryID string) {
-	if transcriptEntryID != "" {
-		al.deliveredRequests.Store(transcriptEntryID, struct{}{})
+	if transcriptEntryID == "" {
+		return
 	}
+	// Every inbound carries a transcript entry id (each human message too); only
+	// a pending request is ever owed a reminder, and admission registers it
+	// BEFORE its turn can run, so anything else is not recorded.
+	if _, pending := al.pendingRequests.Load(transcriptEntryID); !pending {
+		return
+	}
+	al.deliveredRequests.Store(transcriptEntryID, struct{}{})
 }
 
 // takeUnansweredRequests returns, for sessionID, the delivered, still-pending
@@ -91,7 +98,12 @@ func (al *AgentLoop) remindUnansweredRequests(sessionID string) {
 		// OperatorPrompt, admitted as the owner-wake principal.
 		Metadata: map[string]string{"agent_id": agentID, requestReminderMetadataKey: "1", ownerWakeMetadataKey: "1"},
 	}); err != nil {
-		logger.WarnCF("agent", "could not remind the agent about unanswered requests",
+		// The reminder never went out: give the one reminder back so a later turn
+		// end retries, instead of leaving the sender waiting for ever.
+		for _, id := range ids {
+			al.remindedRequests.Delete(id)
+		}
+		logger.ErrorCF("agent", "could not remind the agent about unanswered requests - the reminder stays owed",
 			map[string]any{"session_id": sessionID, "requests": ids, "error": err.Error()})
 	}
 }
@@ -103,4 +115,13 @@ func requestReminderText(ids []string) string {
 	}
 	return fmt.Sprintf("Requests %s are still unanswered. Answer each with the answer_request tool "+
 		"(request_id and your answer as text); a plain reply does not reach the sender.", strings.Join(ids, ", "))
+}
+
+// settleRequest ends a request's life in every set that tracks it: answered or
+// discarded, it can owe no reminder and must not be remembered. Without this the
+// delivered and reminded sets grew for the life of the process.
+func (al *AgentLoop) settleRequest(requestID string) {
+	al.pendingRequests.Delete(requestID)
+	al.deliveredRequests.Delete(requestID)
+	al.remindedRequests.Delete(requestID)
 }

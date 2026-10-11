@@ -1143,16 +1143,24 @@ type AgentSessionStore interface {
 
 // CheckAgentDeleteRevision is the read-only revision comparison a delete does
 // before any cleanup. It returns agentstore.ErrRevisionConflict (wrapped) when
-// the agent's current revision differs from the caller's. An unreadable or
-// missing record is not decided here: the cascade keeps its idempotent-retry
-// behaviour and DeleteState reports it.
+// the agent's current revision differs from the caller's. A MISSING record is
+// not decided here (the cascade keeps its idempotent-retry behaviour and
+// DeleteState reports it); a record that exists but cannot be read is an error.
 func CheckAgentDeleteRevision(omnipusHome, agentID, revision string) error {
-	st, err := agentstore.New(omnipusHome).ReadState(agentID)
-	if err != nil || st == nil {
-		return nil //nolint:nilerr // An unreadable or missing record is decided by the cascade's idempotent retry and DeleteState, not by this read-only comparison.
+	// A lock-free peek: this is an advisory pre-check, and DeleteState repeats the
+	// authoritative comparison under the lock.
+	current, err := agentstore.New(omnipusHome).PeekRevision(agentID)
+	if err != nil {
+		if errors.Is(err, entity.ErrNotFound) {
+			return nil // a missing record is the cascade's idempotent retry; DeleteState reports it
+		}
+		// A record that exists but cannot be read (corrupt, unreadable) must stop
+		// the delete here, BEFORE sessions and task assignments are destroyed and
+		// DeleteState then fails (delta review R1 #10).
+		return fmt.Errorf("read the agent record before deleting it: %w", err)
 	}
-	if st.Revision != revision {
-		return fmt.Errorf("%w: expected %s, current %s", agentstore.ErrRevisionConflict, revision, st.Revision)
+	if current != revision {
+		return fmt.Errorf("%w: expected %s, current %s", agentstore.ErrRevisionConflict, revision, current)
 	}
 	return nil
 }

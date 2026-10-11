@@ -172,7 +172,7 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 		Participant: participantFromSender(a.Sender, al.agentDisplayName),
 	}
 	if err := store.AppendTranscriptStrict(receiverSessionID, entry); err != nil {
-		al.pendingRequests.Delete(requestID)
+		al.settleRequest(requestID)
 		if dErr := ledger.Discard(receiverSessionID, requestID); dErr != nil {
 			logger.WarnCF("agent", "request capture could not be discarded after a failed append",
 				map[string]any{"request_id": requestID, "error": dErr.Error()})
@@ -416,7 +416,7 @@ func (r AddressRouter) Reply(ctx context.Context, req tools.ReplyRequest) (tools
 		return tools.ReplyReceipt{}, fmt.Errorf("%w", addressing.ErrUnusableCorrelation)
 	}
 	if err == nil {
-		al.pendingRequests.Delete(capture.RequestID) // answered: no reminder owed
+		al.settleRequest(capture.RequestID) // answered: no reminder owed
 	}
 	return receipt, err
 }
@@ -639,7 +639,7 @@ func (al *AgentLoop) DiscardRequest(receiverSessionID, requestID string) error {
 	if ledger == nil {
 		return errors.New("session store unavailable")
 	}
-	al.pendingRequests.Delete(requestID) // discarded: it can no longer be answered
+	al.settleRequest(requestID) // discarded: it can no longer be answered
 	return ledger.Discard(receiverSessionID, requestID)
 }
 
