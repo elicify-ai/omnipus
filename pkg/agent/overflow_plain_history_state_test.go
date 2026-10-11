@@ -1,11 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/memory"
@@ -14,21 +14,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func plainHistoryContextDirectory(t *testing.T, agent *AgentInstance) string {
+// plainHistoryArchiveBase returns the store base dir that holds the ONE
+// addressed archive. U2 Decision D / DEL-12 deleted the separate `.context`
+// model JSONL backend, so the base dir itself is the archive root — a fresh
+// store constructed over it sees the same bytes.
+func plainHistoryArchiveBase(t *testing.T, agent *AgentInstance) string {
 	t.Helper()
 	store := agent.Sessions
 	if fault, ok := store.(*plainHistoryCommitFailure); ok {
 		store = fault.SessionStore
 	}
 	unified, ok := store.(*session.UnifiedStore)
-	require.True(t, ok, "fixture: locate the actual unified context backend")
-	return filepath.Join(unified.BaseDir(), ".context")
+	require.True(t, ok, "fixture: locate the actual unified archive backend")
+	return unified.BaseDir()
 }
 
+// plainHistoryArchiveBytes reads the real admitted archive bytes for key: the
+// addressed day archive at <baseDir>/<owning session id>/transcript.jsonl
+// (archive_day_store.go). owningSessionID leaves a key with no ":session:"
+// segment unchanged, which is the shape these fixtures use.
 func plainHistoryArchiveBytes(t *testing.T, agent *AgentInstance, key string) []byte {
 	t.Helper()
-	filename := strings.NewReplacer(":", "_", "/", "_", "\\", "_").Replace(key) + ".jsonl"
-	data, err := os.ReadFile(filepath.Join(plainHistoryContextDirectory(t, agent), filename))
+	data, err := os.ReadFile(filepath.Join(plainHistoryArchiveBase(t, agent), key, "transcript.jsonl"))
 	require.NoError(t, err, "fixture: read actual admitted archive bytes, not a synthesized message list")
 	return data
 }
@@ -52,11 +59,17 @@ func TestContextOverflowPlain_CommittedReliefPreservesArchiveAndReload(t *testin
 	require.NoError(t, err)
 	require.Equal(t, 2, after.State.Skip, "exact completed oldest plain prefix")
 	require.Equal(t, before.State.Count, after.State.Count)
-	require.Equal(t, viewArchived(before), viewArchived(after))
+	// FR-030: relief evicts exactly the completed oldest prefix, so the LIVE
+	// view shrinks by that prefix and nothing else moves — the surviving slots
+	// are the tail of the pre-relief live view. (The previous form compared the
+	// two live views for equality, which no eviction can satisfy; the archive
+	// bytes themselves are pinned unchanged above.)
+	require.Equal(t, viewArchived(before)[after.State.Skip:], viewArchived(after),
+		"committed relief evicts exactly the completed oldest prefix and changes nothing else")
 
 	// A separately constructed REAL store has no live backend cache or staged
 	// message slice. Its metadata+archive projection must reproduce the view.
-	reopened, err := session.NewUnifiedStore(plainHistoryContextDirectory(t, agent))
+	reopened, err := session.NewUnifiedStore(plainHistoryArchiveBase(t, agent))
 	require.NoError(t, err)
 	reloadedBackend := reopened
 	reloaded, err := reloadedBackend.WindowView(context.Background(), key)
@@ -106,7 +119,7 @@ func TestContextOverflowPlain_AbortRestoresActualTurnStart(t *testing.T) {
 	require.Equal(t, start.State.Projection, restored.State.Projection, "restore the exact start projection")
 	require.Len(t, restored.Excluded, 1, "the aborted append is recorded as a retained-but-excluded span")
 	retainedBytes := plainHistoryArchiveBytes(t, agent, key)
-	require.True(t, strings.HasPrefix(string(retainedBytes), string(startBytes)), "FR-006: abort never rewrites retained archive bytes")
+	require.True(t, bytes.HasPrefix(retainedBytes, startBytes), "FR-006: abort never rewrites retained archive bytes")
 	require.Greater(t, len(retainedBytes), len(startBytes), "FR-006: the aborted append's bytes are RETAINED, not truncated")
 	require.Equal(t, history, agent.Sessions.GetHistory(key))
 }

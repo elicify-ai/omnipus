@@ -48,8 +48,8 @@ func writeLegacyActiveAgent(t *testing.T, store *session.UnifiedStore, sessionID
 		t.Fatalf("read meta.json: %v", err)
 	}
 	doc := map[string]any{}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		t.Fatalf("parse meta.json: %v", err)
+	if uerr := json.Unmarshal(raw, &doc); uerr != nil {
+		t.Fatalf("parse meta.json: %v", uerr)
 	}
 	doc["active_agent_id"] = stale
 	out, err := json.Marshal(doc)

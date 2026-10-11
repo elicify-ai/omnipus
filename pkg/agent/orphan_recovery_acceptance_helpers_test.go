@@ -74,7 +74,11 @@ func orphanACSnapshot(t *testing.T, h *cwR1Harness) session.WindowView {
 
 func orphanACArchiveBytes(t *testing.T, h *cwR1Harness) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(h.dir, h.key+".jsonl"))
+	// U2 Decision D / DEL-12: the ONE addressed archive is
+	// <baseDir>/<owning session id>/transcript.jsonl (archive_day_store.go);
+	// the retired model backend wrote <baseDir>/<key>.jsonl. h.key ("cw-r1")
+	// carries no ":session:" segment, so owningSessionID leaves it unchanged.
+	data, err := os.ReadFile(filepath.Join(h.dir, h.key, "transcript.jsonl"))
 	require.NoError(t, err, "read original archive bytes")
 	return data
 }

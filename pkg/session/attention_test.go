@@ -85,10 +85,10 @@ func TestAttention_AckSemanticsAndPersistence(t *testing.T) {
 	id := main.ID
 	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 
-	if got, err := store.AckAttentionSeen(id, 5); err != nil || got != 0 {
-		t.Fatalf("ack on a main with no outcome = (%d, %v), want (0, nil): nothing to see", got, err)
+	if got, ackErr := store.AckAttentionSeen(id, 5); ackErr != nil || got != 0 {
+		t.Fatalf("ack on a main with no outcome = (%d, %v), want (0, nil): nothing to see", got, ackErr)
 	}
-	if _, err := store.AckAttentionSeen(id, -1); err == nil {
+	if _, ackErr := store.AckAttentionSeen(id, -1); ackErr == nil {
 		t.Fatal("a negative ack must be refused")
 	}
 
@@ -98,8 +98,8 @@ func TestAttention_AckSemanticsAndPersistence(t *testing.T) {
 	g2 := attentionOf(t, store, id).OutcomeOrder
 
 	// Ack the bound the client was shown (g1) AFTER g2 was saved: g2 stays unseen.
-	if got, err := store.AckAttentionSeen(id, g1); err != nil || got != g1 {
-		t.Fatalf("ack(g1) = (%d, %v), want (%d, nil)", got, err, g1)
+	if got, ackErr := store.AckAttentionSeen(id, g1); ackErr != nil || got != g1 {
+		t.Fatalf("ack(g1) = (%d, %v), want (%d, nil)", got, ackErr, g1)
 	}
 	if m := attentionOf(t, store, id); m.SeenOrder >= m.OutcomeOrder {
 		t.Fatalf("g2 must stay unseen after acking g1: %+v", m)
@@ -114,8 +114,8 @@ func TestAttention_AckSemanticsAndPersistence(t *testing.T) {
 	}
 
 	// Restart: a new store over the same directory sees the same mark.
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := store.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	reopened, err := NewUnifiedStore(filepath.Clean(dir))
 	if err != nil {

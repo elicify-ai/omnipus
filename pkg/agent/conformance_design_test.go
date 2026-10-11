@@ -850,6 +850,7 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	if createErr := taskStore.Create(tk); createErr != nil {
 		t.Fatalf("create task: %v", createErr)
 	}
+	seedTaskGoal(t, tk.ID, "the work is done", "the result is verified")
 
 	// A met-verdict judge answering every criterion it is asked about.
 	judge := &b6ScriptedJudge{metFromCall: 1, reason: "ok"}

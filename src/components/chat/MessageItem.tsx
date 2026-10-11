@@ -2,19 +2,19 @@ import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { User } from '@phosphor-icons/react'
-import { useQuery } from '@tanstack/react-query'
 import { ToolCallBadge } from './ToolCallBadge'
 import { ModelFooter } from './ModelFooter'
 import { AgentMark } from '@/components/agents/AgentMark'
 import type { ChatMessage, PositionedToolCall } from '@/store/chat'
 import { useChatStore } from '@/store/chat'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { fetchAgents } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { splitMessageParts } from '@/lib/messageParts'
 import { formatErrorDetail } from '@/lib/llm-error'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
+import { ParticipantMessageRow, ReplyHeaderView, usePairedReplyToIds, useParticipantLabelParts } from './ParticipantLabels'
+import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content.
 // Keeps a runaway provider error payload from blowing out the chat scroll.
@@ -114,7 +114,9 @@ const USER_AVATAR_STYLE: React.CSSProperties = {
 }
 
 export function MessageItem({ message }: MessageItemProps) {
-  const { toolCalls } = useChatStore()
+  // The whole-store subscription is pre-existing (the component re-renders on
+  // every store change regardless); messages feeds the reply-chip pairing set.
+  const { toolCalls, messages } = useChatStore()
   // ADR-051 — read once unconditionally at the top (Rules of Hooks: this
   // component takes no other conditionally-skipped hooks below). The
   // disclosure is mounted ONLY when verbose is on AND the message carries
@@ -123,15 +125,23 @@ export function MessageItem({ message }: MessageItemProps) {
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
 
-  // Look up agent for assistant messages that carry an agentId.
-  // Uses the cached ['agents'] query (prefetched by AppShell) — no extra network request.
-  const { data: agents = [] } = useQuery({
-    queryKey: ['agents'],
-    queryFn: fetchAgents,
-    staleTime: 30_000,
-  })
+  // Look up agent for assistant messages that carry an agentId, plus the
+  // label parts the U8 reply header resolves against. Same cached ['agents']
+  // query (prefetched by AppShell) — no extra network request.
+  const { agents, workspaces: labelWorkspaces, currentWorkspaceId } = useParticipantLabelParts()
   const agent = message.agentId ? agents.find((a) => a.id === message.agentId) : null
   const agentName = agent?.name ?? (message.agentId ? message.agentId : null)
+  // U8/F15/F17 — the same helpers the virtualized rows use, so live and
+  // history render identically for the same message id.
+  const replyHeader = isUser || isSystem ? null : replyHeaderParts(message, agents, currentWorkspaceId, labelWorkspaces)
+  const pairedReplyToIds = usePairedReplyToIds(messages)
+
+  // U8/F15/F17 — a user entry carrying a server-stamped participant is a
+  // LEFT-side message from another participant (F17), rendered by the same
+  // row component every list path routes through.
+  if (isUser && message.participant) {
+    return <ParticipantMessageRow message={message} />
+  }
 
   if (isSystem) {
     // Goal outcome line (founder decision 2026-09-14) — always shown.
@@ -160,7 +170,10 @@ export function MessageItem({ message }: MessageItemProps) {
   // store — PositionedToolCall in src/store/chat.ts) to rebuild the true
   // order; calls with no offset (legacy bakes / reconnect edge) fall back
   // to the old "after all text" placement.
-  const positionedToolCalls = (message.tool_calls ?? []) as PositionedToolCall[]
+  const positionedToolCalls = ((message.tool_calls ?? []) as PositionedToolCall[])
+    // F17 (1): same reply-pairing filter the historical rows apply — a
+    // send_message chip whose reply_to a reply bubble answers is hidden.
+    .filter((tc) => !isSendChipHiddenByReply(tc.tool, tc.params, pairedReplyToIds))
   const messageParts = splitMessageParts(message.content ?? '', positionedToolCalls)
   // Live cursor for streaming: a message being actively streamed with no
   // text yet shows the "Thinking…" indicator instead of an (empty) bubble.
@@ -195,14 +208,20 @@ export function MessageItem({ message }: MessageItemProps) {
 
       {/* Content */}
       <div className={cn('flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0', isUser ? 'items-end' : undefined)}>
-        {/* Agent label — shown above assistant messages when the agent is known */}
-        {!isUser && agentName && (
-          <span
-            data-testid="agent-label"
-            className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] px-[var(--space-1)] capitalize"
-          >
-            {agentName}
-          </span>
+        {/* Agent label — shown above assistant messages when the agent is
+            known; a reply bubble shows the U8 reply header instead (D4 rows
+            5-6), same helpers as the historical rows. */}
+        {!isUser && (replyHeader || agentName) && (
+          replyHeader ? (
+            <ReplyHeaderView header={replyHeader} />
+          ) : (
+            <span
+              data-testid="agent-label"
+              className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] px-[var(--space-1)] capitalize"
+            >
+              {agentName}
+            </span>
+          )
         )}
         {/* Streaming-with-no-text-yet indicator. Independent of the
             interleaved parts below (splitMessageParts never emits an empty

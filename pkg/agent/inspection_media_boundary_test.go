@@ -111,7 +111,11 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertInspectionRecordsPrivate(t, archive, imageBytes, imagePath)
-	reloaded, err := session.NewUnifiedStoreWithHome(filepath.Join(agent.Home, "sessions"), home)
+	// DEL-10: there is ONE shared session store — the per-agent stores were
+	// deleted — and it is rooted at the store's own base dir, not at the
+	// agent's home. Reload from the LIVE store's base dir so the reopen really
+	// re-reads the same archive instead of an empty, never-used directory.
+	reloaded, err := session.NewUnifiedStoreWithHome(al.GetSessionStore().BaseDir(), home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +138,8 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 	if _, trimmed := al.windowTrimForce(agent, "", key, true); !trimmed {
 		t.Fatal("forced window trim did not evict the older inspection turn")
 	}
-	compacted, err := session.NewUnifiedStoreWithHome(filepath.Join(agent.Home, "sessions"), home)
+	// DEL-10: one shared session store, rooted at the store's own base dir.
+	compacted, err := session.NewUnifiedStoreWithHome(al.GetSessionStore().BaseDir(), home)
 	if err != nil {
 		t.Fatal(err)
 	}

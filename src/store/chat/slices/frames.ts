@@ -552,6 +552,12 @@ function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: T
   }
   if (frame.agent_id) m.agentId = frame.agent_id
   if (frame.turn_id && !m.turnId) m.turnId = frame.turn_id
+  // U8/F15/F17 — the live reply mirror arrives as one token+done pair
+  // carrying reply_to_message_id + reply_to_participant (pkg/gateway/
+  // address_deps.go::PublishGuestReply). First write wins: a bubble resolved
+  // across several tokens stamps the pair once.
+  if (frame.reply_to_message_id && !m.replyToMessageId) m.replyToMessageId = frame.reply_to_message_id
+  if (frame.reply_to_participant && !m.replyToParticipant) m.replyToParticipant = frame.reply_to_participant
   m.isStreaming = true
   m.status = 'streaming'
   draft.isStreaming = true
@@ -772,6 +778,10 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
     isStreaming: true,
     agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined,
     turnId,
+    // U8/F15/F17 — a reply's first token mints the bubble WITH its reply pair
+    // (see applyTokenContentTo for the merged-continuation path).
+    ...(frame.reply_to_message_id ? { replyToMessageId: frame.reply_to_message_id } : {}),
+    ...(frame.reply_to_participant ? { replyToParticipant: frame.reply_to_participant } : {}),
     ...(idCollision ? { mergedReplayIds: [messageId] } : {}),
   }
   if (idCollision) {

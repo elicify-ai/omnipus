@@ -43,7 +43,7 @@ func TestAgentIdentity_UpdateRejectsCaseFoldedNull(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			api := buildExecutorTestAPI(t)
-			created := postAgent(t, api, `{"name":"Boundary Editable","type":"Main","soul":"editable-soul","figure":"Man","role":"developer","color":"#3B82F6","icon":"magnifying-glass"}`)
+			created := postAgent(t, api, `{"name":"Boundary Editable","type":"Main","soul":"editable-soul","figure":"Man","role":"developer","color":"#3B82F6"}`)
 			require.Equal(t, http.StatusCreated, created.Code, "body: %s", created.Body.String())
 			id, ok := decodeObject(t, created.Body.Bytes())["id"].(string)
 			require.True(t, ok, "created identity id must be a string")

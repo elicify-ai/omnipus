@@ -26,7 +26,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,7 +34,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -92,27 +90,6 @@ func newTestRestAPIWithHomeAndAgent(t *testing.T) *restAPI {
 		taskStore:     task.New(tmpDir + "/tasks"),
 		taskLock:      task.TaskFileLock,
 	}
-}
-
-// newTestRestAPIWithTaskTrigger extends newTestRestAPIAlignedStores with a
-// live agent.TaskTriggerScheduler wired into the agent loop
-// (agentLoop.SetTaskTriggerScheduler), mirroring gateway.go's production boot
-// wiring (NewTaskTriggerScheduler -> Start -> SetTaskTriggerScheduler). REST
-// create/PATCH calls flow through AgentLoop.NotifyTaskUpserted, so with this
-// wired a real cron job is armed/no-op'd exactly as in production — required
-// for the occurrences endpoint's `every` anchor (NextRunAtMSForTask,
-// rest_tasks.go's everyAnchor closure) to resolve to anything other than
-// ok=false. Returns the scheduler too, so a test can also drive it directly
-// (RunDueJobs/WaitForLane) or read its armed state.
-func newTestRestAPIWithTaskTrigger(t *testing.T) (*restAPI, *agent.TaskTriggerScheduler) {
-	t.Helper()
-	api := newTestRestAPIAlignedStores(t)
-	storePath := filepath.Join(t.TempDir(), "triggers", "jobs.json")
-	sched := agent.NewTaskTriggerScheduler(storePath, api.taskStore, api.taskExecutor)
-	require.NoError(t, sched.Start())
-	t.Cleanup(sched.Stop)
-	api.agentLoop.SetTaskTriggerScheduler(sched)
-	return api, sched
 }
 
 // createRecurringTaskViaAPI POSTs a task with a `recurring` RRULE trigger and

@@ -110,8 +110,8 @@ func TestR5_Sites_CaptureOfferFailureFrameIsFixedText(t *testing.T) {
 		t.Fatal("the offer never reached capture admission")
 	}
 	select {
-	case err := <-result:
-		require.Error(t, err, "a failed offer still returns its error to the caller")
+	case resErr := <-result:
+		require.Error(t, resErr, "a failed offer still returns its error to the caller")
 	case <-time.After(2 * time.Second):
 		t.Fatal("the answer did not finish")
 	}

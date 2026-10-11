@@ -49,7 +49,7 @@ func TestParticipantFromSender(t *testing.T) {
 		}
 	})
 	t.Run("no authenticated fact gives no label", func(t *testing.T) {
-		for _, s := range []addressing.Sender{{}, {Principal: "  "}, {Platform: "telegram"}, {Platform: "telegram", DisplayName: "\u0007​"}} {
+		for _, s := range []addressing.Sender{{}, {Principal: "  "}, {Platform: "telegram"}, {Platform: "telegram", DisplayName: "\u0007\u200b"}} {
 			if p := participantFromSender(s, name); p != nil {
 				t.Errorf("sender %+v produced %+v; want nil (never invent a human)", s, p)
 			}
@@ -57,11 +57,11 @@ func TestParticipantFromSender(t *testing.T) {
 	})
 	t.Run("display name is plain text within bounds", func(t *testing.T) {
 		long := strings.Repeat("é", 300)
-		p := participantFromSender(addressing.Sender{Platform: "slack", DisplayName: "A\u0000li‮ce\n" + long}, name)
+		p := participantFromSender(addressing.Sender{Platform: "slack", DisplayName: "A\u0000li\u202ece\n" + long}, name)
 		if p == nil {
 			t.Fatal("nil")
 		}
-		if strings.ContainsAny(p.DisplayName, "\u0000\n‮") {
+		if strings.ContainsAny(p.DisplayName, "\u0000\n\u202e") {
 			t.Fatalf("control/format characters survived: %q", p.DisplayName)
 		}
 		if n := len([]rune(p.DisplayName)); n == 0 || n > 128 {

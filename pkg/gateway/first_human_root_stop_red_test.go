@@ -99,6 +99,7 @@ func newFirstHumanStopFixture(t *testing.T) (*u2ScopeFixture, *session.BootEpoch
 		Sandbox:     config.OmnipusSandboxConfig{Mode: config.SandboxModeOff},
 	}
 	ensureTestWorkspaceMembership(t, cfg)
+	seedDefaultDelegationGraph(t, testHarnessAgentIDs(cfg))
 	msgBus := bus.NewMessageBus()
 	p := &u2ScopeProvider{entered: make(chan context.Context, 16), release: make(chan struct{})}
 	al, err := agent.NewAgentLoop(cfg, msgBus, p)

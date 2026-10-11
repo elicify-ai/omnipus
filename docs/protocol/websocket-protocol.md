@@ -2,26 +2,22 @@
 
 **Version**: 1.0
 **Created**: 2026-04-01
-**Status**: Authoritative
+**Status**: Explanatory guide (the AsyncAPI contract is authoritative)
 
-This document is the single canonical reference for all WebSocket frame types in Omnipus. All specs that reference WebSocket frames must link here rather than defining frames inline. Engineers implementing the backend (`pkg/gateway/`) and the frontend (`src/lib/ws.ts`, chat components) must treat this document as the contract between them.
-
-**Endpoint**: `ws://<host>:<port>/api/v1/chat/ws` (HTTP Upgrade from `/api/v1/chat/ws`)
-
-**Source**: Frame definitions derived from `src/lib/ws.ts` (TypeScript types) as the implemented reference. The backend Go implementation must match these schemas exactly.
+This page is an explanatory protocol guide. The authoritative wire contract is the AsyncAPI specification (`contracts/asyncapi.yaml`); frontend and backend frame types are generated from it. When this guide and the generated contract disagree, follow the contract. The endpoint is `/api/v1/chat/ws` on the gateway's HTTP or HTTPS origin; use `ws` or `wss` accordingly.
 
 ---
 
 ## Connection Lifecycle
 
 1. Client establishes WebSocket connection via HTTP Upgrade.
-2. Client immediately sends an `auth` frame (if `OMNIPUS_BEARER_TOKEN` is configured).
+2. The web app authenticates through its HttpOnly `omnipus-session` cookie, automatically attached to the WebSocket handshake. It neither reads a bearer token from browser storage nor sends an `auth` frame. Programmatic clients without that cookie can use the gateway's supported first-frame bearer authentication (see `auth` below). The authentication handler is `WSHandler.authenticateWS` in `pkg/gateway/websocket.go`; the web app's connection manager only opens the socket.
 3. Server authenticates; connection is ready for message exchange.
-4. Client sends keep-alive `ping` frames every 30 seconds via the connection manager.
-5. On disconnect, the client reconnects with a two-phase backoff (`src/lib/ws.ts:366-372`):
+4. The client sends an application `ping` every 30 seconds via the connection manager; the gateway replies with `pong` for liveness tracking.
+5. On disconnect, the client reconnects with a two-phase backoff (`src/lib/ws.ts::WsConnection._scheduleReconnect`):
    - **Fast phase** — `MAX_FAST_ATTEMPTS = 10` retries with exponential backoff (`2^attempt * 1000 ms`) capped at `MAX_FAST_DELAY_MS = 30_000` ms.
    - **Slow phase** — `MAX_SLOW_ATTEMPTS = 20` retries at a fixed `SLOW_RETRY_DELAY_MS = 60_000` ms interval.
-   - **Give up** — after 30 total attempts the connection surfaces an error and the user must click "Reconnect now" in the SPA.
+   - **Give up** — after ten fast and twenty slow reconnect attempts, the connection manager reports the `gave_up` reconnect state. Chat shows its reconnect recovery control rather than a technical error banner. Authentication rejection is separate and can sign the user out.
 
 ---
 
@@ -31,7 +27,7 @@ These frames are sent by the frontend to the backend over the WebSocket connecti
 
 ### `auth`
 
-Authenticates the WebSocket connection. Must be sent immediately after connection open when a bearer token is configured.
+First-frame bearer authentication for programmatic clients that do not carry the `omnipus-session` cookie. The web app does not send this frame.
 
 ```json
 {
@@ -43,10 +39,10 @@ Authenticates the WebSocket connection. Must be sent immediately after connectio
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"auth"` |
-| token | string | yes | The bearer token. The SPA reads it as `sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')` (`src/lib/ws.ts:688-689`); `sessionStorage` is preferred (XSS protection) and `localStorage` is the legacy fallback. |
+| token | string | yes | The bearer token. |
 
-**Producer**: `WsConnection._createSocket()` in `src/lib/ws.ts`
-**Consumer**: Gateway auth middleware in `pkg/gateway/rest.go`
+**Schema**: `contracts/asyncapi.yaml::AuthFrame`
+**Consumer**: `pkg/gateway/websocket.go::WSHandler.authenticateWS`
 
 ---
 
@@ -139,7 +135,7 @@ Cancels an in-progress streaming response or tool execution for the given sessio
 
 ### `ping`
 
-Keep-alive ping sent every 30 seconds to prevent proxy/firewall timeout. No response is expected from the server (distinct from WebSocket protocol-level ping/pong).
+Application-level keep-alive sent every 30 seconds to prevent proxy/firewall timeout. The gateway replies with a `pong` frame (distinct from WebSocket protocol-level ping/pong).
 
 ```json
 {
@@ -152,7 +148,7 @@ Keep-alive ping sent every 30 seconds to prevent proxy/firewall timeout. No resp
 | type | string | yes | Always `"ping"` |
 
 **Producer**: `WsConnection._startHeartbeat()` in `src/lib/ws.ts`
-**Consumer**: The server emits a `pong` frame in response (see `PongFrame` below); the SPA consumes that for liveness tracking and **does not** surface the `pong` to the chat reducers (`src/lib/ws.ts:591`). The `ping` itself is consumed by the SPA's `_startHeartbeat` after send.
+**Consumer**: `pkg/gateway/websocket.go::wsHandlerReadLoop.dispatchFrame` replies with `pong`. The connection manager consumes `pong`; chat reducers do not receive it.
 
 ---
 
@@ -222,7 +218,7 @@ A single token chunk from a streaming LLM response. Tokens are appended to the c
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"token"` |
-| session_id | string | yes | The session this token belongs to. Required by the AsyncAPI component schema (`TokenFrame`, `contracts/asyncapi.yaml:1033-1053`). |
+| session_id | string | yes | The session this token belongs to. Required by the AsyncAPI component schema (`TokenFrame`). |
 | content | string | yes | The token text to append to the current assistant message |
 
 **Producer**: Agent loop streaming path in `pkg/agent/`
@@ -237,9 +233,9 @@ Signals that a streaming response has completed. The partial buffer is finalized
 ```json
 {
   "type": "done",
+  "session_id": "sess_abc123",
   "stats": {
     "tokens": 342,
-    "cost": 0.0021,
     "duration_ms": 4120
   }
 }
@@ -248,7 +244,8 @@ Signals that a streaming response has completed. The partial buffer is finalized
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"done"` |
-| stats | object | no | Usage statistics for the completed turn |
+| session_id | string | yes | Session whose turn has completed |
+| stats | object | no | Usage statistics for the completed turn (always an object, never null, when present) |
 | stats.tokens | number | no | Total tokens consumed (prompt + completion) |
 | stats.cost | number | no | Estimated cost in USD |
 | stats.duration_ms | number | no | Wall-clock duration of the turn in milliseconds |
@@ -298,10 +295,10 @@ Signals that the agent has invoked a tool and execution is beginning. Renders an
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"tool_call_start"` |
-| session_id | string | yes | The session this tool call belongs to. Required by the AsyncAPI component schema (`ToolCallStartFrame`, `contracts/asyncapi.yaml:1127-1162`). |
+| session_id | string | yes | The session this tool call belongs to. Required by the AsyncAPI component schema (`ToolCallStartFrame`). |
 | tool | string | yes | Tool name (e.g., `"bash"`, `"read_file"`, `"web_search"`) |
 | call_id | string | yes | Unique identifier for this tool invocation |
-| params | object | yes | Tool input parameters (tool-specific schema). **Always an object — never `null`** (nil-safety contract enforced in `ToolCallStartFrame`, `contracts/asyncapi.yaml:1130-1131`). |
+| params | object | yes | Tool input parameters (tool-specific schema). **Always an object — never `null`** (nil-safety contract enforced in `ToolCallStartFrame`). |
 
 **Producer**: Tool execution layer in `pkg/tools/`
 **Consumer**: Tool call badge component — shows tool name + spinner, collapsed by default
@@ -320,68 +317,23 @@ Signals that a tool invocation has completed. Updates the tool call badge with r
   "call_id": "call_abc123",
   "result": "file1.txt\nfile2.txt\n",
   "status": "success",
-  "duration_ms": 142,
-  "error": null
+  "duration_ms": 142
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"tool_call_result"` |
-| session_id | string | yes | The session this tool call belongs to. Required by the AsyncAPI component schema (`ToolCallResultFrame`, `contracts/asyncapi.yaml:1220-1268`). |
+| session_id | string | yes | The session this tool call belongs to. Required by the AsyncAPI component schema (`ToolCallResultFrame`). |
 | tool | string | yes | Tool name — matches the corresponding `tool_call_start` |
 | call_id | string | yes | Tool invocation ID — matches the corresponding `tool_call_start` |
 | result | any | yes | Tool output (type depends on tool; may be string, object, or null) |
 | status | string | yes | One of `"success"` or `"error"` |
 | duration_ms | number | no | Tool execution time in milliseconds |
-| error | string | no | Error message if `status` is `"error"` |
+| error | string | no | Error message if `status` is `"error"`; omit the field rather than sending JSON null |
 
 **Producer**: Tool execution layer in `pkg/tools/`
 **Consumer**: Tool call badge component — updates to success/error state, expandable for detail
-
----
-
-### `timeout`
-
-System-initiated interruption: the backend timed out the turn mid-stream. Partial content (if any) is preserved. This event type must NOT be silently ignored — it is semantically equivalent to a system-initiated cancel and must render visibly. (MAJ-004)
-
-```json
-{
-  "type": "timeout",
-  "partial_content": "The weather in London is...",
-  "message": "Turn timed out after retry."
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| type | string | yes | Always `"timeout"` |
-| partial_content | string | no | Any tokens streamed before the timeout (may be empty string) |
-| message | string | yes | Human-readable explanation shown below the partial message |
-
-**Producer**: Agent reliability layer in `pkg/agent/` (turn timeout handler)
-**Consumer**: Chat message component — renders partial content (if any) followed by a muted "(timed out)" label, analogous to cancel's "(interrupted)" label. Does NOT send a `done` frame; the `timeout` frame serves as the turn terminator.
-
----
-
-### `compaction`
-
-System-initiated notification: the backend compacted the conversation context (pruned old messages and replaced them with a summary). Renders as a system message in the chat thread. (MAJ-004)
-
-```json
-{
-  "type": "compaction",
-  "summary": "Earlier conversation about weather API integration has been summarized to preserve context window space."
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| type | string | yes | Always `"compaction"` |
-| summary | string | yes | A human-readable summary of what was compacted |
-
-**Producer**: Context compaction layer in `pkg/agent/`
-**Consumer**: Chat message component — renders as a system message "Context compacted — [summary]", styled as a neutral info banner (not user/assistant bubble). Analogous to the compaction entry rendered from JSONL transcripts in message history.
 
 ---
 
@@ -394,20 +346,20 @@ Notifies the frontend that a task's status has changed, enabling real-time task 
   "type": "task_status_changed",
   "session_id": "sess_abc123",
   "task_id": "task_abc123",
-  "status": "assigned",
-  "agent_id": "agent_def456",
-  "updated_at": "2026-04-01T12:34:56Z"
+  "status": "in_progress",
+  "agent_id": "agent_def456"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"task_status_changed"` |
-| session_id | string | yes | The session the task belongs to. Required by the AsyncAPI component schema (`TaskStatusChangedFrame`, `contracts/asyncapi.yaml:1393-1422`). |
+| session_id | string | yes | The session the task belongs to. Required by the AsyncAPI component schema (`contracts/components/schemas/TaskStatusChangedFrame.yaml`). |
 | task_id | string | yes | The ID of the task whose status changed |
-| status | string | yes | New status: one of `"queued"`, `"assigned"`, `"running"`, `"completed"`, `"failed"` (five-value enum per `contracts/asyncapi.yaml:1413-1420`) |
-| agent_id | string | yes | The agent the task is assigned to |
-| updated_at | string | yes | ISO 8601 timestamp of the status change |
+| status | string | yes | New status: one of `"inbox"`, `"next"`, `"in_progress"`, `"blocked"`, `"done"` or `"failed"` (`contracts/components/schemas/TaskStatusChangedFrame.yaml`) |
+| agent_id | string | no | The agent managing the task |
+
+`updated_at` is not a property of this frame.
 
 **Producer**: Task executor in `pkg/agent/task_executor.go`
 **Consumer**: Task board component (`TaskList.tsx`) — invalidates TanStack Query cache for the task list, triggering a re-render. The frame is broadcast to all authenticated WebSocket connections for the workspace (not session-scoped).
@@ -445,14 +397,13 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 
 | Direction | Type | Description |
 |-----------|------|-------------|
-| C→S | `auth` | Authenticate the connection |
+| C→S | `auth` | First-frame bearer authentication for programmatic clients (the web app uses its session cookie) |
 | C→S | `message` | Send a user chat message; optional `auto_approve` sets the initial choice when starting a new session |
 | C→S | `session_mode_update` | Set or clear an existing session's Auto-approve choice |
 | C→S | `cancel` | Cancel in-progress turn |
 | C→S | `ping` | Keep-alive |
 | C→S | `attach_session` | Attach to an existing session and replay its transcript (with optional `since` for incremental replay) |
 | C→S | `device_pairing_response` | Admin approval/rejection of a pending device pairing request |
-| C→S | `session_close` | Explicit session close request (server replies with `session_close_ack`) |
 | C→S | `whatsapp_pairing_subscribe` | Start/stop receiving WhatsApp pairing frames on this connection (#283) |
 | S→C | `session_started` | New session ID minted by the server (response to a `message` without `session_id`) |
 | S→C | `session_mode_updated` | Acknowledge a per-chat mode change with the resolved Auto-approve setting |
@@ -474,27 +425,21 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | S→C | `replay_warning` | Transcript contained duplicate `tool_call_id`s during replay |
 | S→C | `cancel_stage` | Cancel progress notification (B3) — `graceful`, `hard`, or `detached` |
 | S→C | `pong` | Server-originated heartbeat reply to a client `ping` (consumed by SPA for liveness; not surfaced to reducers) |
-| S→C | `session_close_ack` | Acknowledgement that a `session_close` request was processed |
 | S→C | `device_pairing_request` | A remote device requests pairing; SPA shows the approval modal |
-| S→C | `timeout` | System-initiated turn timeout (MAJ-004) |
-| S→C | `compaction` | Context window compacted (MAJ-004) |
 | S→C | `whatsapp_pairing` | WhatsApp linked-device pairing QR/status (#283) |
 | S→C | `notification` | User-facing notification raised for the recipient user (#264); delivered only to that user's connections |
 
-The complete type set, including required fields and per-field constraints, is
-defined in `contracts/asyncapi.yaml` (components: `WsFrameType` enum at
-`contracts/asyncapi.yaml:803-835`, and the per-frame component schemas
-thereafter) and is the implementation reference in `src/lib/ws.ts:14-57`
-(generated AsyncAPI TypeScript types). Any new frame type must be added to
-the AsyncAPI spec first, then to this document.
+The current complete frame discriminator set and every field constraint are defined by the generated AsyncAPI contract (`contracts/asyncapi.yaml`, `WsFrameType` and the per-frame component schemas). This page's examples are not a complete frame inventory. In particular, current session-core clients also use redirect, message delivery/status, subagent state/message, tool-result projection, snapshot/catch-up and attention-acknowledgement fields. Consult the corresponding current component schema before implementing a client. Any new frame type must be added to the AsyncAPI spec first, then to this document.
+
+The `timeout`, `compaction`, `session_close` and `session_close_ack` frame types are not part of the current protocol. Context relief changes the retained model view without a summarization call. Stop uses `cancel` with `scope: "session"` or `scope: "tree"`; it ends selected turns, not their goals. Do not wait for an explicit session-close acknowledgement.
 
 ---
 
 ## Unknown Frame Types
 
-When the frontend receives a frame with an unrecognized `type` field, it MUST log a warning to the console and discard the frame — it must NOT crash or disconnect. Exception: if the unknown frame count exceeds the `droppedFrameThreshold` (currently 5 consecutive invalid frames), an error is surfaced to the user.
+The web app drops invalid or unknown inbound frames and reports five consecutive invalid frames through its error callback (`src/lib/ws.ts::WsConnection`, `droppedFrameThreshold`); it does not crash or disconnect.
 
-When the backend receives an unrecognized `type` field from the client, it MUST return an `error` frame describing the unknown type and continue — it must NOT close the connection.
+The current server logs and ignores an unknown client frame type, then continues the connection; it does not promise an error response for every unknown type (`pkg/gateway/websocket.go::wsHandlerReadLoop.dispatchFrame`).
 
 ---
 
