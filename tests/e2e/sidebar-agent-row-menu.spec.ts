@@ -426,12 +426,26 @@ test.describe('D6 — Edit opens the unified editor', () => {
     // sidebar is one of several hosts (agents page, Team tab); a duplicated
     // mount must fail here, not silently stack two sheets
     // (g1-pr-test-analyzer F5).
-    const nameInput = page.getByTestId('agent-name-input')
+    //
+    // AgentProfile renders the shared basicsPanel twice — desktop Tabs
+    // (`hidden sm:block`, aria-hidden below sm) and phone Accordion
+    // (`block sm:hidden`, aria-hidden at sm and up) — so BOTH copies carry
+    // data-testid="agent-name-input" and the raw test-id locator resolves to
+    // 2 elements at every viewport. Exactly one branch is visible and
+    // a11y-exposed (frontend-lead verified: a responsive twin, not a second
+    // editor). getByRole skips hidden elements, so the textbox locator (the
+    // input names itself via its placeholder) resolves to exactly one; the
+    // explicit count guard is scoped to VISIBLE matches the same way, so a
+    // genuinely second VISIBLE editor still fails this test.
+    const nameInput = page.getByRole('textbox', { name: 'Agent name' })
     await expect(
       nameInput,
       'Edit must open the existing unified agent editor (D6)',
     ).toBeVisible({ timeout: 20_000 })
-    await expect(nameInput, 'the unified editor must be mounted exactly once').toHaveCount(1)
+    await expect(
+      page.getByTestId('agent-name-input').filter({ visible: true }),
+      'the unified editor must be mounted exactly once (one visible editor; the hidden responsive twin does not count)',
+    ).toHaveCount(1)
     await expect(nameInput).toHaveValue(/^Jim$/i, { timeout: 15_000 })
   })
 })
