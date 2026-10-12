@@ -12,6 +12,7 @@
 package agent
 
 import (
+	"log/slog"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -35,15 +36,23 @@ func (al *AgentLoop) SetClearNotPerformedHook(fn ClearNotPerformedFunc) {
 }
 
 // notifyClearNotPerformed reports msg's /clear row as not performed. A message
-// with no session or no persisted row (a non-web channel) has nothing to mark.
+// from another channel has no web row to mark and is skipped quietly. A WEB
+// message that cannot be reported (no receiver, or no session or entry id) is
+// never silent: with the client's timer gone, "no failed frame" reads as "held",
+// so the only trace left is this Warn.
 func (al *AgentLoop) notifyClearNotPerformed(msg bus.InboundMessage) {
 	if al == nil {
+		return
+	}
+	if msg.Channel != "" && msg.Channel != "webchat" {
 		return
 	}
 	hook := al.clearNotPerformedHook.Load()
 	sessionID := strings.TrimSpace(msg.SessionID)
 	entryID := strings.TrimSpace(msg.TranscriptEntryID)
 	if hook == nil || sessionID == "" || entryID == "" {
+		slog.Warn("agent: a refused /clear could not be reported to its chat row; the row will look held",
+			"session_id", sessionID, "entry_id", entryID, "receiver_installed", hook != nil)
 		return
 	}
 	(*hook)(sessionID, entryID)
