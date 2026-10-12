@@ -1946,8 +1946,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   content: llmError ? translatedMessage : safeMessage,
                   timestamp: new Date().toISOString(),
                   status: 'error',
-                  isStreaming: false,
-                  refusalNotice: true,
+                  isStreaming: false, refusalNotice: true,
                   ...(llmError
                     ? {
                         errorCode: llmError.code,
