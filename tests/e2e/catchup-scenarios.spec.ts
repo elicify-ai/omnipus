@@ -363,8 +363,11 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       // really exercises the in-memory cursor. A reload would silently turn
       // this scenario into the post-reload replay path — the exact weaker
       // behaviour this scenario exists to distinguish — and pass vacuously.
-      await expect(
-        page.evaluate(() => (window as { navCatchupMark?: string }).navCatchupMark),
+      // awaited: expect(<Promise>).toBe(...) compares the Promise object itself
+      // ("Received: Promise {}"), so this check could never pass - the scenario
+      // never got far enough before to expose it.
+      expect(
+        await page.evaluate(() => (window as { navCatchupMark?: string }).navCatchupMark),
         'no reload across the away-and-back switch',
       ).toBe('scenario-c')
       // Only NOW does the DOM reflect chat A again, so only now does
