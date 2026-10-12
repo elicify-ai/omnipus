@@ -21,6 +21,17 @@
 
 ---
 
+## Founder answers after correction (FQ-17, FQ-18) — dated 2026-10-12
+
+Recorded after the one correction round (no new correction round; source: founder answers file, section "After the correction round"). Where this section and the text below disagree, this section wins.
+
+| Question | Founder answer | Effect on this ADR |
+|---|---|---|
+| FQ-17 | **No default agent at all** (supersedes "Omnipus is the default", FA:Default). An unbound channel, or one whose bound agent no longer exists, drops the message **loudly**: visible error on the channel's status, logged, never silently routed. Every other former fallback (tasks, goals, sessions, chat frames) names its agent explicitly or fails visibly. The default-agent setting, the Mia seed and the `ChannelRouting.default_agent_id` fallback semantics are removed. | **OSA-12 is superseded.** Its per-caller table is re-decided in the specification (`docs/internal/specs/omnipus-system-agent-spec.md` FR-120–FR-127): routing fallbacks fail loudly, web/REST requests without an agent are refused, internal look-ups no longer use a default, tool listings use the central registry. The FQ-17 question below is answered. Retired surfaces gain "default-agent setting". |
+| FQ-18 | Agent-private secrets are **in scope of this implementation** (designed here and in the specification, built with it). Promise wording: option A — never typed into chat, never in tool arguments, masked in output best-effort; a command can still reveal it; documented in `docs/security.md` — **pending one founder confirmation** of the wording. | OSA-7.8 stands with option A; the specification carries it as FR-076 and open question OQ-1. |
+
+---
+
 ## Correction round 2026-10-12
 
 ### Grill findings → disposition
