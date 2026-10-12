@@ -740,7 +740,21 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     // receiveCatchUpComplete) - NOT `done`, which now only ends a TURN. This
     // wait used to key on `done` and timed out on every run once the
     // redesign landed: the same "attach finished" signal, renamed.
-    await expect
+    const frameDigest = () =>
+      receivedFrames
+        .map((raw) => {
+          try {
+            const f = JSON.parse(raw) as { type?: string; session_id?: string }
+            return `${f.type ?? '?'}:${f.session_id ?? '-'}`
+          } catch {
+            return 'unparseable'
+          }
+        })
+        .filter((d) => !d.startsWith('ping') && !d.startsWith('pong'))
+        .slice(-40)
+        .join(' ')
+    try {
+      await expect
       .poll(
         () =>
           receivedFrames.some((raw) => {
@@ -757,6 +771,11 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
         },
       )
       .toBe(true)
+    } catch (err) {
+      // Name what DID arrive: a missing terminal frame and a terminal frame
+      // carrying a different session id are different defects.
+      throw new Error(`${(err as Error).message}\nlast WS frames received (type:session_id): ${frameDigest()}`, { cause: err })
+    }
 
     // 5. Listen for the "session not found" error frame. If it arrives,
     //    the bug is back. We watch the page's connection store for a
