@@ -109,6 +109,19 @@ func TestEnvironmentSetup_Confinement_RealKernel(t *testing.T) {
 	rep, out, err := runKernelFixtureProcess(t)
 	require.NoError(t, err, "inner wrote no probe report; output:\n%s", out)
 	if !rep.Supported && rep.SkipReason == kernelBackendUnavailable {
+		// R2-S5-04: a skip is only honest when THIS HOST really has no kernel
+		// backend. sandbox.SelectBackend() is an independent oracle — it runs
+		// the product's own detection, in this process, and names the backend
+		// it found. When it reports a real backend while the fixture's probe
+		// says "unavailable", the two disagree about the same machine: that is
+		// a backend-detection regression, and it must be RED here instead of
+		// silently skipped. "fallback" is the only answer that genuinely means
+		// "this host has nothing".
+		if _, name := sandbox.SelectBackend(); name != "fallback" {
+			t.Fatalf("the confinement fixture reported %q while sandbox.SelectBackend() reports %q — "+
+				"a backend-detection regression, not a platform limit. Probe detail: %s",
+				rep.SkipReason, name, rep.Detail)
+		}
 		t.Skipf("%s: %s", rep.SkipReason, rep.Detail)
 	}
 
