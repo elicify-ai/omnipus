@@ -18,7 +18,7 @@ import (
 // Issue #1278: a turn must never end as a "final answer" when the provider says
 // it was calling tools (or died doing so) and no tool call came back.
 
-func runEnvelopeTurn(t *testing.T, provider providers.LLMProvider) (reply string, err error, stub *argsRecordingTool) {
+func runEnvelopeTurn(t *testing.T, provider providers.LLMProvider) (reply string, stub *argsRecordingTool, err error) {
 	t.Helper()
 	al, home := schedTestLoop(t)
 	mia := registerAgent(t, al, home, "mia", provider, false)
@@ -28,7 +28,7 @@ func runEnvelopeTurn(t *testing.T, provider providers.LLMProvider) (reply string
 	meta, nerr := al.GetSessionStore().NewScheduledSession("mia")
 	require.NoError(t, nerr)
 	reply, err = al.ProcessScheduled(context.Background(), "mia", meta.ID, "use args_tool", "scheduled", meta.ID)
-	return reply, err, stub
+	return reply, stub, err
 }
 
 // A stream that dies after the 200 (provider error chunk) returns the typed
@@ -39,7 +39,7 @@ func TestEmptyEnvelope_StreamProviderErrorIsRetriedAndTheToolRunsExactlyOnce(t *
 		WithError(&common.StreamProviderError{Code: "server_error", Message: "Provider disconnected unexpectedly"}).
 		WithToolCall("args_tool", `{"content":"x"}`).
 		WithText("done")
-	reply, err, stub := runEnvelopeTurn(t, provider)
+	reply, stub, err := runEnvelopeTurn(t, provider)
 	require.NoError(t, err)
 	assert.Equal(t, "done", reply)
 	assert.Equal(t, int32(1), stub.calls.Load(), "the retried completion must execute the tool exactly once, never twice")
@@ -75,7 +75,7 @@ func TestEmptyEnvelope_ToolCallsFinishWithNoCallsIsRetriedOnce(t *testing.T) {
 		{ToolCalls: []providers.ToolCall{{ID: "c1", Function: &providers.FunctionCall{Name: "args_tool", Arguments: `{"content":"x"}`}}}, FinishReason: "tool_calls"},
 		{Content: "done", FinishReason: "stop"},
 	}}
-	reply, err, stub := runEnvelopeTurn(t, provider)
+	reply, stub, err := runEnvelopeTurn(t, provider)
 	require.NoError(t, err)
 	assert.Equal(t, "done", reply)
 	assert.Equal(t, int32(1), stub.calls.Load())
@@ -88,7 +88,7 @@ func TestEmptyEnvelope_RepeatedEmptyEnvelopeEndsWithAVisibleError(t *testing.T) 
 	provider := &scriptedFinishProvider{resps: []*providers.LLMResponse{
 		{Content: "Let me run it:", FinishReason: "tool_calls"},
 	}}
-	reply, err, stub := runEnvelopeTurn(t, provider)
+	reply, stub, err := runEnvelopeTurn(t, provider)
 	require.Error(t, err, "a model that keeps saying it is calling tools without calling any must fail loudly, got reply %q", reply)
 	assert.Equal(t, 2, provider.count(), "one retry, then the visible failure")
 	assert.Equal(t, int32(0), stub.calls.Load())
@@ -98,7 +98,7 @@ func TestEmptyEnvelope_RepeatedEmptyEnvelopeEndsWithAVisibleError(t *testing.T) 
 // A normal final answer is untouched by the safety net.
 func TestEmptyEnvelope_StopFinishIsAFinalAnswer(t *testing.T) {
 	provider := &scriptedFinishProvider{resps: []*providers.LLMResponse{{Content: "All done.", FinishReason: "stop"}}}
-	reply, err, _ := runEnvelopeTurn(t, provider)
+	reply, _, err := runEnvelopeTurn(t, provider)
 	require.NoError(t, err)
 	assert.Equal(t, "All done.", reply)
 	assert.Equal(t, 1, provider.count())
