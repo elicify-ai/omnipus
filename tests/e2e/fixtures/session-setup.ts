@@ -20,6 +20,7 @@ import {
   openSidebar,
   selectedAgentRow,
   waitForConnected,
+  closeSidebar,
 } from './selectors'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
@@ -348,6 +349,13 @@ export async function freshChat(
         'no selected/first row to read.'
     )
   }
+
+  // Reading the row opened the sidebar. It is an unpinned overlay whose
+  // full-page click-catcher swallows every later pointer event on the chat
+  // ("<div aria-hidden> intercepts pointer events" on the Stop button), and the
+  // hash-only deep link below is a same-document navigation that does not close
+  // it - so close it here, where freshChat opened it.
+  await closeSidebar(page)
 
   // Every REST call and the deep link ride the PAGE's origin — freshChat
   // must hit whichever gateway the page is on (shared OR isolated
