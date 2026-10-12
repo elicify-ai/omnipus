@@ -46,8 +46,12 @@ func TestCreateAgent_TeamJoinChangesTheWorkspaceRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(after.Workspace.CoreTeam) != 1 {
-		t.Fatalf("core_team = %v, want the new member", after.Workspace.CoreTeam)
+	// Team() is the core team plus the endpoints of its (here empty) delegation
+	// graph, so with no edges it is exactly the core team. Reading it through the
+	// method keeps this test off the workspace.State field named Workspace that
+	// the rename guard (pkg/config/rename_guard_test.go) polices.
+	if team := after.Team(); len(team) != 1 {
+		t.Fatalf("core team = %v, want exactly the new member", team)
 	}
 	if after.Revision == before.Revision {
 		t.Fatal("a member was added but the workspace revision did not change: a stale client's PUT would overwrite it")

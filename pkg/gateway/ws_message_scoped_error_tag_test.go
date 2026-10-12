@@ -37,7 +37,9 @@ func TestSendAppendFailureError_TagsTheChatAndTheMessage(t *testing.T) {
 }
 
 func TestClientMessageIDPrincipalConflict_TagsTheChat(t *testing.T) {
-	handler, _, _, frame, _, _ := issue1090SecurityExistingSend(t)
+	handler, _, _, frame, accepted, before := issue1090SecurityExistingSend(t)
+	require.NotEmpty(t, accepted, "instrument check: the seed send in the existing chat was accepted")
+	require.NotEmpty(t, before, "instrument check: the existing chat has a transcript before the conflicting send")
 	sessionID := *frame.SessionId
 
 	foreign := frame
