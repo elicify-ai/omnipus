@@ -268,7 +268,7 @@ func TestLedger_Undelivered_ListsOnlyHeldRequestsInAdmissionOrder(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Undelivered: %v", err)
 	}
-	var ids []string
+	ids := make([]string, 0, len(held))
 	for _, c := range held {
 		ids = append(ids, c.RequestID)
 	}

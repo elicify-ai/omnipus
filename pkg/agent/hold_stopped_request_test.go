@@ -200,11 +200,10 @@ func TestHeldRequest_AskerGone_DroppedNotDeliveredIntoAVoid(t *testing.T) {
 // front of the model - not just flip a flag. The scripted provider asserts the
 // model actually receives the request text.
 func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
-	al, original, provider := r5AdmitRoot(t)
-	// A third scripted answer for the turn that carries the held request.
-	provider.answers = append(provider.answers, "request answered")
-	provider.release = append(provider.release, make(chan struct{}))
-	provider.entered = make(chan int, 3)
+	// A third scripted answer, for the turn that carries the held request, is
+	// staged before the first turn starts so no field is written under a
+	// running provider call.
+	al, original, provider := r5AdmitRootWithAnswers(t, "partial root work", "root resumed exactly once", "request answered")
 	r5StopRoot(t, al, original)
 	provider.open(0)
 	joinGoalFixtureRuns(t, al)
@@ -213,7 +212,7 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	ws := addrWS
-	if err := al.GetSessionStore().SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
+	if err = al.GetSessionStore().SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
 		t.Fatal(err)
 	}
 	const body = "Please summarise the Q3 numbers"
@@ -226,13 +225,13 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 		AdmittedAt: time.Now().UTC(),
 		Text:       composeRequestText("held-1", "agent ray", body),
 	}
-	if err := al.RequestLedger().Put(c); err != nil {
+	if err = al.RequestLedger().Put(c); err != nil {
 		t.Fatalf("SETUP: hold a request: %v", err)
 	}
 
 	msg := rootHumanMessage(original.SessionID)
 	msg.GatewayUserID = "r5-owner"
-	if err := al.enqueueSteeringFromMessage(msg); err != nil {
+	if err = al.enqueueSteeringFromMessage(msg); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	r1AwaitProvider(t, provider, 1)
