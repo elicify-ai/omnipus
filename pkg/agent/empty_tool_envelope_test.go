@@ -118,3 +118,47 @@ func TestEmptyEnvelope_MidStreamBillingAndAuthErrorsAreNotRetried(t *testing.T) 
 		})
 	}
 }
+
+// R2-S1-06: a failed mid-stream attempt was billed. Its usage is debited on the
+// turn exactly like a delivered one, so the turn's tokens include it.
+func TestEmptyEnvelope_FailedMidStreamAttemptUsageIsDebitedOnTheTurn(t *testing.T) {
+	al, home := schedTestLoop(t)
+	provider := testutil.NewScenario().
+		WithError(&common.StreamProviderError{Code: "server_error", Message: "x",
+			Usage: &providers.UsageInfo{PromptTokens: 4000, CompletionTokens: 1000, TotalTokens: 5000}}).
+		WithText("done").WithUsage(40, 60)
+	registerAgent(t, al, home, "mia", provider, false)
+	meta, err := al.GetSessionStore().NewScheduledSession("mia")
+	require.NoError(t, err)
+	_, err = al.ProcessScheduled(context.Background(), "mia", meta.ID, "go", "scheduled", meta.ID)
+	require.NoError(t, err)
+	entries, err := al.GetSessionStore().ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	var tokens int64
+	for _, e := range entries {
+		if e.Role == "assistant" && e.Tokens > 0 {
+			tokens = int64(e.Tokens)
+		}
+	}
+	assert.EqualValues(t, 5100, tokens, "the failed attempt's 5000 billed tokens plus the delivered 100")
+}
+
+// R2-S1-10: the retry budget is per blip. A second, separate empty envelope later
+// in the same turn gets its own retry.
+func TestEmptyEnvelope_ASecondSeparateBlipInTheSameTurnIsRetriedToo(t *testing.T) {
+	call := func(id string) *providers.LLMResponse {
+		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: id, Function: &providers.FunctionCall{Name: "args_tool", Arguments: `{"content":"x"}`}}}, FinishReason: "tool_calls"}
+	}
+	provider := &scriptedFinishProvider{resps: []*providers.LLMResponse{
+		{Content: "first:", FinishReason: "tool_calls"}, // blip 1
+		call("c1"), // retried; the tool runs
+		{Content: "second:", FinishReason: "tool_calls"}, // blip 2, later in the same turn
+		call("c2"),
+		{Content: "done", FinishReason: "stop"},
+	}}
+	reply, stub, err := runEnvelopeTurn(t, provider)
+	require.NoError(t, err, "the second blip must get its own retry")
+	assert.Equal(t, "done", reply)
+	assert.Equal(t, int32(2), stub.calls.Load())
+	assert.Equal(t, 5, provider.count())
+}

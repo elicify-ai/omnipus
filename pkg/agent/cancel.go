@@ -241,16 +241,16 @@ type CancelHooks struct {
 
 // agentLoopRequestCancel carries the shared state of RequestCancel across its stages.
 type agentLoopRequestCancel struct {
-	al                       *AgentLoop
-	ctx                      context.Context
-	scope                    CancelScope
-	canceller                CancelCanceller
-	hooks                    CancelHooks
-	at                       time.Time
-	auditLogger              *audit.Logger
+	al          *AgentLoop
+	ctx         context.Context
+	scope       CancelScope
+	canceller   CancelCanceller
+	hooks       CancelHooks
+	at          time.Time
+	auditLogger *audit.Logger
 	// audited is set once this request wrote its turn.cancel.attempt row, so the
 	// deferred fallback in RequestCancel writes one only when no path did.
-	audited bool
+	audited                  bool
 	hint                     string
 	sessionID                string
 	backgroundSessionsKilled int64
