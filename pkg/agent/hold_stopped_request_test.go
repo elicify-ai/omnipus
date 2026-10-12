@@ -146,10 +146,45 @@ func TestHeldRequest_DroppedAgain_IsRepublishedByTheNextTurn(t *testing.T) {
 	addrDrainInbound(t, f.bus)
 	forgetInMemory(f.al)
 	f.al.deliverHeldRequests(recv)
-	if _, ok := addrDrainInbound(t, f.bus); !ok {
+	wake, ok := addrDrainInbound(t, f.bus)
+	if !ok {
 		t.Fatal("no wake published")
 	}
-	f.al.heldRepublished.Delete(id) // what the dropped-wake branch does
+
+	// R2-S5-08 / R2-X-qa-06: DRIVE the drop through the real branch instead of
+	// deleting the marker by hand (the old `f.al.heldRepublished.Delete(id)`
+	// asserted nothing about the product — a regression that stopped deleting
+	// on a dropped wake stayed green). The wake is admitted through the real
+	// ordinary-inbound path; the owner is STOPPED (heldSetup persists a Stop
+	// record), so prepareOrdinaryExecution returns errOwnerWakeRetained and
+	// runInboundTurnWithRevival deletes the re-published marker
+	// (revive_inbound.go, "A re-published held request is dropped again").
+	// Land the stop first. The held fixture leaves an IN-FLIGHT stop fence (a
+	// Stop marker on a RUNNING record); the retained-wake branch is reached
+	// only by a LANDED stop — a landed stopped record carries no
+	// current-generation stop marker (ADR-20260928 D2). Without this the
+	// admission refuses on the in-flight fence and never reaches the branch
+	// under test.
+	lcStore := f.al.GetSessionLifecycleStore()
+	if lcStore == nil {
+		t.Fatal("SETUP: the fixture must have wired a lifecycle store")
+	}
+	if err := lcStore.Persist(&session.LifecycleRecord{
+		SessionID: recv, Generation: 2, State: session.LifecycleStopped, OwnerScopeKind: session.OwnerScopeHuman,
+		WorkspaceID: addrWS, AgentID: addrReceiver,
+		StopNote: &session.StopNote{At: time.Now(), By: "human", Seq: 1, Cause: session.StopCauseStop},
+	}); err != nil {
+		t.Fatalf("SETUP: land the stop: %v", err)
+	}
+
+	mintGenuineBootEpochForLoop(t, f.al)
+	if _, _, err := f.al.processMessage(context.Background(), wake); err != nil {
+		t.Fatalf("a dropped owner wake must not surface as an error to anyone: %v", err)
+	}
+	if _, inFlight := f.al.heldRepublished.Load(id); inFlight {
+		t.Fatal("the dropped-wake branch must clear the re-published marker; while it is still set the request can never be re-published")
+	}
+
 	f.al.deliverHeldRequests(recv)
 	if _, ok := addrDrainInbound(t, f.bus); !ok {
 		t.Fatal("the next turn did not re-publish the dropped wake")
@@ -237,7 +272,14 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 	}
 	r1AwaitProvider(t, provider, 1)
 	provider.open(1)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// R2-X-qa-14: this context bounds the GOROUTINE's lifetime, not an
+	// assertion deadline — the wait that can fail is the `wakeDeadline` poll
+	// below, and it is unchanged at 10 s. The context must outlive that poll
+	// with room for the turn's own provider calls (which is why it is not the
+	// old 5 s), so it is DERIVED from the poll rather than being a second,
+	// unexplained magic number.
+	const wakeDeadline = 10 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), wakeDeadline+20*time.Second)
 	defer cancel()
 
 	// The wake the delivery publishes is processed like any inbound. (Not
@@ -254,7 +296,7 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		// The text may instead have been steered straight into the resumed turn.
 	}
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(wakeDeadline)
 	seen := func() bool {
 		for _, req := range provider.Requests() {
 			for _, m := range req {
