@@ -759,28 +759,10 @@ func classifyByMessage(body string) LLMErrorCode {
 	return CodeUnknown
 }
 
-// networkSubstrings are the wordings of a transport failure between us and the
-// provider (the request never completed): matched case-insensitively.
-var networkSubstrings = []string{
-	"client connection lost",
-	"no such host",
-	"dial tcp",
-	"i/o timeout",
-	"connection refused",
-	"network is unreachable",
-	"tls handshake",
-}
-
-// isNetworkMessage reports a transport failure: one of networkSubstrings, or
-// any of the transient stream/connection drops the loop already retries.
+// isNetworkMessage reports a transport failure by the one shared vocabulary
+// (providers.IsTransportFailure).
 func isNetworkMessage(body string) bool {
-	lower := strings.ToLower(body)
-	for _, s := range networkSubstrings {
-		if strings.Contains(lower, s) {
-			return true
-		}
-	}
-	return isTransientStreamError(errors.New(body))
+	return providers.IsTransportFailure(errors.New(body))
 }
 
 // classifyByProviderError is the top-level dispatch: prefer

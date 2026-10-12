@@ -2584,28 +2584,7 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 // wrapping). It is intentionally a superset of connectionDropPatterns so that
 // it catches wrapping layers such as "fallback: unclassified error: ...".
 func isTransientStreamError(err error) bool {
-	if err == nil {
-		return false
-	}
-	lower := strings.ToLower(err.Error())
-	for _, pat := range []string{
-		"streaming read error:",
-		"http2: response body closed",
-		"http2: server sent goaway",
-		"http2: transport received server's graceful shutdown goaway",
-		"stream error:",
-		"connection reset by peer",
-		"unexpected eof",
-		"broken pipe",
-		"use of closed network connection",
-		"server closed idle connection",
-		"connection closed",
-	} {
-		if strings.Contains(lower, pat) {
-			return true
-		}
-	}
-	return false
+	return providers.IsTransportFailure(err)
 }
 
 // formatMessagesForLog formats messages for logging

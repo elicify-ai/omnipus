@@ -96,6 +96,10 @@ var (
 		substr("no such host"),
 		substr("connection refused"),
 		substr("network is unreachable"),
+		substr("streaming read error:"),
+		substr("dial tcp"),
+		substr("i/o timeout"),
+		substr("tls handshake"),
 	}
 
 	// C-5 billing vocabulary (dataset D2) — exactly these four phrases.
@@ -488,4 +492,15 @@ func parseDigits(s string) int {
 		}
 	}
 	return n
+}
+
+// IsTransportFailure reports whether err reads as a transport failure between
+// us and the provider (a dropped or unreachable connection): the ONE vocabulary
+// the classifier's retry decision, the agent loop's inline retry and the
+// translator's wording all share (connectionDropPatterns).
+func IsTransportFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	return matchesAny(strings.ToLower(err.Error()), connectionDropPatterns)
 }
