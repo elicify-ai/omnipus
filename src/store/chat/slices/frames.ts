@@ -305,25 +305,39 @@ function applySeqGate(
 // baked tool_calls for this call_id and update it in place. Extracted from
 // handleFrame to keep it under its grandfathered line budget
 // (scripts/budgets/functions.txt) — no behaviour change.
+function withoutIdleMark(marks: Record<string, true> | undefined, callId: string): Record<string, true> | undefined {
+  if (!marks || !(callId in marks)) return marks
+  const { [callId]: _dropped, ...rest } = marks
+  return rest
+}
+
 function applyToolCallResultFrame(
   b: SessionChatState,
   frame: ToolCallResultFrame,
   clampedResult: ReturnType<typeof clampToolResult>,
 ): Partial<SessionChatState> {
   if (!b.toolCalls[frame.call_id]) {
+    // This call no longer has a live entry (baked or unmatched), so its idle
+    // mark - if it had one - can never be released by a live result. Drop it
+    // here, or it would later let an unrelated lone tool result blink Stop off
+    // mid-turn (R2-S3-05).
+    const idleArmedToolCalls = withoutIdleMark(b.idleArmedToolCalls, frame.call_id)
     for (const id of b.messageOrder) {
       const msg = b.messagesById[id]
       const idx = msg?.tool_calls?.findIndex((tc) => tc.id === frame.call_id) ?? -1
       if (idx === -1) continue
-      return produce(b, (draft) => {
-        const tc = draft.messagesById[id].tool_calls![idx]
-        tc.result = clampedResult
-        tc.status = frame.status ?? 'success'
-        tc.duration_ms = frame.duration_ms
-        tc.error = frame.error
-      }) as Partial<SessionChatState>
+      return {
+        ...(produce(b, (draft) => {
+          const tc = draft.messagesById[id].tool_calls![idx]
+          tc.result = clampedResult
+          tc.status = frame.status ?? 'success'
+          tc.duration_ms = frame.duration_ms
+          tc.error = frame.error
+        }) as Partial<SessionChatState>),
+        idleArmedToolCalls,
+      }
     }
-    return appendUnmatchedToolError(b, frame, clampedResult)
+    return { ...appendUnmatchedToolError(b, frame, clampedResult), idleArmedToolCalls }
   }
   return produce(b, (draft) => {
     const tc = draft.toolCalls[frame.call_id]
@@ -1932,7 +1946,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   content: llmError ? translatedMessage : safeMessage,
                   timestamp: new Date().toISOString(),
                   status: 'error',
-                  isStreaming: false,
+                  isStreaming: false, refusalNotice: true,
                   ...(llmError
                     ? {
                         errorCode: llmError.code,

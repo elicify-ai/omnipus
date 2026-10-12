@@ -123,11 +123,35 @@ export function recipientAddressFailedBlockMessage(nameGuess: string): string {
 
 /**
  * One recovery attempt on the agents roster (S3-08). Safe to call on every
- * blocked send/drain trigger: react-query dedupes concurrent refetches, and
- * a later successful load releases the hold on its own.
+ * blocked send/drain trigger: react-query dedupes concurrent refetches. The
+ * load itself releases a held message through armRosterRelease (R2-S3-02).
  */
 export function retryAgentsRoster(): void {
   void queryClient.refetchQueries({ queryKey: ['agents'] })
+}
+
+// R2-S3-02: a queued @-message held on a loading/failed roster used to wait
+// for some unrelated drain trigger (a turn end, a reconnect) - on an idle chat
+// none comes. The hold now arms ONE watch on the roster query; the first
+// successful load drops it and re-runs the queue drain. The drain itself is
+// registered by the store (this module cannot import the store: store.ts
+// imports this one).
+let releaseDrain: (() => void) | null = null
+let stopWatchingRoster: (() => void) | null = null
+
+export function setRosterReleaseDrain(drain: () => void): void {
+  releaseDrain = drain
+}
+
+function armRosterRelease(): void {
+  if (stopWatchingRoster) return
+  stopWatchingRoster = queryClient.getQueryCache().subscribe((event) => {
+    if (event.type !== 'updated' || event.action.type !== 'success') return
+    if (event.query.queryKey[0] !== 'agents' || event.query.state.data === undefined) return
+    stopWatchingRoster?.()
+    stopWatchingRoster = null
+    releaseDrain?.()
+  })
 }
 
 /**
@@ -213,6 +237,7 @@ export function recipientAddressHoldsQueue(content: string | undefined): boolean
   // roster (refetchQueries dedupes), so a transient failure self-heals and
   // the queue drains with its recipient; a permanent one stays loud.
   if (check.kind === 'failed') retryAgentsRoster()
+  if (check.kind === 'failed' || check.kind === 'unresolvable') armRosterRelease()
   if (check.kind === 'unresolvable') {
     logDiagnostic('chatRecipientQueueHeldAgentsUnavailable', { nameGuess: check.nameGuess })
   } else if (check.kind === 'failed') {
