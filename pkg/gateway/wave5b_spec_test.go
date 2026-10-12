@@ -78,6 +78,7 @@ func newWave5bTestAPI(t *testing.T) *restAPI {
 	return &restAPI{
 		agentLoop:     al,
 		allowedOrigin: "http://localhost:3000",
+		homePath:      tmpDir, // own temp home: see TestMain's leak guard
 	}
 }
 
