@@ -1904,7 +1904,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               break
             }
 
-            // C2 (contract: ARCHITECT-C2-contract.md, decided 2026-10-11):
+            // C2 (decided 2026-10-11; record: docs/internal/architecture/ADR-20261012-session-core-delta-amendments-c2-r1-2.md):
             // a MESSAGE-SCOPED refusal — the frame carries session_id AND
             // client_message_id and no first_message_error. The server
             // refused ONE message (an @-addressed send, or any

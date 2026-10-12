@@ -490,7 +490,7 @@ describe('C8 — a FAILED agents list (not merely loading) says so and offers Re
   })
 })
 
-// C2 (contract: ARCHITECT-C2-contract.md, decided 2026-10-11): the server
+// C2 (decided 2026-10-11; record: docs/internal/architecture/ADR-20261012-session-core-delta-amendments-c2-r1-2.md): the server
 // tags a message-scoped refusal with the sender's session_id AND
 // client_message_id (no first_message_error), followed by a
 // MessageStatusFrame{failed} for the row. The SPA must route the refusal to
