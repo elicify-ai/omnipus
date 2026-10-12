@@ -32,6 +32,21 @@ Recorded after the one correction round (no new correction round; source: founde
 
 ---
 
+## Founder answers to specification questions — answers 2026-10-12, recorded 2026-10-13
+
+Recorded without a new correction round (source: founder answers file, sections "Spec open questions OQ-1..OQ-4" and "Spec grill round 1 questions"). Where this section and the text below disagree, this section wins; the specification (`docs/internal/specs/omnipus-system-agent-spec.md`, §0.3) carries the detail.
+
+| Answer | Effect on this ADR |
+|---|---|
+| OQ-1 — agent-private secrets belong to one agent in one workspace; wording A confirmed | OSA-7.3/7.8: the private kind binds to (workspace, agent, variable), not (agent, variable). |
+| OQ-2 B — every channel is bound to an agent in a workspace | ADR-029's legacy unbound routing is removed; an unbound configuration fails loudly with "bind this channel to an agent in a workspace". |
+| OQ-3 — a secret is stored when the user submits the card | OSA-7.2/7.4/7.5 staging, promotion and expiry are **superseded**: no staging and no expiry; a cancelled plan leaves the stored secret unused, listed and removable. Recipient binding (OSA-7.3) stays. |
+| OQ-4 B — warm the default workspace's browser at boot | Browser warm-up no longer depends on any agent. |
+| Q-R1-1 A — replacing an in-use secret stores a new version | The integration keeps its current reference until its approved change tool selects the new one. |
+| Q-R1-2 B — no password re-entry on the secret card | Explicit exception to ADR-022's re-confirmation for this scoped, destination-bound write only; raw credential routes keep it; security-lead verifies the request/session/recipient binding. |
+
+---
+
 ## Correction round 2026-10-12
 
 ### Grill findings → disposition
