@@ -1,0 +1,25 @@
+data: {"id":"gen-1791799871-nPCGrGtMGvDl8xU4IEPo","object":"chat.completion.chunk","created":1791799871,"model":"deepseek/deepseek-v4.1-flash","provider":"DigitalOcean","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"Let","reasoning_details":[{"type":"reasoning.text","text":"Let","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791799871-nPCGrGtMGvDl8xU4IEPo","object":"chat.completion.chunk","created":1791799871,"model":"deepseek/deepseek-v4.1-flash","provider":"DigitalOcean","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" me start by","reasoning_details":[{"type":"reasoning.text","text":" me start by","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791799871-nPCGrGtMGvDl8xU4IEPo","object":"chat.completion.chunk","created":1791799871,"model":"deepseek/deepseek-v4.1-flash","provider":"DigitalOcean","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" finding","reasoning_details":[{"type":"reasoning.text","text":" finding","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791799871-nPCGrGtMGvDl8xU4IEPo","object":"chat.completion.chunk","created":1791799871,"model":"deepseek/deepseek-v4.1-flash","provider":"DigitalOcean","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" the three","reasoning_details":[{"type":"reasoning.text","text":" the three","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791799871-nPCGrGtMGvDl8xU4IEPo","object":"chat.completion.chunk","created":1791799871,"model":"deepseek/deepseek-v4.1-flash","provider":"DigitalOcean","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" largest files under /usr/share","reasoning_details":[{"type":"reasoning.text","text":" largest files under /usr/share","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791799871-nPCGrGtMGvDl8xU4IEPo","object":"chat.completion.chunk","created":1791799871,"model":"deepseek/deepseek-v4.1-flash","provider":"DigitalOcean","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":".","reasoning_details":[{"type":"reasoning.text","text":".","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791799871-nPCGrGtMGvDl8xU4IEPo","object":"chat.completion.chunk","created":1791799871,"model":"deepseek/deepseek-v4.1-flash","provider":"DigitalOcean","choices":[{"index":0,"delta":{"content":"I'll find the","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791799871-nPCGrGtMGvDl8xU4IEPo","object":"chat.completion.chunk","created":1791799871,"model":"deepseek/deepseek-v4.1-flash","provider":"DigitalOcean","choices":[{"index":0,"delta":{"content":" three largest files under /usr","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791799871-nPCGrGtMGvDl8xU4IEPo","object":"chat.completion.chunk","created":1791799871,"model":"deepseek/deepseek-v4.1-flash","provider":"DigitalOcean","choices":[{"index":0,"delta":{"content":"/share by","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1791799871-nPCGrGtMGvDl8xU4IEPo","object":"chat.completion.chunk","created":1791799871,"model":"deepseek/deepseek-v4.1-flash","provider":"DigitalOcean","choices":[{"index":0,"delta":{"content":" size.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id": "gen-1791799871-nPCGrGtMGvDl8xU4IEPo", "object": "chat.completion.chunk", "created": 1791799871, "model": "deepseek/deepseek-v4.1-flash", "provider": "DigitalOcean", "error": {"code": "server_error", "message": "Provider disconnected unexpectedly"}, "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "error"}]}
+
+data: {"id": "gen-1791799871-nPCGrGtMGvDl8xU4IEPo", "object": "chat.completion.chunk", "created": 1791799871, "model": "deepseek/deepseek-v4.1-flash", "provider": "DigitalOcean", "choices": [], "usage": {"prompt_tokens": 101220, "completion_tokens": 8054, "total_tokens": 109274}}
+
+data: [DONE]

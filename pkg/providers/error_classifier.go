@@ -228,6 +228,18 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// inline retry (the only reason it retries inline) applies, exactly like
 	// a connection drop. Checked before substring matching because the
 	// sentinel's wording need not contain any classifier keyword.
+	// A provider that ended its response with an error after the 200 was
+	// committed (OpenRouter's mid-stream error chunk, issue #1278) failed
+	// transiently: nothing it streamed is an answer, and no tool ran. Same
+	// class as a dropped connection, so the same inline retry applies.
+	if errors.Is(err, common.ErrStreamProviderError) {
+		return &FailoverError{
+			Reason:   FailoverTimeout,
+			Provider: provider,
+			Model:    model,
+			Wrapped:  err,
+		}
+	}
 	if errors.Is(err, common.ErrStreamStalled) {
 		return &FailoverError{
 			Reason:   FailoverTimeout,

@@ -56,6 +56,29 @@ const DefaultStreamStallTimeout = 5 * time.Minute
 // provider-attributed fault (network-class), never as a turn timeout.
 var ErrStreamStalled = errors.New("provider stream stalled: no data received for the silence limit")
 
+// ErrStreamProviderError is the sentinel for a streaming call whose provider
+// ended the response with an error AFTER the 200 was committed (OpenRouter's
+// mid-stream error chunk: a top-level `error` object plus finish_reason
+// "error"). What had streamed so far - reasoning, a preamble that announces a
+// tool call - is NOT an answer, and the tool call that was coming never
+// arrived. Issue #1278.
+var ErrStreamProviderError = errors.New("provider ended the response with an error")
+
+// StreamProviderError carries the provider's code and message and the usage the
+// failed attempt was billed for. match with errors.Is(err, ErrStreamProviderError).
+type StreamProviderError struct {
+	Code    string
+	Message string
+	Usage   *UsageInfo
+}
+
+func (e *StreamProviderError) Error() string {
+	return fmt.Sprintf("%s (%s: %s)", ErrStreamProviderError.Error(), e.Code, e.Message)
+}
+
+// Unwrap makes errors.Is(err, ErrStreamProviderError) work through every wrap.
+func (e *StreamProviderError) Unwrap() error { return ErrStreamProviderError }
+
 // StallError carries the sentinel together with how long the stream had been
 // silent when the monitor fired, so the operator-facing message can state the
 // real number. Implements error; match with errors.Is(err, ErrStreamStalled).
