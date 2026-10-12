@@ -305,6 +305,12 @@ var u19RoutingSessionIDScanFiles = []string{
 	// (u19VerifyScanFileUniverse), so a future file carrying the field
 	// cannot hide the way this one did.
 	"fallback_note.go",
+	// loop_empty_tool_envelope.go joined the list in the #1278 fix (2026-10-12):
+	// handleEmptyToolEnvelope's ErrorPayload.SessionID stamp for the
+	// empty-tool-call-envelope safety net is a payload stamp exactly like its
+	// loop_run_turn*.go siblings. TestRoutingSessionID_ConsumerSetIsClosed's
+	// directory re-derivation caught the omission on the PR 1260 CI run.
+	"loop_empty_tool_envelope.go",
 	// The remaining four mention routingSessionID in prose only (verified
 	// 2026-09-24: zero AST reads). Scanning them and finding nothing is
 	// itself the closure proof this list exists to make — a read that ever
@@ -459,6 +465,16 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 		// family, so no funcName disambiguation beyond what's shown above is
 		// needed.
 		return u19BucketWSStamping
+	case "loop_empty_tool_envelope.go":
+		// Added 2026-10-12 (#1278): handleEmptyToolEnvelope's ONLY
+		// routingSessionID read is the ErrorPayload.SessionID stamp on the
+		// terminal "provider again reported tool_calls with no tool call"
+		// error frame - the canonical ts.routingSessionID copied into a WS
+		// frame payload, like every loop-family sibling. A second funcName
+		// reading the field here falls through and fails closed below.
+		if r.funcName == "handleEmptyToolEnvelope" {
+			return u19BucketWSStamping
+		}
 	case "fallback_note.go":
 		// Added 2026-10-02 (QA repair): the file's ONLY routingSessionID read
 		// is queueProviderFallbackNote's §7.4 ProviderFallbackPayload.
@@ -594,8 +610,8 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"steered-child reconstruction path (steer_reconstruct.go) does not build or read a pre-arm "+
 			"key from a live turnState at all)", got)
 	}
-	if got := counts[u19BucketWSStamping]; got != 21 {
-		t.Errorf("WS-payload-stamping reads = %d, want 21. The eighteen pre-2026-09-24 sites are "+
+	if got := counts[u19BucketWSStamping]; got != 22 {
+		t.Errorf("WS-payload-stamping reads = %d, want 22 (the 21 below plus loop_empty_tool_envelope.go::handleEmptyToolEnvelope, #1278, 2026-10-12). The eighteen pre-2026-09-24 sites are "+
 			"loop.go x5, its four loop_run_turn*.go siblings x11, and external_dispatch.go x2 "+
 			"(the classifier's own comment on this bucket has the per-site breakdown). Three verified "+
 			"additions since, each re-read site-by-site in the 2026-10-02 QA repair: the nineteenth is "+
@@ -695,7 +711,7 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	// independent per-site read of every grep hit for the field in this
 	// task's inventory — never by copying observed counts or subtracting
 	// prior comments.
-	const wantTotal = 31
+	const wantTotal = 32 // 31 + handleEmptyToolEnvelope (#1278, loop_empty_tool_envelope.go)
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the named buckets, or one of the buckets "+
