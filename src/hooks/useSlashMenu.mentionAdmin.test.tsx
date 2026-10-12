@@ -13,7 +13,6 @@
 // query key; the workspaces list is a mutable fixture so each test picks the
 // active workspace's is_default).
 
-import type { KeyboardEvent } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import type { ComposerRuntime } from '@assistant-ui/react'
