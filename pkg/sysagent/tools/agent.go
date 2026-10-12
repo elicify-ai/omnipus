@@ -43,10 +43,9 @@ func toSlug(name string) string {
 }
 
 // canonicalAgentColor applies the REST colour rule (coreagent.CanonicalColor,
-// AgentColor.yaml): a palette value in any letter-case is returned uppercase, a
-// previous-palette value is mapped to its new equivalent, and anything else -
-// a well-formed hex outside both sets included - is refused. Empty passes
-// (the field is optional on update); the caller decides whether it is required.
+// AgentColor.yaml): a palette value in any letter-case is returned uppercase and
+// anything else - a well-formed hex outside the ten included - is refused. Empty
+// passes (the field is optional on update).
 func canonicalAgentColor(s string) (string, error) {
 	if s == "" {
 		return "", nil

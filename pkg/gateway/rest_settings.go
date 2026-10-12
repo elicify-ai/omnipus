@@ -723,7 +723,7 @@ func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 		// Fail closed (S2-02): with an incomplete helper walk some chats that
 		// belong to a main cannot be told apart from ordinary ones, so nothing
 		// is deleted and the person is not told "cleared".
-		jsonServerFailure(w, http.StatusInternalServerError, "could not determine which chats belong to a main chat; nothing was deleted", err)
+		jsonServerFailure(w, http.StatusInternalServerError, "could not determine which chats belong to a main chat; nothing was deleted. Check the server log for the damaged session record, repair or remove it, then retry", err)
 		return
 	}
 	removed, kept, mains := 0, len(unreadable), 0

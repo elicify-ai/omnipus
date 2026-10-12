@@ -20,13 +20,15 @@ var newPalette = []string{
 	"#B76E79", "#A97142", "#9C8A5B", "#CDBA96", "#8E9196",
 }
 
-var oldToNew = map[string]string{
-	"#3B82F6": "#6E8BA8", "#38BDF8": "#7A8C9E", "#22D3EE": "#4F8A80", "#818CF8": "#5E6973",
-	"#A78BFA": "#7B7290", "#E879F9": "#B76E79", "#FB923C": "#A97142", "#9CA3AF": "#8E9196",
-	"#F472B6": "#CDBA96", "#C084FC": "#9C8A5B",
+// The ten colours of the REMOVED previous palette (founder ruling 2026-10-12,
+// greenfield: only the new palette exists). They are invalid like any unknown
+// colour: refused on write, read back as the default.
+var removedPalette = []string{
+	"#3B82F6", "#38BDF8", "#22D3EE", "#818CF8", "#A78BFA",
+	"#E879F9", "#FB923C", "#9CA3AF", "#F472B6", "#C084FC",
 }
 
-func TestPalette_CanonicalColorAcceptsTheNewSetAndMapsTheOldOne(t *testing.T) {
+func TestPalette_CanonicalColorAcceptsOnlyTheNewSet(t *testing.T) {
 	for _, hex := range newPalette {
 		got, ok := coreagent.CanonicalColor(hex)
 		assert.True(t, ok, hex)
@@ -35,38 +37,24 @@ func TestPalette_CanonicalColorAcceptsTheNewSetAndMapsTheOldOne(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, hex, low, "letter-case is normalised")
 	}
-	for old, want := range oldToNew {
-		got, ok := coreagent.CanonicalColor(old)
-		assert.True(t, ok, old)
-		assert.Equal(t, want, got, "write mapping for %s", old)
+	for _, old := range removedPalette {
+		_, ok := coreagent.CanonicalColor(old)
+		assert.False(t, ok, "%s is from the removed previous palette", old)
 	}
 	for _, bad := range []string{"", "#D4AF37", "#FF0000", "#6E8BA9", "6E8BA8", "nope"} {
 		_, ok := coreagent.CanonicalColor(bad)
-		assert.False(t, ok, "%q is in neither set", bad)
+		assert.False(t, ok, "%q is not in the palette", bad)
 	}
 }
 
-func TestPalette_MappingIsOneToOneAndLandsInTheNewSet(t *testing.T) {
-	seen := map[string]string{}
-	for old := range oldToNew {
-		got, _ := coreagent.CanonicalColor(old)
-		if prior, dup := seen[got]; dup {
-			t.Fatalf("%s and %s both map to %s: distinct agents would collapse", prior, old, got)
-		}
-		seen[got] = old
-		assert.Contains(t, newPalette, got)
-	}
-	assert.Len(t, seen, 10)
-}
-
-func TestPalette_WireIdentityReadsOldAsNewAndUnknownAsDefault(t *testing.T) {
-	for old, want := range oldToNew {
+func TestPalette_WireIdentityReadsAnythingOutsideTheNewSetAsDefault(t *testing.T) {
+	for _, old := range append([]string{"#D4AF37"}, removedPalette...) {
 		_, _, c := coreagent.WireIdentity("", "", old)
-		assert.Equal(t, want, string(c), "read of stored %s", old)
+		assert.Equal(t, coreagent.DefaultColor, string(c), "read of stored %s", old)
 	}
-	_, _, c := coreagent.WireIdentity("", "", "#D4AF37")
-	assert.Equal(t, coreagent.DefaultColor, string(c))
-	assert.Equal(t, "#8E9196", coreagent.DefaultColor, "the default is Pewter (the old Grey's equivalent)")
+	_, _, c := coreagent.WireIdentity("", "", "#a97142")
+	assert.Equal(t, "#A97142", string(c), "letter-case of a palette value is normalised on read")
+	assert.Equal(t, "#8E9196", coreagent.DefaultColor, "the default is Pewter")
 }
 
 // The seeded built-in agents default to values of the new set, and the visible
