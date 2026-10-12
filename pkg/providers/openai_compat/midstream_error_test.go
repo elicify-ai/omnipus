@@ -48,3 +48,14 @@ func TestParseStream_NoErrorChunkStillReturnsTheResponse(t *testing.T) {
 		t.Fatalf("got %+v err %v", got, err)
 	}
 }
+
+// finish_reason "error" without an error object (a provider that signals it only
+// through the finish reason) is the same failure.
+func TestParseStream_FinishReasonErrorAloneIsAnError(t *testing.T) {
+	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"Running it now:\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"error\"}]}\n\ndata: [DONE]\n\n"
+	got, err := parseStreamResponse(context.Background(), strings.NewReader(stream), nil, nil, nil)
+	if err == nil || !errors.Is(err, common.ErrStreamProviderError) {
+		t.Fatalf("got %+v err %v, want an ErrStreamProviderError", got, err)
+	}
+}

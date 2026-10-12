@@ -89,6 +89,13 @@ var (
 		substr("use of closed network connection"),
 		substr("server closed idle connection"),
 		substr("read: connection timed out"),
+		// Transport failures with no HTTP status (founder preview 2026-10-12): the
+		// HTTP/2 connection died under the request, DNS or the route to the
+		// provider was down. Transient: a retry is the right first move.
+		substr("http2: client connection lost"),
+		substr("no such host"),
+		substr("connection refused"),
+		substr("network is unreachable"),
 	}
 
 	// C-5 billing vocabulary (dataset D2) — exactly these four phrases.
