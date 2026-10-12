@@ -24,11 +24,11 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
 import { useUiStore } from './ui'
+import { checkAddressedAgent, recipientAddressBlocked } from './chat/recipientSend'
 import { queryClient } from '@/lib/queryClient'
 import type { WsConnection } from '@/lib/ws'
 import type { Agent } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
-import { recipientAddressBlocked } from './chat/recipientSend'
 
 const TEST_SESSION_ID = 'sess_recipient_test'
 const WORKSPACE_ID = 'ws_recipient_test'
@@ -391,6 +391,102 @@ describe('C8 — the @ address is never dropped silently', () => {
     expect(retrySend).not.toHaveBeenCalled()
     expect(useUiStore.getState().toasts.some((t) => t.variant === 'warning' && t.message.includes('@Mia'))).toBe(true)
     expect(failed.deliveryStatus).toBe('failed')
+  })
+})
+
+// C8 follow-up (combined-review S3-08, 2026-10-12): the block must know
+// LOADING from FAILED. A never-resolving list that has actually ERRORED must
+// not promise "try again in a moment" — it says the team list could not be
+// loaded and offers a Retry (the toast action), and the drain hold actively
+// retries the roster on every drain trigger instead of silently waiting for
+// a load that will never come. The hold itself stays: releasing an
+// @-addressed message without roster data is the silent drop C8 forbids.
+describe('C8 — a FAILED agents list (not merely loading) says so and offers Retry', () => {
+  /** Settle the shared ['agents'] cache into the ERROR state with no data. */
+  async function failAgentsQuery(): Promise<void> {
+    act(() => { queryClient.removeQueries({ queryKey: ['agents'] }) })
+    await act(async () => {
+      await expect(
+        queryClient.fetchQuery({
+          queryKey: ['agents'],
+          queryFn: () => Promise.reject(new Error('roster down')),
+          retry: false,
+        }),
+      ).rejects.toThrow('roster down')
+    })
+    expect(queryClient.getQueryData<Agent[]>(['agents'])).toBeUndefined()
+    expect(queryClient.getQueryState(['agents'])?.status).toBe('error')
+  }
+
+  it('checkAddressedAgent distinguishes FAILED from loading: the errored roster yields kind "failed"', () => {
+    act(() => { queryClient.removeQueries({ queryKey: ['agents'] }) })
+    // Loading (no cache entry at all yet): still 'unresolvable'.
+    expect(checkAddressedAgent('@Mia hello')).toEqual({ kind: 'unresolvable', nameGuess: 'Mia' })
+
+    return failAgentsQuery().then(() => {
+      expect(checkAddressedAgent('@Mia hello')).toEqual({ kind: 'failed', nameGuess: 'Mia' })
+    })
+  })
+
+  it('the composer block on a FAILED roster says the list could not be loaded and offers Retry — no "try again in a moment"', async () => {
+    await failAgentsQuery()
+    const blocked = recipientAddressBlocked('@Mia please review X')
+    // Same "roster unavailable" sentinel for loading and failed — the caller
+    // only needs "blocked"; the copy carries the difference.
+    expect(blocked).toBe('unresolvable')
+    const toast = useUiStore.getState().toasts.find((t) => t.variant === 'warning')
+    expect(toast).toBeDefined()
+    expect(toast?.message).toContain('could not be loaded')
+    expect(toast?.message).not.toContain('try again in a moment')
+    expect(toast?.action?.label).toBe('Retry')
+  })
+
+  it('the drain hold on a FAILED roster keeps holding (no silent drop) but says "could not be loaded" and kicks a roster refetch', async () => {
+    useChatStore.setState({ outboundQueue: [], pendingDrainQueue: [] })
+    act(() => { useChatStore.getState().sendMessage('@Mia please review X') }) // disconnected → queued
+    expect(useChatStore.getState().outboundQueue).toHaveLength(1)
+
+    await failAgentsQuery()
+    const refetchSpy = vi.spyOn(queryClient, 'refetchQueries').mockResolvedValue(undefined)
+    const send = connectWithSendSpy()
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+
+    // Still held — never drained unaddressed…
+    expect(send).not.toHaveBeenCalled()
+    expect(useChatStore.getState().pendingDrainQueue).toHaveLength(1)
+    // …but the copy is honest and recovery was attempted.
+    const toast = useUiStore.getState().toasts.find((t) => t.variant === 'warning')
+    expect(toast?.message).toContain('could not be loaded')
+    expect(toast?.message).not.toContain('try again in a moment')
+    expect(refetchSpy).toHaveBeenCalled()
+    refetchSpy.mockRestore()
+  })
+
+  it('a Retry (resend) with a FAILED roster gets the failed-list copy too', async () => {
+    await failAgentsQuery()
+    act(() => {
+      useChatStore.setState({
+        sessionsById: {
+          [TEST_SESSION_ID]: bucketFor([
+            {
+              id: 'failed-attempt', role: 'user', content: '@Mia please review X',
+              timestamp: new Date().toISOString(), status: 'error', deliveryStatus: 'failed',
+            },
+          ]),
+        },
+        messages: [],
+        isStreaming: false,
+        isReplaying: false,
+      })
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'jim' })
+    })
+    const send = connectWithSendSpy()
+    act(() => { useChatStore.getState().resendMessage('failed-attempt') })
+
+    expect(send).not.toHaveBeenCalled()
+    const toast = useUiStore.getState().toasts.find((t) => t.variant === 'warning')
+    expect(toast?.message).toContain('could not be loaded')
+    expect(toast?.message).not.toContain('try again in a moment')
   })
 })
 

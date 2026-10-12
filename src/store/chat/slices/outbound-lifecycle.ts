@@ -20,7 +20,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
 import { isClearCommandText, isClearContextMarker } from '@/lib/clearMarker'
-import { checkAddressedAgent, recipientAddressResendBlockMessage, recipientAddressUnresolvedBlockMessage, resolveAddressedAgent } from '../recipientSend'
+import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddressResendBlockMessage, recipientAddressUnresolvedBlockMessage, resolveAddressedAgent, retryAgentsRoster } from '../recipientSend'
 import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
@@ -191,7 +191,9 @@ function performResendMessage(
   // never resolved cannot check the address at all — the old code sent both
   // unaddressed, a silent drop. Both refuse VISIBLY, the same way the
   // composer blocks an @-send in a brand-new chat, and the row stays in its
-  // failed state (before the 'sending' reset below) so Retry remains.
+  // failed state (before the 'sending' reset below) so Retry remains. A
+  // roster that FAILED outright (S3-08) says so and offers a Retry of the
+  // load, instead of the loading copy's "try again in a moment".
   const addressCheck = checkAddressedAgent(content)
   if (addressCheck.kind === 'unresolvable') {
     useUiStore.getState().addToast({
@@ -199,6 +201,15 @@ function performResendMessage(
       variant: 'warning',
     })
     logDiagnostic('chatRecipientResendBlockedAgentsUnavailable', { nameGuess: addressCheck.nameGuess })
+    return
+  }
+  if (addressCheck.kind === 'failed') {
+    useUiStore.getState().addToast({
+      message: recipientAddressFailedBlockMessage(addressCheck.nameGuess),
+      variant: 'warning',
+      action: { label: 'Retry', onClick: retryAgentsRoster },
+    })
+    logDiagnostic('chatRecipientResendBlockedAgentsErrored', { nameGuess: addressCheck.nameGuess })
     return
   }
   if (targetSid === '__pending' && addressCheck.kind === 'addressed') {

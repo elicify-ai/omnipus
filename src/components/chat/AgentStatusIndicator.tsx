@@ -33,24 +33,29 @@ export const THINKING_PHRASES = [
   'Weighing the options…',
 ] as const
 
-export const IDLE_STATUS_TEXT = 'Idle'
 export const UNAVAILABLE_STATUS_TEXT = 'Unavailable/reconnecting'
 
 // The kit's governed identity ink (founder 2026-10-11, AVATAR-PALETTE-
-// DECISION.md) — one list, not a second copy. The annotation plus the
-// assertNever pair below keep this guard compiling only while the kit
-// palette is exactly the generated AgentColor enum. This is the avatar
-// palette behind isPaletteColor, not a D4 task-status palette.
+// DECISION.md) — one list, not a second copy. This is the avatar palette
+// behind isPaletteColor, not a D4 task-status palette.
+//
+// Two compile-time guards pin it to the generated AgentColor enum (S3-07:
+// the coverage direction below used to read the WIDENED annotation, which
+// made `Exclude` always `never` and the guard unable to fail):
+//   - subset — every palette entry IS an AgentColor: the annotation on the
+//     assignment fails to typecheck for a stray entry;
+//   - coverage — every AgentColor appears in the palette: the Exclude reads
+//     the CONST's literal union, so a color added to the enum without a
+//     palette entry leaves a non-never remainder and fails typecheck.
 const IDENTITY_INK: readonly AgentColor[] = AGENT_ICON_PALETTE
 
-type MissingPalette = Exclude<AgentColor, (typeof IDENTITY_INK)[number]>
+type MissingPalette = Exclude<AgentColor, (typeof AGENT_ICON_PALETTE)[number]>
 type AssertNever<T extends never> = T
 type _PaletteCoverage = AssertNever<MissingPalette>
 void (null as unknown as _PaletteCoverage)
 
 export type ReplyPhase =
   | { kind: 'none' }
-  | { kind: 'idle' }
   | { kind: 'unavailable' }
   | { kind: 'waiting'; text: string }
   | { kind: 'working'; text: string }
@@ -118,8 +123,9 @@ function waitingCopy(approvalTool: string | null, questionPending: boolean): str
 /**
  * Precedence follows the spec indicator table, limited to inputs that exist
  * today: disconnect, a pending approval, a pending question card, a correlated
- * running tool, a model turn, then idle. Goal/tool labels only choose the copy.
- * Queued work has no accepted input on this screen and is not invented here.
+ * running tool, a model turn — a settled, connected row paints nothing
+ * ('none'). Goal/tool labels only choose the copy. Queued work has no
+ * accepted input on this screen and is not invented here.
  */
 export function useReplySlotPhase(input: {
   streaming: boolean
@@ -131,9 +137,7 @@ export function useReplySlotPhase(input: {
   idleEligible: boolean
 }): ReplyPhase {
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
-  const isReplaying = useChatStore((s) => s.isReplaying)
   const pendingAsk = useChatStore((s) => s.pendingAsk)
-  const isConnected = useConnectionStore((s) => s.isConnected)
   const approvalTool = useToolApprovalStore((s) => {
     if (!activeSessionId) return null
     const pending = s.queue.find((item) => item.sessionId === activeSessionId)
@@ -163,7 +167,9 @@ export function useReplySlotPhase(input: {
     return { kind: 'working', text: input.goalLabel ?? input.toolLabel ?? 'Working on it…' }
   }
   if (input.streaming) return { kind: 'thinking', text: input.goalLabel }
-  if (input.idleEligible && !isReplaying && isConnected) return { kind: 'idle' }
+  // A settled, replay-free, connected row paints nothing: the "Idle" word is
+  // retired (N3 — no production render used it; 'idle' and 'none' were
+  // indistinguishable downstream).
   return { kind: 'none' }
 }
 
