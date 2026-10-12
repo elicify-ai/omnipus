@@ -106,7 +106,7 @@ func TestClearNotPerformed_ASuccessfulClearReportsNothing(t *testing.T) {
 // no receiver installed (or no session/entry id on a web message) the only trace
 // is a Warn; a non-web channel has no row to mark and stays quiet.
 func TestNotifyClearNotPerformed_WebMessageThatCannotBeReportedIsLogged(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here (repo precedent: 19 call sites)
 	t.Cleanup(cleanup)
 
 	var buf bytes.Buffer
