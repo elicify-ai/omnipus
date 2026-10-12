@@ -281,6 +281,37 @@ describe('F1: a held @-message', () => {
   })
 })
 
+describe('R2-S3-04: only a refusal notice is looked past, not a real turn-ending error', () => {
+  let sent: Array<Record<string, unknown>> = []
+  beforeEach(() => {
+    sent = []
+    useConnectionStore.setState({
+      connection: { send: (p: unknown) => { sent.push(p as Record<string, unknown>); return true }, close: () => {} } as never,
+      isConnected: true,
+    } as never)
+  })
+
+  it('steered turn, then a provider error, then a straggler tool: Stop is released', () => {
+    feed(TOKEN)
+    act(() => { useChatStore.getState().sendMessage('change course') })
+    feed({ type: 'error', code: 'provider_error', message: 'the provider failed' })
+    expect(bucket().isStreaming, 'the terminal error ends the turn').toBe(false)
+    feed(TOOL_START, TOOL_RESULT)
+    expect(anyRunningTool()).toBe(false)
+    expect(bucket().isStreaming, 'a real error bubble ends the look-past; Stop must not stay up').toBe(false)
+  })
+})
+
+describe('R2-S3-05: a stale idle-armed mark cannot blink Stop off in a later turn', () => {
+  it('a straggler baked before its result leaves no mark behind', () => {
+    feed(TOKEN, DONE)
+    feed(TOOL_START) // idle-armed straggler
+    act(() => { useChatStore.getState().clearStreamingState() }) // bakes the running call into its message
+    feed(TOOL_RESULT) // takes the baked branch
+    expect(Object.keys(bucket().sessionsById[SID]?.idleArmedToolCalls ?? {})).toEqual([])
+  })
+})
+
 describe('C11: no Stop blink between a mid-turn tool result and the next token', () => {
   it('a live turn whose last bubble is already finalized keeps the flag up after a tool result', () => {
     // Turn is running (flag armed by the user's send), the last assistant bubble
