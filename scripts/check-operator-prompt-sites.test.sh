@@ -194,7 +194,11 @@ EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "fourth-site-exit" 1 "$EXIT_CODE"
 assert_contains "fourth-site-finding" "rogue_release.go" "$OUTPUT"
-assert_contains "fourth-site-count" "3 site(s)" "$OUTPUT"
+# R2-S5-09: assert the checker's whole count LINE, not the bare phrase. "3
+# site(s)" also matches the OTHER counter's line, and a bare "10" matches any
+# path or line number containing those digits — neither proves the planted
+# site was counted. The full line names which count moved and what it wants.
+assert_contains "fourth-site-count" "OperatorPrompt assigned true: 3 site(s) (want exactly 2)" "$OUTPUT"
 
 echo ""
 echo "Test 3: only 1 OperatorPrompt=true site (one removed) is caught"
@@ -214,7 +218,7 @@ OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
 EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "missing-site-exit" 1 "$EXIT_CODE"
-assert_contains "missing-site-count" "1 site(s)" "$OUTPUT"
+assert_contains "missing-site-count" "OperatorPrompt assigned true: 1 site(s) (want exactly 2)" "$OUTPUT"
 
 echo ""
 echo "Test 4: OperatorPrompt=true mentioned only in a // comment is not counted"
@@ -230,7 +234,7 @@ OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
 EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "comment-only-exit" 0 "$EXIT_CODE"
-assert_contains "comment-only-count" "2 site(s)" "$OUTPUT"
+assert_contains "comment-only-count" "OperatorPrompt assigned true: 2 site(s) (want exactly 2)" "$OUTPUT"
 
 echo ""
 echo "Test 5: OperatorPrompt=true inside a _test.go file is not counted"
@@ -248,7 +252,7 @@ OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
 EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "test-file-exit" 0 "$EXIT_CODE"
-assert_contains "test-file-count" "2 site(s)" "$OUTPUT"
+assert_contains "test-file-count" "OperatorPrompt assigned true: 2 site(s) (want exactly 2)" "$OUTPUT"
 
 echo ""
 echo "Test 6: a TENTH PublishInbound call site is caught"
@@ -266,7 +270,7 @@ EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "tenth-call-exit" 1 "$EXIT_CODE"
 assert_contains "tenth-call-finding" "rogue_publish.go" "$OUTPUT"
-assert_contains "tenth-call-count" "10" "$OUTPUT"
+assert_contains "tenth-call-count" "PublishInbound call sites: 10 (want exactly 9)" "$OUTPUT"
 
 echo ""
 echo "Test 7: the PublishInbound func definition itself is never counted"

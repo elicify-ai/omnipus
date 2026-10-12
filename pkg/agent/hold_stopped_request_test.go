@@ -271,7 +271,14 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 	}
 	r1AwaitProvider(t, provider, 1)
 	provider.open(1)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// R2-X-qa-14: this context bounds the GOROUTINE's lifetime, not an
+	// assertion deadline — the wait that can fail is the `wakeDeadline` poll
+	// below, and it is unchanged at 10 s. The context must outlive that poll
+	// with room for the turn's own provider calls (which is why it is not the
+	// old 5 s), so it is DERIVED from the poll rather than being a second,
+	// unexplained magic number.
+	const wakeDeadline = 10 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), wakeDeadline+20*time.Second)
 	defer cancel()
 
 	// The wake the delivery publishes is processed like any inbound. (Not
@@ -288,7 +295,7 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		// The text may instead have been steered straight into the resumed turn.
 	}
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(wakeDeadline)
 	seen := func() bool {
 		for _, req := range provider.Requests() {
 			for _, m := range req {
