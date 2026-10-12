@@ -409,6 +409,10 @@ export async function freshChat(
       'into a different session or as a different agent than this helper created'
   ).toHaveAttribute('data-selected', 'true', { timeout: 15_000 })
 
+  // The bound-row check above opened the sidebar again (agentRowGroup); leave it
+  // closed so its click-catcher does not swallow the caller's next click.
+  await closeSidebar(page)
+
   return { sessionId: created.id, agentId, agentName }
 }
 

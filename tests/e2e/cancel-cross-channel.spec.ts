@@ -272,13 +272,9 @@ async function triggerLongStreamingTurn(page: Page): Promise<string> {
   // callers that bind on-disk evidence (transcript/audit rows) to the turn
   // use the exact id instead of inferring it from a sessions-dir diff.
   const sessionId = (await freshChat(page, /Jim/i)).sessionId
-  const drawer = page.locator('[role="dialog"][aria-label="Main navigation"]')
-  await expect(drawer, 'DIAG: sidebar open right after freshChat').toBeHidden({ timeout: 1_000 })
 
   await input.fill(LONG_PROSE_PROMPT)
-  await expect(drawer, 'DIAG: sidebar open after filling the prompt').toBeHidden({ timeout: 1_000 })
   await input.press('Enter', { timeout: 15_000 })
-  await expect(drawer, 'DIAG: sidebar open right after sending').toBeHidden({ timeout: 1_000 })
 
   // Wait until the turn is observably active (see waitForActiveStream's doc
   // comment) before returning — a subsequent cancel always has a real,
