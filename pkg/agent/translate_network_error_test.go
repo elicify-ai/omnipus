@@ -57,3 +57,24 @@ func TestTranslateTurnError_UnrelatedErrorStaysUnknown(t *testing.T) {
 	got := TranslateTurnError(errors.New("something nobody anticipated"))
 	assert.Equal(t, CodeUnknown, got.Code)
 }
+
+// R2-S1-03: the words follow the provider's own code, not one network text.
+func TestTranslateTurnError_MidStreamErrorFollowsItsCode(t *testing.T) {
+	for _, tc := range []struct {
+		code, msg string
+		want      LLMErrorCode
+		retryable bool
+	}{
+		{"server_error", "RAWPROVIDERTEXT", CodeNetwork, true},
+		{"402", "RAWPROVIDERTEXT", CodeQuotaBilling, false},
+		{"401", "RAWPROVIDERTEXT", CodeProviderAuthFailed, false},
+		{"429", "RAWPROVIDERTEXT", CodeRateLimited, true},
+		{"invalid_request_error", "RAWPROVIDERTEXT", CodeProviderRejected, false},
+		{"content_policy_violation", "RAWPROVIDERTEXT", CodeContentPolicy, false},
+		{"some_new_code", "RAWPROVIDERTEXT", CodeUnknown, false},
+	} {
+		got := TranslateTurnError(fmt.Errorf("x: %w", &common.StreamProviderError{Code: tc.code, Message: tc.msg}))
+		assert.Equal(t, tc.want, got.Code, "code %q", tc.code)
+		assert.NotContains(t, got.Message, "RAWPROVIDERTEXT", "raw provider text must not reach the person")
+	}
+}

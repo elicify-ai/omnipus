@@ -103,3 +103,18 @@ func TestEmptyEnvelope_StopFinishIsAFinalAnswer(t *testing.T) {
 	assert.Equal(t, "All done.", reply)
 	assert.Equal(t, 1, provider.count())
 }
+
+// R2-S1-03 at the loop: a billing or auth failure that arrives mid-stream is not
+// retried (each attempt is billed and fails the same way); a transient one is.
+func TestEmptyEnvelope_MidStreamBillingAndAuthErrorsAreNotRetried(t *testing.T) {
+	for _, code := range []string{"402", "401"} {
+		t.Run(code, func(t *testing.T) {
+			provider := testutil.NewScenario().
+				WithError(&common.StreamProviderError{Code: code, Message: "no"}).
+				WithText("must not be reached")
+			_, _, err := runEnvelopeTurn(t, provider)
+			require.Error(t, err)
+			assert.Equal(t, 1, provider.CallCount(), "a %s mid-stream error must not be retried", code)
+		})
+	}
+}

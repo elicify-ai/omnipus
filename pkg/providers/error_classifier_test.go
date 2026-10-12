@@ -588,3 +588,33 @@ func TestClassifyError_MidStreamProviderErrorIsTimeoutClass(t *testing.T) {
 		t.Errorf("classified as %+v, want FailoverTimeout", fe)
 	}
 }
+
+// R2-S1-03: a mid-stream provider error is classified by its OWN code. Billing
+// and auth failures are not transient (a retry is billed and fails the same
+// way); only server-side/upstream/overloaded errors retry inline.
+func TestClassifyError_MidStreamErrorFollowsItsCode(t *testing.T) {
+	for _, tc := range []struct {
+		code, msg string
+		want      FailoverReason
+	}{
+		{"server_error", "Provider disconnected unexpectedly", FailoverTimeout},
+		{"overloaded_error", "Overloaded", FailoverTimeout},
+		{"402", "Insufficient credits", FailoverBilling},
+		{"insufficient_quota", "quota", FailoverBilling},
+		{"401", "invalid key", FailoverAuth},
+		{"authentication_error", "invalid x-api-key", FailoverAuth},
+		{"429", "slow down", FailoverRateLimit},
+		{"invalid_request_error", "bad field", FailoverFormat},
+	} {
+		err := fmt.Errorf("wrapped: %w", &common.StreamProviderError{Code: tc.code, Message: tc.msg})
+		fe := ClassifyError(err, "openrouter", "m")
+		if fe == nil || fe.Reason != tc.want {
+			t.Errorf("code %q classified as %+v, want %s", tc.code, fe, tc.want)
+		}
+	}
+	// A code nothing knows is not retried blindly.
+	err := &common.StreamProviderError{Code: "some_new_code", Message: "odd"}
+	if fe := ClassifyError(err, "openrouter", "m"); fe != nil && fe.Reason == FailoverTimeout {
+		t.Errorf("an unknown mid-stream code was retried as a timeout: %+v", fe)
+	}
+}
