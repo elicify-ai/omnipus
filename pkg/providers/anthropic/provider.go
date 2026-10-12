@@ -245,8 +245,14 @@ func (p *Provider) streamWithCallbacks(
 	var lastReasoningLen int
 	lastArgsLen := map[int]int{}
 
+	sawStop := false
 	for stream.Next() {
 		event := stream.Current()
+		// message_stop ends a streamed message; a bare "message" event is a
+		// complete non-streamed message delivered through the same decoder.
+		if event.Type == "message_stop" || event.Type == "message" {
+			sawStop = true
+		}
 		if err := msg.Accumulate(event); err != nil {
 			return nil, fmt.Errorf("claude streaming accumulate: %w", err)
 		}
@@ -342,6 +348,13 @@ func (p *Provider) streamWithCallbacks(
 			return nil, common.NewStallError(stall)
 		}
 		return nil, fmt.Errorf("claude API call: %w", err)
+	}
+	// A stream that ends without message_stop was cut off (the connection was
+	// closed under it): what accumulated is not an answer and a tool call that
+	// was coming never arrived (issue #1278 sweep). An `error` event is already
+	// surfaced by stream.Err() above.
+	if !sawStop {
+		return nil, &common.StreamProviderError{Code: "incomplete_stream", Message: "the stream ended before message_stop"}
 	}
 
 	return parseResponse(&msg)

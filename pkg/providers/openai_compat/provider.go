@@ -317,6 +317,7 @@ func parseStreamResponse(
 	activeTools := map[int]*toolAccum{}
 
 	var malformedChunks int
+	var streamErr *common.StreamProviderError
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 1MB initial, 10MB max
 	for scanner.Scan() {
@@ -362,6 +363,13 @@ func parseStreamResponse(
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage *common.OpenAINonStreamUsage `json:"usage"`
+			// Error is OpenRouter's mid-stream error (issue #1278): the 200 is
+			// already committed, so a provider failure arrives as a top-level
+			// error object on a chunk whose finish_reason is "error".
+			Error *struct {
+				Code    json.RawMessage `json:"code"`
+				Message string          `json:"message"`
+			} `json:"error"`
 		}
 
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -371,6 +379,12 @@ func parseStreamResponse(
 
 		if chunk.Usage != nil {
 			usage = chunk.Usage.ToUsageInfo()
+		}
+		if chunk.Error != nil && streamErr == nil {
+			streamErr = &common.StreamProviderError{
+				Code:    strings.Trim(string(chunk.Error.Code), `"`),
+				Message: chunk.Error.Message,
+			}
 		}
 
 		if len(chunk.Choices) == 0 {
@@ -471,6 +485,25 @@ func parseStreamResponse(
 	}
 	if malformedChunks > 0 {
 		logger.WarnCF("openai_compat", "skipped malformed SSE chunks", map[string]any{"count": malformedChunks})
+	}
+
+	// A provider that ended the response with an error (an error chunk, or the
+	// finish_reason "error" that always accompanies it) did not finish: what
+	// streamed is not an answer and the tool call that was coming never
+	// arrived. Report it - with the usage the failed attempt was billed for -
+	// instead of returning the preamble as a final answer (issue #1278).
+	if streamErr != nil || finishReason == "error" {
+		if streamErr == nil {
+			streamErr = &common.StreamProviderError{Code: "error", Message: "the stream ended with finish_reason \"error\""}
+		}
+		streamErr.Usage = usage
+		logger.WarnCF("openai_compat", "provider ended the stream with an error; the partial response is discarded",
+			map[string]any{
+				"code": streamErr.Code, "message": streamErr.Message,
+				"content_chars": textContent.Len(), "tool_calls_started": len(activeTools),
+				"reasoning_bytes": totalReasoningBytes, "completion_tokens": completionTokens(usage),
+			})
+		return nil, streamErr
 	}
 
 	// Assemble tool calls from accumulated deltas
@@ -604,4 +637,11 @@ func (p *Provider) APIBase() string {
 		return ""
 	}
 	return p.apiBase
+}
+
+func completionTokens(u *UsageInfo) int {
+	if u == nil {
+		return 0
+	}
+	return u.CompletionTokens
 }

@@ -750,7 +750,37 @@ func classifyByMessage(body string) LLMErrorCode {
 	if isRateLimitMessage(body) {
 		return CodeRateLimited
 	}
+	// Transport failures carry no HTTP status, so only their wording says what
+	// they are. Without this they fell to CodeUnknown ("we can't tell why")
+	// although the cause was a dropped connection or unreachable provider.
+	if isNetworkMessage(body) {
+		return CodeNetwork
+	}
 	return CodeUnknown
+}
+
+// networkSubstrings are the wordings of a transport failure between us and the
+// provider (the request never completed): matched case-insensitively.
+var networkSubstrings = []string{
+	"client connection lost",
+	"no such host",
+	"dial tcp",
+	"i/o timeout",
+	"connection refused",
+	"network is unreachable",
+	"tls handshake",
+}
+
+// isNetworkMessage reports a transport failure: one of networkSubstrings, or
+// any of the transient stream/connection drops the loop already retries.
+func isNetworkMessage(body string) bool {
+	lower := strings.ToLower(body)
+	for _, s := range networkSubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return isTransientStreamError(errors.New(body))
 }
 
 // classifyByProviderError is the top-level dispatch: prefer
@@ -857,6 +887,17 @@ func TranslateTurnError(err error) LLMError {
 			}
 		}
 		return typedExitError(code, err)
+	}
+	// The provider ended its response with an error after the 200 (#1278): the
+	// partial text was discarded and nothing ran. Named for the person as a
+	// provider connection failure; the provider's own text stays in Detail.
+	if errors.Is(err, common.ErrStreamProviderError) {
+		return LLMError{
+			Code:      CodeNetwork,
+			Message:   defaultUserMessage(CodeNetwork),
+			Retryable: isRetryable(CodeNetwork),
+			Detail:    buildDetail(nil, err.Error()),
+		}
 	}
 	// The sender's own message could not be saved (founder ruling 2026-10-11):
 	// the turn is refused and the sender sees only the fixed reply; the store's
