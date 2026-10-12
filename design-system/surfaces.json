@@ -6676,6 +6676,10 @@
       "lane": 6
     },
     {
+      "source": "src/components/chat/RowDeliveryStatus.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ParticipantLabels.tsx",
       "lane": 3
     },
