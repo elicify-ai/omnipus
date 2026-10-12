@@ -263,15 +263,11 @@ func waitForCompletionContractTerminal(t *testing.T, al *AgentLoop, taskID strin
 			// only the transient state BEFORE the last write. A fast scheduler
 			// (macOS) happens to poll inside that window; a slower one (the Linux
 			// worker) never does and waited for a status that is never final.
-			//
-			// The mirror only exists when a lifecycle store is wired
-			// (transitionTaskLifecycle is a no-op without one). The gateway
-			// always wires it at boot, as newNativeTaskCompletionTestLoop does;
-			// newExternalCLITaskTestLoop does not, so there a failed task's
-			// session legitimately stays "archived" (measured on the Linux
-			// worker: External failed -> archived, Native failed -> failed).
+			// Every fixture wires the lifecycle store like the gateway does at boot,
+			// so this expectation is strict: a failed task's session must end
+			// "failed", never "archived".
 			wantStatus := session.StatusArchived
-			if got.Status == task.StatusFailed && al.taskExecutor.getLifecycleStore() != nil {
+			if got.Status == task.StatusFailed {
 				wantStatus = session.StatusFailed
 			}
 			if meta, merr := sessStore.GetMeta(got.SessionID); merr == nil && meta.Status == wantStatus {
