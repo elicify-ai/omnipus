@@ -717,7 +717,14 @@ describe('D4/D8 — Remove · failure surfaces (S4-05 rejection, S4-01 refusal)'
     const toast = useUiStore.getState().toasts.at(-1)
     expect(toast?.variant).toBe('error')
     expect(toast?.message).toContain('Could not remove Mia')
-    expect(toast?.message).toContain('team list is unavailable')
+    // R2-S4-02: a fresh record with no core_team IS an empty team — the wire
+    // omits the field only when the stored team is empty — so the refusal
+    // must say the truthful "empty / not on the team any more", not the old
+    // "unavailable — reopen the sidebar and try again", whose retry could
+    // never change the answer.
+    expect(toast?.message).toContain('team list is empty')
+    expect(toast?.message).toContain('not on the team any more')
+    expect(toast?.message).not.toContain('unavailable')
   })
 })
 

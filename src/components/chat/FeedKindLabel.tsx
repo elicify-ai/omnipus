@@ -45,7 +45,7 @@ export function FeedKindLabel() {
 
   // Live agents roster — current display names only; the derivation happens
   // per render in feedKindLabel/sessionDisplayTitle.
-  const { data: agents = [], isPending: agentsPending } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+  const { data: agents = [], isPending: agentsPending, isError: agentsError } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
   const descriptor = activeWorkspaceId != null ? sessionByWorkspace[activeWorkspaceId] : undefined
   if (descriptor != null && activeSessionId != null && descriptor.id === activeSessionId) {
@@ -69,6 +69,15 @@ export function FeedKindLabel() {
     // A main with neither a resolvable name nor an id (a failed roster and a
     // descriptor predating agent ids) shows nothing rather than a guess.
     if (label == null) return null
+    // R2-S4-03: an id fallback is the ruling's accepted stand-in, but it
+    // must not read as a normal name. When the roster FAILED and its data
+    // no longer names the agent, the strip says so — the same honest
+    // "unavailable" signal the search modal shows for the identical trigger.
+    // A failed REFETCH whose retained data still names the agent keeps the
+    // plain name: nothing fell back, so there is nothing to disclaim.
+    const rosterNameResolved = descriptor.agentId != null
+      && agents.some((agent) => agent.id === descriptor.agentId && agent.name.trim() !== '')
+    const namesUnavailable = main && agentsError && !rosterNameResolved
     return (
       <div
         role="status"
@@ -78,7 +87,7 @@ export function FeedKindLabel() {
         className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-[var(--space-2)]"
       >
         <span id={labelId} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
-          {label}
+          {namesUnavailable ? `${label} — agent names unavailable` : label}
         </span>
       </div>
     )

@@ -51,7 +51,12 @@ export { isChatEligibleAgent }
 // happens to be named "admin" is an ordinary agent and stays team-scoped.
 // Readiness / worker / hidden-role filters still apply — this predicate
 // only exempts Admin from TEAM scoping, never from those.
-function isStandaloneChatOperator(agent: Agent): boolean {
+// Exported for R2-S2-DV-07: the @ mention menu filters THIS exact predicate
+// back out outside the default workspace (the gateway refuses an Admin
+// request from any other — pkg/gateway/main_session.go::mainAgentEligible
+// returns ws.IsDefault) instead of hand-rolling a second `id === 'admin'`
+// check that could drift from this one.
+export function isStandaloneChatOperator(agent: Agent): boolean {
   return agent.type === 'core' && agent.id === 'admin'
 }
 
@@ -60,6 +65,8 @@ export interface UseChatAgentsResult {
   agents: Agent[]
   /** Ready-to-chat (active/idle), non-worker agents, scoped to the active workspace's core_team when one is set. A ready Admin is kept even when the team does not list it (ADR-090 standalone operator) — that is not a workspace membership grant. */
   chatAgents: Agent[]
+  /** True when the ACTIVE workspace is the default workspace (R2-S2-DV-07): the only place the gateway admits an @ request to Admin (mainAgentEligible returns ws.IsDefault), so the @ mention menu offers Admin exactly here and nowhere else. Unknown (workspaces not loaded yet) reads as false — the safe side, and the list lands moments later. */
+  activeWorkspaceIsDefault: boolean
   /** True when the latest fetch of the active workspace's team list failed. The last successfully fetched team stays in `workspaces` (React Query retains previous data on a failed refetch), so `chatAgents` may be scoped by a team that failed to refresh — surfaces of the open picker show a "could not be refreshed" line instead of letting that list read as current. */
   teamRefreshFailed: boolean
   isError: boolean
@@ -89,6 +96,10 @@ export function useChatAgents(): UseChatAgentsResult {
   })
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId)
   const teamIds = activeWorkspace?.core_team
+  // R2-S2-DV-07: the @ mention menu offers Admin only here — the gateway
+  // refuses an Admin request from any other workspace
+  // (pkg/gateway/main_session.go::mainAgentEligible returns ws.IsDefault).
+  const activeWorkspaceIsDefault = activeWorkspace?.is_default === true
 
   // Focus recovery and agent_created both refresh ['agents'], but team
   // membership can change separately. Refresh the workspace query too, even
@@ -148,5 +159,5 @@ export function useChatAgents(): UseChatAgentsResult {
     [agents, teamIds],
   )
 
-  return { agents, chatAgents, teamRefreshFailed, isError, refetch }
+  return { agents, chatAgents, activeWorkspaceIsDefault, teamRefreshFailed, isError, refetch }
 }

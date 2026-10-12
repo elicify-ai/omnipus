@@ -60,7 +60,9 @@ export function SessionOverviewList({
    * point 4): an untitled MAIN session reads "<Agent> - Main Session" instead
    * of "Untitled session", derived from this CURRENT name so a rename flows
    * through on the next render. Sessions here are grouped by their owner
-   * agent, so a main always belongs to this group's agent.
+   * agent, so a main always belongs to this group's agent. An unresolved
+   * name falls back to the session's own agent id (R2-S4-01) — never a
+   * fabricated placeholder.
    */
   agentName?: string
 }) {
@@ -75,11 +77,15 @@ export function SessionOverviewList({
   const renderRow = (row: SessionTreeFlatRow) => {
     const session = row.node.session
     const marker = sessionActivation(session.id) === 'expand'
-    // Display title (founder feedback 2026-10-11, point 4): server title
-    // when present; for an untitled main the "<Agent> - Main Session"
+    // Display title (founder feedback 2026-10-11, point 4; R2-S4-01): server
+    // title when present; for an untitled main the "<Agent> - Main Session"
     // derivation from the CURRENT group agentName — recomputed every render,
-    // never cached. Non-main sessions keep "Untitled session".
-    const title = sessionDisplayTitle(session, agentName, 'Untitled session')
+    // never cached. The session's own agent_id is the 4th argument — the id
+    // fallback the ruling accepts — so an unresolved name lands on
+    // "jim - Main Session" instead of null leaking into the expand labels
+    // ("Expand null delegated sessions") and the row. Non-main sessions keep
+    // "Untitled session".
+    const title = sessionDisplayTitle(session, agentName, 'Untitled session', session.agent_id) ?? 'Untitled session'
     return (
       <IndentedRow depth={row.depth}>
         {marker ? (
