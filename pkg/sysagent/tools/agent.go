@@ -95,7 +95,7 @@ func NewAgentCreateTool(d *Deps) *AgentCreateTool { return &AgentCreateTool{deps
 func (t *AgentCreateTool) Name() string           { return "create_agent" }
 func (t *AgentCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentCreateTool) Description() string {
-	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model and color (a palette hex, e.g. #6E8BA8) are all required — a malformed color is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
+	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul and model are required. color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
 }
 
 func (t *AgentCreateTool) Parameters() map[string]any {
@@ -116,7 +116,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Primary LLM model slug (e.g. 'z-ai/glm-5v-turbo')",
 			},
-			"color": map[string]any{"type": "string", "description": "Avatar color: one of the palette hex values (e.g. '#6E8BA8')"},
+			"color": map[string]any{"type": "string", "description": "Avatar color, optional (default Pewter #8E9196): one of the palette hex values (e.g. '#6E8BA8')"},
 			// Optional — agent type + external-CLI worker runtime.
 			"agent_type": map[string]any{
 				"type":        "string",
@@ -162,7 +162,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"model_params": modelParamsParameters(),
 		},
-		"required": []string{"name", "description", "soul", "model", "color"},
+		"required": []string{"name", "description", "soul", "model"},
 	}
 }
 
@@ -253,6 +253,12 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 		return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a palette color, e.g. #6E8BA8")), true
 	}
 	ac.color = canonColor
+	if ac.color == "" {
+		ac.color = coreagent.DefaultColor // same default as REST create
+	}
+	// The shared apply step re-reads the argument map; give it the resolved value
+	// so an explicit empty colour cannot overwrite the default.
+	ac.args["color"] = ac.color
 
 	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
 	ac.agentType, _ = ac.args["agent_type"].(string)
