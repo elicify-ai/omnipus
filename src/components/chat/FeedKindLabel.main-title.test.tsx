@@ -94,8 +94,13 @@ describe('FeedKindLabel — main-session header title (S4-04/S2-05 honest states
     vi.mocked(fetchAgents).mockRejectedValue(new Error('roster down'))
     renderLabel()
     await waitFor(() => {
-      expect(label()?.textContent).toBe('jim - Main Session')
+      expect(label()?.textContent).toContain('jim - Main Session')
     })
+    // R2-S4-03 (this round): the id fallback is no longer silent — the strip
+    // marks it, so a rendered id never reads as an actual agent name. (The
+    // exact-equality assertion this replaces pinned the pre-R2-S4-03
+    // behaviour where the fallback line carried no signal at all.)
+    expect(label()?.textContent).toContain('agent names unavailable')
     expect(screen.queryByText(/Unknown agent/)).not.toBeInTheDocument()
   })
 
