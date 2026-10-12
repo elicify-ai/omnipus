@@ -248,6 +248,9 @@ type agentLoopRequestCancel struct {
 	hooks                    CancelHooks
 	at                       time.Time
 	auditLogger              *audit.Logger
+	// audited is set once this request wrote its turn.cancel.attempt row, so the
+	// deferred fallback in RequestCancel writes one only when no path did.
+	audited bool
 	hint                     string
 	sessionID                string
 	backgroundSessionsKilled int64
@@ -297,6 +300,14 @@ func (al *AgentLoop) RequestCancel(
 	hooks CancelHooks,
 ) (CancelOutcome, error) {
 	rc := &agentLoopRequestCancel{al: al, ctx: ctx, scope: scope, canceller: canceller, hooks: hooks}
+	// Every Stop attempt on a resolved session is audited exactly once: a
+	// request that returns early (superseded generation, an unreadable record,
+	// an error) still happened.
+	defer func() {
+		if !rc.audited && rc.sessionID != "" {
+			rc.auditAttempt(false, false)
+		}
+	}()
 
 	if r0, r1, stop := rc.validateAndResolve(); stop {
 		return r0, r1
@@ -308,7 +319,7 @@ func (al *AgentLoop) RequestCancel(
 		if r1 == nil && !r0.SkippedNewerGeneration {
 			// A queued or idle session settled its Stop without a live turn
 			// to claim: the request still happened.
-			auditCancelAttempt(rc.ctx, rc.auditLogger, rc.sessionID, rc.canceller, r0.Fired, false)
+			rc.auditAttempt(r0.Fired, false)
 		}
 		return r0, r1
 	}
@@ -528,7 +539,7 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	}
 
 	// --- Audit: attempt (always, even for duplicate, no-turn, or armed-latch cancels) ---
-	auditCancelAttempt(rc.ctx, rc.auditLogger, rc.sessionID, rc.canceller, wasFired, armed)
+	rc.auditAttempt(wasFired, armed)
 
 	if !wasFired {
 		killedCount := int(atomic.LoadInt64(&rc.backgroundSessionsKilled))
@@ -1369,4 +1380,11 @@ func auditCancelAttempt(ctx context.Context, logger *audit.Logger, sessionID str
 		"was_fired":         wasFired,
 		"armed":             armed,
 	})
+}
+
+// auditAttempt writes this request's turn.cancel.attempt row and records that it
+// did.
+func (rc *agentLoopRequestCancel) auditAttempt(wasFired, armed bool) {
+	auditCancelAttempt(rc.ctx, rc.auditLogger, rc.sessionID, rc.canceller, wasFired, armed)
+	rc.audited = true
 }
