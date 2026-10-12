@@ -132,7 +132,7 @@ func neutralizeControlKeepNewlines(s string) string { return neutralizeControlEx
 func neutralizeControlExcept(s string, keepNewline bool) string {
 	clean := true
 	for _, r := range s {
-		if needsControlEscape(r) && !(keepNewline && r == '\n') {
+		if needsControlEscape(r) && (!keepNewline || r != '\n') {
 			clean = false
 			break
 		}
