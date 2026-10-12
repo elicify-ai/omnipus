@@ -7,9 +7,9 @@ description: >
   Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver
   are not in it; note that Champagne and Antique brass sit near the gold accent,
   by founder choice. Letter-case of a listed hex is normalized to this form on
-  write. A value from the previous palette is accepted on write and mapped
-  one-to-one to its new equivalent, and a stored previous value is returned as
-  its new equivalent on read (no stored file is rewritten).
+  write. Any other value, including a colour of the removed previous palette, is
+  invalid: rejected on write, and a stored value outside the ten is returned as
+  the default (Pewter) on read (no stored file is rewritten).
   JSON null is not an identity value. On PUT, omission retains the stored value;
   an explicit null or any other invalid supplied value rejects the whole update
   with HTTP 400 before any write.

@@ -550,6 +550,7 @@ func newWSHandler(
 	if agentLoop != nil {
 		agentLoop.SetEventSyncTap(h.hubSyncTap)
 		agentLoop.SetClearNotPerformedHook(h.announceClearNotPerformed)
+		agentLoop.SetRequestDeliveredHook(h.announceHeldRequestDelivered)
 	}
 	// Per-session state kept outside the hub is released with the hub
 	// (final-review N7).

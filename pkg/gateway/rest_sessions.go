@@ -732,7 +732,15 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 	}
 	// A main's title is fixed ("<Agent> - Main Session", derived on read), so a
 	// rename would be accepted and then never shown: refuse it visibly.
-	if cur, getErr := store.GetMeta(id); getErr == nil && cur.Type == session.SessionTypeMain {
+	// The guard needs the record's type, so a record that cannot be read fails
+	// closed (as deleteSession's protection guard does) instead of falling
+	// through to a write on a session whose type is unknown.
+	cur, getErr := store.GetMeta(id)
+	if getErr != nil {
+		jsonSessionStorageError(w, "read", id, getErr)
+		return
+	}
+	if cur.Type == session.SessionTypeMain {
 		jsonErr(w, http.StatusConflict, "a main session's title is fixed")
 		return
 	}

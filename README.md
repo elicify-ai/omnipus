@@ -1,6 +1,4 @@
 <div align="left">
-<img src="docs/marketing/omnipus-hero.png" alt="Omnipus — a team of AI agents you actually own, coordinated around the Omnipus octopus, above a capability strip (research with citations, code, browser automation, long-term memory, build unlimited custom agents) and a privacy strip (your keys, no telemetry, runs on your infrastructure, connect MCP servers and tools)." width="900">
-
 <p>Research. Code. Write. Automate. Browse. Analyze. — named agents that ask each other for help and remember what you discussed.</p>
 
 <p>Or have <b>Ava build entirely new agents</b> for tasks nobody's imagined yet. <b>You run the team. Ava grows the team.</b></p>
@@ -129,20 +127,6 @@ Their identity is locked — no silent knock-offs — but you control each one's
 | **Admin** | Operator | Configures connectors, providers, channels, diagnostics and document dependencies. |
 
 Need more? Ava builds unlimited custom agents, and Omnipus runs them all in the same binary.
-
----
-
-## See it work
-
-A live screenshot, captured against the running gateway.
-
-### Ava builds an agent live
-
-Tell her what you need, watch her call `system.agent.create`, and get a summary card.
-
-The new agent shows up in the roster instantly.
-
-<img src="docs/marketing/screenshots/15-ava-build-agent.png" alt="Ava builds Penny the pricing analyst" width="900">
 
 ---
 
@@ -303,8 +287,6 @@ New here? Start with:
 ---
 
 ## Architecture
-
-<img src="docs/marketing/diagrams/architecture.svg" alt="Omnipus architecture: clients on top, gateway with main port 5000 and sandboxed preview port 5001, channel-to-agent routing, agent runtime with hooks/tools/policy/event-bus, four persistence stores (memory, sessions, audit log, credential vault), all wrapped by the Linux kernel sandbox; LLM providers, MCP servers, and ClawHub registry live outside the sandbox and are reached via SSRF-checked outbound HTTP" width="960">
 
 Single Go binary. File-based JSON/JSONL storage at `~/.omnipus/`. No Postgres, no Redis.
 

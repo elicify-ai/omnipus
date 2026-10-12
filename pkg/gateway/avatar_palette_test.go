@@ -16,12 +16,11 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// Founder decision 2026-10-11 (metallic avatar palette). One old -> new table
-// serves both directions; no stored file is rewritten.
-var oldToNewPalette = [][2]string{
-	{"#3B82F6", "#6E8BA8"}, {"#38BDF8", "#7A8C9E"}, {"#22D3EE", "#4F8A80"}, {"#818CF8", "#5E6973"},
-	{"#A78BFA", "#7B7290"}, {"#E879F9", "#B76E79"}, {"#FB923C", "#A97142"}, {"#9CA3AF", "#8E9196"},
-	{"#F472B6", "#CDBA96"}, {"#C084FC", "#9C8A5B"},
+// Founder ruling 2026-10-12 (greenfield): the previous ten-colour palette is gone.
+// Its values are invalid like any unknown colour.
+var removedPalette = []string{
+	"#3B82F6", "#38BDF8", "#22D3EE", "#818CF8", "#A78BFA",
+	"#E879F9", "#FB923C", "#9CA3AF", "#F472B6", "#C084FC",
 }
 
 func newPaletteAgent(t *testing.T, api *restAPI, color string) string {
@@ -33,32 +32,10 @@ func newPaletteAgent(t *testing.T, api *restAPI, color string) string {
 	return id
 }
 
-// Write: an old value on PUT is mapped to its new equivalent and stored so.
-func TestAvatarPalette_PutMapsAnOldValue(t *testing.T) {
-	for _, pair := range oldToNewPalette {
-		t.Run(pair[0], func(t *testing.T) {
-			api := buildExecutorTestAPI(t)
-			id := newPaletteAgent(t, api, "#6E8BA8")
-			rec := putAgent(t, api, id, `{"color":"`+pair[0]+`"}`)
-			require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-			assert.Equal(t, pair[1], decodeObject(t, rec.Body.Bytes())["color"], "the response carries the new value")
-			assert.Equal(t, pair[1], savedAgent(t, api, id)["color"], "the stored value is the new one")
-		})
-	}
-}
-
-// Write: a lower-case old value maps too (the letter-case rule is unchanged).
-func TestAvatarPalette_PutMapsALowerCaseOldValue(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-	id := newPaletteAgent(t, api, "#6E8BA8")
-	rec := putAgent(t, api, id, `{"color":"#fb923c"}`)
-	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
-	assert.Equal(t, "#A97142", savedAgent(t, api, id)["color"])
-}
-
-// Write: a value in neither set is refused with 400 and nothing is written.
-func TestAvatarPalette_PutRefusesAValueInNeitherSet(t *testing.T) {
-	for _, bad := range []string{"#D4AF37", "#ff0000", "#6E8BA9", "nope"} {
+// Write: a value outside the palette (a removed previous-palette value included) is
+// refused with 400 and nothing is written.
+func TestAvatarPalette_PutRefusesAValueOutsideThePalette(t *testing.T) {
+	for _, bad := range append([]string{"#D4AF37", "#ff0000", "#6E8BA9", "nope"}, removedPalette...) {
 		t.Run(bad, func(t *testing.T) {
 			api := buildExecutorTestAPI(t)
 			id := newPaletteAgent(t, api, "#6E8BA8")
@@ -69,11 +46,11 @@ func TestAvatarPalette_PutRefusesAValueInNeitherSet(t *testing.T) {
 	}
 }
 
-// Create maps an old value as well, so a stale client cannot store the old set.
-func TestAvatarPalette_CreateMapsAnOldValue(t *testing.T) {
+// Create refuses a removed previous-palette value too.
+func TestAvatarPalette_CreateRefusesARemovedValue(t *testing.T) {
 	api := buildExecutorTestAPI(t)
-	id := newPaletteAgent(t, api, "#C084FC")
-	assert.Equal(t, "#9C8A5B", savedAgent(t, api, id)["color"])
+	rec := postAgent(t, api, `{"name":"Old Colour","type":"Main","soul":"s","color":"#C084FC"}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
 }
 
 // setStoredColor puts a colour into the agent's stored record AND the loaded
@@ -96,18 +73,18 @@ func setStoredColor(t *testing.T, api *restAPI, id, color string) {
 	t.Fatalf("agent %s is not in the loaded configuration", id)
 }
 
-// Read: a stored OLD value is returned as the new one (detail and list), and the
-// stored record is left exactly as it was (greenfield: no rewrite).
-func TestAvatarPalette_ReadReturnsTheNewValueAndWritesNothing(t *testing.T) {
-	for _, pair := range oldToNewPalette {
-		t.Run(pair[0], func(t *testing.T) {
+// Read: a stored value of the removed palette reads as the default (detail and
+// list), and the stored record is left exactly as it was (no rewrite).
+func TestAvatarPalette_ReadOfARemovedStoredValueIsTheDefault(t *testing.T) {
+	for _, old := range removedPalette {
+		t.Run(old, func(t *testing.T) {
 			api := buildExecutorTestAPI(t)
 			id := newPaletteAgent(t, api, "#6E8BA8")
-			setStoredColor(t, api, id, pair[0]) // an install that predates the new palette
+			setStoredColor(t, api, id, old)
 
-			assert.Equal(t, pair[1], getAgentObject(t, api, id)["color"], "detail read")
-			assert.Equal(t, pair[1], findListedAgent(t, api, id)["color"], "list read")
-			assert.Equal(t, pair[0], savedAgent(t, api, id)["color"], "no stored-file rewrite")
+			assert.Equal(t, "#8E9196", getAgentObject(t, api, id)["color"], "detail read")
+			assert.Equal(t, "#8E9196", findListedAgent(t, api, id)["color"], "list read")
+			assert.Equal(t, old, savedAgent(t, api, id)["color"], "no stored-file rewrite")
 		})
 	}
 }

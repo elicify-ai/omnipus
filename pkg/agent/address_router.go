@@ -91,6 +91,13 @@ var (
 	_ tools.ReplyRouter = AddressRouter{}
 )
 
+// ErrRequestRecordedNotStarted marks an admission whose request is durably
+// recorded (transcript and ledger) but whose wake could not be published. It is
+// NOT a refusal: the request will be delivered when the receiver next runs, so a
+// caller reports it as waiting, never as failed (a "failed" row invites a re-send
+// and a duplicate request).
+var ErrRequestRecordedNotStarted = errors.New("the request was recorded but the receiver's turn could not be started")
+
 // ErrPeerRefused wraps every refusal that admitted nothing.
 var ErrPeerRefused = errors.New("peer request refused")
 
@@ -106,6 +113,10 @@ type RequestAdmission struct {
 	// AskApproved is true when the receiver's send_message policy was Ask at
 	// preflight and that Ask was approved for this request.
 	AskApproved bool
+	// SenderMessageID is the sender's own message id (web client_message_id) when
+	// a person sent the request from a chat; it lets a held request's delivery
+	// move that message's row on (SetRequestDeliveredHook).
+	SenderMessageID string
 	// BeforeCommit, when set, runs after the FINAL authorization decision
 	// (including any approval wait and its re-read) and before anything of the
 	// receiver exists. A caller whose own source-side effects must follow the
@@ -164,6 +175,10 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 	receiverSessionID = meta.ID
 	requestID = uuid.New().String()
 
+	// A stopped receiver is not woken by a request (it carries no human
+	// authority): the request is HELD. Decided here so the capture records it and
+	// the held request's delivery can move its sender's row on.
+	held = al.receiverStopped(receiverSessionID)
 	capture := addressing.Capture{
 		RequestID:         requestID,
 		ReceiverSessionID: receiverSessionID,
@@ -172,6 +187,8 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 		Source:            a.Source,
 		AdmittedAt:        time.Now().UTC(),
 		Text:              composeRequestText(requestID, a.SenderLabel, a.Content),
+		Held:              held,
+		SenderMessageID:   a.SenderMessageID,
 	}
 	// Capture first: if the append below fails the capture is discarded; if it
 	// were written second, a request the model can see might be unanswerable.
@@ -198,12 +215,9 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 		return "", "", false, storageRefusal("the request could not be recorded", err, ErrPeerRefused)
 	}
 	al.publishUserEntry(receiverSessionID, entry)
-	// A stopped receiver is not woken by a request (it carries no human
-	// authority). The wake below is still published - a Resume that lands
-	// between this check and the wake picks the request up - and a wake that
+	// The wake below is still published for a held request - a Resume that lands
+	// between the check above and the wake picks the request up - and a wake that
 	// meets the stop is dropped, leaving the request held.
-	held = al.receiverStopped(receiverSessionID)
-
 	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	// The admission wake is "on its way": another turn admitted before it is
@@ -213,7 +227,7 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 		al.heldRepublished.Delete(requestID)
 		// The request is durable in the receiver's main and answerable; only
 		// the turn start failed. Report it rather than hide it.
-		return requestID, receiverSessionID, held, fmt.Errorf("request %s was recorded but the receiver's turn could not be started: %w", requestID, err)
+		return requestID, receiverSessionID, held, fmt.Errorf("%w: request %s: %w", ErrRequestRecordedNotStarted, requestID, err)
 	}
 	return requestID, receiverSessionID, held, nil
 }

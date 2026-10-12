@@ -69,7 +69,7 @@ func TestAgentIdentity_CreateNormalisesHex(t *testing.T) {
 		"soul":"chosen-soul",
 		"figure":"Woman",
 		"role":"writer",
-		"color":"#fb923c"
+		"color":"#a97142"
 	}`)
 	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
 	body := decodeObject(t, rec.Body.Bytes())
@@ -99,7 +99,7 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 		"soul":"editable-soul",
 		"figure":"Man",
 		"role":"developer",
-		"color":"#3B82F6"
+		"color":"#6E8BA8"
 	}`)
 	require.Equal(t, http.StatusCreated, created.Code, "body: %s", created.Body.String())
 	createdBody := decodeObject(t, created.Body.Bytes())
@@ -116,7 +116,7 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 
 	before, err := agentstore.New(api.homePath).ReadState(id)
 	require.NoError(t, err)
-	bad := putAgent(t, api, id, `{"figure":"octopus","role":"writer","color":"#22D3EE"}`)
+	bad := putAgent(t, api, id, `{"figure":"octopus","role":"writer","color":"#4F8A80"}`)
 	require.Equal(t, http.StatusBadRequest, bad.Code, "body: %s", bad.Body.String())
 	assert.NotContains(t, strings.ToLower(bad.Body.String()), "unknown field")
 	after := savedAgent(t, api, id)
@@ -136,14 +136,14 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 	cases := []struct {
 		name, body, errorText string
 	}{
-		{"invalid figure alone", `{"figure":"octopus","role":"writer","color":"#22D3EE","description":"must not save"}`, "figure must be Robot, Man, Woman, Omnipus, or Monogram"},
-		{"invalid role alone", `{"figure":"Woman","role":"Developer","color":"#22D3EE","description":"must not save"}`, "role must be one of the curated role slugs"},
+		{"invalid figure alone", `{"figure":"octopus","role":"writer","color":"#4F8A80","description":"must not save"}`, "figure must be Robot, Man, Woman, Omnipus, or Monogram"},
+		{"invalid role alone", `{"figure":"Woman","role":"Developer","color":"#4F8A80","description":"must not save"}`, "role must be one of the curated role slugs"},
 		{"invalid color alone", `{"figure":"Woman","role":"writer","color":"#123456","description":"must not save"}`, "color must be one of the ten identity colours"},
-		{"empty figure", `{"figure":"","role":"writer","color":"#22D3EE"}`, "figure must be Robot, Man, Woman, Omnipus, or Monogram"},
-		{"empty role", `{"figure":"Woman","role":"","color":"#22D3EE"}`, "role must be one of the curated role slugs"},
+		{"empty figure", `{"figure":"","role":"writer","color":"#4F8A80"}`, "figure must be Robot, Man, Woman, Omnipus, or Monogram"},
+		{"empty role", `{"figure":"Woman","role":"","color":"#4F8A80"}`, "role must be one of the curated role slugs"},
 		{"empty color", `{"figure":"Woman","role":"writer","color":""}`, "color must be one of the ten identity colours"},
-		{"null figure", `{"figure":null,"role":"writer","color":"#22D3EE"}`, "figure must be Robot, Man, Woman, Omnipus, or Monogram"},
-		{"null role", `{"figure":"Woman","role":null,"color":"#22D3EE"}`, "role must be one of the curated role slugs"},
+		{"null figure", `{"figure":null,"role":"writer","color":"#4F8A80"}`, "figure must be Robot, Man, Woman, Omnipus, or Monogram"},
+		{"null role", `{"figure":"Woman","role":null,"color":"#4F8A80"}`, "role must be one of the curated role slugs"},
 		{"null color", `{"figure":"Woman","role":"writer","color":null}`, "color must be one of the ten identity colours"},
 	}
 	for _, tc := range cases {
@@ -151,7 +151,7 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 			// A prior rejected case must not supply state to this one, even
 			// while the suite is red and the implementation partially writes.
 			api := buildExecutorTestAPI(t)
-			created := postAgent(t, api, `{"name":"Isolated Editable","type":"Main","soul":"editable-soul","figure":"Man","role":"developer","color":"#3B82F6"}`)
+			created := postAgent(t, api, `{"name":"Isolated Editable","type":"Main","soul":"editable-soul","figure":"Man","role":"developer","color":"#6E8BA8"}`)
 			require.Equal(t, http.StatusCreated, created.Code, "body: %s", created.Body.String())
 			id, ok := decodeObject(t, created.Body.Bytes())["id"].(string)
 			require.True(t, ok, "created identity id must be a string")
@@ -172,7 +172,7 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 
 func TestAgentIdentity_UpdateNormalisesPaletteHex(t *testing.T) {
 	api := buildExecutorTestAPI(t)
-	rec := putAgent(t, api, "test-agent", `{"color":"#3b82f6"}`)
+	rec := putAgent(t, api, "test-agent", `{"color":"#6e8ba8"}`)
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 	saved := savedAgent(t, api, "test-agent")
 	assert.Equal(t, "#6E8BA8", saved["color"])

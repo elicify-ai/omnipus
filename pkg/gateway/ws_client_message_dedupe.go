@@ -308,6 +308,18 @@ func (h *WSHandler) markAcceptedMessageWorkingLocked(sessionID, clientMessageID 
 	}
 }
 
+// setAcceptedMessageState records the message's current delivery state, so a
+// retried client_message_id is answered with it (received, held, working).
+func (h *WSHandler) setAcceptedMessageState(sessionID, clientMessageID, state string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if a := h.acceptedClientMsgs[sessionID]; a != nil {
+		if m := a.byID[clientMessageID]; m != nil {
+			m.state = state
+		}
+	}
+}
+
 func (h *WSHandler) markAcceptedMessageWorking(sessionID, clientMessageID string) {
 	h.mu.Lock()
 	h.markAcceptedMessageWorkingLocked(sessionID, clientMessageID)
