@@ -206,7 +206,11 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 
 	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	// The admission wake is "on its way": another turn admitted before it is
+	// processed must not publish a second copy of the same text.
+	al.claimWakeSlot(requestID)
 	if err := al.publishRequestWake(pubCtx, a.Receiver, requestID, receiverSessionID, entry.Content); err != nil {
+		al.heldRepublished.Delete(requestID)
 		// The request is durable in the receiver's main and answerable; only
 		// the turn start failed. Report it rather than hide it.
 		return requestID, receiverSessionID, held, fmt.Errorf("request %s was recorded but the receiver's turn could not be started: %w", requestID, err)

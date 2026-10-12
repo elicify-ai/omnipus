@@ -759,28 +759,10 @@ func classifyByMessage(body string) LLMErrorCode {
 	return CodeUnknown
 }
 
-// networkSubstrings are the wordings of a transport failure between us and the
-// provider (the request never completed): matched case-insensitively.
-var networkSubstrings = []string{
-	"client connection lost",
-	"no such host",
-	"dial tcp",
-	"i/o timeout",
-	"connection refused",
-	"network is unreachable",
-	"tls handshake",
-}
-
-// isNetworkMessage reports a transport failure: one of networkSubstrings, or
-// any of the transient stream/connection drops the loop already retries.
+// isNetworkMessage reports a transport failure by the one shared vocabulary
+// (providers.IsTransportFailure).
 func isNetworkMessage(body string) bool {
-	lower := strings.ToLower(body)
-	for _, s := range networkSubstrings {
-		if strings.Contains(lower, s) {
-			return true
-		}
-	}
-	return isTransientStreamError(errors.New(body))
+	return providers.IsTransportFailure(errors.New(body))
 }
 
 // classifyByProviderError is the top-level dispatch: prefer
@@ -891,11 +873,27 @@ func TranslateTurnError(err error) LLMError {
 	// The provider ended its response with an error after the 200 (#1278): the
 	// partial text was discarded and nothing ran. Named for the person as a
 	// provider connection failure; the provider's own text stays in Detail.
-	if errors.Is(err, common.ErrStreamProviderError) {
+	var streamErr *common.StreamProviderError
+	if errors.As(err, &streamErr) {
+		code := CodeUnknown
+		switch streamErr.Kind() {
+		case common.StreamErrorTransient:
+			code = CodeNetwork
+		case common.StreamErrorRateLimit:
+			code = CodeRateLimited
+		case common.StreamErrorBilling:
+			code = CodeQuotaBilling
+		case common.StreamErrorAuth:
+			code = CodeProviderAuthFailed
+		case common.StreamErrorInvalidRequest:
+			code = CodeProviderRejected
+		case common.StreamErrorContentPolicy:
+			code = CodeContentPolicy
+		}
 		return LLMError{
-			Code:      CodeNetwork,
-			Message:   defaultUserMessage(CodeNetwork),
-			Retryable: isRetryable(CodeNetwork),
+			Code:      code,
+			Message:   defaultUserMessage(code),
+			Retryable: isRetryable(code),
 			Detail:    buildDetail(nil, err.Error()),
 		}
 	}

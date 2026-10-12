@@ -353,7 +353,10 @@ func (p *Provider) streamWithCallbacks(
 	// closed under it): what accumulated is not an answer and a tool call that
 	// was coming never arrived (issue #1278 sweep). An `error` event is already
 	// surfaced by stream.Err() above.
-	if !sawStop {
+	// A compatible endpoint that omits message_stop but delivered the final
+	// message_delta (which carries stop_reason) did finish; only a stream with
+	// neither was cut off (R2-S1-05).
+	if !sawStop && msg.StopReason == "" {
 		return nil, &common.StreamProviderError{Code: "incomplete_stream", Message: "the stream ended before message_stop"}
 	}
 
