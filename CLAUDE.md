@@ -112,8 +112,13 @@ mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/inde
 **Never run the full Go test suite locally — CI is the authority for Go test/build results.** `go test ./...` OOM-kills this environment; push and read the checks instead. At most one narrowly-scoped local test when you must (`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/`); never run multiple Go test suites in parallel.
 
 **Remote CI cluster — run heavy gates here, not locally.** `ci-omnipus-1` (Fly, `sin`) is
-**5 machines** of `performance-8x`/16 GB, each a TIER with its own `/cache` volume (repo
-clone, Go build cache, `node_modules`) and its own `/tmp/runci.lock`. Scaled to zero when
+**5 machines**, each a TIER with its own `/cache` volume (repo clone, Go build cache,
+`node_modules`) and its own `/tmp/runci.lock`. They are sized per test type on purpose
+(founder ruling 2026-10-12, no resizing): ONE `performance` 8x machine (`080d74db170408`)
+for the heavy sustained work - the `go` tier and the full `e2e` gate, one after the other,
+never in parallel - and `shared` 8x machines for `node` (default `d8d0d90a1e9648`) and `xplat`
+(default `78113d4f329908`); a targeted few-spec e2e rerun may use a shared machine, the full
+e2e gate must not (measured: 2 h starved on shared; a placement error, not undersizing). Scaled to zero when
 idle; a stopped machine bills nothing for compute. One command fans the gates out and stops
 every machine it started, on every exit path including Ctrl-C:
 
@@ -133,12 +138,14 @@ would queue a second run for up to 90 min) and **tiers run concurrently**. One t
 machine is enforced — the dispatcher refuses a map that assigns a machine twice. Do NOT
 split a tier across machines: tiers are dependency clusters sharing a warm cache, so
 splitting buys N cold caches rebuilding the same thing. Override the whole map with
-`CI_CLUSTER_TIERS` (`<name>|<machine-id>|<gates>` per line); machine ids are DATA, never
-hardcoded — get them from `fly machines list -a ci-omnipus-1`.
+`CI_CLUSTER_TIERS` (`<name>|<machine-id>|<gates>` per line); the default map points at the
+ids above, override them with `CI_CLUSTER_{GO,NODE,XPLAT}_MACHINE`, and check sizes with
+`fly machine status <id> --app ci-omnipus-1`.
 
 **`e2e` is deliberately NOT in the default map** — it needs the OpenRouter secret, runs
-~20-30 min, and would pin a machine for the whole run. Give it its own machine when you
-want it (`ci-cluster.sh` with a custom tier, or by hand:
+~20-30 min on the performance machine, and would pin it for the whole run. Run it on the
+performance machine (`080d74db170408`) after the go tier has finished (`ci-cluster.sh` with a
+custom tier, or by hand:
 `fly ssh console -a ci-omnipus-1 --machine <id> -C "/cache/runci.sh <ref> e2e"`). Inside
 that one gate the Playwright suite fans out across the 24 shards in `tests/e2e/shards.json`
 — the same plan `.github/workflows/pr.yml` uses, so the two surfaces cannot drift —
