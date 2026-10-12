@@ -171,7 +171,7 @@ func TestAgentListStatus_CoreAgentNeverDraft(t *testing.T) {
 	}
 	coreagent.SeedConfig(cfg)
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
-	api := &restAPI{agentLoop: al}
+	api := &restAPI{agentLoop: al, homePath: tmpDir} // own temp home: see TestMain's leak guard
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil)
@@ -219,7 +219,7 @@ func TestAgentListStatus_CustomAgentIdle(t *testing.T) {
 	}
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	api := &restAPI{agentLoop: al}
+	api := &restAPI{agentLoop: al, homePath: tmpDir} // own temp home: see TestMain's leak guard
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil)
