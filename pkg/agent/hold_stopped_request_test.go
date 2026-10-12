@@ -416,7 +416,7 @@ func TestHeldRequest_AdmissionWakeInFlight_IsNotDuplicatedByAnotherTurn(t *testi
 		t.Fatal(err)
 	}
 	ws := addrWS
-	if err := f.al.GetSessionStore().SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
+	if err = f.al.GetSessionStore().SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
 		t.Fatal(err)
 	}
 	req := f.peerReq()

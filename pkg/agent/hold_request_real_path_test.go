@@ -50,11 +50,11 @@ func TestHeldRequest_RealWorkerDropsTheWake_ResumeThenDeliversTheTextToTheModel(
 		t.Fatal(err)
 	}
 	ws := addrWS
-	if err := store.SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
+	if err = store.SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
 		t.Fatal(err)
 	}
 	lc := al.GetSessionLifecycleStore()
-	if err := lc.Persist(&session.LifecycleRecord{
+	if err = lc.Persist(&session.LifecycleRecord{
 		SessionID: recv.ID, Generation: 1, State: session.LifecycleStopped, OwnerScopeKind: session.OwnerScopeHuman,
 		WorkspaceID: addrWS, AgentID: addrReceiver,
 		StopNote: &session.StopNote{Cause: session.StopCauseStop},
