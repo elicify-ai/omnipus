@@ -116,10 +116,13 @@ func measureBothIndexes(t *testing.T, n int) {
 		if !ok {
 			t.Fatal("this platform does not report rusage; the budget cannot be measured here")
 		}
-		peak := propindex.ExportedPeakRSSBytes(usage)
+		// The child's OWN peak on Linux, never wait4's ru_maxrss, which carries the
+		// parent's high-water mark (see memory_test.go); a missing value fails.
+		peak, source, ruMaxRSS := propindex.ExportedChildPeak(t, phase, string(out), usage)
 		work := propindex.ExportedChildWork(string(out))
-		t.Logf("BOTH INDEXES, %s: PEAK RSS %s (%d bytes), budget %s, %s",
-			phase, propindex.ExportedMib(peak), peak, propindex.ExportedMib(propindex.ExportedBudgetBytes), work)
+		t.Logf("BOTH INDEXES, %s: PEAK RSS %s (%d bytes, %s), wait4 ru_maxrss %s, budget %s, %s",
+			phase, propindex.ExportedMib(peak), peak, source, propindex.ExportedMib(ruMaxRSS),
+			propindex.ExportedMib(propindex.ExportedBudgetBytes), work)
 		if work == "" {
 			t.Fatalf("the child reported no work; the measurement proves nothing\n%s", out)
 		}
@@ -222,6 +225,8 @@ func TestMemory_BothIndexesChild(t *testing.T) {
 	default:
 		t.Fatalf("unknown phase %q", phase)
 	}
+
+	propindex.ExportedReportOwnPeak(t)
 }
 
 // writeCorpus writes n real notes to disk and indexes them into the properties

@@ -26,6 +26,8 @@ var (
 	ExportedPeakRSSBytes  = peakRSSBytes
 	ExportedMib           = mib
 	ExportedChildWork     = childWork
+	ExportedChildPeak     = childPeak
+	ExportedReportOwnPeak = reportOwnPeak
 )
 
 // ExportedBudgetBytes forwards budgetBytes (memory_test.go) for the same reason.
