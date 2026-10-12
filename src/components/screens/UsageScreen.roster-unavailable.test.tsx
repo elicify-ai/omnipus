@@ -91,11 +91,12 @@ function agentFixture(overrides: Partial<Agent>): Agent {
 
 function renderUsage() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <UsageScreen />
     </QueryClientProvider>,
   )
+  return { qc, view }
 }
 
 describe('UsageScreen — a failed roster is signalled, not silent (R2-S4-03)', () => {
