@@ -1,10 +1,14 @@
 // SessionRow main-title tests (founder UI feedback 2026-10-11, point 4).
 //
-// An untitled MAIN session row must read "<Agent> - Main Session" — derived
-// from the agent's CURRENT display name, so a rename flows through without a
-// reload — and never "Untitled session". A server-set title always wins.
-// Non-main rows keep the existing "Untitled session" fallback (core owns
-// auto-titling of user sessions; this surface must not change it).
+// A MAIN session row always reads "<Agent> - Main Session" — derived from
+// the agent's CURRENT display name, so a rename flows through without a
+// reload — and never "Untitled session". S2-05 ruling (combined-review
+// X-architect X-3; see ARCHITECT-RULINGS.md for the combined-review ruling
+// set; chief-confirmed 2026-10-12, team-lead dispatch): for a main the
+// stored session.title is IGNORED — it can predate an agent rename — so the
+// derivation wins over any stored copy. Non-main rows keep the existing
+// "Untitled session" fallback (core owns auto-titling of user sessions; this
+// surface must not change it).
 //
 // Scaffolding (session fixture shape) is copied from SessionRow.test.tsx.
 
@@ -52,8 +56,14 @@ describe('SessionRow — main session display title', () => {
     expect(renderTitle(sessionFixture({}), 'Jim')).toHaveTextContent('Jim - Main Session')
   })
 
-  it('shows the server title when one is present, ignoring the agent name', () => {
-    expect(renderTitle(sessionFixture({ title: 'Weekly planning' }), 'Jim')).toHaveTextContent('Weekly planning')
+  it('ignores a stored title on a main and derives from the agent name (S2-05 ruling, chief-confirmed 2026-10-12)', () => {
+    // The stored value is deliberately different from the derived one, so the
+    // oracle can tell them apart: the derived label shows, the stored copy
+    // does NOT. (Supersedes the old server-title-wins oracle here; same rule
+    // as the S2-05 flip of ff32fd420's ChatScreen oracle.)
+    renderTitle(sessionFixture({ title: 'Weekly planning' }), 'Jim')
+    expect(screen.getByTestId('session-title-row-1')).toHaveTextContent('Jim - Main Session')
+    expect(screen.queryByText('Weekly planning')).not.toBeInTheDocument()
   })
 
   it('keeps "Untitled session" for an untitled NON-main row (unchanged titling)', () => {

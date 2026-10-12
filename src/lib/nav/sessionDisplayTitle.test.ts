@@ -40,7 +40,7 @@ describe('sessionDisplayTitle', () => {
     )
   })
 
-  it('treats a whitespace-only server title as absent and derives for a main', () => {
+  it('derives for a main regardless of the stored title — the title is not read at all (S2-05 ruling)', () => {
     expect(sessionDisplayTitle(session({ type: 'main', title: '   ' }), 'Jim', 'Untitled session')).toBe(
       'Jim - Main Session',
     )

@@ -4,10 +4,11 @@
  *
  * FR-008 AMENDED (founder decision 2026-10-11, team-lead dispatch): a main
  * session's header line now reads the main's TITLE — "<Agent name> -
- * Main Session" (server title when present, otherwise derived from the
- * agent's CURRENT display name via sessionDisplayTitle) — instead of the
- * bare "Main chat". Extra chats are unchanged: "Extra chat", or
- * "Extra chat — title" when there is one; no dangling dash.
+ * Main Session", ALWAYS derived from the agent's CURRENT display name via
+ * sessionDisplayTitle (S2-05 ruling, chief-confirmed 2026-10-12: the stored
+ * session.title is ignored for a main) — instead of the bare "Main chat".
+ * Extra chats are unchanged: "Extra chat", or "Extra chat — title" when
+ * there is one; no dangling dash.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session } from '@/lib/api'

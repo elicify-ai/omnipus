@@ -29,7 +29,6 @@ import { queryClient } from '@/lib/queryClient'
 import type { WsConnection } from '@/lib/ws'
 import type { Agent } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
-import { recipientAddressBlocked } from './chat/recipientSend'
 
 const TEST_SESSION_ID = 'sess_recipient_test'
 const WORKSPACE_ID = 'ws_recipient_test'
