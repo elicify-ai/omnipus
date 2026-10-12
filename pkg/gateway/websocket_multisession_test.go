@@ -673,7 +673,11 @@ func TestWS_Cancel_OnlyInterruptsTargetSession(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
 	// Give the server a moment to process. No error frame should arrive.
-	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
+	// R2-S5-07: 3 s, not 300 ms — the cancel_stage report is published
+	// ASYNCHRONOUSLY by the cascade, and the assertion below now REQUIRES it
+	// (see below), so the deadline has to cover a real publish on a loaded
+	// worker rather than only a fast local one.
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 	_, rawFrame, readErr := conn.ReadMessage()
 	// A frame after a cancel is EXPECTED: ADR-091 I-6 publishes a cancel_stage
 	// report on the hub (here stage "detached", with the cascade's reached /
@@ -684,10 +688,13 @@ func TestWS_Cancel_OnlyInterruptsTargetSession(t *testing.T) {
 	// What the test is actually about, in its own words above, is that the
 	// cancel is a clean no-op: "There must be no error frame emitted to the
 	// client from this cancel." That is what is asserted now.
-	if readErr == nil {
-		assert.NotContains(t, string(rawFrame), `"type":"error"`,
-			"cancel on a finished session must not produce an error frame; got %s", string(rawFrame))
-		assert.Contains(t, string(rawFrame), `"type":"cancel_stage"`,
-			"the only frame a finished-session cancel may produce is the documented cancel_stage report; got %s", string(rawFrame))
-	}
+	// R2-S5-07: the report's ABSENCE must fail too. The old `if readErr == nil`
+	// let a timeout pass the test, so it could never show the report was sent —
+	// exactly the claim ADR-091 I-6 specifies. A no-frame outcome is now a red.
+	require.NoError(t, readErr,
+		"ADR-091 I-6: a cancel publishes a cancel_stage report; no frame arrived at all")
+	assert.NotContains(t, string(rawFrame), `"type":"error"`,
+		"cancel on a finished session must not produce an error frame; got %s", string(rawFrame))
+	assert.Contains(t, string(rawFrame), `"type":"cancel_stage"`,
+		"the only frame a finished-session cancel may produce is the documented cancel_stage report; got %s", string(rawFrame))
 }
