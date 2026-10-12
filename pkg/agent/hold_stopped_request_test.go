@@ -67,6 +67,7 @@ func forgetInMemory(al *AgentLoop) {
 	al.pendingRequests.Range(func(k, _ any) bool { al.pendingRequests.Delete(k); return true })
 	al.deliveredRequests.Range(func(k, _ any) bool { al.deliveredRequests.Delete(k); return true })
 	al.remindedRequests.Range(func(k, _ any) bool { al.remindedRequests.Delete(k); return true })
+	al.heldRepublished.Range(func(k, _ any) bool { al.heldRepublished.Delete(k); return true })
 }
 
 func TestHeldRequest_AskingAStoppedAgent_IsHeldAndTheAskerIsTold(t *testing.T) {
@@ -376,5 +377,60 @@ func nextWake(t *testing.T, al *AgentLoop) bus.InboundMessage {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no wake was published")
 		return bus.InboundMessage{}
+	}
+}
+
+// R2-S1-02: the "wake already on its way" marker expires. A republished wake
+// can be lost without any signal (full inbox, panic, worker exit); the request
+// must not stay skipped for the life of the process.
+func TestHeldRequest_LostRepublishedWake_IsRepublishedAfterTheMarkerExpires(t *testing.T) {
+	f, recv, asker := heldSetup(t)
+	id, _ := heldAsk(t, f, asker)
+	addrDrainInbound(t, f.bus) // the admission wake, dropped by the stopped agent
+	forgetInMemory(f.al)
+
+	f.al.deliverHeldRequests(recv)
+	if _, ok := addrDrainInbound(t, f.bus); !ok {
+		t.Fatal("no republished wake")
+	}
+	f.al.deliverHeldRequests(recv)
+	if _, again := addrDrainInbound(t, f.bus); again {
+		t.Fatal("a second wake was published while the first was fresh")
+	}
+	// The wake was lost without a trace; time passes.
+	f.al.heldRepublished.Store(id, time.Now().Add(-2*heldWakeInFlightTTL))
+	f.al.deliverHeldRequests(recv)
+	if _, ok := addrDrainInbound(t, f.bus); !ok {
+		t.Fatal("a lost republished wake was never retried: the request stays skipped until restart")
+	}
+}
+
+// R2-S1-04: a request admitted to a runnable receiver has its own wake in flight
+// from admission; another turn admitted before that wake is processed must not
+// publish a second copy of the same text.
+func TestHeldRequest_AdmissionWakeInFlight_IsNotDuplicatedByAnotherTurn(t *testing.T) {
+	f := newAddrFixture(t)
+	wireLifecycle(t, f)
+	asker, err := f.al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "ray")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := addrWS
+	if err := f.al.GetSessionStore().SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
+		t.Fatal(err)
+	}
+	req := f.peerReq()
+	req.SenderSessionID = asker.ID
+	got, err := f.r.SendPeer(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := addrDrainInbound(t, f.bus); !ok {
+		t.Fatal("SETUP: no admission wake")
+	}
+	// Its wake sits in a worker inbox; another turn of the session is admitted.
+	f.al.deliverHeldRequests(got.SessionID)
+	if dup, again := addrDrainInbound(t, f.bus); again {
+		t.Fatalf("a duplicate wake was published for a request whose own wake is still in flight: %+v", dup)
 	}
 }

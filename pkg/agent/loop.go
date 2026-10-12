@@ -107,7 +107,7 @@ type AgentLoop struct {
 	pendingRequests   sync.Map
 	deliveredRequests sync.Map // request ids a turn has actually been given
 	remindedRequests  sync.Map
-	heldRepublished   sync.Map // held request ids whose wake has been re-published and not yet processed
+	heldRepublished   sync.Map // request id -> time.Time its wake was last published (see claimWakeSlot)
 	activeTurnStates  sync.Map // key: sessionKey (string), value: *turnState
 	// externalRunSessions holds the live external-CLI driver per child session
 	// (key: the child's transcript session id (string), value: *externalCLIRunSession)
