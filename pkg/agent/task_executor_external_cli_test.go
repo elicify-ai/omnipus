@@ -6,6 +6,7 @@ package agent
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/stretchr/testify/require"
 )
@@ -56,6 +58,17 @@ func newExternalCLITaskTestLoop(t *testing.T, provider providers.LLMProvider) (a
 	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	bindMetSoftTierJudge(t, al)
+	// Wire the session machinery exactly as the gateway does at boot and as
+	// newNativeTaskCompletionTestLoop does: boot epoch, session stores, the
+	// lifecycle store and the real launcher. Without the lifecycle store a
+	// failed task's session is never mirrored to "failed" (transitionTaskLifecycle
+	// is a no-op), so the fixture would test a configuration that never ships.
+	mintGenuineBootEpochForLoop(t, al)
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(home, "session_messages")), lifecycle)
+	al.taskExecutor.SetLifecycleStore(lifecycle)
+	al.taskExecutor.SetSessionLauncher(NewSteerLauncher(al))
 	// See newNativeTaskCompletionTestLoop's identical Close() cleanup (same
 	// rationale: drain session workers/recaps before t.TempDir() cleanup runs).
 	t.Cleanup(func() { al.Close() })

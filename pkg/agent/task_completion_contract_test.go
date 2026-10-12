@@ -263,6 +263,9 @@ func waitForCompletionContractTerminal(t *testing.T, al *AgentLoop, taskID strin
 			// only the transient state BEFORE the last write. A fast scheduler
 			// (macOS) happens to poll inside that window; a slower one (the Linux
 			// worker) never does and waited for a status that is never final.
+			// Every fixture wires the lifecycle store like the gateway does at boot,
+			// so this expectation is strict: a failed task's session must end
+			// "failed", never "archived".
 			wantStatus := session.StatusArchived
 			if got.Status == task.StatusFailed {
 				wantStatus = session.StatusFailed
