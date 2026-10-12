@@ -135,24 +135,28 @@ export async function openSidebar(page: Page): Promise<void> {
 }
 
 /**
- * Close the sidebar if it is open, the way a user does (Cmd/Ctrl+B - NOT
- * Escape, which cancels a running turn). An unpinned sidebar renders a
- * full-page click-catcher (Sidebar.tsx, the `absolute inset-0 z-30` backdrop)
- * that intercepts every pointer event on the chat - "<div aria-hidden> intercepts
- * pointer events" on the Stop button in cancel-cross-channel T21 - so a helper
- * that opened the sidebar must not leave it open. A sidebar that is already
- * closing (row click -> exit animation) gets a short grace period first.
+ * Close the sidebar if it is open, the way a user does: click outside it (the
+ * overlay's click-away dismiss, Sidebar.tsx). Not Cmd/Ctrl+B - that shortcut is
+ * ignored while an editable control (the composer) has focus - and never Escape,
+ * which cancels a running turn. An unpinned sidebar renders a full-page
+ * click-catcher (the `absolute inset-0 z-30` backdrop) that intercepts every
+ * pointer event on the chat - "<div aria-hidden> intercepts pointer events" on
+ * the Stop button in cancel-cross-channel T21 - so a helper that opened the
+ * sidebar must not leave it open. A sidebar that is already closing (row click
+ * -> exit animation) gets a short grace period first.
  */
 export async function closeSidebar(page: Page): Promise<void> {
-  const nav = page.locator('nav[aria-label="Main navigation"], [role="dialog"][aria-label="Main navigation"]');
+  const panel = page.locator('[role="dialog"][aria-label="Main navigation"]');
   try {
-    await nav.first().waitFor({ state: 'hidden', timeout: 2_000 });
+    await panel.waitFor({ state: 'hidden', timeout: 2_000 });
     return;
   } catch (err) {
     if (!(err instanceof errors.TimeoutError)) throw err;
   }
-  await page.keyboard.press('ControlOrMeta+b');
-  await nav.first().waitFor({ state: 'hidden', timeout: 5_000 });
+  const viewport = page.viewportSize() ?? { width: 1280, height: 720 };
+  // Far right edge, mid-height: well outside the 280px-wide drawer.
+  await page.mouse.click(viewport.width - 8, Math.round(viewport.height / 2));
+  await panel.waitFor({ state: 'hidden', timeout: 5_000 });
 }
 
 /**
