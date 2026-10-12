@@ -561,7 +561,10 @@ describe('D5 — Hide from sidebar', () => {
   })
 })
 
-describe('D4/D8 — Remove', () => {
+// The D4/D8 Remove suite, split into focused describe blocks (function-size
+// budget: a describe callback is a function to scripts/tsfunlen.cjs). Test
+// order and every assertion are unchanged from the pre-split single block.
+describe('D4/D8 — Remove · dialog and the Team-tab PUT', () => {
   it('the dialog names the agent AND the workspace and says membership, not history, ends', async () => {
     renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
     await openRowMenu('Mia')
@@ -617,9 +620,21 @@ describe('D4/D8 — Remove', () => {
     // action can reach (R2: removal never deletes the main chat).
     expect(apiMocks.fetchWorkspace).not.toHaveBeenCalled()
   })
+})
 
+describe('D4/D8 — Remove · failure surfaces (S4-05 rejection, S4-01 refusal)', () => {
   it('a FAILED Remove surfaces the rejection and does not claim success (S4-05)', async () => {
     apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
+    // removeWorkspaceMember's 409 path refetches the workspace and retries the
+    // PUT ONCE (S4-07's shared conflict helper), so the fresh record must
+    // resolve — an unmocked fetch leaves removalBody reading core_team off
+    // undefined and the toast carries THAT TypeError instead of the real one.
+    // The fresh record must STILL contain Mia: a record that no longer does
+    // counts as "already removed elsewhere" (S4-08) and resolves as success
+    // without a second PUT, which is not the failure this test is about.
+    apiMocks.fetchWorkspace.mockResolvedValue(
+      workspaceWith({ mia: miaMember, jim: jimMember }, { core_team: ['mia', 'jim'] }),
+    )
     apiMocks.updateWorkspace.mockRejectedValue(new ApiError(409, 'workspace changed elsewhere'))
     renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
     await openRowMenu('Mia')
@@ -704,7 +719,9 @@ describe('D4/D8 — Remove', () => {
     expect(toast?.message).toContain('Could not remove Mia')
     expect(toast?.message).toContain('team list is unavailable')
   })
+})
 
+describe('D4/D8 — Remove · bounded 409 recovery (S4-07)', () => {
   it('on 409 refetches the workspace and retries ONCE with the fresh revision (same bounded retry as Hide, S4-07)', async () => {
     apiMocks.updateWorkspace
       .mockRejectedValueOnce(new ApiError(409, 'workspace changed elsewhere'))
@@ -756,7 +773,9 @@ describe('D4/D8 — Remove', () => {
     expect(toast?.variant).toBe('error')
     expect(toast?.message).toContain('workspace changed elsewhere')
   })
+})
 
+describe('D4/D8 — Remove · post-removal reporting and binding (S4-02/S4-03)', () => {
   it('a failed RECOVERY after a successful removal reports the true state — removed, not failed (S4-02)', async () => {
     apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
     apiMocks.updateWorkspace.mockResolvedValue(workspaceWith({ jim: jimMember }, { core_team: ['jim'] }))
@@ -850,7 +869,9 @@ describe('D4/D8 — Remove', () => {
     // And the binding STAYS explicitly fresh afterwards.
     expect(useSessionStore.getState().sessionByWorkspace[WS] ?? null).toBeNull()
   })
+})
 
+describe('D4/D8 — Remove · disabled with a visible reason', () => {
   it('Remove is disabled with a visible reason for a locked built-in on the default workspace', async () => {
     const lockedMia = makeAgent({ id: 'mia', name: 'Mia', type: 'core', locked: true })
     renderList({
@@ -936,5 +957,43 @@ describe('D6 — Edit', () => {
     })
     expect(useUiStore.getState().editAgentId).toBe('admin')
     expect(useUiStore.getState().editAgentWorkspaceId, 'Admin is not a member: no workspace context').toBeNull()
+  })
+})
+
+describe('S4-11/T4 — Remove, remembered-but-not-selected', () => {
+  it('clears the remembered binding WITHOUT running entry recovery when the open chat belongs to another agent', async () => {
+    apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
+    apiMocks.updateWorkspace.mockResolvedValue(workspaceWith({ jim: jimMember }, { core_team: ['jim'] }))
+    renderList({ workspace: workspaceWith({ mia: miaMember, jim: jimMember }) })
+    // The workspace REMEMBERS Mia's chat, but the OPEN chat is Jim's. The two
+    // halves of AgentRowMenu::confirmRemove's branch disagree on purpose:
+    // remembersRemoved=true, ownsSelectedChat=false.
+    act(() => {
+      useSessionStore.setState({
+        activeSessionId: JIM_MAIN,
+        activeAgentId: 'jim',
+        sessionByWorkspace: {
+          ...useSessionStore.getState().sessionByWorkspace,
+          [WS]: { id: MIA_MAIN, type: 'chat', title: 'Mia main', agentId: 'mia' },
+        },
+      })
+    })
+
+    await openRowMenu('Mia')
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    })
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    })
+
+    // The stale pointer to the removed member's chat is cleared...
+    expect(useSessionStore.getState().sessionByWorkspace[WS] ?? null).toBeNull()
+    // ...but entry recovery must NOT run: the person is sitting on ANOTHER
+    // agent's chat, and running recovery here would yank them off it.
+    expect(
+      entrySpy,
+      'a remembered-but-not-selected removal must not re-run workspace entry',
+    ).not.toHaveBeenCalled()
   })
 })

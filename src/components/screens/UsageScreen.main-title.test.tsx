@@ -129,12 +129,14 @@ describe('UsageScreen — main session display title', () => {
     expect(screen.queryByText('Untitled')).not.toBeInTheDocument()
   })
 
-  it('shows the server title when one is present', async () => {
-    vi.mocked(fetchSessions).mockResolvedValue([sessionFixture({ title: 'Weekly planning' })])
+  it('ignores the stored title on a main and derives from the CURRENT agent name (steer 2026-10-12: no title survives a rename)', async () => {
+    vi.mocked(fetchSessions).mockResolvedValue([sessionFixture({ title: 'Ava - Main Session' })])
+    vi.mocked(fetchAgents).mockResolvedValue([agentFixture({ name: 'Eve' })])
     await openBySessionTab()
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Weekly planning' })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Eve - Main Session' })).toBeInTheDocument()
     })
+    expect(screen.queryByRole('link', { name: 'Ava - Main Session' })).not.toBeInTheDocument()
   })
 
   it('keeps "Untitled" for an untitled NON-main session (unchanged titling)', async () => {
@@ -161,5 +163,26 @@ describe('UsageScreen — main session display title', () => {
       expect(screen.getByRole('link', { name: 'Jim Prime - Main Session' })).toBeInTheDocument()
     })
     expect(screen.queryByRole('link', { name: 'Jim - Main Session' })).not.toBeInTheDocument()
+  })
+
+  it('when the agents list has FAILED a main reads the AGENT ID — the server’s own empty-name fallback, never "Unknown agent" (S4-04)', async () => {
+    vi.mocked(fetchAgents).mockRejectedValue(new Error('roster down'))
+    await openBySessionTab()
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'jim - Main Session' })).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Unknown agent/)).not.toBeInTheDocument()
+  })
+
+  it('while the agents list is still loading the screen keeps its skeleton — no fabricated title renders (S4-04)', async () => {
+    vi.mocked(fetchAgents).mockReturnValue(new Promise(() => {})) // never settles
+    renderUsage()
+    // The existing loading presentation covers the roster too: the skeleton
+    // stays up and no "Unknown agent - Main Session" row is painted.
+    await waitFor(() => {
+      expect(screen.getByTestId('usage-skeleton')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/Unknown agent/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Main Session/ })).not.toBeInTheDocument()
   })
 })

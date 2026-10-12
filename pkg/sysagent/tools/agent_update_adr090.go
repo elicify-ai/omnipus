@@ -138,8 +138,8 @@ func fieldErrorResult(err error) *tools.ToolResult {
 
 func validateColorArgs(args map[string]any) *tools.ToolResult {
 	if color, ok := args["color"].(string); ok {
-		if err := validateAgentColor(color); err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a 6-digit hex color"))
+		if _, err := canonicalAgentColor(color); err != nil {
+			return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a palette color, e.g. #6E8BA8"))
 		}
 	}
 	return nil

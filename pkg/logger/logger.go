@@ -89,13 +89,21 @@ func formatFieldValue(i any) string {
 
 	if strings.Contains(s, "\n") {
 		// Only valid JSON objects and arrays may retain multiline formatting.
-		// Delimiters alone would let ordinary text masquerade as JSON.
+		// Delimiters alone would let ordinary text masquerade as JSON. Even then
+		// only the newlines survive: a CR (valid JSON whitespace) or any other
+		// control byte is escaped, so the document cannot move the cursor or
+		// colour the terminal.
 		if ((strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) ||
 			(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]"))) && json.Valid([]byte(s)) {
-			return fmt.Sprintf("\n%s", s)
+			return fmt.Sprintf("\n%s", neutralizeControlKeepNewlines(s))
 		}
 		return fmt.Sprintf("%q", s)
 	}
+
+	// From here s has no newline. Escape every other control byte AFTER the
+	// Unquote above, which can turn attacker-supplied escape text (\x1b) back
+	// into a real byte.
+	s = neutralizeControl(s)
 
 	if strings.Contains(s, " ") {
 		if (strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) ||
@@ -106,6 +114,80 @@ func formatFieldValue(i any) string {
 	}
 
 	return s
+}
+
+// neutralizeControl returns s with every byte a terminal would act on written as
+// visible escape text: C0 controls except tab (\r, \n and ESC included), DEL, the C1
+// range (0x9b is a one-byte CSI) and the Unicode line/paragraph separators. It
+// keeps the log reader able to see that something was there, which dropping the
+// bytes would not. Ordinary text, including non-ASCII letters, is unchanged.
+// Backslashes are not doubled: the output is for a human reading a console, and
+// the structured sink (zerolog JSON) does its own escaping.
+func neutralizeControl(s string) string { return neutralizeControlExcept(s, false) }
+
+// neutralizeControlKeepNewlines is neutralizeControl that leaves \n alone, for
+// the one place (a valid multi-line JSON document) where newlines are wanted.
+func neutralizeControlKeepNewlines(s string) string { return neutralizeControlExcept(s, true) }
+
+func neutralizeControlExcept(s string, keepNewline bool) string {
+	clean := true
+	for _, r := range s {
+		if needsControlEscape(r) && !(keepNewline && r == '\n') {
+			clean = false
+			break
+		}
+	}
+	if clean {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		if !needsControlEscape(r) || (keepNewline && r == '\n') {
+			b.WriteRune(r)
+			continue
+		}
+		switch r {
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x100 {
+				fmt.Fprintf(&b, `\x%02x`, r)
+			} else {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			}
+		}
+	}
+	return b.String()
+}
+
+func needsControlEscape(r rune) bool {
+	return (r < 0x20 && r != '\t') || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029
+}
+
+// consoleSafe returns the message and fields as the CONSOLE sink should print
+// them: control bytes escaped in the message text, in string and error values and
+// in field names. The file sink gets the originals; zerolog's JSON encoder
+// escapes them there. Non-string values are passed through (zerolog encodes
+// structs, maps and numbers itself).
+func consoleSafe(message string, fields map[string]any) (string, map[string]any) {
+	message = neutralizeControl(message)
+	if len(fields) == 0 {
+		return message, fields
+	}
+	out := make(map[string]any, len(fields))
+	for k, v := range fields {
+		switch val := v.(type) {
+		case string:
+			v = neutralizeControl(val)
+		case error:
+			v = neutralizeControl(val.Error())
+		}
+		out[neutralizeControl(k)] = v
+	}
+	return message, out
 }
 
 func SetLevel(level LogLevel) {
@@ -340,7 +422,8 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 	activeFileLogger := fileLogger
 	mu.RUnlock()
 
-	writeEvent(consoleLogger, level, component, fields, skip, message)
+	consoleMessage, consoleFields := consoleSafe(message, fields)
+	writeEvent(consoleLogger, level, component, consoleFields, skip, consoleMessage)
 
 	// Also log to file if enabled
 	if activeFileLogger.GetLevel() != zerolog.NoLevel {

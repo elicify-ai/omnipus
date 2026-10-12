@@ -89,6 +89,13 @@ var (
 		substr("use of closed network connection"),
 		substr("server closed idle connection"),
 		substr("read: connection timed out"),
+		// Transport failures with no HTTP status (founder preview 2026-10-12): the
+		// HTTP/2 connection died under the request, DNS or the route to the
+		// provider was down. Transient: a retry is the right first move.
+		substr("http2: client connection lost"),
+		substr("no such host"),
+		substr("connection refused"),
+		substr("network is unreachable"),
 	}
 
 	// C-5 billing vocabulary (dataset D2) — exactly these four phrases.
@@ -228,6 +235,18 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// inline retry (the only reason it retries inline) applies, exactly like
 	// a connection drop. Checked before substring matching because the
 	// sentinel's wording need not contain any classifier keyword.
+	// A provider that ended its response with an error after the 200 was
+	// committed (OpenRouter's mid-stream error chunk, issue #1278) failed
+	// transiently: nothing it streamed is an answer, and no tool ran. Same
+	// class as a dropped connection, so the same inline retry applies.
+	if errors.Is(err, common.ErrStreamProviderError) {
+		return &FailoverError{
+			Reason:   FailoverTimeout,
+			Provider: provider,
+			Model:    model,
+			Wrapped:  err,
+		}
+	}
 	if errors.Is(err, common.ErrStreamStalled) {
 		return &FailoverError{
 			Reason:   FailoverTimeout,

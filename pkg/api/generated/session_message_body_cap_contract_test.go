@@ -12,10 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The runtime steer/respond body ceiling is 65,536 UTF-8 bytes
-// (config.DefaultSMSteerBodyBytes, session.DefaultSteerBodyBytes). The wire
-// schemas that carry that body must accept every length the runtime accepts,
-// or a delivered message is rejected by the SPA's generated validators.
+// The runtime steer/respond body ceiling is a configurable byte limit, default
+// 65,536 UTF-8 bytes (config.DefaultSMSteerBodyBytes, session.DefaultSteerBodyBytes).
+// The wire schemas that carry that body must accept every length the runtime
+// accepts, or a delivered message is rejected by the SPA's generated validators.
+// Architect ruling S2-21 (combined review, 2026-10-12): the schemas carry NO
+// numeric maxLength at all - it counted characters, not bytes, and silently
+// overrode an operator-raised limit - so the server's byte cap is the single
+// bound. The former "one over the ceiling is refused" assertion is replaced by
+// its inverse for that reason.
 func TestContract_SteerRespondBodyCapMatchesRuntime(t *testing.T) {
 	const runtimeCap = 65536
 
@@ -65,8 +70,8 @@ func TestContract_SteerRespondBodyCapMatchesRuntime(t *testing.T) {
 				"16,385 characters is within the runtime ceiling and must validate")
 			require.NoError(t, validateAgainstComponentSchemaRawJSON(t, c.schema, c.mk(strings.Repeat("a", runtimeCap))),
 				"exactly the runtime ceiling must validate")
-			require.Error(t, validateAgainstComponentSchemaRawJSON(t, c.schema, c.mk(strings.Repeat("a", runtimeCap+1))),
-				"one over the runtime ceiling must be refused")
+			require.NoError(t, validateAgainstComponentSchemaRawJSON(t, c.schema, c.mk(strings.Repeat("a", runtimeCap+1))),
+				"S2-21: the schema imposes no length cap; the server's steer_body byte limit is the only bound")
 		})
 	}
 }

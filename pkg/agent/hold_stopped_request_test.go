@@ -5,11 +5,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/addressing"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -198,11 +200,10 @@ func TestHeldRequest_AskerGone_DroppedNotDeliveredIntoAVoid(t *testing.T) {
 // front of the model - not just flip a flag. The scripted provider asserts the
 // model actually receives the request text.
 func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
-	al, original, provider := r5AdmitRoot(t)
-	// A third scripted answer for the turn that carries the held request.
-	provider.answers = append(provider.answers, "request answered")
-	provider.release = append(provider.release, make(chan struct{}))
-	provider.entered = make(chan int, 3)
+	// A third scripted answer, for the turn that carries the held request, is
+	// staged before the first turn starts so no field is written under a
+	// running provider call.
+	al, original, provider := r5AdmitRootWithAnswers(t, "partial root work", "root resumed exactly once", "request answered")
 	r5StopRoot(t, al, original)
 	provider.open(0)
 	joinGoalFixtureRuns(t, al)
@@ -211,7 +212,7 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	ws := addrWS
-	if err := al.GetSessionStore().SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
+	if err = al.GetSessionStore().SetMeta(asker.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
 		t.Fatal(err)
 	}
 	const body = "Please summarise the Q3 numbers"
@@ -224,13 +225,13 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 		AdmittedAt: time.Now().UTC(),
 		Text:       composeRequestText("held-1", "agent ray", body),
 	}
-	if err := al.RequestLedger().Put(c); err != nil {
+	if err = al.RequestLedger().Put(c); err != nil {
 		t.Fatalf("SETUP: hold a request: %v", err)
 	}
 
 	msg := rootHumanMessage(original.SessionID)
 	msg.GatewayUserID = "r5-owner"
-	if err := al.enqueueSteeringFromMessage(msg); err != nil {
+	if err = al.enqueueSteeringFromMessage(msg); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
 	r1AwaitProvider(t, provider, 1)
@@ -335,5 +336,45 @@ func TestHeldRequest_UnreadableReceiverRecord_IsReportedAsHeld(t *testing.T) {
 	}
 	if _, held := heldAsk(t, f, "sender-session"); !held {
 		t.Fatal("an unreadable receiver record was reported as not held: the asker is told its request was seen")
+	}
+}
+
+// Architect ruling 2026-10-12 (PublishInbound census): the wake a held request
+// is re-published with is the SAME message the admission published - one
+// helper, publishRequestWake, so the two cannot drift. Compared field by field
+// across a real admission and a real held delivery.
+func TestHeldRequest_RepublishedWakeIsTheAdmissionWake(t *testing.T) {
+	f, recv, asker := heldSetup(t)
+	id, held := heldAsk(t, f, asker)
+	if !held {
+		t.Fatal("precondition: the request is held")
+	}
+	first := nextWake(t, f.al) // the wake the admission published
+	forgetInMemory(f.al)
+	f.al.deliverHeldRequests(recv)
+	second := nextWake(t, f.al) // the wake the held path re-published
+
+	if first.TranscriptEntryID != id {
+		t.Fatalf("instrument check: first wake names request %s, got %q", id, first.TranscriptEntryID)
+	}
+	if first.OperatorPrompt || second.OperatorPrompt || first.UserInitiated || second.UserInitiated {
+		t.Fatal("a request wake is never an operator prompt or a user-initiated turn")
+	}
+	if first.Metadata[ownerWakeMetadataKey] != "1" || second.Metadata[ownerWakeMetadataKey] != "1" {
+		t.Fatalf("both wakes carry the owner-wake marker: %v / %v", first.Metadata, second.Metadata)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("the held re-publication differs from the admission wake:\nadmit: %+v\nheld:  %+v", first, second)
+	}
+}
+
+func nextWake(t *testing.T, al *AgentLoop) bus.InboundMessage {
+	t.Helper()
+	select {
+	case m := <-al.bus.InboundChan():
+		return m
+	case <-time.After(5 * time.Second):
+		t.Fatal("no wake was published")
+		return bus.InboundMessage{}
 	}
 }

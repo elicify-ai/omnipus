@@ -151,7 +151,7 @@ export function SearchModal() {
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     enabled: open,
   })
-  const { data: agentData, isError: agentsError, refetch: retryAgents } = useQuery({
+  const { data: agentData, isPending: agentsPending, isError: agentsError, refetch: retryAgents } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     enabled: open,
@@ -302,7 +302,10 @@ export function SearchModal() {
   }, [overview.roots, workspaces, debouncedSearch, wsFilter, agentFilter, mode, bucketByAgent, wsMap])
 
   const total = mode === 'workspaces' ? groups.length : groups.reduce((count, group) => count + group.totalCount, 0)
-  const loading = sLoading || wLoading
+  // The roster is part of the modal's ordinary loading gate (S4-04): while
+  // the agents query is in flight no group renders, so no row can carry a
+  // placeholder name before real data arrives.
+  const loading = sLoading || wLoading || (agentsPending && !agentsError)
   const flatIds = useMemo(() => {
     const ids: string[] = []
     for (const group of groups) {
@@ -548,7 +551,14 @@ export function SearchModal() {
                       {group.agentGroups.map((agentGroup) => {
                         const agentKey = `${wsKey}::${agentGroup.agentId}`
                         const agentCollapsed = collapsedAgent.has(agentKey)
-                        const agentName = agentGroup.agent?.name ?? (agentsError || agentGroup.agentId === 'unknown' ? 'Unknown' : '[removed]')
+                        // Honest fallback (S4-04/S2-05): when the roster cannot
+                        // name the owner, the AGENT ID stands in — the server's
+                        // own empty-name fallback
+                        // (pkg/gateway/session_title.go::withDisplayTitle) —
+                        // never a fabricated "[removed]"/"Unknown" label. The
+                        // banner above already says agent-name data is
+                        // unavailable.
+                        const agentName = agentGroup.agent?.name ?? agentGroup.agentId
                         return (
                           <div key={agentKey}>
                             <AgentHeader agent={agentGroup.agent} name={agentName} isCollapsed={agentCollapsed} onToggle={() => toggleAgent(agentKey)} panelId={`agent-panel-${agentKey}`} />

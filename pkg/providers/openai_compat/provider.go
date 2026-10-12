@@ -309,14 +309,10 @@ func parseStreamResponse(
 	var totalReasoningBytes int
 
 	// Tool call assembly: OpenAI streams tool calls as incremental deltas
-	type toolAccum struct {
-		id       string
-		name     string
-		argsJSON strings.Builder
-	}
 	activeTools := map[int]*toolAccum{}
 
 	var malformedChunks int
+	var streamErr *common.StreamProviderError
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 1MB initial, 10MB max
 	for scanner.Scan() {
@@ -362,6 +358,13 @@ func parseStreamResponse(
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage *common.OpenAINonStreamUsage `json:"usage"`
+			// Error is OpenRouter's mid-stream error (issue #1278): the 200 is
+			// already committed, so a provider failure arrives as a top-level
+			// error object on a chunk whose finish_reason is "error".
+			Error *struct {
+				Code    json.RawMessage `json:"code"`
+				Message string          `json:"message"`
+			} `json:"error"`
 		}
 
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -371,6 +374,12 @@ func parseStreamResponse(
 
 		if chunk.Usage != nil {
 			usage = chunk.Usage.ToUsageInfo()
+		}
+		if chunk.Error != nil && streamErr == nil {
+			streamErr = &common.StreamProviderError{
+				Code:    strings.Trim(string(chunk.Error.Code), `"`),
+				Message: chunk.Error.Message,
+			}
 		}
 
 		if len(chunk.Choices) == 0 {
@@ -446,34 +455,64 @@ func parseStreamResponse(
 	}
 
 	if err := scanner.Err(); err != nil {
-		// If the caller's context was canceled or timed out, our own ctx.Done()
-		// watchdog goroutine (ChatStream) closed resp.Body to unblock this scanner
-		// — the resulting "http2: response body closed" is NOT a server-side
-		// connection drop but a cancellation/timeout. Surface the context error so
-		// callers classify it correctly (context.Canceled → clean cancel;
-		// context.DeadlineExceeded → llm_timeout) instead of misreading it as a
-		// transient stream reset and retrying a request the caller already abandoned.
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		// A body-closed read error while the context is still alive is EITHER
-		// our stall monitor aborting a fully silent stream (founder decision
-		// 2026-09-14) or a genuine server-side reset — the same bytes carry
-		// both. Fired() is the only honest discriminator: it is set by our own
-		// monitor just before it closes the body. Only then report the typed
-		// stall error so callers classify it as a retryable provider fault
-		// rather than a transient reset; a server drop keeps its historical
-		// streaming-read-error classification.
-		if watch.Fired() && common.IsBodyClosedStreamError(err) {
-			return nil, common.NewStallError(watch.SilentFor())
-		}
-		return nil, fmt.Errorf("streaming read error: %w", err)
+		return nil, streamScanError(ctx, err, watch)
 	}
 	if malformedChunks > 0 {
 		logger.WarnCF("openai_compat", "skipped malformed SSE chunks", map[string]any{"count": malformedChunks})
 	}
 
-	// Assemble tool calls from accumulated deltas
+	// A provider that ended the response with an error (an error chunk, or the
+	// finish_reason "error" that always accompanies it) did not finish: what
+	// streamed is not an answer and the tool call that was coming never
+	// arrived. Report it - with the usage the failed attempt was billed for -
+	// instead of returning the preamble as a final answer (issue #1278).
+	if streamErr != nil || finishReason == "error" {
+		if streamErr == nil {
+			streamErr = &common.StreamProviderError{Code: "error", Message: "the stream ended with finish_reason \"error\""}
+		}
+		streamErr.Usage = usage
+		logger.WarnCF("openai_compat", "provider ended the stream with an error; the partial response is discarded",
+			map[string]any{
+				"code": streamErr.Code, "message": streamErr.Message,
+				"content_chars": textContent.Len(), "tool_calls_started": len(activeTools),
+				"reasoning_bytes": totalReasoningBytes, "completion_tokens": completionTokens(usage),
+			})
+		return nil, streamErr
+	}
+
+	toolCalls, err := assembleStreamToolCalls(activeTools, finishReason, usage)
+	if err != nil {
+		return nil, err
+	}
+
+	if finishReason == "" {
+		if textContent.Len() > 0 || len(activeTools) > 0 {
+			logger.WarnCF("openai_compat", "stream ended without finish_reason; defaulting to \"unknown\"", nil)
+			finishReason = "unknown"
+		} else {
+			finishReason = "stop"
+		}
+	}
+
+	return &LLMResponse{
+		Content:      textContent.String(),
+		ToolCalls:    toolCalls,
+		FinishReason: finishReason,
+		Usage:        usage,
+	}, nil
+}
+
+// toolAccum is one tool call being assembled from streamed deltas.
+type toolAccum struct {
+	id       string
+	name     string
+	argsJSON strings.Builder
+}
+
+// assembleStreamToolCalls decodes the tool calls accumulated off an SSE stream,
+// in index order. finishReason and usage are already captured off the stream
+// when it runs, so a refusal can carry them as evidence.
+func assembleStreamToolCalls(activeTools map[int]*toolAccum, finishReason string, usage *UsageInfo) ([]ToolCall, error) {
 	var toolCalls []ToolCall
 	for i := 0; i < len(activeTools); i++ {
 		acc, ok := activeTools[i]
@@ -505,22 +544,33 @@ func parseStreamResponse(
 			Arguments: args,
 		})
 	}
+	return toolCalls, nil
+}
 
-	if finishReason == "" {
-		if textContent.Len() > 0 || len(activeTools) > 0 {
-			logger.WarnCF("openai_compat", "stream ended without finish_reason; defaulting to \"unknown\"", nil)
-			finishReason = "unknown"
-		} else {
-			finishReason = "stop"
-		}
+// streamScanError turns a failed SSE scan into the error the caller should see.
+func streamScanError(ctx context.Context, err error, watch *common.StreamStallWatch) error {
+	// If the caller's context was canceled or timed out, our own ctx.Done()
+	// watchdog goroutine (ChatStream) closed resp.Body to unblock this scanner
+	// — the resulting "http2: response body closed" is NOT a server-side
+	// connection drop but a cancellation/timeout. Surface the context error so
+	// callers classify it correctly (context.Canceled → clean cancel;
+	// context.DeadlineExceeded → llm_timeout) instead of misreading it as a
+	// transient stream reset and retrying a request the caller already abandoned.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
-
-	return &LLMResponse{
-		Content:      textContent.String(),
-		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
-		Usage:        usage,
-	}, nil
+	// A body-closed read error while the context is still alive is EITHER
+	// our stall monitor aborting a fully silent stream (founder decision
+	// 2026-09-14) or a genuine server-side reset — the same bytes carry
+	// both. Fired() is the only honest discriminator: it is set by our own
+	// monitor just before it closes the body. Only then report the typed
+	// stall error so callers classify it as a retryable provider fault
+	// rather than a transient reset; a server drop keeps its historical
+	// streaming-read-error classification.
+	if watch.Fired() && common.IsBodyClosedStreamError(err) {
+		return common.NewStallError(watch.SilentFor())
+	}
+	return fmt.Errorf("streaming read error: %w", err)
 }
 
 // streamReasoningDetail is one element of OpenRouter's structured
@@ -604,4 +654,11 @@ func (p *Provider) APIBase() string {
 		return ""
 	}
 	return p.apiBase
+}
+
+func completionTokens(u *UsageInfo) int {
+	if u == nil {
+		return 0
+	}
+	return u.CompletionTokens
 }

@@ -235,8 +235,12 @@ export function originOf(page: Page): string {
   } catch {
     // falls through to the throw below
   }
+  // The message names originOf, not freshChat: originOf is called from
+  // several places (freshChat's own body, but also a spec's beforeEach reading
+  // the gateway's origin directly), and a message that named only freshChat
+  // sent a PR-#1260 triage to the wrong line. Say what actually failed.
   throw new Error(
-    `freshChat: the page is not on an app origin (url: ${url || '(empty)'}). ` +
+    `originOf: the page is not on an app origin (url: ${url || '(empty)'}). ` +
       'goto() the app first, or pass an explicit origin — refusing to guess a server.'
   )
 }

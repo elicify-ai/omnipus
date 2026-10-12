@@ -122,7 +122,7 @@ export const MessageStatusFrame = z
     type: z.literal("message_status"),
     session_id: z.string().min(1).max(255),
     client_message_id: z.string().min(1).max(128),
-    state: z.enum(["received", "working", "failed", "discarded"]),
+    state: z.enum(["received", "working", "failed", "discarded", "held"]),
     reason: z.literal("stopped_before_delivery").optional(),
     seq: z.number().int().min(1).optional(),
   })

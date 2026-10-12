@@ -90,8 +90,8 @@ src/routes/_app/-library.test.tsx	(arg of describe)	257
 src/routes/_app/-sessions.$sessionId.workspace.test.tsx	(arg of describe)	274
 src/store/chat.test.ts	(arg of describe)	392
 src/store/chat.tool-call-offset.test.ts	(arg of describe)	857
-src/store/chat/slices/frames.ts	createFrameSlice	1777
-src/store/chat/slices/frames.ts	handleFrame	1773
+src/store/chat/slices/frames.ts	createFrameSlice	1770
+src/store/chat/slices/frames.ts	handleFrame	1766
 src/store/chat/slices/outbound-lifecycle.ts	createOutboundLifecycleSlice	875
 src/store/chat/slices/outbound-lifecycle.ts	sendMessage	428
 src/store/chat/slices/replay-and-status-frames.ts	(arg of produce)	139

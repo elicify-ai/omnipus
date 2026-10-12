@@ -179,11 +179,14 @@ describe('workspaceDisclosureButton — matches the component’s disclosure lab
 // ── Agent-row "⋯" menu constants (founder decisions D1/D2, 2026-10-11) ─────
 //
 // ORACLE: DECISIONS.md, NOT frontend-lead's component — D1 replaces the two
-// icon buttons with ONE "⋯" button (accessible name parameterised in
-// selectors.ts until the component lands and the real name is confirmed),
-// D2 fixes the menu's items AND their order: History · Hide from sidebar ·
-// Edit · Remove. These tests pin the parameterisation point so a label drift
-// fails here, in seconds, instead of as a whole-shard Playwright timeout.
+// icon buttons with ONE "⋯" button, whose accessible name is built by the
+// agentRowMenuButtonLabel constant in selectors.ts. That name is CONFIRMED
+// against the landed component (AgentRowMenu.tsx labels its trigger exactly
+// `More actions for ${agentName}` — see selectors.ts's own "now CONFIRMED"
+// note), not a placeholder awaiting a component. D2 fixes the menu's items
+// AND their order: History · Hide from sidebar · Edit · Remove. These tests
+// pin the constant so a label drift fails here, in seconds, instead of as a
+// whole-shard Playwright timeout.
 
 describe('agentRowMenuButtonLabel — the D1 "⋯" button’s parameterised accessible name', () => {
   it('builds the exact "More actions for <Agent>" label for a concrete agent', () => {

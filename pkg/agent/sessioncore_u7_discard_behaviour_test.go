@@ -77,7 +77,7 @@ func TestSessionCoreU7_StopDiscardsQueuedHumanInput(t *testing.T) {
 // undelivered input is. GREEN by design (it pins the already-working
 // preservation side), and it must stay green after the discard is added.
 func TestSessionCoreU7_StopPreservesCommittedInput(t *testing.T) {
-	al, rec, _, _ := newStopRedirectRoot(t)
+	al, rec, _, humanDone := newStopRedirectRoot(t)
 	sessionID := rec.SessionID
 
 	if _, err := al.StopSession(context.Background(), StopRequest{
@@ -86,6 +86,14 @@ func TestSessionCoreU7_StopPreservesCommittedInput(t *testing.T) {
 		Channel:   "webchat",
 	}); err != nil {
 		t.Fatalf("StopSession: %v", err)
+	}
+	// Join the parked turn the Stop releases before reading or returning: left
+	// running, it keeps writing into the session directory while the test's
+	// TempDir cleanup removes it ("directory not empty", PR 1260 CI).
+	select {
+	case <-humanDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the parked human turn did not join after the Stop")
 	}
 
 	entries, err := al.GetSessionStore().ReadTranscript(sessionID)

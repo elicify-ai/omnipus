@@ -6880,11 +6880,19 @@
       "lane": 7
     },
     {
+      "source": "src/components/layout/sidebar/AgentRowMenu.tsx",
+      "lane": 7
+    },
+    {
       "source": "src/components/layout/sidebar/SidebarAgentIcon.tsx",
       "lane": 7
     },
     {
       "source": "src/components/layout/sidebar/WorkspaceAgentList.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/agentRowActions.ts",
       "lane": 7
     },
     {

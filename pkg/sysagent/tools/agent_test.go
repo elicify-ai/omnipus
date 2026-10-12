@@ -186,7 +186,7 @@ func TestAgentCreate_WithColor(t *testing.T) {
 		"description": "A research assistant",
 		"soul":        "You are a research bot.",
 		"model":       "test/model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 	})
 
 	if result.IsError {
@@ -203,8 +203,8 @@ func TestAgentCreate_WithColor(t *testing.T) {
 	if agent.ID != "research-bot" {
 		t.Errorf("ID = %q, want %q", agent.ID, "research-bot")
 	}
-	if agent.Color != "#22C55E" {
-		t.Errorf("Color = %q, want %q", agent.Color, "#22C55E")
+	if agent.Color != "#6E8BA8" {
+		t.Errorf("Color = %q, want %q", agent.Color, "#6E8BA8")
 	}
 }
 
@@ -310,7 +310,7 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 		"description": "A disk bot",
 		"soul":        "You are a disk bot.",
 		"model":       "test/model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 	})
 	if result.IsError {
 		t.Fatalf("create failed: %s", result.ForLLM)
@@ -325,8 +325,8 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 	if unmarshalErr := json.Unmarshal(data, &entry); unmarshalErr != nil {
 		t.Fatalf("unmarshal agent entity record: %v", unmarshalErr)
 	}
-	if entry["color"] != "#22C55E" {
-		t.Errorf("disk color = %v, want #22C55E", entry["color"])
+	if entry["color"] != "#6E8BA8" {
+		t.Errorf("disk color = %v, want #6E8BA8", entry["color"])
 	}
 
 	// config.json itself must carry no agents.list content.
@@ -403,7 +403,7 @@ func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 // TestAgentCreate_RejectsInvalidColor verifies that invalid hex colors are rejected.
 func TestAgentCreate_RejectsInvalidColor(t *testing.T) {
 	deps, _ := newTestDeps(t)
-	for _, bad := range []string{"red", "#GGGGGG", "#12345", "22C55E", "#22C55E00"} {
+	for _, bad := range []string{"red", "#GGGGGG", "#12345", "22C55E", "#6E8BA800"} {
 		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 			"name":        "Bot",
 			"description": "A test bot",
@@ -500,7 +500,7 @@ func TestWithConfig_SerializesReaderWriter(t *testing.T) {
 						"description": "A test bot",
 						"soul":        "You are a test bot.",
 						"model":       "test/model",
-						"color":       "#22C55E",
+						"color":       "#6E8BA8",
 					})
 				}
 			}
@@ -678,7 +678,7 @@ func TestConcurrentRESTAndSysagentConfigWrite(t *testing.T) {
 					"description": "test",
 					"soul":        "test",
 					"model":       "test/model",
-					"color":       "#22C55E",
+					"color":       "#6E8BA8",
 				},
 			)
 		}
@@ -708,7 +708,7 @@ func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
 		"soul":        soulContent,
 		"heartbeat":   heartbeatContent,
 		"model":       "test/model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 	})
 	if result.IsError {
 		t.Fatalf("create failed: %s", result.ForLLM)
@@ -925,7 +925,7 @@ func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
 		"description": "A research assistant",
 		"soul":        "You are a research bot.",
 		"model":       "test/model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 		// Deliberately no bash policy override — proving the DEFAULT seed,
 		// not a caller-supplied one.
 	})
@@ -1047,7 +1047,7 @@ func TestCreateAgent_NoGlobalAutoAdd_JoinsContextWorkspace(t *testing.T) {
 			"description": "Created in a workspace context",
 			"soul":        "You help.",
 			"model":       "test/model",
-			"color":       "#22C55E",
+			"color":       "#6E8BA8",
 		})
 		if result.IsError {
 			t.Fatalf("create failed: %s", result.ForLLM)
@@ -1084,7 +1084,7 @@ func TestCreateAgent_NoGlobalAutoAdd_JoinsContextWorkspace(t *testing.T) {
 			"description": "Created with no workspace context",
 			"soul":        "You help.",
 			"model":       "test/model",
-			"color":       "#22C55E",
+			"color":       "#6E8BA8",
 		})
 		if result.IsError {
 			t.Fatalf("create failed: %s", result.ForLLM)
@@ -1197,7 +1197,7 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 		"description": "proves delete_agent hot-reloads without a restart",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 	})
 	if createResult.IsError {
 		t.Fatalf("create_agent failed: %s", createResult.ForLLM)
@@ -1220,7 +1220,7 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 		"description": "stays in the roster after the other agent is deleted",
 		"soul":        "You persist.",
 		"model":       "test-model",
-		"color":       "#3366FF",
+		"color":       "#6E8BA8",
 	})
 	if keeperResult.IsError {
 		t.Fatalf("create_agent (keeper) failed: %s", keeperResult.ForLLM)

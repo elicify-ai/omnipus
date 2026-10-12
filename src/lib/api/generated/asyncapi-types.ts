@@ -172,7 +172,7 @@ export interface MessageStatusFrame {
   type: "message_status";
   session_id: string;
   client_message_id: string;
-  state: "received" | "working" | "failed" | "discarded";
+  state: "received" | "working" | "failed" | "discarded" | "held";
   reason?: "stopped_before_delivery";
   seq?: number;
 }

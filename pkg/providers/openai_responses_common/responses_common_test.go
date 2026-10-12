@@ -2,9 +2,11 @@ package openai_responses_common
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -474,13 +476,16 @@ func TestParseResponseBody_FailedStatus(t *testing.T) {
 			"output_tokens_details": {"reasoning_tokens": 0}}
 	}`)
 
+	// Issue #1278 sweep: a response the API marked failed is an error, not an
+	// answer. The earlier pin ("failed falls through to stop") encoded the bug:
+	// a failed generation was handed to the loop as a finished, possibly partial
+	// answer.
 	result, err := ParseResponseBody(body)
-	if err != nil {
-		t.Fatalf("error: %v", err)
+	if err == nil {
+		t.Fatalf("a failed response was returned as an answer: %+v", result)
 	}
-	// failed/canceled statuses are not specially mapped; they fall through to "stop"
-	if result.FinishReason != "stop" {
-		t.Errorf("FinishReason = %q, want %q", result.FinishReason, "stop")
+	if !errors.Is(err, common.ErrStreamProviderError) {
+		t.Errorf("error = %v, want one matching common.ErrStreamProviderError", err)
 	}
 }
 

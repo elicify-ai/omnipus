@@ -4,7 +4,7 @@
 
 package gateway
 
-// Delta-review C2 (decision note ARCHITECT-C2-contract.md): a refused @-recipient
+// Delta-review C2 (ADR-20261012-session-core-delta-amendments-c2-r1-2.md, Part 1): a refused @-recipient
 // send is MESSAGE-SCOPED. The refusal reaches the sender's connection tagged with
 // the sender's chat (session_id) and the message's client_message_id, and is
 // followed by message_status "failed" for that row. It ends no turn in the

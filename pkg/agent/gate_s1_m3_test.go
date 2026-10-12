@@ -71,6 +71,13 @@ func TestDeliverExternalCLIInstruction_EnqueueRunsOutsideTheHolderLock(t *testin
 		}
 		return ""
 	}
+	// R1 delta T7 strengthening (S1-15): the direct name match above only sees a
+	// call spelled "…Enqueue…" at THIS level. A helper called under the lock that
+	// wraps the enqueue would slip past it. The package call graph closes that:
+	// a call counts as an enqueue if it can reach the durable enqueue through ANY
+	// chain of package calls, so the structural check no longer depends on what
+	// the helper happens to be named.
+	graph := agentPackageCallGraph(t)
 	for _, st := range fn.Body.List {
 		switch x := st.(type) {
 		case *ast.ExprStmt:
@@ -87,8 +94,10 @@ func TestDeliverExternalCLIInstruction_EnqueueRunsOutsideTheHolderLock(t *testin
 		}
 		found := false
 		ast.Inspect(st, func(n ast.Node) bool {
-			if c, ok := n.(*ast.CallExpr); ok && callName(c) == "EnqueueSteeringMessageWithStatus" {
-				found = true
+			if c, ok := n.(*ast.CallExpr); ok {
+				if name := callName(c); name != "" && reachesDurableEnqueue(name, graph) {
+					found = true
+				}
 			}
 			return true
 		})
@@ -99,7 +108,8 @@ func TestDeliverExternalCLIInstruction_EnqueueRunsOutsideTheHolderLock(t *testin
 			}
 		}
 	}
-	require.Equal(t, 1, enqueues, "instrument check: exactly one enqueue call expected")
+	require.NotZero(t, enqueues,
+		"instrument check: the walk must find the enqueue call (directly or through a helper)")
 	require.Equal(t, 0, heldAtEnqueue, "the durable enqueue must not run under the holder lock")
 
 	// R1 delta T7: the walk above catches a DIRECT enqueue under the lock, but a
@@ -128,7 +138,11 @@ func TestDeliverExternalCLIInstruction_EnqueueRunsOutsideTheHolderLock(t *testin
 		}
 		ast.Inspect(st, func(n ast.Node) bool {
 			if c, ok := n.(*ast.CallExpr); ok {
-				if name := callName(c); strings.Contains(strings.ToLower(name), "enqueue") {
+				name := callName(c)
+				if name == "" {
+					return true
+				}
+				if strings.Contains(strings.ToLower(name), "enqueue") || reachesDurableEnqueue(name, graph) {
 					lockedEnqueueish = append(lockedEnqueueish, name)
 				}
 			}
@@ -137,4 +151,72 @@ func TestDeliverExternalCLIInstruction_EnqueueRunsOutsideTheHolderLock(t *testin
 	}
 	require.Empty(t, lockedEnqueueish,
 		"no enqueue may run under the holder lock, directly or through a helper: %v", lockedEnqueueish)
+}
+
+// agentPackageCallGraph maps every function/method defined in pkg/agent's
+// non-test sources to the names of the functions/methods it calls. Names alone:
+// the Go AST carries no type information without a full type-check, and for a
+// structural guard the question is only "could this call, by any route, reach
+// the enqueue".
+func agentPackageCallGraph(t *testing.T) map[string][]string {
+	t.Helper()
+	paths, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	graph := map[string][]string{}
+	for _, p := range paths {
+		if strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		fset := token.NewFileSet()
+		file, perr := parser.ParseFile(fset, p, nil, 0)
+		if perr != nil {
+			// A source this guard cannot parse is not this guard's finding.
+			continue
+		}
+		for _, d := range file.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			var callees []string
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				c, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				switch f := c.Fun.(type) {
+				case *ast.SelectorExpr:
+					callees = append(callees, f.Sel.Name)
+				case *ast.Ident:
+					callees = append(callees, f.Name)
+				}
+				return true
+			})
+			graph[fn.Name.Name] = append(graph[fn.Name.Name], callees...)
+		}
+	}
+	require.Contains(t, graph, "EnqueueSteeringMessageWithStatus",
+		"instrument check: the call graph must contain the durable enqueue, or reachability proves nothing")
+	return graph
+}
+
+// reachesDurableEnqueue reports whether name reaches
+// EnqueueSteeringMessageWithStatus, directly or through any chain of package
+// calls.
+func reachesDurableEnqueue(name string, graph map[string][]string) bool {
+	seen := map[string]bool{}
+	queue := []string{name}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if seen[cur] {
+			continue
+		}
+		seen[cur] = true
+		if cur == "EnqueueSteeringMessageWithStatus" {
+			return true
+		}
+		queue = append(queue, graph[cur]...)
+	}
+	return false
 }

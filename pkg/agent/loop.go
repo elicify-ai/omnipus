@@ -221,6 +221,10 @@ type AgentLoop struct {
 	// gateway constructs once.
 	sessionLifecycleStoreForTools *session.LifecycleStore
 
+	// clearNotPerformedHook receives a refused or not-performed /clear
+	// (clear_not_performed.go). Set once by the gateway's WS handler.
+	clearNotPerformedHook atomic.Pointer[ClearNotPerformedFunc]
+
 	// Security (SEC-15): audit logging.
 	// Initialized in NewAgentLoop when sandbox.audit_log is enabled.
 	auditLogger *audit.Logger

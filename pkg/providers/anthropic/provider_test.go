@@ -2,6 +2,7 @@ package anthropicprovider
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -230,22 +231,17 @@ func TestProvider_ChatUsesTokenSource(t *testing.T) {
 		var reqBody map[string]any
 		json.NewDecoder(r.Body).Decode(&reqBody)
 
-		resp := map[string]any{
-			"id":          "msg_test",
-			"type":        "message",
-			"role":        "assistant",
-			"model":       reqBody["model"],
-			"stop_reason": "end_turn",
-			"content": []map[string]any{
-				{"type": "text", "text": "ok"},
-			},
-			"usage": map[string]any{
-				"input_tokens":  1,
-				"output_tokens": 1,
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		// A token-source provider streams (OAuth/setup tokens require it), so the
+		// fixture speaks SSE. It used to answer with a bare JSON body, which the
+		// streaming path read as an empty stream and silently accepted; a stream
+		// without message_stop is now an error (issue #1278 sweep).
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":%q,\"stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n", reqBody["model"])
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+		fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n")
+		fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	}))
 	defer server.Close()
 

@@ -562,3 +562,29 @@ func TestClassifyError_ToolArgumentsErrorNeverClassifiedByFragmentContent(t *tes
 			"a refused tool call must never be classified as a retriable/failoverable provider fault", result)
 	}
 }
+
+// Issue #1278 follow-up: transport failures with no HTTP status that the
+// founder's preview logged as "unclassified error from openrouter" and that
+// therefore never retried: they are transient transport faults like a dropped
+// connection.
+func TestClassifyError_TransportFailuresAreTimeoutClass(t *testing.T) {
+	for _, msg := range []string{
+		`failed to send request: Post "https://openrouter.ai/api/v1/chat/completions": http2: client connection lost`,
+		`failed to send request: Post "https://openrouter.ai/api/v1/chat/completions": dial tcp: lookup openrouter.ai: no such host`,
+		`dial tcp 104.18.2.115:443: connect: connection refused`,
+		`dial tcp: network is unreachable`,
+	} {
+		fe := ClassifyError(errors.New(msg), "openrouter", "deepseek/deepseek-v4.1-flash")
+		if fe == nil || fe.Reason != FailoverTimeout {
+			t.Errorf("%q classified as %+v, want FailoverTimeout", msg, fe)
+		}
+	}
+}
+
+func TestClassifyError_MidStreamProviderErrorIsTimeoutClass(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", &common.StreamProviderError{Code: "server_error", Message: "Provider disconnected unexpectedly"})
+	fe := ClassifyError(err, "openrouter", "m")
+	if fe == nil || fe.Reason != FailoverTimeout {
+		t.Errorf("classified as %+v, want FailoverTimeout", fe)
+	}
+}

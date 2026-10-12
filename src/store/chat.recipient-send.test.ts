@@ -24,6 +24,7 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
 import { useUiStore } from './ui'
+import { checkAddressedAgent, recipientAddressBlocked } from './chat/recipientSend'
 import { queryClient } from '@/lib/queryClient'
 import type { WsConnection } from '@/lib/ws'
 import type { Agent } from '@/lib/api'
@@ -393,6 +394,102 @@ describe('C8 — the @ address is never dropped silently', () => {
   })
 })
 
+// C8 follow-up (combined-review S3-08, 2026-10-12): the block must know
+// LOADING from FAILED. A never-resolving list that has actually ERRORED must
+// not promise "try again in a moment" — it says the team list could not be
+// loaded and offers a Retry (the toast action), and the drain hold actively
+// retries the roster on every drain trigger instead of silently waiting for
+// a load that will never come. The hold itself stays: releasing an
+// @-addressed message without roster data is the silent drop C8 forbids.
+describe('C8 — a FAILED agents list (not merely loading) says so and offers Retry', () => {
+  /** Settle the shared ['agents'] cache into the ERROR state with no data. */
+  async function failAgentsQuery(): Promise<void> {
+    act(() => { queryClient.removeQueries({ queryKey: ['agents'] }) })
+    await act(async () => {
+      await expect(
+        queryClient.fetchQuery({
+          queryKey: ['agents'],
+          queryFn: () => Promise.reject(new Error('roster down')),
+          retry: false,
+        }),
+      ).rejects.toThrow('roster down')
+    })
+    expect(queryClient.getQueryData<Agent[]>(['agents'])).toBeUndefined()
+    expect(queryClient.getQueryState(['agents'])?.status).toBe('error')
+  }
+
+  it('checkAddressedAgent distinguishes FAILED from loading: the errored roster yields kind "failed"', () => {
+    act(() => { queryClient.removeQueries({ queryKey: ['agents'] }) })
+    // Loading (no cache entry at all yet): still 'unresolvable'.
+    expect(checkAddressedAgent('@Mia hello')).toEqual({ kind: 'unresolvable', nameGuess: 'Mia' })
+
+    return failAgentsQuery().then(() => {
+      expect(checkAddressedAgent('@Mia hello')).toEqual({ kind: 'failed', nameGuess: 'Mia' })
+    })
+  })
+
+  it('the composer block on a FAILED roster says the list could not be loaded and offers Retry — no "try again in a moment"', async () => {
+    await failAgentsQuery()
+    const blocked = recipientAddressBlocked('@Mia please review X')
+    // Same "roster unavailable" sentinel for loading and failed — the caller
+    // only needs "blocked"; the copy carries the difference.
+    expect(blocked).toBe('unresolvable')
+    const toast = useUiStore.getState().toasts.find((t) => t.variant === 'warning')
+    expect(toast).toBeDefined()
+    expect(toast?.message).toContain('could not be loaded')
+    expect(toast?.message).not.toContain('try again in a moment')
+    expect(toast?.action?.label).toBe('Retry')
+  })
+
+  it('the drain hold on a FAILED roster keeps holding (no silent drop) but says "could not be loaded" and kicks a roster refetch', async () => {
+    useChatStore.setState({ outboundQueue: [], pendingDrainQueue: [] })
+    act(() => { useChatStore.getState().sendMessage('@Mia please review X') }) // disconnected → queued
+    expect(useChatStore.getState().outboundQueue).toHaveLength(1)
+
+    await failAgentsQuery()
+    const refetchSpy = vi.spyOn(queryClient, 'refetchQueries').mockResolvedValue(undefined)
+    const send = connectWithSendSpy()
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+
+    // Still held — never drained unaddressed…
+    expect(send).not.toHaveBeenCalled()
+    expect(useChatStore.getState().pendingDrainQueue).toHaveLength(1)
+    // …but the copy is honest and recovery was attempted.
+    const toast = useUiStore.getState().toasts.find((t) => t.variant === 'warning')
+    expect(toast?.message).toContain('could not be loaded')
+    expect(toast?.message).not.toContain('try again in a moment')
+    expect(refetchSpy).toHaveBeenCalled()
+    refetchSpy.mockRestore()
+  })
+
+  it('a Retry (resend) with a FAILED roster gets the failed-list copy too', async () => {
+    await failAgentsQuery()
+    act(() => {
+      useChatStore.setState({
+        sessionsById: {
+          [TEST_SESSION_ID]: bucketFor([
+            {
+              id: 'failed-attempt', role: 'user', content: '@Mia please review X',
+              timestamp: new Date().toISOString(), status: 'error', deliveryStatus: 'failed',
+            },
+          ]),
+        },
+        messages: [],
+        isStreaming: false,
+        isReplaying: false,
+      })
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'jim' })
+    })
+    const send = connectWithSendSpy()
+    act(() => { useChatStore.getState().resendMessage('failed-attempt') })
+
+    expect(send).not.toHaveBeenCalled()
+    const toast = useUiStore.getState().toasts.find((t) => t.variant === 'warning')
+    expect(toast?.message).toContain('could not be loaded')
+    expect(toast?.message).not.toContain('try again in a moment')
+  })
+})
+
 // C2 (contract: ARCHITECT-C2-contract.md, decided 2026-10-11): the server
 // tags a message-scoped refusal with the sender's session_id AND
 // client_message_id (no first_message_error), followed by a
@@ -512,5 +609,68 @@ describe('C2 — a message-scoped refusal routes to its own chat and never ends 
     expect(x.messagesById['asst-1']?.status).toBe('error')
     expect(x.isStreaming).toBe(false)
     expect(x.activeTurnId).toBeNull()
+  })
+})
+
+// S3-06: the composer's OWN guard — recipientAddressBlocked — is what the user
+// meets first (ChatScreen.recipientAddressBlockedNow calls it from the Enter
+// path and both mid-stream submit paths, and preventDefaults without clearing
+// the composer). The store-level rules above were already pinned; this block
+// pins the composer side: what it returns, what it warns, and that it lets the
+// safe cases through untouched.
+describe('S3-06 — the composer guard (recipientAddressBlocked)', () => {
+  it('blocks an @-send in a brand-new chat and names the addressee', () => {
+    act(() => { useSessionStore.setState({ activeSessionId: null, activeAgentId: null }) })
+    const got = recipientAddressBlocked('@Mia please review X')
+    expect(got).not.toBeNull()
+    expect(got).not.toBe('unresolvable')
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'warning' && t.message.includes('@Mia'))).toBe(true)
+  })
+
+  it('blocks an @-send whose address cannot be checked and returns the "unresolvable" marker', () => {
+    act(() => { queryClient.removeQueries({ queryKey: ['agents'] }) })
+    act(() => { useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'jim' }) })
+    expect(recipientAddressBlocked('@Mia please review X')).toBe('unresolvable')
+    expect(useUiStore.getState().toasts.some((t) => t.variant === 'warning' && t.message.includes('@Mia'))).toBe(true)
+  })
+
+  it('lets an @-send through once a session exists and the address resolves', () => {
+    act(() => { useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'jim' }) })
+    expect(recipientAddressBlocked('@Mia please review X')).toBeNull()
+    expect(useUiStore.getState().toasts).toHaveLength(0)
+  })
+
+  it('lets ordinary text through in a brand-new chat', () => {
+    act(() => { useSessionStore.setState({ activeSessionId: null, activeAgentId: null }) })
+    expect(recipientAddressBlocked('hello there')).toBeNull()
+    expect(useUiStore.getState().toasts).toHaveLength(0)
+  })
+})
+
+// S3-06 (the "Unknown"): a held @ message must not be held FOREVER. Once the
+// team list resolves, a drain trigger sends it WITH its recipient — the hold is
+// a wait, not a drop.
+describe('S3-06 — a held @ message drains once the team list resolves', () => {
+  it('the hold is a wait: after the agents list loads, the next drain sends it addressed', () => {
+    act(() => { queryClient.removeQueries({ queryKey: ['agents'] }) })
+    act(() => { useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'jim' }) })
+
+    act(() => { useChatStore.getState().sendMessage('@Mia please review X') }) // offline → queued
+    expect(useChatStore.getState().outboundQueue).toHaveLength(1)
+
+    const send = connectWithSendSpy()
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+    expect(send).not.toHaveBeenCalled()
+    expect(useChatStore.getState().pendingDrainQueue).toHaveLength(1)
+
+    // The team list now resolves; the next drain trigger must send it WITH the
+    // recipient, never unaddressed.
+    act(() => { queryClient.setQueryData(['agents'], agentFixtures) })
+    act(() => { useChatStore.getState().drainOutboundQueue() })
+
+    const frames = sentPayloads(send)
+    expect(frames, 'the held message must go out once the address resolves').toHaveLength(1)
+    expect(frames[0].recipient).toMatchObject({ agent_id: 'mia' })
+    expect(useChatStore.getState().pendingDrainQueue).toHaveLength(0)
   })
 })

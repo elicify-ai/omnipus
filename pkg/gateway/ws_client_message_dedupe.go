@@ -345,10 +345,12 @@ func (hcm *wsHandlerHandleChatMessage) answerRetriedMessage() bool {
 	h.mu.Unlock()
 	if wrongPrincipal {
 		cid := hcm.clientMessageID
+		sid := hcm.sessionID // contract C2: message-scoped, so it names the chat
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:            string(generated.WsFrameTypeError),
 			Message:         "Could not check this chat",
 			ClientMessageId: &cid,
+			SessionId:       &sid,
 		})
 		return true
 	}

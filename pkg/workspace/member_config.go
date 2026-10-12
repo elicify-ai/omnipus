@@ -35,7 +35,7 @@ type MemberHeartbeat struct {
 // Merge semantics (ADR-hide-from-sidebar addendum 2026-10-11, founder ruling
 // "hiding is only hiding"): an incoming member_config REPLACES the stored one
 // — an omitted heartbeat clears it, with the disable transition — except
-// exactly two display-flag rules the gateway PUT handler enforces:
+// exactly two display-flag rules MergeMemberConfig enforces:
 //   - hidden_from_sidebar absent => the stored flag is preserved (a
 //     heartbeat save never un-hides);
 //   - a pure hide/show entry (flag present, heartbeat absent) preserves the
@@ -140,4 +140,37 @@ func GCMemberConfigs(coreTeam []string, mc map[string]MemberConfig) (map[string]
 		}
 	}
 	return pruned, removed
+}
+
+// IncomingMemberConfig is one member_configs request entry: the converted
+// config plus which fields the request actually carried. The wire fields are
+// tri-state (absent / false / true) but storage is a plain bool, so presence is
+// carried beside the value.
+type IncomingMemberConfig struct {
+	Config           MemberConfig
+	HiddenPresent    bool
+	HeartbeatPresent bool
+}
+
+// PureHideShow reports whether the entry carries ONLY the display flag
+// (hidden_from_sidebar present, heartbeat absent).
+func (in IncomingMemberConfig) PureHideShow() bool { return in.HiddenPresent && !in.HeartbeatPresent }
+
+// MergeMemberConfig applies the stored-vs-incoming rule for one member (see the
+// MemberConfig doc for the ruling): the incoming entry replaces the stored one
+// except (1) an absent hidden_from_sidebar keeps the stored flag, and (2) a
+// pure hide/show entry keeps the stored heartbeat. With no stored entry there is
+// nothing to preserve and the incoming config is taken as is.
+func MergeMemberConfig(stored MemberConfig, storedExists bool, in IncomingMemberConfig) MemberConfig {
+	merged := in.Config
+	if !storedExists {
+		return merged
+	}
+	if !in.HiddenPresent {
+		merged.HiddenFromSidebar = stored.HiddenFromSidebar
+	}
+	if in.PureHideShow() {
+		merged.Heartbeat = stored.Heartbeat
+	}
+	return merged
 }

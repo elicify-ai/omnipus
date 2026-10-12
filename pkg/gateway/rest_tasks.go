@@ -1536,9 +1536,9 @@ func (tp *taskPatch) launchIfStarted() bool {
 	// running. Preserve a Failed disposition the executor already persisted for
 	// this error; otherwise revert to the pre-update state so the client can
 	// retry. The HTTP status signals the cause:
-	//   503 — taskExecutor is nil (gateway degraded / not fully initialized)
-	//   409 — dispatch cap exhausted (retryable congestion)
-	//   500 — any other launch error
+	//   503 — taskExecutor is nil (gateway degraded) or draining for shutdown
+	//   409 — the task's plan is not executing
+	//   500 — any other launch error (including a plan state that cannot be read)
 	//
 	// The revert also clears StartedAt: the in_progress patch above (via
 	// Store.updateLocked) stamped it on the (failed) transition, so a bare
@@ -1638,9 +1638,9 @@ func (tp *taskPatch) launchIfStarted() bool {
 				// Fixed text: the raw executor error is only in the Warn log above.
 				jsonErr(tp.w, httpStatus, "the server is shutting down; start the task again after it restarts")
 			case httpStatus == http.StatusConflict:
-				// The remaining 409 classes (dispatch cap, plan not
-				// executing) are domain errors built from fixed text, ids and
-				// the plan's state.
+				// The remaining 409 class (plan not executing) is a domain
+				// error built from fixed text, ids and the plan's state.
+				// A full run queue is not a refusal: the launcher queues it.
 				jsonErr(tp.w, httpStatus, startErr.Error())
 			default:
 				jsonErr(tp.w, httpStatus, "the task could not be started. Check the agent and try again; details are in the server log.")

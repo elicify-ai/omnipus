@@ -1,13 +1,14 @@
 /**
  * BDD-07.1 above the feed, as AMENDED for mains (founder decision
  * 2026-10-11, amending FR-008 "Main chat has no title suffix"): the header
- * line for a main session now reads the main's TITLE — "<Agent name> -
- * Main Session", derived from the agent's CURRENT display name when the
- * server has not stamped one yet, and following an agent rename without a
- * reload. ChatScreen reads the active workspace descriptor
+ * line for a main session reads "<Agent name> - Main Session", ALWAYS
+ * derived from the agent's CURRENT display name (S2-05 ruling,
+ * chief-confirmed 2026-10-12: the stored session.title is ignored for a
+ * main, so no attach-time copy survives a rename) and following an agent
+ * rename without a reload. ChatScreen reads the active workspace descriptor
  * (sessionByWorkspace[activeWorkspaceId], when its id is the active session)
  * and the seam. Paths (live or replay) do not change the words. Extra chats,
- * tasks, and helpers are unchanged.
+ * tasks, and helpers keep their stored titles, unchanged.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
@@ -174,12 +175,23 @@ describe('ChatScreen kind label (BDD-07.1; mains as amended 2026-10-11)', () => 
     expectLabelAboveFeed('Jim - Main Session')
   })
 
-  it('shows the server title for a main that has one', async () => {
+  it('ignores a stored title on a main and derives from the live agent name (S2-05 ruling, chief-confirmed 2026-10-12)', async () => {
     seam.mains.add('sid-main')
     agentsQuery.data = [agent('jim', 'Jim')]
-    seed('sid-main', 'main', 'Jim - Main Session', 'jim')
+    // S2-05 (combined-review X-architect X-3; see ARCHITECT-RULINGS.md for
+    // the combined-review ruling set; chief-confirmed 2026-10-12, team-lead
+    // dispatch): for a MAIN the SPA ignores the stored session.title — it is
+    // a copy taken at attach time, persisted in the browser — and ALWAYS
+    // derives "<Agent> - Main Session" from the live agent list, so no
+    // stored copy can survive an agent rename. The stored value here is
+    // deliberately different from the derived one, keeping the oracle's
+    // distinguishing power: the derived label must show and the stored one
+    // must NOT. (Supersedes ff32fd420's server-title-wins oracle, S5-12/Q4.)
+    // Extra chats, tasks and helpers keep their stored titles (covered below).
+    seed('sid-main', 'main', 'Jim - Main Session (server-stamped)', 'jim')
     await renderScreen()
     expectLabelAboveFeed('Jim - Main Session')
+    expect(screen.queryByText('Jim - Main Session (server-stamped)')).not.toBeInTheDocument()
   })
 
   it('follows an agent rename: the header re-derives from the CURRENT name without a reload', async () => {

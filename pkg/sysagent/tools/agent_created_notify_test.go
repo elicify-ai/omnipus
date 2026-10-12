@@ -56,7 +56,7 @@ func TestAgentCreate_NotifiesAgentCreated(t *testing.T) {
 		"description": "proves create_agent invokes NotifyAgentCreated",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 	})
 	if result.IsError {
 		t.Fatalf("create_agent failed: %s", result.ForLLM)
@@ -96,7 +96,7 @@ func TestAgentCreate_ValidationFailure_DoesNotNotifyAgentCreated(t *testing.T) {
 		"description": "missing name must error, never persist",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 	})
 	if !result.IsError {
 		t.Fatalf("create_agent with no name must fail validation, got success: %s", result.ForLLM)
@@ -157,7 +157,7 @@ func TestAgentCreate_NotifyFiresOnlyAfterAgentIsListable(t *testing.T) {
 		"description": "proves NotifyAgentCreated fires only once the agent is live-listable",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 	})
 	if result.IsError {
 		t.Fatalf("create_agent failed: %s", result.ForLLM)
@@ -247,7 +247,7 @@ func TestAgentCreate_InitAgentHomeFailure_DoesNotNotifyAgentCreated(t *testing.T
 		"description": "proves an InitAgentHome failure after entity save never notifies",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 	})
 	if !result.IsError {
 		t.Fatalf("create_agent must fail when InitAgentHome cannot create the agent's sessions/ subdir "+
@@ -309,7 +309,7 @@ func TestAgentCreate_NilNotifyAgentCreatedIsSafe(t *testing.T) {
 		"description": "proves a nil NotifyAgentCreated never panics",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 	})
 	if result.IsError {
 		t.Fatalf("create_agent failed: %s", result.ForLLM)
@@ -357,7 +357,7 @@ func TestAgentCreate_DefaultSingletonWriteFailure_DoesNotNotifyAgentCreated(t *t
 		"description": "proves a default-singleton write failure after entity save never notifies",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 		"default":     true,
 	})
 	if !result.IsError {
@@ -433,7 +433,7 @@ func TestAgentCreate_HeartbeatWriteFailure_DoesNotNotifyAgentCreated(t *testing.
 		"description": "proves a HEARTBEAT.md write failure after entity save never notifies",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
+		"color":       "#6E8BA8",
 		"heartbeat":   "ping every morning",
 	})
 	if !result.IsError {
@@ -628,7 +628,7 @@ func TestAgentCreate_NotifyFiresOnlyAfterAsyncReloadLands(t *testing.T) {
 				"description": "proves NotifyAgentCreated waits out the async reload",
 				"soul":        "You are a test agent.",
 				"model":       "test-model",
-				"color":       "#22C55E",
+				"color":       "#6E8BA8",
 			}),
 		}
 	}()
