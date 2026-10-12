@@ -75,10 +75,42 @@ test('phone Sessions titles wrap above metadata and keep same-prefix chats disti
 test('a built-in agent shows locked figure, role and colour and no upload', async ({ page }) => {
   await page.goto('/#/agents')
   await page.getByTestId('agent-card-mia').click()
-  const figure = page.getByRole('button', { name: 'Omnipus' })
-  await expect(figure).toBeVisible({ timeout: 15_000 })
-  await expect(figure).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'General assistant' })).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Azure' })).toBeDisabled()
+  // The ONE avatar editor is AgentLookPicker (founder 2026-10-10, "pick by
+  // picture"): role is a single searchable dropdown, the look is five figure
+  // thumbnails, the colour is the founder's ten metallic dots
+  // (AVATAR-PALETTE-DECISION.md, 2026-10-11 — the old named swatch colours,
+  // "Azure" among them, are gone). Built-in identity is locked: every choice
+  // stays visible but disabled. Oracle: the same DOM contract the vitest
+  // suite pins for Mia (src/test/agentIdentityAssertions.ts,
+  // AgentProfile.wave1.test.tsx "built-in identity stays locked").
+  // The profile mounts the form twice (desktop Tabs `hidden sm:block` +
+  // phone Accordion `block sm:hidden`); at this viewport only the desktop
+  // copy is visible, so scope test-id locators to the visible one — role
+  // locators already exclude the aria-hidden copy.
+  const look = page.getByTestId('avatar-look').filter({ visible: true })
+  await expect(look).toBeVisible({ timeout: 15_000 })
+  // All five figures present, disabled; Omnipus (Mia's stored figure) pressed.
+  for (const figure of ['Omnipus', 'Man', 'Robot', 'Woman', 'Monogram']) {
+    const choice = look.getByRole('button', { name: figure, exact: true })
+    await expect(choice).toBeDisabled()
+    await expect(choice).toHaveAttribute('aria-pressed', String(figure === 'Omnipus'))
+  }
+  // The role is ONE searchable dropdown, disabled, showing the stored role's
+  // label — not word buttons ("General assistant" as a button is old UI).
+  const role = look.getByRole('combobox', { name: 'Role badge' })
+  await expect(role).toBeDisabled()
+  await expect(role).toContainText('General assistant')
+  // All ten palette dots present and disabled; Mia's stored colour pressed.
+  const colourNames = [
+    'Steel blue', 'Titanium', 'Verdigris', 'Gunmetal', 'Graphite violet',
+    'Rose gold', 'Bronze', 'Antique brass', 'Champagne', 'Pewter',
+  ] as const
+  for (const name of colourNames) {
+    const dot = look.getByRole('button', { name, exact: true })
+    await expect(dot).toBeDisabled()
+    await expect(dot).toHaveAttribute('aria-pressed', String(name === 'Steel blue'))
+  }
+  // No upload affordance in the avatar editor and no file input on the page.
+  await expect(look.getByRole('button', { name: /upload/i })).toHaveCount(0)
   await expect(page.locator('input[type="file"]')).toHaveCount(0)
 })
