@@ -692,7 +692,15 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
 
     // 4. Navigate directly to the seeded session (TanStack Router hash form).
     await page.goto(`/#/sessions/${sessionID}`)
-    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+    // Wait for the chat surface to be bound to THIS session - not for the
+    // "banner" landmark. The only banner (WorkspaceTabContainer's <header>)
+    // belongs to the workspace route; a session with no workspace_id (this one:
+    // created for a custom agent with no workspace) renders the inline
+    // ChatScreen, which has none. A banner wait here is therefore a race with
+    // the route swap: it passed only if the first poll beat the swap (the old
+    // route's header still on screen) and failed 15 s later otherwise - failed
+    // the first attempt, passed on retry, in 3 of 4 runs.
+    await expect(page.locator(`[data-active-session-id="${sessionID}"]`)).toBeVisible({ timeout: 15_000 })
 
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 15_000 })
