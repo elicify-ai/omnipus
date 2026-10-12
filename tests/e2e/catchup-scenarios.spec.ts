@@ -48,7 +48,7 @@
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, waitForConnected, assistantMessages, userMessages } from './fixtures/selectors'
+import { chatInput, waitForConnected, assistantMessages, userMessages, selectedAgentRow } from './fixtures/selectors'
 import { freshChat } from './fixtures/session-setup'
 import { installFreezeProxy } from './helpers/freezeProxy'
 import { GatewayProcess } from './fixtures/gateway-process'
@@ -192,8 +192,6 @@ async function waitTurnDoneAfterReload(page: Page) {
 // Scoped to the drawer panel specifically (`#sidebar-overlay-panel`,
 // Sidebar.tsx) so nothing outside it can ever match.
 const sidebarPanel = (page: Page) => page.getByRole('navigation', { name: 'Main navigation' })
-const sessionRowByTitle = (page: Page, title: string) => sidebarPanel(page).getByRole('button')
-  .filter({ has: page.getByText(title, { exact: true }) })
 
 async function ensureSidebarOpen(page: Page) {
   if (!(await sidebarPanel(page).isVisible())) {
@@ -208,25 +206,21 @@ async function ensureSidebarOpen(page: Page) {
 // reading it back from the DOM, rather than guessing what the title will
 // be, is what makes re-selecting the row later reliable).
 async function activeSidebarTitle(page: Page): Promise<string> {
-  // Real-browser follow-up (orchestrator, traced from the actual trace.zip
-  // execution log): even scoped to the sidebar panel, `aria-current="page"`
-  // ALSO matches the workspace accordion header (Sidebar.tsx's own
-  // per-project button — "you're currently in this workspace"), which
-  // renders BEFORE its session tree in DOM order. `.first()` picked that
-  // header, not the actual active session row (SidebarSessionRow, line
-  // ~987 of that file) — captured title was literally "My Workspace",
-  // which later matched the SAME header again, never a real session,
-  // leaving the drawer's onClose never triggered (explains scenario c's
-  // "not a 150ms fade, the layer stays" too — same root cause). The
-  // active SESSION row renders AFTER the workspace header within its
-  // expanded accordion section, so `.last()` is the real one.
+  // The sidebar no longer lists per-session rows: the active chat is the
+  // SELECTED AGENT ROW (data-selected="true", selectors.ts::selectedAgentRow -
+  // "this agent owns the selected chat"). The old read - the last
+  // `button[aria-current="page"]` - now only ever matches the workspace header,
+  // so the captured "title" was literally "My Workspace" and scenario c clicked
+  // that header instead of going back to chat A (screenshot: still on chat B).
+  // The agent's name is the stable handle; clicking its row is the real
+  // "go back to this agent's chat" navigation (FR-029).
   await ensureSidebarOpen(page)
-  const row = sidebarPanel(page).locator('button[aria-current="page"]').last()
+  const row = selectedAgentRow(page)
   await expect(row).toBeVisible({ timeout: 10_000 })
-  // The sibling lifecycle label changes from Working to Done; it is not part
-  // of the stable session title and cannot be used to locate the row later.
-  const title = (await row.locator('span.truncate').innerText()).trim()
-  await row.focus()
+  const title = ((await row.getAttribute('aria-label')) ?? '').trim()
+  expect(title, 'the selected agent row must carry its name').not.toBe('')
+  // Close with Cmd/Ctrl+B from a non-editable focus (the row's own button).
+  await row.locator('.sidebar-agent-row button').first().focus()
   await page.keyboard.press('ControlOrMeta+b')
   await expect(sidebarPanel(page)).toBeHidden()
   return title
@@ -238,21 +232,15 @@ async function activeSidebarTitle(page: Page): Promise<string> {
 // cancels the running turn (ADR-057's cancel state machine), which would
 // defeat the entire point of this scenario.
 async function switchToSessionByTitle(page: Page, title: string) {
-  // Real-browser follow-up (orchestrator, traced locally against a real
-  // gateway): the sidebar title is a plain 60-char truncation of the first
-  // message (confirmed: a captured title's own .length was exactly 60,
-  // ending in a literal "..." baked into the text, not a CSS-only
-  // truncation). Every scenario in this file that calls startLongTurn uses
-  // the SAME hardcoded LONG_PROMPT, so once more than one of them has run
-  // against the SAME gateway process (true for CI too — the whole spec
-  // file runs sequentially against one worker's gateway, not just this
-  // isolated local run) their titles collide exactly, and getByRole's
-  // {exact: true} — needing a single match to click — hangs against the
-  // resulting ambiguity instead of erroring cleanly. `.first()` is the most
-  // recently created matching session (the sidebar lists newest-first),
-  // which is always the one THIS test just made.
+  // `title` is the agent row's name (see activeSidebarTitle): clicking the
+  // row's main button navigates to that agent's eligible main chat. Escape is
+  // never used here - it cancels the running turn (ADR-057).
   await ensureSidebarOpen(page)
-  await sessionRowByTitle(page, title).first().click()
+  await sidebarPanel(page)
+    .getByRole('group', { name: title, exact: true })
+    .locator('.sidebar-agent-row button')
+    .first()
+    .click()
   await expect(sidebarPanel(page)).toBeHidden()
 }
 

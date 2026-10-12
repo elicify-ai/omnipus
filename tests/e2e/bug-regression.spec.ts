@@ -774,7 +774,15 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     } catch (err) {
       // Name what DID arrive: a missing terminal frame and a terminal frame
       // carrying a different session id are different defects.
-      throw new Error(`${(err as Error).message}\nlast WS frames received (type:session_id): ${frameDigest()}`, { cause: err })
+      const detail = await page.request
+        .get(`${BUG_BASE_URL}/api/v1/sessions/${sessionID}`, { headers: authHeaders, failOnStatusCode: false })
+        .then(async (r) => `${r.status()} ${(await r.text()).slice(0, 300)}`)
+        .catch((e: unknown) => `request failed: ${String(e)}`)
+      throw new Error(
+        `${(err as Error).message}\nlast WS frames received (type:session_id): ${frameDigest()}\n` +
+          `GET /api/v1/sessions/${sessionID} -> ${detail}\npage url: ${page.url()}`,
+        { cause: err },
+      )
     }
 
     // 5. Listen for the "session not found" error frame. If it arrives,
