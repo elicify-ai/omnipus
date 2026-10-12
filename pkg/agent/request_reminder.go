@@ -58,11 +58,33 @@ func (al *AgentLoop) markRequestDelivered(sessionID, transcriptEntryID string) {
 		return
 	}
 	if ledger := al.RequestLedger(); ledger != nil {
+		// Read before the mark: only the FIRST delivery of a request that was
+		// held moves its sender's row on.
+		prior, found, getErr := ledger.Get(sessionID, transcriptEntryID)
+		if getErr != nil {
+			logger.WarnCF("agent", "request capture could not be read before its delivery mark",
+				map[string]any{"session_id": sessionID, "request_id": transcriptEntryID, "error": getErr.Error()})
+		}
 		if err := ledger.MarkDelivered(sessionID, transcriptEntryID); err != nil {
 			logger.WarnCF("agent", "request delivery could not be recorded; it may be delivered again on the next turn",
 				map[string]any{"session_id": sessionID, "request_id": transcriptEntryID, "error": err.Error()})
+			return
+		}
+		if found && prior.Held && !prior.Delivered && prior.SenderMessageID != "" &&
+			prior.Source.Kind == addressing.SourceConversation && prior.Source.SessionID != "" {
+			al.notifyHeldRequestDelivered(prior.Source.SessionID, prior.SenderMessageID)
 		}
 	}
+}
+
+// notifyHeldRequestDelivered tells the installed receiver (the gateway) that a
+// held request's sender row can move on.
+func (al *AgentLoop) notifyHeldRequestDelivered(senderSessionID, senderMessageID string) {
+	hook := al.requestDeliveredHook.Load()
+	if hook == nil {
+		return
+	}
+	(*hook)(senderSessionID, senderMessageID)
 }
 
 // takeUnansweredRequests returns, for sessionID, the delivered, still-pending

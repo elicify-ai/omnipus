@@ -225,6 +225,9 @@ type AgentLoop struct {
 	// (clear_not_performed.go). Set once by the gateway's WS handler.
 	clearNotPerformedHook atomic.Pointer[ClearNotPerformedFunc]
 
+	// requestDeliveredHook receives a held request's delivery (request_delivered_hook.go).
+	requestDeliveredHook atomic.Pointer[RequestDeliveredFunc]
+
 	// Security (SEC-15): audit logging.
 	// Initialized in NewAgentLoop when sandbox.audit_log is enabled.
 	auditLogger *audit.Logger
