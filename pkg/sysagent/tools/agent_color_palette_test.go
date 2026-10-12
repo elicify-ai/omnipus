@@ -99,3 +99,46 @@ func TestToolsRefuseAColourOfTheRemovedPreviousPalette(t *testing.T) {
 		t.Fatalf("a previous-palette colour must be refused on update: %s", res.ForLLM)
 	}
 }
+
+// Founder/coordinator ruling 2026-10-13: create_agent behaves like REST - an
+// omitted or empty colour defaults to Pewter (#8E9196), and the tool schema says
+// color is optional.
+func TestCreateAgent_EmptyOrOmittedColorDefaultsToPewter(t *testing.T) {
+	for _, args := range []map[string]any{
+		{"name": "No Colour A", "description": "d", "soul": "You help.", "model": "test/model"},
+		{"name": "No Colour B", "description": "d", "soul": "You help.", "model": "test/model", "color": ""},
+	} {
+		deps, _ := newTestDepsWithHome(t)
+		res := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
+		if res.IsError {
+			t.Fatalf("a missing colour defaults, it is not an error: %s", res.ForLLM)
+		}
+		id, _ := parseSuccess(t, res.ForLLM)["id"].(string)
+		ag, err := agentstore.New(deps.Home).Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ag.Color != "#8E9196" {
+			t.Errorf("stored colour %q, want the default Pewter #8E9196", ag.Color)
+		}
+	}
+}
+
+func TestCreateAgent_SchemaSaysColorIsOptional(t *testing.T) {
+	deps, _ := newTestDepsWithHome(t)
+	tool := systools.NewAgentCreateTool(deps)
+	required, _ := tool.Parameters()["required"].([]string)
+	for _, r := range required {
+		if r == "color" {
+			t.Fatalf("color must not be in the required list: %v", required)
+		}
+	}
+	props, _ := tool.Parameters()["properties"].(map[string]any)
+	color, _ := props["color"].(map[string]any)
+	if d, _ := color["description"].(string); !strings.Contains(d, "optional") || !strings.Contains(d, "Pewter") {
+		t.Errorf("color description should say optional with default Pewter, got %q", d)
+	}
+	if d := tool.Description(); strings.Contains(d, "color (a palette hex, e.g. #6E8BA8) are all required") {
+		t.Errorf("tool description still says color is required: %q", d)
+	}
+}
