@@ -149,7 +149,7 @@ func TestUpdateAgent_JudgeOtherIdentityFieldsStillForbidden(t *testing.T) {
 	}{
 		{"name", `{"name":"Rogue Judge"}`},
 		{"description", `{"description":"a rewritten description"}`},
-		{"color", `{"color":"#3B82F6"}`},
+		{"color", `{"color":"#6E8BA8"}`},
 		{"skills", `{"skills":["some-skill"]}`},
 	}
 	for _, tc := range cases {
@@ -497,7 +497,7 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 	t.Run("native Subagent", func(t *testing.T) {
 		api := buildExecutorTestAPI(t)
 		id := createNativeSubagent(t, api)
-		validPatch := `{"model":"test-model","max_tool_iterations":8,"color":"#FB923C","description":"updated worker"}`
+		validPatch := `{"model":"test-model","max_tool_iterations":8,"color":"#A97142","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
@@ -515,7 +515,7 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		// forbidden on a subagent_3p PUT (agent_field_rules.go
 		// subagent3pForbiddenUpdateFields, extended in W2a). See
 		// TestUpdateAgent_Subagent3p_ForbiddenFields for the 400 case.
-		validPatch := `{"model":"test-model","color":"#FB923C","description":"updated worker"}`
+		validPatch := `{"model":"test-model","color":"#A97142","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
@@ -645,7 +645,7 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 	//    current display-only value used by the presence-rejection cases.
 	w1 := httptest.NewRecorder()
 	r1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
-		strings.NewReader(`{"color":"#3B82F6"}`))
+		strings.NewReader(`{"color":"#6E8BA8"}`))
 	r1.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w1, r1)
 	require.Equal(t, http.StatusOK, w1.Code, "establishing PUT body: %s", w1.Body.String())
@@ -659,9 +659,9 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 		name string
 		body string
 	}{
-		{name: "stale timestamp", body: fmt.Sprintf(`{"color":"#38BDF8","updated_at":%q}`, "2000-01-01T00:00:00Z")},
-		{name: "current timestamp", body: fmt.Sprintf(`{"color":"#22D3EE","updated_at":%q}`, currentUpdatedAt)},
-		{name: "null", body: `{"color":"#818CF8","updated_at":null}`},
+		{name: "stale timestamp", body: fmt.Sprintf(`{"color":"#7A8C9E","updated_at":%q}`, "2000-01-01T00:00:00Z")},
+		{name: "current timestamp", body: fmt.Sprintf(`{"color":"#4F8A80","updated_at":%q}`, currentUpdatedAt)},
+		{name: "null", body: `{"color":"#5E6973","updated_at":null}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
@@ -797,7 +797,7 @@ func TestUpdateAgent_ConcurrentDeleteRace_Returns404NotPhantom200(t *testing.T) 
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(`{"revision":"`+strings.Repeat("0", 64)+`","color":"#3B82F6"}`))
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(`{"revision":"`+strings.Repeat("0", 64)+`","color":"#6E8BA8"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 

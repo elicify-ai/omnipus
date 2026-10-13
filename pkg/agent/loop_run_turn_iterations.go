@@ -118,6 +118,11 @@ turnLoop:
 			break turnLoop
 		}
 
+		if len(er.cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) > 0 {
+			// A response that carried its tool calls ends an empty-envelope blip:
+			// the retry budget is per blip, not per turn (R2-S1-10).
+			er.cn.emptyToolEnvelopeRetries = 0
+		}
 		if len(er.cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 || er.cn.rc.rx.rr.rq.ri.gracefulTerminal {
 			switch er.cn.handleInitialResponse() {
 			case agentLoopRunTurnConductorRunIterationsReturn:

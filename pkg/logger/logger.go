@@ -132,7 +132,7 @@ func neutralizeControlKeepNewlines(s string) string { return neutralizeControlEx
 func neutralizeControlExcept(s string, keepNewline bool) string {
 	clean := true
 	for _, r := range s {
-		if needsControlEscape(r) && !(keepNewline && r == '\n') {
+		if needsControlEscape(r) && (!keepNewline || r != '\n') {
 			clean = false
 			break
 		}
@@ -164,7 +164,27 @@ func neutralizeControlExcept(s string, keepNewline bool) string {
 }
 
 func needsControlEscape(r rune) bool {
-	return (r < 0x20 && r != '\t') || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == 0x2028 || r == 0x2029
+	return (r < 0x20 && r != '\t') || r == 0x7f || (r >= 0x80 && r <= 0x9f) ||
+		r == 0x2028 || r == 0x2029 || isInvisibleFormatControl(r)
+}
+
+// isInvisibleFormatControl reports the Unicode format characters a terminal or a
+// reader cannot see but acts on (founder ruling R2-X-SEC-04): the bidirectional
+// controls, which reorder the visible text of a line (U+202A-202E embeddings and
+// overrides, U+2066-2069 isolates, U+200E/U+200F marks), and the zero-width
+// characters, which hide a difference between identical-looking values
+// (U+200B-200D and the byte-order mark U+FEFF). A precise list, not a category
+// test: ordinary non-ASCII text is left alone.
+func isInvisibleFormatControl(r rune) bool {
+	switch {
+	case r >= 0x202A && r <= 0x202E, r >= 0x2066 && r <= 0x2069:
+		return true
+	case r == 0x200E, r == 0x200F:
+		return true
+	case r >= 0x200B && r <= 0x200D, r == 0xFEFF:
+		return true
+	}
+	return false
 }
 
 // consoleSafe returns the message and fields as the CONSOLE sink should print

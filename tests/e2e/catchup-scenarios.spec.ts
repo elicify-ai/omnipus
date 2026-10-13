@@ -49,7 +49,7 @@
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected, assistantMessages, userMessages } from './fixtures/selectors'
-import { freshChat } from './fixtures/session-setup'
+import { freshChat, openSessionByDeepLink, originOf } from './fixtures/session-setup'
 import { installFreezeProxy } from './helpers/freezeProxy'
 import { GatewayProcess } from './fixtures/gateway-process'
 
@@ -175,85 +175,28 @@ async function waitTurnDoneAfterReload(page: Page) {
 // Showing it is a real user action; never seed the sidebar store or press Escape
 // to dismiss it while a turn is running (Escape can cancel the turn).
 
-// A session's sidebar row (Sidebar.tsx's SidebarSessionRow) is a ghost
-// Button whose accessible name is the session's title — there is no
-// dedicated testid per row, the title text IS the selector.
-// Real-browser follow-up (orchestrator, scenarios b and c — traced from the
-// actual trace.zip execution log, not guessed): scoping the row lookup to
-// the WHOLE page matched the WRONG element. The header's "My Workspace"
-// workspace tab apparently ALSO carries aria-current="page" (the tablist's
-// own "currently selected view" semantics) and, being earlier in the DOM
-// than the sidebar drawer, `.first()` picked IT — so a captured "title"
-// was literally the string "My Workspace", and clicking it again later hit
-// the SAME header tab, never a real session row. That explains both bugs
-// from one root cause: the drawer's onClose (wired only to an actual
-// session row's own click handler) never fired, so its backdrop stayed
-// open indefinitely — not a transient fade, exactly what was observed.
-// Scoped to the drawer panel specifically (`#sidebar-overlay-panel`,
-// Sidebar.tsx) so nothing outside it can ever match.
-const sidebarPanel = (page: Page) => page.getByRole('navigation', { name: 'Main navigation' })
-const sessionRowByTitle = (page: Page, title: string) => sidebarPanel(page).getByRole('button')
-  .filter({ has: page.getByText(title, { exact: true }) })
-
-async function ensureSidebarOpen(page: Page) {
-  if (!(await sidebarPanel(page).isVisible())) {
-    await page.getByRole('button', { name: 'Show sidebar', exact: true }).click()
-  }
-  await expect(sidebarPanel(page)).toBeVisible()
+// Capture which chat is on screen so it can be reopened later (see below).
+async function activeChatSessionId(page: Page): Promise<string> {
+  // The sidebar no longer lists per-session rows, so a chat has no sidebar
+  // title to capture and re-find (the old read - the last
+  // `button[aria-current="page"]` - now only ever matches the workspace header
+  // "My Workspace"). The stable handle for "this chat" is the session id the
+  // chat surface itself is bound to (ChatScreen stamps data-active-session-id).
+  const bound = page.locator('[data-active-session-id]').first()
+  await expect(bound).toBeAttached({ timeout: 15_000 })
+  const id = ((await bound.getAttribute('data-active-session-id')) ?? '').trim()
+  expect(id, 'the chat surface must be bound to a session').not.toBe('')
+  return id
 }
 
-// The currently-active row carries aria-current="page" (SidebarSessionRow).
-// Used to capture chat A's real, server-assigned title (which is a model-
-// generated summary of the first message, not the prompt text verbatim —
-// reading it back from the DOM, rather than guessing what the title will
-// be, is what makes re-selecting the row later reliable).
-async function activeSidebarTitle(page: Page): Promise<string> {
-  // Real-browser follow-up (orchestrator, traced from the actual trace.zip
-  // execution log): even scoped to the sidebar panel, `aria-current="page"`
-  // ALSO matches the workspace accordion header (Sidebar.tsx's own
-  // per-project button — "you're currently in this workspace"), which
-  // renders BEFORE its session tree in DOM order. `.first()` picked that
-  // header, not the actual active session row (SidebarSessionRow, line
-  // ~987 of that file) — captured title was literally "My Workspace",
-  // which later matched the SAME header again, never a real session,
-  // leaving the drawer's onClose never triggered (explains scenario c's
-  // "not a 150ms fade, the layer stays" too — same root cause). The
-  // active SESSION row renders AFTER the workspace header within its
-  // expanded accordion section, so `.last()` is the real one.
-  await ensureSidebarOpen(page)
-  const row = sidebarPanel(page).locator('button[aria-current="page"]').last()
-  await expect(row).toBeVisible({ timeout: 10_000 })
-  // The sibling lifecycle label changes from Working to Done; it is not part
-  // of the stable session title and cannot be used to locate the row later.
-  const title = (await row.locator('span.truncate').innerText()).trim()
-  await row.focus()
-  await page.keyboard.press('ControlOrMeta+b')
-  await expect(sidebarPanel(page)).toBeHidden()
-  return title
-}
-
-// Real sidebar navigation (orchestrator follow-up — the previous draft left
-// this "for the orchestrator to wire once runnable"): open the drawer,
-// click the session's OWN row by its title. Escape is never used here — it
-// cancels the running turn (ADR-057's cancel state machine), which would
-// defeat the entire point of this scenario.
-async function switchToSessionByTitle(page: Page, title: string) {
-  // Real-browser follow-up (orchestrator, traced locally against a real
-  // gateway): the sidebar title is a plain 60-char truncation of the first
-  // message (confirmed: a captured title's own .length was exactly 60,
-  // ending in a literal "..." baked into the text, not a CSS-only
-  // truncation). Every scenario in this file that calls startLongTurn uses
-  // the SAME hardcoded LONG_PROMPT, so once more than one of them has run
-  // against the SAME gateway process (true for CI too — the whole spec
-  // file runs sequentially against one worker's gateway, not just this
-  // isolated local run) their titles collide exactly, and getByRole's
-  // {exact: true} — needing a single match to click — hangs against the
-  // resulting ambiguity instead of erroring cleanly. `.first()` is the most
-  // recently created matching session (the sidebar lists newest-first),
-  // which is always the one THIS test just made.
-  await ensureSidebarOpen(page)
-  await sessionRowByTitle(page, title).first().click()
-  await expect(sidebarPanel(page)).toBeHidden()
+// Go (back) to a chat through the SPA's own /#/sessions/<id> route. Not
+// page.goto of a different document: the router is a hash router
+// (createHashHistory, src/main.tsx), so a same-origin hash goto is a
+// same-document navigation - the in-memory cursor survives, which the
+// "no reload" marker check in scenario c proves. Escape is never used - it
+// cancels the running turn (ADR-057).
+async function switchToSession(page: Page, sessionId: string) {
+  await openSessionByDeepLink(page, sessionId, originOf(page))
 }
 
 // Round-3/round-4 open item (orchestrator, both rounds): the previous version
@@ -296,7 +239,7 @@ async function assertNoDuplicateOrGapText(page: Page, before: string, after: str
   // already moved off session A's own deep link, this bare reload had
   // nothing to restore it. Reopen the same way when a title is given.
   if (title !== undefined && (await assistantMessages(page).count()) === 0) {
-    await switchToSessionByTitle(page, title)
+    await switchToSession(page, title)
   }
   await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
   const reloaded = (await bubbleText(assistantMessages(page).first())).trim()
@@ -353,7 +296,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       // behaviour too, not something to change the product for). Capture
       // chat A's real, server-assigned sidebar title BEFORE the reload, the
       // same way scenario c already does, so it can be reopened afterward.
-      const titleA = await activeSidebarTitle(page)
+      const titleA = await activeChatSessionId(page)
       await expect(stopButton(page), 'freeze begins during the real turn, not after done').toBeVisible()
       await freeze.freeze()
       await page.waitForTimeout(60_000)
@@ -365,7 +308,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       // Reopen chat A via the sidebar — the same real navigation scenario c
       // uses, not page.goto (a second reload would just repeat the same
       // welcome-screen landing).
-      await switchToSessionByTitle(page, titleA)
+      await switchToSession(page, titleA)
       await waitTurnDoneAfterReload(page)
       await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
       const after = (await bubbleText(assistantMessages(page).first())).trim()
@@ -383,8 +326,8 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       await expect(stopButton(page), 'the turn must still be running before the outage or switch').toBeVisible()
       // Capture chat A's real, server-assigned sidebar title BEFORE switching
       // away — this is what makes finding it again reliable (see
-      // activeSidebarTitle's own comment on why this beats guessing).
-      const titleA = await activeSidebarTitle(page)
+      // activeChatSessionId's own comment on why this beats guessing).
+      const titleA = await activeChatSessionId(page)
       // Switch to a fresh chat B while chat A's turn is still running
       // server-side (the turn never depends on a UI connection, ADR-082 P1 —
       // switching the VIEW away changes nothing about it).
@@ -413,15 +356,18 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       // clear the in-memory cursor and defeat the point of this scenario; see
       // reconnect-mid-turn.spec.ts's own S-11 note on the same trap). Escape
       // is never pressed — it cancels the running turn.
-      await switchToSessionByTitle(page, titleA)
+      await switchToSession(page, titleA)
       await expect(stopButton(page), 'reattach reconstructs the still-running turn').toBeVisible()
       // The window marker set before the switch survived: no document reload
       // happened across the away-and-back round trip, so the catch-up below
       // really exercises the in-memory cursor. A reload would silently turn
       // this scenario into the post-reload replay path — the exact weaker
       // behaviour this scenario exists to distinguish — and pass vacuously.
-      await expect(
-        page.evaluate(() => (window as { navCatchupMark?: string }).navCatchupMark),
+      // awaited: expect(<Promise>).toBe(...) compares the Promise object itself
+      // ("Received: Promise {}"), so this check could never pass - the scenario
+      // never got far enough before to expose it.
+      expect(
+        await page.evaluate(() => (window as { navCatchupMark?: string }).navCatchupMark),
         'no reload across the away-and-back switch',
       ).toBe('scenario-c')
       // Only NOW does the DOM reflect chat A again, so only now does

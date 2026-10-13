@@ -93,23 +93,26 @@ func TestSteeredHelperWithGoal_SetGoalRefusedAndRecordUntouched(t *testing.T) {
 
 	after, err := resolveGoalRecordStore().Get(rec.GoalRef)
 	require.NoError(t, err)
-	// Compare what set_goal would change, not the whole record: LastActivityAt and
-	// the round counters move with any turn, refused or not, so a whole-record
-	// comparison is timing-dependent (it failed once on the CI worker).
-	require.Equal(t, goalSemantics(before), goalSemantics(after),
-		"a refused set_goal must leave the helper's goal record (definition, criteria, DoD, state, binding) untouched")
+	require.Equal(t, goalRecordForCompare(*before), goalRecordForCompare(*after),
+		"a refused set_goal must leave the helper's goal record untouched in EVERY field the turn itself does not move")
 }
 
-// goalSemantics is the part of a goal record set_goal can amend or the helper's
-// launch fixed: its definition, criteria, definition of done, source, owner,
-// state and session binding. Activity stamps and counters are excluded.
-func goalSemantics(g *goal.Goal) map[string]any {
-	return map[string]any{
-		"goal_id": g.GoalID, "owner_kind": g.OwnerKind, "owner_id": g.OwnerID,
-		"source": g.Source, "prompt": g.Prompt, "definition": g.Definition,
-		"criteria": g.Criteria, "dod": g.DoD, "max_rounds": g.MaxRounds,
-		"state": g.State, "active_session_id": g.ActiveSessionID,
-	}
+// goalRecordForCompare returns the WHOLE record with only the fields the turn
+// itself legitimately moves blanked, so the comparison is against everything
+// else rather than against a hand-picked allowlist.
+//
+// R2-S5-03: the previous goalSemantics() named eleven fields and silently
+// dropped the rest — SupersededCriteria, TerminalHistory, LatestClaim,
+// LatestVerdict, Round, AttemptsUsed, ZeroOutputPushes, QuestionRoundsUsed,
+// StartedAt, LatestReason, TerminalReason, the routing pair. A refused
+// set_goal that mutated any of those passed, which is exactly the regression
+// this test exists to catch. The allowlist is replaced by a DENY list of one:
+// LastActivityAt is the record's activity stamp and moves on any turn, refused
+// or not (the reason the whole-record comparison was narrowed in the first
+// place); everything else must be byte-identical across a refusal.
+func goalRecordForCompare(g goal.Goal) goal.Goal {
+	g.LastActivityAt = time.Time{}
+	return g
 }
 
 // A nested turn must never carry its parent helper's goal-owner marker: a

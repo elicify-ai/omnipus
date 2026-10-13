@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -63,6 +64,65 @@ func peakRSSBytes(r *syscall.Rusage) int64 {
 
 func mib(b int64) string { return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20)) }
 
+// ---------------------------------------------------------------------------
+// WHY LINUX READS THE CHILD'S OWN VmHWM, NOT wait4's ru_maxrss
+//
+// On Linux the child's ru_maxrss is NOT the child's own peak. Go starts the
+// child with a shared address space and exec then folds the OLD address space's
+// high-water mark into the child's rusage, so wait4 reports max(the parent's
+// peak so far, the child's own peak). The parent has just built the 50,000-record
+// corpus, so the "child" figure was the parent's peak: it was identical across
+// the idle, b2 and b1 phases (PR 1260: 66.6 MiB in all three, 50.8 MiB in all
+// three on a quiet machine) whatever the phase did, and it moved with the
+// parent's garbage-collection timing and the runner rather than with the query
+// path. The kernel exposes the child's own peak as VmHWM in /proc/self/status,
+// read by the child at the end of its phase and reported on a line the parent
+// parses. ru_maxrss is still logged beside it, for the record, never asserted.
+//
+// A missing, unparsable or zero VmHWM is a test failure, never a pass. Platforms
+// without /proc/self/status (darwin) keep the wait4 figure, which does not carry
+// this quirk there.
+// ---------------------------------------------------------------------------
+
+const vmHWMPrefix = "VMHWM:"
+
+// readOwnVmHWM returns this process's own peak resident set, in bytes, from
+// /proc/self/status. It fails (rather than returning 0) on anything it cannot
+// read and parse.
+func readOwnVmHWM() (int64, error) {
+	raw, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return 0, fmt.Errorf("read /proc/self/status: %w", err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		rest, ok := strings.CutPrefix(line, "VmHWM:")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest) // "  51234 kB"
+		if len(fields) != 2 || fields[1] != "kB" {
+			return 0, fmt.Errorf("unexpected VmHWM line %q", line)
+		}
+		kb, err := strconv.ParseInt(fields[0], 10, 64)
+		if err != nil || kb <= 0 {
+			return 0, fmt.Errorf("unusable VmHWM value in %q", line)
+		}
+		return kb * 1024, nil
+	}
+	return 0, fmt.Errorf("no VmHWM line in /proc/self/status")
+}
+
+// childVmHWM extracts the VmHWM line the child printed.
+func childVmHWM(out string) (int64, bool) {
+	for _, line := range strings.Split(out, "\n") {
+		if i := strings.Index(line, vmHWMPrefix); i >= 0 {
+			v, err := strconv.ParseInt(strings.TrimSpace(line[i+len(vmHWMPrefix):]), 10, 64)
+			return v, err == nil && v > 0
+		}
+	}
+	return 0, false
+}
+
 // TestMemory_TheQueryPathStaysInsideTheBudget measures idle, B2's 10,000
 // survivors and B1's 50,000 evaluated candidates.
 func TestMemory_TheQueryPathStaysInsideTheBudget(t *testing.T) {
@@ -90,12 +150,23 @@ func TestMemory_TheQueryPathStaysInsideTheBudget(t *testing.T) {
 				t.Fatalf("this platform does not report rusage; the budget cannot be measured here")
 			}
 			peak := peakRSSBytes(usage)
+			ruMaxRSS := peak
+			source := "wait4 ru_maxrss"
+			if runtime.GOOS == "linux" {
+				// The child's OWN peak (see the block above). Never fall back to
+				// the inherited ru_maxrss figure: a missing value fails the test.
+				own, ok := childVmHWM(string(out))
+				if !ok {
+					t.Fatalf("the %s child reported no usable VmHWM; refusing to pass on the inherited ru_maxrss figure\n%s", phase, out)
+				}
+				peak, source = own, "child VmHWM"
+			}
 
 			// The child prints what it actually did, so a measurement of nothing
 			// cannot pass as a measurement of the query path.
 			work := childWork(string(out))
-			t.Logf("PEAK RSS %s = %s (%d bytes), budget %s, %s",
-				phase, mib(peak), peak, mib(budgetBytes), work)
+			t.Logf("PEAK RSS %s = %s (%d bytes, %s), wait4 ru_maxrss %s, budget %s, %s",
+				phase, mib(peak), peak, source, mib(ruMaxRSS), mib(budgetBytes), work)
 			if work == "" {
 				t.Fatalf("the child reported no work; this measurement proves nothing\n%s", out)
 			}
@@ -246,6 +317,14 @@ func runMemoryPhase(t *testing.T, phase, dbPath string) {
 
 	default:
 		t.Fatalf("unknown measurement phase %q", phase)
+	}
+
+	if runtime.GOOS == "linux" {
+		hwm, err := readOwnVmHWM()
+		if err != nil {
+			t.Fatalf("the child cannot read its own peak RSS: %v", err)
+		}
+		fmt.Printf("%s %d\n", vmHWMPrefix, hwm)
 	}
 }
 

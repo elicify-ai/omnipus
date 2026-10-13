@@ -47,3 +47,16 @@ func TestChatStream_StreamEndingWithoutMessageStopIsAnErrorNotAnAnswer(t *testin
 		t.Fatalf("a stream cut off before message_stop was returned as an answer: %+v", resp)
 	}
 }
+
+// R2-S1-05: a compatible endpoint that finishes with message_delta (stop_reason)
+// but omits message_stop is complete, not cut off.
+func TestChatStream_StopReasonWithoutMessageStopIsComplete(t *testing.T) {
+	p := anthropicScriptedStream(t, evMessageStart, evBlockStart, evTextDelta,
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n")
+	resp, err := p.ChatStream(context.Background(), []Message{{Role: "user", Content: "hi"}},
+		nil, "claude-sonnet-4-6", map[string]any{"max_tokens": 256}, nil, nil)
+	if err != nil || resp.Content != "I will now run the command:" {
+		t.Fatalf("a stream with stop_reason but no message_stop must complete; got %+v err %v", resp, err)
+	}
+}

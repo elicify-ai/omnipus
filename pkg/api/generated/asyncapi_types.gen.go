@@ -579,7 +579,7 @@ type ErrorFrame struct {
 	Payload *ErrorPayload `json:"payload,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Only meaningful when session_id is set — a global error has no session to sequence. Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ErrorFrame.yaml.
 	Seq *int64 `json:"seq,omitempty"`
-	// Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific session. A message-scoped refusal (client_message_id set, no first_message_error) carries the chat the message was sent from.
+	// Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific session. A message-scoped refusal (client_message_id set, no first_message_error) of a message sent into an existing chat carries that chat. A send that names no chat (the first message of a new chat) has none to name, so its errors carry no session_id.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
 }

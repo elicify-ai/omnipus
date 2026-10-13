@@ -50,3 +50,47 @@ func TestStopSession_EveryAttemptIsAuditedOnceWhateverTheSessionState(t *testing
 		})
 	}
 }
+
+// R2-S1-09: a Stop attempt whose generation was already superseded, or whose
+// RequestCancel fails early, still happened: it writes its audit row, exactly
+// once.
+func TestRequestCancel_EarlyReturnsStillAuditTheAttemptExactlyOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		recGen     int
+		scopeGen   int
+		wantErr    bool
+		wantNewer  bool
+		persistRec bool
+	}{
+		{"superseded generation", 3, 1, false, true, true},
+		{"no carried selection", 1, 1, true, false, true},
+		{"lifecycle record unreadable", 0, 1, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			al := newCancelTestAgentLoop(t)
+			auditDir := t.TempDir()
+			al.auditLogger = newAuditLoggerForCancelTest(t, auditDir)
+			lc := session.NewLifecycleStore(t.TempDir())
+			al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), lc)
+			if tc.persistRec {
+				require.NoError(t, lc.Persist(&session.LifecycleRecord{
+					SessionID: "sess-early", Generation: tc.recGen, State: session.LifecycleRunning,
+					OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: "mia",
+				}))
+			}
+			out, err := al.RequestCancel(context.Background(),
+				CancelScope{SessionID: "sess-early", TurnOnly: true, Generation: tc.scopeGen},
+				CancelCanceller{UserID: "alice", Channel: "web"}, CancelHooks{})
+			require.Equal(t, tc.wantErr, err != nil, "err=%v", err)
+			require.Equal(t, tc.wantNewer, out.SkippedNewerGeneration)
+			n := 0
+			for _, ev := range readCancelAuditEvents(t, auditDir) {
+				if ev == audit.EventTurnCancelAttempt {
+					n++
+				}
+			}
+			require.Equal(t, 1, n, "the attempt must be audited exactly once")
+		})
+	}
+}

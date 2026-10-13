@@ -108,8 +108,16 @@ func TestDeliverExternalCLIInstruction_EnqueueRunsOutsideTheHolderLock(t *testin
 			}
 		}
 	}
-	require.NotZero(t, enqueues,
-		"instrument check: the walk must find the enqueue call (directly or through a helper)")
+	// R2-S5-07: back to an EXACT count. One call in this function may reach the
+	// durable enqueue — the delivery's own, outside the lock. The earlier
+	// NotZero loosened that to "at least one", so a SECOND enqueue (a helper
+	// wrapping it, called anywhere in the function) went uncounted here; the
+	// locked-region scan below is a different check and does not replace this
+	// one. The reachability walk is what makes the count meaningful: it catches
+	// a helper that wraps the enqueue under any name.
+	require.Equal(t, 1, enqueues,
+		"exactly one call in this function may reach the durable enqueue (the delivery's own, outside the lock); "+
+			"a second one, direct or through a helper, is a regression")
 	require.Equal(t, 0, heldAtEnqueue, "the durable enqueue must not run under the holder lock")
 
 	// R1 delta T7: the walk above catches a DIRECT enqueue under the lock, but a
@@ -169,10 +177,11 @@ func agentPackageCallGraph(t *testing.T) map[string][]string {
 		}
 		fset := token.NewFileSet()
 		file, perr := parser.ParseFile(fset, p, nil, 0)
-		if perr != nil {
-			// A source this guard cannot parse is not this guard's finding.
-			continue
-		}
+		// R2-S5-07: a package source that does not parse must FAIL this guard,
+		// not be skipped. Skipping it empties the call graph for that file, and
+		// reachability through anything it defines then reads as "cannot reach
+		// the enqueue" — the guard would pass while checking nothing.
+		require.NoError(t, perr, "a package source failed to parse, so the call graph is incomplete: %s", p)
 		for _, d := range file.Decls {
 			fn, ok := d.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {

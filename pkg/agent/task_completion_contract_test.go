@@ -254,10 +254,26 @@ func waitForCompletionContractTerminal(t *testing.T, al *AgentLoop, taskID strin
 			if sessStore == nil {
 				return got
 			}
-			if meta, merr := sessStore.GetMeta(got.SessionID); merr == nil && meta.Status == session.StatusArchived {
+			// The session's FINAL status is the lifecycle mirror of the task's
+			// outcome (lifecycle_bridge.go::lifecycleToUnifiedStatus, sub-agent
+			// control plane ADR D4/MAJ-009): a completed run mirrors to
+			// StatusArchived, a FAILED run to StatusFailed. completeTaskWithResult
+			// first writes StatusArchived directly and finalizeTaskLifecycle then
+			// mirrors the real outcome over it, so for a failed task "archived" is
+			// only the transient state BEFORE the last write. A fast scheduler
+			// (macOS) happens to poll inside that window; a slower one (the Linux
+			// worker) never does and waited for a status that is never final.
+			// Every fixture wires the lifecycle store like the gateway does at boot,
+			// so this expectation is strict: a failed task's session must end
+			// "failed", never "archived".
+			wantStatus := session.StatusArchived
+			if got.Status == task.StatusFailed {
+				wantStatus = session.StatusFailed
+			}
+			if meta, merr := sessStore.GetMeta(got.SessionID); merr == nil && meta.Status == wantStatus {
 				return got
 			}
-			// Terminal, but the session archive write hasn't landed yet —
+			// Terminal, but the session's final status write hasn't landed yet —
 			// keep polling rather than returning early.
 		}
 		time.Sleep(20 * time.Millisecond)

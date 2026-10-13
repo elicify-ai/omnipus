@@ -2716,8 +2716,9 @@ components:
           type: string
           maxLength: 255
           description: 'Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific
-            session. A message-scoped refusal (client_message_id set, no first_message_error) carries the chat the
-            message was sent from.
+            session. A message-scoped refusal (client_message_id set, no first_message_error) of a message sent
+            into an existing chat carries that chat. A send that names no chat (the first message of a new
+            chat) has none to name, so its errors carry no session_id.
 
             '
         message:

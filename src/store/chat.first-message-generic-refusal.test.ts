@@ -223,7 +223,7 @@ describe('#1090 C3 — generic correlated first-message refusals', () => {
       .toStrictEqual(sentBefore)
   })
 
-  // C2 contract (ARCHITECT-C2-contract.md, decided 2026-10-11; R3-CONSOLIDATED
+  // C2 contract (record: docs/internal/architecture/ADR-20261012-session-core-delta-amendments-c2-r1-2.md, decided 2026-10-11; R3-CONSOLIDATED
   // row C2): an error frame carrying session_id AND client_message_id with no
   // first_message_error is a MESSAGE-SCOPED refusal — it renders a notice in
   // its chat and must NOT end the turn; that complement is asserted in

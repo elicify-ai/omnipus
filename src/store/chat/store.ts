@@ -5,7 +5,7 @@ import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
 import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
-import { recipientAddressHoldsQueue } from './recipientSend'
+import { recipientAddressHoldsQueue, setRosterReleaseDrain } from './recipientSend'
 import { registerWorkspaceEntryQueueResume } from '@/store/session/workspaceEntryFlow'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -806,6 +806,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
 // Same cycle-break registration as session/chat foreground callbacks. Entry
 // and New chat resume only AFTER their coherent destination is committed.
 registerWorkspaceEntryQueueResume(() => useChatStore.getState().drainOutboundQueue())
+// R2-S3-02: the team list loading releases an @-message held on it.
+setRosterReleaseDrain(() => useChatStore.getState().drainOutboundQueue())
 
 // Expose syncForeground so setActiveSession can call it after switching sessions.
 // Avoiding a direct import of the session store here to keep the cycle-break intact.

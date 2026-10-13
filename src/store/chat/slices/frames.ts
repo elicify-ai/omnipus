@@ -293,6 +293,14 @@ function applySeqGate(
   return 'drop-or-gap'
 }
 
+// R2-S3-05: a copy of an idle-mark set without one call id.
+function withoutIdleMark(marks: Record<string, true> | undefined, callId: string): Record<string, true> | undefined {
+  if (!marks || !(callId in marks)) return marks
+  const rest = { ...marks }
+  delete rest[callId]
+  return rest
+}
+
 // ADR-091 D7/D10 + #823 Opus review round 2 item 1 ("update moved tools by
 // call_id"): applies a tool_call_result to this session's own flat tool
 // call. The live entry can be gone not because this result is genuinely
@@ -311,19 +319,27 @@ function applyToolCallResultFrame(
   clampedResult: ReturnType<typeof clampToolResult>,
 ): Partial<SessionChatState> {
   if (!b.toolCalls[frame.call_id]) {
+    // This call no longer has a live entry (baked or unmatched), so its idle
+    // mark - if it had one - can never be released by a live result. Drop it
+    // here, or it would later let an unrelated lone tool result blink Stop off
+    // mid-turn (R2-S3-05).
+    const idleArmedToolCalls = withoutIdleMark(b.idleArmedToolCalls, frame.call_id)
     for (const id of b.messageOrder) {
       const msg = b.messagesById[id]
       const idx = msg?.tool_calls?.findIndex((tc) => tc.id === frame.call_id) ?? -1
       if (idx === -1) continue
-      return produce(b, (draft) => {
-        const tc = draft.messagesById[id].tool_calls![idx]
-        tc.result = clampedResult
-        tc.status = frame.status ?? 'success'
-        tc.duration_ms = frame.duration_ms
-        tc.error = frame.error
-      }) as Partial<SessionChatState>
+      return {
+        ...(produce(b, (draft) => {
+          const tc = draft.messagesById[id].tool_calls![idx]
+          tc.result = clampedResult
+          tc.status = frame.status ?? 'success'
+          tc.duration_ms = frame.duration_ms
+          tc.error = frame.error
+        }) as Partial<SessionChatState>),
+        idleArmedToolCalls,
+      }
     }
-    return appendUnmatchedToolError(b, frame, clampedResult)
+    return { ...appendUnmatchedToolError(b, frame, clampedResult), idleArmedToolCalls }
   }
   return produce(b, (draft) => {
     const tc = draft.toolCalls[frame.call_id]
@@ -1904,7 +1920,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               break
             }
 
-            // C2 (contract: ARCHITECT-C2-contract.md, decided 2026-10-11):
+            // C2 (decided 2026-10-11; record: docs/internal/architecture/ADR-20261012-session-core-delta-amendments-c2-r1-2.md):
             // a MESSAGE-SCOPED refusal — the frame carries session_id AND
             // client_message_id and no first_message_error. The server
             // refused ONE message (an @-addressed send, or any
@@ -1932,7 +1948,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   content: llmError ? translatedMessage : safeMessage,
                   timestamp: new Date().toISOString(),
                   status: 'error',
-                  isStreaming: false,
+                  isStreaming: false, refusalNotice: true,
                   ...(llmError
                     ? {
                         errorCode: llmError.code,

@@ -24,7 +24,7 @@ const monogramFigureError = "figure must be Robot, Man, Woman, Omnipus, or Monog
 func TestAgentIdentity_MonogramRoundTripsOnCreateAndUpdate(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	created := postAgent(t, api, `{"name":"Monogram Created","type":"Main","soul":"monogram-soul","figure":"Monogram","role":"general","color":"#3B82F6"}`)
+	created := postAgent(t, api, `{"name":"Monogram Created","type":"Main","soul":"monogram-soul","figure":"Monogram","role":"general","color":"#6E8BA8"}`)
 	require.Equal(t, http.StatusCreated, created.Code, "body: %s", created.Body.String())
 	body := decodeObject(t, created.Body.Bytes())
 	assert.Equal(t, "Monogram", body["figure"], "create response must echo the accepted figure")
@@ -47,7 +47,7 @@ func TestAgentIdentity_MonogramWrongCaseRejectedOnUpdate(t *testing.T) {
 	stateBefore, err := agentstore.New(api.homePath).ReadState("test-agent")
 	require.NoError(t, err)
 
-	rec := putAgent(t, api, "test-agent", `{"figure":"monogram","role":"writer","color":"#22D3EE","description":"must not save"}`)
+	rec := putAgent(t, api, "test-agent", `{"figure":"monogram","role":"writer","color":"#4F8A80","description":"must not save"}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "wrong-case figure must reject; body: %s", rec.Body.String())
 	assert.Equal(t, map[string]any{"error": monogramFigureError}, decodeObject(t, rec.Body.Bytes()), "published 400 text is exact-case")
 	assert.Equal(t, storedBefore, savedAgent(t, api, "test-agent"), "a rejected figure must not persist valid siblings")
@@ -64,7 +64,7 @@ func TestAgentIdentity_MonogramWrongCaseRejectedOnCreate(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	before := agentNameSet(t, api)
 
-	rec := postAgent(t, api, `{"name":"Bad Monogram Case","type":"Main","soul":"bad-soul","figure":"monogram","role":"general","color":"#3B82F6"}`)
+	rec := postAgent(t, api, `{"name":"Bad Monogram Case","type":"Main","soul":"bad-soul","figure":"monogram","role":"general","color":"#6E8BA8"}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "wrong-case figure must reject on create; body: %s", rec.Body.String())
 	assert.Equal(t, map[string]any{"error": monogramFigureError}, decodeObject(t, rec.Body.Bytes()))
 	assert.Equal(t, before, agentNameSet(t, api), "an invalid figure must not create an agent")
@@ -74,7 +74,7 @@ func TestAgentIdentity_MonogramWrongCaseRejectedOnCreate(t *testing.T) {
 // valid siblings -- the AgentFigure schema description's core promise.
 func TestAgentIdentity_UpdateNullFigureIsZeroWrite(t *testing.T) {
 	api := buildExecutorTestAPI(t)
-	created := postAgent(t, api, `{"name":"Null Figure Editable","type":"Main","soul":"editable-soul","figure":"Man","role":"developer","color":"#3B82F6"}`)
+	created := postAgent(t, api, `{"name":"Null Figure Editable","type":"Main","soul":"editable-soul","figure":"Man","role":"developer","color":"#6E8BA8"}`)
 	require.Equal(t, http.StatusCreated, created.Code, "body: %s", created.Body.String())
 	id, ok := decodeObject(t, created.Body.Bytes())["id"].(string)
 	require.True(t, ok, "created identity id must be a string")
@@ -82,7 +82,7 @@ func TestAgentIdentity_UpdateNullFigureIsZeroWrite(t *testing.T) {
 	stateBefore, err := agentstore.New(api.homePath).ReadState(id)
 	require.NoError(t, err)
 
-	rec := putAgent(t, api, id, `{"figure":null,"role":"writer","color":"#22D3EE","description":"must not save"}`)
+	rec := putAgent(t, api, id, `{"figure":null,"role":"writer","color":"#4F8A80","description":"must not save"}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "an explicit null figure rejects the whole update; body: %s", rec.Body.String())
 	assert.Equal(t, map[string]any{"error": monogramFigureError}, decodeObject(t, rec.Body.Bytes()))
 	assert.Equal(t, storedBefore, savedAgent(t, api, id), "null figure must not persist the valid role/colour siblings")

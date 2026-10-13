@@ -81,3 +81,72 @@ func TestRecipient_RunnableRecipientIsNeverReportedHeld(t *testing.T) {
 
 	assert.Equal(t, []string{"received"}, statusStates(t, wc, 400*time.Millisecond))
 }
+
+// R2-S2-02: the held tick is followed by "working" when the held request is
+// finally delivered to the (resumed) recipient, through the same hub path.
+func TestRecipient_HeldRequestDeliveryMovesTheSendersRowToWorking(t *testing.T) {
+	h, b, _ := newRecipientHandler(t)
+	wc := makeTestConn()
+	sid := mintOwnerChat(t, h, b, wc)
+	bindTestConnToSession(h, "chat-owner", sid, wc)
+	stopRecipientMain(t, h, "ws-1", "ray")
+	statusStates(t, wc, 50*time.Millisecond)
+
+	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray wake up", "ann", nil, "", "ws-1", false, "held-cid-3", nil, &to, wc)
+	require.Equal(t, []string{"received", "held"}, statusStates(t, wc, 300*time.Millisecond))
+
+	recvMain, err := session.MainSessionID("ws-1", "ray")
+	require.NoError(t, err)
+	entries, err := h.agentLoop.GetSessionStore().ReadTranscript(recvMain)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "the request sits in the recipient's main")
+
+	h.agentLoop.MarkRequestDeliveredForTest(recvMain, entries[0].ID)
+	assert.Equal(t, []string{"working"}, statusStates(t, wc, 300*time.Millisecond),
+		"delivery moves the row on exactly once, and never to failed")
+
+	h.agentLoop.MarkRequestDeliveredForTest(recvMain, entries[0].ID)
+	assert.Empty(t, statusStates(t, wc, 200*time.Millisecond), "a second delivery mark repeats nothing")
+}
+
+// R2-S2-03: a retried @-message answers with its CURRENT state, held included,
+// not a fresh "received".
+func TestRecipient_RetryOfAHeldMessageReplaysHeld(t *testing.T) {
+	h, b, _ := newRecipientHandler(t)
+	wc := makeTestConn()
+	sid := mintOwnerChat(t, h, b, wc)
+	bindTestConnToSession(h, "chat-owner", sid, wc)
+	stopRecipientMain(t, h, "ws-1", "ray")
+	statusStates(t, wc, 50*time.Millisecond)
+
+	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
+	send := func() {
+		h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray wake up", "ann", nil, "", "ws-1", false, "held-cid-4", nil, &to, wc)
+	}
+	send()
+	require.Equal(t, []string{"received", "held"}, statusStates(t, wc, 300*time.Millisecond))
+
+	send() // the SPA re-sends the same client_message_id
+	states := statusStates(t, wc, 300*time.Millisecond)
+	require.NotEmpty(t, states)
+	assert.Equal(t, "held", states[len(states)-1], "the replayed status is the current one; got %v", states)
+}
+
+// R2-S2-05: the request is recorded but its wake cannot be published: the row is
+// reported as waiting, never failed (a failed row invites a duplicate re-send).
+func TestRecipient_RecordedButWakeFailedIsHeldNotFailed(t *testing.T) {
+	h, b, _ := newRecipientHandler(t)
+	wc := makeTestConn()
+	sid := mintOwnerChat(t, h, b, wc)
+	bindTestConnToSession(h, "chat-owner", sid, wc)
+	statusStates(t, wc, 50*time.Millisecond)
+	b.Close() // every later PublishInbound fails
+
+	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray hello", "ann", nil, "", "ws-1", false, "held-cid-5", nil, &to, wc)
+
+	states := statusStates(t, wc, 300*time.Millisecond)
+	assert.NotContains(t, states, "failed", "a recorded request is not a failed one: %v", states)
+	assert.Equal(t, []string{"received", "held"}, states)
+}

@@ -1423,7 +1423,7 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 		"type": "Main",
 		"description": "A researcher",
 		"soul": "Research Bot soul",
-		"color": "#22D3EE",
+		"color": "#4F8A80",
 		"tools_cfg": {
 			"builtin": {
 				"policies": ` + mustPolicyJSON(t, reqPolicies) + `

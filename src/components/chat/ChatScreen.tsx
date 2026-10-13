@@ -108,8 +108,8 @@ import {
   UnansweredUserMessageStatus,
   ChatConnectionNotice,
   RestartInterruptedNotice,
-  UserMessageDeliveryStatus,
 } from './ConnectionStatus'
+import { RowDeliveryStatus } from './RowDeliveryStatus'
 
 function placementOf(message: ChatMessage): DelegationPlacementMessage {
   return {
@@ -267,7 +267,8 @@ export function UserMessage() {
           </div>
         ))}
         {storeMessage?.deliveryStatus && (storeMessage.firstSendStatus || storeMessage.deliveryStatus !== 'sending') && (
-          <UserMessageDeliveryStatus
+          <RowDeliveryStatus
+            content={storeMessage.content}
             state={storeMessage.deliveryStatus}
             firstSendStatus={storeMessage.firstSendStatus}
             agentName={agentName}
@@ -1024,7 +1025,8 @@ export function VirtualUserMessageRow({
           )
         )}
         {message.deliveryStatus && (message.firstSendStatus || message.deliveryStatus !== 'sending') && (
-          <UserMessageDeliveryStatus
+          <RowDeliveryStatus
+            content={message.content}
             state={message.deliveryStatus}
             firstSendStatus={message.firstSendStatus}
             agentName={agentName}

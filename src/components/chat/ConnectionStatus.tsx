@@ -172,7 +172,17 @@ function deliveryStateCopy(
   state: UserDeliveryState,
   agentName: string,
   isClearCommand: boolean,
+  connected: boolean,
 ): { label: string; tooltip: string; icon: React.ReactNode } {
+  if (state === 'queued' && isClearCommand && connected) {
+    // The connection is up, so a /clear still queued is one the server is
+    // holding (e.g. its agent is stopped) - "back online" would be false.
+    return {
+      label: `Waiting \u2014 your /clear is applied when ${agentName} runs it`,
+      tooltip: `Your /clear is waiting for ${agentName}. Nothing has been cleared yet; it is applied as soon as ${agentName} can run it.`,
+      icon: <Clock size={14} aria-hidden="true" />,
+    }
+  }
   if (state === 'queued') {
     return {
       label: 'Not sent yet, will be sent automatically',
@@ -287,7 +297,7 @@ export function UserMessageDeliveryStatus({
     )
   }
 
-  const copy = deliveryStateCopy(state, agentName, isClearCommand)
+  const copy = deliveryStateCopy(state, agentName, isClearCommand, connected)
 
   return (
     <div role="status" aria-live="polite" data-testid="user-message-delivery-status" className="flex min-h-8 items-center justify-end">

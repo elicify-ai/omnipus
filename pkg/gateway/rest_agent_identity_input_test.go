@@ -20,8 +20,8 @@ func TestAgentIdentity_PaletteCaseMatchesStrictValidation(t *testing.T) {
 			for _, tc := range []struct {
 				input, canonical string
 			}{
-				{"#fb923c", "#A97142"},
-				{"#22d3Ee", "#4F8A80"},
+				{"#a97142", "#A97142"},
+				{"#4f8A80", "#4F8A80"},
 				{"#123456", ""}, // Well-formed hex, not in the published palette.
 			} {
 				t.Run(fmt.Sprintf("strict=%t/%s/%s", strict, operation, tc.input), func(t *testing.T) {

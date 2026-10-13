@@ -231,6 +231,23 @@ func TestHandleCancel_SecondClickOnAlreadyClaimedTurn_SendsNoAckFrame(t *testing
 			"ClaimCancel just lost the race) and must NOT produce another ack "+
 			"frame; doing so would over-signal (saw stages %v)", secondStages)
 
+	// R2-S5-07: the ack filter above made a wrongly-emitted "detached" from the
+	// SECOND click invisible — only graceful/hard were counted, so any other
+	// stage the second click published went unnoticed. The first click's own
+	// cascade legitimately publishes ONE "detached" on the hub and conn2 may or
+	// may not still be subscribed when it lands, so the honest bound is "at
+	// most the first click's one": a second click that emitted its own would
+	// make it two.
+	detachedSeen := 0
+	for _, stage := range secondStages {
+		if stage == "detached" {
+			detachedSeen++
+		}
+	}
+	assert.LessOrEqual(t, detachedSeen, 1,
+		"at most the FIRST click's cascade may be observed here; a second click must not publish a "+
+			"cancel_stage frame of its own (saw stages %v)", secondStages)
+
 	cancelCtx()
 }
 

@@ -40,7 +40,7 @@ func TestAgentIdentity_UpdateBodyFailsClosed(t *testing.T) {
 					store := agentstore.New(api.homePath)
 					stateBefore, err := store.ReadState("test-agent")
 					require.NoError(t, err)
-					base := fmt.Sprintf(`{"revision":%q,"color":"#22D3EE","description":"must not partially save"}`, stateBefore.Revision)
+					base := fmt.Sprintf(`{"revision":%q,"color":"#4F8A80","description":"must not partially save"}`, stateBefore.Revision)
 					body := tc.body(base)
 					req := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
 					// Unknown length also exercises streamed bodies, not just a
@@ -92,7 +92,7 @@ func TestAgentIdentity_UpdateTransportTruncationIsZeroWrite(t *testing.T) {
 	store := agentstore.New(api.homePath)
 	stateBefore, err := store.ReadState("test-agent")
 	require.NoError(t, err)
-	body := fmt.Sprintf(`{"revision":%q,"color":"#22D3EE"}`, stateBefore.Revision)
+	body := fmt.Sprintf(`{"revision":%q,"color":"#4F8A80"}`, stateBefore.Revision)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", nil)
 	req.Body = io.NopCloser(incompleteAgentBody{Reader: strings.NewReader(body)})
 	rec := httptest.NewRecorder()

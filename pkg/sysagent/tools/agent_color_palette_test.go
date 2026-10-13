@@ -13,8 +13,7 @@ import (
 
 // S2-03 (combined review; architect ruling): create_agent and update_agent use
 // the same colour rule as REST - coreagent.CanonicalColor (AgentColor.yaml):
-// a palette value in any letter-case is stored uppercase, a previous-palette
-// value is mapped to its new equivalent, everything else (a well-formed hex
+// a palette value in any letter-case is stored uppercase, everything else (a well-formed hex
 // outside both sets such as #22C55E included) is refused.
 
 func createWithColor(t *testing.T, deps *systools.Deps, color string) (isErr bool, body string) {
@@ -43,7 +42,6 @@ func TestCreateAgent_ColorOutsideThePaletteIsRefused(t *testing.T) {
 func TestCreateAgent_ColorIsStoredCanonical(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"#6e8ba8", "#6E8BA8"}, // lower-case palette value
-		{"#3B82F6", "#6E8BA8"}, // previous palette (Blue -> Steel blue)
 	} {
 		deps, _ := newTestDepsWithHome(t)
 		isErr, body := createWithColor(t, deps, tc.in)
@@ -82,23 +80,65 @@ func TestUpdateAgent_ColorOutsideThePaletteIsRefusedAndNothingChanges(t *testing
 	}
 }
 
-func TestUpdateAgent_LegacyColorIsStoredCanonical(t *testing.T) {
-	deps, _ := newTestDeps(t)
-	store := agentstore.New(deps.Home)
+func TestToolsRefuseAColourOfTheRemovedPreviousPalette(t *testing.T) {
+	deps, _ := newTestDepsWithHome(t)
+	isErr, body := createWithColor(t, deps, "#3B82F6")
+	if !isErr {
+		t.Fatalf("a previous-palette colour is invalid now (greenfield, founder 2026-10-12): %s", body)
+	}
+
+	deps2, _ := newTestDeps(t)
+	store := agentstore.New(deps2.Home)
 	if err := store.Create("painter", &config.AgentConfig{ID: "painter", Name: "Painter"}); err != nil {
 		t.Fatal(err)
 	}
-	res := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id": "painter", "revision": currentAgentRevision(t, deps, "painter"), "color": "#9ca3af",
+	res := systools.NewAgentUpdateTool(deps2).Execute(context.Background(), map[string]any{
+		"id": "painter", "revision": currentAgentRevision(t, deps2, "painter"), "color": "#9ca3af",
 	})
-	if res.IsError {
-		t.Fatalf("a previous-palette colour must be accepted: %s", res.ForLLM)
+	if !res.IsError {
+		t.Fatalf("a previous-palette colour must be refused on update: %s", res.ForLLM)
 	}
-	ag, err := store.Get("painter")
-	if err != nil {
-		t.Fatal(err)
+}
+
+// Founder/coordinator ruling 2026-10-13: create_agent behaves like REST - an
+// omitted or empty colour defaults to Pewter (#8E9196), and the tool schema says
+// color is optional.
+func TestCreateAgent_EmptyOrOmittedColorDefaultsToPewter(t *testing.T) {
+	for _, args := range []map[string]any{
+		{"name": "No Colour A", "description": "d", "soul": "You help.", "model": "test/model"},
+		{"name": "No Colour B", "description": "d", "soul": "You help.", "model": "test/model", "color": ""},
+	} {
+		deps, _ := newTestDepsWithHome(t)
+		res := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
+		if res.IsError {
+			t.Fatalf("a missing colour defaults, it is not an error: %s", res.ForLLM)
+		}
+		id, _ := parseSuccess(t, res.ForLLM)["id"].(string)
+		ag, err := agentstore.New(deps.Home).Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ag.Color != "#8E9196" {
+			t.Errorf("stored colour %q, want the default Pewter #8E9196", ag.Color)
+		}
 	}
-	if ag.Color != "#8E9196" {
-		t.Errorf("stored %q, want #8E9196 (Grey -> Pewter)", ag.Color)
+}
+
+func TestCreateAgent_SchemaSaysColorIsOptional(t *testing.T) {
+	deps, _ := newTestDepsWithHome(t)
+	tool := systools.NewAgentCreateTool(deps)
+	required, _ := tool.Parameters()["required"].([]string)
+	for _, r := range required {
+		if r == "color" {
+			t.Fatalf("color must not be in the required list: %v", required)
+		}
+	}
+	props, _ := tool.Parameters()["properties"].(map[string]any)
+	color, _ := props["color"].(map[string]any)
+	if d, _ := color["description"].(string); !strings.Contains(d, "optional") || !strings.Contains(d, "Pewter") {
+		t.Errorf("color description should say optional with default Pewter, got %q", d)
+	}
+	if d := tool.Description(); strings.Contains(d, "color (a palette hex, e.g. #6E8BA8) are all required") {
+		t.Errorf("tool description still says color is required: %q", d)
 	}
 }

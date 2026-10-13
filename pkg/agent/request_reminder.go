@@ -58,11 +58,33 @@ func (al *AgentLoop) markRequestDelivered(sessionID, transcriptEntryID string) {
 		return
 	}
 	if ledger := al.RequestLedger(); ledger != nil {
+		// Read before the mark: only the FIRST delivery of a request that was
+		// held moves its sender's row on.
+		prior, found, getErr := ledger.Get(sessionID, transcriptEntryID)
+		if getErr != nil {
+			logger.WarnCF("agent", "request capture could not be read before its delivery mark",
+				map[string]any{"session_id": sessionID, "request_id": transcriptEntryID, "error": getErr.Error()})
+		}
 		if err := ledger.MarkDelivered(sessionID, transcriptEntryID); err != nil {
 			logger.WarnCF("agent", "request delivery could not be recorded; it may be delivered again on the next turn",
 				map[string]any{"session_id": sessionID, "request_id": transcriptEntryID, "error": err.Error()})
+			return
+		}
+		if found && prior.Held && !prior.Delivered && prior.SenderMessageID != "" &&
+			prior.Source.Kind == addressing.SourceConversation && prior.Source.SessionID != "" {
+			al.notifyHeldRequestDelivered(prior.Source.SessionID, prior.SenderMessageID)
 		}
 	}
+}
+
+// notifyHeldRequestDelivered tells the installed receiver (the gateway) that a
+// held request's sender row can move on.
+func (al *AgentLoop) notifyHeldRequestDelivered(senderSessionID, senderMessageID string) {
+	hook := al.requestDeliveredHook.Load()
+	if hook == nil {
+		return
+	}
+	(*hook)(senderSessionID, senderMessageID)
 }
 
 // takeUnansweredRequests returns, for sessionID, the delivered, still-pending
@@ -216,13 +238,42 @@ func (al *AgentLoop) deliverHeldRequests(sessionID string) {
 			al.markRequestDelivered(sessionID, c.RequestID)
 			continue
 		}
-		if _, inFlight := al.heldRepublished.LoadOrStore(c.RequestID, struct{}{}); inFlight {
+		if !al.claimWakeSlot(c.RequestID) {
 			continue // its wake is already on its way
 		}
 		if pubErr := al.publishHeldRequestWake(c); pubErr != nil {
 			al.heldRepublished.Delete(c.RequestID)
 			logger.WarnCF("agent", "held request could not be re-published; it stays held and is retried on the next turn",
 				map[string]any{"session_id": sessionID, "request_id": c.RequestID, "error": pubErr.Error()})
+		}
+	}
+}
+
+// heldWakeInFlightTTL is how long a published request wake counts as "on its
+// way". A wake can be lost without any signal (full worker inbox, a panic, the
+// worker exiting before it drains); after this long the request is published
+// again instead of staying skipped until the gateway restarts.
+const heldWakeInFlightTTL = time.Minute
+
+// claimWakeSlot reports whether the caller may publish requestID's wake now:
+// true (and the slot is stamped) when no wake was published within
+// heldWakeInFlightTTL, false while one is presumed in flight.
+func (al *AgentLoop) claimWakeSlot(requestID string) bool {
+	now := time.Now()
+	for {
+		prev, loaded := al.heldRepublished.Load(requestID)
+		if !loaded {
+			if _, raced := al.heldRepublished.LoadOrStore(requestID, now); !raced {
+				return true
+			}
+			continue
+		}
+		at, _ := prev.(time.Time)
+		if now.Sub(at) < heldWakeInFlightTTL {
+			return false
+		}
+		if al.heldRepublished.CompareAndSwap(requestID, prev, now) {
+			return true
 		}
 	}
 }
