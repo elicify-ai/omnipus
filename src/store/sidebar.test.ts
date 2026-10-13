@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
-import { useSidebarStore } from './sidebar'
+import { useSidebarStore, isSidebarOverlayOpen } from './sidebar'
 
 // Reset Zustand store state between tests.
 beforeEach(() => {
@@ -126,5 +126,70 @@ describe('sidebar store — hide', () => {
     })
     expect(useSidebarStore.getState().isPinned).toBe(false)
     expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+})
+
+// R4-QA-01 / R4-S5-PTA-02 (combined review round 4, M1): isSidebarOverlayOpen
+// is the ONE shared Escape-precedence predicate — Sidebar.tsx::handleKeydown
+// closes the overlay when it answers true, and useCancelState's global cancel
+// handler stands down on the very same answer. It has three outcomes and both
+// owners must read them the same way: if the pinned/wide-viewport term ever
+// answered "overlay" for a DOCKED sidebar (pinned, window ≥ the breakpoint),
+// Escape on a normal desktop would stop reaching the streaming turn (the
+// cancel handler would stand down and the dock handler would call close()) —
+// with every previous test green, because they all ran unpinned/narrow.
+// Expected values below are the product rule (Escape acts on the topmost
+// layer; a docked sidebar is not a surface Escape closes), not the
+// implementation read back. Each branch's pin was proven to die on its mutant
+// (mutation receipts: receipts/nav-r4-mut-*.log).
+describe('sidebar store — isSidebarOverlayOpen (shared Escape predicate)', () => {
+  /** jsdom has no matchMedia: answer the pin-breakpoint query from a switch. */
+  function stubPinViewport(matches: boolean) {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    })
+  }
+
+  it('CLOSED is never an overlay — even pinned on a wide viewport', () => {
+    stubPinViewport(true)
+    act(() => {
+      useSidebarStore.setState({ isOpen: false, isPinned: true })
+    })
+    expect(isSidebarOverlayOpen()).toBe(false)
+  })
+
+  it('OPEN and unpinned is an overlay — on any viewport', () => {
+    stubPinViewport(true)
+    act(() => {
+      useSidebarStore.setState({ isOpen: true, isPinned: false })
+    })
+    expect(isSidebarOverlayOpen()).toBe(true)
+  })
+
+  it('OPEN and pinned on a WIDE viewport is DOCKED — not an overlay, so Escape still reaches the streaming turn', () => {
+    stubPinViewport(true)
+    act(() => {
+      useSidebarStore.setState({ isOpen: true, isPinned: true })
+    })
+    expect(isSidebarOverlayOpen()).toBe(false)
+  })
+
+  it('OPEN and pinned on a NARROW viewport is an OVERLAY — the pin is not honoured below the breakpoint', () => {
+    stubPinViewport(false)
+    act(() => {
+      useSidebarStore.setState({ isOpen: true, isPinned: true })
+    })
+    expect(isSidebarOverlayOpen()).toBe(true)
   })
 })

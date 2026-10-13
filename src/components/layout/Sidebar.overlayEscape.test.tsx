@@ -391,3 +391,108 @@ describe('Sidebar overlay — Escape precedence over the turn-cancel handler (R3
     expect(cancelProbe?.stopAllArmed).toBe(true)
   })
 })
+
+// Combined-review R4 (M1 = R4-QA-01 / R4-S5-PTA-02, PTA-06): the two gaps the
+// round-4 CHECK left. (1) The predicate's DOCKED branch — a saved pin on a
+// viewport ≥ the 1024px breakpoint — was never exercised: every earlier case
+// here runs unpinned on a narrow stub, so a mutant flipping the wide-viewport
+// term survived all five suites while Escape stopped cancelling a streaming
+// turn for the default desktop setup. (2) The profile menu in the sidebar
+// footer is a Radix layer exactly like the row menu, and now has the same
+// pin. Mutation receipts: receipts/nav-r4-mut-*.log.
+describe('Escape precedence — docked sidebar and the profile menu (R4 M1 / PTA-06)', () => {
+  /** A MediaQueryList-shaped answer for the file's matchMedia stub. */
+  function mediaList(matches: boolean) {
+    return (query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })
+  }
+
+  /** The file's stub answers narrow for every query; these cases re-point it
+   * and always restore the narrow default for the suites above. */
+  function mockViewport(matches: boolean) {
+    ;(window.matchMedia as unknown as { mockImplementation: (i: (q: string) => unknown) => void })
+      .mockImplementation(mediaList(matches))
+  }
+
+  beforeEach(() => {
+    cancelStreamSpy.mockClear()
+    cancelProbe = null
+  })
+
+  afterEach(() => {
+    mockViewport(false)
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+  })
+
+  it('DOCKED sidebar (pinned + wide viewport) + STREAMING: Escape cancels the turn — the dock is untouched', () => {
+    // Wide viewport: the saved pin IS honoured, so the sidebar docks (no
+    // overlay panel exists) — the normal desktop layout this file never ran.
+    mockViewport(true)
+    act(() => {
+      useSidebarStore.setState({ isOpen: true, isPinned: true })
+      useWorkspacesStore.setState({ activeWorkspaceId: WS })
+      useChatStore.setState({ isStreaming: true })
+    })
+    render(
+      <>
+        <Sidebar />
+        <CancelProbe isStreaming />
+      </>,
+      { wrapper: makeWrapper() },
+    )
+    // Positive controls: DOCKED, not overlay — the overlay panel is absent
+    // and the docked sidebar body is on screen.
+    expect(overlayPanel()).toBeNull()
+    expect(screen.getByTestId('sidebar-library-button')).toBeTruthy()
+
+    // A real keypress's target inside the document bubbles document → window
+    // through BOTH Escape owners.
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    // The dock is NOT a surface Escape closes: the turn-cancel handler owns
+    // the key (this is the mutant test — flipping the wide-viewport term to
+    // "overlay" stands the cancel handler down and leaves the turn running).
+    expect(cancelStreamSpy).toHaveBeenCalledTimes(1)
+    expect(cancelStreamSpy).toHaveBeenCalledWith()
+    expect(cancelProbe?.stopAllArmed).toBe(true)
+    // …and the docked sidebar stays exactly as it was.
+    expect(useSidebarStore.getState().isOpen).toBe(true)
+    expect(useSidebarStore.getState().isPinned).toBe(true)
+    expect(overlayPanel()).toBeNull()
+  })
+
+  it('STREAMING + the profile menu (sidebar footer) open: Escape closes ONLY the menu — sidebar stays open, the turn is not cancelled', async () => {
+    renderOpenOverlayWhileStreaming()
+
+    // Open the profile menu the way a pointer does (Radix opens on pointer
+    // down) — the sidebar-footer DropdownMenu, not the row ⋯ menu.
+    const trigger = screen.getByTestId('sidebar-profile-trigger')
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0, pointerType: 'mouse' })
+      fireEvent.pointerUp(trigger, { button: 0, pointerType: 'mouse' })
+    })
+    const menu = screen.getByRole('menu')
+
+    fireEvent.keyDown(menu, { key: 'Escape' })
+
+    // The Radix layer consumed the Escape: the menu is gone…
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    // …the overlay sidebar stays open…
+    expect(useSidebarStore.getState().isOpen).toBe(true)
+    expect(overlayPanel()).not.toBeNull()
+    // …and the turn was never touched — the menu's dismissal preventDefaults
+    // the key before the document-level cancel handler sees it.
+    expect(cancelStreamSpy).not.toHaveBeenCalled()
+    expect(cancelProbe?.stopAllArmed).toBe(false)
+  })
+})
