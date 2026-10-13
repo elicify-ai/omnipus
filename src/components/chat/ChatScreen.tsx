@@ -38,6 +38,7 @@ import { ProviderFallbackNoteLine } from './ProviderFallbackNoteLine'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
+import { SecretRequestThreadTail } from './SecretRequestCard'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { ModelPicker } from './composer/ModelPicker'
@@ -3338,6 +3339,10 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               While pending, the composer below is locked (see
               OmnipusComposer's askLocked). */}
           <AskUserQuestionThreadTail />
+
+          {/* Secure secret card (omnipus-system-agent K1, FR-061/FR-074):
+              pending cards rooted in this chat, plus the latest result. */}
+          <SecretRequestThreadTail />
 
           {/* Composer — centered, ChatGPT-style floating layout. The context
               row and ActivityBar pills render bare on the shell (above /

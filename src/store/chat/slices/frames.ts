@@ -36,6 +36,7 @@ import { handleReplayAndStatusFrame } from './replay-and-status-frames'
 import { handleCatchUpFrame } from './catchup-frames'
 import { handleProviderFrame } from './provider-frames'
 import { handleMailPanelObserverFrame } from './mail-panel-observer-frames'
+import { handleSecretRequestFrame } from './secret-request-frames'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
 
@@ -1068,8 +1069,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         return
       }
 
-      // Mail panel presence ack/error: own handler, main switch is grandfathered.
-      if (handleMailPanelObserverFrame(frame)) {
+      // Mail panel presence and the secret card (K1/K3/K4): own handlers, main switch is grandfathered.
+      if (handleMailPanelObserverFrame(frame) || handleSecretRequestFrame(frame)) {
         syncForeground()
         return
       }

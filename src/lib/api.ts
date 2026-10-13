@@ -490,6 +490,7 @@ export { ApiSchemaError, CSRF_HEADER_NAME, getApiSchemaErrorCount, getCsrfCookie
 export * from './api/library'
 export * from './api/plans'
 export * from './api/providers'
+export * from './api/secrets'
 export * from './api/security'
 export * from './api/sessions'
 export * from './api/skills'

@@ -6463,6 +6463,8 @@
     }
   ],
   "sourceOwners": [
+    {"source":"src/components/agents/AgentPrivateSecrets.tsx","lane":5},
+    {"source":"src/components/chat/SecretRequestCard.tsx","lane":3},
     {"source":"src/components/chat/OmnipusChatScreen.tsx","lane":3},
     {"source":"src/components/layout/sidebar/OmnipusEntry.tsx","lane":7},
     {"source":"src/components/settings/SystemAgentsSection.tsx","lane":6},

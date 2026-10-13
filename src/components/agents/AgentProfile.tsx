@@ -37,6 +37,7 @@ import {
   AccordionContent,
 } from '@/components/ui/accordion'
 import { DeleteAgentControl } from './DeleteAgentControl'
+import { AgentPrivateSecrets } from './AgentPrivateSecrets'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ExecutorSelector } from './ExecutorSelector'
 import { AgentLookPicker, BehaviorFields, UploadMdButton } from './AgentFormFields'
@@ -1328,6 +1329,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // agent is not a worker (`!isWorker()` per A2/F-08). Workers are
   // delegation-only and have no heartbeat concept.
   const showHeartbeatTab = editAgentWorkspaceId !== null && !isWorkerAgent
+  // US-7: private variables belong to conversation agents (workers and system agents have none).
+  const showPrivateSecrets = !isWorkerAgent && !isSystemAgent
 
   // Operator decision (agent-types-field-matrix.md): locked core agents now
   // get editable Rate Limits + Execution knobs too, so the Advanced tab
@@ -1816,6 +1819,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               />
             </section>
           )}
+
+          {/* omnipus-system-agent US-7 / FR-241: the private variables this
+              agent's own commands see, per workspace — names only. */}
+          {showPrivateSecrets && <AgentPrivateSecrets agentId={agentId} />}
 
     </div>
   )

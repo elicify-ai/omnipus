@@ -27,6 +27,7 @@ import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 import { useNotificationsStore } from '@/store/notifications'
+import { reconcileSecretRequests } from './secret-request-frames'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -117,6 +118,7 @@ function handleSessionStateFrame(
   withBucket: ReplayAndStatusFrameContext['withBucket'],
 ): void {
   useToolApprovalStore.getState().reconcileWithSessionState(frame)
+  reconcileSecretRequests(frame) // omnipus-system-agent K4
   // askuserquestion-tool-spec v3 US-6 S1/FR-9: reconcile pending
   // AskUserQuestion cards on every reconnect snapshot. The
   // hydrate/clear/race semantics live in the dedicated, unit-tested
