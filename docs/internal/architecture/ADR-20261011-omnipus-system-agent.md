@@ -61,18 +61,21 @@ Recorded after both specification grill rounds; **this decision has not been gri
 
 **Founder answers RQ-1–RQ-4 (2026-10-13):** per-person channel conversations appear in the sidebar hidden by default (un-hideable) and in the agent's History; fixed stranger text once per stranger per connection per 24 h; an allowed group admits all its members (strangers inside it logged only); the global `session.dm_scope` is retired in favour of the per-connection mode, `identity_links` stay global.
 
-## OSA-15 — Group chats per workspace (founder decision, 2026-10-13) — not yet grilled
+## OSA-15 — Group chats as rooms per workspace (founder decisions, 2026-10-13) — not yet grilled
 
-Source: founder answers GC-1–GC-7 (file section "After spec fix round 2") and issues #1068, #892, #955. Detail: specification US-17–US-19, FR-160–FR-188, K23–K31, WU-15/WU-16.
+**Updated 2026-10-13 by GC-8 and GC-9:** group chats are **rooms**; the earlier "hidden working session per member" design and the GC-7 self hand-off are withdrawn.
+
+Source: founder answers GC-1–GC-9 (file section "After spec fix round 2") and issues #1068, #892, #955. Detail: specification US-17–US-19, FR-158–FR-203 (group part), K23–K34, WU-15/WU-16.
 
 | Topic | Decision |
 |---|---|
 | Shape (GC-1) | A group chat is the user plus chosen agents of **one** workspace; each workspace also has one standing **team room**. Squads (named) and ad-hoc groups are created only by the user (GC-3); an ad-hoc group with one agent is how extra chats return. Groups never span workspaces; direct session-to-session messages keep the existing peer rules, including cross-workspace main-to-main. |
-| Mechanism (reuse) | A group is a session with `agent_ids` members and no owning agent; each member works in a hidden member session under it, so turns, Stop (descendant walk), approvals (root-session display), attention and stats are reused. Delivery uses the session-core request/answer path (`AdmitRequest`, guest answers into the source conversation). |
+| Mechanism (GC-8, reuse) | A room is a conversation the user owns, with members and its own transcript; **no agent works inside it**. Each room message is fanned out over the existing agent-request path: `AdmitRequest` appends a request (with bounded room context) to each addressed member's **main session**, under the existing receiver admission (message policy, `ask` hold). Each agent works in its main session; its answer returns into the room through `replyIntoConversation`, authored by the responder. A busy member is queued or held like any request; the room shows each member's state. Approvals and questions appear in the agent's main chat. Stop in a room stops fan-out and cancels pending room requests (running main-chat work: founder question FQ-RM-1). Room cost = room-originated turns in members' main sessions. |
+| Main-chat view (GC-9 A) | Room traffic appears in each agent's main chat as compact, collapsed "From group <name>: …" entries, expandable, visible to agent and user. Main sessions therefore know room traffic addressed to them without extra awareness machinery. |
 | Who answers (GC-2, GQ-1 A) | @all by default for the user's messages only; @-names select members. An agent reaches other agents only by @-naming them or writing @all. In the team room the user can mute a member: it is not addressed by @all there but stays in the workspace (GQ-4 A). |
 | Agent-to-agent limit (GC-5) | None. **Accepted risk R-A4 (founder, 2026-10-13, after a stress test):** agents can keep answering each other with no human present, each reply costing money; mitigation is the visible per-group cost and the existing Stop. |
 | Authority | A group message from an agent is input, never authority: it cannot approve, answer the user's cards, run commands or change configuration (#1068 §6). Membership changes are audited. |
-| Self hand-off (GC-7) | A member may send one request to **its own main session in that workspace** (the only allowed self target; the `send_message` "never yourself" rule is extended for exactly this case). The main session does the work with its cards in the main chat, then reports once into the group. Loop guards: hand-offs originate only from member sessions, one open hand-off per member per group, and the report addresses nobody. |
+| Self hand-off (GC-7) | **Withdrawn by GC-8**: rooms already run in the main session, and no other conversation needs it (per-person channel conversations show their approvals to the user directly). The `send_message` "never yourself" rule stays unchanged. |
 | Sidebar (GC-4) | "Group chats" per workspace under the agent rows: team room, squads, ad-hoc groups, each with the attention marker. |
 | Channel group conversations (#892, GQ-2 C) | A stopped one resumes only on a message from a person individually on the connection's tables or from the operator; automatic wakes never resume it. Other members' messages are not processed; the group gets one notice "The assistant is paused." per stop; the operator still sees them. |
 | Channel steering (#955, GC-6, GQ-3) | A per-participant steering flag on individual person entries of the connection, **off by default**; when on, steering commands work as in the web chat and change only that conversation; UI-only commands (`/channels`, `/config`, `/skills`, `/tasks`, `/sessions`, `/switch-agent`) are refused on channels; nothing on a channel changes agent or global settings. Web group chats do not use the flag. Routing and the flag are edited in the connection's Configure side panel on the Connectors page. |
@@ -83,7 +86,7 @@ Source: founder answers AW-1, AW-2. Detail: specification US-20, FR-190–FR-198
 
 | Topic | Decision |
 |---|---|
-| What the main session sees | At each main-chat turn a short list of the agent's other conversations **in the same workspace** (who, where, last activity, one-line summary; ≤ 20 entries, < 2,000 characters; no content). |
+| What the main session sees | At each main-chat turn a short list of the agent's other **non-room** conversations **in the same workspace** (rooms already deliver their traffic to the main session, OSA-15) (who, where, last activity, one-line summary; ≤ 20 entries, < 2,000 characters; no content). |
 | Look-up | A new read-only tool `read_conversation` opens one of those conversations; it never sends, resumes or changes anything. Policy: ceiling allow; explicit deny for Judge, Plan Supervisor and workers. |
 | Summaries and notes (reuse) | The one-line summary is the first sentence of the conversation's existing idle recap (title if none); the recap's `worth_remembering` items are written automatically to a new per-(agent, workspace) memory room. No extra model call. |
 | Boundary (AW-2) | Nothing crosses workspaces. This also corrects an existing leak: the recap carry-forward `last-session.md` lives in the agent-wide private room today and is moved to per-(agent, workspace) storage. |

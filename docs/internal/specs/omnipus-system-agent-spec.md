@@ -114,9 +114,9 @@ The founder added scope after fix round 2 and asked for two more grill rounds ov
 | #955, GC-6 — channel commands are conversation-scoped; admin commands web/CLI only | US-19; FR-185–FR-188 |
 | AW-1, AW-2 — the main session knows the agent's other conversations in the same workspace | US-20; FR-190–FR-198; ADR OSA-16 |
 | GC-5 — no limit on agent-to-agent replies (stress-tested) | Accepted risk **R-A4** (§6.7, §19) |
-| GC-7 — self hand-off from a group to the agent's own main session | FR-177–FR-179; BDD-17.14–17.17; ADR OSA-15 |
+| GC-7 — self hand-off from a group to the agent's own main session | Removed by GC-8 (§0.9) |
 
-**Reuse, not new systems.** Group chats reuse sessions (`Session.agent_ids` participants, the session-core request/answer path — `AdmitRequest`, guest replies into the source conversation, `PublishGuestReply`), the existing Stop and descendant walk, approvals with root-session display (FR-092), attention (FR-091) and session stats for cost. Awareness reuses the idle recap (`runRecap` already returns `recap` and `worth_remembering`), session metadata and the memory rooms behind `remember`/`recall_memory`. Channel commands reuse the per-chat `Session.model`.
+**Reuse, not new systems.** Group chats are rooms (§0.9, GC-8): they reuse the session-core request/answer path — `AdmitRequest` into members' main sessions, guest replies into the room via `replyIntoConversation`/`PublishGuestReply` — the request ledger, receiver admission policy, Stop, attention and session stats for cost. Awareness reuses the idle recap (`runRecap` already returns `recap` and `worth_remembering`), session metadata and the memory rooms behind `remember`/`recall_memory`. Channel commands reuse the per-chat `Session.model`.
 
 **Found while designing (reported, fixed in scope):** the recap's carry-forward file `last-session.md` lives in the agent's private memory room, which is agent-wide (`pkg/agent/memory.go::WriteLastSession`, `ReadLastSession`), so one workspace's recap can reach the agent's next session in another workspace. AW-2 and the security rule "digests must not leak across workspaces" require scoping it per workspace (FR-197).
 
@@ -131,6 +131,22 @@ The founder added scope after fix round 2 and asked for two more grill rounds ov
 | Screen alignment (wireframe R34/R35) | Routing settings live in **the connection's Configure side panel on the Connectors page**; the derived "who can reach <Agent>" list lives in the shared agent editor slide-over (there is no Agents page). |
 
 **Design choices made for GQ-3 (visible, non-blocking):** the flag is set per **individual** person entry (allow list or person table); a group entry admits members but never entitles them to steer; in web group chats the flag does not apply (the user steers as in any web chat; agents never steer — FR-168); `/help` is answered for every allowed participant; an un-entitled participant's command is not executed and not passed to the agent, and is answered "Commands are not enabled for you in this conversation." at most once per participant per conversation per 24 hours (logged every time).
+
+### 0.9 Group chats redesigned as rooms (founder GC-8, GC-9, 2026-10-13)
+
+GC-8 supersedes the "hidden working session per member" design of §0.7. A group chat is a **room**: a shared conversation the user owns; **no agent works inside it**. Each room message is fanned out over the existing agent-request path (`pkg/agent/address_router.go::AdmitRequest` appends the request to the receiver's **main** session); each agent works in its own main session in that workspace; its answer returns into the room over the existing reply path (`replyIntoConversation`, authored by the responder). GC-9 A: room traffic shows in each agent's main chat as compact, collapsed entries ("From group <name>: …", expandable), visible to the agent and the user.
+
+| Consequence | Where |
+|---|---|
+| Main sessions see room traffic addressed to them automatically, so awareness (AW-1/AW-2) covers only non-room conversations | FR-190 |
+| The GC-7 self hand-off is **removed**: rooms no longer need it, and the only other non-main conversations (per-person channel conversations) already show their approvals and questions to the user in the workspace, so no case needs it (FR-177–FR-179, tests 128–130 and K31 removed) | §0.9 |
+| A busy agent answers later: the request is queued (or held when the receiver's message policy is `ask`) like any agent request; the room shows each addressed member's state | FR-201 |
+| Stop in the room stops the fan-out and cancels pending room requests; a member turn already running is FQ-RM-1 | FR-170, §17 |
+| Room cost = the sum of the room-originated turns in members' main sessions | FR-171 |
+| Team room, squads, ad-hoc rooms, mute (GQ-4 A), membership audit and the workspace boundary stay as decided | FR-158–FR-162, FR-172 |
+| Approvals, questions and secret cards from a member's work appear in **that agent's main chat** (standard), and the room shows "waiting for you in <Agent>'s main chat" | FR-169 |
+
+**Reused:** address book, request ledger, admission (receiver send policy, `ask` hold), `AdmitRequest`, `replyIntoConversation`, `PublishGuestReply`, the steering FIFO, Stop. **New:** the room entity and its transcript; the fan-out (mention resolution, per-member request with room context, state tracking, cancellation); the room UI; the collapsed main-chat rendering. **Removed requirements:** FR-163 (old), FR-167 (old), FR-177, FR-178, FR-179. **Added:** FR-199–FR-203.
 
 ---
 
@@ -388,20 +404,21 @@ The operator decides, per connection (channel instance), who may talk to the wor
 8. **Given** a person rule naming an agent that is not a member of the workspace or no longer exists, **When** the rule is saved, **Then** it is refused; **When** such a rule exists and the person writes, **Then** the message is dropped loudly — never sent to the main agent instead.
 9. **Given** per-person conversations exist, **When** the sidebar renders, **Then** they are hidden under the agent by default, can be un-hidden one by one, and are always in the agent's History.
 
-### US-17 — Group chats in a workspace: team room, squads, ad-hoc groups (P1)
+### US-17 — Group chats as rooms: team room, squads, ad-hoc rooms (P1)
 
-The user talks with several agents of one workspace in one conversation; agents also talk to each other there. Every workspace has a standing team room; the user creates squads and ad-hoc groups. **Why P1**: founder GC-1–GC-6, #1068. **Independent test**: in Sales, open the team room, write "status?" — every member answers; write "@Jim plan it" — only Jim answers; create squad "Launch" with Mia and Jim; Stop halts all of them.
+The user talks with several agents of one workspace in one room; agents also talk to each other there. Each agent does the work in its own main session and answers back into the room. Every workspace has a standing team room; the user creates squads and ad-hoc rooms. **Why P1**: founder GC-1–GC-9, #1068. **Independent test**: in Sales, open the team room, write "status?" — every member answers; write "@Jim plan it" — only Jim answers; each request and answer also shows, collapsed, in that agent's main chat; Stop cancels pending requests.
 
 1. **Given** a workspace, **When** it exists, **Then** it has one team room whose members are its conversation agents (Omnipus excluded); the user can mute a member there.
-2. **Given** the user, **When** they create a squad (named) or an ad-hoc group (one or more chosen agents of the same workspace), **Then** it appears in the workspace's "Group chats" sidebar section.
-3. **Given** a group message without an @-name, **When** the user sends it, **Then** every member agent answers (@all default); with @-names, only the named agents answer. An agent's message without @-names reaches no other agent.
-4. **Given** an agent's message in a group, **When** it @-names other members, **Then** those members answer (agent-to-agent; no limit, accepted risk R-A4).
-5. **Given** a running group, **When** the user presses Stop, **Then** every member's work in that group stops.
-6. **Given** a group, **When** its header shows, **Then** it lists the members and the group's running cost.
-7. **Given** an agent's group message, **When** it asks for an approval or tries to answer someone else's question, **Then** it has no authority: approvals and questions reach only the user.
-8. **Given** any group, **When** members change, **Then** the change is audited; **and** no group can include an agent from another workspace.
+2. **Given** the user, **When** they create a squad (named) or an ad-hoc room (one or more chosen agents of the same workspace), **Then** it appears in the workspace's "Group chats" sidebar section.
+3. **Given** a room message without an @-name, **When** the user sends it, **Then** every member agent answers (@all default); with @-names, only the named agents answer. An agent's message without @-names reaches no other agent; an agent's `@all` reaches the others but not itself.
+4. **Given** an agent's answer in a room, **When** it @-names other members, **Then** those members receive it and answer (no limit, accepted risk R-A4).
+5. **Given** a room, **When** the user presses Stop, **Then** the fan-out stops and pending room requests are cancelled.
+6. **Given** a room, **When** its header shows, **Then** it lists the members and the room's running cost.
+7. **Given** an agent's room message, **When** it claims an approval or tries to answer someone else's question, **Then** it has no authority; the member's own approvals and questions appear in that agent's main chat.
+8. **Given** any room, **When** members change, **Then** the change is audited; **and** no room can include an agent from another workspace.
 9. **Given** an agent asks to create a squad, **When** it tries, **Then** there is no tool for it — only the user creates squads (GC-3).
-10. **Given** a group conversation produces an action the agent's main session should do alone, **When** the agent hands it off, **Then** the request goes to its own main session in that workspace, the group shows "handed to <Agent>'s main session", the main session does the work (its cards appear in the main chat with attention) and reports the result back into the group — without bouncing back and forth.
+10. **Given** an addressed member is busy, **When** the room message arrives, **Then** it is queued (or held for approval) like any agent request, the room shows that member's state, and the answer arrives later.
+11. **Given** an agent's main chat, **When** room traffic reaches it, **Then** it shows as a compact, collapsed entry "From group <name>: …", expandable, and the agent's answer is visible there too.
 
 ### US-18 — Who may resume a stopped channel group conversation (P1)
 
@@ -550,7 +567,7 @@ The agent behaves like a person who remembers their other conversations in this 
 | Workspace entry | Spinner | Empty state + Set up a team | Retryable error, no fallback | Remembered chat kept pending | — | Chat opens | Send until resolved |
 | W18 completion | Progress per part | — | Failed parts listed | Partly done listed | — | Report + "Open chat" | — |
 | Group chats sidebar section | Skeleton rows | Team room only | Error + Retry (never "no groups") | Cached list + hint | — | Rows with attention markers | — |
-| Group view (header, members, cost, @-picker) | Loading members | Team room with no agents: "No agents yet" + Add agent | Error + Retry; send disabled | Cached transcript + "reconnecting" | Message "not confirmed" + Retry | Answers stream per member | Send while unresolved |
+| Room view (header, members, cost, per-member state, @-picker) | Loading members | Team room with no agents: "No agents yet" + Add agent | Error + Retry; send disabled | Cached transcript + "reconnecting" | Message "not confirmed" + Retry | Answers stream per member | Send while unresolved |
 | Squad / group dialog | Loading workspace agents | "No agents in this workspace" | Error + Retry | — | Create "not confirmed" + Retry | Group opens | Create without a member |
 | Hidden per-person conversations | — | Control absent | Error + Retry | Cached + hint | Un-hide "not confirmed" | Row shown | — |
 | Agent editor "who can reach this agent" | Loading | "Nobody yet" | Error + Retry | Cached + hint | — | List with links | — |
@@ -591,7 +608,6 @@ Keyboard and focus (FR-109): every listed control is reachable by Tab/arrow keys
 | `select_secret_version` | ask | allow-to-ceiling (asks; own or validated target pair) | allow-to-ceiling (asks; own pair only) | allow-to-ceiling (constructor) | deny | — |
 | `connect_channel`, `connect_mailbox`, `set_agent_permissions` | ask | allow-to-ceiling | deny | deny | deny | — |
 | `read_conversation` | allow | allow-to-ceiling | allow-to-ceiling (Mia, Jim); deny (General Purpose, Planner, Researcher — workers) | allow-to-ceiling (main type) / deny (worker type) | deny | — |
-| `send_message` self target (own main, same workspace, from a group member session only) | existing policy | existing | existing | existing | — | — |
 | Management family (agent/workspace/skill/connector/provider/channel change tools) | per ADR OSA-3 | allow-to-ceiling | deny | deny | deny | — |
 
 "allow-to-ceiling" = no per-agent entry (Omnipus never carries per-agent ask). Omnipus's exact supporting set: `list_agents`, `get_agent`, `get_agent_tools`, `read_agent_metadata`, `list_workspaces`, `get_workspace`, `list_models`, `list_providers`, `test_provider`, `list_mcp_servers`, `list_channels`, `test_channel`, `list_skills`, `find_skills`, `run_doctor`, `get_usage`, `list_secrets`, `AskUserQuestion`, `send_message`, `answer_request`, `message_parent`, `delegate`, `Skill`, `ToolSearch`, `remember`, `recall_memory`, `recall_conversation`, `run_retrospective`, `set_goal`, `goal_claim`, `read_file`, `write_file`, `edit_file`, `append_file`, `list_directory`, `grep`, `list_mounts`, `knowledge_describe`, `knowledge_find`, `knowledge_read`, `knowledge_list`, `search_web`, `fetch_url`, `create_agent`, `update_agent`, `delete_agent`, `update_workspace`, `create_skill`, `edit_skill`, `remove_skill`, `install_skill`, `add_mcp_server`, `remove_mcp_server`, `configure_provider`, `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `connect_mailbox`, `set_agent_permissions`, `request_secret`, `select_secret_version`, `remove_secret`, `environment_setup`, `bash`. Everything else: explicit per-agent deny. Every new tool is registered in the static name list, the shipped ceiling, the role inventories, the custom constructor, the Auto classification table, the central metadata catalogue **and** the executable per-agent registry built at boot and on reload. This is seeded role data in the existing two layers — not a per-agent coverage backfill and not a resolver exception.
@@ -679,16 +695,17 @@ Order per change: schema in `contracts/components/schemas/` → reference from `
 | K20 | **changed** `ChannelEntry` status | `strangers_count`, `last_stranger_label` (display label or redacted id), `last_stranger_at` | FR-145 |
 | K21 | **new** `AgentReachabilityEntry`; `GET /api/v1/agents/{id}/reachability` | connection id, workspace id, via enum `main` / `person_rule`, match kind/label | FR-146 |
 | K22 | **changed** `BindingMatch` config shape (not wire) and session-scope route | `instance_id`; `/api/v1/security/session-scope` per RQ-4 | FR-141, FR-148 |
-| K23 | **changed** `Session` | optional `muted_agent_ids` (team room only); optional `kind` enum `chat` / `group_team_room` / `group_squad` / `group_adhoc` / `group_member`; for groups `agent_id` omitted and `agent_ids` = members; optional `group_name`; `group_cost` read-only | FR-163, FR-171 |
+| K23 | **changed** `Session` | optional `kind` enum `chat` / `room_team` / `room_squad` / `room_adhoc`; for rooms `agent_id` omitted, `agent_ids` = members, optional `room_name`, `muted_agent_ids` (team room), `room_cost` read-only | FR-199, FR-171, FR-158 |
 | K24 | **new** `GroupCreateRequest`, `GroupMembersUpdateRequest`; `POST /api/v1/workspaces/{id}/groups`, `PATCH /api/v1/groups/{id}/members` (also mute/unmute in the team room), `DELETE /api/v1/groups/{id}` | kind (`squad` / `adhoc`), name (squad, ≤ 80), agent ids (≥ 1, same workspace); team room not creatable or deletable | FR-161, FR-162, FR-172 |
 | K25 | **changed** `MessageFrame` | optional `mentions[]` (agent ids or `all`) resolved by the SPA picker; server re-resolves from text and membership | FR-164 |
 | K26 | **changed** `Message` / transcript entry | group entries carry the authoring agent (existing guest author) and the resolved addressees | FR-166 |
-| K27 | **changed** `ToolApprovalRequiredFrame`, `SessionStatePendingApproval`, `SecretRequestFrame` | the existing `root_session_id` (K7/K1) also points at a group session for member decisions | FR-169 |
+| K27 | **new** `RoomMemberStateFrame` (WS) + snapshot list | room id, member agent id, state enum `queued` / `held` / `working` / `waiting_on_you` / `answered` / `cancelled`, request id | FR-201 |
 | K28 | **changed** `ChannelEntry` / channel conversation status | `stopped_by_operator` and `received_while_stopped` count on a channel group conversation | FR-182 |
 | K29 | **changed** `Session` | optional `sidebar_visible` (per-person channel conversations default `false`); `PATCH` on the existing session update route | FR-152 |
 | K30 | **new** `AwarenessEntry` (read-only, for the web inspector of what the agent sees) and audit event shapes for group membership | session id, kind, who, last activity, summary | FR-190, FR-172 |
-| K31 | **changed** transcript entry / `Message` | optional `handoff` {id, state `open` / `reported`, target `main`} on the "handed to" marker and on the report entry; report entries carry `addressees: []` | FR-178, FR-179 |
 | K32 | **changed** `ChannelPersonRule` and allow-list entry shape | `steering` boolean (default false) on individual person entries only | FR-185 |
+| K33 | **changed** transcript entry / `Message` in a main session | optional `room_ref` {room id, room name, request id, role `request` / `answer`} so the SPA renders the collapsed "From group <name>" entry | FR-202 |
+| K34 | **changed** request ledger entry (`addressing`) — not wire | `origin: room` + room id, so answers route to the room and cancelled requests are dropped | FR-203 |
 | K17 | config | `agents.defaults.default_agent_id` ignored with warning (settings sanitiser and loader) | FR-120 |
 
 ### 7.2 Runtime validation (MAJ-004)
@@ -1684,14 +1701,14 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - When the gateway loads and reloads
 - Then a warning names the ignored key and each connection uses its own mode
 
-### Feature: Group chats (US-17)
+### Feature: Group chats as rooms (US-17)
 
 **BDD-17.1 Team room exists with workspace members** — Traces to US-17 AS-1 — Happy Path
 - Given Sales with members Mia, Jim and worker GP
 - When the Group chats section renders
 - Then "Team room" is first, with members Mia and Jim (no workers, no Omnipus)
 
-**BDD-17.2 User creates a squad and an ad-hoc group** — US-17 AS-2 — Happy Path (Outline)
+**BDD-17.2 User creates a squad and an ad-hoc room** — US-17 AS-2 — Happy Path (Outline)
 - Given Sales
 - When the user creates `<kind>` with `<members>`
 - Then it appears under Group chats after the team room, with the attention marker slot
@@ -1699,12 +1716,12 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | kind | members |
 |---|---|
 | squad "Launch" | Mia, Jim |
-| ad-hoc group | Jim |
+| ad-hoc room | Jim |
 
-**BDD-17.3 @all default and @-named subset** — US-17 AS-3 — Happy Path (Outline)
+**BDD-17.3 Fan-out to members' main sessions** — US-17 AS-3 — Happy Path (Outline)
 - Given squad Launch with Mia, Jim, Researcher2
 - When the user writes `<message>`
-- Then `<answering>` answer
+- Then a request is appended to the main session of each of `<answering>`, each works there, and each answer appears in the room authored by that agent
 
 | message | answering |
 |---|---|
@@ -1715,27 +1732,27 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 
 **BDD-17.4 Agent @-names another member** — US-17 AS-4 — Happy Path
 - Given squad Launch
-- When Jim's answer says "@Mia can you draft the email?"
-- Then Mia receives it as input and answers in the group
+- When Jim's answer in the room says "@Mia can you draft the email?"
+- Then a room request reaches Mia's main session and her answer appears in the room
 
 **BDD-17.5 Unlimited agent-to-agent replies, visible cost** — US-17 AS-4 — Edge Case
 - Given Jim and Mia keep @-naming each other with no user present
 - When 50 exchanges have happened
-- Then nothing stops them automatically, the group header's cost has increased with every reply, and the group shows attention-free running state
+- Then nothing stops them automatically and the room header's cost has risen with every room-originated turn
 
-**BDD-17.6 Stop stops the group** — US-17 AS-5 — Happy Path
-- Given three members are answering
-- When the user presses Stop in the group
-- Then every member's running work in that group stops and no queued member turn starts afterwards
+**BDD-17.6 Stop cancels the fan-out** — US-17 AS-5 — Happy Path
+- Given Mia's room request is queued and Jim's is held for approval
+- When the user presses Stop in the room
+- Then both pending requests are cancelled and shown as cancelled, and no further fan-out happens until the user writes again
 
 **BDD-17.7 Header shows members and cost** — US-17 AS-6 — Happy Path
 - Given squad Launch after two rounds
 - When the header renders
-- Then it lists Mia, Jim, Researcher2 and the group's total cost so far
+- Then it lists Mia, Jim, Researcher2 and the room's cost = the sum of the room-originated turns in their main sessions
 
 **BDD-17.8 Agent messages are input, never authority** — US-17 AS-7 — Error Path (Outline)
-- Given squad Launch with a pending approval for Mia's `add_mcp_server` and a pending question to the user
-- When Jim's message `<attempt>`
+- Given squad Launch with a pending approval in Mia's main chat and a pending question card to the user
+- When Jim's room message `<attempt>`
 - Then `<result>`
 
 | attempt | result |
@@ -1757,13 +1774,13 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 
 **BDD-17.10 No squad tool for agents** — US-17 AS-9 — Error Path
 - Given any agent, including Omnipus
-- When it looks for a tool to create a group
-- Then none exists; group creation is only in the web app
+- When it looks for a tool to create a room
+- Then none exists; room creation is only in the web app
 
-**BDD-17.11 Group approvals and questions reach the user** — US-17 AS-7 — Happy Path
-- Given a member asks a question or needs an approval while answering in the group
+**BDD-17.11 Member decisions in the main chat** — US-17 AS-7 — Happy Path
+- Given Jim's work on a room request needs an approval
 - When it is pending
-- Then the card appears in the group chat naming the member, and the group's sidebar row shows attention
+- Then the card appears in Jim's main chat with the attention marker, and the room shows "waiting for you in Jim's main chat" for Jim
 
 **BDD-17.12 Team room follows membership** — US-17 AS-1 — Alternate Path
 - Given Researcher2 joins Sales
@@ -1773,35 +1790,33 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 **BDD-17.13 Direct cross-workspace message still works** — US-17 AS-8 — Alternate Path
 - Given Mia in Sales
 - When she messages Ray's main in Marketing with `send_message`
-- Then it is admitted under the existing peer rules; no group is involved
+- Then it is admitted under the existing peer rules; no room is involved
 
-**BDD-17.14 Self hand-off to the own main session** — US-17 AS-10 — Happy Path
-- Given squad Launch in Sales and Jim decides "configure the CRM connector" belongs to his main session
-- When Jim's group turn sends a request to his own main session in Sales
-- Then the group shows "handed to Jim's main session", Jim's Sales main chat starts a turn with that request, and its approval card appears in the main chat with the attention marker (not in the group)
+**BDD-17.14 Busy member answers later** — US-17 AS-10 — Edge Case (Outline)
+- Given squad Launch and `<condition>` for Mia
+- When the user writes "status?"
+- Then the room shows Mia as `<state>` and her answer arrives when `<when>`
 
-**BDD-17.15 Report comes back once** — US-17 AS-10 — Happy Path
-- Given that hand-off
-- When Jim's main session finishes
-- Then its result appears in the group as a report from Jim's main session, linked to the hand-off, addressed to nobody: no member (Jim included) is triggered by it and it starts no new hand-off
-
-**BDD-17.16 Self-target limits** — US-17 AS-10 — Error Path (Outline)
-- Given Jim
-- When `<sender>` targets `<recipient>`
-- Then `<result>`
-
-| sender | recipient | result |
+| condition | state | when |
 |---|---|---|
-| Jim's member session in Sales squad | Jim's own main in Sales | admitted (hand-off) |
-| Jim's main in Sales | Jim's own main in Sales | refused (no hand-off from the main to itself) |
-| Jim's member session in Sales squad | Jim's main in Marketing | refused (own main in this workspace only) |
-| Jim's member session | Jim's extra chat or another group | refused |
-| Jim's member session with a hand-off still open | Jim's own main in Sales | refused until the open one reports |
+| Mia's main is mid-turn | queued | her current turn settles |
+| Mia's message policy is `ask` | held for your approval | the user approves the admission |
+| Mia is idle | working | at once |
 
-**BDD-17.17 No bounce** — US-17 AS-10 — Edge Case
-- Given Jim's main session, while doing a handed-off task, mentions the group in its reply
-- When the report is posted
-- Then mentions in the report are not resolved, and the main session has no path to hand the task back to the group member
+**BDD-17.15 Collapsed entries in the main chat** — US-17 AS-11 — Happy Path
+- Given squad Launch
+- When the user writes "@Mia draft it" and Mia answers
+- Then Mia's main chat shows one collapsed entry "From group Launch: draft it" that expands to the request and its room context, followed by her answer, and the room shows the same answer
+
+**BDD-17.16 Room context travels with the request** — US-17 AS-3 — Edge Case
+- Given the user wrote "@Jim plan it", Jim answered, then the user wrote "@Mia review Jim's plan"
+- When Mia's request arrives in her main session
+- Then it includes the room messages since Mia's last room request (bounded), so Mia can see Jim's plan
+
+**BDD-17.17 Answer after Stop** — US-17 AS-5 — Edge Case
+- Given Jim's main turn for a room request was already running when the user pressed Stop
+- When it finishes
+- Then the outcome follows FQ-RM-1, and any @-names in it are not fanned out until the user writes again
 
 **BDD-17.18 Mute in the team room** — US-17 AS-1 — Alternate Path
 - Given Sales's team room with Mia, Jim, Researcher2 and Researcher2 muted by the user
@@ -1810,8 +1825,8 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 
 **BDD-17.19 Agent message without @ reaches nobody** — US-17 AS-3 — Edge Case
 - Given squad Launch with Mia, Jim, Researcher2
-- When Jim posts "done" without an @-name
-- Then no other agent is triggered; if Jim writes "@all regroup", Mia and Researcher2 are
+- When Jim's answer is "done" without an @-name
+- Then no other agent receives a request; if Jim writes "@all regroup", Mia and Researcher2 do (not Jim)
 
 ### Feature: Stopped channel group conversations (US-18)
 
@@ -1891,10 +1906,10 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - When the operator turns steering on for Anna and saves
 - Then Anna's next steering command works without a restart; turning it off again stops it
 
-**BDD-19.7 Web group chats ignore the flag** — US-19 AS-1 — Alternate Path
+**BDD-19.7 Rooms ignore the flag** — US-19 AS-1 — Alternate Path
 - Given squad Launch in the web app
-- When the user sends /model gpt-x and Jim's message contains "/model x"
-- Then the user's command changes the squad conversation's model as in any web chat, and Jim's text is not a command (FR-168)
+- When the user sends /stop, then /model gpt-x, and Jim's room message contains "/model x"
+- Then /stop acts as room Stop, /model is refused ("a room has no model; use the agent's main chat"), and Jim's text is not a command (FR-168)
 
 ### Feature: Conversation awareness (US-20)
 
@@ -2122,13 +2137,13 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 110 | `pkg/groupchat::TestTeamRoom_MembershipFollowsWorkspace` | Unit | 17.1, 17.12 |
 | 111 | `pkg/gateway::TestGroupCreate_UserOnly_WorkspaceLocked_Audited` | Integration | 17.2, 17.9, 17.10 |
 | 112 | `pkg/groupchat::TestMentionResolution_AllDefaultAndNamed` (dataset D7) | Unit | 17.3, 17.4 |
-| 113 | `pkg/agent::TestGroupFanOut_AnswersAsGuestEntries` | Integration | 17.3, 17.4 |
-| 114 | `pkg/agent::TestGroupNoLimit_CostAccumulates` | Integration | 17.5, 17.7 |
-| 115 | `pkg/agent::TestGroupStop_StopsAllMembers` | Integration | 17.6 |
+| 113 | `pkg/agent::TestRoomFanOut_RequestsToMains_AnswersAsGuestEntries` | Integration | 17.3, 17.4 |
+| 114 | `pkg/agent::TestRoomNoLimit_CostFromRoomOriginatedTurns` | Integration | 17.5, 17.7 |
+| 115 | `pkg/agent::TestRoomStop_CancelsPendingAndFanOut` | Integration | 17.6, 17.17 |
 | 116 | `pkg/agent::TestGroupAgentMessage_NoAuthority` | Integration | 17.8 |
-| 117 | `pkg/gateway::TestGroupDecisions_InGroupChat_Attention` | Integration | 17.11 |
+| 117 | `pkg/gateway::TestRoomMemberDecisions_InMainChat_RoomShowsWaiting` | Integration | 17.11 |
 | 118 | `pkg/gateway::TestDirectCrossWorkspaceMessage_Unchanged` | Integration | 17.13 |
-| 119 | `tests/e2e/omnipus-group-chats.spec.ts` (sidebar section, header, @-picker incl. @all, squad creation) | E2E | 17.1, 17.2, 17.3, 17.6, 17.7 |
+| 119 | `tests/e2e/omnipus-group-chats.spec.ts` (sidebar section, header with cost and member states, @-picker incl. @all, squad creation, collapsed main-chat entries) | E2E | 17.1, 17.2, 17.3, 17.6, 17.7, 17.15 |
 | 120 | `pkg/agent::TestStoppedChannelGroup_ResumeAuthority` | Integration | 18.1, 18.3 |
 | 121 | `pkg/agent::TestStoppedChannelGroup_AutomaticWakesNeverResume` | Integration | 18.2 |
 | 122 | `pkg/commands::TestChannelSteering_ConversationScoped` | Integration | 19.1 |
@@ -2137,9 +2152,9 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 125 | `pkg/tools::TestReadConversation_ReadOnlyAndScope` | Integration | 20.2, 20.5 |
 | 126 | `pkg/agent::TestRecapOutcomes_ToWorkspaceMemory_NoCrossWorkspace` | Integration | 20.3, 20.4 |
 | 127 | `tests/e2e/llm-omnipus-awareness.spec.ts` (live) | E2E | 20.1, 20.2 |
-| 128 | `pkg/agent::TestSelfHandoff_MemberToOwnMain_DecisionsInMain` | Integration | 17.14 |
-| 129 | `pkg/agent::TestSelfHandoff_ReportOnce_NoRetrigger_NoBounce` | Integration | 17.15, 17.17 |
-| 130 | `pkg/tools::TestMessageRecipient_SelfTargetLimits` | Unit | 17.16 |
+| 128 | `pkg/agent::TestRoomRequest_QueuedHeldWorkingStates` | Integration | 17.14 |
+| 129 | `src/components/chat/RoomTrafficEntry.test.tsx` + `pkg/agent::TestRoomTraffic_CollapsedInMain` | Integration | 17.15 |
+| 130 | `pkg/agent::TestRoomRequest_CarriesBoundedRoomContext` | Unit | 17.16 |
 | 131 | `pkg/groupchat::TestTeamRoomMute_AllSkipsMuted_NamedStillAnswers` | Unit | 17.18 |
 | 132 | `src/components/connectors/ConnectionConfigurePanel.steering.test.tsx` + `pkg/gateway::TestSteeringFlag_SaveNoRestart` | Integration | 19.6 |
 | 133 | `pkg/commands::TestChannelHelp_ListsOnlyPermitted` | Unit | 19.5 |
@@ -2296,7 +2311,6 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | Person rule to an unavailable agent never falls back to main | 16.11 | 101 |
 | Agent group message never approves or answers for the user | 17.8 | 116 |
 | Group never spans workspaces | 17.9 | 111 |
-| Self hand-off never bounces or re-triggers | 17.15, 17.17 | 129 |
 | Automatic wake never resumes a stopped channel group | 18.2 | 121 |
 | No cross-workspace awareness, notes or carry-forward | 20.4 | 126 |
 
@@ -2443,28 +2457,28 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-150**: `connect_channel` MUST set the main agent and MAY save offered person rules and a conversation mode in the same approved call; `configure_channel` (Ask) MUST be able to change them later.
 - **FR-151**: The connection's Configure side panel on the Connectors page (wireframe R34/R35) MUST provide the routing settings (main agent selector limited to workspace members, allow list, person table with label + id + agent + steering flag, conversation mode, stranger status) with the §6.3 states and keyboard contract.
 
-### N. Group chats (US-17; GC-1–GC-6; #1068; not grilled)
-- **FR-158**: In the team room the user MUST be able to mute and unmute a member agent; a muted agent is not addressed by `@all` (or the user's default) there but still answers when @-named, and stays a member of the workspace and of other groups; mute changes are audited (GQ-4 A).
+### N. Group chats as rooms (US-17; GC-1–GC-9, GQ-1, GQ-4; #1068; not grilled)
+- **FR-158**: In the team room the user MUST be able to mute and unmute a member agent; a muted agent is not addressed by the user's default or `@all` there but still answers when @-named, and stays a member of the workspace and of other rooms; mute changes are audited (GQ-4 A).
 - **FR-160**: Each workspace MUST have exactly one standing team room whose members are the workspace's chat-target agents (workers, hidden engine agents and Omnipus excluded), updated when membership changes.
-- **FR-161**: Only the user MUST be able to create squads (named) and ad-hoc groups (one or more chosen agents) from the web app; no agent tool creates or changes groups (GC-3).
-- **FR-162**: A group MUST contain agents of exactly one workspace; adding an agent that is not a member of that workspace MUST be refused; removing an agent from the workspace MUST remove it from that workspace's groups.
-- **FR-163**: A group chat MUST be a session in its workspace that records its member agents (`agent_ids`) and has no single owning agent; each member works in its own hidden member session linked under the group, so the existing turn, Stop, approval and stats machinery applies.
-- **FR-164**: A user message without @-names MUST be delivered to every member (@all default); with @-names (or `@all`) only to the named members (GC-2). @-names match member display names case-insensitively; an unknown @-name is shown as unresolved and addresses nobody.
-- **FR-165**: An agent's group message MUST be delivered only to the members it @-names (or to all other members when it writes `@all`); an agent message without @-names MUST reach no other agent (GQ-1 A). There MUST be no limit on agent-to-agent replies (GC-5; accepted risk R-A4).
-- **FR-166**: A member's answer MUST appear in the group transcript as that agent's entry (existing guest-answer path), visible to the user and to the other members as input.
-- **FR-167**: Each member answering MUST have seen the group's messages since it last spoke (bounded window, at most the last 50 group entries).
-- **FR-168**: An agent's group message MUST be input only: it can never resolve an approval, answer a user question card, run a command or change configuration (#1068 §6).
-- **FR-169**: Questions, approvals and secret cards raised by a member while working in a group MUST appear in the group chat naming the member, and MUST set the group's attention.
-- **FR-170**: Stop in a group MUST stop every member's running and queued work in that group.
-- **FR-171**: The group header MUST show the members and the group's running cost (sum of its member sessions' stats).
-- **FR-172**: Group creation, membership changes and deletion MUST be audited (who, which group, which agents, when).
-- **FR-173**: Direct session-to-session messages MUST keep the existing peer rules, including cross-workspace main-to-main messages; groups never span workspaces.
-- **FR-174**: The sidebar MUST show a "Group chats" section per workspace under the agent rows: team room first, then squads, then ad-hoc groups, each with the attention marker (GC-4).
-- **FR-175**: The group view MUST provide a header with members, an @-picker that offers `@all` and each member, and (for squads and ad-hoc groups) membership editing; squad creation MUST be a web dialog (name + members from the workspace).
-- **FR-177**: A member session in a group MUST be able to send a request to exactly one self target: its own agent's main session in the group's workspace, through the existing agent-to-agent request path; the `send_message` recipient rule ("never yourself or the author") MUST be extended for that case only. Every other self target — from the main to itself, to the own main in another workspace, to an own extra chat or another group — MUST be refused.
-- **FR-178**: A self hand-off MUST show "handed to <Agent>'s main session" in the group; the main session MUST process it as an ordinary request (its approvals, questions and secret cards appear in the main chat with the attention marker); its result MUST be posted back into the group once, linked to the hand-off, as a report from the agent's main session.
-- **FR-179**: Loop guards: a hand-off MAY originate only from a group member session; at most one hand-off per member per group MAY be open at a time; the report MUST be addressed to nobody (its mentions are not resolved) and MUST NOT trigger any member, start a new hand-off or let the main session hand the task back.
-- **FR-176**: Group message size and rate limits MUST reuse the existing session messaging limits (65,536 bytes per message; 60 admissions/minute per sender and target).
+- **FR-161**: Only the user MUST be able to create squads (named) and ad-hoc rooms (one or more chosen agents) from the web app; no agent tool creates or changes rooms (GC-3).
+- **FR-162**: A room MUST contain agents of exactly one workspace; adding a non-member MUST be refused; removing an agent from the workspace MUST remove it from that workspace's rooms.
+- **FR-199**: A room MUST be a conversation in its workspace owned by the user, recording its members and its own transcript; no agent session works inside it and no per-member session exists (GC-8).
+- **FR-164**: A user room message without @-names MUST be addressed to every unmuted member (@all default); with @-names (or `@all`) only to the named members (GC-2). @-names match member display names case-insensitively; an unknown @-name is shown unresolved and addresses nobody.
+- **FR-165**: An agent's room message MUST be addressed only to the members it @-names; `@all` from an agent addresses every other member but not itself; without @-names it MUST reach no other agent (GQ-1 A). There MUST be no limit on agent-to-agent replies (GC-5; R-A4).
+- **FR-200**: Each addressed member MUST receive the room message as an agent request appended to its **main session** in that workspace through the existing request path (`AdmitRequest`), subject to the existing receiver admission (message policy, `ask` hold, membership); the request MUST carry the room id, the sender and the room messages since that member's last room request (at most 20 entries, 8,192 bytes).
+- **FR-166**: Each member's answer MUST return into the room through the existing reply path (`replyIntoConversation`), authored by the responder, and MUST be fanned out to the members it @-names per FR-165.
+- **FR-201**: The room MUST show each addressed member's request state — queued, held for your approval, working, waiting for you in <Agent>'s main chat, answered, cancelled — updated live and restored after reload.
+- **FR-168**: An agent's room message MUST be input only: it can never resolve an approval, answer a user question card, run a command or change configuration (#1068 §6).
+- **FR-169**: Approvals, questions and secret cards raised while a member works on a room request MUST appear in that agent's main chat (standard behaviour, with the attention marker); the room MUST show "waiting for you in <Agent>'s main chat" for that member.
+- **FR-170**: Stop in a room MUST stop further fan-out and cancel the room's pending (queued or held) requests; fan-out resumes only when the user writes again. A member turn already running is governed by FQ-RM-1.
+- **FR-171**: The room header MUST show the members and the room's running cost = the sum of the room-originated turns in members' main sessions; a turn whose inputs came from several sources is attributed to the room in proportion to its room-originated inputs.
+- **FR-202**: In an agent's main chat, room traffic (requests and the agent's room answers) MUST appear as compact, collapsed entries "From group <name>: …", expandable, visible to the agent and the user (GC-9 A).
+- **FR-172**: Room creation, membership changes, mutes and deletion MUST be audited (who, which room, which agents, when).
+- **FR-173**: Direct session-to-session messages MUST keep the existing peer rules, including cross-workspace main-to-main messages; rooms never span workspaces.
+- **FR-174**: The sidebar MUST show a "Group chats" section per workspace under the agent rows: team room first, then squads, then ad-hoc rooms, each with the attention marker (GC-4).
+- **FR-175**: The room view MUST provide a header with members, cost and per-member state, an @-picker offering `@all` and each member, and (squads and ad-hoc rooms) membership editing; squad creation MUST be a web dialog (name + members from the workspace).
+- **FR-176**: Room message size and rate limits MUST reuse the existing session messaging limits (65,536 bytes per message; 60 admissions/minute per sender and target).
+- **FR-203**: Room requests in the ledger MUST be marked as room-originated so the agent's answer is routed to the room, not to any other conversation, and a cancelled room request MUST NOT produce a room answer.
 
 ### O. Stopped channel group conversations (US-18; #892; not grilled)
 - **FR-180**: A channel group conversation stopped by the operator MUST resume only on a message from a person individually on the connection's allow list or person table, or from the operator in the web app.
@@ -2477,10 +2491,10 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-186**: For a participant whose flag is on, steering commands MUST work as in the web chat and change only that conversation: `/model`, `/effort` (refused while no per-conversation effort setting exists), `/clear`, `/stop`, `/stop-redirect`, `/cancel`, `/status`, `/goal`, `/loop`, `/remember`, `/recall`, `/retrospective`.
 - **FR-187**: UI-only commands MUST be refused on channels for every participant with "available in the web app or CLI": `/channels`, `/config`, `/skills`, `/tasks` (administration) and `/sessions`, `/switch-agent` (they open web views). No channel command MUST change agent or global settings; the agent-wide model-change path MUST be removed from the channel surface.
 - **FR-188**: A steering command from a participant whose flag is off MUST NOT be executed or passed to the agent; the participant MUST be answered "Commands are not enabled for you in this conversation." at most once per participant per conversation per 24 hours; every attempt MUST be logged. `/help` MUST be answered for every allowed participant and list only what they may use.
-- **FR-189**: In web group chats the steering flag MUST NOT apply: the user's commands work as in any web chat on the group conversation; agents never issue commands (FR-168).
+- **FR-189**: In rooms the steering flag MUST NOT apply: the user's `/stop` acts as room Stop and `/help` is answered; commands that change an agent's conversation settings (`/model`, `/effort`, `/clear`, …) are refused in a room with "a room has no model; use the agent's main chat"; agents never issue commands (FR-168).
 
 ### Q. Conversation awareness (US-20; AW-1, AW-2; not grilled)
-- **FR-190**: At the start of every main-chat turn, the agent's context MUST include a list of its other conversations in the same workspace — extra chats, group chats it belongs to and per-person channel conversations (not helper or task sessions) — each with who, where, last activity and a one-line summary; at most 20 entries, most recent first, under 2,000 characters; no message content.
+- **FR-190**: At the start of every main-chat turn, the agent's context MUST include a list of its other conversations in the same workspace — per-person channel conversations and any other non-main conversations it owns (not rooms, whose traffic already reaches the main session per GC-8, and not helper or task sessions) — each with who, where, last activity and a one-line summary; at most 20 entries, most recent first, under 2,000 characters; no message content.
 - **FR-191**: The one-line summary MUST be the first sentence (≤ 140 characters) of the conversation's latest idle recap; without a recap it MUST be the conversation title. Building the list MUST make no model call.
 - **FR-192**: A new read-only tool `read_conversation` MUST return recent entries (text only, paged, at most 50 per page) of one of the caller's own conversations or groups in the same workspace; it MUST NOT send, resume, change or mark anything in that conversation.
 - **FR-193**: `read_conversation` MUST be refused for conversations the caller is not part of, for other workspaces and for unknown ids.
@@ -2512,9 +2526,9 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **SC-013**: At every crash cut of BDD-6.24 the recovered request state matches the store (0 "interrupted" requests with stored references; 0 duplicate versions from re-submission).
 - **SC-014**: After each transition of BDD-6.25 the exact value of every stored card secret is masked in 100% of runs.
 - **SC-016**: For the BDD-16.2/16.3 fixture, 100% of messages reach the specified agent, 0 stranger messages start a turn, and the stranger count on the connection status equals the strangers sent.
-- **SC-017**: In a three-agent group, "status?" yields exactly 3 answers and "@Jim plan" exactly 1; after Stop, 0 member turns start; the header cost equals the sum of member session costs.
+- **SC-017**: In a three-agent room, "status?" creates exactly 3 requests in members' main sessions and 3 room answers, "@Jim plan" exactly 1; after Stop, 0 pending room requests remain; the header cost equals the sum of room-originated turns.
 - **SC-018**: Across 20 runs, 0 awareness lists contain another workspace's conversation, note or carry-forward; 0 model calls are made to build the list.
-- **SC-019**: A self hand-off produces exactly 1 main-session turn and exactly 1 report in the group, and 0 further hand-offs or member turns from the report.
+- **SC-019**: Every room request and room answer appears exactly once as a collapsed entry in the agent's main chat, and every addressed member's state in the room matches its request state after a reload.
 - **SC-015**: Tool-versus-Settings contention on each of the four shared resources produces 0 silent overwrites in 100 race iterations.
 
 ---
@@ -2642,23 +2656,23 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-160 | GC-1; #1068 §3 | US-17 | 17.1, 17.12 | 110, 119 |
 | FR-161 | GC-1, GC-3 | US-17 | 17.2, 17.10 | 111, 119 |
 | FR-162 | GC-1; #1068 §5 | US-17 | 17.9, 17.12 | 110, 111 |
-| FR-163 | GC-1; reuse | US-17 | 17.3, 17.6 | 113, 115 |
+| FR-199 | GC-8 | US-17 | 17.3, 17.15 | 113, 119 |
+| FR-200 | GC-8; reuse | US-17 | 17.3, 17.14, 17.16 | 113, 128, 130 |
+| FR-201 | GC-8 | US-17 | 17.11, 17.14 | 117, 128 |
+| FR-202 | GC-9 A | US-17 | 17.15 | 129, 119 |
+| FR-203 | GC-8 | US-17 | 17.6, 17.17 | 115 |
 | FR-164 | GC-2 | US-17 | 17.3 | 112, 113, 119 |
 | FR-165 | GC-2, GC-5; GQ-1 A | US-17 | 17.4, 17.5, 17.19 | 112, 114, 135 |
 | FR-166 | GC-1; reuse | US-17 | 17.3, 17.4 | 113 |
-| FR-167 | GC-1 | US-17 | 17.4 | 113 |
 | FR-168 | #1068 §6 | US-17 | 17.8 | 116 |
-| FR-169 | FA:FQ-8 pattern | US-17 | 17.11 | 117 |
-| FR-170 | GC-5 | US-17 | 17.6 | 115, 119 |
-| FR-171 | GC-5 | US-17 | 17.5, 17.7 | 114, 119 |
+| FR-169 | GC-8 | US-17 | 17.11 | 117 |
+| FR-170 | GC-5, GC-8 | US-17 | 17.6, 17.17 | 115, 119 |
+| FR-171 | GC-5, GC-8 | US-17 | 17.5, 17.7 | 114, 119 |
 | FR-172 | #1068 §6 | US-17 | 17.9, 17.12 | 111 |
 | FR-173 | #1068 §5 | US-17 | 17.13 | 118 |
 | FR-174 | GC-4 | US-17 | 17.1, 17.2 | 119 |
 | FR-175 | GC-2, GC-3 | US-17 | 17.2, 17.3, 17.7 | 119 |
 | FR-176 | #1068 §6 | US-17 | 17.3 | 113 |
-| FR-177 | GC-7 | US-17 | 17.14, 17.16 | 128, 130 |
-| FR-178 | GC-7 | US-17 | 17.14, 17.15 | 128, 129 |
-| FR-179 | GC-7 | US-17 | 17.15, 17.16, 17.17 | 129, 130 |
 | FR-180 | #892 | US-18 | 18.1 | 120 |
 | FR-181 | #892 | US-18 | 18.2 | 121 |
 | FR-182 | #892; GQ-2 C | US-18 | 18.1, 18.3 | 120 |
@@ -2716,7 +2730,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | `docs/skills.md` | Skills via Omnipus; target workspace shelf | WU-3 |
 | `docs/connectors.md`, `docs/connectors/telegram.md`, `docs/connectors/google-chat.md` (incl. steering flags, UI-only commands, paused-group notice) | `connect_channel` binds the channel's main agent in a workspace; proven vs not tested; QR in chat; unbound or unrouted messages fail loudly; **person table, allow list, "not authorised" replies and stranger status, conversation mode per connection, group behaviour, legacy type-level rules ignored** | WU-7, WU-1, WU-14 |
 | `docs/settings.md` | System agents; on the Connectors page each connection's Configure side panel requires a workspace and a main agent and holds the person table, allow list, steering flags and conversation mode; no default-agent or global conversation-scope setting; saved secrets list | WU-10, WU-1, WU-6, WU-14 |
-| `docs/group-chats.md` (**new page**) | Team room, squads, ad-hoc groups; "handed to <Agent>'s main session" and where its approvals appear; @all default and @-names; agent-to-agent replies with no limit and visible cost (R-A4); Stop; members and audit; one workspace only | WU-15 |
+| `docs/group-chats.md` (**new page**) | Rooms: team room, squads, ad-hoc rooms; each agent answers from its own main chat, where room traffic shows as collapsed entries and where its approvals appear; queued/held states; Stop cancels pending requests; @all default and @-names; agent-to-agent replies with no limit and visible cost (R-A4); Stop; members and audit; one workspace only | WU-15 |
 | `docs/memory.md` | Conversation awareness: what the agent sees, `read_conversation`, automatic notes per workspace, recaps-off behaviour | WU-17 |
 | `docs/mail.md` | `connect_mailbox`; read vs send readiness | WU-7 |
 | `docs/providers-and-models.md` | What the provider check proves; Omnipus's model in System agents | WU-3, WU-10 |
@@ -2744,7 +2758,7 @@ Pages are drafted by the implementing lead in the same change; WU-12 is a final 
 | WU-10 | Screens incl. state/keyboard contract, kickoff retarget, workspace entry | Feature | frontend-lead; backend-lead (kickoff) | WU-0, WU-2, WU-8 |
 | WU-11 | Removals, guard scripts, retired-surfaces list | Feature (structural, cross-tree) | frontend-lead; backend-lead; prometheus (CLAUDE.md) | WU-10 |
 | WU-14 | Channel person routing (US-16): instance-scoped bindings, allow-list stranger handling, main agent after person table, per-connection conversation mode, derived per-agent list (agent editor slide-over), routing in the Connectors Configure side panel, steering flags, `connect_channel`/`configure_channel` rule parameters (**not grilled — focused review per founder**) | Feature | backend-lead, frontend-lead; prometheus (W13 skill text) | WU-0, WU-1, WU-7 |
-| WU-15 | Group chats: team room, squads, ad-hoc groups, mention routing, member sessions, Stop, cost, audit, self hand-off to the own main (GC-7), sidebar section, group view and squad dialog (**not grilled**) | Feature | backend-lead, frontend-lead | WU-0, WU-8, WU-10 |
+| WU-15 | Rooms: room entity and transcript, fan-out over the existing request path (mentions, room context, member states, cancellation, cost attribution), room UI (sidebar section, header, @-picker, squad dialog), collapsed main-chat entries (**not grilled**; smaller than before — no per-member sessions, no hand-off) | Feature | backend-lead, frontend-lead | WU-0, WU-8, WU-10 |
 | WU-16 | Channel conversation control: stopped-group resume authority (#892), conversation-scoped commands (#955) (**not grilled**) | Feature | backend-lead | WU-14 |
 | WU-17 | Conversation awareness: turn-start list, `read_conversation` + policy entries, recap outcomes to per-workspace memory room, per-workspace carry-forward (**not grilled**) | Feature | backend-lead; prometheus (prompt text) | WU-14, WU-15 |
 | WU-12 | Docs sweep | Standard | implementing leads; docs-verifier | all |
@@ -2791,7 +2805,18 @@ UI development of WU-10 may start in parallel with WU-3/WU-4 against generated c
 
 ## 17. Open questions for the founder
 
-None open. RQ-1–RQ-4 (§0.7) and GQ-1–GQ-4 (§0.8) are answered. The GQ-3 detail choices in §0.8 are listed for visibility.
+RQ-1–RQ-4 (§0.7) and GQ-1–GQ-4 (§0.8) are answered. New with GC-8:
+
+**FQ-RM-1 — What room Stop does to an answer already being worked on.** Context: a room message becomes a request in each member's own main chat. Stop in the room cancels requests that have not started yet. But a member may already be working on it in its main chat — that work may also include other things the user asked in that main chat. Impact: whether room Stop reaches into agents' main chats.
+- **A** — Room Stop leaves running work alone; when it finishes, the answer is posted to the room marked "after Stop" and its @-names are not passed on until the user writes again.
+- **B** — Room Stop also stops any main-chat turn that is working on a room request (it would also stop the other things that turn was doing).
+- **C** — As A, but the late answer is dropped from the room (still visible in the agent's main chat).
+- **Recommendation: A** — a room never interrupts work in someone's main chat, and the runaway-loop case is still stopped because nothing is passed on.
+
+**FQ-RM-2 — One-agent rooms and "extra chats".** Context: GC-1 said group chats bring back extra chats (a second, separate conversation with one agent). With rooms (GC-8) every room message is worked on in the agent's main chat, so a one-agent room is a separate room transcript but not a separate working context — the main chat sees everything. Impact: whether "extra chats" with their own context come back at all.
+- **A** — Allow one-agent ad-hoc rooms as topic rooms (work still in the main chat); separate-context extra chats stay absent for now.
+- **B** — Rooms need at least two agents; extra chats with their own context return separately (a later decision).
+- **Recommendation: A** — simplest, consistent with GC-8; a separate-context chat can come back later if missed.
 
 ---
 
@@ -2814,8 +2839,8 @@ None open. RQ-1–RQ-4 (§0.7) and GQ-1–GQ-4 (§0.8) are answered. The GQ-3 de
 - #1277 is fixed separately; in-use removal waits for it.
 - External-program workers keep their own runtime; no secret card or private secrets.
 - R-A1–R-A3 are documented, not mitigated beyond the ask list.
-- **R-A4 (founder-accepted 2026-10-13, after a stress test):** no limit on agent-to-agent replies in group chats; two agents can keep answering each other with no human present, each reply costing money. Mitigation is visibility only: cost per group in the header and the existing Stop (GC-5).
-- An ad-hoc group may have a single agent; that is how "extra chats" return (D7 follow-up).
+- **R-A4 (founder-accepted 2026-10-13, after a stress test):** no limit on agent-to-agent replies in rooms (each reply is a turn in the answering agent's main session); two agents can keep answering each other with no human present, each reply costing money. Mitigation is visibility only: cost per group in the header and the existing Stop (GC-5).
+- An ad-hoc room may have a single agent (FQ-RM-2 decides whether that is wanted); with GC-8 such a room's work happens in the agent's main chat, so it is not an independent extra chat.
 
 ## 20. Clarifications
 
@@ -2836,5 +2861,5 @@ None open. RQ-1–RQ-4 (§0.7) and GQ-1–GQ-4 (§0.8) are answered. The GQ-3 de
 - GC-1–GC-6 → group chats (team room, squads, ad-hoc) in scope; @all default; user-only squads; no agent-to-agent limit (R-A4); channel commands conversation-scoped.
 - AW-1, AW-2 → list + read-only look-up + automatic notes; same workspace only.
 - GQ-1 A; GQ-2 C (paused notice once per stop); GQ-3 per-participant steering flag, off by default; GQ-4 A (team-room mute).
-- GC-7 → self hand-off from a group to the agent's own main session in that workspace; report back once; no bounce.
+- GC-7 → self hand-off (later removed by GC-8). GC-8 → group chats are rooms; agents work in their main sessions. GC-9 A → collapsed room entries in main chats.
 - OQ-5 → first "keep the rules, separate feature"; then the same day: channel person routing is **in scope** of this implementation (US-16, OSA-14), reusing the bindings engine.
