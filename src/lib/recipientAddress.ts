@@ -70,6 +70,18 @@ export function parseAddressedAgent(content: string, candidates: readonly NamedC
 }
 
 /**
+ * The agents a leading "@<Name>" can address from the chat of `activeAgentId`:
+ * not that chat's own agent, never a worker, only chat-eligible agents. The
+ * ONE filter the send path and the held-row label share, so a row can never
+ * name a different addressee than the one the message was sent to.
+ */
+export function addressableAgents(agents: readonly Agent[], activeAgentId: string | null): Agent[] {
+  return agents.filter(
+    (agent) => agent.id !== activeAgentId && !isWorker(agent) && isChatEligibleAgent(agent),
+  )
+}
+
+/**
  * Full send-side resolution: the exact-name parse of `content` against the
  * picker-eligible agents, narrowed by the addressing rules, mapped to the
  * generated wire pair.
@@ -96,13 +108,7 @@ export function resolveSendRecipient(params: {
 }): OutboundRecipient | null {
   if (!params.content.startsWith('@')) return null
   if (!params.activeWorkspaceId) return null
-  const candidates = params.agents.filter(
-    (agent) =>
-      agent.id !== params.activeAgentId
-      && !isWorker(agent)
-      && isChatEligibleAgent(agent),
-  )
-  const hit = parseAddressedAgent(params.content, candidates)
+  const hit = parseAddressedAgent(params.content, addressableAgents(params.agents, params.activeAgentId))
   if (!hit) return null
   return { workspace_id: params.activeWorkspaceId, agent_id: hit.id }
 }

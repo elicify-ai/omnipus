@@ -25,7 +25,7 @@ import {
   readLLMErrorFromFrame,
   sanitizeLegacyErrorMessage,
 } from '@/lib/llm-error'
-import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
+import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, endTurnState, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { flushHeldClearProjection, forgetClearRefreshForSend, settleClearRefetchAfterTurn } from '../clear-refetch'
@@ -1766,8 +1766,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 // replay-terminating done for this session never mistakes a
                 // stale id for a still-open turn.
                 markTurnFinished(sid, draft.activeTurnId)
-                draft.activeTurnId = null
-                draft.activeTurnAgentId = null
+                endTurnState(draft)
                 if (clearReplayingNow) {
                   draft.isReplaying = false
                 }
@@ -2015,8 +2014,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     // done would — see the matching comment on the C8 sweep
                     // branch below for why every branch here clears this.
                     markTurnFinished(targetSid, draft.activeTurnId)
-                    draft.activeTurnId = null
-                    draft.activeTurnAgentId = null
+                    endTurnState(draft)
                   }) as Partial<SessionChatState>
                 }
               }
@@ -2139,8 +2137,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   // stale activeTurnId as "replay still awaiting catch-up"
                   // and open a stray empty placeholder.
                   markTurnFinished(targetSid, draft.activeTurnId)
-                  draft.activeTurnId = null
-                  draft.activeTurnAgentId = null
+                  endTurnState(draft)
                 }) as Partial<SessionChatState>
               }
               // Same catalogue already on the last bubble (replay drew it,
@@ -2150,8 +2147,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   draft.isStreaming = false
                   if (clearReplayingNow) draft.isReplaying = false
                   markTurnFinished(targetSid, draft.activeTurnId)
-                  draft.activeTurnId = null
-                  draft.activeTurnAgentId = null
+                  endTurnState(draft)
                 }) as Partial<SessionChatState>
               }
               // No this-turn assistant to coalesce into — last is a prior
@@ -2186,8 +2182,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 ...applyMessageArray(msgs, b),
                 isStreaming: false,
                 ...(clearReplayingNow ? { isReplaying: false } : {}),
-                activeTurnId: null,
-                activeTurnAgentId: null,
+                activeTurnId: null, activeTurnAgentId: null, idleArmedToolCalls: undefined,
               }
             })
             // FR-030/031 (U10b): an errored turn ends the session's turn

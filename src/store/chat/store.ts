@@ -9,7 +9,7 @@ import { recipientAddressHoldsQueue, setRosterReleaseDrain } from './recipientSe
 import { registerWorkspaceEntryQueueResume } from '@/store/session/workspaceEntryFlow'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
-import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
+import { endTurnState, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
 import { EMPTY_BUCKET, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from './runtime-state'
 import { applyMessageArray, emptySessionState, omitKeys } from './session'
 import { flushHeldClearProjection, retryClearTranscriptRead } from './clear-refetch'
@@ -576,8 +576,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           return {
             ...applyMessageArray(msgs, b),
             isStreaming: false,
-            activeTurnId: null,
-            activeTurnAgentId: null,
+            activeTurnId: null, activeTurnAgentId: null, idleArmedToolCalls: undefined,
           }
         }
         // FR-21 / T21–T26: set isStreaming:false AND status:'interrupted' on the message.
@@ -614,8 +613,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // this is one of them. Leaving activeTurnId set here would let a
           // later, unrelated done for this session misread it as "replay
           // still awaiting catch-up" and open a stray empty placeholder.
-          draft.activeTurnId = null
-          draft.activeTurnAgentId = null
+          endTurnState(draft)
         }) as Partial<SessionChatState>
       })
       // An explicit `sessionId` (e.g. the browser panel's pinned session)

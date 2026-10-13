@@ -314,6 +314,19 @@ export function advanceEventTime(current: string | null, incoming: string | null
 }
 
 /**
+ * The turn-ended write shared by every terminal path (done, error, Stop):
+ * no announced turn, and no idle-armed tool mark. A mark exists only so a
+ * straggler's own result can release the busy flag; once a turn has ended
+ * (or the user stopped it) a mark whose result never came would later let an
+ * unrelated lone tool result blink Stop off mid-turn (R3-SPA-SFH-04).
+ */
+export function endTurnState(draft: Pick<SessionChatState, 'activeTurnId' | 'activeTurnAgentId' | 'idleArmedToolCalls'>): void {
+  draft.activeTurnId = null
+  draft.activeTurnAgentId = null
+  draft.idleArmedToolCalls = undefined
+}
+
+/**
  * True when the bucket's busy flag (`isStreaming`, which draws the composer's
  * Stop button) has nothing behind it: no message is streaming, no tool call is
  * running, no turn was announced active, no replay is rebuilding history, and

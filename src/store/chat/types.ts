@@ -310,6 +310,13 @@ export type ChatMessage = Message & {
    */
   errorFacts?: GeneratedLLMError['facts']
   /**
+   * A message-scoped refusal notice (frames.ts, the C2 branch): an error bubble
+   * appended while the turn the refused message was sent into KEEPS RUNNING.
+   * It is not that turn's reply, so busyFlagIsUnbacked looks past it - and only
+   * past it; a real turn-ending error bubble is a reply and is not skipped.
+   */
+  refusalNotice?: boolean
+  /**
    * ADR-070 §2.4 — true when this assistant bubble was closed because a
    * mid-turn steer (a follow-up sent while it was still streaming) landed
    * after it, rather than because the reply/turn fully finished. Debugging/
@@ -323,13 +330,6 @@ export type ChatMessage = Message & {
    * both via `findOpenAssistantMessageId`'s eligibility check or an
    * equivalent explicit exclusion, never by a UI render branch.
    */
-  /**
-   * A message-scoped refusal notice (frames.ts, the C2 branch): an error bubble
-   * appended while the turn the refused message was sent into KEEPS RUNNING.
-   * It is not that turn's reply, so busyFlagIsUnbacked looks past it - and only
-   * past it; a real turn-ending error bubble is a reply and is not skipped.
-   */
-  refusalNotice?: boolean
   closedBySteer?: boolean
   /**
    * Operator-reported UX fix (2026-09-08 — a `/goal` activation left the

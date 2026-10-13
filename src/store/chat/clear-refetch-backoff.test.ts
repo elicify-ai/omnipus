@@ -15,6 +15,8 @@ import { retryClearTranscriptRead, FREE_UNRESOLVED_READS, MAX_TURN_ENDS_BETWEEN_
 import type { ServerFrame } from '@/lib/ws'
 
 const requestMock = vi.hoisted(() => vi.fn())
+const logDiagnostic = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/telemetry', async (orig) => ({ ...(await orig<typeof import('@/lib/telemetry')>()), logDiagnostic }))
 vi.mock('@/lib/api/http', async (importOriginal) => ({ ...(await importOriginal<typeof import('@/lib/api/http')>()), request: requestMock }))
 
 const SID = 'sess-clear-backoff'
@@ -39,6 +41,7 @@ const withBucket = (sid: string | null, updater: (b: never) => object) => {
 beforeEach(() => {
   seq = 0
   requestMock.mockReset()
+  logDiagnostic.mockClear()
   queryClient.removeQueries()
   delete pendingClearRefetches[SID]
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'jim', activeAgentType: null })
@@ -81,5 +84,32 @@ describe('unresolvable /clear: the transcript re-read backs off', () => {
     retryClearTranscriptRead(SID, withBucket as never)
     await settle()
     expect(requestMock.mock.calls.length).toBe(before + 1)
+  })
+})
+
+describe('R3-SPA-SFH-05: the back-off counts real misses only and leaves a trace', () => {
+  it('reads that merely joined a fetch already in flight do not burn the free reads', async () => {
+    for (let round = 0; round < FREE_UNRESOLVED_READS + 3; round++) {
+      let release!: (rows: never[]) => void
+      const slow = new Promise<never[]>((resolve) => { release = resolve })
+      const inFlight = queryClient.fetchQuery({ queryKey: ['messages', SID], queryFn: () => slow, staleTime: 0 })
+      await turnEnd() // the clear's re-read joins `inFlight`
+      release([])
+      await inFlight
+      await settle()
+    }
+    expect(pendingClearRefetches[SID]?.unresolvedReads ?? 0, 'joined reads are not misses').toBe(0)
+    const before = requestMock.mock.calls.length
+    await turnEnd()
+    expect(requestMock.mock.calls.length, 'the next turn end still reads at once').toBe(before + 1)
+  })
+
+  it('logs once when a skip run starts, with the session', async () => {
+    for (let i = 0; i < 20; i++) await turnEnd()
+    const skips = logDiagnostic.mock.calls.filter(([event]) => event === 'clearRefetchBackoffSkip')
+    expect(skips.length).toBeGreaterThanOrEqual(1)
+    expect(skips[0][1]).toMatchObject({ sessionId: SID })
+    const skippedTurnEnds = 20 - requestMock.mock.calls.length
+    expect(skips.length, 'once per run of skips, not once per skipped turn end').toBeLessThan(skippedTurnEnds)
   })
 })
