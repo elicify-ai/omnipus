@@ -3,7 +3,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-//go:build !records_no_sqlite && !mipsle && !netbsd && !windows && !(freebsd && arm)
+//go:build !records_no_sqlite && !mipsle && !windows
 
 // package propindex_test (external/black-box), not propindex: this file
 // imports pkg/knowledge for the dual-index measurement below, and
