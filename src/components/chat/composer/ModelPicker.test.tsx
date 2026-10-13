@@ -22,7 +22,7 @@
  * (describe('OmnipusComposer — model selector store contracts (FR-010)')) —
  * out of scope here since ModelPicker does not call sendMessage itself.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -30,6 +30,7 @@ import { useChatStore, type ChatMessage } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
+import { fetchAgents } from '@/lib/api'
 
 // ── API mocks ─────────────────────────────────────────────────────────────────
 
@@ -129,6 +130,31 @@ beforeEach(() => {
     useChatStore.setState({ nextModel: null, nextModelProvider: null, messages: [] })
     useUiStore.setState({ modelSelectorOpen: false })
   })
+})
+
+// H6 R2: the agent-default seed test swaps the fetchAgents fixture (an
+// implementation override SURVIVES vi.clearAllMocks). Restore the factory
+// list byte-identically so no other describe inherits it.
+afterEach(() => {
+  vi.mocked(fetchAgents).mockResolvedValue([
+    {
+      figure: 'Omnipus', role: 'general',
+      id: 'mia',
+      name: 'Mia',
+      type: 'core',
+      status: 'active',
+      model: 'z-ai/glm-5.2',
+      description: 'Assistant',
+    },
+    {
+      figure: 'Omnipus', role: 'general',
+      id: 'jim',
+      name: 'Jim',
+      type: 'core',
+      status: 'idle',
+      description: 'Orchestrator',
+    },
+  ] as never)
 })
 
 // ── Render + testid ───────────────────────────────────────────────────────────
@@ -728,7 +754,7 @@ describe('ModelPicker — H6 same model under two providers: only the picked pro
     expect(rows[1]).not.toHaveAttribute('data-chosen') // openai-chatgpt's row
   })
 
-  it('a SEEDED value (transcript/agent default) shows exactly ONE check via the first-provider lookup, not two', async () => {
+  it('a SEEDED value offered by TWO providers shows NO chosen row — list order is not a recorded choice', async () => {
     act(() => {
       useChatStore.setState({ messages: [assistantMsg('m1', 'gpt-6.1-sol')] })
     })
@@ -743,11 +769,65 @@ describe('ModelPicker — H6 same model under two providers: only the picked pro
     await vi.waitFor(() => screen.getAllByText('gpt-6.1-sol'))
     const rows = dualProviderRows('gpt-6.1-sol')
     expect(rows).toHaveLength(2)
-    const chosenRows = rows.filter((el) => el.hasAttribute('data-chosen'))
-    expect(chosenRows).toHaveLength(1)
-    // First-wins resolves to the FIRST provider in list order (grok-local),
-    // the same precedence ModelSelector renders in.
+    // H6 R2 (review round 1 — F3): a provider-less seed resolves a row only
+    // when EXACTLY ONE provider serves the slug. Two providers → ambiguous →
+    // no row chosen. The old first-wins lookup presented list order (grok-
+    // local first) as if it were the provider that served the last turn.
+    expect(rows[0]).not.toHaveAttribute('data-chosen')
+    expect(rows[1]).not.toHaveAttribute('data-chosen')
+  })
+
+  it('a SEEDED value offered by exactly ONE provider marks that provider\'s row', async () => {
+    act(() => {
+      useChatStore.setState({ messages: [assistantMsg('m1', 'grok-4')] })
+    })
+    renderPicker()
+    await waitForLoadedTrigger()
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().nextModel).toBe('grok-4')
+    })
+
+    act(() => { useUiStore.getState().setModelSelectorOpen(true) })
+    await vi.waitFor(() => screen.getAllByText('grok-4'))
+    const rows = dualProviderRows('grok-4')
+    expect(rows).toHaveLength(1)
     expect(rows[0]).toHaveAttribute('data-chosen')
+  })
+
+  it('an AGENT-DEFAULT seed carries the agent\'s own provider — the check lands on the agent\'s provider row, not the first listing', async () => {
+    // The agent response has an explicit `provider` field; the seed must
+    // pass it through (H6 R2 F3). Mirror the reviewed scenario: agent data
+    // already loaded, then navigate to an EMPTY conversation — the seed
+    // comes from the agent default, transcript-less.
+    vi.mocked(fetchAgents).mockResolvedValue([
+      {
+        figure: 'Omnipus', role: 'general',
+        id: 'mia',
+        name: 'Mia',
+        type: 'core',
+        status: 'active',
+        model: 'gpt-6.1-sol',
+        provider: 'openai-chatgpt',
+        description: 'Assistant',
+      },
+    ] as never)
+    renderPicker()
+    await waitForLoadedTrigger() // agents + providers queries settled
+
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 'sess_empty', activeAgentId: 'mia' })
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().nextModel).toBe('gpt-6.1-sol')
+      expect(useChatStore.getState().nextModelProvider).toBe('openai-chatgpt')
+    })
+
+    act(() => { useUiStore.getState().setModelSelectorOpen(true) })
+    await vi.waitFor(() => screen.getAllByText('gpt-6.1-sol'))
+    const rows = dualProviderRows('gpt-6.1-sol')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).not.toHaveAttribute('data-chosen') // grok-local — first listing, NOT the agent's provider
+    expect(rows[1]).toHaveAttribute('data-chosen') // openai-chatgpt — the agent's own provider
   })
 
   it('navigating to a different session re-seeds and releases the picked provider', async () => {

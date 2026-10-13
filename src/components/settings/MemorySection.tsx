@@ -10,7 +10,7 @@ import { ModelSelector } from '@/components/ui/model-selector'
 import { Switch } from '@/components/ui/switch'
 import { fetchMemorySettings, updateMemorySettings, fetchProviders, getErrorMessage } from '@/lib/api'
 import type { MemorySettings, FallbackModel } from '@/lib/api'
-import { useModelToProvider } from '@/lib/agents/modelToProvider'
+import { useModelToProvider, resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
 import { isProviderUsable } from '@/lib/providerStatus'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
@@ -158,10 +158,20 @@ export function MemorySection(): React.ReactElement {
 
   const [form, setForm] = useState<FormState>(DEFAULT_SETTINGS)
 
+  // H6 R2 (review round 1 — F2): the provider row the recap PRIMARY pick was
+  // made under, kept in UI-only state because `recap_model` is a bare slug
+  // on the wire (no provider sibling — tracking issue #1291). Without it, a
+  // pick under the second provider was immediately replaced by the display
+  // lookup's guess. Reset on hydration (the saved slug carries no provider
+  // record) and on free-text edits; an ambiguous saved value then shows NO
+  // chosen row instead of a first-listed guess.
+  const [recapPickedProvider, setRecapPickedProvider] = useState<string | null>(null)
+
   const { state: saveState, setState: setSaveState, errorMessage, setErrorMessage } = useSaveStatus()
 
   useEffect(() => {
     if (!data) return
+    setRecapPickedProvider(null)
     setForm({
       auto_recap_enabled: data.auto_recap_enabled ?? DEFAULT_SETTINGS.auto_recap_enabled,
       idle_timeout_minutes: data.idle_timeout_minutes ?? DEFAULT_SETTINGS.idle_timeout_minutes,
@@ -414,7 +424,8 @@ export function MemorySection(): React.ReactElement {
             <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Summarization model</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
               Recap runs a background summarization call — a fast, cheap model is recommended.
-              Leave empty to use the default model.
+              Leave empty to use the default model. The provider shown next to the model is
+              display-only for this setting: recap runs are routed by the model name.
             </p>
           </div>
 
@@ -430,12 +441,23 @@ export function MemorySection(): React.ReactElement {
             <ModelSelector
               models={availableModels}
               value={form.recap_model}
-              // H6: first-wins lookup narrows the check to ONE provider's row
-              // when two serve the same slug (recap_model is a bare slug on
-              // the wire — no provider sibling to remember the pick under).
-              valueProvider={modelToProvider(form.recap_model)}
-              onChange={(v) => setField('recap_model', v)}
-              onPairChange={({ model }) => setField('recap_model', model)}
+              // H6 R2 (review round 1 — F2): the explicitly picked provider
+              // wins; a saved/free-typed slug resolves a row only when exactly
+              // one provider serves it (recap_model is a bare slug on the
+              // wire — no provider sibling, issue #1291). An ambiguous saved
+              // value shows no chosen row instead of a first-listed guess.
+              valueProvider={recapPickedProvider ?? resolveUniqueModelProvider(usableProviders, form.recap_model)}
+              onChange={(v) => {
+                // A manual (non-grouped) edit has no provider identity —
+                // drop any remembered pick; a grouped pick's onPairChange
+                // re-sets it in the same tick.
+                setRecapPickedProvider(null)
+                setField('recap_model', v)
+              }}
+              onPairChange={({ model, provider }) => {
+                setRecapPickedProvider(provider || null)
+                setField('recap_model', model)
+              }}
               placeholder="Default model"
               providerGroups={providerGroups}
               triggerTestId="recap-model-trigger"

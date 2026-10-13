@@ -665,24 +665,11 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
         .map((g) => ({ ...g, models: [...g.models].sort((a, b) => a.localeCompare(b)) }))
     : []
   const useGrouped = groupsWithModels.length >= 1
-  // H6: when the flat list is actually ONE provider group's models, its
-  // providerId participates in the chosen/pair identity (see the flat path
-  // below); a bare `models` list has none.
-  const flatGroupProviderId =
-    providerGroups && groupsWithModels.length === 1 ? groupsWithModels[0].providerId : undefined
 
-  // O3: resolve the provider routing key for a given model slug by searching
-  // the providerGroups array. Returns the group's `providerId` or empty string.
-  const resolveProviderId = (modelSlug: string): string => {
-    if (catalogMode) {
-      const group = visibleCatalogGroups.find((g) => g.models.some((m) => m.id === modelSlug))
-      return group?.providerId ?? ''
-    }
-    if (!effectiveProviderGroups) return ''
-    const group = effectiveProviderGroups.find((g) => g.models.includes(modelSlug))
-    return group?.providerId ?? ''
-  }
-
+  // H6 R2 (review round 1): the slug scan REMOVED from the pick path — when
+  // two groups serve the same slug, a scan returns the FIRST one, which is a
+  // cross-row guess, not the clicked row's provider. A row without provider
+  // context now emits '' (unresolved) instead of another row's id.
   // H6 (provider hotfix 2026-10-13): the "chosen" half of the selection
   // identity. With `valueProvider` the check marks the (provider, model)
   // PAIR; without it (`undefined`) the legacy model-id match stands, so a
@@ -692,17 +679,11 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
   const matchesValueProvider = (rowProviderId: string | undefined): boolean =>
     valueProvider === undefined || rowProviderId === undefined || valueProvider === rowProviderId
 
-  // H6 (provider hotfix 2026-10-13): the ROW's providerId is the picked one.
-  // The old `resolveProviderId(model)` slug lookup returns the FIRST group
-  // whose models include the slug — the WRONG provider when two providers
-  // serve the same model (the exact founder-instance shape: picking
-  // gpt-6.1-sol under openai-chatgpt emitted grok-local). The slug lookup
-  // remains only as the fallback for a row with no provider context (a
-  // group without `providerId` — the O3 legacy shape, which still resolves
-  // to '' as before).
+  // H6 (provider hotfix 2026-10-13): the ROW's providerId is the picked one —
+  // never re-derived from the slug (see the removed scan above).
   const handleSelect = (model: string, rowProviderId?: string) => {
     onChange(model)
-    onPairChange?.({ model, provider: rowProviderId ?? resolveProviderId(model) })
+    onPairChange?.({ model, provider: rowProviderId ?? '' })
     setOpen(false)
     setQuery('')
   }
@@ -737,7 +718,14 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
     return (
       <CommandItem
         key={row.key}
-        value={row.model.id}
+        // H6 R2 (review round 1 — F1): cmdk identifies the keyboard-active row
+        // by its item `value`, so two providers serving the same slug both
+        // went aria-selected and Enter dispatched to the FIRST of them —
+        // keyboard selection emitted the first provider even after the click
+        // path was fixed. The value is the same (provider, model) pair the
+        // check mark uses; the visible text and the emitted model slug are
+        // unchanged (onSelect closes over both).
+        value={`${row.providerId}:${row.model.id}`}
         onSelect={() => handleSelect(row.model.id, row.providerId)}
         data-model={row.model.id}
         // FR-029: "chosen" is the operator's pick. cmdk's own aria-selected
@@ -946,7 +934,13 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
                       return (
                         <CommandItem
                           key={model}
-                          value={model}
+                          // H6 R2 (review round 1 — F1): provider/model-qualified
+                          // cmdk identity — see the catalog path above for why
+                          // the bare slug made keyboard Enter pick the first
+                          // provider's row. providerName (the CommandGroup key)
+                          // stands in when a legacy group carries no providerId,
+                          // keeping values unique across groups.
+                          value={`${group.providerId ?? group.providerName}:${model}`}
                           onSelect={() => handleSelect(model, group.providerId)}
                           data-chosen={chosen || undefined}
                           {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
@@ -972,18 +966,20 @@ export function ModelSelector({ models, value, valueProvider, onChange, placehol
                 )
                   .filter(filterModel)
                   .map((model) => {
-                    // H6: pair identity — the single group's providerId (when
-                    // the flat list came from one provider group) participates
-                    // in the chosen match like every other path; a bare
-                    // `models` list has no provider context (undefined →
-                    // legacy model-id match). data-chosen: same chosen-marker
-                    // contract the catalog path uses.
-                    const chosen = value === model && matchesValueProvider(flatGroupProviderId)
+                    // H6 R2 (review round 1): this branch only renders when
+                    // there are NO non-empty provider groups (≥1 group takes
+                    // the grouped branch above — O3 made grouping always-on),
+                    // so a row here has no provider context on either side:
+                    // matchesValueProvider(undefined) is the legacy model-id
+                    // match, and the emitted provider is '' (unresolved).
+                    // data-chosen: same chosen-marker contract the catalog
+                    // path uses.
+                    const chosen = value === model && matchesValueProvider(undefined)
                     return (
                       <CommandItem
                         key={model}
                         value={model}
-                        onSelect={() => handleSelect(model, flatGroupProviderId)}
+                        onSelect={() => handleSelect(model)}
                         data-chosen={chosen || undefined}
                         {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
                       >

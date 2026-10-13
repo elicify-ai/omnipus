@@ -6,7 +6,7 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchProviders } from '@/lib/api'
 import { isProviderUsable } from '@/lib/providerStatus'
-import { useModelToProvider } from '@/lib/agents/modelToProvider'
+import { resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
 import { cn } from '@/lib/utils'
 
 /**
@@ -63,11 +63,13 @@ export function ModelPicker({
       providerId: p.id,
       models: p.models ?? [],
     }))
-  // H6: display-provider lookup for SEEDED values (transcript/agent default
-  // carry no provider) — first-wins over the same provider order the
-  // selector renders, so exactly one row shows the check instead of one per
-  // provider serving the slug.
-  const { lookup: modelToProvider } = useModelToProvider(usableProviders)
+  // H6 R2 (review round 1 — F3): display-provider resolution for SEEDED
+  // values resolves a provider only when EXACTLY ONE usable provider serves
+  // the slug. First-wins (the old lookup) presented list order as if it were
+  // a recorded choice — the wrong row showed the check whenever two
+  // providers advertise the same model. Ambiguous → no row chosen (unknown).
+  // The AGENT-default seed no longer goes through this at all: the agent
+  // response carries an explicit provider, passed through in the seed below.
 
   const transcriptLastModel = useMemo<string | null>(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -85,6 +87,17 @@ export function ModelPicker({
     const agent = agents.find((a) => a.id === activeAgentId)
     if (!agent || typeof agent.model !== 'string') return null
     const trimmed = agent.model.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }, [agents, activeAgentId])
+
+  // H6 R2 (review round 1 — F3): the agent's own provider routing key. The
+  // Agent response carries an explicit `provider` field; an agent-default
+  // seed must carry it through instead of dropping it and letting the
+  // display guess.
+  const activeAgentProvider = useMemo<string | null>(() => {
+    const agent = agents.find((a) => a.id === activeAgentId)
+    if (!agent || typeof agent.provider !== 'string') return null
+    const trimmed = agent.provider.trim()
     return trimmed.length > 0 ? trimmed : null
   }, [agents, activeAgentId])
 
@@ -141,11 +154,17 @@ export function ModelPicker({
       // PRECEDENCE RULE.
       return
     }
-    // H6: the seed path passes no provider (omitted second arg → null) — a
-    // transcript/agent-default value has no provider of its own; the display
-    // derives one via the first-provider lookup above.
-    setNextModel(transcriptLastModel ?? activeAgentModel ?? null)
-  }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, setNextModel])
+    // H6 R2 (review round 1 — F3): the seed's provider depends on its SOURCE.
+    // An agent-default seed carries the agent's own provider (the Agent
+    // response has the field — dropping it made the display guess a
+    // different provider's row). A transcript seed genuinely has none — the
+    // display then resolves a row only when exactly one provider serves the
+    // slug, and otherwise shows no selection rather than a guess.
+    setNextModel(
+      transcriptLastModel ?? activeAgentModel ?? null,
+      transcriptLastModel ? null : activeAgentProvider,
+    )
+  }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, activeAgentProvider, setNextModel])
 
   function onPickerChange(model: string) {
     // provider clears here (omitted second arg → null); a grouped pick's
@@ -187,9 +206,11 @@ export function ModelPicker({
         variant="ghost"
         models={availableModels}
         value={nextModel ?? ''}
-        // H6: the picked provider when there is one; a seeded value resolves
-        // via the first-provider lookup so exactly one row shows the check.
-        valueProvider={nextModelProvider ?? modelToProvider(nextModel ?? '')}
+        // H6: the picked provider when there is one (explicit pick, or the
+        // agent-default seed's carried provider); a provider-less seed
+        // resolves a row only when exactly one provider serves the slug —
+        // ambiguous seeds show NO chosen row instead of a first-listed guess.
+        valueProvider={nextModelProvider ?? resolveUniqueModelProvider(usableProviders, nextModel ?? '')}
         onChange={onPickerChange}
         onPairChange={onPickerPairChange}
         placeholder={activeAgentModel ?? 'Select a model…'}

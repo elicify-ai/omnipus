@@ -26,7 +26,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { ModelSelector } from '@/components/ui/model-selector'
-import { useModelToProvider } from '@/lib/agents/modelToProvider'
+import { useModelToProvider, resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -1486,10 +1486,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             <ModelSelector
               models={availableModels}
               value={model}
-              // H6: the explicit provider (or, for a pre-O3 agent with none
-              // saved, the first-wins lookup) narrows the check to ONE
-              // provider's row when several serve the same slug.
-              valueProvider={primaryProvider || modelToProvider(model)}
+              // H6 R2 (review round 1 — F3): the explicit provider wins; a
+              // pre-O3 agent with none saved resolves a row only when exactly
+              // ONE provider serves the slug — an ambiguous legacy value shows
+              // no chosen row instead of a first-listed guess.
+              valueProvider={primaryProvider || resolveUniqueModelProvider(usableProviders, model)}
               onChange={(v) => { markDirty(); setModel(v) }}
               onPairChange={({ provider: p }) => { setPrimaryProvider(p) }}
               placeholder="Provider default"
