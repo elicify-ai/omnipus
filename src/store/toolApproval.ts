@@ -21,7 +21,7 @@
 //   isApprovalInScope decides whether it is shown for the active workspace.
 
 import { create } from 'zustand'
-import type { ToolApprovalRequiredFrame, SessionStateFrame, CommandSegmentInfo } from '@/lib/api/generated/asyncapi-types'
+import type { ToolApprovalRequiredFrame, SessionStateFrame, CommandSegmentInfo, RoomRef } from '@/lib/api/generated/asyncapi-types'
 
 export interface PendingToolApproval {
   approvalId: string
@@ -49,6 +49,38 @@ export interface PendingToolApproval {
    * never has this — SessionStatePendingApproval carries no segments field.
    */
   segments?: CommandSegmentInfo[]
+  /**
+   * omnipus-system-agent K7 / L1 amendment §1.2 R6: the chat the approval
+   * belongs in — the root of the acting session's chain, server-derived.
+   * Undefined when the server omitted it (equal to `sessionId`, or a server
+   * that does not send it yet); `approvalChatId` falls back to `sessionId`.
+   */
+  rootSessionId?: string
+  /** K7: display name of the acting agent (a helper names itself here). */
+  actingAgentName?: string
+  /** K7 / §6.18: server-derived turn origin, e.g. "while answering Anna on tg-1". */
+  originLabel?: string
+  /** K7 / FR-251: a room's pre-admission card. */
+  roomRef?: RoomRef
+}
+
+/** The chat an approval renders in: its root session, else its own (K7, R6). */
+export function approvalChatId(approval: Pick<PendingToolApproval, 'rootSessionId' | 'sessionId'>): string {
+  return approval.rootSessionId ?? approval.sessionId
+}
+
+function k7Fields(source: {
+  root_session_id?: string
+  acting_agent_name?: string
+  origin_label?: string
+  room_ref?: RoomRef
+}): Pick<PendingToolApproval, 'rootSessionId' | 'actingAgentName' | 'originLabel' | 'roomRef'> {
+  return {
+    ...(source.root_session_id ? { rootSessionId: source.root_session_id } : {}),
+    ...(source.acting_agent_name ? { actingAgentName: source.acting_agent_name } : {}),
+    ...(source.origin_label ? { originLabel: source.origin_label } : {}),
+    ...(source.room_ref ? { roomRef: source.room_ref } : {}),
+  }
 }
 
 /**
@@ -124,6 +156,11 @@ export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({
           ...updated[existing],
           expiresAt,
           segments: frame.segments,
+          // A live frame is complete: it also upgrades a reconnect stub.
+          toolCallId: frame.tool_call_id,
+          turnId: frame.turn_id,
+          args: frame.args,
+          ...k7Fields(frame),
         }
         return { queue: updated }
       }
@@ -141,6 +178,7 @@ export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({
             expiresAt,
             workspaceId: frame.workspace_id,
             segments: frame.segments,
+            ...k7Fields(frame),
           },
         ],
       }
@@ -179,6 +217,7 @@ export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({
             ...a,
             expiresAt: Date.now() + serverEntry.expires_in_ms,
             workspaceId: serverEntry.workspace_id ?? a.workspaceId,
+            ...k7Fields(serverEntry),
           }
         })
 
@@ -204,16 +243,24 @@ export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({
       // (toolCallId === '' && turnId === '') and renders an honest "can't
       // show what's being asked" card with only Deny offered, instead of a
       // normal-looking card with suspiciously empty arguments.
+      //
+      // omnipus-system-agent K7 (L1 amendment §1.3): a server that sends the
+      // complete snapshot (tool_call_id, turn_id, args, segments) restores a
+      // COMPLETE, approvable card after a reload. The stub below remains only
+      // for a snapshot without those fields; bundle B3 makes them required
+      // and deletes this fallback.
       const newStubs: PendingToolApproval[] = livePending
         .filter((s) => !existingIds.has(s.approval_id))
         .map((s) => ({
           approvalId: s.approval_id,
-          toolCallId: '',
+          toolCallId: s.tool_call_id && s.turn_id ? s.tool_call_id : '',
           toolName: s.tool_name,
-          args: {},
+          args: s.tool_call_id && s.turn_id ? (s.args ?? {}) : {},
           agentId: s.agent_id,
           sessionId: s.session_id,
-          turnId: '',
+          turnId: s.tool_call_id && s.turn_id ? s.turn_id : '',
+          ...(s.tool_call_id && s.turn_id && s.segments ? { segments: s.segments } : {}),
+          ...k7Fields(s),
           // Same relative-delta-to-absolute-clock conversion as enqueue()
           // above: expires_in_ms is relative to THIS frame's receipt, never
           // an absolute timestamp — treating it as one would place expiresAt
