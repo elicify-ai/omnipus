@@ -499,3 +499,47 @@ func TestWorkspaceHiddenFlag_HeartbeatDisableStillPausesPlans(t *testing.T) {
 	assert.Equal(t, plan.PausedReasonOwnerDisabled, got.PausedReason,
 		"instrument: a real heartbeat disable must pause the owner's running plans")
 }
+
+// Intended behaviour (founder decision A, 2026-10-13): member_configs on a
+// workspace PUT cannot delete one off-team entry. A PUT that sends only on-team
+// entries prunes EVERY off-team (stale) entry; a PUT that keeps any off-team
+// entry is refused 422; on-team entries are never touched by the prune.
+func TestWorkspaceMemberConfigs_PutPrunesAllOffTeamEntriesAndRefusesKeepingOne(t *testing.T) {
+	env := u1NewEnv(t, false)
+	const ws = "01JMCPRUNEALLOFFTEAM00001"
+	hiddenFlagSeedWorkspace(t, env.home, ws, false, []string{"jim"}, json.RawMessage(`{
+		"jim": {"hidden_from_sidebar": true},
+		"mia": {"hidden_from_sidebar": true},
+		"ray": {"hidden_from_sidebar": true}
+	}`))
+	revision := func() any { return env.getWorkspace(t, ws)["revision"] }
+
+	// Keeping one stale entry (ray) while omitting another (mia) is refused, and
+	// nothing is written.
+	w := env.put(t, ws, map[string]any{"revision": revision(), "member_configs": map[string]any{
+		"ray": map[string]any{"hidden_from_sidebar": true},
+	}})
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, "an off-team key in the request is refused: %s", w.Body.String())
+	for _, id := range []string{"jim", "mia", "ray"} {
+		assert.NotNil(t, hiddenFlagDiskEntry(t, env.api, ws, id), "%s untouched by a refused PUT", id)
+	}
+
+	// An empty member_configs map prunes every off-team entry at once, the
+	// on-team one stays.
+	w = env.put(t, ws, map[string]any{"revision": revision(), "member_configs": map[string]any{}})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Nil(t, hiddenFlagDiskEntry(t, env.api, ws, "mia"), "stale mia pruned")
+	assert.Nil(t, hiddenFlagDiskEntry(t, env.api, ws, "ray"), "stale ray pruned with it")
+	assert.Equal(t, true, hiddenFlagDiskEntry(t, env.api, ws, "jim")["hidden_from_sidebar"], "on-team jim untouched")
+
+	// Sending only an on-team entry prunes the stale ones the same way.
+	hiddenFlagSeedWorkspace(t, env.home, ws, false, []string{"jim"}, json.RawMessage(`{
+		"jim": {"hidden_from_sidebar": true}, "mia": {"hidden_from_sidebar": true}
+	}`))
+	w = env.put(t, ws, map[string]any{"revision": revision(), "member_configs": map[string]any{
+		"jim": map[string]any{"hidden_from_sidebar": true},
+	}})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Nil(t, hiddenFlagDiskEntry(t, env.api, ws, "mia"), "stale mia pruned by an on-team-only PUT")
+	assert.NotNil(t, hiddenFlagDiskEntry(t, env.api, ws, "jim"), "on-team jim kept")
+}

@@ -712,11 +712,17 @@ func (rr *agentLoopRunRecap) persistResponse() {
 		"workspace", rr.agentInst.Home,
 	)
 	if err := memory.WriteLastSession(formatLastSession(parsed.Recap, parsed.WorthRemembering)); err != nil {
+		// The recap and its worth_remembering facts did not land. File no retro:
+		// it is the marker agentSessionHasRetro reads, so filing it would block
+		// every later recap of this session. The audit outcome names the failed
+		// step only; the error text carries filesystem paths and stays in the log.
 		slog.Warn("session_end: failed to write LAST_SESSION.md",
 			"session_id", rr.sessionID,
 			"agent_id", rr.agentInst.ID,
 			"error", err,
 		)
+		rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "write_failed:last_session")
+		return
 	}
 
 	retro := Retro{
@@ -728,11 +734,16 @@ func (rr *agentLoopRunRecap) persistResponse() {
 		NeedsImprovement: parsed.NeedsImprovement,
 	}
 	if err := memory.AppendRetro(rr.sessionID, retro); err != nil {
+		// last-session.md already holds the recap. No retro was filed, so the
+		// session still counts as not recapped and a later pass retries it (and
+		// rewrites last-session.md). The audit names the failed step only.
 		slog.Warn("session_end: failed to append retro",
 			"session_id", rr.sessionID,
 			"agent_id", rr.agentInst.ID,
 			"error", err,
 		)
+		rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "write_failed:retro")
+		return
 	}
 
 	rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "success")

@@ -213,7 +213,16 @@ func TestHandleCancel_SecondClickOnAlreadyClaimedTurn_SendsNoAckFrame(t *testing
 	// Well under the 3s hard-abort timer the FIRST cancel armed, so any
 	// cancel_stage frame observed here is attributable only to the SECOND
 	// click.
-	secondStages := readCancelStageFrames(conn2, 500*time.Millisecond)
+	//
+	// The second click's own `detached` is awaited as an EVENT (a blocking read
+	// with a generous deadline that only a broken server reaches), not sampled in
+	// a fixed window a loaded machine can miss. Exactness is kept by a short quiet
+	// window AFTER that event: any further stage still lands in secondStages and
+	// fails the equality below. The wait uses its own single read loop so the
+	// quiet window is the only read that is expected to time out (a conn caches
+	// its first read error, so a timeout may end a connection's reads only once).
+	secondStages := readCancelStagesUntil(t, conn2, "detached", 10*time.Second)
+	secondStages = append(secondStages, readCancelStageFrames(conn2, 300*time.Millisecond)...)
 	// The FIRST click's own cascade publishes its "detached" stage on the HUB
 	// (websocket_cancel.go's sendCancelReportFrame), so conn2 sees that frame
 	// inside this window even though it belongs to the first cancel. The claim

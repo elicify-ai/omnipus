@@ -101,3 +101,54 @@ func TestClearHeld_NeverFollowsFailed(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	require.Equal(t, "held,failed", ev.kinds(), "held first, then failed, and nothing after failed")
 }
+
+// R4-SRV-CR-03: when the stop settles and the /clear is queued, the hold is over:
+// the receiver is told, once, after the held report.
+func TestClearHeld_BusyTurn_ReportsReleasedOnceAfterHeld(t *testing.T) {
+	prov := newStoppableProvider()
+	f := newBusyClearFixture(t, prov)
+	ev := &clearEventLog{}
+	f.al.SetClearHeldHook(ev.add("held"))
+	f.al.SetClearReleasedHook(ev.add("released"))
+	f.al.SetClearNotPerformedHook(ev.add("failed"))
+
+	require.True(t, f.w.enqueue(f.human("first question")))
+	select {
+	case <-prov.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first turn never reached the model")
+	}
+	require.True(t, f.w.enqueue(f.persistClearRow(t)))
+
+	waitUntilClear(t, "the /clear to run after the stop", 15*time.Second, func() bool { return f.markerCount(t) == 1 })
+	waitUntilClear(t, "the release report", 5*time.Second, func() bool { return strings.Contains(ev.kinds(), "released") })
+	require.Equal(t, []string{"held:" + f.sid + ":clear-row-1", "released:" + f.sid + ":clear-row-1"}, ev.snapshot(),
+		"held first, then released, each once, naming the /clear's own row")
+}
+
+// A /clear refused because the stop did not settle is never released: it failed.
+func TestClearHeld_RefusedClear_IsNeverReportedReleased(t *testing.T) {
+	old := clearStopSettleTimeout
+	clearStopSettleTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { clearStopSettleTimeout = old })
+	prov := newStuckProvider()
+	f := newBusyClearFixture(t, prov)
+	t.Cleanup(func() { close(prov.release) })
+	ev := &clearEventLog{}
+	f.al.SetClearHeldHook(ev.add("held"))
+	f.al.SetClearReleasedHook(ev.add("released"))
+	f.al.SetClearNotPerformedHook(ev.add("failed"))
+
+	require.True(t, f.w.enqueue(f.human("first question")))
+	select {
+	case <-prov.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first turn never reached the model")
+	}
+	require.True(t, f.w.enqueue(f.persistClearRow(t)))
+
+	waitUntilClear(t, "the refusal of the unsettled /clear", 10*time.Second, func() bool { return strings.Contains(ev.kinds(), "failed") })
+	prov.release <- struct{}{}
+	time.Sleep(300 * time.Millisecond)
+	require.Equal(t, "held,failed", ev.kinds(), "a refused /clear is held then failed, never released")
+}

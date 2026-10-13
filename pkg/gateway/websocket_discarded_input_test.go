@@ -293,3 +293,55 @@ func TestClearHeld_IsFramedAsAHeldMessageStatusAndNeverFollowsFailed(t *testing.
 	case <-time.After(200 * time.Millisecond):
 	}
 }
+
+// R4-SRV-CR-03: nothing moves a held /clear row on except its outcome. Once the
+// hold is released the recorded state is no longer "held", so a client retry of
+// the same id is not answered "held" again; a failure that raced ahead stays
+// "failed".
+func TestClearHeld_ReleaseMovesTheRecordedStateOnAndNeverOverwritesFailed(t *testing.T) {
+	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
+	wc := makeTestConn()
+	seed := func(chatID, clientID string) (sessionID, entryID string) {
+		handler.handleChatMessageWithClientID(context.Background(), chatID, "", "/clear", "", nil,
+			"", "", false, clientID, nil, wc)
+		received := readMessageStatusFrames(t, wc, 1)
+		require.Equal(t, "received", received[0].State)
+		sessionID = received[0].SessionId
+		bindTestConnToSession(handler, chatID, sessionID, wc)
+		store := handler.agentLoop.ResolveSessionStore(sessionID)
+		require.NotNil(t, store)
+		entries, err := store.ReadTranscript(sessionID)
+		require.NoError(t, err)
+		for _, e := range entries {
+			if e.ClientMessageID == clientID {
+				entryID = e.ID
+			}
+		}
+		require.NotEmpty(t, entryID, "setup: the persisted /clear row")
+		return sessionID, entryID
+	}
+
+	// Held, then released: the record moves on and no frame is published.
+	sid, entry := seed("chat-rel-1", "client-rel-1")
+	handler.agentLoop.NotifyClearHeldForTest(sid, entry)
+	require.Equal(t, "held", readMessageStatusFrames(t, wc, 1)[0].State)
+	require.Equal(t, "held", handler.acceptedMessageState(sid, "client-rel-1"), "setup: recorded held")
+	handler.agentLoop.NotifyClearReleasedForTest(sid, entry)
+	assert.Equal(t, "working", handler.acceptedMessageState(sid, "client-rel-1"),
+		"a released /clear is no longer recorded as held")
+	select {
+	case raw := <-wc.sendCh:
+		t.Fatalf("releasing a hold publishes no frame: %s", raw)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Held, failed, then a late release: failed stays terminal.
+	sid2, entry2 := seed("chat-rel-2", "client-rel-2")
+	handler.agentLoop.NotifyClearHeldForTest(sid2, entry2)
+	require.Equal(t, "held", readMessageStatusFrames(t, wc, 1)[0].State)
+	handler.agentLoop.NotifyClearNotPerformedForTest(sid2, entry2)
+	require.Equal(t, "failed", readMessageStatusFrames(t, wc, 1)[0].State)
+	handler.agentLoop.NotifyClearReleasedForTest(sid2, entry2)
+	assert.Equal(t, "failed", handler.acceptedMessageState(sid2, "client-rel-2"),
+		"a late release must not overwrite the terminal failed state")
+}

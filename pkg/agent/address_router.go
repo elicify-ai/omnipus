@@ -226,10 +226,16 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 		// duplicate request. The receiver's next admitted turn delivers it.
 		logger.WarnCF("agent", "request recorded but the receiver's turn could not be started; held for its next turn",
 			map[string]any{"request_id": requestID, "session_id": receiverSessionID, "error": err.Error()})
-		held = true
-		if mErr := ledger.MarkHeld(receiverSessionID, requestID); mErr != nil {
-			logger.ErrorCF("agent", "a held request could not be marked held; its sender's row will not move on when it is delivered",
+		// What the sender is told must be what the ledger says: the delivery tick
+		// is owed only to a capture recorded as held. A turn admitted since the
+		// capture was written may already have delivered the request (no longer
+		// waiting), and a ledger fault leaves the capture as first recorded.
+		marked, mErr := ledger.MarkHeld(receiverSessionID, requestID)
+		if mErr != nil {
+			logger.ErrorCF("agent", "a request whose wake failed could not be marked held; its sender's row keeps the state recorded at admission",
 				map[string]any{"request_id": requestID, "session_id": receiverSessionID, "error": mErr.Error()})
+		} else {
+			held = marked
 		}
 	}
 	return requestID, receiverSessionID, held, nil

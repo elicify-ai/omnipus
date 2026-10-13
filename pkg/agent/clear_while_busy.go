@@ -83,13 +83,16 @@ func (w *sessionWorker) stopThenClear(msg bus.InboundMessage) {
 		return
 	}
 	if w.pushInbox(msg) {
+		w.parent.notifyClearReleased(msg)
 		return
 	}
 	// The worker is leaving (or its queue is full): hand the /clear to a live
 	// worker for the scope, which spawns a fresh one if this one is gone.
 	if !w.parent.dispatchSessionWorker(w.scope, msg) {
 		w.rejectClear(msg, "the agent is too busy to queue it.")
+		return
 	}
+	w.parent.notifyClearReleased(msg)
 }
 
 // requestStopForClear runs the one session Stop for the person who typed /clear.

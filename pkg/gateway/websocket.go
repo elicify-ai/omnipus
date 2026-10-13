@@ -555,6 +555,7 @@ func newWSHandler(
 		agentLoop.SetEventSyncTap(h.hubSyncTap)
 		agentLoop.SetClearNotPerformedHook(h.announceClearNotPerformed)
 		agentLoop.SetClearHeldHook(h.announceClearHeld)
+		agentLoop.SetClearReleasedHook(h.releaseClearHeld)
 		agentLoop.SetRequestDeliveredHook(h.announceHeldRequestDelivered)
 	}
 	// Per-session state kept outside the hub is released with the hub

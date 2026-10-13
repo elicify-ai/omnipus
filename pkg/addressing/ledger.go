@@ -256,24 +256,34 @@ func (l *Ledger) MarkDeliveredFirst(sessionID, requestID string) (prior Capture,
 // MarkHeld records that the request's sender was told it is waiting, for a
 // request admitted to a receiver that was not stopped but whose wake could not
 // be published: it is delivered by the receiver's next turn like any held
-// request. A request that was never captured, or is already delivered or
-// discarded, is left alone.
-func (l *Ledger) MarkHeld(sessionID, requestID string) error {
+// request. It reports whether the request IS held afterwards - held, not yet
+// delivered and not discarded - which is what the sender may be told. A request
+// that was never captured, or is already delivered or discarded, is left alone
+// and reported not held: a turn admitted before this call may already have
+// delivered it, with no tick owed, so a "waiting" row would never be cleared.
+// On an error the answer is false and nothing was marked.
+func (l *Ledger) MarkHeld(sessionID, requestID string) (held bool, err error) {
 	p, err := l.path(sessionID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	c, ok, err := readLatest(p, requestID)
-	if err != nil || !ok || c.Held || c.Delivered || c.Discarded {
-		return err
+	if err != nil || !ok || c.Delivered || c.Discarded {
+		return false, err
+	}
+	if c.Held {
+		return true, nil
 	}
 	c.Held = true
 	if err := repairTornTail(p); err != nil {
-		return err
+		return false, err
 	}
-	return fileutil.AppendJSONLSync(p, c)
+	if err := fileutil.AppendJSONLSync(p, c); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Undelivered lists the session's held requests - captured, not yet given to a

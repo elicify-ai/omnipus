@@ -229,6 +229,10 @@ type AgentLoop struct {
 	// reply (clear_held.go). Set once by the gateway's WS handler.
 	clearHeldHook atomic.Pointer[ClearHeldFunc]
 
+	// clearReleasedHook receives a held /clear once the stop has settled and the
+	// /clear is queued (clear_held.go). Set once by the gateway's WS handler.
+	clearReleasedHook atomic.Pointer[ClearReleasedFunc]
+
 	// requestDeliveredHook receives a held request's delivery (request_delivered_hook.go).
 	requestDeliveredHook atomic.Pointer[RequestDeliveredFunc]
 
