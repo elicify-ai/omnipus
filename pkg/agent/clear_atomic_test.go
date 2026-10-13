@@ -18,13 +18,28 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
+// requirePOSIXNonRootOrFail guards the chmod-injection tests below. Windows has no
+// POSIX permission bits, so it skips with its reason. Root IS NOT skipped
+// (R2-X-qa-11): a root run bypasses file modes, so the injected failure never
+// happens and the test would pass or skip while proving nothing. Both CI surfaces
+// (runci.sh's re-exec as `ci`, GitHub's runner user) are non-root, so this only
+// ever fires on a developer's root shell, where it says exactly what to do.
+func requirePOSIXNonRootOrFail(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("needs POSIX file permissions")
+	}
+	if os.Geteuid() == 0 {
+		t.Fatal("this test injects a failure with chmod, which root bypasses; run it as an unprivileged user " +
+			"(a skip here would hide the guarded /clear rollback behind a green run)")
+	}
+}
+
 // Delta review R1 #12: /clear is all or nothing. If the divider cannot be
 // recorded the window move is undone and the error says nothing was cleared;
 // the old code moved the window first and left it cleared with no divider.
 func TestClearConversation_MarkerFailureUndoesTheWindowMove(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("needs POSIX file permissions and a non-root user")
-	}
+	requirePOSIXNonRootOrFail(t)
 	al, inst, id := clearFixture(t, session.SessionTypeChat)
 	store := al.GetSessionStore()
 	transcript := filepath.Join(store.BaseDir(), id, "transcript.jsonl")
@@ -74,9 +89,7 @@ func TestClearSessionWindow_DropsTheExpiryNoticeEvenWhenNothingMoves(t *testing.
 // retention notice the clear dropped; otherwise the agent is never told what
 // retention expired.
 func TestClearConversation_MarkerFailureAlsoRestoresTheRetentionNotice(t *testing.T) {
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("needs POSIX file permissions and a non-root user")
-	}
+	requirePOSIXNonRootOrFail(t)
 	al, inst, id := clearFixture(t, session.SessionTypeChat)
 	store := al.GetSessionStore()
 	const note = "Retention expired older conversation content for this conversation."

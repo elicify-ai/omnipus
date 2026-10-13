@@ -109,18 +109,21 @@ func TestEnvironmentSetup_Confinement_RealKernel(t *testing.T) {
 	rep, out, err := runKernelFixtureProcess(t)
 	require.NoError(t, err, "inner wrote no probe report; output:\n%s", out)
 	if !rep.Supported && rep.SkipReason == kernelBackendUnavailable {
-		// R2-S5-04: a skip is only honest when THIS HOST really has no kernel
-		// backend. sandbox.SelectBackend() is an independent oracle — it runs
-		// the product's own detection, in this process, and names the backend
-		// it found. When it reports a real backend while the fixture's probe
+		// R2-S5-04 / R3 N7: a skip is only honest when THIS HOST really has no
+		// kernel backend. hostKernelSandboxOracle shares NO code with the
+		// product's detection (sandbox.NewLinuxBackend / SelectBackend): on
+		// Linux it issues the raw landlock_create_ruleset(2) ABI-version probe
+		// through golang.org/x/sys/unix, on darwin it checks the sandbox-exec
+		// binary. When the oracle finds a backend while the fixture's probe
 		// says "unavailable", the two disagree about the same machine: that is
-		// a backend-detection regression, and it must be RED here instead of
-		// silently skipped. "fallback" is the only answer that genuinely means
-		// "this host has nothing".
-		if _, name := sandbox.SelectBackend(); name != "fallback" {
-			t.Fatalf("the confinement fixture reported %q while sandbox.SelectBackend() reports %q — "+
+		// a backend-detection regression and it must be RED here instead of
+		// silently skipped. (Asking sandbox.SelectBackend() was not
+		// independent: on Linux it calls the same NewLinuxBackend() the
+		// fixture uses, so a shared regression read as agreement.)
+		if present, evidence := hostKernelSandboxOracle(); present {
+			t.Fatalf("the confinement fixture reported %q while the independent host oracle finds a kernel sandbox (%s) — "+
 				"a backend-detection regression, not a platform limit. Probe detail: %s",
-				rep.SkipReason, name, rep.Detail)
+				rep.SkipReason, evidence, rep.Detail)
 		}
 		t.Skipf("%s: %s", rep.SkipReason, rep.Detail)
 	}

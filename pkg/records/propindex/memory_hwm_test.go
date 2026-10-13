@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-//go:build !records_no_sqlite && !mipsle && !netbsd && !windows && !(freebsd && arm)
+//go:build !records_no_sqlite && !mipsle && !windows
 
 package propindex
 

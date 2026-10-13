@@ -16,9 +16,10 @@ import (
 
 func TestMain(m *testing.M) {
 	testutil.RegisterGatewayRunner(RunContext)
-	if stale := removeStaleLeakedLocks("entities"); len(stale) > 0 {
-		println("gateway TestMain: removed", len(stale), "stale lock file(s) left in the package directory by an earlier run:", strings.Join(stale, ", "))
-	}
+	// No pre-run sweep of leaked files (R3-QA-05): a lock a run leaves behind must
+	// stay visible as the leak it is. The CI worker's persistent checkout is made
+	// clean by runci.sh (`git clean -fdx` after checkout), which is where stale
+	// files from an older revision belong.
 	code := m.Run()
 	if leaked := leakedPackageDirFiles(); len(leaked) > 0 && code == 0 {
 		println("gateway TestMain: a test wrote into the package directory instead of its temp home:", strings.Join(leaked, ", "))
