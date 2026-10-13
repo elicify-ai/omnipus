@@ -54,9 +54,9 @@ func TestSkill_ResolvedAllowAcrossSeededRoster(t *testing.T) {
 				"every agent needs it to load any skill's content at all "+
 				"(ADR-072 D1, mirroring CLAUDE.md constraint 6's ToolSearch structural floor)", a.ID)
 	}
-	require.GreaterOrEqual(t, checked, 9,
-		"sanity: the sweep must have covered the full seeded roster (4 core + worker + "+
-			"3 subagent-tier + judge + plansupervisor = 9), not silently skipped everything")
+	require.GreaterOrEqual(t, checked, 8,
+		"sanity: the sweep must have covered the full seeded roster (Mia, Jim, Omnipus + worker + "+
+			"planner + researcher + judge + plansupervisor = 8; FR-008 retired Ava and Admin), not silently skipped everything")
 }
 
 // TestSkill_ResolvedAllow_FreshCustomAgent verifies a newly created custom

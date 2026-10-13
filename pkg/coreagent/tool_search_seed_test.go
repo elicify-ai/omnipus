@@ -56,9 +56,9 @@ func TestToolSearch_ResolvedAllowAcrossSeededRoster(t *testing.T) {
 				"every agent needs it to reach any tiered (lazy/search-only) tool at all "+
 				"(ADR-090: seeded Allow; runtime discovery remains non-deniable)", a.ID)
 	}
-	require.GreaterOrEqual(t, checked, 9,
-		"sanity: the sweep must have covered the full seeded roster (4 core + worker + "+
-			"2 specialist roles + judge + plansupervisor = 9), not silently skipped everything")
+	require.GreaterOrEqual(t, checked, 8,
+		"sanity: the sweep must have covered the full seeded roster (Mia, Jim, Omnipus + worker + "+
+			"2 specialist roles + judge + plansupervisor = 8; FR-008 retired Ava and Admin), not silently skipped everything")
 }
 
 // TestToolSearch_ResolvedAllow_FreshCustomAgent verifies the tenth seed
