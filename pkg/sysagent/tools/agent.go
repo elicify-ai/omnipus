@@ -309,8 +309,9 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 
 // refuseManagementGrants refuses a create whose tool_policy_changes grant any
 // management-family tool with a non-deny policy — "allow" and "ask" are both
-// grants (omnipus-system-agent FR-025, BDD-14.3). Runs before any write. A
-// malformed patch is refused with the shared decoder's own message.
+// grants — or remove one (dropping the constructor's Deny lets the agent ride
+// the ceiling) (omnipus-system-agent FR-025, BDD-14.3). Runs before any
+// write. A malformed patch is refused with the shared decoder's own message.
 func refuseManagementGrants(args map[string]any) (*tools.ToolResult, bool) {
 	raw, present := args["tool_policy_changes"]
 	if !present {
@@ -323,6 +324,13 @@ func refuseManagementGrants(args map[string]any) (*tools.ToolResult, bool) {
 	if tool, bad := coreagent.ManagementGrantViolation(patch.Set); bad {
 		return tools.ErrorResult(errorJSON("MANAGEMENT_GRANT_REFUSED", coreagent.ManagementGrantRefusal(tool),
 			"Set "+tool+" to deny or leave it out; ask Omnipus to make management changes")), true
+	}
+	// Removing the constructor's explicit Deny lets the new agent ride the
+	// ceiling (allow or ask for this family) — the same grant, refused the
+	// same way (founder-approved security fix, 2026-10-14).
+	if tool, bad := coreagent.ManagementRemoveViolation(patch.Remove); bad {
+		return tools.ErrorResult(errorJSON("MANAGEMENT_GRANT_REFUSED", coreagent.ManagementRemoveRefusal(tool),
+			"Leave "+tool+" out of remove; ask Omnipus to make management changes")), true
 	}
 	return nil, false
 }
