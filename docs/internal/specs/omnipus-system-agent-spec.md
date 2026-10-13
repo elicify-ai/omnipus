@@ -120,6 +120,18 @@ The founder added scope after fix round 2 and asked for two more grill rounds ov
 
 **Found while designing (reported, fixed in scope):** the recap's carry-forward file `last-session.md` lives in the agent's private memory room, which is agent-wide (`pkg/agent/memory.go::WriteLastSession`, `ReadLastSession`), so one workspace's recap can reach the agent's next session in another workspace. AW-2 and the security rule "digests must not leak across workspaces" require scoping it per workspace (FR-197).
 
+### 0.8 Founder answers GQ-1–GQ-4 and screen alignment (2026-10-13)
+
+| Answer | Applied |
+|---|---|
+| GQ-1 A — the @all default applies to the user's messages only; agents reach others only by @-naming them or writing @all | FR-165; D7 row 7; BDD-17.19 |
+| GQ-2 C (overrides the architect's recommendation A) — one notice "The assistant is paused." per stop in the group; those messages are not processed; the operator still sees them | FR-182; BDD-18.1, 18.3 |
+| GQ-3 — founder's own design: a per-participant **steering flag**, off by default, enabled explicitly per participant; when on, steering works as in the web chat, conversation-scoped, except UI-only commands | FR-185–FR-189; US-19 rewritten; BDD-19.x; K32 |
+| GQ-4 A — the user can mute an agent in the team room (not addressed by @all there; stays in the workspace) | FR-158; BDD-17.18; K23/K24 |
+| Screen alignment (wireframe R34/R35) | Routing settings live in **the connection's Configure side panel on the Connectors page**; the derived "who can reach <Agent>" list lives in the shared agent editor slide-over (there is no Agents page). |
+
+**Design choices made for GQ-3 (visible, non-blocking):** the flag is set per **individual** person entry (allow list or person table); a group entry admits members but never entitles them to steer; in web group chats the flag does not apply (the user steers as in any web chat; agents never steer — FR-168); `/help` is answered for every allowed participant; an un-entitled participant's command is not executed and not passed to the agent, and is answered "Commands are not enabled for you in this conversation." at most once per participant per conversation per 24 hours (logged every time).
+
 ---
 
 ## 1. Discovery summary
@@ -321,7 +333,7 @@ Any native agent can ask for a secret through a protected card. The value never 
 
 ### US-12 — Screens (P0)
 
-**Why P0**: reachability. **Independent test**: walk entry, Team, picker, graph self-row, System agents, Channel settings; old routes are gone.
+**Why P0**: reachability. **Independent test**: walk entry, Team, picker, graph self-row, System agents, the Connectors page's Configure side panel; old routes are gone.
 
 1. **Given** any workspace active, **When** the Omnipus entry is opened, **Then** Omnipus's chat opens without changing the active workspace.
 2. **Given** Team, **When** it opens, **Then** list first, graph second; cards show avatar, name, kind, model, other workspaces and actions.
@@ -331,7 +343,7 @@ Any native agent can ask for a secret through a protected card. The value never 
 6. **Given** a keyboard-only or screen-reader user, **When** they use the entry, Add choices, picker, list/graph switch, card actions, System agents navigation, secret card and W18 completion, **Then** every control is reachable, labelled and announced, and focus moves predictably.
 7. **Given** any changed screen, **When** data is loading, empty, unavailable, stale, partial, or a change is uncertain, **Then** it shows the state from §6.3.
 8. **Given** the default workspace's Team graph, **When** shown, **Then** Omnipus's self-row is visible and can be edited or removed.
-9. **Given** Channel settings, **When** routing is saved, **Then** both a workspace and an agent are required.
+9. **Given** the connection's Configure side panel on the Connectors page (wireframe R34), **When** routing is saved, **Then** both a workspace and an agent are required.
 
 ### US-13 — No default agent: explicit agents or loud failure (P0)
 
@@ -380,9 +392,9 @@ The operator decides, per connection (channel instance), who may talk to the wor
 
 The user talks with several agents of one workspace in one conversation; agents also talk to each other there. Every workspace has a standing team room; the user creates squads and ad-hoc groups. **Why P1**: founder GC-1–GC-6, #1068. **Independent test**: in Sales, open the team room, write "status?" — every member answers; write "@Jim plan it" — only Jim answers; create squad "Launch" with Mia and Jim; Stop halts all of them.
 
-1. **Given** a workspace, **When** it exists, **Then** it has one team room whose members are its conversation agents (Omnipus excluded).
+1. **Given** a workspace, **When** it exists, **Then** it has one team room whose members are its conversation agents (Omnipus excluded); the user can mute a member there.
 2. **Given** the user, **When** they create a squad (named) or an ad-hoc group (one or more chosen agents of the same workspace), **Then** it appears in the workspace's "Group chats" sidebar section.
-3. **Given** a group message without an @-name, **When** the user sends it, **Then** every member agent answers (@all default); with @-names, only the named agents answer.
+3. **Given** a group message without an @-name, **When** the user sends it, **Then** every member agent answers (@all default); with @-names, only the named agents answer. An agent's message without @-names reaches no other agent.
 4. **Given** an agent's message in a group, **When** it @-names other members, **Then** those members answer (agent-to-agent; no limit, accepted risk R-A4).
 5. **Given** a running group, **When** the user presses Stop, **Then** every member's work in that group stops.
 6. **Given** a group, **When** its header shows, **Then** it lists the members and the group's running cost.
@@ -396,16 +408,17 @@ The user talks with several agents of one workspace in one conversation; agents 
 **Why P1**: #892. **Independent test**: the operator stops a Telegram group conversation; Ben (allowed via the group) writes — it stays stopped; Anna (individually on the allow list) writes — it resumes; a heartbeat never resumes it.
 
 1. **Given** a channel group conversation the operator stopped, **When** a person individually on the connection's allow list (or the operator in the web app) writes, **Then** it resumes.
-2. **Given** it is stopped, **When** someone admitted only through the group writes, **Then** it stays stopped and their message is handled per GQ-2 — never silently dropped.
+2. **Given** it is stopped, **When** someone admitted only through the group writes, **Then** it stays stopped, the group gets one notice "The assistant is paused." (once per stop), their message is not processed, and the operator still sees it.
 3. **Given** it is stopped, **When** a heartbeat, timer or queued wake fires, **Then** it does not resume.
 
-### US-19 — Channel commands affect only that conversation (P1)
+### US-19 — Steering on channels is per participant and per conversation (P1)
 
-**Why P1**: #955, GC-6. **Independent test**: `/model gpt-x` in a Telegram chat changes only that conversation's model; the agent's configured model and the web chat are unchanged; `/channels` on Telegram is refused.
+**Why P1**: #955, GC-6, GQ-3. **Independent test**: on Telegram, Anna (steering enabled on her person entry) uses `/model gpt-x` — only that conversation changes; Ben (not enabled) sends `/model gpt-x` — it is not executed and he is told once; `/channels` is refused for everyone.
 
-1. **Given** a channel conversation, **When** someone uses `/model`, `/effort` or `/clear`, **Then** only that conversation changes.
-2. **Given** a channel, **When** someone uses an admin-type command, **Then** it is refused with "available in the web app or CLI".
-3. **Given** a channel group conversation, **When** someone admitted only through the group uses a conversation command, **Then** it is refused (same authority as US-18).
+1. **Given** a participant whose steering flag is on, **When** they use a steering command, **Then** it works as in the web chat and changes only that conversation.
+2. **Given** a participant whose steering flag is off (the default), **When** they use a steering command, **Then** it is not executed, not passed to the agent, and they are told once per conversation per 24 hours.
+3. **Given** any participant, **When** they use a UI-only command, **Then** it is refused with "available in the web app or CLI", whatever their flag.
+4. **Given** the connection's Configure side panel, **When** the operator edits a person entry, **Then** the steering flag can be switched on or off for that person; group entries have no steering flag.
 
 ### US-20 — The agent knows its other conversations (P1)
 
@@ -541,7 +554,7 @@ The agent behaves like a person who remembers their other conversations in this 
 | Squad / group dialog | Loading workspace agents | "No agents in this workspace" | Error + Retry | — | Create "not confirmed" + Retry | Group opens | Create without a member |
 | Hidden per-person conversations | — | Control absent | Error + Retry | Cached + hint | Un-hide "not confirmed" | Row shown | — |
 | Agent editor "who can reach this agent" | Loading | "Nobody yet" | Error + Retry | Cached + hint | — | List with links | — |
-| Channel settings routing | Loading | "Not bound" warning | Error + Retry | — | Save "not confirmed" | Bound pair shown | Save without workspace + agent |
+| Connectors page → connection Configure side panel (routing, person table, steering flags, mode, stranger status) | Loading | "Not bound" warning | Error + Retry | — | Save "not confirmed" | Bound pair shown | Save without workspace + agent |
 
 Keyboard and focus (FR-109): every listed control is reachable by Tab/arrow keys and operable by Enter/Space; menus open on focus/Enter, not hover; the secret card takes initial focus on its first field, Enter submits only from the last field, keystrokes never reach the chat composer, errors are associated with fields and announced, terminal states are announced and focus returns to the composer; Go is never pre-selected; attention has a text/shape cue besides colour and respects reduced motion; layouts reflow at narrow widths and work by touch.
 
@@ -666,8 +679,8 @@ Order per change: schema in `contracts/components/schemas/` → reference from `
 | K20 | **changed** `ChannelEntry` status | `strangers_count`, `last_stranger_label` (display label or redacted id), `last_stranger_at` | FR-145 |
 | K21 | **new** `AgentReachabilityEntry`; `GET /api/v1/agents/{id}/reachability` | connection id, workspace id, via enum `main` / `person_rule`, match kind/label | FR-146 |
 | K22 | **changed** `BindingMatch` config shape (not wire) and session-scope route | `instance_id`; `/api/v1/security/session-scope` per RQ-4 | FR-141, FR-148 |
-| K23 | **changed** `Session` | optional `kind` enum `chat` / `group_team_room` / `group_squad` / `group_adhoc` / `group_member`; for groups `agent_id` omitted and `agent_ids` = members; optional `group_name`; `group_cost` read-only | FR-163, FR-171 |
-| K24 | **new** `GroupCreateRequest`, `GroupMembersUpdateRequest`; `POST /api/v1/workspaces/{id}/groups`, `PATCH /api/v1/groups/{id}/members`, `DELETE /api/v1/groups/{id}` | kind (`squad` / `adhoc`), name (squad, ≤ 80), agent ids (≥ 1, same workspace); team room not creatable or deletable | FR-161, FR-162, FR-172 |
+| K23 | **changed** `Session` | optional `muted_agent_ids` (team room only); optional `kind` enum `chat` / `group_team_room` / `group_squad` / `group_adhoc` / `group_member`; for groups `agent_id` omitted and `agent_ids` = members; optional `group_name`; `group_cost` read-only | FR-163, FR-171 |
+| K24 | **new** `GroupCreateRequest`, `GroupMembersUpdateRequest`; `POST /api/v1/workspaces/{id}/groups`, `PATCH /api/v1/groups/{id}/members` (also mute/unmute in the team room), `DELETE /api/v1/groups/{id}` | kind (`squad` / `adhoc`), name (squad, ≤ 80), agent ids (≥ 1, same workspace); team room not creatable or deletable | FR-161, FR-162, FR-172 |
 | K25 | **changed** `MessageFrame` | optional `mentions[]` (agent ids or `all`) resolved by the SPA picker; server re-resolves from text and membership | FR-164 |
 | K26 | **changed** `Message` / transcript entry | group entries carry the authoring agent (existing guest author) and the resolved addressees | FR-166 |
 | K27 | **changed** `ToolApprovalRequiredFrame`, `SessionStatePendingApproval`, `SecretRequestFrame` | the existing `root_session_id` (K7/K1) also points at a group session for member decisions | FR-169 |
@@ -675,6 +688,7 @@ Order per change: schema in `contracts/components/schemas/` → reference from `
 | K29 | **changed** `Session` | optional `sidebar_visible` (per-person channel conversations default `false`); `PATCH` on the existing session update route | FR-152 |
 | K30 | **new** `AwarenessEntry` (read-only, for the web inspector of what the agent sees) and audit event shapes for group membership | session id, kind, who, last activity, summary | FR-190, FR-172 |
 | K31 | **changed** transcript entry / `Message` | optional `handoff` {id, state `open` / `reported`, target `main`} on the "handed to" marker and on the report entry; report entries carry `addressees: []` | FR-178, FR-179 |
+| K32 | **changed** `ChannelPersonRule` and allow-list entry shape | `steering` boolean (default false) on individual person entries only | FR-185 |
 | K17 | config | `agents.defaults.default_agent_id` ignored with warning (settings sanitiser and loader) | FR-120 |
 
 ### 7.2 Runtime validation (MAJ-004)
@@ -1455,7 +1469,7 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | Picker | add result unknown | "not confirmed" + Retry |
 | System agents | save result unknown | "not confirmed" + Retry |
 | Omnipus entry | attach pending | send disabled |
-| Channel settings | no workspace chosen | Save disabled |
+| Connection Configure side panel | no workspace chosen | Save disabled |
 
 **BDD-12.14 Keyboard journeys** — US-12 AS-6 — Edge Case (Outline)
 - Given keyboard only
@@ -1470,8 +1484,8 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | open Settings → System agents → Omnipus editor |
 | W18 report → Open chat |
 
-**BDD-12.15 Channel settings require a workspace** — US-12 AS-9 — Error Path
-- Given the Channel settings panel
+**BDD-12.15 Connection routing requires a workspace** — US-12 AS-9 — Error Path
+- Given the connection's Configure side panel on the Connectors page
 - When the user picks an agent but no workspace
 - Then Save is disabled with "choose a workspace"
 
@@ -1601,7 +1615,7 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 **BDD-16.6 Derived per-agent list** — US-16 AS-5 — Happy Path
 - Given Jim is the target of rule Anna on tg-1 and main agent of slack-1 in Marketing
 - When Jim's editor opens
-- Then it lists "tg-1 (Sales): Anna" and "slack-1 (Marketing): everyone allowed", read-only, each linking to its connection settings
+- Then it lists "tg-1 (Sales): Anna" and "slack-1 (Marketing): everyone allowed", read-only, each linking to that connection's Configure side panel
 
 **BDD-16.7 Conversation mode** — US-16 AS-6 — Happy Path (Outline)
 - Given tg-1 conversation mode `<mode>`
@@ -1789,6 +1803,16 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - When the report is posted
 - Then mentions in the report are not resolved, and the main session has no path to hand the task back to the group member
 
+**BDD-17.18 Mute in the team room** — US-17 AS-1 — Alternate Path
+- Given Sales's team room with Mia, Jim, Researcher2 and Researcher2 muted by the user
+- When the user writes "status?" and then "@Researcher2 anything?"
+- Then Mia and Jim answer the first, Researcher2 answers only the second, and Researcher2 is still a member of Sales and its squads
+
+**BDD-17.19 Agent message without @ reaches nobody** — US-17 AS-3 — Edge Case
+- Given squad Launch with Mia, Jim, Researcher2
+- When Jim posts "done" without an @-name
+- Then no other agent is triggered; if Jim writes "@all regroup", Mia and Researcher2 are
+
 ### Feature: Stopped channel group conversations (US-18)
 
 **BDD-18.1 Authorised person resumes** — US-18 AS-1 — Happy Path (Outline)
@@ -1800,7 +1824,7 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 |---|---|
 | Anna (individually on the allow list) | resumes |
 | the operator in the web app | resumes |
-| Ben (admitted only via the group) | stays stopped; handled per GQ-2 |
+| Ben (admitted only via the group) | stays stopped; the group gets "The assistant is paused." once for this stop |
 
 **BDD-18.2 Automatic wakes never resume** — US-18 AS-3 — Error Path (Outline)
 - Given the stopped group conversation
@@ -1816,24 +1840,26 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 **BDD-18.3 Others are not silently dropped** — US-18 AS-2 — Error Path
 - Given the conversation is stopped
 - When Ben writes
-- Then Ben's message is recorded in the conversation as received-while-stopped and the GQ-2 handling applies
+- Then Ben's message is not processed, it is recorded as received-while-stopped for the operator, and the group has received "The assistant is paused." exactly once since the stop (a second message adds no second notice)
 
-### Feature: Channel commands (US-19)
+### Feature: Channel steering (US-19)
 
-**BDD-19.1 Conversation-scoped commands** — US-19 AS-1 — Happy Path (Outline)
-- Given Mia's Telegram conversation with Anna and Mia's web main chat
+**BDD-19.1 Entitled participant steers this conversation only** — US-19 AS-1 — Happy Path (Outline)
+- Given Anna's person entry on tg-1 has steering on, and Mia also has a web main chat
 - When Anna sends `<command>`
-- Then `<effect>` and Mia's configured settings and the web chat are unchanged
+- Then `<effect>` and Mia's configured settings, the web chat and other channel conversations are unchanged
 
 | command | effect |
 |---|---|
 | /model gpt-x | Anna's conversation uses gpt-x |
-| /effort high | Anna's conversation uses high effort (if per-conversation effort exists; otherwise refused) |
+| /effort high | Anna's conversation uses high effort (refused while no per-conversation effort setting exists) |
 | /clear | Anna's conversation context is cleared |
+| /stop | Anna's conversation's current turn stops |
+| /goal ship the draft | a goal starts in Anna's conversation |
 
-**BDD-19.2 Admin commands refused on channels** — US-19 AS-2 — Error Path (Outline)
-- Given a Telegram conversation
-- When someone sends `<command>`
+**BDD-19.2 UI-only commands refused for everyone** — US-19 AS-3 — Error Path (Outline)
+- Given Anna (steering on) on tg-1
+- When she sends `<command>`
 - Then "available in the web app or CLI" and nothing changes
 
 | command |
@@ -1842,11 +1868,33 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | /config |
 | /skills |
 | /tasks |
+| /sessions |
+| /switch-agent mia |
 
-**BDD-19.3 Group-only members cannot use commands** — US-19 AS-3 — Error Path
-- Given a Telegram group conversation and Ben admitted only via the group
-- When Ben sends /model gpt-x
-- Then it is refused; the conversation model is unchanged
+**BDD-19.3 Un-entitled participant** — US-19 AS-2 — Error Path
+- Given Ben's entry has steering off (default)
+- When Ben sends /model gpt-x twice within an hour
+- Then nothing changes, the agent does not see the command, Ben gets "Commands are not enabled for you in this conversation." once, and both attempts are logged
+
+**BDD-19.4 Group members cannot steer** — US-19 AS-4 — Error Path
+- Given group G admitted on tg-1 and Carl admitted only via G
+- When Carl sends /clear in G
+- Then it is treated as an un-entitled command (BDD-19.3 handling)
+
+**BDD-19.5 /help for every allowed participant** — US-19 AS-2 — Alternate Path
+- Given Ben (steering off)
+- When Ben sends /help
+- Then he receives the help text, which lists only what he may use
+
+**BDD-19.6 Flag edited in the Configure side panel** — US-19 AS-4 — Happy Path
+- Given the Connectors page, tg-1's Configure side panel
+- When the operator turns steering on for Anna and saves
+- Then Anna's next steering command works without a restart; turning it off again stops it
+
+**BDD-19.7 Web group chats ignore the flag** — US-19 AS-1 — Alternate Path
+- Given squad Launch in the web app
+- When the user sends /model gpt-x and Jim's message contains "/model x"
+- Then the user's command changes the squad conversation's model as in any web chat, and Jim's text is not a command (FR-168)
 
 ### Feature: Conversation awareness (US-20)
 
@@ -2066,7 +2114,7 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 102 | `pkg/routing::TestConversationMode_PerConnection_NoRestart` (incl. identity links) | Integration | 16.7, 16.8, 16.12 |
 | 103 | `pkg/channels::TestGroupTrigger_UnchangedWithPersonRules` | Unit | 16.13 |
 | 104 | `src/components/agents/ReachableBy.test.tsx` + `pkg/gateway::TestAgentReachability_Derived` | Integration | 16.6 |
-| 105 | `tests/e2e/omnipus-channel-routing.spec.ts` (connection settings: main agent, allow list, person table, mode, stranger status) | E2E | 16.1, 16.3, 16.7, 16.10 |
+| 105 | `tests/e2e/omnipus-channel-routing.spec.ts` (Connectors page → Configure side panel: main agent, allow list, person table, steering flags, mode, stranger status) | E2E | 16.1, 16.3, 16.7, 16.10 |
 | 106 | `tests/e2e/llm-omnipus-connect-channel-rules.spec.ts` (live) | E2E | 16.9 |
 | 107 | `src/components/layout/sidebar/PerPersonConversations.test.tsx` + `pkg/gateway::TestSessionSidebarVisible_DefaultHiddenForPerPerson` | Integration | 16.14 |
 | 108 | `pkg/channels::TestGroupAdmission_AndGroupStrangerLoggedOnly` | Unit | 16.15 |
@@ -2083,8 +2131,8 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 119 | `tests/e2e/omnipus-group-chats.spec.ts` (sidebar section, header, @-picker incl. @all, squad creation) | E2E | 17.1, 17.2, 17.3, 17.6, 17.7 |
 | 120 | `pkg/agent::TestStoppedChannelGroup_ResumeAuthority` | Integration | 18.1, 18.3 |
 | 121 | `pkg/agent::TestStoppedChannelGroup_AutomaticWakesNeverResume` | Integration | 18.2 |
-| 122 | `pkg/commands::TestChannelCommands_ConversationScoped` | Integration | 19.1 |
-| 123 | `pkg/commands::TestChannelCommands_AdminRefused_GroupOnlyRefused` | Unit | 19.2, 19.3 |
+| 122 | `pkg/commands::TestChannelSteering_ConversationScoped` | Integration | 19.1 |
+| 123 | `pkg/commands::TestChannelSteering_UIOnlyRefused_UnentitledAndGroupRefused` | Unit | 19.2, 19.3, 19.4 |
 | 124 | `pkg/agent::TestAwarenessList_ContentBoundsWorkspace` | Integration | 20.1, 20.6, 20.7 |
 | 125 | `pkg/tools::TestReadConversation_ReadOnlyAndScope` | Integration | 20.2, 20.5 |
 | 126 | `pkg/agent::TestRecapOutcomes_ToWorkspaceMemory_NoCrossWorkspace` | Integration | 20.3, 20.4 |
@@ -2092,6 +2140,11 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 128 | `pkg/agent::TestSelfHandoff_MemberToOwnMain_DecisionsInMain` | Integration | 17.14 |
 | 129 | `pkg/agent::TestSelfHandoff_ReportOnce_NoRetrigger_NoBounce` | Integration | 17.15, 17.17 |
 | 130 | `pkg/tools::TestMessageRecipient_SelfTargetLimits` | Unit | 17.16 |
+| 131 | `pkg/groupchat::TestTeamRoomMute_AllSkipsMuted_NamedStillAnswers` | Unit | 17.18 |
+| 132 | `src/components/connectors/ConnectionConfigurePanel.steering.test.tsx` + `pkg/gateway::TestSteeringFlag_SaveNoRestart` | Integration | 19.6 |
+| 133 | `pkg/commands::TestChannelHelp_ListsOnlyPermitted` | Unit | 19.5 |
+| 134 | `pkg/agent::TestWebGroupCommands_UserOnly` | Integration | 19.7 |
+| 135 | `pkg/groupchat::TestAgentMessageWithoutMention_ReachesNobody` | Unit | 17.19 |
 
 Live-model specs use `openrouter` + `deepseek/deepseek-v4.1-flash`. Prompt-text tests prove wording only; a live pass does not prove the instruction-only Go gate cannot be bypassed (accepted R-A1).
 
@@ -2189,7 +2242,8 @@ The protected set is one list owned next to the environment composers: `allowedC
 | 4 | "@all" | Mia, Jim | Mia, Jim | BDD-17.3 |
 | 5 | "email@example.com" | Mia, Jim | treated as text, not a mention | BDD-17.3 |
 | 6 | Jim: "@Mia draft" | Mia, Jim | Mia | BDD-17.4 |
-| 7 | Jim: "done" (no @) | Mia, Jim | per GQ-1 | BDD-17.4 |
+| 7 | Jim: "done" (no @) | Mia, Jim | nobody (GQ-1 A) | BDD-17.19 |
+| 8 | Jim: "@all regroup" | Mia, Jim, R2 | Mia, R2 (not Jim himself) | BDD-17.19 |
 
 ### 9.4 Regression requirements
 
@@ -2357,7 +2411,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-110**: New UI MUST use the catalogued components of §6.8; a new reusable composite MUST follow the four-part publication contract and pass the design-system gate.
 - **FR-111**: The default workspace's Team graph MUST show Omnipus's self-row with edit and remove controls.
 - **FR-112**: Every changed surface MUST implement the states of §6.3.
-- **FR-113**: The Channel settings panel MUST require a workspace and an agent before saving routing.
+- **FR-113**: The connection's Configure side panel on the Connectors page (wireframe R34/R35) MUST require a workspace and an agent before saving routing.
 
 ### K. No default agent and channel binding
 - **FR-120**: The system MUST have no default-agent concept (setting, seed, `Agent.default`, update field, tool arguments, delete guard, registry override, health check, every `GetDefaultAgent` call); the old key MUST be ignored with a warning on load and reload.
@@ -2375,27 +2429,28 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-132**: Publishing a reply without a producing agent MUST still publish it without borrowing another agent's state.
 
 ### M. Channel person routing (US-16; PR-1–PR-4; not grilled)
-- **FR-140**: Each channel instance MUST hold, in its workspace binding, a **main agent** (a member of that workspace), an allow list (existing `allow_from`), a person table and a conversation mode; all are edited on the connection's settings.
+- **FR-140**: Each channel instance MUST hold, in its workspace binding, a **main agent** (a member of that workspace), an allow list (existing `allow_from`), a person table and a conversation mode; all are edited in the connection's Configure side panel on the Connectors page.
 - **FR-141**: The person table MUST be stored as `Config.Bindings` entries whose match names the **instance** (new `instance_id` match field) plus a person (peer), group (parent peer), guild, team or account; it MUST NOT introduce a second rules store.
 - **FR-142**: For a bound instance the route MUST be: allow-list check → person table (priorities 1–5, instance-scoped) → main agent → loud unrouted drop; the bound identity no longer skips the bindings.
 - **FR-143**: A person-rule target MUST be a chat-target member of the instance's workspace; saving otherwise MUST be refused; at runtime an unavailable target MUST cause a loud drop, never a main-agent fallback.
 - **FR-144**: Bindings without an `instance_id` and `channel_policies.<ch>.routing_rules` MUST be ignored with a load/reload warning naming them (greenfield; the latter mapped user ids onto the bot-account match).
 - **FR-145**: A sender not on the allow list MUST NOT start any turn. In a direct chat the system MUST reply "Sorry, you are not authorised to use this assistant." at most once per stranger per connection per 24 hours; a group on the allow list or person table admits all its members, and a stranger inside a non-admitted group is never answered publicly (logged only). Every stranger event MUST be recorded on the connection status (count, last stranger, time), in the log and in the audit log (RQ-2 A, RQ-3 A).
-- **FR-146**: The per-agent "who can reach this agent" list MUST be derived from all connection tables (main-agent and person-rule entries) and shown read-only in the agent editor with links to each connection's settings; it MUST NOT be stored separately.
+- **FR-146**: The per-agent "who can reach this agent" list MUST be derived from all connection tables (main-agent and person-rule entries) and shown read-only in the shared agent editor slide-over (there is no Agents page) with links to each connection's Configure side panel; it MUST NOT be stored separately.
 - **FR-147**: Each connection MUST have a conversation mode: `main` (default — the target agent's main chat in that workspace) or `per_person` (one conversation per person, keyed with the existing per-channel-peer scope and `identity_links`), applied without a gateway restart.
 - **FR-148**: The global `session.dm_scope` setting and its `/api/v1/security/session-scope` route MUST be retired (an existing value is ignored with a load warning); `session.identity_links` stays global (RQ-4 A).
 - **FR-152**: Per-person channel conversations MUST appear in the sidebar under their agent, hidden by default and individually un-hideable, and in the agent's History (RQ-1).
 - **FR-149**: `group_trigger` and per-instance channel settings MUST keep their behaviour.
 - **FR-150**: `connect_channel` MUST set the main agent and MAY save offered person rules and a conversation mode in the same approved call; `configure_channel` (Ask) MUST be able to change them later.
-- **FR-151**: Settings MUST provide the connection editor (main agent selector limited to workspace members, allow list, person table with label + id + agent, conversation mode, stranger status) with the §6.3 states and keyboard contract.
+- **FR-151**: The connection's Configure side panel on the Connectors page (wireframe R34/R35) MUST provide the routing settings (main agent selector limited to workspace members, allow list, person table with label + id + agent + steering flag, conversation mode, stranger status) with the §6.3 states and keyboard contract.
 
 ### N. Group chats (US-17; GC-1–GC-6; #1068; not grilled)
+- **FR-158**: In the team room the user MUST be able to mute and unmute a member agent; a muted agent is not addressed by `@all` (or the user's default) there but still answers when @-named, and stays a member of the workspace and of other groups; mute changes are audited (GQ-4 A).
 - **FR-160**: Each workspace MUST have exactly one standing team room whose members are the workspace's chat-target agents (workers, hidden engine agents and Omnipus excluded), updated when membership changes.
 - **FR-161**: Only the user MUST be able to create squads (named) and ad-hoc groups (one or more chosen agents) from the web app; no agent tool creates or changes groups (GC-3).
 - **FR-162**: A group MUST contain agents of exactly one workspace; adding an agent that is not a member of that workspace MUST be refused; removing an agent from the workspace MUST remove it from that workspace's groups.
 - **FR-163**: A group chat MUST be a session in its workspace that records its member agents (`agent_ids`) and has no single owning agent; each member works in its own hidden member session linked under the group, so the existing turn, Stop, approval and stats machinery applies.
 - **FR-164**: A user message without @-names MUST be delivered to every member (@all default); with @-names (or `@all`) only to the named members (GC-2). @-names match member display names case-insensitively; an unknown @-name is shown as unresolved and addresses nobody.
-- **FR-165**: An agent's group message MUST be delivered to the members it @-names; whether an agent message without @-names reaches all other members is **GQ-1**. There MUST be no limit on agent-to-agent replies (GC-5; accepted risk R-A4).
+- **FR-165**: An agent's group message MUST be delivered only to the members it @-names (or to all other members when it writes `@all`); an agent message without @-names MUST reach no other agent (GQ-1 A). There MUST be no limit on agent-to-agent replies (GC-5; accepted risk R-A4).
 - **FR-166**: A member's answer MUST appear in the group transcript as that agent's entry (existing guest-answer path), visible to the user and to the other members as input.
 - **FR-167**: Each member answering MUST have seen the group's messages since it last spoke (bounded window, at most the last 50 group entries).
 - **FR-168**: An agent's group message MUST be input only: it can never resolve an approval, answer a user question card, run a command or change configuration (#1068 §6).
@@ -2414,14 +2469,15 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 ### O. Stopped channel group conversations (US-18; #892; not grilled)
 - **FR-180**: A channel group conversation stopped by the operator MUST resume only on a message from a person individually on the connection's allow list or person table, or from the operator in the web app.
 - **FR-181**: Automatic wakes (heartbeats, timers, scheduled tasks, queued wakes) MUST NOT resume a stopped channel group conversation.
-- **FR-182**: A message from someone admitted only through the group while stopped MUST be recorded visibly in the conversation and handled per GQ-2; never silently dropped.
+- **FR-182**: While a channel group conversation is stopped, messages from people who may not resume it MUST NOT be processed; the group MUST receive one notice "The assistant is paused." once per stop; the messages MUST stay visible to the operator (GQ-2 C).
 - **FR-183**: The resume rule MUST be decided by the server from the connection's tables, not by the model.
 
 ### P. Channel commands (US-19; #955, GC-6; not grilled)
-- **FR-185**: On channels, `/model`, `/effort` and `/clear` MUST change only that conversation (stored on the conversation like the web chat's per-chat model); `/effort` MUST be refused on channels until a per-conversation effort setting exists.
-- **FR-186**: On channels, `/help`, `/status`, `/stop`, `/cancel`, `/goal` and `/loop` MUST act on that conversation only; `/channels`, `/config`, `/skills`, `/tasks` and `/remember` MUST be web/CLI only (refused on channels with "available in the web app or CLI"); the borderline list is **GQ-3**.
-- **FR-187**: No channel command MUST change agent or global settings; the agent-wide model-change path MUST be removed from the channel surface.
-- **FR-188**: In channel group conversations, conversation commands MUST be limited to the people authorised by FR-180.
+- **FR-185**: Each individual person entry of a connection (allow list or person table) MUST carry a steering flag, **off by default**; group entries MUST NOT carry one (members admitted through a group never steer). The flag is edited in the connection's Configure side panel and applies without restart (GQ-3).
+- **FR-186**: For a participant whose flag is on, steering commands MUST work as in the web chat and change only that conversation: `/model`, `/effort` (refused while no per-conversation effort setting exists), `/clear`, `/stop`, `/stop-redirect`, `/cancel`, `/status`, `/goal`, `/loop`, `/remember`, `/recall`, `/retrospective`.
+- **FR-187**: UI-only commands MUST be refused on channels for every participant with "available in the web app or CLI": `/channels`, `/config`, `/skills`, `/tasks` (administration) and `/sessions`, `/switch-agent` (they open web views). No channel command MUST change agent or global settings; the agent-wide model-change path MUST be removed from the channel surface.
+- **FR-188**: A steering command from a participant whose flag is off MUST NOT be executed or passed to the agent; the participant MUST be answered "Commands are not enabled for you in this conversation." at most once per participant per conversation per 24 hours; every attempt MUST be logged. `/help` MUST be answered for every allowed participant and list only what they may use.
+- **FR-189**: In web group chats the steering flag MUST NOT apply: the user's commands work as in any web chat on the group conversation; agents never issue commands (FR-168).
 
 ### Q. Conversation awareness (US-20; AW-1, AW-2; not grilled)
 - **FR-190**: At the start of every main-chat turn, the agent's context MUST include a list of its other conversations in the same workspace — extra chats, group chats it belongs to and per-person channel conversations (not helper or task sessions) — each with who, where, last activity and a one-line summary; at most 20 entries, most recent first, under 2,000 characters; no message content.
@@ -2582,12 +2638,13 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-150 | PR-1; team-lead steer | US-16 | 16.9 | 106 |
 | FR-151 | R5 | US-16 | 16.1, 16.3, 16.7, 16.10 | 105 |
 | FR-152 | RQ-1 | US-16 | 16.14 | 107, 105 |
+| FR-158 | GQ-4 A | US-17 | 17.18 | 131, 119 |
 | FR-160 | GC-1; #1068 §3 | US-17 | 17.1, 17.12 | 110, 119 |
 | FR-161 | GC-1, GC-3 | US-17 | 17.2, 17.10 | 111, 119 |
 | FR-162 | GC-1; #1068 §5 | US-17 | 17.9, 17.12 | 110, 111 |
 | FR-163 | GC-1; reuse | US-17 | 17.3, 17.6 | 113, 115 |
 | FR-164 | GC-2 | US-17 | 17.3 | 112, 113, 119 |
-| FR-165 | GC-2, GC-5; GQ-1 | US-17 | 17.4, 17.5 | 112, 114 |
+| FR-165 | GC-2, GC-5; GQ-1 A | US-17 | 17.4, 17.5, 17.19 | 112, 114, 135 |
 | FR-166 | GC-1; reuse | US-17 | 17.3, 17.4 | 113 |
 | FR-167 | GC-1 | US-17 | 17.4 | 113 |
 | FR-168 | #1068 §6 | US-17 | 17.8 | 116 |
@@ -2604,12 +2661,13 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-179 | GC-7 | US-17 | 17.15, 17.16, 17.17 | 129, 130 |
 | FR-180 | #892 | US-18 | 18.1 | 120 |
 | FR-181 | #892 | US-18 | 18.2 | 121 |
-| FR-182 | #892; GQ-2 | US-18 | 18.3 | 120 |
+| FR-182 | #892; GQ-2 C | US-18 | 18.1, 18.3 | 120 |
 | FR-183 | #892 | US-18 | 18.1 | 120 |
-| FR-185 | #955; GC-6 | US-19 | 19.1 | 122 |
-| FR-186 | GC-6; GQ-3 | US-19 | 19.2 | 123 |
-| FR-187 | #955 | US-19 | 19.1, 19.2 | 122, 123 |
-| FR-188 | #892, #955 | US-19 | 19.3 | 123 |
+| FR-185 | GQ-3 | US-19 | 19.4, 19.6 | 123, 132 |
+| FR-186 | #955; GC-6; GQ-3 | US-19 | 19.1 | 122 |
+| FR-187 | #955; GC-6 | US-19 | 19.2 | 123 |
+| FR-188 | GQ-3 | US-19 | 19.3, 19.5 | 123, 133 |
+| FR-189 | GQ-3 | US-19 | 19.7 | 134 |
 | FR-190 | AW-1, AW-2 | US-20 | 20.1, 20.6 | 124, 127 |
 | FR-191 | AW-1 | US-20 | 20.1, 20.6, 20.7 | 124 |
 | FR-192 | AW-1 | US-20 | 20.2 | 125, 127 |
@@ -2633,7 +2691,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | `connect_channel`, `connect_mailbox`, `set_agent_permissions`, `remove_secret` | Static names, ceiling, Omnipus inventory, Auto classification, executable registry | Omnipus chat | Integration 36–38, 48; live 61 |
 | Private secrets | Per-pair storage; per-child injection | Secret card | Integration 34, 71, 74; UAT |
 | Helper decisions | Root-session frames; SPA scope | Omnipus chat from another workspace | E2E 56 |
-| Team list / picker / graph self-row / System agents / Channel settings | SPA | Team tab, Settings | E2E 54; unit 29, 81 |
+| Team list / picker / graph self-row / System agents / connection Configure side panel | SPA | Team tab, Settings, Connectors page | E2E 54; unit 29, 81 |
 | No default / mandatory binding | Removal; routing | Channel status | Integration 44, 64; UAT |
 
 "Code correct and tested" and "reachable by a user or agent" stay separate claims in every report.
@@ -2656,8 +2714,8 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | `docs/getting-started.md`, `docs/tutorial.md` | First agent via Omnipus; provider first | WU-10 |
 | `docs/concepts.md` | Omnipus; workflows; no default agent; channels always bound | WU-2, WU-1 |
 | `docs/skills.md` | Skills via Omnipus; target workspace shelf | WU-3 |
-| `docs/connectors.md`, `docs/connectors/telegram.md`, `docs/connectors/google-chat.md` | `connect_channel` binds the channel's main agent in a workspace; proven vs not tested; QR in chat; unbound or unrouted messages fail loudly; **person table, allow list, "not authorised" replies and stranger status, conversation mode per connection, group behaviour, legacy type-level rules ignored** | WU-7, WU-1, WU-14 |
-| `docs/settings.md` | System agents; Channel settings require a workspace and a main agent; connection editor (person table, allow list, conversation mode); no default-agent or global conversation-scope setting; saved secrets list | WU-10, WU-1, WU-6, WU-14 |
+| `docs/connectors.md`, `docs/connectors/telegram.md`, `docs/connectors/google-chat.md` (incl. steering flags, UI-only commands, paused-group notice) | `connect_channel` binds the channel's main agent in a workspace; proven vs not tested; QR in chat; unbound or unrouted messages fail loudly; **person table, allow list, "not authorised" replies and stranger status, conversation mode per connection, group behaviour, legacy type-level rules ignored** | WU-7, WU-1, WU-14 |
+| `docs/settings.md` | System agents; on the Connectors page each connection's Configure side panel requires a workspace and a main agent and holds the person table, allow list, steering flags and conversation mode; no default-agent or global conversation-scope setting; saved secrets list | WU-10, WU-1, WU-6, WU-14 |
 | `docs/group-chats.md` (**new page**) | Team room, squads, ad-hoc groups; "handed to <Agent>'s main session" and where its approvals appear; @all default and @-names; agent-to-agent replies with no limit and visible cost (R-A4); Stop; members and audit; one workspace only | WU-15 |
 | `docs/memory.md` | Conversation awareness: what the agent sees, `read_conversation`, automatic notes per workspace, recaps-off behaviour | WU-17 |
 | `docs/mail.md` | `connect_mailbox`; read vs send readiness | WU-7 |
@@ -2674,7 +2732,7 @@ Pages are drafted by the implementing lead in the same change; WU-12 is a final 
 | WU | Content | Size | Owner (security-lead reviews, never implements) | Depends on |
 |---|---|---|---|---|
 | WU-0 | Contracts K1–K17 + regeneration (**preparation commits**, not independently landable — K11/K12 remove fields existing code reads) | Standard | backend-lead | — |
-| WU-1 | No default agent; mandatory channel binding; loud failure; browser warm-up (FR-120–FR-132, FR-113 backend) | Feature | backend-lead; frontend-lead (remove default UI, Channel settings) | WU-0 |
+| WU-1 | No default agent; mandatory channel binding; loud failure; browser warm-up (FR-120–FR-132, FR-113 backend) | Feature | backend-lead; frontend-lead (remove default UI; Configure side panel requires workspace + agent) | WU-0 |
 | WU-2 | Omnipus identity, Ava/Admin removal, membership, self-row, grant inventory, ceiling + ask-list, Omnipus per-agent Ask refusal, God Mode note, **and the permission split and management-grant refusal (FR-024, FR-025), committed together with the grants** | Feature | backend-lead; prometheus (prompt) | WU-0 |
 | WU-3 | Change-tool adaptations: target workspace, outcomes, provider/workspace checks, shared-resource lock order and revision tokens (FR-085, FR-088) | Feature | backend-lead | WU-2 |
 | WU-4 | Secret card core: request/submit/state read, atomic store with submit receipt, versioned references and states, descriptor, trust checks, audit, complete masking set across all rebuilds, card UI, references in config tools (**security-lead verification gate, FR-083**) | Feature | backend-lead, frontend-lead | WU-0, WU-3 |
@@ -2685,7 +2743,7 @@ Pages are drafted by the implementing lead in the same change; WU-12 is a final 
 | WU-9 | Workflow skills, core prompt, routing table, `AskUserQuestion` text | Feature | prometheus; backend-lead wiring | WU-2, WU-3, WU-4, WU-7 |
 | WU-10 | Screens incl. state/keyboard contract, kickoff retarget, workspace entry | Feature | frontend-lead; backend-lead (kickoff) | WU-0, WU-2, WU-8 |
 | WU-11 | Removals, guard scripts, retired-surfaces list | Feature (structural, cross-tree) | frontend-lead; backend-lead; prometheus (CLAUDE.md) | WU-10 |
-| WU-14 | Channel person routing (US-16): instance-scoped bindings, allow-list stranger handling, main agent after person table, per-connection conversation mode, derived per-agent list, connection editor, `connect_channel`/`configure_channel` rule parameters (**not grilled — focused review per founder**) | Feature | backend-lead, frontend-lead; prometheus (W13 skill text) | WU-0, WU-1, WU-7 |
+| WU-14 | Channel person routing (US-16): instance-scoped bindings, allow-list stranger handling, main agent after person table, per-connection conversation mode, derived per-agent list (agent editor slide-over), routing in the Connectors Configure side panel, steering flags, `connect_channel`/`configure_channel` rule parameters (**not grilled — focused review per founder**) | Feature | backend-lead, frontend-lead; prometheus (W13 skill text) | WU-0, WU-1, WU-7 |
 | WU-15 | Group chats: team room, squads, ad-hoc groups, mention routing, member sessions, Stop, cost, audit, self hand-off to the own main (GC-7), sidebar section, group view and squad dialog (**not grilled**) | Feature | backend-lead, frontend-lead | WU-0, WU-8, WU-10 |
 | WU-16 | Channel conversation control: stopped-group resume authority (#892), conversation-scoped commands (#955) (**not grilled**) | Feature | backend-lead | WU-14 |
 | WU-17 | Conversation awareness: turn-start list, `read_conversation` + policy entries, recap outcomes to per-workspace memory room, per-workspace carry-forward (**not grilled**) | Feature | backend-lead; prometheus (prompt text) | WU-14, WU-15 |
@@ -2733,28 +2791,7 @@ UI development of WU-10 may start in parallel with WU-3/WU-4 against generated c
 
 ## 17. Open questions for the founder
 
-RQ-1–RQ-4 are answered (§0.7). New points from the scope round:
-
-**GQ-1 — Does an agent's message without an @-name reach the other agents?** Context: you chose "@all by default" for messages in a group. For the user's messages that is clear. For an agent's message it decides how much agents talk among themselves: if every agent reply without an @ goes to all other agents, each answer triggers everyone again — with no limit (GC-5), a three-agent group can run up cost quickly. Impact: cost and noise in every group.
-- **A** — The @all default applies to the user's messages only; an agent reaches other agents only by @-naming them (or writing @all).
-- **B** — The default applies to agents too: an agent reply without @ reaches every other member.
-- **Recommendation: A** — agents still talk freely when they mean to; plain answers to the user do not set off a chain.
-
-**GQ-2 — Messages from group members while a channel group conversation is stopped.** Context: #892 says they must not be silently dropped — either queued or answered with a notice. Impact: what people in a Telegram group see while the operator has paused the agent.
-- **A** — Not queued; the conversation records them as "received while stopped" (visible to the operator); no public reply in the group.
-- **B** — Queued and processed when an authorised person resumes.
-- **C** — A one-time notice in the group: "The assistant is paused."
-- **Recommendation: A** — nothing happens later by surprise and the group is not spammed; the operator sees everything.
-
-**GQ-3 — Borderline channel commands.** Context: GC-6 keeps conversation commands on channels and moves admin commands to the web/CLI. Three are borderline: `/remember` writes to the agent's memory (shared by all its conversations in that workspace), `/goal` and `/loop` start autonomous work in that conversation. Impact: what channel users can trigger.
-- **A** — `/remember` web/CLI only; `/goal` and `/loop` stay, conversation-scoped, for authorised people only.
-- **B** — All three web/CLI only.
-- **Recommendation: A** — `/remember` reaches beyond the conversation; goals and loops do not.
-
-**GQ-4 — Team room membership opt-out.** Context: #1068 asks for opt-in participation; you defined the team room as the workspace's standing room. Impact: whether an agent can be kept out of the team room.
-- **A** — Every conversation agent of the workspace is a member; the user can mute an agent in the team room (it stops being addressed by @all there) without removing it from the workspace.
-- **B** — Membership strictly follows the workspace; no mute.
-- **Recommendation: A** — keeps the room useful when one agent is noisy or costly.
+None open. RQ-1–RQ-4 (§0.7) and GQ-1–GQ-4 (§0.8) are answered. The GQ-3 detail choices in §0.8 are listed for visibility.
 
 ---
 
@@ -2798,5 +2835,6 @@ RQ-1–RQ-4 are answered (§0.7). New points from the scope round:
 - RQ-1 → sidebar, hidden by default, un-hideable; also History. RQ-2 A. RQ-3 A. RQ-4 A.
 - GC-1–GC-6 → group chats (team room, squads, ad-hoc) in scope; @all default; user-only squads; no agent-to-agent limit (R-A4); channel commands conversation-scoped.
 - AW-1, AW-2 → list + read-only look-up + automatic notes; same workspace only.
+- GQ-1 A; GQ-2 C (paused notice once per stop); GQ-3 per-participant steering flag, off by default; GQ-4 A (team-room mute).
 - GC-7 → self hand-off from a group to the agent's own main session in that workspace; report back once; no bounce.
 - OQ-5 → first "keep the rules, separate feature"; then the same day: channel person routing is **in scope** of this implementation (US-16, OSA-14), reusing the bindings engine.
