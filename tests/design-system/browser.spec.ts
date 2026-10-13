@@ -815,6 +815,17 @@ test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both 
         if (index === 1) expect(frames.sheenDuration).toBe(2400)
       }
       const thinking = page.getByTestId('agent-icon').first()
+      // The ink is the SUPPLIED palette hex, opaquely passed through
+      // (AgentIconProps.color: "Palette ink. Fully opaque. Passed through as
+      // currentColor"). The expected fill therefore derives from the SAME
+      // contract enum value the renders above were given — the founder's
+      // 2026-10-11 metallic avatar palette (AVATAR-PALETTE-DECISION;
+      // options[8] is the champagne ink) — by hex arithmetic, never from
+      // observing the component, so a mapping, tinting or swap regression
+      // still fails this exact equality. The >=3:1 contrast assertion below
+      // keeps gating whatever ink the palette carries.
+      const inkHex = AgentColor.options[8]
+      const expectedFill = `rgb(${parseInt(inkHex.slice(1, 3), 16)}, ${parseInt(inkHex.slice(3, 5), 16)}, ${parseInt(inkHex.slice(5, 7), 16)})`
       for (const background of ['#111113', '#0A0A0B']) {
         // Pause at the actual glow's dimmest frame, not a guessed delay.
         const sample = await thinking.evaluate((root, backdrop) => {
@@ -835,7 +846,7 @@ test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both 
             dimmestGlow: Number(getComputedStyle(root.querySelector('[data-glow]')!).opacity),
           }
         }, background)
-        expect(sample.fill).toBe('rgb(251, 146, 60)') // Orange from the spec palette.
+        expect(sample.fill).toBe(expectedFill)
         expect(sample.inkOpacity).toBe(1)
         expect(sample.badgeOpacity).toBe(1)
         expect(sample.dimmestGlow).toBe(0.55)
