@@ -124,7 +124,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   act(() => {
     useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_1' })
-    useChatStore.setState({ nextModel: null, messages: [] })
+    // H6: reset the picked-provider twin too, or a dual-provider test's
+    // pick leaks into the next test's display state.
+    useChatStore.setState({ nextModel: null, nextModelProvider: null, messages: [] })
     useUiStore.setState({ modelSelectorOpen: false })
   })
 })
@@ -631,5 +633,146 @@ describe('ModelPicker — subscription (signed_in) providers are usable', () => 
       expect(screen.getByText('Connect a provider to pick a model')).toBeInTheDocument()
     })
     expect(screen.queryByText('gpt-5.6')).not.toBeInTheDocument()
+  })
+})
+
+// ── H6 (provider hotfix 2026-10-13) — (provider, model) selection identity ─────
+//
+// The founder's live instance listed the SAME model id (gpt-6.1-sol) under
+// TWO providers — the custom local proxy `grok-local` (a local proxy that
+// serves both Grok and ChatGPT models; the dual listing itself is fine) and
+// the subscription row `openai-chatgpt` — and picking it under ONE showed it
+// SELECTED UNDER BOTH, because selection was keyed by model id only. The
+// picker now records WHICH provider row the pick was made under and shows
+// the check on that row alone.
+
+const DUAL_PROVIDER_LIST = [
+  {
+    id: 'grok-local',
+    name: 'grok-local',
+    display_name: 'grok-local',
+    status: 'connected',
+    models: ['gpt-6.1-sol', 'grok-4'],
+  },
+  {
+    id: 'openai-chatgpt',
+    name: 'openai-chatgpt',
+    display_name: 'ChatGPT (subscription)',
+    status: 'signed_in',
+    models: ['gpt-6.1-sol', 'gpt-5.6'],
+  },
+] as Array<Record<string, unknown>>
+
+/** Both grouped rows for one model slug, in provider-fixture order.
+ *  Options only — the trigger button also carries the value text once a
+ *  value is set, and it is not a row. */
+const dualProviderRows = (model: string) =>
+  screen.getAllByRole('option').filter((el) => (el.textContent ?? '').includes(model))
+
+describe('ModelPicker — H6 same model under two providers: only the picked provider is selected', () => {
+  beforeEach(() => {
+    providerFixtures.list = DUAL_PROVIDER_LIST
+  })
+
+  it('picking the shared slug under openai-chatgpt records THAT provider and marks only its row', async () => {
+    renderPicker()
+    await waitForLoadedTrigger()
+
+    act(() => { useUiStore.getState().setModelSelectorOpen(true) })
+    await vi.waitFor(() => {
+      expect(
+        screen.getAllByRole('option').filter((el) => (el.textContent ?? '').includes('gpt-6.1-sol')),
+      ).toHaveLength(2)
+    })
+    const pickRows = screen.getAllByRole('option').filter((el) => (el.textContent ?? '').includes('gpt-6.1-sol'))
+    // Click the SECOND row — openai-chatgpt's (fixture order).
+    fireEvent.click(pickRows[1])
+
+    // The pick carries the provider into the store — the (provider, model)
+    // pair, not just the slug. (The wire frame still carries model_name
+    // only today — MessageFrame.metadata has no provider field; see the
+    // FR-010 contract tests in ChatScreen.test.tsx.)
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().nextModel).toBe('gpt-6.1-sol')
+      expect(useChatStore.getState().nextModelProvider).toBe('openai-chatgpt')
+    })
+
+    // Reopen: exactly the openai-chatgpt row shows the check.
+    act(() => { useUiStore.getState().setModelSelectorOpen(true) })
+    await vi.waitFor(() => screen.getAllByText('gpt-6.1-sol'))
+    const rows = dualProviderRows('gpt-6.1-sol')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).not.toHaveAttribute('data-chosen') // grok-local's row
+    expect(rows[1]).toHaveAttribute('data-chosen') // openai-chatgpt's row
+  })
+
+  it('picking the shared slug under grok-local marks only grok-local\'s row (the pair decides, not the slug)', async () => {
+    renderPicker()
+    await waitForLoadedTrigger()
+
+    act(() => { useUiStore.getState().setModelSelectorOpen(true) })
+    const pickRows = await vi.waitFor(() =>
+      screen.getAllByRole('option').filter((el) => (el.textContent ?? '').includes('gpt-6.1-sol')),
+    )
+    expect(pickRows).toHaveLength(2)
+    fireEvent.click(pickRows[0]) // grok-local's row
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().nextModelProvider).toBe('grok-local')
+    })
+
+    act(() => { useUiStore.getState().setModelSelectorOpen(true) })
+    await vi.waitFor(() => screen.getAllByText('gpt-6.1-sol'))
+    const rows = dualProviderRows('gpt-6.1-sol')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toHaveAttribute('data-chosen') // grok-local's row
+    expect(rows[1]).not.toHaveAttribute('data-chosen') // openai-chatgpt's row
+  })
+
+  it('a SEEDED value (transcript/agent default) shows exactly ONE check via the first-provider lookup, not two', async () => {
+    act(() => {
+      useChatStore.setState({ messages: [assistantMsg('m1', 'gpt-6.1-sol')] })
+    })
+    renderPicker()
+    await waitForLoadedTrigger()
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().nextModel).toBe('gpt-6.1-sol')
+      expect(useChatStore.getState().nextModelProvider).toBeNull()
+    })
+
+    act(() => { useUiStore.getState().setModelSelectorOpen(true) })
+    await vi.waitFor(() => screen.getAllByText('gpt-6.1-sol'))
+    const rows = dualProviderRows('gpt-6.1-sol')
+    expect(rows).toHaveLength(2)
+    const chosenRows = rows.filter((el) => el.hasAttribute('data-chosen'))
+    expect(chosenRows).toHaveLength(1)
+    // First-wins resolves to the FIRST provider in list order (grok-local),
+    // the same precedence ModelSelector renders in.
+    expect(rows[0]).toHaveAttribute('data-chosen')
+  })
+
+  it('navigating to a different session re-seeds and releases the picked provider', async () => {
+    renderPicker()
+    await waitForLoadedTrigger()
+
+    act(() => { useUiStore.getState().setModelSelectorOpen(true) })
+    const pickRows = await vi.waitFor(() =>
+      screen.getAllByRole('option').filter((el) => (el.textContent ?? '').includes('gpt-6.1-sol')),
+    )
+    fireEvent.click(pickRows[1])
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().nextModelProvider).toBe('openai-chatgpt')
+    })
+
+    // Genuine navigation: a different session whose transcript seeds a
+    // different model — the pick (and its provider) was scoped to the
+    // conversation it was made in.
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 'sess_2', activeAgentId: 'mia' })
+      useChatStore.setState({ messages: [assistantMsg('m2', 'grok-4')] })
+    })
+    await vi.waitFor(() => {
+      expect(useChatStore.getState().nextModel).toBe('grok-4')
+      expect(useChatStore.getState().nextModelProvider).toBeNull()
+    })
   })
 })

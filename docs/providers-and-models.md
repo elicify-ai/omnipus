@@ -33,6 +33,12 @@ Use a fallback chain when an agent must keep working through temporary failures.
 
 For a custom endpoint, choose either the `openai-compatible` or `anthropic` protocol. Enter the exact model names that the endpoint accepts. Omnipus cannot discover a custom endpoint's catalog for you.
 
+## Picking a model when two providers offer it
+
+The model pickers — next to the chat message box, on an agent's profile, in the new-agent wizard, and on the **Default model** card — list every model offered by your connected and signed-in providers, grouped under the provider that serves it.
+
+The same model name can appear under more than one provider, for example when a local proxy serves models that a subscription provider also offers. When that happens, the check mark appears only under the provider whose row you actually picked, so the selected row always tells you which provider entry you chose. Picking the same model under a different provider moves the check mark to that provider's row.
+
 ## Models known to support tools
 
 Omnipus sends tool definitions with every model request. A model without tool use fails instead of continuing as a text-only model.

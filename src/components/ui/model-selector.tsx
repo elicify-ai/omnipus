@@ -58,6 +58,20 @@ export interface ModelSelectorProviderFilter {
 interface ModelSelectorProps {
   models: string[]
   value: string
+  /**
+   * H6 (provider hotfix 2026-10-13): the provider id the current `value` was
+   * picked under. When provided, "chosen" is the (provider, model) PAIR —
+   * only the picked provider's row shows the check. Without it, chosen is
+   * the bare model id, so a model served by TWO providers (e.g. a local
+   * proxy row and a subscription row both listing `gpt-6.1-sol`) rendered
+   * as selected under both at once — the founder's live-instance bug.
+   *
+   * `undefined` = the caller has no provider to compare against — legacy
+   * model-id-only match, unchanged. `''` = a provider is known to be absent
+   * and matches no row. A row whose group carries no `providerId` can never
+   * contradict a known `valueProvider` (nothing to compare — legacy match).
+   */
+  valueProvider?: string
   onChange: (model: string) => void  // Named onChange (not onValueChange) since this supports free-text input, not just selection
   placeholder?: string
   disabled?: boolean
@@ -197,7 +211,7 @@ type CatalogRow =
 /** Height used to lay out the virtualised list, in px. Rows are a fixed size. */
 const CATALOG_ROW_HEIGHT = 32
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange, label, catalogGroups, filterProviders }: ModelSelectorProps) {
+export function ModelSelector({ models, value, valueProvider, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange, label, catalogGroups, filterProviders }: ModelSelectorProps) {
   const [internalOpen, setInternalOpen] = React.useState(false)
   const isControlled = controlledOpen !== undefined
   const open = isControlled ? controlledOpen : internalOpen
@@ -651,6 +665,11 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
         .map((g) => ({ ...g, models: [...g.models].sort((a, b) => a.localeCompare(b)) }))
     : []
   const useGrouped = groupsWithModels.length >= 1
+  // H6: when the flat list is actually ONE provider group's models, its
+  // providerId participates in the chosen/pair identity (see the flat path
+  // below); a bare `models` list has none.
+  const flatGroupProviderId =
+    providerGroups && groupsWithModels.length === 1 ? groupsWithModels[0].providerId : undefined
 
   // O3: resolve the provider routing key for a given model slug by searching
   // the providerGroups array. Returns the group's `providerId` or empty string.
@@ -664,9 +683,26 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     return group?.providerId ?? ''
   }
 
-  const handleSelect = (model: string) => {
+  // H6 (provider hotfix 2026-10-13): the "chosen" half of the selection
+  // identity. With `valueProvider` the check marks the (provider, model)
+  // PAIR; without it (`undefined`) the legacy model-id match stands, so a
+  // call site with no provider to compare against is unchanged. A row whose
+  // group carries no `providerId` has nothing to compare and never
+  // contradicts a known `valueProvider`.
+  const matchesValueProvider = (rowProviderId: string | undefined): boolean =>
+    valueProvider === undefined || rowProviderId === undefined || valueProvider === rowProviderId
+
+  // H6 (provider hotfix 2026-10-13): the ROW's providerId is the picked one.
+  // The old `resolveProviderId(model)` slug lookup returns the FIRST group
+  // whose models include the slug — the WRONG provider when two providers
+  // serve the same model (the exact founder-instance shape: picking
+  // gpt-6.1-sol under openai-chatgpt emitted grok-local). The slug lookup
+  // remains only as the fallback for a row with no provider context (a
+  // group without `providerId` — the O3 legacy shape, which still resolves
+  // to '' as before).
+  const handleSelect = (model: string, rowProviderId?: string) => {
     onChange(model)
-    onPairChange?.({ model, provider: resolveProviderId(model) })
+    onPairChange?.({ model, provider: rowProviderId ?? resolveProviderId(model) })
     setOpen(false)
     setQuery('')
   }
@@ -695,12 +731,14 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   )
 
   const renderCatalogItem = (row: Extract<CatalogRow, { kind: 'model' }>) => {
-    const chosen = value === row.model.id
+    // H6: pair identity — valueProvider narrows the check to the picked
+    // provider's row (see matchesValueProvider).
+    const chosen = value === row.model.id && matchesValueProvider(row.providerId)
     return (
       <CommandItem
         key={row.key}
         value={row.model.id}
-        onSelect={() => handleSelect(row.model.id)}
+        onSelect={() => handleSelect(row.model.id, row.providerId)}
         data-model={row.model.id}
         // FR-029: "chosen" is the operator's pick. cmdk's own aria-selected
         // tracks the keyboard cursor, which lands on the first row the moment
@@ -898,21 +936,30 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                     key={group.providerName}
                     heading={group.providerName}
                   >
-                    {filteredModels.map((model) => (
-                      <CommandItem
-                        key={model}
-                        value={model}
-                        onSelect={() => handleSelect(model)}
-                        {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
-                      >
-                        <Check
-                          size={14}
-                          className="mr-[var(--space-2)] shrink-0"
-                          style={{ opacity: value === model ? 1 : 0, color: 'var(--color-accent)' }}
-                        />
-                        <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
-                      </CommandItem>
-                    ))}
+                    {filteredModels.map((model) => {
+                      // H6: pair identity — valueProvider narrows the check to
+                      // the picked provider's row (see matchesValueProvider).
+                      // data-chosen: same chosen-marker contract the catalog
+                      // path uses (cmdk's own aria-selected tracks the
+                      // keyboard cursor, never the user's pick).
+                      const chosen = value === model && matchesValueProvider(group.providerId)
+                      return (
+                        <CommandItem
+                          key={model}
+                          value={model}
+                          onSelect={() => handleSelect(model, group.providerId)}
+                          data-chosen={chosen || undefined}
+                          {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
+                        >
+                          <Check
+                            size={14}
+                            className="mr-[var(--space-2)] shrink-0"
+                            style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
+                          />
+                          <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
+                        </CommandItem>
+                      )
+                    })}
                   </CommandGroup>
                 )
               })
@@ -924,21 +971,31 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                   : models
                 )
                   .filter(filterModel)
-                  .map((model) => (
-                    <CommandItem
-                      key={model}
-                      value={model}
-                      onSelect={() => handleSelect(model)}
-                      {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
-                    >
-                      <Check
-                        size={14}
-                        className="mr-[var(--space-2)] shrink-0"
-                        style={{ opacity: value === model ? 1 : 0, color: 'var(--color-accent)' }}
-                      />
-                      <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
-                    </CommandItem>
-                  ))}
+                  .map((model) => {
+                    // H6: pair identity — the single group's providerId (when
+                    // the flat list came from one provider group) participates
+                    // in the chosen match like every other path; a bare
+                    // `models` list has no provider context (undefined →
+                    // legacy model-id match). data-chosen: same chosen-marker
+                    // contract the catalog path uses.
+                    const chosen = value === model && matchesValueProvider(flatGroupProviderId)
+                    return (
+                      <CommandItem
+                        key={model}
+                        value={model}
+                        onSelect={() => handleSelect(model, flatGroupProviderId)}
+                        data-chosen={chosen || undefined}
+                        {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
+                      >
+                        <Check
+                          size={14}
+                          className="mr-[var(--space-2)] shrink-0"
+                          style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
+                        />
+                        <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
+                      </CommandItem>
+                    )
+                  })}
               </CommandGroup>
             )}
             {queryRaw && !exactMatch && !constrainToCatalog && (

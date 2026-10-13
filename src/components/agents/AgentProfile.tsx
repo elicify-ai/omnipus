@@ -1139,14 +1139,22 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   }, [saveStatus, queryClient, addToast])
 
   // Add a fallback from the <ModelSelector> dropdown. Pairs the picked
-  // model with the provider that owns it (via modelToProvider). De-dupes
+  // model with the provider that owns it — the provider row the user
+  // actually picked under when onPairChange supplies it (H6: two providers
+  // can serve the same slug; the first-wins modelToProvider lookup cannot
+  // tell them apart), else the first-wins lookup for the onChange-only
+  // free-text path. handleSelect fires onChange BEFORE onPairChange for the
+  // same pick, so this runs twice: the first call seeds the entry via the
+  // lookup, the second patches it to the exact picked provider (both
+  // setStates batch into one render — the intermediate is never painted,
+  // and the debounced autosave only ever sees the final pair). De-dupes
   // by model — the fallback list cannot have the same model twice
   // (US-3). Free-text picks (model not in any connected provider) are
   // accepted but surface a warning toast.
-  function addFallbackFromSelector(modelSlug: string) {
+  function addFallbackFromSelector(modelSlug: string, providerOverride?: string) {
     const trimmed = modelSlug.trim()
     if (!trimmed) return
-    const knownProvider = modelToProvider(trimmed)
+    const knownProvider = providerOverride || modelToProvider(trimmed)
     if (!knownProvider) {
       addToast({
         message: `"${trimmed}" isn't listed by any connected provider — saving anyway, but the fallback may not work.`,
@@ -1154,7 +1162,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       })
     }
     setFallbackModels((prev) => {
-      if (prev.some((f) => f.model === trimmed)) return prev
+      const existing = prev.find((f) => f.model === trimmed)
+      if (existing) {
+        // Second callback of the same pick: patch the seeded entry to the
+        // exact picked provider. A plain re-pick of an existing entry stays
+        // a no-op (US-3 dedupe).
+        if (!providerOverride || existing.provider === providerOverride) return prev
+        return prev.map((f) => (f.model === trimmed ? { ...f, provider: providerOverride } : f))
+      }
       return [...prev, { model: trimmed, provider: knownProvider ?? '' }]
     })
   }
@@ -1471,6 +1486,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             <ModelSelector
               models={availableModels}
               value={model}
+              // H6: the explicit provider (or, for a pre-O3 agent with none
+              // saved, the first-wins lookup) narrows the check to ONE
+              // provider's row when several serve the same slug.
+              valueProvider={primaryProvider || modelToProvider(model)}
               onChange={(v) => { markDirty(); setModel(v) }}
               onPairChange={({ provider: p }) => { setPrimaryProvider(p) }}
               placeholder="Provider default"
@@ -1684,6 +1703,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     models={availableModels}
                     value=""
                     onChange={(v) => { markDirty(); addFallbackFromSelector(v) }}
+                    // H6: the grouped pick's exact provider overrides the
+                    // first-wins lookup — see addFallbackFromSelector.
+                    onPairChange={({ model: m, provider: p }) => { markDirty(); addFallbackFromSelector(m, p) }}
                     placeholder="Add fallback…"
                     providerGroups={providerGroups}
                     triggerTestId="fallback-add-trigger"

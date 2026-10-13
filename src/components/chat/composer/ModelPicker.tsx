@@ -6,6 +6,7 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchProviders } from '@/lib/api'
 import { isProviderUsable } from '@/lib/providerStatus'
+import { useModelToProvider } from '@/lib/agents/modelToProvider'
 import { cn } from '@/lib/utils'
 
 /**
@@ -31,6 +32,9 @@ export function ModelPicker({
 }) {
   const messages = useChatStore((s) => s.messages)
   const nextModel = useChatStore((s) => s.nextModel)
+  // H6 (provider hotfix 2026-10-13): the provider row an explicit pick was
+  // made under — the (provider, model) selection identity. null = seeded.
+  const nextModelProvider = useChatStore((s) => s.nextModelProvider)
   const setNextModel = useChatStore((s) => s.setNextModel)
   const addToast = useUiStore((s) => s.addToast)
   const modelSelectorOpen = useUiStore((s) => s.modelSelectorOpen)
@@ -49,9 +53,21 @@ export function ModelPicker({
   // vanish from the picker.
   const usableProviders = providers.filter((p) => isProviderUsable(p.status))
   const availableModels = usableProviders.flatMap((p) => p.models ?? [])
+  // H6: `providerId` on each group is what makes the selector's
+  // `resolveProviderId`/`onPairChange` emit the real routing key — without it
+  // every pick emitted provider:'' and the picked provider was unknowable.
   const providerGroups = usableProviders
     .filter((p) => (p.models ?? []).length > 0)
-    .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
+    .map((p) => ({
+      providerName: p.display_name ?? p.name ?? p.id,
+      providerId: p.id,
+      models: p.models ?? [],
+    }))
+  // H6: display-provider lookup for SEEDED values (transcript/agent default
+  // carry no provider) — first-wins over the same provider order the
+  // selector renders, so exactly one row shows the check instead of one per
+  // provider serving the slug.
+  const { lookup: modelToProvider } = useModelToProvider(usableProviders)
 
   const transcriptLastModel = useMemo<string | null>(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -125,10 +141,15 @@ export function ModelPicker({
       // PRECEDENCE RULE.
       return
     }
+    // H6: the seed path passes no provider (omitted second arg → null) — a
+    // transcript/agent-default value has no provider of its own; the display
+    // derives one via the first-provider lookup above.
     setNextModel(transcriptLastModel ?? activeAgentModel ?? null)
   }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, setNextModel])
 
   function onPickerChange(model: string) {
+    // provider clears here (omitted second arg → null); a grouped pick's
+    // onPairChange (below) immediately re-sets it in the same handler tick.
     setNextModel(model || null)
     // Either a non-empty pick (pin this model) or an explicit revert to ''
     // (hand back to auto-follow) is the user's OWN action, not a derived
@@ -138,6 +159,18 @@ export function ModelPicker({
     if (model === '') {
       addToast({ message: 'Reverted to agent default for next message', variant: 'default' })
     }
+  }
+
+  // H6 (provider hotfix 2026-10-13): the pick is the (provider, model) PAIR —
+  // record which provider row it was made under so only that row shows the
+  // check when two providers serve the same slug. NOT called for free-text
+  // picks (none exist here — the picker is constrained to the catalog).
+  // The wire carries model only today (`metadata.model_name`); see the
+  // nextModelProvider store comment for the field this becomes if the
+  // contract gains `metadata.provider`.
+  function onPickerPairChange(pair: { model: string; provider: string }) {
+    if (!pair.model) return
+    setNextModel(pair.model, pair.provider)
   }
 
   return (
@@ -154,7 +187,11 @@ export function ModelPicker({
         variant="ghost"
         models={availableModels}
         value={nextModel ?? ''}
+        // H6: the picked provider when there is one; a seeded value resolves
+        // via the first-provider lookup so exactly one row shows the check.
+        valueProvider={nextModelProvider ?? modelToProvider(nextModel ?? '')}
         onChange={onPickerChange}
+        onPairChange={onPickerPairChange}
         placeholder={activeAgentModel ?? 'Select a model…'}
         providerGroups={providerGroups}
         triggerTestId="composer-model-selector"

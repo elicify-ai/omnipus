@@ -210,10 +210,15 @@ export function MemorySection(): React.ReactElement {
   }
 
   // Fallback chain helpers — mirrors AgentProfile's pattern
-  function addFallbackFromSelector(modelSlug: string) {
+  // H6 (provider hotfix 2026-10-13): providerOverride carries the provider
+  // row the user actually picked under (onPairChange fires after onChange
+  // for the same pick) — the first-wins modelToProvider lookup cannot tell
+  // two providers serving the same slug apart. First call seeds via the
+  // lookup; the second patches to the exact pick.
+  function addFallbackFromSelector(modelSlug: string, providerOverride?: string) {
     const trimmed = modelSlug.trim()
     if (!trimmed) return
-    const knownProvider = modelToProvider(trimmed)
+    const knownProvider = providerOverride || modelToProvider(trimmed)
     if (!knownProvider) {
       addToast({
         message: `"${trimmed}" isn't listed by any connected provider — saving anyway, but the fallback may not work.`,
@@ -221,7 +226,13 @@ export function MemorySection(): React.ReactElement {
       })
     }
     setField('recap_fallback_models', (() => {
-      if (form.recap_fallback_models.some((f) => f.model === trimmed)) return form.recap_fallback_models
+      const existing = form.recap_fallback_models.find((f) => f.model === trimmed)
+      if (existing) {
+        if (!providerOverride || existing.provider === providerOverride) return form.recap_fallback_models
+        return form.recap_fallback_models.map((f) =>
+          f.model === trimmed ? { ...f, provider: providerOverride } : f,
+        )
+      }
       return [...form.recap_fallback_models, { model: trimmed, provider: knownProvider || undefined }]
     })())
   }
@@ -419,6 +430,10 @@ export function MemorySection(): React.ReactElement {
             <ModelSelector
               models={availableModels}
               value={form.recap_model}
+              // H6: first-wins lookup narrows the check to ONE provider's row
+              // when two serve the same slug (recap_model is a bare slug on
+              // the wire — no provider sibling to remember the pick under).
+              valueProvider={modelToProvider(form.recap_model)}
               onChange={(v) => setField('recap_model', v)}
               onPairChange={({ model }) => setField('recap_model', model)}
               placeholder="Default model"
@@ -527,6 +542,9 @@ export function MemorySection(): React.ReactElement {
                 models={availableModels}
                 value=""
                 onChange={(v) => addFallbackFromSelector(v)}
+                // H6: the grouped pick's exact provider overrides the
+                // first-wins lookup — see addFallbackFromSelector.
+                onPairChange={({ model: m, provider: p }) => addFallbackFromSelector(m, p)}
                 placeholder="Add fallback model…"
                 providerGroups={providerGroups}
                 triggerTestId="recap-fallback-add-trigger"
