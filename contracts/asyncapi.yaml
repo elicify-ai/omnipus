@@ -1856,7 +1856,7 @@ components:
         root_session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
           description: >
             Server-derived root of the acting session's chain (the chat the card
             renders in). Omitted when equal to session_id.
@@ -1955,7 +1955,7 @@ components:
         root_session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
           description: >
             Root of the acting session's chain, so the root chat's card clears
             without a lookup. Omitted when equal to session_id.
@@ -1994,7 +1994,7 @@ components:
         root_session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
           description: Same value and semantics as SecretRequestFrame.root_session_id.
         state:
           type: string
@@ -5393,7 +5393,7 @@ components:
         root_session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
           description: >
             L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
             session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat
@@ -5494,7 +5494,7 @@ components:
         root_session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
           description: >
             L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
             session's chain (ParentSessionID walk, 16 hops, cycle guard): lets the
@@ -5775,7 +5775,7 @@ components:
         root_session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
           description: >
             L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
             session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat

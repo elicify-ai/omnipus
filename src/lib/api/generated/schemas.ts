@@ -17107,7 +17107,7 @@ export const SecretRequestFrame = z
     type: z.literal("secret_request"),
     request_id: z.string().min(1).max(128),
     session_id: z.string().min(1).max(255),
-    root_session_id: z.string().min(1).max(128).optional(),
+    root_session_id: z.string().min(1).max(255).optional(),
     acting_agent_id: z.string().min(1).max(128),
     acting_agent_name: z.string().min(1).max(128),
     origin_label: z.string().min(1).max(200).optional(),
@@ -17130,7 +17130,7 @@ export const SecretRequestResolvedFrame = z
     request_id: z.string().min(1).max(128),
     state: z.enum(["submitted", "cancelled", "stopped", "interrupted", "refused"]),
     session_id: z.string().min(1).max(255).optional(),
-    root_session_id: z.string().min(1).max(128).optional(),
+    root_session_id: z.string().min(1).max(255).optional(),
   })
   .strict();
 
@@ -17138,7 +17138,7 @@ export const SessionStateSecretRequest = z
   .object({
     request_id: z.string().min(1).max(128),
     session_id: z.string().min(1).max(255),
-    root_session_id: z.string().min(1).max(128).optional(),
+    root_session_id: z.string().min(1).max(255).optional(),
     state: z.enum(["pending", "submitted", "cancelled", "stopped", "interrupted", "refused"]),
     acting_agent_id: z.string().min(1).max(128),
     acting_agent_name: z.string().min(1).max(128),
@@ -17855,7 +17855,7 @@ export const CommandSegmentInfo = z
 
 export const ToolApprovalRequiredFrame = z
   .object({
-    root_session_id: z.string().min(1).max(128).optional(),
+    root_session_id: z.string().min(1).max(255).optional(),
     acting_agent_name: z.string().min(1).max(128).optional(),
     origin_label: z.string().min(1).max(200).optional(),
     room_ref: RoomRef.optional(),
@@ -17875,7 +17875,7 @@ export const ToolApprovalRequiredFrame = z
 
 export const ToolApprovalResolvedFrame = z
   .object({
-    root_session_id: z.string().min(1).max(128).optional(),
+    root_session_id: z.string().min(1).max(255).optional(),
     type: z.literal("tool_approval_resolved"),
     approval_id: z.string().min(1),
     state: z.enum(["approved", "denied_user", "denied_timeout", "denied_cancel", "denied_restart", "denied_batch_short_circuit"]),
@@ -17950,7 +17950,7 @@ export const SessionStatePendingApproval = z
     turn_id: z.string().min(1).optional(),
     args: z.record(z.unknown()).optional(),
     segments: z.array(CommandSegmentInfo).optional(),
-    root_session_id: z.string().min(1).max(128).optional(),
+    root_session_id: z.string().min(1).max(255).optional(),
     acting_agent_name: z.string().min(1).max(128).optional(),
     origin_label: z.string().min(1).max(200).optional(),
     room_ref: RoomRef.optional(),

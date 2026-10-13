@@ -69,7 +69,7 @@ properties:
   root_session_id:
     type: string
     minLength: 1
-    maxLength: 128
+    maxLength: 255
     description: >
       L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
       session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat
