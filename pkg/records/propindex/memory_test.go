@@ -112,6 +112,39 @@ func readOwnVmHWM() (int64, error) {
 	return 0, fmt.Errorf("no VmHWM line in /proc/self/status")
 }
 
+// childPeak is the one place that decides which figure is the child's peak. On
+// Linux it is the child's own VmHWM, and a child that did not report a usable one
+// FAILS the test (tb.Fatalf) instead of falling back to the inherited ru_maxrss;
+// elsewhere it is the wait4 figure. Both phases of the single-index test and the
+// two-index test use it, so the rule exists once.
+func childPeak(tb testing.TB, phase, out string, usage *syscall.Rusage) (peak int64, source string, ruMaxRSS int64) {
+	tb.Helper()
+	peak = peakRSSBytes(usage)
+	ruMaxRSS, source = peak, "wait4 ru_maxrss"
+	if runtime.GOOS == "linux" {
+		own, ok := childVmHWM(out)
+		if !ok {
+			tb.Fatalf("the %s child reported no usable VmHWM; refusing to pass on the inherited ru_maxrss figure\n%s", phase, out)
+		}
+		peak, source = own, "child VmHWM"
+	}
+	return peak, source, ruMaxRSS
+}
+
+// reportOwnPeak is the child's half: it prints its own VmHWM on the line the
+// parent parses. On Linux a child that cannot read its own peak fails.
+func reportOwnPeak(tb testing.TB) {
+	tb.Helper()
+	if runtime.GOOS != "linux" {
+		return
+	}
+	hwm, err := readOwnVmHWM()
+	if err != nil {
+		tb.Fatalf("the child cannot read its own peak RSS: %v", err)
+	}
+	fmt.Printf("%s %d\n", vmHWMPrefix, hwm)
+}
+
 // childVmHWM extracts the VmHWM line the child printed.
 func childVmHWM(out string) (int64, bool) {
 	for _, line := range strings.Split(out, "\n") {
@@ -149,18 +182,9 @@ func TestMemory_TheQueryPathStaysInsideTheBudget(t *testing.T) {
 			if !ok {
 				t.Fatalf("this platform does not report rusage; the budget cannot be measured here")
 			}
-			peak := peakRSSBytes(usage)
-			ruMaxRSS := peak
-			source := "wait4 ru_maxrss"
-			if runtime.GOOS == "linux" {
-				// The child's OWN peak (see the block above). Never fall back to
-				// the inherited ru_maxrss figure: a missing value fails the test.
-				own, ok := childVmHWM(string(out))
-				if !ok {
-					t.Fatalf("the %s child reported no usable VmHWM; refusing to pass on the inherited ru_maxrss figure\n%s", phase, out)
-				}
-				peak, source = own, "child VmHWM"
-			}
+			// The child's OWN peak on Linux (see the block above); never a silent
+			// fallback to the inherited ru_maxrss figure.
+			peak, source, ruMaxRSS := childPeak(t, phase, string(out), usage)
 
 			// The child prints what it actually did, so a measurement of nothing
 			// cannot pass as a measurement of the query path.
@@ -319,13 +343,7 @@ func runMemoryPhase(t *testing.T, phase, dbPath string) {
 		t.Fatalf("unknown measurement phase %q", phase)
 	}
 
-	if runtime.GOOS == "linux" {
-		hwm, err := readOwnVmHWM()
-		if err != nil {
-			t.Fatalf("the child cannot read its own peak RSS: %v", err)
-		}
-		fmt.Printf("%s %d\n", vmHWMPrefix, hwm)
-	}
+	reportOwnPeak(t)
 }
 
 // TestMemory_BothIndexesTogether (D16.4 item 4's "both indexes" half) lives in
