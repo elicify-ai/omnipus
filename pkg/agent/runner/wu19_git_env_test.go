@@ -43,8 +43,8 @@ func TestWU19_WorktreeGitChildEnvironment(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	if err := os.WriteFile(filepath.Join(root, name), b, 0o700); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(root, name), b, 0o700); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := runGit(context.Background(), root, "-test.run=^TestWU19_WorktreeGitChildEnvironment$", "--", "--wu19-git")

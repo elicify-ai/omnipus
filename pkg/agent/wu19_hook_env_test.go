@@ -43,8 +43,8 @@ func TestWU19_ProcessHookChildEnvironment(t *testing.T) {
 				t.Fatalf("positive control: hook handshake failed: %v", err)
 			}
 			defer func() {
-				if err := hook.Close(); err != nil {
-					t.Errorf("close hook child: %v", err)
+				if closeErr := hook.Close(); closeErr != nil {
+					t.Errorf("close hook child: %v", closeErr)
 				}
 			}()
 			b, err := os.ReadFile(path)
