@@ -186,12 +186,14 @@ For both, we recommend the **full (heavy) Docker image**: it bundles browser aut
 ```bash
 docker run -d \
   -p 127.0.0.1:5000:5000 \
-  -p 127.0.0.1:5001:5001 \
+  -e OMNIPUS_GATEWAY_HOST=0.0.0.0 \
   -v "$PWD/data:/root/.omnipus" \
   ghcr.io/elicify-ai/omnipus:latest
 ```
 
-Or with compose: `curl -O https://raw.githubusercontent.com/elicify-ai/omnipus/main/docker/docker-compose.yml && docker compose up`.
+Then open `http://localhost:5000`. The `OMNIPUS_GATEWAY_HOST=0.0.0.0` line is required: without it the gateway listens only on the container's own loopback and the published port reaches nothing.
+
+Or with compose: see the [Docker guide](docs/docker.md#quick-start--docker-compose). Both services in the compose file are profile-gated, so a plain `docker compose up` starts nothing; start the gateway with `--profile gateway`, and add `OMNIPUS_GATEWAY_HOST=0.0.0.0` to its `environment` first (the guide shows how).
 
 The published image (`ghcr.io/elicify-ai/omnipus:latest`) is built from [`docker/Dockerfile.goreleaser`](docker/Dockerfile.goreleaser): an Alpine image with only `ca-certificates` and `tzdata` on top of the Go binary.
 
@@ -215,7 +217,6 @@ If you need browser tools inside Docker, use the heavy image below.
 docker build -t omnipus:heavy -f docker/Dockerfile.heavy .
 docker run -d \
   -p 127.0.0.1:5000:5000 \
-  -p 127.0.0.1:5001:5001 \
   -v "$PWD/data:/home/omnipus/.omnipus" \
   omnipus:heavy
 ```
@@ -239,7 +240,7 @@ Requires Go 1.26+ and Node 24+. `make build` runs `spa-embed` first so `go:embed
 
 ### First boot
 
-Two ports open: **5000** serves the SPA + API, and **5001** serves sandboxed agent preview iframes.
+One port opens: **5000** serves the SPA, the API and agent previews (under `/preview/`). Docker users publish only this port.
 
 The onboarding wizard runs on first visit: Welcome → Provider → API Key → Model → Account → Done.
 

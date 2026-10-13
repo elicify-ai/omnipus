@@ -195,7 +195,7 @@ The `agent` profile runs a single query and exits. The one-shot form is `omnipus
 docker compose -f docker/docker-compose.yml run --rm omnipus-agent mia "What is 2+2?"
 ```
 
-`mia` is the default assistant in the built-in roster (`mia`, `jim`, `ray`, `ava`). Run the container with no arguments to print the roster.
+`mia` is the default assistant in the built-in roster (`mia`, `jim`, `ava`, `admin`). Run the container with no arguments to print the roster.
 
 Two prerequisites, because the one-shot command is a **client** rather than a self-contained run:
 
