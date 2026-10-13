@@ -61,13 +61,13 @@ func TestL1WU1NoDefaultAgentSymbols_ProductionASTAndInstrumentControl(t *testing
 			fn, isFunc := decl.(*ast.FuncDecl)
 			if isFunc && strings.Contains(filepath.ToSlash(path), "/pkg/config/") &&
 				(strings.Contains(strings.ToLower(fn.Name.Name), "load") || strings.Contains(strings.ToLower(fn.Name.Name), "ignore")) {
-				copyFile := &ast.File{Decls: []ast.Decl{decl}}
+				copyFile := &ast.File{Name: file.Name, Decls: []ast.Decl{decl}}
 				for _, name := range l1WU1RetiredSymbols(copyFile) {
 					assert.Equal(t, "DefaultAgentID", name, "loader cannot retain an executable default-agent resolver")
 				}
 				continue
 			}
-			copyFile := &ast.File{Decls: []ast.Decl{decl}}
+			copyFile := &ast.File{Name: file.Name, Decls: []ast.Decl{decl}}
 			assert.Empty(t, l1WU1RetiredSymbols(copyFile), "FR-120: retired default-agent symbol remains in %s", path)
 		}
 		return nil
