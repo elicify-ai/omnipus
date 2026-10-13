@@ -186,15 +186,15 @@ func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 	// mcpEnabledEnvSensitiveValues, called from bootCredentials/executeReload
 	// alongside cfg.RegisterSensitiveValues.
 	//
-	// Boot-time asymmetry (documented, not fixed — see mcpEnabledEnvSensitiveValues
-	// and pkg/agent/loop_mcp.go's reconcileLocked): a dangling ref on an
-	// ENABLED channel aborts boot fatally (the "fatal: enabled credential ...
-	// not found" branch below); a dangling ref on an enabled+globally-enabled
-	// MCP server does not — reconcileLocked logs a WARN and skips connecting
-	// just that server, leaving the rest of boot to proceed normally. This
-	// asymmetry predates this fix and is left in place deliberately (making
-	// it fatal would be new boot-time behavior with its own blast radius —
-	// out of scope for this pass).
+	// Boot-time asymmetry (resolved 2026-10-13 — see the #1277 notes on
+	// bootCredentials): a dangling ref on an ENABLED channel used to abort
+	// boot fatally (the "fatal: enabled credential ..." branch); since the
+	// #1277 founder decision it degrades only that channel — visibly, naming
+	// the ref — exactly like the enabled+globally-enabled MCP server case,
+	// where reconcileLocked logs a WARN and skips connecting just that server,
+	// leaving the rest of boot to proceed normally. Both integration classes
+	// now share the same degrade-not-fatal semantics; only store-level
+	// failures stay fatal.
 	if cfg.Tools.MCP.Enabled {
 		for _, srv := range cfg.Tools.MCP.Servers {
 			if !srv.Enabled {
@@ -297,7 +297,10 @@ func enabledRefFromBundleError(err error, enabledRefs map[string]bool) (string, 
 }
 
 // reportInjectionErrors logs every credentials.InjectFromConfig failure at
-// ERROR and returns only the ones that must stop the caller (boot or reload).
+// ERROR and returns the ones that must stop the caller (boot or reload) —
+// plus, separately, the entry-authentication failures whose fatal-vs-scoped
+// verdict the caller must defer until it has the whole bundle's evidence
+// (#1277, see splitEntryAuthFailures).
 //
 // The split, and why it is not "everything is fatal" any more (2026-08-14,
 // corrected 2026-08-15 — see the "wrong master key" note below):
@@ -314,28 +317,24 @@ func enabledRefFromBundleError(err error, enabledRefs map[string]bool) (string, 
 //     hand-editing config.json. One stale line of config must not cost the
 //     whole application.
 //
+//   - An *EntryAuthError cause (which unwraps to ErrWrongKey) is AMBIGUOUS at
+//     injection time: a single tampered entry and a wrong whole-store master
+//     key produce the identical per-ref error shape, and EntryAuthError's own
+//     doc comment says the discriminating evidence is SCOPE — a wrong key
+//     fails every entry, a tampered one fails only itself. Since #1277
+//     (founder decision 2026-10-12) that class is therefore NOT decided here:
+//     it comes back as deferred, and the caller decides once ResolveBundle has
+//     run — a bundle that resolved nothing means the whole vault is unreadable
+//     (fatal, the 2026-08-15 posture preserved); a bundle with any resolved
+//     value means the store is demonstrably readable and only this entry is
+//     broken (scoped degradation, logged by the caller).
+//
 //   - Everything else is STORE-WIDE, and stays fatal: the bare
 //     credentials.ErrStoreLocked (store never unlocked — short-circuited
-//     before this function is even reached, see InjectFromConfig), AND —
-//     this is the part the 2026-08-14 fix got wrong — a *CredentialRefError
-//     whose Err is credentials.ErrWrongKey or a corrupted-entry decrypt
-//     failure. UnlockWithKey performs NO verification against the stored
-//     data, so a stale/rotated master.key or a drifted OMNIPUS_MASTER_KEY
-//     unlocks cleanly (IsLocked() is false, the ErrStoreLocked short-circuit
-//     never fires) and EVERY store.Get call then fails with ErrWrongKey —
-//     wrapped, per ref, in a *CredentialRefError that looks identically
-//     "scoped" to the NotFoundError case above. It is not: the cause is the
-//     master key, not that one config entry, and every OTHER provider and
-//     mailbox is equally dead even though only one happened to be checked
-//     first. Degrading on the wrapper TYPE alone (any *CredentialRefError)
-//     let a wrong master key boot as if a single stale provider were the
-//     only casualty — silently serving with a broken vault, which is worse
-//     than refusing to start. The discriminator has to be the Err field's
-//     type, not the wrapper's type: only *NotFoundError degrades; ErrWrongKey,
-//     store corruption, and any other cause (including an os.Setenv failure)
-//     stay fatal. This exactly mirrors rest.go's
-//     describeCredentialResolutionError, which classifies the same two cases
-//     for the REST credential-resolution path.
+//     before this function is even reached, see InjectFromConfig), a corrupt
+//     credentials.json parse failure, an os.Setenv failure, or any other
+//     cause. This exactly mirrors rest.go's describeCredentialResolutionError,
+//     which classifies the same cases for the REST credential-resolution path.
 //
 // Unknown error shapes (neither *CredentialRefError nor recognized inside
 // one) fall into the fatal bucket on purpose: a future failure mode nobody
@@ -348,13 +347,7 @@ func enabledRefFromBundleError(err error, enabledRefs map[string]bool) (string, 
 // unusable through GET /api/v1/providers, and a default model whose credential
 // is missing gets a startupBlockedProvider that says exactly that instead of
 // an upstream 401 (see createStartupProvider). Nothing here degrades quietly.
-//
-// The channel-credential path (ResolveBundle, below) is deliberately NOT
-// changed: a missing credential on an ENABLED channel remains fatal, because
-// a channel silently not connecting is invisible to the operator in a way a
-// provider in the Settings list is not.
-func reportInjectionErrors(errs []error, phase string) []error {
-	var fatal []error
+func reportInjectionErrors(errs []error, phase string) (fatal []error, deferredAuth []error) {
 	for _, e := range errs {
 		var refErr *credentials.CredentialRefError
 		if errors.As(e, &refErr) {
@@ -371,9 +364,16 @@ func reportInjectionErrors(errs []error, phase string) []error {
 				)
 				continue
 			}
-			// The ref IS configured but the cause is store-wide, not scoped
-			// to this one entry — see the doc comment above. Treat it the
-			// same as a locked store: fatal.
+			var entryAuth *credentials.EntryAuthError
+			if errors.As(refErr.Err, &entryAuth) {
+				// #1277: the single-tampered-entry vs wrong-whole-key verdict
+				// needs the bundle's evidence — deferred to the caller.
+				deferredAuth = append(deferredAuth, e)
+				continue
+			}
+			// The ref IS configured but the cause is neither a missing ref nor
+			// an ambiguous entry-auth failure — a corrupt store document, an
+			// env failure. Store-wide: fatal.
 			slog.Error(
 				phase+": credential store unreadable for a configured ref — "+
 					"not a simple missing ref, treating as store-wide (wrong master key or "+
@@ -390,7 +390,94 @@ func reportInjectionErrors(errs []error, phase string) []error {
 		slog.Error(phase+": provider credential injection failed", "error", e)
 		fatal = append(fatal, e)
 	}
-	return fatal
+	return fatal, deferredAuth
+}
+
+// splitEntryAuthFailures extracts the subset of errs whose cause is an
+// entry-authentication failure (*credentials.EntryAuthError, which unwraps to
+// ErrWrongKey) — the ambiguous class #1277 scopes by bundle evidence: a wrong
+// whole-store master key fails every entry (nothing resolves), a single
+// tampered entry fails only itself (the rest of the bundle still decrypts).
+func splitEntryAuthFailures(errs []error) (auth, rest []error) {
+	for _, e := range errs {
+		var entryAuth *credentials.EntryAuthError
+		if errors.As(e, &entryAuth) {
+			auth = append(auth, e)
+			continue
+		}
+		rest = append(rest, e)
+	}
+	return auth, rest
+}
+
+// fatalStoreWideAuthFailure builds the boot/reload-fatal error for the
+// store-wide entry-auth failure class: every configured credential failed to
+// decrypt and nothing resolved, so the vault is unreadable under this master
+// key (or credentials.json was wholesale replaced). #1277 keeps this class
+// fatal — the founder ruling scopes ONE integration's missing/unreadable
+// secret, not the whole vault. The returned error names the failing refs and
+// carries the entry-authentication cause (errors.Is ⇒ ErrWrongKey); each
+// failing ref is also logged at ERROR with its config attribution so the
+// operator sees exactly which entries the key cannot open.
+func fatalStoreWideAuthFailure(authErrs []error) error {
+	slog.Error(
+		"credential store is unreadable — every configured credential failed to decrypt and nothing "+
+			"resolved: this is a whole-store failure (wrong master key or replaced credentials.json), "+
+			"not a single integration's missing secret; refusing to continue",
+		"failing_refs", len(authErrs),
+	)
+	for _, e := range authErrs {
+		var refErr *credentials.CredentialRefError
+		if errors.As(e, &refErr) {
+			slog.Error(
+				"credential store unreadable for a configured ref — the whole store failed to "+
+					"decrypt under this master key, not just this entry",
+				"scope", refErr.Scope,
+				"owner", refErr.Owner,
+				"workspace", refErr.SubOwner,
+				"credential_ref", refErr.Ref,
+				"error", refErr.Err,
+			)
+			continue
+		}
+		slog.Error(
+			"credential store unreadable for a configured ref — the whole store failed to "+
+				"decrypt under this master key, not just this entry",
+			"error", e,
+		)
+	}
+	return fmt.Errorf(
+		"fatal: credential store unreadable — every configured credential failed authentication "+
+			"(wrong master key?): %w",
+		errors.Join(authErrs...),
+	)
+}
+
+// logScopedCredentialFailures logs entry-auth failures that the bundle proved
+// scoped — the rest of the vault still decrypts — as loud per-integration
+// degradations (#1277), naming the config entry and the credential reference
+// wherever the error shape carries them.
+func logScopedCredentialFailures(phase string, authErrs []error) {
+	for _, e := range authErrs {
+		var refErr *credentials.CredentialRefError
+		if errors.As(e, &refErr) {
+			slog.Error(
+				phase+": credential unusable — the referencing entry will not work until it is fixed, "+
+					"the rest of the system continues",
+				"scope", refErr.Scope,
+				"owner", refErr.Owner,
+				"workspace", refErr.SubOwner,
+				"credential_ref", refErr.Ref,
+				"error", refErr.Err,
+			)
+			continue
+		}
+		slog.Error(
+			phase+": credential unusable — the referencing entry will not work until it is fixed, "+
+				"the rest of the system continues",
+			"error", e,
+		)
+	}
 }
 
 // bootCredentials runs the canonical credential + config boot sequence and
@@ -406,7 +493,10 @@ func reportInjectionErrors(errs []error, phase string) []error {
 //  4. InjectFromConfig for provider env-vars (fatal only on a store-wide
 //     failure; a single unresolvable ref is an ERROR + degraded entry — see
 //     reportInjectionErrors)
-//  5. ResolveBundle for channel secrets (NotFoundError for disabled channels is Info, rest Warn)
+//  5. ResolveBundle for channel secrets (#1277, founder decision 2026-10-12:
+//     a missing or single-entry-unreadable secret degrades only that
+//     integration — loud ERROR + the integration's visible error state; a
+//     whole-store entry-auth failure and unclassified shapes stay fatal)
 //  6. cfg.RegisterSensitiveValues with all resolved plaintexts
 //
 // Both Run and boot_order_test.go call this helper so that a refactor of one
@@ -437,8 +527,13 @@ func bootCredentials(
 	// and that provider/mailbox is left unusable, so the operator can start the
 	// gateway and fix it in the UI. A store-wide failure is still fatal. See
 	// reportInjectionErrors for the full rationale and the incident behind it.
+	// Entry-auth failures come back deferred: their scoped-vs-store-wide
+	// verdict needs the bundle ResolveBundle produces below (#1277).
+	var deferredAuth []error
 	if errs := credentials.InjectFromConfig(cfg, credStore); len(errs) > 0 {
-		if fatal := reportInjectionErrors(errs, "boot"); len(fatal) > 0 {
+		fatal, auth := reportInjectionErrors(errs, "boot")
+		deferredAuth = append(deferredAuth, auth...)
+		if len(fatal) > 0 {
 			return nil, nil, nil, fmt.Errorf(
 				"fatal: provider credential injection failed — ensure OMNIPUS_MASTER_KEY is set and all referenced credentials exist: %w",
 				errors.Join(fatal...),
@@ -462,31 +557,53 @@ func bootCredentials(
 	// Resolve all credential refs into a SecretBundle. Channels receive secrets
 	// via the bundle — no os.Setenv for channel credentials (B1 fix).
 	bundle, bundleErrs := credentials.ResolveBundle(cfg, credStore)
-	for _, e := range bundleErrs {
+
+	// #1277 (founder decision 2026-10-12): one integration's missing or
+	// unreadable secret never aborts boot — only that integration degrades,
+	// visibly. The one exception is the STORE-LEVEL failure class: when every
+	// configured credential failed entry authentication and nothing resolved,
+	// the vault itself is unreadable (wrong master key / replaced
+	// credentials.json) and boot stays fatal. See splitEntryAuthFailures.
+	bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
+	if len(bundleAuth) > 0 && len(bundle) == 0 {
+		return nil, nil, nil, fatalStoreWideAuthFailure(append(append([]error{}, deferredAuth...), bundleAuth...))
+	}
+	logScopedCredentialFailures("boot", deferredAuth)
+	for _, e := range bundleAuth {
+		slog.Error(
+			"boot: credential unusable — the referencing entry will not work until it is fixed, "+
+				"the rest of the system continues",
+			"error", e,
+		)
+	}
+
+	for _, e := range bundleRest {
 		var notFound *credentials.NotFoundError
 		if errors.As(e, &notFound) {
 			if enabledRefs[notFound.Name] {
-				// Missing credential on something actually enabled/in-use
-				// (channel, voice, web-search tool, skill marketplace) is
-				// fatal at boot.
-				return nil, nil, nil, fmt.Errorf(
-					"fatal: enabled credential %q not found in store — "+
-						"ensure the credential is stored before starting: %w",
-					notFound.Name, e,
+				// #1277: a missing credential on something actually
+				// enabled/in-use (channel, voice, web-search tool, skill
+				// marketplace) degrades only that integration — logged loud,
+				// boot continues, and the affected channel/connector/provider
+				// reports the ref-naming reason in its Settings entry.
+				slog.Error(
+					"boot: credential unusable — the referencing entry will not work until it is fixed, "+
+						"the rest of the system continues",
+					"credential_ref", notFound.Name,
+					"error", e,
 				)
+				continue
 			}
 			slog.Info("credential not found (not currently enabled/in use)", "ref", notFound.Name)
 			continue
 		}
-		// Any error other than "ref not found" (wrong master key, corrupted
-		// credential store entry, decrypt failure, ...) means the ref IS
-		// configured but unreadable — worse than a simple missing ref, since
-		// the operator believes it is set up correctly. On something that is
-		// actually ENABLED/in-use this would otherwise only produce a
-		// slog.Warn an operator can easily miss, then it starts (or keeps
-		// running) silently without its secret. Escalate to the same fatal
-		// treatment boot already applies to the NotFoundError-on-enabled case
-		// above, instead of inventing a separate degraded-signal mechanism.
+		// Any error other than "ref not found" or an entry-auth failure (an
+		// env failure, an unclassified future shape, ...) means the ref IS
+		// configured but unreadable in a way nobody has classified. On
+		// something that is actually ENABLED/in-use this stays fatal: the
+		// unknown-shape posture is unchanged by #1277 — only the classified
+		// missing (NotFoundError) and entry-auth (bundle-backed) classes
+		// degrade.
 		if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
 			return nil, nil, nil, fmt.Errorf(
 				"fatal: enabled credential %q failed to resolve (not simply "+

@@ -85,6 +85,12 @@ func searchProviderKeyed(id string) bool {
 // Enabled-but-keyless is "no API key"; anything else not usable is "switched
 // off" (a catalogue-defined base-URL provider with a missing URL also
 // reports "switched off"; there is no separate vocabulary for that).
+//
+// #1277 (founder decision 2026-10-12): when the enabled keyed provider's
+// configured credential reference is known, the reason names it — a generic
+// "no API key" does not tell the operator which secret to re-enter. The fixed
+// vocabulary stays the message prefix, so the spec-text matches and existing
+// consumers keep working; only the ref detail is appended.
 func unusableReason(cfg *config.WebToolsConfig, id string) string {
 	if !slices.Contains(searchProviderCatalogueIDs(), id) {
 		return "unknown id"
@@ -94,6 +100,12 @@ func unusableReason(cfg *config.WebToolsConfig, id string) string {
 	}
 	if searchProviderKeyed(id) {
 		if searchProviderEnabledInCfg(cfg, id) {
+			if def, ok := config.SearchProviderDefByID(id); ok && def.APIKeyRef != nil {
+				if ref := def.APIKeyRef(cfg); ref != "" {
+					return fmt.Sprintf(
+						"no API key: credential reference %q is missing from the credential store", ref)
+				}
+			}
 			return "no API key"
 		}
 		return "switched off"
@@ -958,7 +970,7 @@ func (t *WebSearchTool) executeChosen(
 	// Unknown or unusable picks are refused honestly, no silent substitution.
 	if !slices.Contains(searchProviderCatalogueIDs(), id) || !entries.usable[id] {
 		rec.refusal = true
-		return t.chosenRefusal(entries, id)
+		return t.chosenRefusal(entries, id, cfg)
 	}
 	// Naming the default equals omitting the argument entirely (US-4) --
 	// plain calls only.
@@ -1041,18 +1053,28 @@ func (t *WebSearchTool) executeChosen(
 
 // chosenRefusal is US-4's honest refusal for a named provider that is not
 // usable now: "search failed / - <id>: not usable / Usable providers: ...".
-func (t *WebSearchTool) chosenRefusal(entries roleEntries, id string) *ToolResult {
+// #1277 (founder decision 2026-10-12): when the provider has a configured
+// reason — an enabled keyed provider whose credential reference does not
+// resolve — the refusal also carries that reason verbatim as its own detail
+// line, so the operator learns WHICH secret to fix. The first two lines stay
+// byte-identical: the pinned prefix in the US-4 tests and the Contains-based
+// assertions keep matching.
+func (t *WebSearchTool) chosenRefusal(entries roleEntries, id string, cfg *config.WebToolsConfig) *ToolResult {
 	var usableIds []string
 	for _, cand := range searchProviderCatalogueIDs() {
 		if entries.usable[cand] {
 			usableIds = append(usableIds, cand)
 		}
 	}
-	return ErrorResult(strings.Join([]string{
+	lines := []string{
 		"search failed",
 		"- " + id + ": not usable",
 		"Usable providers: " + strings.Join(usableIds, ", "),
-	}, "\n"))
+	}
+	if reason := unusableReason(cfg, id); reason != "" {
+		lines = append(lines, "Reason: "+reason)
+	}
+	return ErrorResult(strings.Join(lines, "\n"))
 }
 
 // usableOthers lists usable ids other than one, catalogue order.

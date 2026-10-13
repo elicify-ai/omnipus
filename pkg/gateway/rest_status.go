@@ -17,12 +17,24 @@ import (
 	"unicode/utf8"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // --- Doctor / Diagnostics ---
+
+// channelManagerForDoctor returns the live channel manager for the doctor's
+// degraded-connection check, or nil when none is wired (unit tests that build
+// a bare restAPI). Indirected so runDiagnosticChecks stays testable without a
+// full runtime.
+func (a *restAPI) channelManagerForDoctor() *channels.Manager {
+	if a == nil || a.agentLoop == nil {
+		return nil
+	}
+	return a.agentLoop.GetChannelManager()
+}
 
 // HandleDoctor handles GET/POST /api/v1/doctor.
 func (a *restAPI) HandleDoctor(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +181,29 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"action_link":    "/settings?tab=security",
 			"action_label":   "Open security settings",
 		})
+	}
+
+	// #1277 (founder decision 2026-10-12): an integration whose credential is
+	// missing or unreadable no longer aborts boot/reload — it degrades, and
+	// doctor must say so: which connection failed and which secret reference
+	// to fix. The manager's failure record already carries the factory error,
+	// which names the configured ref.
+	if mgr := a.channelManagerForDoctor(); mgr != nil {
+		for _, f := range mgr.FailedChannels() {
+			displayName := f.Channel
+			if displayName == "" {
+				displayName = f.Name
+			}
+			issues = append(issues, map[string]any{
+				"id":             "channel-degraded-" + f.Name,
+				"severity":       "medium",
+				"title":          fmt.Sprintf("Connection %q is degraded", displayName),
+				"description":    fmt.Sprintf("The %q connection is enabled but not running: %s", displayName, f.Err.Error()),
+				"recommendation": "Open Settings → Connectors, select this connection, and re-enter its credential.",
+				"action_link":    "/settings?tab=connectors",
+				"action_label":   "Open connectors",
+			})
+		}
 	}
 
 	return issues

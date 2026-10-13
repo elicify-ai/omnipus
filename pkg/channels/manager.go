@@ -13,6 +13,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -99,10 +100,21 @@ type channelWorker struct {
 // Name is the registry identifier (e.g. "whatsapp_native") as passed to
 // recordChannelFailure; Channel is the human-readable display name
 // (e.g. "WhatsApp Native"). Both are populated on every failure.
+//
+// CredentialScoped marks a failure whose plausible cause is that one of the
+// instance's configured credential references did not resolve into the secret
+// bundle (#1277, founder decision 2026-10-12): at least one of the refs
+// credentials.CredentialRefs declares is absent from the bundle the factory
+// was handed. Such a failure is recorded and surfaced (FailedChannels, the
+// Settings degraded overlay, doctor) but does NOT abort boot or roll a reload
+// back — only the affected integration is down, exactly like a provider whose
+// api_key_ref is missing. Failures with the flag false keep the historical
+// boot-fatal semantics (a constructor bug, an unregistered factory).
 type ChannelInitError struct {
-	Name    string // registry id, e.g. "whatsapp_native"
-	Channel string // human-readable display name, e.g. "WhatsApp Native"
-	Err     error
+	Name             string // registry id, e.g. "whatsapp_native"
+	Channel          string // human-readable display name, e.g. "WhatsApp Native"
+	Err              error
+	CredentialScoped bool // #1277: at least one configured ref is missing from the bundle
 }
 
 func (e *ChannelInitError) Error() string {
@@ -127,14 +139,21 @@ type Manager struct {
 	mux                   *dynamicServeMux
 	httpServer            *http.Server
 	mu                    sync.RWMutex
-	placeholders          sync.Map           // "channel:chatID" → placeholderEntry
-	typingStops           sync.Map           // "channel:chatID" → typingEntry
-	reactionUndos         sync.Map           // "channel:chatID" → reactionEntry
-	streamActive          sync.Map           // "channel:chatID" → streamEntry (set when streamer.Finalize sent the message)
-	channelHashes         map[string]string  // channel name → config hash
-	streamFallback        bus.StreamDelegate // optional fallback for channels not in m.channels (e.g., webchat WebSocket)
-	failedChannels        []ChannelInitError // enabled channels that failed to start
-	cancelInterceptor     CancelRequester    // set after construction via SetCancelInterceptor; may be nil
+	placeholders          sync.Map          // "channel:chatID" → placeholderEntry
+	typingStops           sync.Map          // "channel:chatID" → typingEntry
+	reactionUndos         sync.Map          // "channel:chatID" → reactionEntry
+	streamActive          sync.Map          // "channel:chatID" → streamEntry (set when streamer.Finalize sent the message)
+	channelHashes         map[string]string // channel name → config hash
+	// credSigs mirrors channelHashes with a credential-availability signature
+	// per enabled instance (#1277): which of the instance's configured refs
+	// were present in the bundle when the hash was committed. Reload diffs it
+	// so a secret that disappears (deleted, unreadable) or reappears
+	// re-initializes exactly that instance even though its config bytes did
+	// not change.
+	credSigs          map[string]string
+	streamFallback    bus.StreamDelegate // optional fallback for channels not in m.channels (e.g., webchat WebSocket)
+	failedChannels    []ChannelInitError // enabled channels that failed to start
+	cancelInterceptor CancelRequester    // set after construction via SetCancelInterceptor; may be nil
 
 	// steerAudience is ADR-091 I-5's injected steer.AudienceResolver
 	// (injected into every package that hosts a
@@ -402,6 +421,9 @@ func NewManager(
 
 	// Store initial config hashes for all channels
 	m.channelHashes = toChannelHashes(cfg)
+	// #1277: and the initial credential-availability signatures, so a reload
+	// can tell a secret-set change from an unchanged config.
+	m.credSigs = credentialSignatures(cfg, secrets)
 
 	return m, nil
 }
@@ -582,10 +604,17 @@ func (s *finalizeHookStreamer) Cancel(ctx context.Context) {
 // It is passed through to the factory so the factory can select the right
 // config entry (ADR-029 Gate 0). It returns an error if the factory is not
 // registered or construction fails.
+// errFactoryNotRegistered marks the failure initChannel returns when no
+// factory is registered for the channel type — a build/registration mismatch,
+// never a credential problem: no factory code ran, so the #1277
+// credential-scoped classification must not apply (such a failure stays
+// boot-fatal, like every non-credential construction failure).
+var errFactoryNotRegistered = errors.New("factory not registered")
+
 func (m *Manager) initChannel(name, instanceID, displayName string) error {
 	f, ok := getFactory(name)
 	if !ok {
-		return fmt.Errorf("factory not registered for channel %q", displayName)
+		return fmt.Errorf("factory not registered for channel %q: %w", displayName, errFactoryNotRegistered)
 	}
 	logger.DebugCF("channels", "Attempting to initialize channel", map[string]any{
 		"channel":    displayName,
@@ -690,11 +719,45 @@ func warnMisconfigured(displayName, missing string) {
 
 // recordChannelFailure records a failed enabled-channel init and logs it.
 func (m *Manager) recordChannelFailure(name, displayName string, err error) {
-	m.failedChannels = append(m.failedChannels, ChannelInitError{Name: name, Channel: displayName, Err: err})
-	logger.ErrorCF("channels", "Enabled channel failed to initialize", map[string]any{
-		"channel": displayName,
-		"error":   err.Error(),
+	m.recordChannelFailureScoped(name, displayName, err, false)
+}
+
+// recordChannelFailureScoped records a failed enabled-channel init, logging it
+// and — when credentialScoped is set (#1277) — saying plainly that only this
+// integration is down and naming the class of cause, so the log line an
+// operator greps for matches the degraded-not-fatal behaviour.
+func (m *Manager) recordChannelFailureScoped(name, displayName string, err error, credentialScoped bool) {
+	m.failedChannels = append(m.failedChannels, ChannelInitError{
+		Name:             name,
+		Channel:          displayName,
+		Err:              err,
+		CredentialScoped: credentialScoped,
 	})
+	logger.ErrorCF("channels", "Enabled channel failed to initialize", map[string]any{
+		"channel":           displayName,
+		"error":             err.Error(),
+		"credential_scoped": credentialScoped,
+	})
+}
+
+// instanceCredentialRefMissing reports whether any credential reference the
+// instance configures is absent (or empty) in the supplied secret bundle —
+// the signature of the one-integration missing/unreadable-secret failure
+// #1277 scopes. The bundle, not the store, is the right witness: it is exactly
+// what the factory was handed, and a factory that found its refs present in
+// it did not fail for a missing secret. An instance that configures no refs
+// at all is never credential-scoped — its failures keep the historical
+// boot-fatal semantics.
+func instanceCredentialRefMissing(inst config.ChannelInstanceConfig, secrets credentials.SecretBundle) bool {
+	for _, ref := range inst.CredentialRefs() {
+		if strings.TrimSpace(ref) == "" {
+			continue
+		}
+		if secrets.GetString(ref) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // FailedChannels returns a copy of the list of enabled channels that failed to
@@ -706,6 +769,17 @@ func (m *Manager) FailedChannels() []ChannelInitError {
 	out := make([]ChannelInitError, len(m.failedChannels))
 	copy(out, m.failedChannels)
 	return out
+}
+
+// managerHasFailureFor reports whether the failed list already carries an
+// entry recorded under the given instance id.
+func managerHasFailureFor(failed []ChannelInitError, name string) bool {
+	for i := range failed {
+		if failed[i].Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // channelTypeToFactory maps a channel instance type to the factory name
@@ -763,7 +837,9 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 				)
 				// Record under instanceID (not factoryName) so degraded status
 				// refers to the operator-visible config key.
-				m.recordChannelFailure(instanceID, "WhatsApp Native", wrapped)
+				m.recordChannelFailureScoped(instanceID, "WhatsApp Native", wrapped,
+					instanceCredentialRefMissing(inst, m.secrets) &&
+						!errors.Is(err, errFactoryNotRegistered))
 			}
 			continue
 		}
@@ -782,7 +858,16 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 
 		// initChannel keys m.channels by instanceID (FR-015 / WS-B resolved).
 		if err := m.initChannel(factoryName, instanceID, displayName); err != nil {
-			m.recordChannelFailure(instanceID, displayName, err)
+			// #1277 (founder decision 2026-10-12): a failure whose configured
+			// credential reference is missing from the bundle is one
+			// integration's missing/unreadable secret — recorded and surfaced,
+			// never boot-fatal. The classification runs against the same
+			// bundle the factory just failed under (m.secrets). An unregistered
+			// factory is a build/registration mismatch, not a credential
+			// problem, and keeps the historical fatal semantics.
+			scoped := instanceCredentialRefMissing(inst, m.secrets) &&
+				!errors.Is(err, errFactoryNotRegistered)
+			m.recordChannelFailureScoped(instanceID, displayName, err, scoped)
 		}
 	}
 
@@ -828,11 +913,17 @@ func isNonFatalChannelName(name string) bool {
 // bootFatalError returns a joined error for the subset of failed channels whose
 // failure is boot-fatal, or nil if every failure is non-fatal (or there were
 // none). Non-fatal failures remain recorded in FailedChannels for degraded
-// status; they simply do not abort boot.
+// status; they simply do not abort boot. Non-fatal classes: the legacy
+// build-variant names (isNonFatalChannelName) and — since #1277 (founder
+// decision 2026-10-12) — failures flagged CredentialScoped, the
+// one-integration missing/unreadable-secret class.
 func bootFatalError(failed []ChannelInitError) error {
 	joinedErrs := make([]error, 0, len(failed))
 	for i := range failed {
 		if isNonFatalChannelName(failed[i].Name) {
+			continue
+		}
+		if failed[i].CredentialScoped {
 			continue
 		}
 		joinedErrs = append(joinedErrs, &failed[i])
@@ -1878,6 +1969,7 @@ type managerReload struct {
 	secrets     credentials.SecretBundle
 	oldConfig   *config.Config
 	oldSecrets  credentials.SecretBundle
+	oldCredSigs map[string]string
 	list        map[string]string
 	added       []string
 	removed     []string
@@ -1885,7 +1977,11 @@ type managerReload struct {
 	dispatchCtx context.Context
 	cancel      context.CancelFunc
 	deferFuncs  []func()
-	cc          map[string]config.ChannelInstanceConfig
+	// removedInstances carries the stale instance pointer of every removed
+	// channel until restartExisting's deferred unregister actually deletes it
+	// (#1277 — see removeChannels/startAdded).
+	removedInstances map[string]Channel
+	cc               map[string]config.ChannelInstanceConfig
 }
 
 // Reload applies configuration changes to the channel manager. It compares
@@ -1916,6 +2012,7 @@ func (mr *managerReload) prepareDispatch() {
 	// Save old config and secrets so we can revert on error.
 	mr.oldConfig = mr.m.config
 	mr.oldSecrets = mr.m.secrets
+	mr.oldCredSigs = mr.m.credSigs
 
 	// Update config and secrets early: initChannel uses m.config and m.secrets via factory call.
 	mr.m.config = mr.cfg
@@ -1924,6 +2021,26 @@ func (mr *managerReload) prepareDispatch() {
 
 	mr.list = toChannelHashes(mr.cfg)
 	mr.added, mr.removed = compareChannels(mr.m.channelHashes, mr.list)
+	// #1277 (founder decision 2026-10-12): a config-hash-identical instance
+	// whose credential availability changed — its secret was deleted from the
+	// vault, became unreadable, or was restored — must still be re-initialized,
+	// or a deleted credential would keep the old channel instance running on
+	// its stale in-process secret forever. Force the same removed+added pair a
+	// config change produces so removeChannels stops the stale instance and
+	// initializeAdded re-attempts the factory against the new bundle.
+	mr.m.credSigs = credentialSignatures(mr.cfg, mr.secrets)
+	for id, sig := range mr.m.credSigs {
+		if _, stillEnabled := mr.list[id]; !stillEnabled {
+			continue
+		}
+		if oldSig, ok := mr.oldCredSigs[id]; !ok || oldSig == sig {
+			continue
+		}
+		if !slices.Contains(mr.added, id) {
+			mr.added = append(mr.added, id)
+			mr.removed = append(mr.removed, id)
+		}
+	}
 
 	// Fix 16: cancel the existing dispatcher before creating a new one to prevent context leak.
 	//
@@ -1995,10 +2112,17 @@ func (mr *managerReload) quiesceDispatch() {
 func (mr *managerReload) removeChannels() {
 	// Fix 14 (removed loop): capture loop variable with a local copy to avoid Go closure capture bug.
 	mr.deferFuncs = make([]func(), 0, len(mr.removed)+len(mr.added))
+	mr.removedInstances = make(map[string]Channel, len(mr.removed))
 	for _, name := range mr.removed {
 		n := name // local copy — prevents closure from capturing the loop variable
 		// Stop all channels
 		channel := mr.m.channels[n]
+		// #1277: remember the stale instance pointer. The unregister is
+		// deferred to restartExisting, so until then m.channels[n] still
+		// holds it; startAdded must not mistake it for an instance THIS
+		// pass constructed when the same instance is also in added
+		// (a credential-signature-forced re-attempt whose factory failed).
+		mr.removedInstances[n] = channel
 		// Defense-in-depth: a "removed" name that never resolved to a registered
 		// channel (e.g. it failed to construct on a prior boot/reload) leaves
 		// m.channels[n] nil. Calling Stop would panic and crash the gateway. Skip the
@@ -2038,6 +2162,7 @@ func (mr *managerReload) initializeAdded() (error, bool) {
 		mr.m.config = mr.oldConfig
 		mr.m.liveCfg.Store(mr.oldConfig)
 		mr.m.secrets = mr.oldSecrets
+		mr.m.credSigs = mr.oldCredSigs
 		mr.cancel()
 		return err, true
 	}
@@ -2095,6 +2220,7 @@ func (mr *managerReload) initializeAdded() (error, bool) {
 		mr.m.config = mr.oldConfig
 		mr.m.liveCfg.Store(mr.oldConfig)
 		mr.m.secrets = mr.oldSecrets
+		mr.m.credSigs = mr.oldCredSigs
 		mr.m.failedChannels = oldFailed
 		mr.cancel()
 		return err, true
@@ -2114,6 +2240,16 @@ func (mr *managerReload) startAdded() {
 		// is nil. Calling Start on it would panic and crash the entire gateway. Record
 		// a degraded failure, drop the hash so the channel is re-attempted on the next
 		// reload, and continue — a single missing channel must NEVER take down the bus.
+		//
+		// #1277: the same guard covers the stale case — when n was ALSO removed
+		// this reload, m.channels[n] still holds the OLD (stopped) instance
+		// because the unregister is deferred to restartExisting. A pointer
+		// match with the removed instance means this pass's factory FAILED to
+		// construct a replacement, and starting the stale instance here would
+		// resurrect the removed credential's channel.
+		if stale, wasRemoved := mr.removedInstances[n]; wasRemoved && channel == stale {
+			channel = nil
+		}
 		if channel == nil {
 			// Give a specific, actionable reason when this is the ordinary,
 			// well-understood case of an enabled channel that simply hasn't
@@ -2143,7 +2279,17 @@ func (mr *managerReload) startAdded() {
 					}
 				}
 			}
-			mr.m.recordChannelFailure(n, n, reason)
+			// initChannels already recorded the specific factory failure when
+			// construction errored for this instance (the same reason this
+			// channel is nil). Appending the generic not-registered reason on
+			// top would double-count the instance in FailedChannels — #1277's
+			// RED pack pins exactly one failure entry per degraded connection —
+			// and would bury the actionable cause under boilerplate. Record the
+			// generic reason only when no failure for this instance exists yet
+			// (the genuine mismatch/skip case, e.g. the prerequisite-check skip).
+			if !managerHasFailureFor(mr.m.failedChannels, n) {
+				mr.m.recordChannelFailure(n, n, reason)
+			}
 			delete(mr.list, n)
 			continue
 		}

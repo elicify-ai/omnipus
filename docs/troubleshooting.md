@@ -41,6 +41,12 @@ Stop that process, or set another port in `~/.omnipus/config.json` and start aga
 
 The port is read at startup; a running gateway does not move its listener.
 
+## A connection shows a credential error (degraded)
+
+A connector, provider, mailbox, or assistant-connector whose stored secret is missing, was deleted, or can no longer be read is shown as degraded — the row's error names the exact credential reference to fix, for example `secret reference MY_BOT_TOKEN is missing from the credential store`. Only that one integration is down: the gateway still starts, still applies your settings changes, and every other connection keeps working. **Doctor** (Settings → Diagnostics) lists the same degraded connection with the same reference.
+
+To fix it, re-enter the credential where the row points you — **Settings → Connectors** for a connection, **Settings → Providers** for a model key, the Credential Vault for a raw entry — and save. The connection recovers on the next settings save or restart. This is different from a vault-level failure (the store is locked, or its file is damaged): that stops the gateway at startup and is covered by [Saving a secret fails with "credential store locked"](#saving-a-secret-fails-with-credential-store-locked) below.
+
 ## Every request returns 401 Unauthorized
 
 The web app signs you in once, then rides a session cookie. Scripts must present a Bearer token belonging to a configured account or the gateway's CLI token, or match `OMNIPUS_BEARER_TOKEN`.

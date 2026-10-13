@@ -1207,6 +1207,35 @@ type ChannelInstanceConfig struct {
 	EmailUsername string `json:"username,omitempty"`
 }
 
+// CredentialRefs returns every credential-reference field this instance
+// configures, in a stable order. This is the ONE canonical list of a channel
+// instance's secret references: credentials.ResolveAll (pkg/credentials/
+// inject.go) and gateway buildEnabledRefMap walk the same fields inline and
+// must stay in sync with it, and pkg/channels uses it to classify a factory
+// failure as credential-scoped (#1277) and to detect a credential-availability
+// change between reloads. A new *_ref field on this struct must be added here.
+func (c ChannelInstanceConfig) CredentialRefs() []string {
+	return []string{
+		c.TokenRef,
+		c.BotTokenRef,
+		c.AppTokenRef,
+		c.AppSecretRef,
+		c.EncryptKeyRef,
+		c.VerificationTokenRef,
+		c.ClientSecretRef,
+		c.AccessTokenRef,
+		c.CryptoPassphraseRef,
+		c.ChannelSecretRef,
+		c.ChannelAccessTokenRef,
+		c.SecretRef,
+		c.WebhookURLRef,
+		c.ServiceAccountJSONRef,
+		c.PasswordRef,
+		c.NickServPasswordRef,
+		c.SASLPasswordRef,
+	}
+}
+
 // GroupTriggerConfig controls when the bot responds in group chats.
 type GroupTriggerConfig struct {
 	MentionOnly bool     `json:"mention_only,omitempty"`

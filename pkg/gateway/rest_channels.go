@@ -332,23 +332,26 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 }
 
 // applyDegradedOverlay marks entries in channelList as degraded when the
-// supplied failed list contains a matching registry id.  It is a pure function
+// supplied failed list contains a matching entry.  It is a pure function
 // extracted from HandleChannels so that it can be unit-tested without a full
 // REST stack.
 //
 // Normalisation rule: "whatsapp_native" maps to the "whatsapp" base type because
 // both the bridge and native transports share the WhatsApp channel type.
 //
-// Matching is by BASE TYPE (config.ParseInstanceKey of the entry id) so that a
-// per-instance entry ("whatsapp.eu") is correctly marked when its base type
-// ("whatsapp") failed to construct, and every instance of a failing type is
-// flagged. A base-type entry ("telegram") parses to itself, so the existing
-// base-type overlay tests keep passing unchanged.
+// Matching is by EXACT instance id (#1277, per-instance status): the manager
+// records failures under the config map key (the instanceID), which is what
+// each configured entry's Id carries. Base-type matching here would smear one
+// instance's failure across every sibling of the same type — a healthy
+// "line.healthy" must not wear a failed "line"'s credential error, and a
+// namespaced failed id ("line.bad") must still reach its own row. Bare-type
+// instances (instanceID == type name, e.g. "telegram") match exactly as
+// before, so the existing overlay tests keep passing unchanged.
 func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.ChannelInitError) {
 	if len(failed) == 0 {
 		return
 	}
-	// Build a map of normalised registry-id (base type) → error reason.
+	// Build a map of normalised registry-id (instance id) → error reason.
 	degradedMap := make(map[string]string, len(failed))
 	for _, f := range failed {
 		id := f.Name
@@ -358,8 +361,7 @@ func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.Chan
 		degradedMap[id] = f.Err.Error()
 	}
 	for i := range channelList {
-		baseType, _ := config.ParseInstanceKey(channelList[i].Id)
-		if reason, ok := degradedMap[baseType]; ok {
+		if reason, ok := degradedMap[channelList[i].Id]; ok {
 			r := reason
 			channelList[i].Degraded = boolPtr(true)
 			channelList[i].DegradedReason = &r
