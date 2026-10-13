@@ -34,8 +34,8 @@ if cat "$3" >/dev/null 2>/dev/null; then printf 'FUTURE=reachable\n'; else print
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
+	if startErr := cmd.Start(); startErr != nil {
+		t.Fatal(startErr)
 	}
 	reader := bufio.NewReader(stdout)
 	existing, err := reader.ReadString('\n')
@@ -47,11 +47,11 @@ if cat "$3" >/dev/null 2>/dev/null; then printf 'FUTURE=reachable\n'; else print
 		t.Fatalf("same-child control/ready handshake failed: got %q err=%v", ready, err)
 	}
 	fixture.Write(t, future, fixture.Sentinel)
-	if _, err := io.WriteString(stdin, "go\n"); err != nil {
-		t.Fatal(err)
+	if _, writeErr := io.WriteString(stdin, "go\n"); writeErr != nil {
+		t.Fatal(writeErr)
 	}
-	if err := stdin.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := stdin.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	out, err := io.ReadAll(reader)
 	if err != nil {

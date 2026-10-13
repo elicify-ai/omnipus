@@ -4,6 +4,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -122,7 +123,7 @@ func wu23GodOSProbe() {
 		fmt.Fprintln(os.Stderr, "workspace control failed")
 		os.Exit(90)
 	}
-	if err := os.WriteFile(filepath.Join(outside, "god-free.txt"), []byte("free"), 0o600); err != nil {
+	if writeErr := os.WriteFile(filepath.Join(outside, "god-free.txt"), []byte("free"), 0o600); writeErr != nil {
 		fmt.Fprintln(os.Stderr, "God outside write control failed")
 		os.Exit(91)
 	}
@@ -138,7 +139,7 @@ func wu23GodOSProbe() {
 	for name, rel := range map[string]string{"sessions": "sessions/private.txt", "credentials": "credentials.json"} {
 		if _, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(rel))); err == nil {
 			fmt.Println("LEAKED=" + name)
-		} else if os.IsPermission(err) || os.IsNotExist(err) {
+		} else if errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrNotExist) {
 			fmt.Println("DENIED=" + name)
 		} else {
 			fmt.Fprintln(os.Stderr, "unexpected protected-file I/O error")

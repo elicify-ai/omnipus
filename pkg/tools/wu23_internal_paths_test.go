@@ -13,6 +13,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	fixture "github.com/elicify-ai/omnipus/tests/l1_red/protectedfixture"
+	"github.com/stretchr/testify/assert"
 )
 
 func wu23Context(f fixture.Layout) context.Context {
@@ -130,11 +131,10 @@ func TestWU23_ResolverAndPreflightAreNeverGrantable(t *testing.T) {
 				if h != nil {
 					h.Close()
 				}
-				if err != ErrCarveOut {
-					// Skill instructions have their existing specialized gate.
-					if !strings.HasPrefix(rel, "skills/") || err == nil {
-						t.Errorf("D5 %s %s: got %v want ErrCarveOut (inventory beats pattern)", op, rel, err)
-					}
+				// Skill instructions have their existing specialized gate.
+				if !strings.HasPrefix(rel, "skills/") || err == nil {
+					// Keep exact sentinel identity: wrapping is not accepted.
+					assert.Same(t, ErrCarveOut, err, "D5 %s %s: want exact ErrCarveOut (inventory beats pattern)", op, rel)
 				}
 			}
 			for _, access := range []uint64{fspolicy.PathGrantAccessRead, fspolicy.PathGrantAccessWrite, fspolicy.PathGrantAccessRead | fspolicy.PathGrantAccessWrite} {
@@ -176,9 +176,9 @@ func TestWU23_ReadFileAliasesStayProtected(t *testing.T) {
 
 func TestWU23_AllowListReadOnlyAndSessionScoped(t *testing.T) {
 	f := fixture.New(t)
-	p, err := ResolveTurnFSPolicy(wu23Context(f), f.AgentHome, false)
-	if err != nil {
-		t.Fatal(err)
+	p, policyErr := ResolveTurnFSPolicy(wu23Context(f), f.AgentHome, false)
+	if policyErr != nil {
+		t.Fatal(policyErr)
 	}
 	for _, rel := range []string{"media/allowed.txt", "uploads/acting/allowed.txt", "uploads/root/allowed.txt", "skills/fixture/helper.txt"} {
 		t.Run(rel, func(t *testing.T) {

@@ -40,8 +40,8 @@ func TestWU23_FreshHomeInventoryClassifiedAndProtected(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := store.Close(); err != nil {
-			t.Errorf("close sessions: %v", err)
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close sessions: %v", closeErr)
 		}
 	}()
 	main, err := store.GetOrCreateMainSession("alpha", "self")
@@ -50,11 +50,11 @@ func TestWU23_FreshHomeInventoryClassifiedAndProtected(t *testing.T) {
 	}
 	tasks := task.New(filepath.Join(home, "tasks"))
 	tk := &task.Task{ID: "wu23-task", Title: "Inventory task", Prompt: "fixture", WorkspaceID: "alpha", AgentID: "self", Action: task.ActionLLM, Status: task.StatusNext}
-	if err := tasks.Create(tk); err != nil {
-		t.Fatal(err)
+	if createErr := tasks.Create(tk); createErr != nil {
+		t.Fatal(createErr)
 	}
-	if _, _, err := tasks.OpenRun(tk.ID, nil, task.RunKindManual, main.ID, nil); err != nil {
-		t.Fatal(err)
+	if _, _, runErr := tasks.OpenRun(tk.ID, nil, task.RunKindManual, main.ID, nil); runErr != nil {
+		t.Fatal(runErr)
 	}
 	classified := map[string]bool{"agents": true, "workspaces": true, "media": true, "uploads": true, "toolchains": true}
 	for _, rel := range fixture.ProtectedRelative() {

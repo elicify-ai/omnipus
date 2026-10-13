@@ -4,10 +4,10 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -80,7 +80,7 @@ cat "$3/probe-err.txt"
 					}
 					b, readErr := os.ReadFile(path)
 					if op.name == "create" {
-						if !os.IsNotExist(readErr) {
+						if !errors.Is(readErr, os.ErrNotExist) {
 							t.Errorf("protected absent target created: %s", rel)
 						}
 					} else if readErr != nil || string(b) != fixture.Sentinel {
@@ -125,8 +125,16 @@ func wu23KernelFloor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
-	port := ln.Addr().(*net.TCPAddr).Port
+	defer func() {
+		if closeErr := ln.Close(); closeErr != nil {
+			t.Errorf("close floor probe listener: %v", closeErr)
+		}
+	}()
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("floor probe listener address type=%T, want *net.TCPAddr", ln.Addr())
+	}
+	port := addr.Port
 	// An arbitrary ephemeral port is deliberately not added to ConnectPorts.
 	script := fmt.Sprintf(`printf free > "$3/free.txt" || exit 90
 cat "$2" >/dev/null || exit 91
@@ -157,18 +165,6 @@ cat "$1" >/dev/null
 	t.Logf("God ancestor creation succeeded=%t platform=%s", err == nil, wu23Platform())
 }
 
-func wu23QuotePath(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
-}
-
-func wu23CheckExecuted(t *testing.T, cmd *exec.Cmd, want string) {
-	t.Helper()
-	out, err := cmd.CombinedOutput()
-	if err != nil || strings.TrimSpace(string(out)) != want {
-		t.Fatalf("child got %q want %q err=%v", out, want, err)
-	}
-}
-
 func TestWU23_KernelDerivationRequiredInputs(t *testing.T) {
 	typ := reflect.TypeOf(TurnPolicyInput{})
 	for _, name := range []string{"AllowRoots", "Floor"} {
@@ -191,5 +187,5 @@ func TestWU23_KernelDerivationRequiredInputs(t *testing.T) {
 	if lim.EgressProxyAddr != "" || lim.MemoryLimitBytes != 0 {
 		t.Error("D7: God floor must not introduce egress filtering or resource caps")
 	}
-	t.Log(fmt.Sprintf("God limits: kernel floor present=%t", lim.KernelPolicy != nil))
+	t.Logf("God limits: kernel floor present=%t", lim.KernelPolicy != nil)
 }

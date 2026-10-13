@@ -52,8 +52,8 @@ func TestWU23_DedicatedKnowledgeStoreCannotEscape(t *testing.T) {
 				t.Fatal(err)
 			}
 			alias := "escape-" + strings.ReplaceAll(rel, "/", "-") + ".md"
-			if err := os.Symlink(target, filepath.Join(root, alias)); err != nil {
-				t.Fatalf("dedicated-store alias fixture %d unavailable: %v", i, err)
+			if linkErr := os.Symlink(target, filepath.Join(root, alias)); linkErr != nil {
+				t.Fatalf("dedicated-store alias fixture %d unavailable: %v", i, linkErr)
 			}
 			for _, path := range []string{target, filepath.ToSlash(relative), alias} {
 				for _, tool := range []tools.Tool{reader, edit, move} {

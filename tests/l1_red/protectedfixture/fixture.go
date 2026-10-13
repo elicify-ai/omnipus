@@ -38,18 +38,18 @@ type Layout struct {
 func New(t *testing.T) Layout {
 	t.Helper()
 	root := t.TempDir()
-	real, err := filepath.EvalSymlinks(root)
+	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := Layout{Home: filepath.Join(real, "data"), Work: filepath.Join(real, "data", "workspaces", "alpha", "work"), AgentHome: filepath.Join(real, "data", "agents", "self"), Shared: filepath.Join(real, "shared"), Outside: filepath.Join(real, "outside")}
+	f := Layout{Home: filepath.Join(resolved, "data"), Work: filepath.Join(resolved, "data", "workspaces", "alpha", "work"), AgentHome: filepath.Join(resolved, "data", "agents", "self"), Shared: filepath.Join(resolved, "shared"), Outside: filepath.Join(resolved, "outside")}
 	for _, dir := range []string{f.Home, f.Work, f.AgentHome, f.Shared, f.Outside} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	t.Setenv("HOME", real)
-	t.Setenv("USERPROFILE", real)
+	t.Setenv("HOME", resolved)
+	t.Setenv("USERPROFILE", resolved)
 	t.Setenv("OMNIPUS_HOME", f.Home)
 	for _, rel := range ProtectedRelative() {
 		Write(t, filepath.Join(f.Home, filepath.FromSlash(rel)), Sentinel)
