@@ -35,7 +35,7 @@ import (
 func TestSetChannelRouting_Bound_EmptyAgentID_NothingPersisted(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -59,7 +59,7 @@ func TestSetChannelRouting_Bound_EmptyAgentID_NothingPersisted(t *testing.T) {
 func TestSetChannelRouting_Bound_AgentNotInTeam_NothingPersisted(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 		{ID: "jim"},
 	})
@@ -90,7 +90,7 @@ func TestSetChannelRouting_Bound_AgentNotInTeam_NothingPersisted(t *testing.T) {
 func TestSetChannelRouting_Bound_UnknownWorkspace_NothingPersisted(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 	})
 	seedChannelInstance(t, api, "whatsapp.eu")
 
@@ -111,7 +111,7 @@ func TestSetChannelRouting_Bound_UnknownWorkspace_NothingPersisted(t *testing.T)
 func TestSetChannelRouting_Bound_WorkerAgent_NothingPersisted(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "worker1", Type: config.AgentTypeWorker},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "worker1"}, false)
@@ -144,7 +144,7 @@ func TestSetChannelRouting_Bound_WorkerAgent_NothingPersisted(t *testing.T) {
 func TestSetChannelRouting_EmitsAuditEvent(t *testing.T) {
 	api, auditDir := newTestAPIWithAuditor(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -641,7 +641,7 @@ func TestHandleChannels_SurfacesInstanceIDAndIdentity(t *testing.T) {
 func TestSetChannelRouting_Bound_EmptyAgentID(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -659,7 +659,7 @@ func TestSetChannelRouting_Bound_EmptyAgentID(t *testing.T) {
 func TestSetChannelRouting_Bound_AgentNotInTeam(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 		{ID: "jim"},
 	})
@@ -685,7 +685,7 @@ func TestSetChannelRouting_Bound_AgentNotInTeam(t *testing.T) {
 func TestSetChannelRouting_Bound_UnknownWorkspace(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 	})
 	// No workspace "ghost" written.
 	seedChannelInstance(t, api, "whatsapp.eu")
@@ -702,7 +702,7 @@ func TestSetChannelRouting_Bound_UnknownWorkspace(t *testing.T) {
 func TestSetChannelRouting_Bound_ArchivedWorkspace(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 	})
 	writeTestWorkspaceJSON(t, api, "archived1", "archived", []string{"mia"}, false)
 	seedChannelInstance(t, api, "whatsapp.eu")
@@ -719,7 +719,7 @@ func TestSetChannelRouting_Bound_ArchivedWorkspace(t *testing.T) {
 func TestSetChannelRouting_Bound_WorkerAgent(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "worker1", Type: config.AgentTypeWorker},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "worker1"}, false)
@@ -743,7 +743,7 @@ func TestSetChannelRouting_Bound_WorkerAgent(t *testing.T) {
 func TestSetChannelRouting_Unbound_Worker_Returns422(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "worker1", Type: config.AgentTypeWorker},
 	})
 
@@ -770,7 +770,7 @@ func TestSetChannelRouting_Unbound_Worker_Returns422(t *testing.T) {
 func TestSetChannelRouting_ValidBinding_SetsIdentity(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -827,7 +827,7 @@ func TestSetChannelRouting_ValidBinding_SetsIdentity(t *testing.T) {
 func TestGetChannelRouting_BoundReadsIdentity(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -853,7 +853,7 @@ func TestGetChannelRouting_BoundReadsIdentity(t *testing.T) {
 func TestGetChannelRouting_UnboundReadsWildcard(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 	})
 
 	// Plant a wildcard binding for telegram (unbound).
@@ -932,7 +932,7 @@ func TestHandleChannels_BadSlug_Returns400_NothingWritten(t *testing.T) {
 func TestSetChannelRouting_UnbindClears_WorkspaceID_And_Identity(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -985,7 +985,7 @@ func TestSetChannelRouting_UnbindClears_WorkspaceID_And_Identity(t *testing.T) {
 func TestSetChannelRouting_Bound_RestampsExistingSessions(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -1012,7 +1012,7 @@ func TestSetChannelRouting_Bound_RestampsExistingSessions(t *testing.T) {
 func TestSetChannelRouting_Rebind_UpdatesExistingSessions(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "w1", "active", []string{"mia", "ray"}, false)
@@ -1047,7 +1047,7 @@ func TestSetChannelRouting_Rebind_UpdatesExistingSessions(t *testing.T) {
 func TestSetChannelRouting_Unbind_ClearsExistingSessions(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -1078,7 +1078,7 @@ func TestSetChannelRouting_Unbind_ClearsExistingSessions(t *testing.T) {
 func TestSetChannelRouting_Bound_UnboundChannelSessionsUnaffected(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -1116,7 +1116,7 @@ func TestSetChannelRouting_Bound_UnboundChannelSessionsUnaffected(t *testing.T) 
 func TestSetChannelRouting_SiblingInstanceIsUntouched(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "emea", "active", []string{"mia", "ray"}, false)
@@ -1786,7 +1786,7 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 				MaxToolIterations: 20,
 			},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore},
 				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker},
 			},
 		},
@@ -1797,13 +1797,16 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
+	// FR-127: a routing write always names a workspace; both agents are on it
+	// so the worker refusal is the only reason under test.
+	writeTestWorkspaceJSON(t, api, "ops", "active", []string{"mia", "worker"}, false)
 
-	// Worker target → 400.
+	// Worker target → 422.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/channels/telegram/routing",
-		strings.NewReader(`{"default_agent_id": "worker"}`),
+		strings.NewReader(`{"workspace_id": "ops", "default_agent_id": "worker"}`),
 	)
 	api.HandleChannels(w, r)
 	// MIN-002: worker rejection standardized to 422 (was 400).
@@ -1814,7 +1817,7 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 
 	// Confirm no binding was persisted for telegram.
 	liveCfg := api.agentLoop.GetConfig()
-	assert.Less(t, channelWildcardIdx(liveCfg.Bindings, "telegram"), 0,
+	assert.False(t, liveCfg.Channels["telegram"].IsWorkspaceBound(),
 		"rejected worker target must not persist a binding")
 
 	// Control: base agent target → 200.
@@ -1822,14 +1825,14 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 	r2 := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/channels/telegram/routing",
-		strings.NewReader(`{"default_agent_id": "mia"}`),
+		strings.NewReader(`{"workspace_id": "ops", "default_agent_id": "mia"}`),
 	)
 	api.HandleChannels(w2, r2)
 	require.Equal(t, http.StatusOK, w2.Code, "a base agent target must succeed (control)")
 	var resp gen.ChannelRouting
 	require.NoError(t, json.NewDecoder(w2.Body).Decode(&resp))
-	require.NotNil(t, resp.DefaultAgentId)
-	assert.Equal(t, "mia", *resp.DefaultAgentId)
+	assert.True(t, resp.Bound)
+	assert.Equal(t, "mia", resp.DefaultAgentId)
 }
 
 // --- HandleChannels tests ---

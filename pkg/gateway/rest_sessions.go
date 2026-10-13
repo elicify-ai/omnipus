@@ -932,7 +932,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// FR-005: Omnipus has exactly one conversation — its main chat in the
 	// default workspace. A second one is refused with that main's id.
-	if msg, _, err := omnipusSecondConversationRefusal(a.homePath, agentID); err != nil {
+	if msg, _, err := omnipusSecondConversationRefusal(a.agentLoop.GetSessionStore(), a.homePath, agentID); err != nil {
 		jsonServerFailure(w, http.StatusInternalServerError, "could not check Omnipus's conversation", err)
 		return
 	} else if msg != "" {

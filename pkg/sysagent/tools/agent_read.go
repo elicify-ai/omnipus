@@ -47,19 +47,13 @@ func (t *AgentGetTool) Execute(_ context.Context, args map[string]any) *tools.To
 	if t.deps != nil && t.deps.AgentActiveRevision != nil && t.deps.AgentActiveRevision(id) == state.Revision {
 		activation = agentstore.ActivationActive
 	}
-	defaultAgent := state.Agent.Default
-	if t.deps != nil && t.deps.GetCfg != nil {
-		if cfg := t.deps.GetCfg(); cfg != nil {
-			defaultAgent = cfg.Agents.Defaults.DefaultAgentID == state.Agent.ID
-		}
-	}
 	resp := map[string]any{
 		"id": state.Agent.ID, "name": state.Agent.Name, "description": state.Agent.Description,
 		"type": wireAgentType(*state.Agent), "soul": state.Soul, "skills": nonNilStrings(state.Agent.Skills),
 		"mcp_servers": storedMCPBindings(state.Agent), "stored_tool_overrides": storedOverrides(state.Agent),
 		"override_names": overrides, "model": state.Agent.Model, "revision": state.Revision,
 		"activation_status": activation, "editable_fields": editableDescriptors(*state.Agent),
-		"memory_enabled": state.Agent.MemoryEnabled, "default": defaultAgent, "voice": state.Agent.Voice,
+		"memory_enabled": state.Agent.MemoryEnabled, "voice": state.Agent.Voice,
 		"context_window_override": state.Agent.ContextWindowOverride,
 		"model_params":            state.Agent.ModelParams,
 	}

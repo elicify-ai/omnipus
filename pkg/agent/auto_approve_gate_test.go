@@ -55,7 +55,7 @@ func runStubTurn(t *testing.T, autoApprove bool, names []string) (*autoRecording
 	stubs := installAutoStubs(t, al, "mia", names)
 	approver := &autoRecordingApprover{approve: true}
 	al.SetToolApprover(approver)
-	_, err := al.ProcessDirect(context.Background(), "use the tools", "auto-gate-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "use the tools", "auto-gate-turn")
 	require.NoError(t, err)
 	return approver, stubs, al
 }
@@ -88,7 +88,7 @@ func TestAutoApprove_T4_T11_T12_RunsToolsRunWithoutPrompt(t *testing.T) {
 	al.SetToolApprover(approver)
 	readAudit := swapAuditLogger(t, al)
 
-	_, err := al.ProcessDirect(context.Background(), "use the tools", "auto-runs-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "use the tools", "auto-runs-turn")
 	require.NoError(t, err)
 
 	for _, name := range autoRunsSample {
@@ -164,7 +164,7 @@ func TestAutoApprove_T5b_AutoOnNoKernelSandboxStillRuns(t *testing.T) {
 	al.SetToolApprover(approver)
 	readAudit := swapAuditLogger(t, al)
 
-	_, err := al.ProcessDirect(context.Background(), "use the tools", "auto-nosandbox-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "use the tools", "auto-nosandbox-turn")
 	require.NoError(t, err)
 
 	for _, name := range autoRunsSample {
@@ -197,7 +197,7 @@ func writeFileTurn(t *testing.T, autoApprove bool, mutate func(*config.Config), 
 	installAutoStubs(t, al, "mia", nil, "write_file")
 	approver := &autoRecordingApprover{approve: false}
 	al.SetToolApprover(approver)
-	_, err := al.ProcessDirect(context.Background(), "write the files", "auto-write-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "write the files", "auto-write-turn")
 	require.NoError(t, err)
 	return approver, scripted
 }
@@ -425,7 +425,7 @@ func TestAutoApprove_Reachability_ProductionWiring(t *testing.T) {
 	approver := &autoRecordingApprover{approve: false}
 	al.SetToolApprover(approver)
 
-	_, err := al.ProcessDirect(context.Background(), "write and delete", "auto-reach-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "write and delete", "auto-reach-turn")
 	require.NoError(t, err)
 
 	reqs := approver.requests()
@@ -476,7 +476,7 @@ func TestAutoApprove_RuleC_MidTurnFlipChangesNextToolCall(t *testing.T) {
 	}
 	al.SetToolApprover(approver)
 
-	_, err := al.ProcessDirect(context.Background(), "use the tools", "auto-gate-rule-c-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "use the tools", "auto-gate-rule-c-turn")
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, approver.countFor(names[0]),

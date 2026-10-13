@@ -44,7 +44,7 @@ func TestRunTurn_DenyRule_WritesNoFalseAllowDecision(t *testing.T) {
 	approver := &countingDenyApprover{reason: "user"}
 	al.SetToolApprover(approver)
 
-	_, err := al.ProcessDirect(context.Background(), "run rm", "deny-rule-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "run rm", "deny-rule-turn")
 	require.NoError(t, err)
 	assert.Equal(t, 0, approver.callCount(), "a D3 deny rule settles the call without ever consulting a human")
 

@@ -28,6 +28,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // browserWarmUpEnabled reports whether RunContextWithOptions' boot-time
@@ -110,8 +111,8 @@ func warmCaptureIdleTimeout(cfg *config.Config) time.Duration {
 }
 
 // pickWarmBrowserManager chooses the ONE browser whose tab (and, optionally,
-// capture) gets warmed at boot: the browser of the workspace the DEFAULT agent
-// resolves to (ADR-075 FR-016b). It returns (nil, reason) when there is
+// capture) gets warmed at boot: the DEFAULT WORKSPACE's browser
+// (omnipus-system-agent FR-126; there is no default agent any more). It returns (nil, reason) when there is
 // nothing to warm — reason is a short operator-facing sentence, and the caller
 // logs it exactly once at INFO.
 //
@@ -124,22 +125,13 @@ func warmCaptureIdleTimeout(cfg *config.Config) time.Duration {
 // multiply a whole Chrome process and profile by the workspace count to save
 // time on exactly one panel.
 //
-// Why the DEFAULT AGENT'S RESOLVED WORKSPACE, and no fallback:
-//
-//   - Selection used to compare agents.defaults.default_agent_id against
-//     mgr.AgentID(). After FR-001 that accessor returns the manager's BROWSING
-//     KEY ("ws:<id>"), so the comparison could never match again and every
-//     boot silently took the lexicographic branch instead. This is the fix for
-//     that, and it is why the four selection tests in browser_warmboot_test.go
-//     had to change with it.
-//   - The old lexicographic fallback is GONE. It was a tie-break over
-//     workspaces, and picking one would mean starting a Chrome against one
-//     workspace's profile — one particular set of live logins — because it
-//     sorted first, with nobody watching and nobody asked. That is the same
-//     implicit choice FR-033 refuses at every other resolution point, and a
-//     latency optimisation is the weakest possible reason to make it. When the
-//     default agent resolves to no workspace we warm NOTHING and say so; the
-//     lazy path is a complete fallback and costs one panel one cold open.
+// Why the DEFAULT WORKSPACE, and no fallback: a browser belongs to a
+// workspace (FR-001), and the default workspace is the one every install has.
+// There is no lexicographic tie-break over other workspaces — starting a
+// Chrome against one workspace's live logins because it sorted first is the
+// implicit choice FR-033 refuses everywhere else. With no default workspace,
+// or no manager for it, we warm NOTHING and say why; the lazy path is a
+// complete fallback and costs one panel one cold open.
 //
 // Determinism is therefore trivial rather than sorted: there is only ever one
 // candidate key, so two boots of the same install — and a macOS and a Linux
@@ -175,24 +167,16 @@ func pickWarmBrowserManager(
 		return nil, "no workspace has a browser manager yet"
 	}
 
-	def := strings.TrimSpace(cfg.Agents.Defaults.DefaultAgentID)
-	if def == "" {
-		return nil, "no default agent is set (agents.defaults.default_agent_id), " +
-			"so there is no one workspace to warm"
+	def, err := workspace.ResolveDefaultID(home)
+	if err != nil || strings.TrimSpace(def) == "" {
+		return nil, "there is no default workspace to warm a browser for"
 	}
-	key, err := browser.ResolveBrowsingKeyForAgent(home, def, "")
-	if err != nil {
-		return nil, fmt.Sprintf(
-			"the default agent %q is not on exactly one workspace's team, so it resolves to no "+
-				"single browser to warm", def)
+	for _, mgr := range byKey {
+		if mgr.BrowsingKey().WorkspaceID() == def {
+			return mgr, ""
+		}
 	}
-	mgr, ok := byKey[key.String()]
-	if !ok {
-		return nil, fmt.Sprintf(
-			"the default agent %q resolves to workspace %q, which has no browser manager yet",
-			def, key.WorkspaceID())
-	}
-	return mgr, ""
+	return nil, fmt.Sprintf("the default workspace %q has no browser manager yet", def)
 }
 
 // warmBootListenerDialTimeout / warmBootListenerRetryDelay pace that wait.

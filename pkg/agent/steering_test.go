@@ -600,7 +600,7 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -619,7 +619,7 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 	resultCh := make(chan result, 1)
 
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"do something",
 			"test-session",
@@ -724,7 +724,7 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 	require.NotEmpty(t, correlationID, "every queued steering item is minted a correlation id")
 
 	// Process a normal message - the initial steering poll should inject the steering message
-	_, err = al.ProcessDirectWithChannel(
+	_, err = al.processDirectWithChannelPrimaryForTest(
 		context.Background(),
 		"initial message",
 		"test-session",
@@ -962,7 +962,7 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 		err  error
 	}, 1)
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"initial request",
 			sessionKey,
@@ -1119,7 +1119,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 		t.Fatal("expected continue path to inject steering media into the provider request")
 	}
 
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1202,7 +1202,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
 	sessionKey := routing.BuildAgentMainSessionKey("mia")
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1222,7 +1222,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"do something",
 			sessionKey,
@@ -1380,7 +1380,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	al.RegisterTool(&interruptibleTool{name: "cancel_tool", started: started})
 	sessionKey := routing.BuildAgentMainSessionKey("mia")
 
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1406,7 +1406,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"do work",
 			sessionKey,
@@ -1589,7 +1589,7 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, wrappedProvider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1602,7 +1602,7 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 
 	resultCh := make(chan string, 1)
 	go func() {
-		resp, _ := al.ProcessDirectWithChannel(
+		resp, _ := al.processDirectWithChannelPrimaryForTest(
 			context.Background(), "go", "test-session", "test", "chat1",
 		)
 		resultCh <- resp
@@ -1702,7 +1702,7 @@ func stubTurnStateForCancel(t *testing.T, al *AgentLoop, sessionKey, transcriptS
 	t.Helper()
 	providerCancelledCh = make(chan struct{}, 1)
 
-	agent := al.registry.GetDefaultAgent()
+	agent := al.registry.primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}

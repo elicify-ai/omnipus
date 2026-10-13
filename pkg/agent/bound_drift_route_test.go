@@ -37,7 +37,7 @@ func TestDriftDrop_SingleEmission_ViaProcessMessage(t *testing.T) {
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		// "ray" is intentionally absent (deleted) — drift condition.
 	}
 	cfg.Channels = map[string]config.ChannelInstanceConfig{

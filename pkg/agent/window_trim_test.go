@@ -89,7 +89,7 @@ func makeTurnWithTool(userContent, toolCallID, toolResult string) []providers.Me
 // seedHistory installs a pre-built history into a session and saves it.
 func seedHistory(t *testing.T, al *AgentLoop, sessionKey string, history []providers.Message) {
 	t.Helper()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	seedWindowHistory(agent.Sessions, sessionKey, history)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
@@ -98,7 +98,7 @@ func seedHistory(t *testing.T, al *AgentLoop, sessionKey string, history []provi
 // windowAfterTrim runs windowTrim and returns the live window afterward.
 func windowAfterTrim(t *testing.T, al *AgentLoop, sessionKey string) ([]providers.Message, compressionResult, bool) {
 	t.Helper()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	result, ok := al.windowTrim(agent, "", sessionKey)
 	window := agent.Sessions.GetHistory(sessionKey)
@@ -151,7 +151,7 @@ func TestWindowTrim_KeepLastTurnAlignedFit(t *testing.T) {
 		"RemainingMessages must equal the post-trim window length")
 
 	// Skip must have advanced — verify by reloading history from the session.
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	reloaded := agent.Sessions.GetHistory(sessionKey)
 	assert.Equal(t, window, reloaded,
 		"session GetHistory must reflect the trimmed window")
@@ -211,7 +211,7 @@ func TestWindowTrim_CutsOnTurnBoundary(t *testing.T) {
 		seedHistory(t, al, sk, history)
 
 		// First trim.
-		agent := al.GetRegistry().GetDefaultAgent()
+		agent := al.GetRegistry().primaryChatAgentForTest()
 		al.windowTrim(agent, "", sk)
 
 		// Second trim to exercise Skip>0 path.
@@ -295,7 +295,7 @@ func TestWindowTrim_SingleHugeTurn_KeepsLastUser(t *testing.T) {
 
 	// B-21b: Skip stopped at the floor (the kept turn's user message) — the
 	// emptying that followed is not a cut and moved it no further.
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	skip := archiveLineCount(t, al, sk) - len(window)
 	assert.Equal(t, 2, skip, "Skip = the floor's position, unchanged by emptying")
 	assert.Equal(t, archiveBefore, archiveLineCount(t, al, sk), "B-23: no archive line changes")
@@ -341,7 +341,7 @@ func TestWindowTrim_NoDroppedMarker(t *testing.T) {
 	}
 	seedHistory(t, al, sk, history)
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 
 	al.windowTrim(agent, "", sk)
 
@@ -408,7 +408,7 @@ func TestWindowTrim_RecallSpanDropAloneReturnsOK(t *testing.T) {
 	}
 	al.setRecallSpan(sk, newRecallSpan(1, 1, recallMsgs, []int{1}))
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	windowBefore := agent.Sessions.GetHistory(sk)
 
@@ -444,7 +444,7 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 	al, _, cleanup19 := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup19()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	// Start with a large context window and a conversation that fits easily.
@@ -501,7 +501,7 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 		const newSmallModel = "openrouter/tiny-window-model"
 		al2, _, cleanup19b := newSwitchTestAgentLoop(t, "test-model", newSmallModel)
 		defer cleanup19b()
-		ag2 := al2.GetRegistry().GetDefaultAgent()
+		ag2 := al2.GetRegistry().primaryChatAgentForTest()
 		require.NotNil(t, ag2)
 
 		ag2.ContextWindow = 100000
@@ -550,7 +550,7 @@ func TestModelSwitch_UpsizeKeepsSkipForward(t *testing.T) {
 	al, _, cleanup24 := newSwitchTestAgentLoop(t, "test-model", largerModel)
 	defer cleanup24()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	// Start with a small window that forces an eviction, then switch to larger.
@@ -719,7 +719,7 @@ func sliceFromMarkerForTest(t *testing.T, src, marker string) string {
 // given session key (ReadArchive, ignores Skip).
 func archiveLineCount(t *testing.T, al *AgentLoop, sessionKey string) int {
 	t.Helper()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	archived, err := agent.Sessions.ReadArchive(context.Background(), sessionKey)
 	require.NoError(t, err)
@@ -752,7 +752,7 @@ func TestArchive_FloorPathPreservesEvicted(t *testing.T) {
 	beforeArchive := archiveLineCount(t, al, sk)
 	require.Equal(t, len(history), beforeArchive, "archive must start with all messages")
 
-	_, ok := al.windowTrim(al.GetRegistry().GetDefaultAgent(), "", sk)
+	_, ok := al.windowTrim(al.GetRegistry().primaryChatAgentForTest(), "", sk)
 	require.True(t, ok, "floor-path trim must return ok=true")
 
 	afterArchive := archiveLineCount(t, al, sk)
@@ -770,7 +770,7 @@ func TestArchive_ModelSwitchPreservesEvicted(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	agent.ContextWindow = 4000
@@ -846,7 +846,7 @@ func TestWindowTrim_AlreadyFitsEvictsNothing(t *testing.T) {
 	}
 	seedHistory(t, al, sessionKey, history)
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	before := agent.Sessions.GetHistory(sessionKey)
 	require.Len(t, before, len(history), "precondition: the whole window is live")
 

@@ -98,7 +98,7 @@ func TestADR090_MCPUnboundDuringApprovalNeverDispatches(t *testing.T) {
 	}
 	hook := &adr090UnbindOnApproval{loop: loop}
 	loop.SetToolApprover(hook)
-	result, err := loop.ProcessDirect(context.Background(), "read connector", "adr090-unbind-approval")
+	result, err := loop.processDirectPrimaryForTest(context.Background(), "read connector", "adr090-unbind-approval")
 	require.NoError(t, err)
 	require.Equal(t, "handled", result)
 	require.Equal(t, 1, hook.calls, "positive control: initially assigned call reached approval")

@@ -67,7 +67,7 @@ func newCtxTurnHarness(t *testing.T, provider *testutil.ScenarioProvider, window
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(func() { al.Close() })
 
-	mia := registerAgent(t, al, home, "mia", provider, true)
+	mia := registerAgent(t, al, home, "mia", provider)
 	al.RegisterTool(&bigResultTool{size: toolSize})
 	mia.StoreToolPolicy(&tools.ToolPolicyCfg{
 		Policies: map[string]config.ToolPolicy{"big_tool": "allow"},

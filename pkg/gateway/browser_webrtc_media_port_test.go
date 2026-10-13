@@ -283,7 +283,7 @@ func TestHandleWebRTCOffer_MediaPortFallback_TellsTheViewerInThePanel(t *testing
 	}
 	handler, al := newMeasuredBrowserWSTestHandler(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 
 	// The socket already fell back before this viewer ever opened the panel —

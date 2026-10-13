@@ -407,7 +407,7 @@ func TestChatTurn_ProviderErrorNeverLeaksProviderText(t *testing.T) {
 	t.Cleanup(func() { msgBus.Close() })
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(al.Close)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("SETUP: default agent must be registered")
 	}

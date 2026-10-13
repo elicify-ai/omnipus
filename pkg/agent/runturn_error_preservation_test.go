@@ -326,7 +326,7 @@ func TestRunTurn_ProviderError_WritesErrorEntryToTranscript(t *testing.T) {
 	t.Cleanup(al.Close)
 
 	ctx := context.Background()
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "SETUP: default agent must be registered")
 
 	sub := al.SubscribeEvents(64)

@@ -242,7 +242,7 @@ func TestDecommission_LongConversationMakesNoExtraModelCalls(t *testing.T) {
 		require.NoError(t, err, "turn %d must succeed", i)
 	}
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	// Precondition: the conversation really did grow past the old threshold.

@@ -27,10 +27,10 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInsta
 		return
 	}
 
+	// With no producing agent (an unroutable-message reply) there is no
+	// "already sent" tracker to consult: publish, never borrowing another
+	// agent's state (omnipus-system-agent FR-132, §6.4).
 	alreadySent := false
-	if ag == nil {
-		ag = al.GetRegistry().GetDefaultAgent()
-	}
 	if ag != nil {
 		if tool, ok := ag.Tools.Get("send_message"); ok {
 			if mt, ok := tool.(*tools.MessageTool); ok {

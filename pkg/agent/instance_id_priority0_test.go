@@ -57,7 +57,7 @@ func TestInstanceID_DrivesPriority0_EndToEnd_StampedVsTypeKey(t *testing.T) {
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	}
 	// Only the namespaced key is bound.  The bare "whatsapp" type key is

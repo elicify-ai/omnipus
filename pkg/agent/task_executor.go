@@ -1974,18 +1974,14 @@ func (al *AgentLoop) processTaskDirect(
 		return "", fmt.Errorf("processTaskDirect: mcp: %w: %w", ErrTaskRunNotDispatched, err)
 	}
 
-	registry := al.GetRegistry()
-	ag, ok := registry.GetAgent(agentID)
-	if !ok {
-		logger.WarnCF(
-			"agent",
-			"processTaskDirect: agent not found, using default",
-			map[string]any{"requested": agentID},
-		)
-		ag = registry.GetDefaultAgent()
-	}
-	if ag == nil {
-		return "", fmt.Errorf("processTaskDirect: no agent %q: %w", agentID, ErrTaskRunNotDispatched)
+	// FR-123 / §6.4: a task runs only under its own agent. A missing agent is
+	// the existing truthful pre-dispatch failure — zero runs, never another
+	// agent's turn.
+	ag, ok := al.GetRegistry().GetAgent(agentID)
+	if !ok || ag == nil {
+		logger.WarnCF("agent", "processTaskDirect: the task's agent no longer exists; not dispatched",
+			map[string]any{"requested": agentID})
+		return "", fmt.Errorf("processTaskDirect: the task's agent %q no longer exists: %w", agentID, ErrTaskRunNotDispatched)
 	}
 
 	// Tool context uses "system" channel so exec/cron tools are permitted.

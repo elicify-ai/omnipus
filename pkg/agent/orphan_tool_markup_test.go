@@ -114,7 +114,7 @@ func newOrphanMarkupLoop(t *testing.T, provider providers.LLMProvider) (*AgentLo
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(al.Close)
 
-	inst := al.GetRegistry().GetDefaultAgent()
+	inst := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, inst, "default agent must be registered")
 	return al, inst
 }

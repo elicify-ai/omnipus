@@ -1,9 +1,17 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // RoutingDrop is one channel instance's routing degradation: the reason the
@@ -52,4 +60,101 @@ func (al *AgentLoop) RoutingDropFor(instanceID string) (RoutingDrop, bool) {
 	defer al.routingDrops.mu.Unlock()
 	drop, ok := al.routingDrops.drops[strings.TrimSpace(instanceID)]
 	return drop, ok
+}
+
+// unboundChannelReason is the visible drop reason for an instance that is not
+// bound to a workspace with a named main agent (FR-121).
+const unboundChannelReason = "bind this channel to an agent in a workspace"
+
+// routeDropError is resolveMessageRoute's refusal for a channel message that
+// must not reach any agent. processMessage — the single rejection point —
+// logs it at error level, audits it and records it on the instance.
+type routeDropError struct {
+	instanceID string
+	reason     string
+}
+
+func (e *routeDropError) Error() string { return "message dropped: " + e.reason }
+
+// routeDropReason maps a dropped route to its visible reason.
+func routeDropReason(route routing.ResolvedRoute, identity *config.ChannelIdentity) string {
+	agentID := ""
+	if identity != nil {
+		agentID = strings.TrimSpace(identity.ID)
+	}
+	switch route.MatchedBy {
+	case routing.MatchedByMissingAgent:
+		return fmt.Sprintf("bound agent %s not found", agentID)
+	case routing.MatchedByNotChatTarget:
+		return fmt.Sprintf("bound agent %s is not a chat target", agentID)
+	default:
+		return unboundChannelReason
+	}
+}
+
+// boundMemberRefusal returns the drop reason when agentID is not on the core
+// team of the bound workspace (FR-121: the selected agent is validated), or
+// "" when it is. An unreadable workspace is a drop too — never a guess.
+func (al *AgentLoop) boundMemberRefusal(workspaceID, agentID string) string {
+	state, err := workspace.ReadState(omnipusHome(), workspaceID)
+	if err != nil {
+		return fmt.Sprintf("the bound workspace %s could not be read: %v", workspaceID, err)
+	}
+	for _, member := range state.Workspace.CoreTeam {
+		if routing.NormalizeAgentID(member) == routing.NormalizeAgentID(agentID) {
+			return ""
+		}
+	}
+	name := strings.TrimSpace(state.Workspace.Name)
+	if name == "" {
+		name = workspaceID
+	}
+	return fmt.Sprintf("%s is not in %s", agentID, name)
+}
+
+// routeToSessionOwner routes a message addressed to an existing session to
+// that session's canonical owner (§6.4). A session that does not exist, or
+// whose owner no longer resolves, is refused — never handed to another agent.
+func (al *AgentLoop) routeToSessionOwner(registry *AgentRegistry, msg bus.InboundMessage) (routing.ResolvedRoute, *AgentInstance, error) {
+	store := al.ResolveSessionStore(msg.SessionID)
+	if store == nil {
+		return routing.ResolvedRoute{}, nil, fmt.Errorf("session %q not found", msg.SessionID)
+	}
+	meta, err := store.GetMeta(msg.SessionID)
+	if err != nil || meta == nil {
+		return routing.ResolvedRoute{}, nil, fmt.Errorf("session %q could not be read: %w", msg.SessionID, err)
+	}
+	owner := strings.TrimSpace(meta.AgentID)
+	agent, ok := registry.GetAgent(owner)
+	if owner == "" || !ok || agent == nil {
+		return routing.ResolvedRoute{}, nil, fmt.Errorf("the session's owner agent %s no longer exists", owner)
+	}
+	return routing.ResolvedRoute{AgentID: agent.ID, SessionKey: agentSessionKey(agent.ID, msg), MatchedBy: "session.owner"}, agent, nil
+}
+
+// recordRouteDrop is the single side-effecting record of a dropped channel
+// message (FR-121): an error-level log, one audit entry and the instance's
+// routing degradation (K15).
+func (al *AgentLoop) recordRouteDrop(msg bus.InboundMessage, drop *routeDropError) {
+	logger.ErrorCF("agent", "Inbound message dropped: "+drop.reason, map[string]any{
+		"instance_id": drop.instanceID, "channel": msg.Channel, "chat_id": msg.ChatID, "reason": drop.reason,
+	})
+	al.driftDropped.Add(1)
+	if al.auditLogger != nil {
+		if err := al.auditLogger.Log(&audit.Entry{
+			Event:    audit.EventChannelMessageDropped,
+			Decision: audit.DecisionDeny,
+			Details: map[string]any{
+				"instance_id": drop.instanceID, "channel": msg.Channel, "chat_id": msg.ChatID, "reason": drop.reason,
+			},
+		}); err != nil {
+			logger.ErrorCF("agent", "audit write failed for a dropped inbound message",
+				map[string]any{"instance_id": drop.instanceID, "error": err.Error()})
+		}
+	}
+	instance := drop.instanceID
+	if instance == "" {
+		instance = msg.Channel
+	}
+	al.RecordRoutingDrop(instance, drop.reason)
 }

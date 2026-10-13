@@ -1038,6 +1038,25 @@ func (al *AgentLoop) enqueueSteeringItemWithStatus(scope, agentID string, item s
 	if al.steering == nil {
 		return EnqueueStatusNormal, fmt.Errorf("steering queue is not initialized")
 	}
+	// FR-123 / §6.4: an item with no named sender runs under the session's
+	// canonical owner; when that owner no longer resolves the item is refused
+	// visibly here — never queued for a drain that would lose it, and never
+	// handed to an invented sender.
+	if strings.TrimSpace(agentID) == "" {
+		owner := al.agentForSession(scope)
+		if owner == nil {
+			ownerID := "(unknown)"
+			if parsed := routing.ParseAgentSessionKey(normalizeSteeringScope(scope)); parsed != nil && parsed.AgentID != "" {
+				ownerID = parsed.AgentID
+			}
+			err := fmt.Errorf("steering refused: the session's owner agent %s no longer exists", ownerID)
+			logger.WarnCF("agent", "Steering refused: no canonical owner", map[string]any{
+				"scope": normalizeSteeringScope(scope), "owner_agent_id": ownerID,
+			})
+			return EnqueueStatusNormal, err
+		}
+		agentID = owner.ID
+	}
 
 	var status EnqueueStatus
 	// Pushed via pushItemScope directly, not pushScope/pushWakeScope: those
@@ -1102,13 +1121,6 @@ func (al *AgentLoop) enqueueSteeringItemWithStatus(scope, agentID string, item s
 		normalizedScope := normalizeSteeringScope(scope)
 		if normalizedScope != "" {
 			meta.SessionKey = normalizedScope
-		}
-		if meta.AgentID == "" {
-			if registry := al.GetRegistry(); registry != nil {
-				if agent := registry.GetDefaultAgent(); agent != nil {
-					meta.AgentID = agent.ID
-				}
-			}
 		}
 	}
 
@@ -1454,13 +1466,14 @@ func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 		return nil
 	}
 
+	// The canonical owner named by the session key only — a missing owner is
+	// nil, never a default agent (FR-123, §6.4).
 	if parsed := routing.ParseAgentSessionKey(sessionKey); parsed != nil {
 		if agent, ok := registry.GetAgent(parsed.AgentID); ok {
 			return agent
 		}
 	}
-
-	return registry.GetDefaultAgent()
+	return nil
 }
 
 // continuePendingSteering is the one destructive dequeue-and-run path for an

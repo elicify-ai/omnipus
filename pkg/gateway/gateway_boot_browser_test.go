@@ -4,6 +4,9 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -123,11 +126,11 @@ func TestWarmCaptureIdleTimeout_NonPositiveMeansNeverStop(t *testing.T) {
 	}
 }
 
-// TestPickWarmBrowserManager_PrefersTheDefaultAgent — migrated to ADR-075
-// FR-016b. "The default agent's manager" is no longer a thing that exists: a
-// manager is a WORKSPACE's browser, so the selection is the default agent's
-// RESOLVED workspace. Mia is on beta; alpha and gamma belong to other people.
-func TestPickWarmBrowserManager_PrefersTheDefaultAgent(t *testing.T) {
+// TestPickWarmBrowserManager_PrefersTheDefaultWorkspace — omnipus-system-agent
+// FR-126: a manager is a WORKSPACE's browser and there is no default agent, so
+// the selection is the DEFAULT WORKSPACE. Beta is the default; alpha sorts
+// first and must not be chosen.
+func TestPickWarmBrowserManager_PrefersTheDefaultWorkspace(t *testing.T) {
 	home := warmTestHome(t)
 	coord := newWarmTestCoordinator(t)
 	keyAlpha := warmTestWorkspace(t, home, "warmalpha", "ava")
@@ -138,29 +141,29 @@ func TestPickWarmBrowserManager_PrefersTheDefaultAgent(t *testing.T) {
 		newWarmTestManagerForKey(t, coord, keyBeta),
 		newWarmTestManagerForKey(t, coord, keyGamma),
 	}
+	markWarmTestDefaultWorkspace(t, home, "warmbeta")
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.DefaultAgentID = "mia"
 
 	got, reason := pickWarmBrowserManager(cfg, home, mgrs)
 	if reason != "" {
 		t.Fatalf("expected a pick, got skip reason %q", reason)
 	}
 	if got == nil || got.BrowsingKey() != keyBeta {
-		t.Fatalf("expected the DEFAULT agent's WORKSPACE browser (%s) to be warmed, got %q",
+		t.Fatalf("expected the DEFAULT WORKSPACE's browser (%s) to be warmed, got %q",
 			keyBeta.String(), warmedKey(got))
 	}
 	// Not the sorted-first one. warmalpha sorts before warmbeta, so a
 	// selection that quietly fell back to a lexicographic pick would land on
 	// alpha and this assertion is what catches it.
 	if got.BrowsingKey() == keyAlpha {
-		t.Fatal("warmed the sorted-first workspace, not the default agent's")
+		t.Fatal("warmed the sorted-first workspace, not the default workspace's")
 	}
 }
 
-// TestPickWarmBrowserManager_DeterministicWithoutADefault — migrated. There is
-// no lexicographic fallback any more: with no default agent there is no ONE
-// workspace to warm, and choosing one would start a Chrome against one
-// particular set of live logins because its id sorted first, unasked. The
+// TestPickWarmBrowserManager_DeterministicWithoutADefault — there is no
+// lexicographic fallback: with no default workspace there is no ONE workspace
+// to warm, and choosing one would start a Chrome against one particular set of
+// live logins because its id sorted first, unasked. The
 // requirement the old name carried — that two boots of one install never
 // disagree — is now trivially satisfied, and is still asserted by repetition
 // so a future map-order-dependent pick cannot pass by luck.
@@ -173,56 +176,16 @@ func TestPickWarmBrowserManager_DeterministicWithoutADefault(t *testing.T) {
 		newWarmTestManagerForKey(t, coord, warmTestWorkspace(t, home, "warmmia", "mia")),
 	}
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.DefaultAgentID = ""
 
 	for i := 0; i < 25; i++ {
 		got, reason := pickWarmBrowserManager(cfg, home, mgrs)
 		if got != nil {
-			t.Fatalf("iteration %d: warmed %q with no default agent — a tie-break over workspaces "+
+			t.Fatalf("iteration %d: warmed %q with no default workspace — a tie-break over workspaces "+
 				"picks whose logins to start a browser against", i, warmedKey(got))
 		}
-		if !strings.Contains(reason, "no default agent") {
-			t.Fatalf("iteration %d: skip reason %q must name the missing default agent", i, reason)
+		if !strings.Contains(reason, "no default workspace") {
+			t.Fatalf("iteration %d: skip reason %q must name the missing default workspace", i, reason)
 		}
-	}
-}
-
-// TestPickWarmBrowserManager_UnknownDefaultFallsBack — migrated, and the name
-// now describes the opposite outcome deliberately. A default_agent_id that
-// resolves to no workspace (or to more than one) leaves NOTHING to warm: the
-// old fallback would have warmed some other workspace's browser instead, which
-// is a worse answer than a cold first open. The install still works; the first
-// panel open builds the browser lazily.
-func TestPickWarmBrowserManager_UnknownDefaultFallsBack(t *testing.T) {
-	home := warmTestHome(t)
-	coord := newWarmTestCoordinator(t)
-	mgrs := []*browser.BrowserManager{
-		newWarmTestManagerForKey(t, coord, warmTestWorkspace(t, home, "warmone", "mia")),
-		newWarmTestManagerForKey(t, coord, warmTestWorkspace(t, home, "warmtwo", "ava")),
-	}
-
-	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.DefaultAgentID = "nobody"
-	got, reason := pickWarmBrowserManager(cfg, home, mgrs)
-	if got != nil {
-		t.Fatalf("a default agent on no workspace must warm nothing, got %q", warmedKey(got))
-	}
-	if !strings.Contains(reason, "nobody") || !strings.Contains(reason, "workspace") {
-		t.Fatalf("skip reason %q must name the agent and say it resolves to no single workspace", reason)
-	}
-
-	// An AMBIGUOUS default agent — on both workspaces — is the same answer for
-	// the same reason (FR-033): warming one would silently choose which set of
-	// live logins boot opens a browser against.
-	warmTestWorkspace(t, home, "warmone", "mia", "roam")
-	warmTestWorkspace(t, home, "warmtwo", "ava", "roam")
-	cfg.Agents.Defaults.DefaultAgentID = "roam"
-	got, reason = pickWarmBrowserManager(cfg, home, mgrs)
-	if got != nil {
-		t.Fatalf("a default agent on TWO workspaces must warm nothing, got %q", warmedKey(got))
-	}
-	if !strings.Contains(reason, "roam") {
-		t.Fatalf("skip reason %q must name the ambiguous default agent", reason)
 	}
 }
 
@@ -241,7 +204,7 @@ func TestPickWarmBrowserManager_SkipsUnwarmableManagers(t *testing.T) {
 	good := newWarmTestManagerForKey(t, coord, keyRay)
 
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.DefaultAgentID = "ray"
+	markWarmTestDefaultWorkspace(t, home, "warmray")
 
 	got, reason := pickWarmBrowserManager(cfg, home,
 		[]*browser.BrowserManager{nil, noCoordinator, noKey, good})
@@ -250,10 +213,10 @@ func TestPickWarmBrowserManager_SkipsUnwarmableManagers(t *testing.T) {
 			keyRay.String(), warmedKey(got), reason)
 	}
 
-	// The default agent is now the coordinator-less manager's own agent: even
-	// though a manager for its workspace EXISTS in the list, it is unwarmable,
-	// so the answer is still "nothing to warm" rather than a substitute.
-	cfg.Agents.Defaults.DefaultAgentID = "orphan"
+	// The default workspace is now the coordinator-less manager's: even
+	// though a manager for it EXISTS in the list, it is unwarmable, so the
+	// answer is still "nothing to warm" rather than a substitute.
+	markWarmTestDefaultWorkspace(t, home, "warmorphan")
 	if got, reason := pickWarmBrowserManager(cfg, home,
 		[]*browser.BrowserManager{nil, noCoordinator, noKey}); got != nil {
 		t.Fatalf("expected nil when nothing is warmable, got %q (reason %q)", warmedKey(got), reason)
@@ -532,5 +495,38 @@ func TestFindSharedBrowserCoordinator_FindsTheSharedInstance(t *testing.T) {
 	}
 	if got != coord {
 		t.Fatal("expected the exact SAME shared coordinator instance every attached manager points to")
+	}
+}
+
+// markWarmTestDefaultWorkspace marks workspaceID as the install's default
+// workspace (is_default) and clears the flag on every other workspace file.
+func markWarmTestDefaultWorkspace(t *testing.T, home, workspaceID string) {
+	t.Helper()
+	dir := filepath.Join(home, "workspaces")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("markWarmTestDefaultWorkspace: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("markWarmTestDefaultWorkspace: %v", err)
+		}
+		var ws map[string]any
+		if err := json.Unmarshal(raw, &ws); err != nil {
+			t.Fatalf("markWarmTestDefaultWorkspace: %v", err)
+		}
+		ws["is_default"] = strings.TrimSuffix(e.Name(), ".json") == workspaceID
+		out, err := json.Marshal(ws)
+		if err != nil {
+			t.Fatalf("markWarmTestDefaultWorkspace: %v", err)
+		}
+		if err := os.WriteFile(path, out, 0o600); err != nil {
+			t.Fatalf("markWarmTestDefaultWorkspace: %v", err)
+		}
 	}
 }

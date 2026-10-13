@@ -82,7 +82,7 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 	provider := &inspectionBoundaryProvider{toolName: "read_file", toolArgs: map[string]any{"path": imagePath}}
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	agent.Tools.Register(tools.NewReadFileTool(home, true, tools.MaxReadFileSize))
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"read_file": "allow"}})
 
@@ -237,7 +237,7 @@ func TestReadImage_InterruptedTurnDoesNotPersistInspection(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	imageBytes := boundaryPNG(t, 32, 24)
 	al.RegisterTool(&boundaryInspectionTool{image: tools.InspectionImage{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { return nil }}})
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"boundary_inspection": "allow"}})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -294,7 +294,7 @@ func TestReadImage_ProviderImageRejectionStaysIncomplete(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	imageBytes := boundaryPNG(t, 32, 24)
 	al.RegisterTool(&boundaryInspectionTool{image: tools.InspectionImage{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { return nil }}})
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"boundary_inspection": "allow"}})
 
 	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "rejected", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect this"})

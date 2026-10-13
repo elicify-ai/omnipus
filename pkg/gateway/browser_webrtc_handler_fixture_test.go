@@ -22,7 +22,7 @@ func prepareWebRTCHandlerFixture(t *testing.T, h *BrowserWSHandler, al *agent.Ag
 	agentID := frame.AgentId
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, h.sessionWorkspaceID(frame.SessionId))
 	if outcome != agent.BrowserResolveOK {
-		mgr, outcome = al.BrowserManagerForAgent(context.Background(), al.GetRegistry().GetDefaultAgent().ID, "")
+		mgr, outcome = al.BrowserManagerForAgent(context.Background(), primaryChatAgent(al.GetRegistry()).ID, "")
 	}
 	if outcome != agent.BrowserResolveOK {
 		t.Fatal("fixture cannot resolve its original browser manager")

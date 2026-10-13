@@ -79,7 +79,7 @@ func newMediaWorkspaceIDTestLoop(
 	imagePath = filepath.Join(tmpDir, "screen-"+channelName+".png")
 	require.NoError(t, os.WriteFile(imagePath, []byte("fake screenshot"), 0o644))
 
-	defaultAgent = al.GetRegistry().GetDefaultAgent()
+	defaultAgent = al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "expected default agent")
 	defaultAgent.Tools.Register(&handledMediaTool{store: store, path: imagePath})
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{

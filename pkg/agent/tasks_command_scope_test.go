@@ -39,7 +39,7 @@ import (
 func TestHandleCommand_Tasks_MustNotLeakUnrelatedSessionsActiveTurn(t *testing.T) {
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected a default agent from newTestAgentLoop's fixture")
 	}
@@ -83,7 +83,7 @@ func TestHandleCommand_Tasks_MustNotLeakUnrelatedSessionsActiveTurn(t *testing.T
 func TestHandleCommand_Tasks_StillReportsOwnSessionsActiveTurn(t *testing.T) {
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected a default agent from newTestAgentLoop's fixture")
 	}

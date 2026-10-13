@@ -913,11 +913,10 @@ func (c *OmnipusConfig) ToStandardConfig() *config.Config {
 	cfg.Agents.List = make([]config.AgentConfig, len(c.Agents.List))
 	for i, a := range c.Agents.List {
 		cfg.Agents.List[i] = config.AgentConfig{
-			ID:      a.ID,
-			Default: a.Default,
-			Name:    a.Name,
-			Home:    a.Workspace,
-			Skills:  a.Skills,
+			ID:     a.ID,
+			Name:   a.Name,
+			Home:   a.Workspace,
+			Skills: a.Skills,
 		}
 		if a.Model != nil {
 			cfg.Agents.List[i].Model = &config.AgentModelConfig{

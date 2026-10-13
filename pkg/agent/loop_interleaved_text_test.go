@@ -81,7 +81,7 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 	t.Cleanup(func() { al.Close() })
 
 	// Register the agent that will own the scheduled session.
-	mia := registerAgent(t, al, home, "mia", provider, true)
+	mia := registerAgent(t, al, home, "mia", provider)
 	// No-default-policy model (CLAUDE.md hard constraint 6): "remember" is a
 	// real builtin tool with zero policy coverage on this bare test config, so
 	// it now fails closed to "deny" unless granted explicitly — this test's

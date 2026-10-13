@@ -100,10 +100,10 @@ func TestLoop_StopsAtEffectiveLimit(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &toolLimitOnlyProvider{})
 	al.RegisterTool(&toolLimitTestTool{})
 
-	if _, err := al.ProcessDirectWithChannel(context.Background(), "hello", "tool-limit-904", "test", "chat1"); err != nil {
+	if _, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hello", "tool-limit-904", "test", "chat1"); err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
-	def := al.registry.GetDefaultAgent()
+	def := al.registry.primaryChatAgentForTest()
 	if def == nil {
 		t.Fatal("no default agent")
 	}

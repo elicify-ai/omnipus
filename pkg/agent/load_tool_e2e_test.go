@@ -249,7 +249,7 @@ func TestLoadTool_EndToEndMessageHistoryIntegrity(t *testing.T) {
 	const sessionKey = "e2e-load-tool-integrity"
 
 	// Drive a full conversation via the production entry point.
-	reply, err := al.ProcessDirectWithChannel(ctx,
+	reply, err := al.processDirectWithChannelPrimaryForTest(ctx,
 		"please load find_skills and use it to find some skills",
 		sessionKey, "cli", "test")
 	require.NoError(t, err,

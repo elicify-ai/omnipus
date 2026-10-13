@@ -307,7 +307,7 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := meta.ID
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	require.NotEmpty(t, agent.Model,
 		"test setup: default agent model must be non-empty; got %q", agent.Model)
@@ -555,7 +555,7 @@ func TestRunAgentLoop_ProviderError_HasStatusErrorField(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := meta.ID
 
-	_, err = al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), processOptions{
+	_, err = al.runAgentLoop(context.Background(), al.GetRegistry().primaryChatAgentForTest(), processOptions{
 		SessionKey: "pe-block", Channel: "web", ChatID: sessionID,
 		UserMessage: "trigger", DefaultResponse: defaultResponse, SendResponse: false,
 		TranscriptSessionID: sessionID, TranscriptStore: store,

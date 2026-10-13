@@ -129,7 +129,7 @@ func q13StartBackgroundInLiveTurn(t *testing.T) *q13StopBackgroundFixture {
 		}
 	})
 	go func() {
-		_, f.turnErr = al.ProcessDirectWithChannel(ctx, "start a background sleep and keep working",
+		_, f.turnErr = al.processDirectWithChannelPrimaryForTest(ctx, "start a background sleep and keep working",
 			"q13-"+t.Name(), "cli", "q13-stop-background")
 		close(f.done)
 	}()

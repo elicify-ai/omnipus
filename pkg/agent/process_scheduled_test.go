@@ -127,13 +127,12 @@ func registerAgent(
 	al *AgentLoop,
 	home, id string,
 	provider providers.LLMProvider,
-	isDefault bool,
 ) *AgentInstance {
 	t.Helper()
 	seedTestWorkspaceMembershipForIDs(t, []string{id})
 	cfg := al.cfg
 	ag := NewAgentInstance(
-		&config.AgentConfig{ID: id, Name: id, Default: isDefault},
+		&config.AgentConfig{ID: id, Name: id},
 		&cfg.Agents.Defaults, cfg, provider,
 	)
 	ag.Home = filepath.Join(home, "agents", id)
@@ -141,15 +140,6 @@ func registerAgent(
 	al.registry.mu.Lock()
 	al.registry.agents[id] = ag
 	al.registry.mu.Unlock()
-	if isDefault {
-		// ADR-054 D6.4: AgentConfig.Default is no longer consulted by
-		// GetDefaultAgent — the per-entity flag set above (kept for realism)
-		// is now inert for resolution. SetDefaultAgentOverride is the
-		// settings-singleton equivalent every real caller goes through
-		// (config.Agents.Defaults.DefaultAgentID → AgentLoop wires it via
-		// this same method — see loop.go's ReloadProviderAndConfig).
-		al.registry.SetDefaultAgentOverride(id)
-	}
 	return ag
 }
 
@@ -160,13 +150,10 @@ func TestProcessScheduled_RoutesToOwnerNotDefault(t *testing.T) {
 	al, home := schedTestLoop(t)
 
 	miaProvider := testutil.NewScenario().WithText("mia handled it")
-	registerAgent(t, al, home, "mia", miaProvider, false)
+	registerAgent(t, al, home, "mia", miaProvider)
 
 	maxProvider := &panicProvider{t: t}
-	registerAgent(t, al, home, "max", maxProvider, true) // max is the DEFAULT
-
-	// Sanity: max is the default agent.
-	require.Equal(t, "max", al.GetRegistry().GetDefaultAgent().ID)
+	registerAgent(t, al, home, "max", maxProvider) // another chat agent that must not run
 
 	meta, err := al.GetSessionStore().NewScheduledSession("mia")
 	require.NoError(t, err)
@@ -177,7 +164,7 @@ func TestProcessScheduled_RoutesToOwnerNotDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "mia handled it", reply)
 	assert.Equal(t, 1, miaProvider.CallCount(), "the owner (mia) must run the turn")
-	assert.False(t, maxProvider.called.Load(), "the default agent (max) must NOT be invoked")
+	assert.False(t, maxProvider.called.Load(), "no other agent (max) may be invoked")
 }
 
 // TestProcessScheduled_MissingOwner_NoDefaultFallback asserts that an unknown /
@@ -187,7 +174,7 @@ func TestProcessScheduled_MissingOwner_NoDefaultFallback(t *testing.T) {
 	al, home := schedTestLoop(t)
 
 	defProvider := &panicProvider{t: t}
-	registerAgent(t, al, home, "max", defProvider, true) // default — must not run
+	registerAgent(t, al, home, "max", defProvider) // another chat agent — must not run
 
 	meta, err := al.GetSessionStore().NewScheduledSession("ghost")
 	require.NoError(t, err)
@@ -198,7 +185,7 @@ func TestProcessScheduled_MissingOwner_NoDefaultFallback(t *testing.T) {
 	require.Error(t, err, "missing owner must be a hard error")
 	assert.Contains(t, err.Error(), "owner unavailable")
 	assert.Empty(t, reply)
-	assert.False(t, defProvider.called.Load(), "no default-agent fallback is allowed")
+	assert.False(t, defProvider.called.Load(), "no other agent may stand in for the missing owner")
 }
 
 // TestProcessScheduled_PerOwnerSessionKey asserts the run uses the per-owner
@@ -207,7 +194,7 @@ func TestProcessScheduled_MissingOwner_NoDefaultFallback(t *testing.T) {
 // Traces to: W-1 (agentSessionKey namespacing).
 func TestProcessScheduled_PerOwnerSessionKey(t *testing.T) {
 	al, home := schedTestLoop(t)
-	mia := registerAgent(t, al, home, "mia", testutil.NewScenario().WithText("recorded"), false)
+	mia := registerAgent(t, al, home, "mia", testutil.NewScenario().WithText("recorded"))
 
 	meta, err := al.GetSessionStore().NewScheduledSession("mia")
 	require.NoError(t, err)
@@ -236,7 +223,7 @@ func TestProcessScheduled_AskToolAutoDenied(t *testing.T) {
 	prov := testutil.NewScenario().
 		WithToolCall("dangerous_tool", `{}`).
 		WithText("could not use that tool, finishing anyway")
-	mia := registerAgent(t, al, home, "mia", prov, false)
+	mia := registerAgent(t, al, home, "mia", prov)
 
 	stub := &dangerousStubTool{}
 	mia.Tools.Register(stub)
@@ -274,7 +261,7 @@ func TestProcessScheduled_AskToolAutoDenied(t *testing.T) {
 func TestProcessScheduled_CancelledRunReturnsPromptly(t *testing.T) {
 	al, home := schedTestLoop(t)
 	blocker := &blockingProvider{entered: make(chan struct{})}
-	registerAgent(t, al, home, "mia", blocker, false)
+	registerAgent(t, al, home, "mia", blocker)
 
 	meta, err := al.GetSessionStore().NewScheduledSession("mia")
 	require.NoError(t, err)
@@ -395,7 +382,7 @@ func TestProcessScheduled_AskToolAutoDenied_EmitsScheduledAudit(t *testing.T) {
 	prov := testutil.NewScenario().
 		WithToolCall("dangerous_tool", `{}`).
 		WithText("could not use that tool, proceeding without it")
-	mia := registerAgent(t, al, home, "mia", prov, false)
+	mia := registerAgent(t, al, home, "mia", prov)
 
 	stub := &dangerousStubTool{}
 	mia.Tools.Register(stub)

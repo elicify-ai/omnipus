@@ -97,7 +97,7 @@ func TestLoop_RunningTurnKeepsStartLimit(t *testing.T) {
 	al := mustNewAgentLoop(t, d18Config(home, 3), bus.NewMessageBus(), prov)
 	al.RegisterTool(&toolLimitTestTool{})
 
-	started := al.GetRegistry().GetDefaultAgent()
+	started := al.GetRegistry().primaryChatAgentForTest()
 	if started == nil || started.MaxIterations != 3 {
 		t.Fatalf("instrument: the turn must start with limit 3, got %+v", started)
 	}
@@ -106,13 +106,13 @@ func TestLoop_RunningTurnKeepsStartLimit(t *testing.T) {
 		reloadErr = al.ReloadProviderAndConfig(context.Background(), prov, d18Config(home, 1))
 	}
 
-	if _, err := al.ProcessDirectWithChannel(context.Background(), "hello", "d18-turn-1", "test", "chat1"); err != nil {
+	if _, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hello", "d18-turn-1", "test", "chat1"); err != nil {
 		t.Fatalf("turn 1: %v", err)
 	}
 	if reloadErr != nil {
 		t.Fatalf("mid-turn reload failed: %v", reloadErr)
 	}
-	rebuilt := al.GetRegistry().GetDefaultAgent()
+	rebuilt := al.GetRegistry().primaryChatAgentForTest()
 	if rebuilt == nil || rebuilt == started {
 		t.Fatal("instrument: the registry was not rebuilt mid-turn")
 	}
@@ -133,7 +133,7 @@ func TestLoop_RunningTurnKeepsStartLimit(t *testing.T) {
 	}
 
 	al.RegisterTool(&toolLimitTestTool{})
-	if _, err := al.ProcessDirectWithChannel(context.Background(), "again", "d18-turn-2", "test", "chat1"); err != nil {
+	if _, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "again", "d18-turn-2", "test", "chat1"); err != nil {
 		t.Fatalf("turn 2: %v", err)
 	}
 	if got := prov.takeCalls(); got != 1 {

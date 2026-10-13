@@ -84,7 +84,7 @@ func TestProcessMessage_MediaToolDelivery_StampsWorkspaceID(t *testing.T) {
 		store: store,
 		path:  imagePath,
 	})
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "expected default agent")
 	// No-default-policy model (CLAUDE.md hard constraint 6): handled_media_tool
 	// needs an explicit agent-level grant, or it fails closed to "deny" before
@@ -150,7 +150,7 @@ func TestProcessMessage_MediaToolDelivery_UnboundChannel_EmptyWorkspaceID(t *tes
 		store: store,
 		path:  imagePath,
 	})
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "expected default agent")
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
 		Policies: map[string]config.ToolPolicy{"handled_media_tool": "allow"},

@@ -133,7 +133,7 @@ func getChannelRoutingReq(t *testing.T, api *restAPI, channelID string) *httptes
 func TestWorkspaceDelete_CascadesToInstances(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 

@@ -174,7 +174,7 @@ func TestVerifierBudget_CapRefusalDoesNotKillTurn(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	t.Cleanup(func() { al.Close() })
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "expected a default agent")
 
 	opts := processOptions{

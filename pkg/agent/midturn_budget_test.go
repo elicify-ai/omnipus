@@ -50,7 +50,7 @@ func midTurnFixture(t *testing.T, cw int, shareFraction float64) (*AgentLoop, *A
 	t.Cleanup(func() { msgBus.Close() })
 	al := mustNewAgentLoop(t, cfg, msgBus, testutilScenarioText())
 	t.Cleanup(func() { al.Close() })
-	agent := registerAgent(t, al, home, "mia", testutilScenarioText(), true)
+	agent := registerAgent(t, al, home, "mia", testutilScenarioText())
 	return al, agent
 }
 

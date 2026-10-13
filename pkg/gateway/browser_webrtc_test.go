@@ -183,7 +183,7 @@ func TestHandleWebRTCOffer_GateLadder_DisabledByConfig(t *testing.T) {
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 
 	wc := newTestBrowserWSConn()
@@ -299,7 +299,7 @@ func TestHandleWebRTCOffer_GateLadder_NotCapable(t *testing.T) {
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
@@ -380,7 +380,7 @@ func TestHandleWebRTCOffer_CapableButLaunchFails(t *testing.T) {
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
@@ -421,7 +421,7 @@ func TestHandleWebRTCOffer_DetachClearsViewerState(t *testing.T) {
 	handler, al := newBrowserWSTestHandler(t, nil)
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 
 	// Fabricate a webrtc-attached state as if handleWebRTCOffer had ACTUALLY
@@ -478,7 +478,7 @@ func TestHandleWebRTCOffer_DetachOfStaleAttachmentDoesNotClobberNewerOfferSameVi
 	handler, al := newBrowserWSTestHandler(t, nil)
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 
 	const viewerID = "viewer-reconnect-race"
@@ -776,7 +776,7 @@ func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
@@ -860,7 +860,7 @@ func TestHandleWebRTCOffer_OtherAgentViewerlessCapture_Superseded(t *testing.T) 
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)

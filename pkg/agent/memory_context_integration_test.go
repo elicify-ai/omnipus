@@ -246,7 +246,7 @@ func TestIntegration_ContextCompactionOverflow(t *testing.T) {
 	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al and cleanup are needed for this test
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent, "default agent must exist after NewAgentLoop")
 
 	// Set a small context window to make windowTrim trigger reliably.

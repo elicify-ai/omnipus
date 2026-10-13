@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/constants"
@@ -350,22 +351,12 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 	// re-targeting.
 	if explicitID := inboundMetadata(msg, "agent_id"); explicitID != "" {
 		if agent, ok := registry.GetAgent(explicitID); ok {
-			// A worker is a delegation-only labor tier — never a chat target.
-			// An inbound message that explicitly addresses a worker (e.g. a stale
-			// SPA dropdown value or a crafted channel payload) must NOT let the
-			// worker answer as a live persona. Degrade to the normal routing
-			// cascade, which resolves a chat-target default.
+			// A worker is a delegation-only labor tier — never a chat target,
+			// and there is no default agent to fall back to (FR-120): refuse.
 			if agent.IsWorker() {
-				logger.WarnCF(
-					"agent",
-					"Explicit agent_id references a worker (not a chat target); ignoring and falling back to default route",
-					map[string]any{
-						"agent_id":   explicitID,
-						"session_id": msg.SessionID,
-						"reason":     "worker is invoked via delegation, not as a chat target",
-					},
-				)
-				// Fall through to the ResolveRoute cascade below.
+				logger.WarnCF("agent", "Explicit agent_id references a worker (not a chat target); refused",
+					map[string]any{"agent_id": explicitID, "session_id": msg.SessionID})
+				return routing.ResolvedRoute{}, nil, fmt.Errorf("agent %q is a worker and cannot be a chat target", explicitID)
 			} else {
 				logger.InfoCF("agent", "Routed to explicit agent (dropdown)", map[string]any{
 					"agent_id":   explicitID,
@@ -384,25 +375,21 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		}
 	}
 
-	instanceID := inboundInstanceID(msg)
-	identity := al.resolveInboundIdentity(instanceID)
-
-	// ADR-029 FR-012/FR-014: set BoundInstance=true when the instance is
-	// workspace-bound AND carries an agent-kind identity. Both conditions must
-	// hold: a bare identity without a workspace (legacy routing) must not trigger
-	// the drift-drop guard, and a workspace binding without an agent identity
-	// cannot be drift-checked (nothing to validate). The drift guard inside
-	// ResolveRoute then enforces that a workspace-bound instance never falls back
-	// to the global default when its agent is unresolvable.
-	var boundInstance bool
-	if identity != nil && strings.ToLower(strings.TrimSpace(identity.Kind)) == "agent" {
-		if cfg := al.GetConfig(); cfg != nil {
-			if inst, ok := cfg.Channels[instanceID]; ok && inst.WorkspaceID != "" {
-				boundInstance = true
-			}
-		}
+	// §6.4: a message addressed to an existing session runs under that
+	// session's canonical owner — never a default agent.
+	if msg.SessionID != "" && msg.Channel != "system" {
+		return al.routeToSessionOwner(registry, msg)
 	}
 
+	instanceID := inboundInstanceID(msg)
+	identity := al.resolveInboundIdentity(instanceID)
+	cfg := al.GetConfig()
+	bound := false
+	if identity != nil && strings.ToLower(strings.TrimSpace(identity.Kind)) == "agent" && cfg != nil {
+		if inst, ok := cfg.Channels[instanceID]; ok && strings.TrimSpace(inst.WorkspaceID) != "" {
+			bound = true
+		}
+	}
 	route := registry.ResolveRoute(routing.RouteInput{
 		Channel:       msg.Channel,
 		AccountID:     inboundMetadata(msg, metadataKeyAccountID),
@@ -412,50 +399,23 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		TeamID:        inboundMetadata(msg, metadataKeyTeamID),
 		InstanceID:    instanceID,
 		Identity:      identity,
-		BoundInstance: boundInstance,
+		BoundInstance: bound,
 	})
-
-	// ADR-029 FR-012/FR-028: a drift drop means the bound agent is unresolvable.
-	// Do NOT call GetDefaultAgent — enter the FR-015 unroutable path directly.
-	// The counter increment and audit event are emitted ONCE at the processMessage
-	// rejection point (the single true drop site), NOT here.  resolveMessageRoute
-	// is a side-effect-free resolver: multiple call sites (resolveSteeringTarget,
-	// buildContinuationTarget) invoke it on the same message, so any emission here
-	// would fire multiple times per inbound message and corrupt the FR-028/MAJ-003
-	// counter and audit trail.  Return the route with Drop=true so the caller can
-	// detect the drift condition and emit the structured event exactly once.
+	// FR-121: resolveMessageRoute is side-effect-free (several callers resolve
+	// the same message); the drop is logged, audited and shown on the
+	// channel exactly once, at processMessage's rejection point.
 	if route.Drop {
-		intendedAgent := ""
-		if identity != nil {
-			intendedAgent = strings.TrimSpace(identity.ID)
-		}
-		logger.WarnCF(
-			"agent",
-			"Bound-instance drift drop: configured agent unresolvable; message rejected (ADR-029 FR-012)",
-			map[string]any{
-				"instance_id": instanceID,
-				"channel":     msg.Channel,
-				"chat_id":     msg.ChatID,
-				"matched_by":  route.MatchedBy,
-			},
-		)
-		return route, nil, fmt.Errorf("no agent available for route (agent_id=%s)", intendedAgent)
+		return route, nil, &routeDropError{instanceID: instanceID, reason: routeDropReason(route, identity)}
 	}
-
 	agent, ok := registry.GetAgent(route.AgentID)
-	if !ok {
-		agent = registry.GetDefaultAgent()
+	if !ok || agent == nil {
+		route.Drop = true
+		return route, nil, &routeDropError{instanceID: instanceID,
+			reason: fmt.Sprintf("bound agent %s not found", route.AgentID)}
 	}
-	if agent == nil {
-		// FR-015: log unroutable message with structured context before rejecting.
-		logger.WarnCF("agent", "Unroutable message rejected — no matching agent and no default",
-			map[string]any{
-				"channel":        msg.Channel,
-				"sender_id":      msg.Sender.CanonicalID,
-				"chat_id":        msg.ChatID,
-				"resolved_agent": route.AgentID,
-			})
-		return routing.ResolvedRoute{}, nil, fmt.Errorf("no agent available for route (agent_id=%s)", route.AgentID)
+	if reason := al.boundMemberRefusal(cfg.Channels[instanceID].WorkspaceID, agent.ID); reason != "" {
+		route.Drop = true
+		return route, nil, &routeDropError{instanceID: instanceID, reason: reason}
 	}
 
 	// A message addressed to a concrete chat session runs under that session's
@@ -672,12 +632,9 @@ func (al *AgentLoop) processSystemMessage(
 //
 // FIX 5d (#1): resolve the TRUE originating agent when the message carries
 // one (AsyncNotifier.Notify sets AsyncOriginAgentID for an async tool/
-// delegate result) — never guess GetDefaultAgent() when the real producer
-// is known. This is the confirmed, exact cause of a live "Worker vs Jim"
-// speaker-attribution flip: an async result from a non-default agent used
-// to be silently reattributed to whichever agent happens to be default.
-// GetDefaultAgent() remains the fallback ONLY for messages with no async
-// origin at all — a genuine last resort, not the primary path.
+// delegate result). A message with no async origin at all is discarded with
+// an error log and an audit entry (omnipus-system-agent FR-131): there is no
+// default agent to guess.
 //
 // UAT E-3: a NAMED origin that no longer resolves (the agent was deleted)
 // is NOT re-homed onto the default agent any more. That fallback handed a
@@ -690,8 +647,7 @@ func (al *AgentLoop) processSystemMessage(
 //
 // discarded=true means the message was fully handled here (or could not be
 // routed to any agent, but is not itself an error — the caller returns
-// ("", nil) either way); a non-nil error means processSystemMessage must
-// fail outright (no default agent configured at all).
+// ("", nil) either way).
 func (al *AgentLoop) resolveSystemMessageAgent(msg bus.InboundMessage) (agent *AgentInstance, discarded bool, err error) {
 	if msg.AsyncOriginAgentID != "" {
 		named, ok := al.GetRegistry().GetAgent(msg.AsyncOriginAgentID)
@@ -731,12 +687,35 @@ func (al *AgentLoop) resolveSystemMessageAgent(msg bus.InboundMessage) (agent *A
 		agent = named
 	}
 	if agent == nil {
-		agent = al.GetRegistry().GetDefaultAgent()
-	}
-	if agent == nil {
-		return nil, false, fmt.Errorf("no default agent for system message")
+		// FR-131 / §6.4: no addressable origin — discard loudly, never hand
+		// the message to a default agent.
+		al.recordSystemMessageDiscard(msg)
+		return nil, true, nil
 	}
 	return agent, false, nil
+}
+
+// systemMessageNoOriginReason is the visible discard reason for a system
+// message with no addressable originating agent (FR-131).
+const systemMessageNoOriginReason = "system message without an addressable agent"
+
+// recordSystemMessageDiscard logs the discard at error level and audits it once.
+func (al *AgentLoop) recordSystemMessageDiscard(msg bus.InboundMessage) {
+	logger.ErrorCF("agent", "System message discarded: "+systemMessageNoOriginReason, map[string]any{
+		"channel": msg.Channel, "chat_id": msg.ChatID, "sender_id": msg.Sender.CanonicalID,
+		"reason": systemMessageNoOriginReason,
+	})
+	if al.auditLogger == nil {
+		return
+	}
+	if err := al.auditLogger.Log(&audit.Entry{
+		Event:    audit.EventSystemMessageDiscarded,
+		Decision: audit.DecisionDeny,
+		Details:  map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID, "reason": systemMessageNoOriginReason},
+	}); err != nil {
+		logger.ErrorCF("agent", "audit write failed for a discarded system message",
+			map[string]any{"error": err.Error()})
+	}
 }
 
 // resolveSystemMessageTranscript resolves the originating turn's transcript

@@ -94,7 +94,7 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	const orphanToolCallID = "tc-orphan-v2d"
 	const orphanToolName = "exec"
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "default agent must be registered")
 
 	orphanHistory := buildOrphanedHistory(orphanToolCallID, orphanToolName)
@@ -109,7 +109,7 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 
 	// Drive runTurn end-to-end.
 	ctx := context.Background()
-	finalContent, err := al.ProcessDirect(ctx, "what's the status?", resolvedSessionKey)
+	finalContent, err := al.processDirectPrimaryForTest(ctx, "what's the status?", resolvedSessionKey)
 	require.NoError(t, err, "ProcessDirect must not fail on a session with orphaned tool calls")
 	assert.Equal(t, llmReply, finalContent,
 		"ProcessDirect must return the ScenarioProvider's scripted reply")
@@ -241,7 +241,7 @@ func TestRecoverOrphan_CleanSession_IsNoOp(t *testing.T) {
 
 	const resolvedSessionKey = "agent:mia:main"
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent)
 
 	// Seed with a CLEAN history (tool call + matching result).
@@ -253,7 +253,7 @@ func TestRecoverOrphan_CleanSession_IsNoOp(t *testing.T) {
 
 	priorLen := len(defaultAgent.Sessions.GetHistory(resolvedSessionKey))
 
-	_, err := al.ProcessDirect(context.Background(), "ping", resolvedSessionKey)
+	_, err := al.processDirectPrimaryForTest(context.Background(), "ping", resolvedSessionKey)
 	require.NoError(t, err, "ProcessDirect must succeed on a clean session")
 
 	afterHistory := defaultAgent.Sessions.GetHistory(resolvedSessionKey)

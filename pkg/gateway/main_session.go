@@ -145,28 +145,42 @@ const omnipusStandaloneRefusal = "Omnipus's chats live in the default workspace;
 const agentMustBeNamed = "an agent must be named"
 
 // omnipusSecondConversationRefusal enforces FR-005: Omnipus has exactly one
-// conversation, its main chat in the default workspace, so any request to
-// mint another chat with it is refused with that main's id (never a dead
-// end). Returns ("", "", nil) for any other agent, and when there is no
-// default workspace yet (omnipusChatRefusal answers that case). A failure to
-// read the workspaces is returned as the error.
-func omnipusSecondConversationRefusal(home, agentID string) (string, string, error) {
+// conversation, its main chat, so any request to mint another chat with it is
+// refused with that main's id (never a dead end). The id is the existing main
+// in store when there is one, else the main the default workspace will hold.
+// Returns ("", "", nil) for any other agent, and when Omnipus has no main and
+// there is no default workspace yet (omnipusChatRefusal answers that case). A
+// failure to read the sessions or the workspaces is returned as the error.
+func omnipusSecondConversationRefusal(store *session.UnifiedStore, home, agentID string) (string, string, error) {
 	if agentID != string(coreagent.IDOmnipus) {
 		return "", "", nil
 	}
-	def, err := workspace.ResolveDefaultID(home)
-	if err != nil {
-		if errors.Is(err, workspace.ErrNoDefault) {
+	mainID := ""
+	if store != nil {
+		mains, err := store.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
+			return m.Type == session.SessionTypeMain && m.AgentID == agentID
+		})
+		if err != nil {
+			return "", "", err
+		}
+		if len(mains) > 0 {
+			mainID = mains[0].ID
+		}
+	}
+	if mainID == "" {
+		def, err := workspace.ResolveDefaultID(home)
+		if err != nil {
+			if errors.Is(err, workspace.ErrNoDefault) {
+				return "", "", nil
+			}
+			return "", "", err
+		}
+		if def == "" {
 			return "", "", nil
 		}
-		return "", "", err
-	}
-	if def == "" {
-		return "", "", nil
-	}
-	mainID, err := session.MainSessionID(def, agentID)
-	if err != nil {
-		return "", "", err
+		if mainID, err = session.MainSessionID(def, agentID); err != nil {
+			return "", "", err
+		}
 	}
 	return fmt.Sprintf("Omnipus has one conversation; continue it in its main chat (session %s)", mainID), mainID, nil
 }

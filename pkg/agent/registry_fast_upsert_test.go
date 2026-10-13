@@ -202,8 +202,9 @@ func TestUpsertAgentFast_TrapsClosed_RoutingAndDefaultAgent(t *testing.T) {
 
 	// --- ResolveRoute (TRAP 1). ---
 	route := resolveRouteSafely(t, al.GetRegistry(), routing.RouteInput{
-		Channel:  "webchat",
-		Identity: &config.ChannelIdentity{Kind: "agent", ID: "gamma"},
+		Channel:       "webchat",
+		Identity:      &config.ChannelIdentity{Kind: "agent", ID: "gamma"},
+		BoundInstance: true,
 	})
 	require.False(t, route.Drop, "route must not drop")
 	require.Equal(t, "gamma", route.AgentID,
@@ -223,19 +224,6 @@ func TestUpsertAgentFast_TrapsClosed_RoutingAndDefaultAgent(t *testing.T) {
 		}
 	}
 	require.True(t, found, "al.cfg.Agents.List (published by UpsertAgentFast) must contain gamma")
-
-	// --- GetDefaultAgent (TRAP 1), once cfg names gamma as the default. ---
-	cfg2 := cloneCfg(t, al.GetConfig()) // already contains gamma from the upsert above
-	cfg2.Agents.Defaults.DefaultAgentID = "gamma"
-	inst2, err := al.UpsertAgentFast(cfg2, "gamma")
-	require.NoError(t, err)
-	require.NotNil(t, inst2)
-
-	def := al.GetRegistry().GetDefaultAgent()
-	require.NotNil(t, def)
-	require.Equal(t, "gamma", def.ID,
-		"GetDefaultAgent must resolve the fast-upserted agent once cfg.Agents.Defaults.DefaultAgentID "+
-			"names it — this fails if defaultAgentOverride is not refreshed fresh from cfg (TRAP 1)")
 }
 
 // TestUpsertAgentFast_ConcurrentDifferentAgents_NoLostUpdate proves TRAP 2's

@@ -46,7 +46,7 @@ func TestSessionCreation_InheritsWorkspaceID(t *testing.T) {
 	cfg.Agents.Defaults.Home = workspace
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	}
 	// Instance "whatsapp.eu" is bound to workspace "sales" with agent "ray".
@@ -121,7 +121,7 @@ func TestSessionCreation_UnboundInstance_NoWorkspaceID(t *testing.T) {
 	cfg.Agents.Defaults.Home = workspace
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 	}
 	// No bound instance — bare telegram (unbound, no WorkspaceID).
 	cfg.Channels = map[string]config.ChannelInstanceConfig{}
@@ -170,7 +170,7 @@ func TestSessionCreation_TwoInstancesDifferentWorkspaces(t *testing.T) {
 	cfg.Agents.Defaults.Home = workspace
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	}
 	cfg.Channels = map[string]config.ChannelInstanceConfig{

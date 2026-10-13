@@ -274,7 +274,7 @@ func TestSessionWorker_Continue_UnrelatedActiveSession_MustNotStrandOwnQueuedFol
 // test for Bug 2 (design note, "A bug inside the confirmed bug"): Continue
 // dequeues the steering queue (dequeueSteeringMessagesForScopeWithFallback)
 // BEFORE checking whether agentForSession(sessionKey) returns nil. When the
-// registry has no agent to route to (registry.GetDefaultAgent() nil — the
+// registry has no agent to route to (no agent resolves — the
 // note's example: "the session's agent was deleted mid-turn"),
 // agentForSession returns nil and Continue returns an error — but the
 // just-dequeued message is sitting in a local variable that goes out of
@@ -301,12 +301,9 @@ func TestAgentLoop_Continue_NilAgent_MustNotDiscardDequeuedMessages(t *testing.T
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			// Deliberately NO agents registered at all: registry.GetDefaultAgent()
-			// then returns nil (registry.go's Priority-1/Priority-2 ladder both
-			// require at least one registered chat-target agent), so
-			// agentForSession(sessionKey) — which falls back to GetDefaultAgent()
-			// whenever the session key doesn't parse to a specific registered
-			// agent ID — returns nil for any session key. This is the
+			// Deliberately NO agents registered at all, so
+			// agentForSession(sessionKey) — which resolves only the agent the
+			// session key names — returns nil for any session key. This is the
 			// "session's agent was deleted mid-turn" scenario the design note
 			// names as agentForSession's one deterministic, permanent failure
 			// cause.

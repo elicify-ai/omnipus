@@ -403,6 +403,21 @@ func BuiltinSkillsDir() string {
 	return filepath.Join(wd, "skills")
 }
 
+// installSkillsLoader is the shared, install-level skill loader: the install
+// root's skills, the global skills directory and the builtin skills — no
+// agent, no grants (omnipus-system-agent FR-124). With no install root
+// configured it reads the global directory only.
+func installSkillsLoader(cfg *config.Config) *skills.SkillsLoader {
+	root := ""
+	if cfg != nil {
+		root = cfg.AgentHomeBasePath()
+	}
+	if root == "" {
+		root = getGlobalConfigDir()
+	}
+	return skills.NewSkillsLoader(root, globalSkillsDir(), BuiltinSkillsDir())
+}
+
 // InstalledSkillIDs lists every installed skill id, read straight from the
 // skills directories with no agent involved.
 func InstalledSkillIDs(workspace string) []string {

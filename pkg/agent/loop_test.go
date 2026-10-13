@@ -705,7 +705,7 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 		store: store,
 		path:  imagePath,
 	})
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -811,7 +811,7 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 		path:  imagePath,
 		loop:  al,
 	})
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -891,7 +891,7 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 		store: store,
 		path:  imagePath,
 	})
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1614,7 +1614,7 @@ func TestProcessMessage_UsesRouteSessionKey(t *testing.T) {
 	})
 	sessionKey := route.SessionKey
 
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("No default agent found")
 	}
@@ -2343,7 +2343,7 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 	provider := &simpleMockProvider{response: ""}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
-	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "empty-response", "test", "chat1")
+	response, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hello", "empty-response", "test", "chat1")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
@@ -2393,7 +2393,7 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.RegisterTool(&toolLimitTestTool{})
 
-	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "tool-limit", "test", "chat1")
+	response, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hello", "tool-limit", "test", "chat1")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
@@ -2401,7 +2401,7 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 		t.Fatalf("response = %q, want %q", response, toolLimitResponse)
 	}
 
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("No default agent found")
 	}
@@ -2466,7 +2466,7 @@ func TestAgentLoop_SuccessfulTurnDoesNotSetTurnFailed(t *testing.T) {
 	provider := &simpleMockProvider{response: "Hello from the model"}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
-	response, err := al.ProcessDirectWithChannel(context.Background(), "hi", "success-turn", "test", "chat1")
+	response, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hi", "success-turn", "test", "chat1")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
@@ -2532,7 +2532,7 @@ func TestProcessDirectWithChannel_TriggersMCPInitialization(t *testing.T) {
 		t.Fatal("expected MCP manager to be nil before first direct processing")
 	}
 
-	_, err = al.ProcessDirectWithChannel(
+	_, err = al.processDirectWithChannelPrimaryForTest(
 		context.Background(),
 		"hello",
 		"session-1",
@@ -2839,7 +2839,7 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &toolFeedbackProvider{filePath: heartbeatFile}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}

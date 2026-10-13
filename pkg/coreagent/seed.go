@@ -4,7 +4,6 @@ package coreagent
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -679,8 +678,8 @@ func SeedConfig(cfg *config.Config) bool {
 		// migrate (§6.2), and re-running it on every boot would silently
 		// restore a grant list the operator later emptied on purpose — the
 		// exact ADR-054 D6.4 "reports success, doesn't stick" failure mode.
-		// Gating on isFreshInstall (same flag as the AutoRecap/DefaultAgentID
-		// seeds above) makes this fire once, on the very first boot, and
+		// Gating on isFreshInstall (same flag as the AutoRecap
+		// seed above) makes this fire once, on the very first boot, and
 		// never again. Do NOT restore this to an unconditional migration.
 		if sc.isFreshInstall && len(a.Skills) == 0 {
 			if seedSkills := coreAgentSkills(ca.ID); len(seedSkills) > 0 {
@@ -692,8 +691,7 @@ func SeedConfig(cfg *config.Config) bool {
 		// Idempotent Type re-enforcement (tamper protection). The subagent tier
 		// (worker + specialists) MUST carry Type=worker and base agents Type=core —
 		// these classify routing and chat-target eligibility, so a tampered/absent
-		// Type is corrected on every boot. A subagent-tier agent can never be the
-		// default: clear a stray Default flag too.
+		// Type is corrected on every boot.
 		wantType := config.AgentTypeCore
 		if IsSubagentTierID(ca.ID) {
 			wantType = config.AgentTypeWorker
@@ -703,10 +701,6 @@ func SeedConfig(cfg *config.Config) bool {
 			sc.modified = true
 		}
 		if IsSubagentTierID(ca.ID) {
-			if a.Default {
-				a.Default = false
-				sc.modified = true
-			}
 			// Idempotent executor migration: the seeded subagent-tier agents run
 			// native. Fill the executor only when the existing entry has none, so an
 			// operator who pointed it at an external-cli/remote runtime keeps their
@@ -747,13 +741,6 @@ func SeedConfig(cfg *config.Config) bool {
 		}
 		policies := coreAgentSeed(ca.ID)
 		isSubagentTier := IsSubagentTierID(ca.ID)
-		// Mia is the default agent on fresh installs: she appears first in the
-		// All() list and is the friendliest entry-point for new users. A subagent
-		// (worker or specialist) is NEVER the default — it is not a chat target.
-		// Only set Default=true on the fresh-seed path (here). The re-enforcement
-		// loop above intentionally does NOT touch the Default field on existing
-		// entries so operator choices survive config reload.
-		isDefault := ca.ID == IDMia
 		// Type: the subagent tier (worker + specialists) is Type=worker; every
 		// other seeded agent is a base/core agent.
 		agentType := config.AgentTypeCore
@@ -769,7 +756,6 @@ func SeedConfig(cfg *config.Config) bool {
 			Color:       ca.Color,
 			Type:        agentType,
 			Locked:      true,
-			Default:     isDefault,
 			CreatedAt:   timePtr(time.Now().UTC()),
 			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill
 			// resolution. Nil for agents with no seeded skills (unrestricted).
@@ -842,29 +828,6 @@ func (sc *seedConfig) seedFreshInstallDefaults() {
 		}
 	}
 
-	// RELEASE BLOCKER fix: Mia being "the default agent" on a fresh install
-	// was previously ONLY expressed via the per-entity AgentConfig.Default
-	// stamp on her fresh-seed record below (isDefault := ca.ID == IDMia) —
-	// but ADR-054 D6.4 moved default-agent RESOLUTION entirely to the
-	// settings singleton (cfg.Agents.Defaults.DefaultAgentID; see
-	// pkg/agent.AgentRegistry.GetDefaultAgent and
-	// pkg/routing.RouteResolver.resolveDefaultAgentID) and nothing ever seeded
-	// THAT field, so a fresh install had NO configured default at all:
-	// webchat and channel routing each fell back to a DIFFERENT priority-2/3
-	// default and disagreed. Seed the singleton here, on the exact same
-	// isFreshInstall gate the AutoRecap seed above uses, so a fresh install's
-	// actual resolved default matches the documented "Mia is default" intent.
-	// The per-entity Default:true stamp on Mia's fresh-seed record below is
-	// UNCHANGED (kept for backward display compatibility per config.go's
-	// ADR-054 D6.4 note) — this only adds the singleton write alongside it.
-	// Guarded by "still empty" so an operator's pre-boot env override
-	// (OMNIPUS_DEFAULT_AGENT_ID) is never clobbered, and so this is a
-	// fresh-install-only seed, not a re-enforcement that would overwrite an
-	// operator's later choice on every subsequent boot.
-	if sc.isFreshInstall && strings.TrimSpace(sc.cfg.Agents.Defaults.DefaultAgentID) == "" {
-		sc.cfg.Agents.Defaults.DefaultAgentID = string(IDMia)
-		sc.modified = true
-	}
 }
 
 // ToolPolicyUpdateWorkerGoalClaimAllow is the marker recorded in

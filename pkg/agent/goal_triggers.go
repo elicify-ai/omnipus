@@ -1525,8 +1525,9 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 
 	agentInst := resolveGoalAgent(al, s)
 	if agentInst == nil {
-		logger.WarnCF("agent", "goal idle settle: could not resolve agent",
-			map[string]any{"session_id": sessionID, "agent_id": s.AgentID})
+		// FR-123: no canonical owner — end the goal visibly instead of
+		// leaving it active with nothing able to run it.
+		al.failGoalIfOwnerMissing(sessionID, rec.GoalID, s.AgentID)
 		return
 	}
 
@@ -2156,6 +2157,12 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 		}
 		agentID = resolved
 	}
+	// FR-123 / §6.4: a goal runs only under its canonical owner. When that
+	// owner no longer exists the goal ends visibly as failed — never re-homed
+	// onto another agent and never left active with nothing to run it.
+	if al.failGoalIfOwnerMissing(sessionID, goalID, agentID) {
+		return
+	}
 	notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
@@ -2247,26 +2254,19 @@ func (s *goalTriggerState) routeFor(sessionID string) (goalRoute, error) {
 }
 
 // resolveGoalAgent resolves the AgentInstance that runs the goal-bearing
-// session's machine checks (the Judge's AssigneeAgentID). Falls back through
-// the session owner (agent_id) → first AgentIDs entry → the default agent, mirroring how the
-// chat turn itself resolves the active agent. Returns nil if none resolves.
+// session's machine checks (the Judge's AssigneeAgentID): the session's
+// canonical owner (agent_id) only. Another participant is never a substitute
+// and there is no default agent (omnipus-system-agent FR-123, §6.4); nil when
+// the owner no longer resolves, and the caller fails the goal visibly.
 func resolveGoalAgent(al *AgentLoop, s *session.UnifiedMeta) *AgentInstance {
 	registry := al.GetRegistry()
-	if registry == nil {
+	if registry == nil || s == nil || strings.TrimSpace(s.AgentID) == "" {
 		return nil
 	}
-	candidates := make([]string, 0, 1+len(s.AgentIDs))
-	candidates = append(candidates, s.AgentID)
-	candidates = append(candidates, s.AgentIDs...)
-	for _, id := range candidates {
-		if id == "" {
-			continue
-		}
-		if inst, ok := registry.GetAgent(id); ok && inst != nil {
-			return inst
-		}
+	if inst, ok := registry.GetAgent(s.AgentID); ok && inst != nil {
+		return inst
 	}
-	return registry.GetDefaultAgent()
+	return nil
 }
 
 // --- Bounce economics (G-4 / D8 / N-13) ------------------------------------

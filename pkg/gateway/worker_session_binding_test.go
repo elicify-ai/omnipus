@@ -73,7 +73,7 @@ func newWorkerTestRestAPI(t *testing.T) (*restAPI, string) {
 				MaxToolIterations: 20,
 			},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore},
 				{ID: "ava", Name: "Ava", Type: config.AgentTypeCore},
 				{ID: "hans", Name: "Hans", Type: config.AgentTypeWorker},
 				{ID: "otto", Name: "Otto", Type: config.AgentTypeCustom},

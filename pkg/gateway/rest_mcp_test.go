@@ -1298,7 +1298,7 @@ func TestTestMCPServer_SuccessHealsDisconnectedEnabledServer(t *testing.T) {
 	// tests guard against). Calling the healed tool through the same live
 	// manager the reconcile registered it into closes that gap: a dead child
 	// fails this call even though the status above still says "connected".
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent, "default agent must exist for tool execution")
 	echoToolName := mcpToolByPrefix(defaultAgent, "mcp_heal-srv_")
 	require.NotEmpty(t, echoToolName,

@@ -146,7 +146,7 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	// --- Fixture calibration (derived, NOT hardcoded) -----------------------
@@ -295,7 +295,7 @@ func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	agent.ContextWindow = 8000
@@ -335,7 +335,7 @@ func TestSwitchTime_LLMHistoryHasNoSystemMessage(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	agent.ContextWindow = 8000
@@ -397,7 +397,7 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model")
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	agent.ContextWindow = 8000
 
@@ -473,7 +473,7 @@ func TestSwitchTime_UnknownModel_SurfacesToUserNotJustLog(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model")
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	oldModel := agent.Model
 	require.NotEmpty(t, oldModel, "test setup: default agent must have a model")
@@ -607,7 +607,7 @@ func TestApplyAgentModel_MaxTokensDoesNotRatchetDown(t *testing.T) {
 	al, cfg, cleanup := newSwitchTestAgentLoop(t, bigModel, smallModel)
 	defer cleanup()
 
-	inst := al.GetRegistry().GetDefaultAgent()
+	inst := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, inst)
 	configured := inst.MaxTokens
 	require.Positive(t, configured)

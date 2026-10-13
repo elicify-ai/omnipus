@@ -56,7 +56,7 @@ func omnipusFullRosterConfig() *config.Config {
 	return &config.Config{
 		Agents: config.AgentsConfig{
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore},
 				{ID: "jim", Name: "Jim", Type: config.AgentTypeCore},
 				{ID: "omnipus", Name: "Omnipus", Type: config.AgentTypeCore, Locked: true},
 				{ID: "planner", Name: "Planner", Type: config.AgentTypeWorker},

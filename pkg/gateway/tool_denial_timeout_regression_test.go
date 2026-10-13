@@ -127,7 +127,7 @@ func TestTimeoutDenial_PayloadIsHonest_BDD01(t *testing.T) {
 
 	al, _, stub := newTimeoutRegressionHarness(t, provider, window)
 
-	finalContent, err := al.ProcessDirect(context.Background(), "please run run_task", "sess-w6-timeout-bdd01")
+	finalContent, err := al.ProcessDirectAs(context.Background(), "mia", "please run run_task", "sess-w6-timeout-bdd01")
 	require.NoError(t, err, "a single real timeout denial must not abort the turn — only the aggregate budget does")
 	assert.Equal(t, "run_task's approval expired; I will not retry and am reporting this as a blocker.", finalContent)
 	assert.Equal(t, 0, stub.executed, "run_task must never execute — the only call was denied")
@@ -209,7 +209,7 @@ func TestTimeoutBudget_TurnEndsOnItsOwn_NoManualStop_AC02(t *testing.T) {
 	// The ENTIRE test's interaction with the turn is this one blocking call.
 	// No goroutine, no reg.resolve, no cancel, no Stop — the turn must end
 	// BY ITSELF via the real, unanswered timeout + the aggregate budget.
-	finalContent, err := al.ProcessDirect(context.Background(), "please run run_task ten times", "sess-w6-timeout-ac02")
+	finalContent, err := al.ProcessDirectAs(context.Background(), agentID, "please run run_task ten times", "sess-w6-timeout-ac02")
 	elapsed := time.Since(start)
 
 	require.Error(t, err, "the turn must terminate on its own once the aggregate denial budget exhausts")

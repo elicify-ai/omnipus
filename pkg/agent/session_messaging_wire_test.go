@@ -363,7 +363,7 @@ func TestSessionMessagingConsumer_MessageParentDirectPath_ReachesInbox(t *testin
 
 	// The default agent now has a LIVE message_parent tool (reconstructed with
 	// the real stores by wireSessionMessagingForAgent).
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("no default agent registered")
 	}

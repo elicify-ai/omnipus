@@ -94,7 +94,7 @@ func newPlainHistoryLoop(t *testing.T, provider providers.LLMProvider) (*AgentLo
 	t.Cleanup(msgBus.Close)
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(al.Close)
-	agent := al.registry.GetDefaultAgent()
+	agent := al.registry.primaryChatAgentForTest()
 	require.NotNil(t, agent, "fixture: explicit Mia must resolve")
 	return al, agent, msgBus
 }
@@ -188,7 +188,7 @@ func runPlainHistoryEntryRecovery(t *testing.T, direct bool) {
 	var response string
 	var err error
 	if direct {
-		response, err = al.ProcessDirectWithChannel(context.Background(), trigger, key, "test", "plain-entry-chat")
+		response, err = al.processDirectWithChannelPrimaryForTest(context.Background(), trigger, key, "test", "plain-entry-chat")
 	} else {
 		var routed *AgentInstance
 		response, routed, err = al.processMessage(context.Background(), bus.InboundMessage{

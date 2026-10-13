@@ -13,7 +13,7 @@ func TestBrowserPanelCaptureFactoryUsesResolvedPanel(t *testing.T) {
 	h, loop := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.WebRTCMediaUDPPort = 0
 	})
-	defaultAgent := loop.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(loop.GetRegistry())
 	if defaultAgent == nil {
 		t.Fatal("fixture has no default agent")
 	}

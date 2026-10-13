@@ -973,7 +973,7 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 	}
 	// FR-005: Omnipus has one conversation; a second is refused with its
 	// main chat's id, before anything is minted.
-	if msg, _, err := omnipusSecondConversationRefusal(home, hcm.targetAgentID); err != nil || msg != "" {
+	if msg, _, err := omnipusSecondConversationRefusal(hcm.h.agentLoop.GetSessionStore(), home, hcm.targetAgentID); err != nil || msg != "" {
 		if err != nil {
 			logsafeError("ws: could not check Omnipus's conversation", "error", err)
 			msg = "could not check Omnipus's conversation"
@@ -1336,11 +1336,11 @@ func (hcm *wsHandlerHandleChatMessage) buildInboundMessage() {
 		// this field).
 		OperatorPrompt: true,
 	}
-	if hcm.agentID != "" {
-		// Format already validated up front, before the kickoff consume step
-		// (see the check next to the worker-agent guard near the top of this
-		// function) — no re-validation needed here.
-		hcm.msg.Metadata = map[string]string{"agent_id": hcm.agentID}
+	if hcm.targetAgentID != "" {
+		// The resolved turn agent: the frame's agent_id (format validated up
+		// front, before the kickoff consume step) or, for an existing session,
+		// its canonical owner (§6.4) — never left to a default.
+		hcm.msg.Metadata = map[string]string{"agent_id": hcm.targetAgentID}
 	}
 	// FR-010: forward per-turn model override to the bus so the agent loop's
 	// switch-compress path can route THIS turn to the chosen model. Trim

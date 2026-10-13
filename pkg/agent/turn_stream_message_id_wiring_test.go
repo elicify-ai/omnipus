@@ -166,7 +166,7 @@ func TestRunTurn_StreamingMessageID_NewPerRoundAfterToolCall(t *testing.T) {
 	}}
 	al, msgBus := newProgressWiringTestLoop(t, provider)
 	al.RegisterTool(&mockCustomTool{})
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent)
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
 		Policies: map[string]config.ToolPolicy{"mock_custom": "allow"},
@@ -210,7 +210,7 @@ func TestRunTurn_StreamingMessageID_ReusedAcrossD6Continuation(t *testing.T) {
 		{content: " off, and now it finishes cleanly."},
 	}}
 	al, msgBus := newProgressWiringTestLoop(t, provider)
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent)
 
 	streamer := &producerAgentIDMockStreamer{}

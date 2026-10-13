@@ -165,7 +165,7 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	// -----------------------------------------------------------------------
 	const sessionKey = "test-session-policy-deny"
 	ctx := context.Background()
-	finalContent, err := al.ProcessDirect(ctx, "please run dangerous_tool for me", sessionKey)
+	finalContent, err := al.processDirectPrimaryForTest(ctx, "please run dangerous_tool for me", sessionKey)
 	require.NoError(
 		t,
 		err,
@@ -246,7 +246,7 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	// which would let a broken classifier grade its own homework) proves the
 	// real, honest, classified content reaches persisted history.
 	// -----------------------------------------------------------------------
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "default agent must exist after boot")
 
 	// "mia" is the only agent this test's cfg.Agents.List registers, so it is

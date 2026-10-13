@@ -396,7 +396,7 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 
 	// The default agent now carries a LIVE message_parent tool backed by the
 	// real stores — drive the child's upward legs through it.
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("no default agent registered")
 	}

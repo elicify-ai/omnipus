@@ -669,10 +669,10 @@ func TestEventForwarder_InternalRateLimitDenial_EmitsExactlyOneFrame(t *testing.
 
 	ctx := context.Background()
 
-	_, err1 := al.ProcessDirectWithChannel(ctx, "first message", "rl-frame-session-1", "webchat", chatID)
+	_, err1 := al.ProcessDirectWithChannelAs(ctx, customAgentID, "first message", "rl-frame-session-1", "webchat", chatID)
 	require.NoError(t, err1, "SETUP: the first turn must succeed so the single budget slot is genuinely consumed")
 
-	_, err2 := al.ProcessDirectWithChannel(ctx, "second message", "rl-frame-session-2", "webchat", chatID)
+	_, err2 := al.ProcessDirectWithChannelAs(ctx, customAgentID, "second message", "rl-frame-session-2", "webchat", chatID)
 	require.Error(t, err2, "SETUP: the second turn must be denied by the internal limiter")
 	require.Contains(t, err2.Error(), "rate limit",
 		"SETUP: the denial must come from the SEC-26 limiter, not some unrelated failure")
