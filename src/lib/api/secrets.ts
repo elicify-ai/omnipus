@@ -46,6 +46,11 @@ export async function submitSecretRequest(requestId: string, body: SecretSubmitR
       `/secret-requests/${encodeURIComponent(requestId)}/submit`,
       { method: 'POST', body: JSON.stringify(body) },
       SecretRequestStateSchema as ZodType<SecretRequestState>,
+      undefined,
+      // FR-075 (founder, 2026-10-14): a secret-bearing POST is never replayed
+      // automatically — not even after a CSRF recovery. One user action, one
+      // POST; the card asks the person to send again.
+      { csrfRetry: false },
     )
     return { kind: 'accepted', state }
   } catch (error) {

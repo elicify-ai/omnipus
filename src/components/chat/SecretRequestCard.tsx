@@ -178,6 +178,11 @@ function CardHeader({ request }: { request: SessionStateSecretRequest }) {
   )
 }
 
+/** A 403 from the CSRF check: the submit never reached the handler. */
+function isCsrfRejection(error: unknown): boolean {
+  return isApiError(error) && error.status === 403 && /csrf/i.test(error.body ?? '')
+}
+
 function usePendingSubmit(entry: SecretRequestEntry, clearValues: () => void) {
   const store = useSecretRequestStore
   const requestId = entry.request.request_id
@@ -194,20 +199,26 @@ function usePendingSubmit(entry: SecretRequestEntry, clearValues: () => void) {
   const send = useCallback(
     async (body: { values: Record<string, string> } | { cancel: true }) => {
       store.getState().setLocalPhase(requestId, 'submitting')
+      // FR-075 (founder, 2026-10-14): the typed values leave the inputs the
+      // moment they are handed to the one submit — whatever its outcome
+      // (saved, refused, lost) they are never kept for a second attempt.
+      clearValues()
       try {
         const outcome = await submitSecretRequest(requestId, body)
-        clearValues()
         store.getState().applyState(outcome.state)
       } catch (error) {
         if (classifyMutationFailure(error) === 'uncertain') {
           await checkState()
           return
         }
-        const message = isApiError(error) && error.status === 404
-          ? 'This request is no longer available.'
-          : isApiError(error) && error.status === 413
-            ? 'The values are too long altogether.'
-            : `Not saved: ${mutationFailureMessage(error)}`
+        const message = isCsrfRejection(error)
+          // Never replayed automatically (secrets.ts): the person sends again.
+          ? 'Not sent — send again.'
+          : isApiError(error) && error.status === 404
+            ? 'This request is no longer available.'
+            : isApiError(error) && error.status === 413
+              ? 'The values are too long altogether.'
+              : `Not saved: ${mutationFailureMessage(error)}`
         store.getState().setLocalPhase(requestId, 'rejected', message)
       }
     },
@@ -223,7 +234,21 @@ function PendingForm({ entry }: { entry: SecretRequestEntry }) {
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const inputs = useRef<Array<HTMLInputElement | null>>([])
-  const clearValues = useCallback(() => setValues({}), [])
+  // Every input node this card ever rendered — kept so a value can be wiped
+  // even from a control React has already detached (FR-075).
+  const everyInput = useRef(new Set<HTMLInputElement>())
+  const clearValues = useCallback(() => {
+    setValues({})
+    for (const node of everyInput.current) node.value = ''
+  }, [])
+  // Leaving the screen (terminal state, navigation, unmount) wipes the inputs.
+  useEffect(() => {
+    const nodes = everyInput.current
+    return () => {
+      for (const node of nodes) node.value = ''
+      nodes.clear()
+    }
+  }, [])
   const { send, checkState } = usePendingSubmit(entry, clearValues)
   const busy = localPhase === 'submitting'
   const unknown = localPhase === 'unknown'
@@ -270,7 +295,10 @@ function PendingForm({ entry }: { entry: SecretRequestEntry }) {
       {request.fields.map((field, index) => (
         <Field key={field.key} label={field.label} error={errors[field.key]} required>
           <Input
-            ref={(node) => { inputs.current[index] = node }}
+            ref={(node) => {
+              inputs.current[index] = node
+              if (node) everyInput.current.add(node)
+            }}
             type="password"
             autoComplete="new-password"
             spellCheck={false}
