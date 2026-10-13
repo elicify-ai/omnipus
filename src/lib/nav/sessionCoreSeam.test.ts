@@ -134,16 +134,18 @@ describe('sessionCoreSeam end to end at eligibleMainAgents (unmocked)', () => {
     expect(JSON.stringify(listed)).not.toContain('main-session-')
   })
 
-  it('entry without a member main id stays unavailable / Retry / no send', async () => {
-    const { resolveWorkspaceEntry } = await import('@/lib/nav/workspaceEntry')
-    const avaMember: WorkspaceMemberConfig = {}
+  // WU-10 FR-107 / BDD-12.11 supersedes Ava-first, not the missing-main guard.
+  it('entry without the first colleague main id stays unavailable / Retry / no send', async () => {
+    const path = '@/lib/nav/workspaceEntry'
+    const { resolveWorkspaceEntry } = await import(/* @vite-ignore */ path)
+    const miaMember: WorkspaceMemberConfig = {}
     const entry = resolveWorkspaceEntry({
       workspaceId: 'product-launch',
       entryKind: 'login',
       rememberedSessionId: null,
       pointerVerdict: 'absent',
       sessions: [session],
-      avaMember,
+      team: { coreTeam: ['mia'], memberConfigs: { mia: miaMember }, agents: [makeAgent({ id: 'mia', type: 'core' })] },
       committed: null,
     })
     expect(entry).toEqual({
@@ -153,6 +155,19 @@ describe('sessionCoreSeam end to end at eligibleMainAgents (unmocked)', () => {
       acknowledged: false,
       retry: true,
     })
+  })
+
+  // WU-10 FR-107 / BDD-12.11: real generated member data, no seam double.
+  it('entry opens the first conversation member through its real server-computed main id', async () => {
+    const path = '@/lib/nav/workspaceEntry'
+    const { resolveWorkspaceEntry } = await import(/* @vite-ignore */ path)
+    const entry = resolveWorkspaceEntry({
+      workspaceId: 'product-launch', entryKind: 'login', rememberedSessionId: null,
+      pointerVerdict: 'absent', sessions: [session], committed: null,
+      team: { coreTeam: ['mia'], memberConfigs: { mia: { main_session_id: 'opaque-first-main' } },
+        agents: [makeAgent({ id: 'mia', type: 'core' })] },
+    })
+    expect(entry).toEqual({ status: 'welcome', sessionId: 'opaque-first-main', agentId: 'mia', sendEnabled: true, acknowledged: false })
   })
 
   // M6: the former "a non-main chat session is never acknowledged" pin here
