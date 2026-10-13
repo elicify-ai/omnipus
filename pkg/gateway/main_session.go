@@ -139,6 +139,38 @@ func mainSessionGate(home string, cfg *config.Config, id string) (isMain, eligib
 // chat with Omnipus outside the default workspace.
 const omnipusStandaloneRefusal = "Omnipus's chats live in the default workspace; open Omnipus's main chat there."
 
+// agentMustBeNamed is the visible refusal for a new chat (REST create or a
+// WebSocket frame without session_id) that names no agent
+// (omnipus-system-agent FR-122, §6.4): there is no default agent.
+const agentMustBeNamed = "an agent must be named"
+
+// omnipusSecondConversationRefusal enforces FR-005: Omnipus has exactly one
+// conversation, its main chat in the default workspace, so any request to
+// mint another chat with it is refused with that main's id (never a dead
+// end). Returns ("", "", nil) for any other agent, and when there is no
+// default workspace yet (omnipusChatRefusal answers that case). A failure to
+// read the workspaces is returned as the error.
+func omnipusSecondConversationRefusal(home, agentID string) (string, string, error) {
+	if agentID != string(coreagent.IDOmnipus) {
+		return "", "", nil
+	}
+	def, err := workspace.ResolveDefaultID(home)
+	if err != nil {
+		if errors.Is(err, workspace.ErrNoDefault) {
+			return "", "", nil
+		}
+		return "", "", err
+	}
+	if def == "" {
+		return "", "", nil
+	}
+	mainID, err := session.MainSessionID(def, agentID)
+	if err != nil {
+		return "", "", err
+	}
+	return fmt.Sprintf("Omnipus has one conversation; continue it in its main chat (session %s)", mainID), mainID, nil
+}
+
 // omnipusChatRefusal enforces "one main per agent per workspace" for the
 // system agent at every door that mints or re-binds a chat session (POST
 // /sessions, the first WebSocket message, and a later frame naming another

@@ -3648,6 +3648,21 @@ func TestContract_ChannelRouting_Bound(t *testing.T) {
 	mustPassComponent(t, "ChannelRouting", FixtureChannelRouting_Bound())
 }
 
+// TestContract_ChannelRoutingUpdateRequest_RequiresNonblankPair pins K14's
+// write shape: the bound pair passes; an omitted or empty member fails.
+func TestContract_ChannelRoutingUpdateRequest_RequiresNonblankPair(t *testing.T) {
+	mustPassComponent(t, "ChannelRoutingUpdateRequest", FixtureChannelRoutingUpdateRequest_Bound())
+	for _, raw := range []string{
+		`{"workspace_id":"my-workspace"}`,
+		`{"default_agent_id":"agent-a"}`,
+		`{"workspace_id":"","default_agent_id":"agent-a"}`,
+		`{"workspace_id":"my-workspace","default_agent_id":""}`,
+	} {
+		assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ChannelRoutingUpdateRequest", []byte(raw)),
+			"K14: %s must fail the write schema", raw)
+	}
+}
+
 // ── ChannelCreateResponse ─────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/ChannelCreateResponse.yaml
 

@@ -123,17 +123,6 @@ properties:
         example: 4096
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
-  default:
-    type: boolean
-    description: >
-      Send true to make this agent the global default that handles inbound
-      messages with no more-specific routing rule — replacing whichever agent
-      previously held it. Send false to clear the default, which only has an
-      effect if this agent currently holds it (sending false for an agent
-      that isn't the current default is a no-op). Omitting this field leaves
-      the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external
-      agents cannot be defaults. This does not change workspace membership.
-    example: false
   skills:
     type: array
     uniqueItems: true

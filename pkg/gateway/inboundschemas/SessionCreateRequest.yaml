@@ -1,12 +1,19 @@
 type: object
 description: Body for POST /sessions. Creates a new session for an agent.
 additionalProperties: false
+required:
+  - agent_id
 properties:
   agent_id:
     type: string
+    minLength: 1
     description: >
-      Agent ID that will own this session. Defaults to "main" when omitted.
-      Must reference an existing agent (400 if not found).
+      Agent ID that will own this session. Required and nonblank — there is
+      no default agent (omnipus-system-agent FR-122, K16); a missing or blank
+      value is refused with 400 "an agent must be named". Must reference an
+      existing chat-target agent (400 if not found). Omnipus has exactly one
+      conversation, so naming Omnipus is refused with 409 carrying its main
+      session id (FR-005).
     example: "jim"
   type:
     type: string

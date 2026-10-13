@@ -1,19 +1,35 @@
 title: ChannelRouting
 description: >
-  Routing configuration for a single communication channel.
-  Controls which agent handles inbound messages arriving on this channel.
+  Routing configuration for a single communication channel instance, as read
+  back by GET and returned by PUT /channels/{id}/routing. Every channel is
+  bound to a workspace and names that binding's main agent (omnipus-system-agent
+  FR-127, K14); there is no global default agent and no unbound routing mode.
+  An instance that has no binding yet is reported truthfully (FR-128):
+  `bound` is false and both ids are empty strings — never an invented or
+  legacy destination.
 type: object
 additionalProperties: false
+required:
+  - workspace_id
+  - default_agent_id
+  - bound
 properties:
   default_agent_id:
     type: string
     description: >
-      ID of the agent that handles this channel's inbound messages.
-      Omitted or empty means fall back to the global default agent.
-    example: "550e8400-e29b-41d4-a716-446655440000"
+      ID of the bound main agent that answers this channel's inbound messages.
+      Empty string when `bound` is false. (Landing 1 keeps the historical key
+      name; it no longer means any global-default fallback.)
+    example: "mia"
   workspace_id:
     type: string
     description: >
-      Workspace this channel instance is bound to. Required (non-empty) for a
-      bound instance; empty/omitted = unbound (legacy default routing).
+      Workspace this channel instance is bound to. Empty string when `bound`
+      is false.
     example: "my-workspace"
+  bound:
+    type: boolean
+    description: >
+      True when the instance is bound to a workspace and names a main agent.
+      An unbound instance drops every inbound message loudly until bound.
+    example: true

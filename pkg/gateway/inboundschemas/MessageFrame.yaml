@@ -58,8 +58,8 @@ properties:
     minLength: 1
     maxLength: 128
     description: >
-      Route this message to a specific agent by ID. If omitted the default
-      agent (typically "main") handles the message. Spec
+      Route this message to a specific agent by ID. There is no default
+      agent. Spec
       omnipus-system-agent K8 (FR-122, landing 1, WU-1): a frame without
       `session_id` MUST carry a nonblank `agent_id`; the server enforces this
       semantically (error frame "an agent must be named") with inbound

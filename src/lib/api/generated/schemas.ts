@@ -1298,7 +1298,6 @@ type Agent = {
   model_params?: AgentModelParams | undefined;
   rate_limits?: AgentRateLimits | undefined;
   stats?: AgentStats | undefined;
-  default?: boolean | undefined;
   skills?: Array<string> | undefined;
   updated_at?: string | undefined;
   voice?: (string | null) | undefined;
@@ -1522,7 +1521,6 @@ type AgentUpdateRequest = {
       }>
     | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
-  default?: boolean | undefined;
   skills?: Array<string> | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
@@ -1566,6 +1564,7 @@ type ChannelEntry = {
   native_available?: boolean | undefined;
   degraded?: boolean | undefined;
   degraded_reason?: string | undefined;
+  last_dropped_at?: string | undefined;
 };
 type ChannelId = string;
 type ChannelIdentity = {
@@ -3525,13 +3524,11 @@ export const SessionPage: z.ZodType<SessionPage> = z.object({
   next_cursor: z.string().optional(),
   partial_errors: z.array(z.string()).optional(),
 });
-export const SessionCreateRequest = z
-  .object({
-    agent_id: z.string(),
-    type: z.enum(["chat", "task", "channel"]),
-    workspace_id: z.string().max(128),
-  })
-  .partial();
+export const SessionCreateRequest = z.object({
+  agent_id: z.string().min(1),
+  type: z.enum(["chat", "task", "channel"]).optional(),
+  workspace_id: z.string().max(128).optional(),
+});
 export const Attachment: z.ZodType<Attachment> = z.object({
   type: z.enum(["image", "audio", "video", "file"]),
   path: z.string(),
@@ -3997,7 +3994,6 @@ export const Agent: z.ZodType<Agent> = z
     model_params: AgentModelParams.optional(),
     rate_limits: AgentRateLimits.optional(),
     stats: AgentStats.optional(),
-    default: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
     updated_at: z.string().datetime({ offset: true }).optional(),
     voice: z.string().nullish(),
@@ -4120,7 +4116,6 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
     .passthrough()
     .optional(),
   tools_cfg: AgentToolsCfg.optional(),
-  default: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
   voice: z.string().nullish(),
   executor: ExecutorConfig.optional(),
@@ -4633,6 +4628,7 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   native_available: z.boolean().optional(),
   degraded: z.boolean().optional(),
   degraded_reason: z.string().optional(),
+  last_dropped_at: z.string().datetime({ offset: true }).optional(),
 });
 export const ChannelCreateRequest = z.object({
   type: z.string(),
@@ -4651,9 +4647,15 @@ export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
 export const ChannelTestResponse = z
   .object({ success: z.boolean(), message: z.string() })
   .passthrough();
-export const ChannelRouting = z
-  .object({ default_agent_id: z.string(), workspace_id: z.string() })
-  .partial();
+export const ChannelRouting = z.object({
+  default_agent_id: z.string(),
+  workspace_id: z.string(),
+  bound: z.boolean(),
+});
+export const ChannelRoutingUpdateRequest = z.object({
+  workspace_id: z.string().min(1).max(128),
+  default_agent_id: z.string().min(1).max(128),
+});
 export const Mailbox: z.ZodType<Mailbox> = z.object({
   agent_id: z.string(),
   enabled: z.boolean(),
@@ -9131,7 +9133,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/channels/:id/routing",
     alias: "getChannelRouting",
-    description: `Returns the routing configuration for the specified channel, including which agent handles its inbound messages.
+    description: `Returns the routing configuration for the specified channel: its workspace binding and main agent, or — for an instance that is not yet bound — &#x60;bound: false&#x60; with empty ids (FR-128). Never an invented or legacy destination.
 `,
     requestFormat: "json",
     parameters: [
@@ -9164,14 +9166,14 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/channels/:id/routing",
     alias: "setChannelRouting",
-    description: `Sets the routing configuration for the specified channel. The default_agent_id field controls which agent handles inbound messages arriving on this channel. Omit it or leave it empty to fall back to the global default agent.
+    description: `Binds the channel instance to a workspace and names its main agent. Both workspace_id and default_agent_id are required and nonblank (omnipus-system-agent FR-127, K14); there is no unbound mode and no global default agent. A missing or blank value is refused with 400 &quot;bind this channel to an agent in a workspace&quot; and changes nothing. Saving a valid binding clears the channel&#x27;s routing degradation (FR-129).
 `,
     requestFormat: "json",
     parameters: [
       {
         name: "body",
         type: "Body",
-        schema: ChannelRouting,
+        schema: ChannelRoutingUpdateRequest,
       },
       {
         name: "id",
@@ -9578,7 +9580,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/health",
     alias: "getHealth",
-    description: `Returns HTTP 200 with status &quot;ok&quot; when the gateway is serving, and HTTP 503 with status &quot;degraded&quot; plus a reason on a gateway-fatal condition (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
+    description: `Returns HTTP 200 with status &quot;ok&quot; when the gateway is serving, and HTTP 503 with status &quot;degraded&quot; plus a reason on a gateway-fatal condition (agent loop dead, config reload failed). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
 `,
     requestFormat: "json",
     response: HealthResponse,

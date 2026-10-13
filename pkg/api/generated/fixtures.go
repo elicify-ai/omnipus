@@ -2614,14 +2614,12 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	soul := "You are a helpful assistant."
 	voice := "alloy"
 
-	vDefault := true
 	return AgentUpdateRequest{
 		Revision:    repeatStr("a", 64),
 		Name:        &name,
 		Description: &description,
 		Model:       &model,
 		Color:       &color,
-		Default:     &vDefault,
 		Soul:        &soul,
 		Voice:       &voice,
 		ModelParams: &struct {
@@ -2659,9 +2657,11 @@ func FixtureAgentUpdateRequest_Revision() AgentUpdateRequest {
 // ── ChannelRouting ────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/ChannelRouting.yaml
 
+// FixtureChannelRouting_Populated is the truthful read of an instance that
+// is not bound yet (omnipus-system-agent FR-128, K14): bound false, both ids
+// empty — never an invented destination.
 func FixtureChannelRouting_Populated() ChannelRouting {
-	id := "agent-a"
-	return ChannelRouting{DefaultAgentId: &id}
+	return ChannelRouting{Bound: false, WorkspaceId: "", DefaultAgentId: ""}
 }
 
 // FixtureChannelRouting_Bound returns a fully-bound ChannelRouting (F-12/FR-026):
@@ -2671,9 +2671,16 @@ func FixtureChannelRouting_Bound() ChannelRouting {
 	id := "agent-a"
 	wsID := "my-workspace"
 	return ChannelRouting{
-		WorkspaceId:    &wsID,
-		DefaultAgentId: &id,
+		WorkspaceId:    wsID,
+		DefaultAgentId: id,
+		Bound:          true,
 	}
+}
+
+// FixtureChannelRoutingUpdateRequest_Bound is the only accepted write shape:
+// a nonblank workspace and main agent (omnipus-system-agent FR-127, K14).
+func FixtureChannelRoutingUpdateRequest_Bound() ChannelRoutingUpdateRequest {
+	return ChannelRoutingUpdateRequest{WorkspaceId: "my-workspace", DefaultAgentId: "agent-a"}
 }
 
 // ── CliDetect ─────────────────────────────────────────────────────────────────

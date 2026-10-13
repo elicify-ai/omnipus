@@ -1797,6 +1797,8 @@ components:
       $ref: ./components/schemas/ChannelTestResponse.yaml
     ChannelRouting:
       $ref: ./components/schemas/ChannelRouting.yaml
+    ChannelRoutingUpdateRequest:
+      $ref: ./components/schemas/ChannelRoutingUpdateRequest.yaml
     ChannelCreateRequest:
       $ref: ./components/schemas/ChannelCreateRequest.yaml
     ChannelCreateResponse:
@@ -3847,7 +3849,7 @@ paths:
       description: >
         Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP
         503 with status "degraded" plus a reason on a gateway-fatal condition
-        (agent loop dead, config reload failed, default agent unloadable). The
+        (agent loop dead, config reload failed). The
         audit_* and catalog fields describe a degraded SUBSYSTEM while the
         gateway itself is still serving and never change the status code — a
         stale provider catalog (ADR-067 FR-037) makes the model picker less
@@ -5100,8 +5102,10 @@ paths:
       operationId: getChannelRouting
       summary: Get channel routing configuration
       description: >
-        Returns the routing configuration for the specified channel, including
-        which agent handles its inbound messages.
+        Returns the routing configuration for the specified channel: its
+        workspace binding and main agent, or — for an instance that is not yet
+        bound — `bound: false` with empty ids (FR-128). Never an invented or
+        legacy destination.
       tags:
       - Channels
       security:
@@ -5135,10 +5139,13 @@ paths:
       operationId: setChannelRouting
       summary: Set channel routing configuration
       description: >
-        Sets the routing configuration for the specified channel. The
-        default_agent_id field controls which agent handles inbound messages
-        arriving on this channel. Omit it or leave it empty to fall back to the
-        global default agent.
+        Binds the channel instance to a workspace and names its main agent.
+        Both workspace_id and default_agent_id are required and nonblank
+        (omnipus-system-agent FR-127, K14); there is no unbound mode and no
+        global default agent. A missing or blank value is refused with 400
+        "bind this channel to an agent in a workspace" and changes nothing.
+        Saving a valid binding clears the channel's routing degradation
+        (FR-129).
       tags:
       - Channels
       security:
@@ -5156,7 +5163,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChannelRouting'
+              $ref: '#/components/schemas/ChannelRoutingUpdateRequest'
       responses:
         '200':
           description: Updated channel routing configuration.

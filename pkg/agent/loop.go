@@ -43,6 +43,10 @@ import (
 )
 
 type AgentLoop struct {
+	// routingDrops is the per-channel-instance routing degradation
+	// (omnipus-system-agent FR-121, K15): set when an inbound message is
+	// dropped as unroutable, cleared by a valid binding (FR-129).
+	routingDrops routingDropTracker
 	// connLanes holds the per-chat serial lanes of bound connector input that
 	// is waiting behind a voice note being transcribed (connector_lane.go).
 	connLanes   sync.Mutex
