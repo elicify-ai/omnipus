@@ -87,7 +87,7 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 		// fail closed rather than record an empty owner that skips the
 		// return-time binding check.
 		logsafeWarn("ws: could not read the source chat to bind the request", "session_id", srcID, "error", metaErr)
-		hcm.h.sendRecipientRefusal(hcm.wc, srcID, hcm.clientMessageID, "the request could not be delivered to that agent")
+		hcm.h.sendRecipientRefusal(hcm.wc, srcID, hcm.clientMessageID, recipientDeliveryFailedMessage)
 		return
 	}
 	{
@@ -135,11 +135,11 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 	if err != nil {
 		logsafeWarn("ws: could not deliver the request to the recipient", "session_id", srcID, "error", err)
 		if hcm.sessionID == "" {
-			hcm.h.sendRecipientRefusal(hcm.wc, srcID, hcm.clientMessageID, "the request could not be delivered to that agent")
+			hcm.h.sendRecipientRefusal(hcm.wc, srcID, hcm.clientMessageID, recipientDeliveryFailedMessage)
 		} else {
 			// The message was already saved and echoed; the deferred failed tick
 			// (hcm.sessionID is set) reconciles the row after this error.
-			hcm.h.sendRecipientRefusalError(hcm.wc, srcID, hcm.clientMessageID, "the request could not be delivered to that agent")
+			hcm.h.sendRecipientRefusalError(hcm.wc, srcID, hcm.clientMessageID, recipientDeliveryFailedMessage)
 		}
 		return
 	}
@@ -236,6 +236,10 @@ func (h *WSHandler) sendRecipientRefusal(wc *wsConn, sessionID, clientMessageID,
 		State:           "failed",
 	}, wc)
 }
+
+// recipientDeliveryFailedMessage is the fixed user-facing text for an @-recipient
+// request that could not be delivered; it names no cause (those are in the log).
+const recipientDeliveryFailedMessage = "the request could not be delivered to that agent"
 
 // errRecipientSourceRefused marks a BeforeCommit abort whose user-facing error
 // the source preparation has already sent.
