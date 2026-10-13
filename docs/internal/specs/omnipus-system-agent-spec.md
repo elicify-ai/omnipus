@@ -1,7 +1,8 @@
 # Feature Specification: The Omnipus system agent
 
 **Created**: 2026-10-12 · **Fix rounds 1–4**: 2026-10-13 · **Fix after the independent Opus review**: 2026-10-13 (§0.16)
-**Status**: Approved — founder approval 2026-10-13, after the ADR grill, four GPT spec grill rounds, an independent Opus review and their fix rounds
+**Status**: Approved
+**Approval**: founder approval 2026-10-13, after the ADR grill, four GPT spec grill rounds, an independent Opus review and their fix rounds
 **Size**: Feature (spec-driven; 5-reviewer gate; every engine/WebSocket bundle needs hands-on UAT by a tester and an independent validator on the exact landing commit — root `CLAUDE.md`, "Definition of Done")
 **Release**: v0.1.1 (founder answer R1 A, 2026-10-12, relayed by team-lead)
 
