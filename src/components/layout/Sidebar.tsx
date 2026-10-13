@@ -289,10 +289,23 @@ export function Sidebar() {
         if (isVisible) hide()
         else open()
       }
-      // Escape closes the overlay. A docked wide sidebar is not an overlay,
-      // so Escape leaves it. Below 1024px a saved dock is not on screen, and
-      // close() drops the overlay without clearing that dock.
-      if (e.key === 'Escape' && isOpen && !effectivelyPinned) {
+      // Escape closes the overlay — but only when no dismissable layer
+      // inside the sidebar has already consumed the key. Radix's
+      // DismissableLayer (the row's ⋯ menu, the profile menu, dialogs,
+      // popovers) handles Escape from a document-level CAPTURE keydown:
+      // the topmost layer closes and calls event.preventDefault() BEFORE
+      // this window-level bubble listener sees the key, so a
+      // defaultPrevented Escape means "a layer above this sidebar just
+      // dismissed" and the overlay must stay open. Closing here too would
+      // animate the whole sidebar out under an Escape that was only ever
+      // meant to dismiss the menu (CI job 114998058497, sidebar-agent-row-menu
+      // e2e D8). Same pattern as panel-shell/panelEscape.ts
+      // (shouldClosePanelOnEscape). With nothing else open, no layer
+      // preventDefaults, and Escape closes the overlay as before. A docked
+      // wide sidebar is not an overlay, so Escape leaves it; below 1024px a
+      // saved dock is not on screen, and close() drops the overlay without
+      // clearing that dock.
+      if (e.key === 'Escape' && !e.defaultPrevented && isOpen && !effectivelyPinned) {
         close()
       }
     },
@@ -450,6 +463,12 @@ export function Sidebar() {
                     e.preventDefault()
                     commitCreateWorkspace()
                   } else if (e.key === 'Escape') {
+                    // The field consumes its own Escape: preventDefault marks
+                    // the key handled so the sidebar's window-level Escape
+                    // handler (handleKeydown) stands down and the overlay
+                    // stays open — cancelling the name must not also throw
+                    // the whole sidebar away.
+                    e.preventDefault()
                     setCreatingWorkspace(false)
                     setNewWorkspaceName('')
                   }
