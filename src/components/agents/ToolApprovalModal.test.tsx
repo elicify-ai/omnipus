@@ -1,4 +1,6 @@
-// Unit tests for ToolApprovalModal — FR-011, FR-082, FR-052
+// L1 amendment §1.2 R6 / §1.5: inline container replaces the modal.
+// All non-container preview/action/security oracles retained; B3 stub deletion deferred.
+// Unit tests for ToolApprovalPanel — FR-011, FR-082, FR-052
 //
 // Tests:
 //  1. Modal does not render when queue is empty
@@ -13,67 +15,27 @@
 //  9. Countdown uses expires_in_ms — expiresAt computed as Date.now() + expires_in_ms
 // 10. session_state reconciliation removes stale approvals
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import type { ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
 
-// We mock submitToolApproval but pass-through ApiError + isApiError so the
-// component's `isApiError(err)` branch matches errors thrown from inside the
-// mock implementation. Without re-exporting them, the mock would shadow them
-// with undefined and crash on any thrown error.
-vi.mock('@/lib/api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
-  return {
-    ...actual,
-    submitToolApproval: vi.fn(),
-  }
-})
+// Real transport, ApiError, UI and logout paths. Only fetch/socket boundaries
+// are doubled by the shared test fixture.
 
-vi.mock('@/store/ui', () => ({
-  useUiStore: vi.fn((selector) => {
-    const state = {
-      addToast: vi.fn(),
-      toasts: [],
-      removeToast: vi.fn(),
-    }
-    return selector ? selector(state) : state
-  }),
-}))
-
-// D9: forceLogout is mocked so a 401 in these tests doesn't exercise the real
-// sessionStorage/hash-redirect side effects — just asserts the call happened.
-const mockForceLogout = vi.fn()
-vi.mock('@/lib/authLogout', () => ({
-  forceLogout: (...args: unknown[]) => mockForceLogout(...args),
-}))
-
-import * as api from '@/lib/api'
 import { useToolApprovalStore } from '@/store/toolApproval'
-import { ToolApprovalModal } from './ToolApprovalModal'
+import { useAuthStore } from '@/store/auth'
+import { useSessionStore } from '@/store/session'
+import type { ComponentType } from 'react'
+import { renderWithClient as render, loadApprovalPanel, resetSharedState, installApprovalNetwork, setApprovalReply, approvalPosts, toasts, cleanupApprovalState } from '../../../tests/l1-ui-red-u23/support'
+let ToolApprovalPanel: ComponentType
 import type { SessionStateFrame } from '@/lib/ws'
 
-// Capture the mock addToast for assertion
-let capturedAddToast: ReturnType<typeof vi.fn>
 
 beforeEach(async () => {
-  capturedAddToast = vi.fn()
-  const { useUiStore } = await import('@/store/ui')
-  vi.mocked(useUiStore).mockImplementation(((selector?: (s: unknown) => unknown) => {
-    const state = { addToast: capturedAddToast, toasts: [], removeToast: vi.fn() }
-    return selector ? selector(state) : state
-  }) as unknown as typeof useUiStore)
-
-  // Reset store
-  act(() => {
-    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
-  })
-  vi.clearAllMocks()
-  vi.mocked(api.submitToolApproval).mockResolvedValue({
-    approval_id: 'appr-001',
-    action: 'allow_once',
-    status: 'ok',
-  })
+  resetSharedState('sess-001')
+  installApprovalNetwork()
+  ToolApprovalPanel = await loadApprovalPanel()
 })
 
 const SAMPLE_APPROVAL = {
@@ -87,17 +49,17 @@ const SAMPLE_APPROVAL = {
   expiresAt: Date.now() + 300_000, // 5 minutes
 }
 
-describe('ToolApprovalModal — rendering', () => {
-  it('renders nothing when the queue is empty', () => {
-    const { container } = render(<ToolApprovalModal />)
+describe('ToolApprovalPanel — rendering', () => {
+  it('L1 §1.2 R6: renders nothing when the queue is empty', () => {
+    const { container } = render(<ToolApprovalPanel />)
     expect(container.firstChild).toBeNull()
   })
 
-  it('renders the modal when the queue has an entry', () => {
+  it('L1 §1.2 R6: renders the modal when the queue has an entry', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     // Deliverable 3: the modal shows the HUMAN tool name (humanizeToolName),
     // not the raw wire identifier — 'fetch_url' has an EXPLICIT_LABELS entry
     // ('Fetch URL'), so the raw id should no longer appear as the Tool label.
@@ -110,15 +72,15 @@ describe('ToolApprovalModal — rendering', () => {
     expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument()
   })
 
-  it('shows the tool args in the modal', () => {
+  it('L1 §1.2 R6: shows the tool args in the modal', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText(/https:\/\/example\.com/)).toBeInTheDocument()
   })
 
-  it('shows queue depth indicator when multiple approvals are pending', () => {
+  it('L1 §1.2 R6: shows queue depth indicator when multiple approvals are pending', () => {
     act(() => {
       useToolApprovalStore.setState({
         queue: [
@@ -127,7 +89,7 @@ describe('ToolApprovalModal — rendering', () => {
         ],
       })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('+1 more')).toBeInTheDocument()
   })
 })
@@ -137,7 +99,7 @@ describe('ToolApprovalModal — rendering', () => {
 // (binary highlighted, env-prefix separated, working-dir line) was ported
 // here for `bash` calls — verify it renders, in addition to the generic
 // Arguments JSON dump, and does NOT render for other tools.
-describe('ToolApprovalModal — bash command preview (ADR-036 §3.4 port)', () => {
+describe('ToolApprovalPanel — bash command preview (ADR-036 §3.4 port)', () => {
   const BASH_APPROVAL = {
     approvalId: 'appr-bash-001',
     toolCallId: 'call-bash-001',
@@ -149,112 +111,112 @@ describe('ToolApprovalModal — bash command preview (ADR-036 §3.4 port)', () =
     expiresAt: Date.now() + 300_000,
   }
 
-  it('renders a Command preview with the binary highlighted and env prefix separated', () => {
+  it('L1 §1.2 R6: renders a Command preview with the binary highlighted and env prefix separated', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [BASH_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Command')).toBeInTheDocument()
     expect(screen.getByText('FOO=bar')).toBeInTheDocument()
     expect(screen.getByText('npm')).toBeInTheDocument()
   })
 
-  it('renders the working directory from args.cwd', () => {
+  it('L1 §1.2 R6: renders the working directory from args.cwd', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [BASH_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('apps/web')).toBeInTheDocument()
   })
 
-  it('still renders the generic Arguments JSON dump alongside the preview', () => {
+  it('L1 §1.2 R6: still renders the generic Arguments JSON dump alongside the preview', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [BASH_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Arguments')).toBeInTheDocument()
     expect(screen.getByText(/run_in_background/)).toBeInTheDocument()
   })
 
-  it('does NOT render a Command preview for a non-bash tool', () => {
+  it('L1 §1.2 R6: does NOT render a Command preview for a non-bash tool', () => {
     act(() => {
       useToolApprovalStore.setState({
         queue: [{ ...SAMPLE_APPROVAL, args: { command: 'not actually bash' } }],
       })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.queryByText('Command')).not.toBeInTheDocument()
   })
 
-  it('does NOT render a Command preview when bash args have no command string', () => {
+  it('L1 §1.2 R6: does NOT render a Command preview when bash args have no command string', () => {
     act(() => {
       useToolApprovalStore.setState({
         queue: [{ ...BASH_APPROVAL, args: { run_in_background: true } }],
       })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.queryByText('Command')).not.toBeInTheDocument()
   })
 })
 
-describe('ToolApprovalModal — button dispatch', () => {
-  it('Approve button calls submitToolApproval with action:"allow_once"', async () => {
+describe('ToolApprovalPanel — button dispatch', () => {
+  it('L1 §1.2 R6: Approve button calls submitToolApproval with action:"allow_once"', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
 
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'allow_once')
+      expect(approvalPosts()).toContainEqual({ id: 'appr-001', body: { action: 'allow_once' } })
     })
   })
 
-  it('Deny button calls submitToolApproval with action:"deny"', async () => {
+  it('L1 §1.2 R6: Deny button calls submitToolApproval with action:"deny"', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Deny/i }))
 
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'deny')
+      expect(approvalPosts()).toContainEqual({ id: 'appr-001', body: { action: 'deny' } })
     })
   })
 
-  it('Cancel button calls submitToolApproval with action:"cancel"', async () => {
+  it('L1 §1.2 R6: Cancel button calls submitToolApproval with action:"cancel"', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
 
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'cancel')
+      expect(approvalPosts()).toContainEqual({ id: 'appr-001', body: { action: 'cancel' } })
     })
   })
 
   // ADR-036 §3.4 gap closure: the retired ExecApprovalBlock's 3-way decision
   // (Allow / Deny / "Always Allow") is now fully reachable from the generic
   // modal for every tool, not just bash.
-  it('Always Allow button calls submitToolApproval with action:"allow"', async () => {
+  it('L1 §1.2 R6: Always Allow button calls submitToolApproval with action:"allow"', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
 
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'allow')
+      expect(approvalPosts()).toContainEqual({ id: 'appr-001', body: { action: 'allow' } })
     })
   })
 
-  it('toasts when Always Allow approved this call but the grant did not stick', async () => {
-    vi.mocked(api.submitToolApproval).mockResolvedValue({
+  it('L1 §1.2 R6: toasts when Always Allow approved this call but the grant did not stick', async () => {
+    setApprovalReply({
       approval_id: 'appr-001',
       action: 'allow',
       status: 'ok',
@@ -263,12 +225,12 @@ describe('ToolApprovalModal — button dispatch', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
 
     await waitFor(() => {
-      expect(capturedAddToast).toHaveBeenCalledWith({
+      expect(toasts()).toContainEqual({
         message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
         variant: 'warning',
       })
@@ -276,8 +238,8 @@ describe('ToolApprovalModal — button dispatch', () => {
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)
   })
 
-  it('toasts when Always Allow omits grant_recorded — treated as did-not-stick', async () => {
-    vi.mocked(api.submitToolApproval).mockResolvedValue({
+  it('L1 §1.2 R6: toasts when Always Allow omits grant_recorded — treated as did-not-stick', async () => {
+    setApprovalReply({
       approval_id: 'appr-001',
       action: 'allow',
       status: 'ok',
@@ -285,12 +247,12 @@ describe('ToolApprovalModal — button dispatch', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
 
     await waitFor(() => {
-      expect(capturedAddToast).toHaveBeenCalledWith({
+      expect(toasts()).toContainEqual({
         message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
         variant: 'warning',
       })
@@ -302,8 +264,8 @@ describe('ToolApprovalModal — button dispatch', () => {
   // RECORDED (ToolApprovalResponse.scope), not the client's own request —
   // this is the SPA's only confirmation of what stuck, since the card
   // closes immediately after a successful allow.
-  it('toasts the actually-recorded scope ("prefix") after a successful Always Allow, distinct from the did-not-stick warning', async () => {
-    vi.mocked(api.submitToolApproval).mockResolvedValue({
+  it('L1 §1.2 R6: toasts the actually-recorded scope ("prefix") after a successful Always Allow, distinct from the did-not-stick warning', async () => {
+    setApprovalReply({
       approval_id: 'appr-shell-001',
       action: 'allow',
       status: 'ok',
@@ -326,23 +288,23 @@ describe('ToolApprovalModal — button dispatch', () => {
         ],
       })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
 
     await waitFor(() => {
-      expect(capturedAddToast).toHaveBeenCalledWith({
+      expect(toasts()).toContainEqual({
         message: 'Always allowed — every command starting with that prefix is now allowed for this session.',
         variant: 'success',
       })
     })
-    expect(capturedAddToast).not.toHaveBeenCalledWith(
+    expect(toasts()).not.toContainEqual(
       expect.objectContaining({ variant: 'warning' }),
     )
   })
 
-  it('toasts the actually-recorded "exact" scope, not a prefix, when the server recorded exact even though a prefix was offered', async () => {
-    vi.mocked(api.submitToolApproval).mockResolvedValue({
+  it('L1 §1.2 R6: toasts the actually-recorded "exact" scope, not a prefix, when the server recorded exact even though a prefix was offered', async () => {
+    setApprovalReply({
       approval_id: 'appr-shell-002',
       action: 'allow',
       status: 'ok',
@@ -365,23 +327,23 @@ describe('ToolApprovalModal — button dispatch', () => {
         ],
       })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
 
     await waitFor(() => {
-      expect(capturedAddToast).toHaveBeenCalledWith({
+      expect(toasts()).toContainEqual({
         message: 'Always allowed — this exact command is now allowed for this session.',
         variant: 'success',
       })
     })
   })
 
-  it('removes approval from queue after successful Approve', async () => {
+  it('L1 §1.2 R6: removes approval from queue after successful Approve', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
 
@@ -390,8 +352,8 @@ describe('ToolApprovalModal — button dispatch', () => {
     })
   })
 
-  it('removes approval from queue after successful Always Allow', async () => {
-    vi.mocked(api.submitToolApproval).mockResolvedValue({
+  it('L1 §1.2 R6: removes approval from queue after successful Always Allow', async () => {
+    setApprovalReply({
       approval_id: 'appr-001',
       action: 'allow',
       status: 'ok',
@@ -400,66 +362,51 @@ describe('ToolApprovalModal — button dispatch', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
 
     await waitFor(() => {
       expect(useToolApprovalStore.getState().queue).toHaveLength(0)
     })
-    expect(capturedAddToast).not.toHaveBeenCalled()
+    expect(toasts()).toEqual([])
   })
 })
 
-describe('ToolApprovalModal — a11y safe-default contract (C2)', () => {
-  // This is a SECURITY-CRITICAL control. Two invariants must hold so a stray
-  // keypress can never auto-approve a tool call:
-  //   1. Escape resolves to DENY (the safe default), never approve, never a
-  //      silent dismiss that leaves the agent hanging.
-  //   2. Default keyboard focus lands on the Deny button on open, so a stray
-  //      Enter on open denies rather than approves.
-
-  it('Escape triggers DENY (the safe default), never approve', async () => {
-    act(() => {
-      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
-    })
-    render(<ToolApprovalModal />)
-
-    // Radix Dialog listens for Escape on the document via the dialog content.
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', code: 'Escape' })
-
-    await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'deny')
-    })
-    // The safe default must NEVER be an approve.
-    expect(api.submitToolApproval).not.toHaveBeenCalledWith('appr-001', 'allow_once')
+describe('ToolApprovalPanel — keyboard safety (amendment §1.2 R6)', () => {
+  // Binding quote: "the card never takes focus on appearance ... Escape does
+  // not resolve". Modal-only Escape=Deny and initial Deny focus are superseded.
+  it('L1 §1.2 R6: Escape does not resolve or dismiss, and never approves', () => {
+    act(() => useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] }))
+    render(<ToolApprovalPanel />)
+    fireEvent.keyDown(screen.getByTestId('tool-approval-panel'), { key: 'Escape', code: 'Escape' })
+    expect(approvalPosts()).toEqual([])
+    expect(useToolApprovalStore.getState().queue.map(a => a.approvalId)).toEqual(['appr-001'])
+    expect(useToolApprovalStore.getState().resolvedIds).toEqual([])
+    expect(approvalPosts()).not.toContainEqual({ id: 'appr-001', body: { action: 'allow_once' } })
   })
 
-  it('lands default focus on the Deny button when the modal opens', async () => {
-    act(() => {
-      useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
-    })
-    render(<ToolApprovalModal />)
-
-    const denyButton = screen.getByRole('button', { name: /Deny/i })
-    // onOpenAutoFocus moves focus to Deny (overriding Radix's first-focusable
-    // heuristic which would land on the X close button or Approve).
-    await waitFor(() => {
-      expect(denyButton).toHaveFocus()
-    })
-    // Defence-in-depth: focus is NOT on Approve.
+  it('L1 §1.2 R6: appearing inline preserves composer focus, never Deny or Approve focus', () => {
+    render(<><textarea aria-label="Chat composer" /><ToolApprovalPanel /></>)
+    const composer = screen.getByLabelText('Chat composer')
+    composer.focus()
+    act(() => useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] }))
+    expect(composer).toHaveFocus()
+    expect(screen.getByRole('button', { name: /Deny/i })).not.toHaveFocus()
     expect(screen.getByRole('button', { name: /Approve/i })).not.toHaveFocus()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(approvalPosts()).toEqual([])
   })
 })
 
-describe('ToolApprovalModal — error handling', () => {
-  it('dismisses silently on 410 Gone (already resolved)', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(410, 'Gone'))
+describe('ToolApprovalPanel — error handling', () => {
+  it('L1 §1.2 R6: dismisses silently on 410 Gone (already resolved)', async () => {
+    setApprovalReply({ error: 'Gone' }, 410)
 
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Deny/i }))
 
@@ -468,21 +415,21 @@ describe('ToolApprovalModal — error handling', () => {
       expect(useToolApprovalStore.getState().queue).toHaveLength(0)
     })
     // No toast should be shown for 410
-    expect(capturedAddToast).not.toHaveBeenCalled()
+    expect(toasts()).toEqual([])
   })
 
-  it('shows admin-required toast on 403', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(403, 'Forbidden'))
+  it('L1 §1.2 R6: shows admin-required toast on 403', async () => {
+    setApprovalReply({ error: 'Forbidden' }, 403)
 
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
 
     await waitFor(() => {
-      expect(capturedAddToast).toHaveBeenCalledWith(
+      expect(toasts()).toContainEqual(
         expect.objectContaining({
           message: expect.stringMatching(/must be an admin/i),
           variant: 'error',
@@ -493,18 +440,18 @@ describe('ToolApprovalModal — error handling', () => {
     expect(useToolApprovalStore.getState().queue).toHaveLength(1)
   })
 
-  it('shows re-auth toast on 401', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(401, 'Unauthorized'))
+  it('L1 §1.2 R6: shows re-auth toast on 401', async () => {
+    setApprovalReply({ error: 'Unauthorized' }, 401)
 
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
 
     await waitFor(() => {
-      expect(capturedAddToast).toHaveBeenCalledWith(
+      expect(toasts()).toContainEqual(
         expect.objectContaining({
           message: expect.stringMatching(/log in again/i),
           variant: 'error',
@@ -517,40 +464,43 @@ describe('ToolApprovalModal — error handling', () => {
   // queryClient.ts's global 401 subscriber never sees it. Before this fix, a
   // 401 here left the rest of the app (Sidebar, every other open screen)
   // looking still logged-in. Assert the shared forced-logout path now fires.
-  it('D9: routes a 401 through the shared forceLogout() teardown', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(401, 'Unauthorized'))
+  it('L1 §1.2 R6: D9: routes a 401 through the shared forceLogout() teardown', async () => {
+    setApprovalReply({ error: 'Unauthorized' }, 401)
 
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
 
     await waitFor(() => {
-      expect(mockForceLogout).toHaveBeenCalledOnce()
+      expect(useAuthStore.getState().username).toBeNull()
+      expect(localStorage.getItem('omnipus_auth_username')).toBeNull()
+      expect(window.location.hash).toBe('#/login')
     })
   })
 
-  it('D9: does NOT call forceLogout() on 403 (forbidden, not unauthenticated)', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(403, 'Forbidden'))
+  it('L1 §1.2 R6: D9: does NOT call forceLogout() on 403 (forbidden, not unauthenticated)', async () => {
+    setApprovalReply({ error: 'Forbidden' }, 403)
 
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
 
     await waitFor(() => {
-      expect(capturedAddToast).toHaveBeenCalled()
+      expect(toasts().length).toBeGreaterThan(0)
     })
-    expect(mockForceLogout).not.toHaveBeenCalled()
+    expect(useAuthStore.getState().username).toBe('l1-red-user')
+    expect(window.location.hash).not.toBe('#/login')
   })
 })
 
-describe('ToolApprovalModal — expires_in_ms countdown (FR-082)', () => {
-  it('expiresAt is computed as Date.now() + expires_in_ms on enqueue', () => {
+describe('ToolApprovalPanel — expires_in_ms countdown (FR-082)', () => {
+  it('L1 §1.2 R6: expiresAt is computed as Date.now() + expires_in_ms on enqueue', () => {
     const before = Date.now()
     const EXPIRES_IN_MS = 300_000
 
@@ -577,8 +527,8 @@ describe('ToolApprovalModal — expires_in_ms countdown (FR-082)', () => {
   })
 })
 
-describe('ToolApprovalModal — session_state reset handler (FR-052, FR-073, FR-081)', () => {
-  it('removes stale approvals not present in session_state', () => {
+describe('ToolApprovalPanel — session_state reset handler (FR-052, FR-073, FR-081)', () => {
+  it('L1 §1.2 R6: removes stale approvals not present in session_state', () => {
     act(() => {
       useToolApprovalStore.setState({
         queue: [
@@ -613,7 +563,7 @@ describe('ToolApprovalModal — session_state reset handler (FR-052, FR-073, FR-
     expect(queue[0].approvalId).toBe('appr-live')
   })
 
-  it('refreshes expiresAt for approvals present in session_state', () => {
+  it('L1 §1.2 R6: refreshes expiresAt for approvals present in session_state', () => {
     const oldExpiresAt = Date.now() + 10_000 // was 10s remaining
 
     act(() => {
@@ -651,7 +601,7 @@ describe('ToolApprovalModal — session_state reset handler (FR-052, FR-073, FR-
     expect(entry.expiresAt).toBeGreaterThan(oldExpiresAt)
   })
 
-  it('clears all approvals when session_state has empty pending_approvals', () => {
+  it('L1 §1.2 R6: clears all approvals when session_state has empty pending_approvals', () => {
     act(() => {
       useToolApprovalStore.setState({
         queue: [SAMPLE_APPROVAL, { ...SAMPLE_APPROVAL, approvalId: 'appr-002' }],
@@ -673,14 +623,14 @@ describe('ToolApprovalModal — session_state reset handler (FR-052, FR-073, FR-
 
 // ── Phase 5: edge-case render tests ────────────────────────────────────────────
 //
-// These tests verify that ToolApprovalModal does not crash when a valid-shape
+// These tests verify that ToolApprovalPanel does not crash when a valid-shape
 // but degenerate-value ToolApprovalRequiredFrame reaches the component. They
 // mirror the exact failure case from the Ava-chat bug (args: {}) and extend to
 // unicode keys, very long strings, nested objects, null values, and timing edge
 // cases. Props are constructed from the generated ToolApprovalRequiredFrame
 // type — no hand-written wire types.
 //
-// Each test: enqueue the frame → render ToolApprovalModal → assert no throw.
+// Each test: enqueue the frame → render ToolApprovalPanel → assert no throw.
 
 // Minimal valid ToolApprovalRequiredFrame (all required fields per AsyncAPI spec)
 const baseFrame: ToolApprovalRequiredFrame = {
@@ -728,15 +678,17 @@ const edgeCases: Array<[string, Partial<ToolApprovalRequiredFrame>]> = [
 ]
 
 describe.each(edgeCases)(
-  'ToolApprovalModal renders "%s" without throwing',
+  'ToolApprovalPanel renders "%s" without throwing',
   (_label, overrides) => {
-    it('renders without throwing', () => {
+    it('L1 §1.2 R6: renders without throwing', () => {
       const frame: ToolApprovalRequiredFrame = { ...baseFrame, ...overrides }
       act(() => {
         useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
         useToolApprovalStore.getState().enqueue(frame)
       })
-      expect(() => render(<ToolApprovalModal />)).not.toThrow()
+      act(() => useSessionStore.setState({ activeSessionId: frame.session_id }))
+      expect(() => render(<ToolApprovalPanel />)).not.toThrow()
+      expect(screen.getByTestId('tool-approval-panel')).toBeInTheDocument()
     })
   },
 )
@@ -759,35 +711,35 @@ const MOUNT_APPROVAL = {
   expiresAt: Date.now() + 300_000,
 }
 
-describe('ToolApprovalModal — Always Allow for request_mount', () => {
-  it('offers Always Allow for an ordinary tool', () => {
+describe('ToolApprovalPanel — Always Allow for request_mount', () => {
+  it('L1 §1.2 R6: offers Always Allow for an ordinary tool', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
   })
 
-  it('offers Always Allow for request_mount when args are present', () => {
+  it('L1 §1.2 R6: offers Always Allow for request_mount when args are present', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByTestId('always-allow-toggle')).toBeInTheDocument()
   })
 
-  it('hides Always Allow for request_mount when no folder path is present', () => {
+  it('L1 §1.2 R6: hides Always Allow for request_mount when no folder path is present', () => {
     act(() => {
       useToolApprovalStore.setState({
         queue: [{ ...MOUNT_APPROVAL, args: { reason: 'UAT folder A' } }],
       })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.queryByTestId('always-allow-toggle')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Add folder|Approve/i })).toBeInTheDocument()
   })
 
-  it('still offers a way to approve and a way to deny request_mount', () => {
+  it('L1 §1.2 R6: still offers a way to approve and a way to deny request_mount', () => {
     // Always Allow is offered when args are present (a grant is this folder,
     // this session). Approve and Deny must still be there either way.
     //
@@ -795,13 +747,16 @@ describe('ToolApprovalModal — Always Allow for request_mount', () => {
     // (operator-approved "Add folder" / "Don't add" — see
     // approvalPreviews/registry.ts and RequestMountApprovalPreview.tsx) but
     // still dispatches the same 'allow_once'/'deny' actions — covered by the
-    // dedicated ToolApprovalModal.readablePreviews.test.tsx suite. This test
+    // dedicated ToolApprovalPanel.readablePreviews.test.tsx suite. This test
     // only asserts BOTH decision buttons are present, whatever their label.
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Don't add/i })).toBeInTheDocument()
   })
 })
+
+// Real stores/QueryClient/auth survive the test boundary; only fetch/socket doubled.
+afterEach(async () => { await cleanupApprovalState() })

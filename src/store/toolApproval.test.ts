@@ -1,3 +1,4 @@
+// L1 amendment §1.2 R6 / §1.5: one root-scoped queue; B3 stub cases retained by dispatch.
 // Unit tests for the toolApproval Zustand store — specifically
 // reconcileWithSessionState's reconnect-gap fix.
 //
@@ -351,5 +352,58 @@ describe('enqueue — carries segments through (ADR-092 D4)', () => {
     expect(useToolApprovalStore.getState().queue[0].segments).toEqual([
       { segment_index: 0, command_text: 'rm -rf /tmp/x', resolved_binary: 'rm' },
     ])
+  })
+})
+
+
+describe('L1 K7 / amendment §1.2 R6 — root/acting/origin metadata', () => {
+  it('L1 R6 / FR-092: keeps server-derived root, acting name, origin and room reference on a live entry', () => {
+    const frame: ToolApprovalRequiredFrame = {
+      type: 'tool_approval_required', approval_id: 'appr-root', tool_call_id: 'call-root',
+      tool_name: 'bash', args: { command: 'npm run build' }, agent_id: 'helper',
+      session_id: 'helper-session', root_session_id: 'omnipus-main',
+      acting_agent_name: 'Setup helper', origin_label: 'for group Sales',
+      room_ref: { room_id: 'room-sales', room_name: 'Sales', request_id: 'delivery-1', role: 'request' },
+      turn_id: 'turn-root', expires_in_ms: 600_000,
+    }
+    act(() => useToolApprovalStore.getState().enqueue(frame))
+    expect(useToolApprovalStore.getState().queue).toHaveLength(1)
+    expect(useToolApprovalStore.getState().queue[0]).toMatchObject({
+      sessionId: 'helper-session', rootSessionId: 'omnipus-main', actingAgentName: 'Setup helper',
+      originLabel: 'for group Sales', roomRef: frame.room_ref,
+      args: { command: 'npm run build' }, toolCallId: 'call-root', turnId: 'turn-root',
+    })
+  })
+
+  it('L1 R6 / K7: optional root/name/origin survive thin snapshot hydration without deleting the B3 stub guard', () => {
+    const frame: SessionStateFrame = {
+      type: 'session_state', user_id: 'user-1', emitted_at: '2026-10-14T09:00:00Z',
+      pending_approvals: [{
+        approval_id: 'appr-root-stub', tool_name: 'bash', agent_id: 'helper', session_id: 'helper-session',
+        root_session_id: 'omnipus-main', acting_agent_name: 'Setup helper', origin_label: 'asked by Mia',
+        expires_in_ms: 600_000,
+      }],
+    }
+    act(() => useToolApprovalStore.getState().reconcileWithSessionState(frame))
+    expect(useToolApprovalStore.getState().queue).toHaveLength(1)
+    expect(useToolApprovalStore.getState().queue[0]).toMatchObject({
+      rootSessionId: 'omnipus-main', actingAgentName: 'Setup helper', originLabel: 'asked by Mia',
+      toolCallId: '', turnId: '', args: {}, // B3 is explicitly not this pack
+    })
+  })
+
+  it('L1 R6: duplicate root-routed frame still produces one approval identity', () => {
+    const frame: ToolApprovalRequiredFrame = {
+      type: 'tool_approval_required', approval_id: 'appr-dup-root', tool_call_id: 'call-root',
+      tool_name: 'bash', args: { command: 'npm run build' }, agent_id: 'helper',
+      session_id: 'helper-session', root_session_id: 'omnipus-main', acting_agent_name: 'Setup helper',
+      turn_id: 'turn-root', expires_in_ms: 600_000,
+    }
+    act(() => {
+      useToolApprovalStore.getState().enqueue(frame)
+      useToolApprovalStore.getState().enqueue(frame)
+    })
+    expect(useToolApprovalStore.getState().queue.map(a => a.approvalId)).toEqual(['appr-dup-root'])
+    expect(useToolApprovalStore.getState().queue[0]).toMatchObject({ rootSessionId: 'omnipus-main' })
   })
 })
