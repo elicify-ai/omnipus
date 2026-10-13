@@ -1,7 +1,7 @@
 # Feature Specification: The Omnipus system agent
 
 **Created**: 2026-10-12 · **Fix round 1**: 2026-10-13 · **Fix round 2 (final)**: 2026-10-13
-**Status**: Draft — fix round 3 applied (2026-10-13); grill round 4 (the last) follows
+**Status**: Draft — fix round 4 applied (2026-10-13); an independent Opus review, a founder interview and one more fix follow
 **Size**: Feature (spec-driven; 5-reviewer gate; every engine/WebSocket bundle needs hands-on UAT by a tester and an independent validator on the exact landing commit — root `CLAUDE.md`, "Definition of Done")
 **Release**: v0.1.1 (founder answer R1 A, 2026-10-12, relayed by team-lead)
 
@@ -15,6 +15,7 @@
 | Spec grill round 1 | [Spec review](omnipus-system-agent-spec-review.md) at `54c38386b` | Findings dispositioned in §0.1 |
 | Spec grill round 2 | [Spec review round 2](omnipus-system-agent-spec-review-round2.md) at `12e73f653` | Findings dispositioned in §0.4 |
 | Spec grill round 3 | [Spec review round 3](omnipus-system-agent-spec-review-round3.md) at `8beb0f390` | Findings dispositioned in §0.11 |
+| Spec grill round 4 | [Spec review round 4](omnipus-system-agent-spec-review-round4.md) at `29e3ba3ef` | Findings dispositioned in §0.14 |
 | Routing wireframe v4/v5 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/channel-routing/README.md` (per-type table) and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/requirements.md` R34/R35 | Screen authority for §6.15 |
 | Channel person routing | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/designs/channel-person-routing-decisions-20261013.md` (R1–R5, PR-1–PR-4) | **In scope** by founder decision 2026-10-13 (US-16, ADR OSA-14). Not yet grilled |
 | Group chats and awareness | Founder answers "After spec fix round 2" (GC-1–GC-6, RQ-1–RQ-4, AW-1, AW-2); issues #1068, #892, #955 | US-17–US-20, ADR OSA-15/OSA-16. Not yet grilled |
@@ -197,7 +198,28 @@ Tally: 13 major fixed, 2 minor fixed, 2 observations adopted; none overridden by
 
 This spec **adopts** issue #1109 ("AgentEmail 2.0") items **T1** (several mailboxes per agent and workspace, with a switcher), **T2** (an explicit `mailbox` parameter on the email tools, required only when the agent has more than one mailbox in that workspace), **T6** (setup UX: provider templates, Gmail app-password wizard, Test Connection before save) and **T8** (human-only provisioning). **T3** (all-folder search/read), **T4** (all-folders Mail panel), **T5** (`email_forward`, `email_move`, `email_delete`, `email_mark`) and **T7** (To/CC/BCC/attachments — likely already covered) **stay in #1109** for later. The T2 parameter amends EM-1's "tools unchanged" in that one respect only. Email still never starts a turn (#1109 decision 9, D27). Detail: US-21, FR-225–FR-235, K40–K44, WU-18. **Migration: none (greenfield, F:D22)** — the old one-mailbox-per-pair config shape is not read; a load warning names any such entry and the operator re-adds the mailbox.
 
-**Interpretation to confirm (EQ-1):** T8 says no agent-facing mailbox creation; the founder also placed the T6 setup UX in Omnipus's `connect_mailbox` workflow. The spec reconciles them as: no ordinary agent can create a mailbox; Omnipus's `connect_mailbox` stays, Ask-gated, with the password entered by the user on the secret card and the summary confirmed by the user — a human-driven provisioning path. See §17.
+**EQ-1 answered A (founder, 2026-10-13):** no ordinary agent can create a mailbox; Omnipus's `connect_mailbox` stays, Ask-gated, with the password entered by the user on the secret card and the summary confirmed by the user — a human-driven provisioning path.
+
+### 0.14 Fix round 4 (2026-10-13)
+
+Review status: person routing (US-16), rooms (US-17), channel control (US-18/19) and awareness (US-20) were reviewed in spec grill rounds 3 and 4; several mailboxes (US-21) in round 4. EQ-1 is answered **A** (Omnipus's Ask-gated, user-driven `connect_mailbox` stays; ordinary agents never create mailboxes).
+
+| Finding | Disposition | Change |
+|---|---|---|
+| R4-MAJ-001 revisions omit admission and mailbox meaning | Fixed | §6.6: channel token includes `open_to_anyone`; mailbox token is pair-scoped over the ordered mailbox list and each mailbox's non-secret fields (incl. signature); new read tool `list_mailboxes` (Omnipus) returns ids and tokens; BDD-11.9 rows for open-to-anyone only, steering only, signature only, sibling added; FR-088 amended, FR-085 traced to test 181 |
+| R4-MAJ-002 adapter prefilters and typed identities | Fixed | §6.16 per-adapter entry points (Telegram, Discord, Slack message/mention/slash, Matrix, WhatsApp, BaseChannel) call the central admission before any early rejection; typed identity mapping (canonical sender, group identity, thread → reply target only); username aliases resolved from authenticated updates; group/person overlap rule; FR-237; BDD-16.25–16.27 |
+| R4-MAJ-003 pre-ladder main check vs person-first | Fixed | FR-121 rewritten: binding and configured main checked first, destination resolved, then the **selected** agent validated; dead main drops only unmatched senders; failed matched destination never falls back; BDD-16.24 both directions |
+| R4-MAJ-004 receiver-write crash cut | Fixed | §6.11: the delivery id **is** the receiver's request id (capture and transcript entry); retry reconciles existing receiver facts before any append/wake; answer, mirror and mention ids derived deterministically; FR-216 amended; BDD-17.32 fault cuts |
+| R4-MAJ-005 room contracts | Fixed | K27 full state vocabulary (per §6.11); K35 folded into the `Room` record; K26 `RoomMessageRequest` with client id and stable mentions; K45 room attach/catch-up/live frames with sequence cursor over the existing hub connection; pre-admission Ask shown as the receiver's existing approval with request id = delivery id; outbound-parser and reconnect tests 172–173 |
+| R4-MAJ-006 mailbox runtime identity | Fixed | §6.17 runtime tuple (agent, workspace, mailbox) through transport, credentials, generation, read-flight, cache, watcher, presence, preview grants and cleanup; shared account caps kept; no healthy-sibling fallback; FR-238; BDD-21.13 |
+| R4-MAJ-007 mail selectors and reference binding | Fixed | References embed the mailbox id at issue and are validated against the selected mailbox; preview-token bodies, new-mail summary, create/configure, cleanup and panel context carry `mailbox_id` (K46); WU-0 owns K1–K48; BDD-21.4 uses `read_email_attachment` (consumes `message_ref`); `read_message` keeps its `uid` interface within the selected mailbox; FR-228 amended |
+| R4-MAJ-008 Settings secret entry | Fixed | User-origin secret request (no agent turn): the Add Email panel creates a value-free, destination-bound request (mailbox id reserved first), renders the same isolated card inline, submits through K5; K47; FR-236; BDD-21.14 with no model configured |
+| R4-MAJ-009 Test Connection truth | Fixed (read-only case: EQ-2) | A failed test saves no mailbox configuration; already-submitted passwords stay stored, unused, listed and removable — both reported; success is bound to a candidate fingerprint and invalidated by any edit; late results ignored; FR-231 amended; BDD-21.8 rewritten; BDD-21.15 |
+| R4-MAJ-010 mailbox/Configure states and keyboard | Fixed | §6.3 rows for categories, add picker, Email template/wizard/test/save, Mail switcher, email settings; stale-result rejection and dirty-draft guard on mailbox switch; BDD-12.17, 21.16 |
+| R4-MIN-001 stale handoff text | Fixed | EQ-1 marked answered; FR-222 qualified by EM-3; §1 scope updated; room docs row without bare Stop |
+| R4-MIN-002 old cost oracles | Fixed | BDD-17.7 and SC-017 use the §6.14 allocated cost |
+| R4-OBS-001 duplicate descriptions | Adopted | §6.9–§6.13, §6.16, §6.17 are the normative owners; K27 and stories point to them |
+| R4-OBS-002 component mapping | Adopted | §6.8: Checkbox, DisclosureRow/R35 accordion, Command-based switcher, Sheet + Tabs for the wizard; field errors through Field's own error slot (FormError has no public export) |
 
 ---
 
@@ -207,7 +229,7 @@ This spec **adopts** issue #1109 ("AgentEmail 2.0") items **T1** (several mailbo
 |---|---|---|
 | Actors | The user (single account, web app); Omnipus; its helper sessions; ordinary native agents (Mia, Jim, General Purpose, Planner, Researcher, custom); external-program workers; outside people on chat channels; AI providers, connector (MCP) servers, chat platforms, mail servers | F:D4, D10, D11 |
 | Problem | Two overlapping helpers; a blank create form; secrets typed into chat; unverified "done" claims; messages silently routed to a default agent | BRD §1; FA:FQ-17 |
-| In scope | One Omnipus agent; workflows as skills; summary + question gate with a narrow ask list; secret card for all native agents including agent-private secrets per workspace + agent; self-checks in change tools; connect-channel and connect-mailbox; helper decisions in the Omnipus chat; screen changes; removal of the Agents screen, create form, Ava, Admin, the default agent and unbound channel routing; **channel person routing per connection** (person table, allow list, main agent, stranger reply, conversation mode, derived per-agent list) | F:D1–D27; FA; PR-1–PR-4 |
+| In scope | One Omnipus agent; workflows as skills; summary + question gate with a narrow ask list; secret card for all native agents including agent-private secrets per workspace + agent; self-checks in change tools; connect-channel and connect-mailbox; helper decisions in the Omnipus chat; screen changes; removal of the Agents screen, create form, Ava, Admin, the default agent and unbound channel routing; **channel person routing per connection** (People list with "Open to anyone", main agent, stranger reply, conversation mode, derived per-agent list); **rooms** (team room, squads, ad-hoc rooms) and their reduced commands; channel steering per participant; agent conversation awareness within a workspace; **several mailboxes per agent** (EM-3, #1109 T1/T2/T6/T8) | F:D1–D27; FA; PR-1–PR-4; GC-1–GC-10; AW-1/2; EM-1–EM-3 |
 | Out of scope | Judge/Planner settings redesign, core security settings (F:D1); team templates (F:D25); secret files and connector sign-in (S5/S6); separate-context extra chats; external channel people in rooms; email as a chat channel (EM-1: email stays an agent tool); the #1277 fix | F:D1, D10, D25; FA:FQ-13 |
 | Constraints | Single Go binary, pure Go, two-layer tool policy (Hard Constraint #6), contract-first (#8), greenfield (F:D22), Linux/macOS/Windows | root `CLAUDE.md` |
 | Accepted risks | R-A1 foothold via allow tools; R-A2 read-to-web disclosure; R-A3 external-program worker planting — founder-accepted 2026-10-12 | ADR OSA-3 |
@@ -519,7 +541,7 @@ An agent may hold more than one mailbox in a workspace (for example support@ and
 3. **Given** Mia has one mailbox in that workspace, **When** she uses any email tool without `mailbox`, **Then** it behaves exactly as today.
 4. **Given** Mia has two mailboxes, **When** she uses an email tool without `mailbox`, **Then** it is refused, naming the mailboxes she can choose; with `mailbox` it acts on that one only.
 5. **Given** the user adds Email (Connectors → Agent tools → Add Email, or Omnipus's connect workflow), **When** they pick a provider, **Then** a template fills the server settings; for Gmail a wizard links to 2-Step Verification and App Passwords; **Test Connection** runs before saving and names the failure class; a failing test saves nothing.
-6. **Given** any agent, **When** it looks for a way to create a mailbox, **Then** none exists (only Omnipus's Ask-gated, user-driven `connect_mailbox`, per EQ-1).
+6. **Given** any agent, **When** it looks for a way to create a mailbox, **Then** none exists (only Omnipus's Ask-gated, user-driven `connect_mailbox`, EQ-1 A).
 7. **Given** the Connectors page, **When** Agent tools → Email renders, **Then** there is one row per mailbox showing address, owner agent and workspace.
 
 ## 4. Behavioural contract
@@ -571,6 +593,8 @@ An agent may hold more than one mailbox in a workspace (for example support@ and
 ---
 
 ## 6. Explicit non-behaviours and safeguards
+
+§6.9–§6.17 are the **normative owners** of their topics (scope, routing chain, room states and recovery, memory, mentions, cost, Connectors, adapter identities, mailbox runtime); user stories, FRs and contracts refer to them and do not restate them (R4-OBS-001).
 
 ### 6.1 Qualitative prohibitions
 
@@ -643,6 +667,13 @@ An agent may hold more than one mailbox in a workspace (for example support@ and
 | Room view (header, members, cost, per-member state, @-picker) | Loading members | (team room only exists from two agents) |  Error + Retry; send disabled | Cached transcript + "reconnecting" | Message "not confirmed" + Retry | Answers stream per member | Send while unresolved |
 | Squad dialog and "Add participant" picker (chat header, top-left) | Loading workspace agents | "No other agents in this workspace" (create disabled below two agents) | Error + Retry | — | Create/add "not confirmed" + Retry | Room opens (from a main chat: new room with a link back) | Create with fewer than two agents; add in the team room (explained) |
 | Hidden per-person conversations | — | Control absent | Error + Retry | Cached + hint | Un-hide "not confirmed" | Row shown | — |
+| Connectors page categories (Chat channels, Agent tools) and Add connector picker | Skeleton groups | "Nothing connected yet" + picker inline | Error + Retry (never an empty list) | Cached + hint | — | Grouped rows | — |
+| Add Email: template list | Loading templates | — | Error + Retry; Generic IMAP is offered only as an explicit choice, never as a silent fallback | — | — | Fields filled | Next until a template or Generic is chosen |
+| Add Email: Gmail wizard and secure card | — | — | Card unavailable + Retry | — | Card "submission unknown" → state read | Stored; next step focused | Test until a password is stored |
+| Add Email: Test Connection | "Testing…" (announced) | — | Each failure class shown per read/send; timeout is a failure, never "ready" | — | Late result ignored (client test id) | "Reading OK · Sending OK" | Save until the current fingerprint passed (EQ-2 for read-only) |
+| Add Email / mailbox settings: Save | Saving… | — | Rejected save with reason | — | "Not confirmed" + reload shows the true state | Mailbox listed and in the switcher | — |
+| Mail panel mailbox switcher | Loading mailboxes | "No mailbox yet" + Add Email link | Error + Retry; an unavailable mailbox is marked, not hidden | Cached + hint | — | Switched view | Switch while a dirty draft is unresolved (guard) |
+| Agent editor email settings (mailbox list) | Loading | "No mailbox" | Error + Retry | Cached + hint | Edit "not confirmed" | Saved | — |
 | Agent editor "who can reach this agent" | Loading | "Nobody yet" | Error + Retry | Cached + hint | — | List with links | — |
 | Connectors page → connection Configure side panel (routing, person table, steering flags, mode, stranger status) | Loading | "Not bound" warning | Error + Retry | — | Save "not confirmed" | Bound pair shown | Save without workspace + agent |
 
@@ -680,10 +711,11 @@ Keyboard and focus (FR-109): every listed control is reachable by Tab/arrow keys
 | `remove_secret` | ask | allow-to-ceiling (asks) | deny | deny | deny | — |
 | `select_secret_version` | ask | allow-to-ceiling (asks; own or validated target pair) | allow-to-ceiling (asks; own pair only) | allow-to-ceiling (constructor) | deny | — |
 | `connect_channel`, `connect_mailbox`, `set_agent_permissions` | ask | allow-to-ceiling | deny | deny | deny | — |
+| `list_mailboxes` (read, Omnipus only) | allow | allow-to-ceiling | deny | deny | deny | — |
 | `read_conversation` | allow | allow-to-ceiling | allow-to-ceiling (Mia, Jim); deny (General Purpose, Planner, Researcher — workers) | allow-to-ceiling (main type) / deny (worker type) | deny | — |
 | Management family (agent/workspace/skill/connector/provider/channel change tools) | per ADR OSA-3 | allow-to-ceiling | deny | deny | deny | — |
 
-"allow-to-ceiling" = no per-agent entry (Omnipus never carries per-agent ask). Omnipus's exact supporting set: `list_agents`, `get_agent`, `get_agent_tools`, `read_agent_metadata`, `list_workspaces`, `get_workspace`, `list_models`, `list_providers`, `test_provider`, `list_mcp_servers`, `list_channels`, `test_channel`, `list_skills`, `find_skills`, `run_doctor`, `get_usage`, `list_secrets`, `AskUserQuestion`, `send_message`, `answer_request`, `message_parent`, `delegate`, `Skill`, `ToolSearch`, `remember`, `recall_memory`, `recall_conversation`, `run_retrospective`, `set_goal`, `goal_claim`, `read_file`, `write_file`, `edit_file`, `append_file`, `list_directory`, `grep`, `list_mounts`, `knowledge_describe`, `knowledge_find`, `knowledge_read`, `knowledge_list`, `search_web`, `fetch_url`, `create_agent`, `update_agent`, `delete_agent`, `update_workspace`, `create_skill`, `edit_skill`, `remove_skill`, `install_skill`, `add_mcp_server`, `remove_mcp_server`, `configure_provider`, `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `connect_mailbox`, `set_agent_permissions`, `request_secret`, `select_secret_version`, `remove_secret`, `read_conversation`, `environment_setup`, `bash`. Everything else: explicit per-agent deny. Every new tool is registered in the static name list, the shipped ceiling, the role inventories, the custom constructor, the Auto classification table, the central metadata catalogue **and** the executable per-agent registry built at boot and on reload. This is seeded role data in the existing two layers — not a per-agent coverage backfill and not a resolver exception.
+"allow-to-ceiling" = no per-agent entry (Omnipus never carries per-agent ask). Omnipus's exact supporting set: `list_agents`, `get_agent`, `get_agent_tools`, `read_agent_metadata`, `list_workspaces`, `get_workspace`, `list_models`, `list_providers`, `test_provider`, `list_mcp_servers`, `list_channels`, `test_channel`, `list_skills`, `find_skills`, `run_doctor`, `get_usage`, `list_secrets`, `AskUserQuestion`, `send_message`, `answer_request`, `message_parent`, `delegate`, `Skill`, `ToolSearch`, `remember`, `recall_memory`, `recall_conversation`, `run_retrospective`, `set_goal`, `goal_claim`, `read_file`, `write_file`, `edit_file`, `append_file`, `list_directory`, `grep`, `list_mounts`, `knowledge_describe`, `knowledge_find`, `knowledge_read`, `knowledge_list`, `search_web`, `fetch_url`, `create_agent`, `update_agent`, `delete_agent`, `update_workspace`, `create_skill`, `edit_skill`, `remove_skill`, `install_skill`, `add_mcp_server`, `remove_mcp_server`, `configure_provider`, `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `connect_mailbox`, `set_agent_permissions`, `request_secret`, `select_secret_version`, `remove_secret`, `read_conversation`, `list_mailboxes`, `environment_setup`, `bash`. Everything else: explicit per-agent deny. Every new tool is registered in the static name list, the shipped ceiling, the role inventories, the custom constructor, the Auto classification table, the central metadata catalogue **and** the executable per-agent registry built at boot and on reload. This is seeded role data in the existing two layers — not a per-agent coverage backfill and not a resolver exception.
 
 ### 6.6 Shared mutable setup resources (MAJ-011, R2-MAJ-003)
 
@@ -695,12 +727,12 @@ Keyboard and focus (FR-109): every listed control is reachable by Tab/arrow keys
 | Provider entry | Install-wide | None | Revision token + expected-revision check at the shared boundary |
 | MCP server entry | Install-wide | Name-collision refusal only | Same |
 | Channel instance | Install-wide | None | Same |
-| Mailbox (agent, workspace) | Per pair | None | Same |
+| Mailboxes of an (agent, workspace) pair | Per pair (list) | None | Same — one pair-scoped token covering list membership and each mailbox's non-secret fields |
 | Stored secret references | Per reference | Versioned names (FR-072) | Selection compares recipient (FR-064) |
 
 **The one synchronization boundary.** Today Settings writes run under the gateway config write lock (`pkg/gateway/rest_config.go::safeUpdateConfigJSON` → `restAPI.configMu`) and then publish into the agent loop (`refreshConfigAndRewireServices` → `AgentLoop.SwapConfig`, agent-loop lock) — order *config lock → agent-loop lock*. System tools write through `Deps.WithConfig` → `AgentLoop.MutateConfig` (agent-loop lock only) and persist with `SaveConfigLocked`, which deliberately never takes the config lock (the documented AB-BA deadlock). Decision: for writes to the four shared resources above, the tool path **acquires the gateway config lock before entering `MutateConfig`** (order config lock → agent-loop lock, the same as Settings; never the reverse), checks the expected revision against the live configuration, writes, persists and releases. Settings writes to these resources are unchanged in locking and therefore serialize with tool writes; a Settings change bumps the revision, so a later tool write with the old token is refused.
 
-**Before-state projection.** Read tools return a secret-free revision token per shared resource: a stable hash over its non-secret fields (provider: id, effective endpoint, protocol, reference name; MCP: name, transport, command + arguments or URL, enabled, reference names; channel: instance, platform, binding (workspace + main agent), enabled, reference names, the whole People list (each row's identifier, kind, "Talks to", "Can use commands"), group entries, conversation mode, mention/group-trigger settings and every instance-scoped rule in order; mailbox: hosts, username, reference name). A missing entry has the token `absent`. Resolved secret values never enter a token, summary or precondition. `list_providers` gains endpoint, protocol, reference name and token (today it returns only name and credential presence); the MCP, channel and mailbox read paths gain the token.
+**Before-state projection.** Read tools return a secret-free revision token per shared resource: a stable hash over its non-secret fields (provider: id, effective endpoint, protocol, reference name; MCP: name, transport, command + arguments or URL, enabled, reference names; channel: instance, platform, binding (workspace + main agent), enabled, `open_to_anyone`, reference names, the whole People list (each row's identifier, kind, "Talks to", "Can use commands"), group entries, conversation mode, mention/group-trigger settings and every instance-scoped rule in order; mailbox: one pair-scoped token over the ordered list of the pair's mailboxes and each mailbox's id, label, address, hosts, ports, TLS, username, credential reference and version, signature, provider template and enabled state). A missing entry has the token `absent`. Resolved secret values never enter a token, summary or precondition. `list_providers` gains endpoint, protocol, reference name and token (today it returns only name and credential presence); the MCP and channel read paths gain the token; a new read tool `list_mailboxes` (Omnipus, allow) returns a pair's mailbox ids, labels, addresses, non-secret settings and the pair token.
 
 On refusal the helper relays a revised summary to the main for a new Go. No workflow transaction engine, global lock framework or cross-resource atomicity is introduced.
 
@@ -740,6 +772,10 @@ On refusal the helper relays a revised summary to the main for a new Go. No work
 | Hidden per-person conversations | DisclosureRow |
 | People list switches ("Can use commands") and Talks-to selector | Switch, Popover/Command |
 | Configure tabs | Tabs; Sheet for the side panel |
+| "Open to anyone" | Checkbox |
+| Connectors categories and type groups | R35 accordion / DisclosureRow |
+| Mail panel mailbox switcher | Command-based picker in a Popover |
+| Add Email wizard (template, Gmail steps, card, test) | Sheet + Tabs (steps), Field with its own error slot (FormError has no public export), Button, the secret card |
 
 A genuinely new reusable composite follows the four-part publication contract (catalogue, export, style registration, manifest). Gates: the design-system CI gate (load `omnipus-design-system`; scripts under `scripts/design-system/` and `scripts/design-system-locks/`), `npm run typecheck`, and Storybook static-build evidence for any published component. Draft HTML colours/layout are not copied.
 
@@ -786,7 +822,8 @@ recorded ─► awaiting approval (receiver policy ask; before capture) ─► r
 
 - **Room-origin intake rule:** a room request is never steered into a running turn; it waits in the member's main FIFO until the current turn settles (the founder's busy behaviour), using the existing queue — no second runner.
 - **Room-origin reply branch:** the answer is appended to the room (responder as author), mirrored once as a collapsed entry in the responder's main chat, and its resolved mentions are fanned out; no agent owner is woken (a room has none).
-- **Delivery identity:** each (room message, member) has a stable delivery id written to the room record before admission. Retry after a lost acknowledgement re-reads the room record and admits only members without a recorded admission. An answer occurrence and its mention fan-out are recorded once by answer entry id.
+- **Delivery identity (R4-MAJ-004):** each (room message, member) has a stable delivery id written to the room record before admission, and that id **is** the receiver's request id: it is passed into `AdmitRequest` and stored on the receiver's capture and transcript entry. A Retry first reads the receiver's facts for that id: a committed capture or append without a room acknowledgement counts as admitted (the acknowledgement is recorded; nothing is appended or woken again); only members with no receiver facts are admitted. The room answer id, the main-mirror id and each mention-delivery id are derived deterministically from the request id and the answer occurrence, so each is written once even when the crash falls between the room append, the mirror and the mention admission.
+- **Pre-admission Ask:** when the receiver's policy asks before capture, the approval is the receiver's existing approval card in the receiver's main chat (request id = delivery id, carrying `room_ref`); the room shows that member as `awaiting_approval` with a link to it. Deny → `refused`; `/pause`, member removal or room deletion cancels the pending approval; after a reconnect the card and the room state are re-read from the ledger and the room record.
 - **Interrupted work** is shown as interrupted with an "ask again" action that creates a new request; nothing is replayed automatically.
 - **Pause fence:** each room has a durable generation number; `/pause` increments it and, under the room lock, cancels every not-yet-consumed request of older generations through the existing ledger discard. Admission, approval completion and FIFO dequeue each re-check the generation under the same lock. An answer to work consumed before the pause stays "after pause" even after `/resume` and never forwards its mentions.
 - **Membership/deletion:** no new deliveries to removed members or deleted rooms; their not-yet-consumed requests are cancelled; already-running work finishes in the main chat and its room delivery is reported "room unavailable".
@@ -814,6 +851,27 @@ Room cost = Σ over the members' main-chat turns that consumed at least one requ
 - A chat channel's **Configure** side panel has four tabs: **Setup** (connect method per type), **People** (one list: each row = identifier, label, "Talks to" — default the main agent — and "Can use commands" on person rows only; group rows have no command switch), **Conversations** (main chat vs one conversation per person or group; mention options where the type has them), **Requests** (recent strangers with "Add to People").
 - Per type (from the wireframe README): Telegram — bot token; `@username` or numeric id; group chat ids; "mention only". WhatsApp — QR pairing (existing state machine: waiting → code → linked; timeout/error → Retry); phone number with country code; `@g.us` groups; "mention only". Slack — bot token + app-level token; member id `U…`; channel ids `C…`; no mention switch. Discord — bot token; user id; server ids; "mention only". Matrix — homeserver + user id + access token; Matrix user id; rooms. Google Chat — webhook or service-account JSON; spaces; "mention only". Feishu, LINE, DingTalk, QQ, WeCom, Weixin — app credentials; app-specific ids. IRC — server, nick, channels, credentials; nick. Controls that do not apply to a type are hidden, not disabled. Identifiers are validated inline against the type's format.
 - An Email connector's Configure panel shows only mailbox setup (IMAP/SMTP, folders) — no People, Conversations or Requests (EM-1).
+
+### 6.16 Adapter entry points and typed identities (R4-MAJ-002)
+
+Every adapter entry point MUST call the central admission and entitlement decision (§6.10) **before** any adapter-level sender check, early rejection or media download: Telegram `handleMessage`, Discord `handleMessage`, Slack `handleMessageEvent` / `handleAppMention` / `handleSlashCommand`, Matrix `handleMessageEvent`, WhatsApp's message handler, and every adapter that reaches `BaseChannel.HandleMessage`. Adapter-local allow checks become calls to that one decision.
+
+| Type | Canonical sender (person rows, entitlement) | Group identity (group rows, conversation key) | Thread / topic |
+|---|---|---|---|
+| Telegram | numeric user id; a row entered as `@username` matches the authenticated update's username and records the numeric id on first match | chat id of the group | forum topic: reply target only; conversation = group |
+| WhatsApp | phone number in international form (JID normalized) | `…@g.us` group JID | — |
+| Slack | member id `U…` | channel id `C…` | thread: reply target only |
+| Discord | user id | server (guild) id for admission and routing; the channel within it is the reply target | thread: reply target only |
+| Matrix | user id `@user:server` | room id | — |
+| Google Chat, Feishu, LINE, DingTalk, QQ, WeCom, Weixin, IRC | the platform's authenticated user id (IRC: nick) | the platform's space/group/channel id | — |
+
+**Overlap rule (groups):** a group message is admitted when the group is listed **or** the sender is individually listed (closed connection); the destination is the group row's agent when the group is listed, else the sender's row agent; the conversation is the group's (§6.9). In direct chats only person rows apply. Duplicates are detected by canonical id once known.
+
+### 6.17 Mailbox runtime identity (R4-MAJ-006, R4-MAJ-007)
+
+Every mail runtime owner keys by the trusted tuple **(agent, workspace, mailbox id)**: tool transport resolution (`registerEmailToolsForAgent`), credential lookup (`gatewayMailRuntime.resolveCredentials`), scope and generation (`mailScope`, `mailGenerationForPair`), read-flight sharing and the bounded cache subtree (ADR "Mail live access: pooled connections, folder discovery and a bounded cache"), the new-mail watcher claim, backoff and summary (`MailboxWatcherSet.CycleAll`), Mail panel presence, preview grants and cleanup. The physical-account connection cap (same server + username) and the global cap stay shared — no pool per mailbox. Tools offer exactly the pair's configured mailboxes; an unavailable, unknown or ambiguous choice is refused and never falls back to a healthy sibling. Rotating, disabling or deleting one mailbox touches only that mailbox.
+
+**Reference binding:** the single reference issuer embeds the mailbox id in every `message_ref` (today `uid:<uidvalidity>:<uid>`, `pkg/email/message_ref.go`); the validator rejects a reference whose mailbox differs from the selected mailbox, in addition to today's folder-epoch check (`refEpochMismatch`). `read_message` keeps its `uid` interface, interpreted within the selected mailbox.
 
 ---
 
@@ -849,14 +907,14 @@ Order per change: schema in `contracts/components/schemas/` → reference from `
 | K23 | **new** `Room` schema (rooms are not Sessions; ordinary sessions keep required `agent_id`) | id, workspace id, kind `team` / `squad` / `adhoc`, name, members[] (never null), muted[] (all rooms), paused, generation, origin_session_id, read_only_reason, allocated_cost (+ unpriced flag), needs_attention (derived from member states `waiting_on_you`) ; `GET /api/v1/workspaces/{id}/rooms`, `GET /api/v1/rooms/{id}` | FR-199, FR-171, FR-158, FR-217 |
 | K24 | **new** `RoomCreateRequest`, `RoomMembersUpdateRequest`; `POST /api/v1/workspaces/{id}/rooms`, `PATCH /api/v1/rooms/{id}/members` (add, remove, mute, unmute; the team room accepts only mute/unmute), `DELETE /api/v1/rooms/{id}` | kind (`squad` / `adhoc`), name (squad, ≤ 80), agent ids (**≥ 2**, same workspace), optional `origin_session_id` (main chat it was started from); team room not creatable, deletable or editable through these | FR-161, FR-172, FR-204, FR-207 |
 | K25 | **changed** `MessageFrame` | optional `mentions[]` (agent ids or `all`) resolved by the SPA picker; server re-resolves from text and membership | FR-164 |
-| K26 | **new** `RoomEntry` + `RoomEntryFrame` (live) + room catch-up/replay in `RoomSnapshotFrame`; `POST /api/v1/rooms/{id}/messages` (with `client_message_id` for retry reconciliation) | author (user or agent), addressees[], after_pause, delivery states; previously "changed `Message` / transcript entry" | group entries carry the authoring agent (existing guest author) and the resolved addressees | FR-166 |
-| K27 | **new** `RoomMemberStateFrame` (WS) + snapshot list | room id, member agent id, state enum `queued` / `held` / `working` / `waiting_on_you` / `answered` / `cancelled`, request id | FR-201 |
+| K26 | **new** `RoomEntry` + `RoomEntryFrame` (live) + room catch-up/replay in `RoomSnapshotFrame`; `POST /api/v1/rooms/{id}/messages` with **`RoomMessageRequest`** {`client_message_id`, `text`, `mentions[]` (agent ids or `all`, from the picker)} | author (user or agent), addressees[], after_pause, delivery states; previously "changed `Message` / transcript entry"; group entries carry the authoring agent (existing guest author) and the resolved addressees | FR-166 |
+| K27 | **new** `RoomMemberStateFrame` (WS) + snapshot list | room id, member agent id, request id (= delivery id), state enum — exactly the §6.11 states: `recorded` / `awaiting_approval` / `admitted` / `working` / `answered` / `refused` / `failed` / `interrupted` / `unavailable` / `cancelled` / `unknown` (a member whose running turn waits on the user stays `working`; the approval itself shows in that member's main chat) | FR-201, FR-213 |
 | K28 | **changed** `ChannelEntry` / channel conversation status | `stopped_by_operator` and `received_while_stopped` count on a channel group conversation | FR-182 |
 | K29 | **changed** `Session` + **new** `SessionSidebarVisibilityRequest`; `PATCH /api/v1/sessions/{id}/sidebar-visibility` (not the rename `PUT`) | `sidebar_visible` (per-person conversations default `false`) | FR-152 |
 | K32 | **changed** `ChannelPersonRule` and allow-list entry shape | `steering` boolean (default false) on individual person entries only | FR-185 |
 | K33 | **changed** `Message` and every carrier of a main-session entry — `UserMessageFrame`, `TokenFrame`/final assistant frames, `ReplayMessageFrame`, catch-up snapshot entries | optional `room_ref` {room id, room name, request id, role `request` / `answer`} so live, history and replay render the same collapsed entry | FR-202, FR-215 |
 | K34 | **changed** request ledger entry (`addressing`) — not wire | `origin: room` + room id, so answers route to the room and cancelled requests are dropped | FR-203 |
-| K35 | **changed** `Session` (room) | `room_paused` boolean; `room_origin_session_id` (link back, GC-10); `room_read_only_reason` when below two agents; room transcript entries may carry `after_pause: true` | FR-170, FR-204, FR-207 |
+| K35 | **folded into K23** (`Room`) | paused, generation, origin_session_id, read_only_reason, after-pause marks on entries — no Session changes for rooms | FR-170, FR-204, FR-207, FR-217 |
 | K36 | **changed** `ChannelPersonRule` → one People row | identifier (typed per connector type), label, kind `person` / `group` (and `guild`/`team` where the type has them), talks_to agent id (default: main agent), can_use_commands (person rows only), unique per connection | FR-141, FR-185, FR-212 |
 | K37 | **new** `ChannelStrangerEntry`; `GET /api/v1/channels/{id}/requests` | identifier, label, last seen, count; action "Add to People" uses the routing write | FR-223 |
 | K38 | **changed** connector list response | `category` enum `chat_channel` / `agent_tool` per connector; email = `agent_tool` with no routing fields | FR-221, FR-222 |
@@ -866,6 +924,10 @@ Order per change: schema in `contracts/components/schemas/` → reference from `
 | K42 | **new** `MailboxTestRequest`, `MailboxTestResult`; `POST …/mailboxes/test` (before save) | read and send results, each `ok` or failure class enum `auth_failed` / `send_auth_failed` / `server_not_found` / `connection_refused` / `tls_problem` / `timeout` / `unknown`, safe message | FR-231 |
 | K43 | **new** `MailProviderTemplate`; `GET /api/v1/mail/provider-templates` | id (`gmail`, `fastmail`, `icloud`, `nextcloud`, `zoho`, `outlook_com`, `generic_imap`), name, IMAP/SMTP hosts and ports, help links (Gmail: 2-Step Verification, App Passwords) | FR-229, FR-230 |
 | K44 | **changed** workspace mail routes (`/workspaces/{id}/mail/{agentId}/…`) | `mailbox` query parameter: optional with one mailbox, required with several (400 naming the choices) | FR-226, FR-227 |
+| K45 | **new** WS `AttachRoomFrame` {room_id, after_seq} → `RoomSnapshotFrame` (entries after the cursor in order, members, mutes, states, paused, generation, allocated cost, `complete` flag) then live `RoomEntryFrame`, `RoomMemberStateFrame`, `RoomMetaFrame` (members/mute/pause/cost/read-only), each with `seq`; carried on the existing hub connection without an agent session | Room viewing and reconnect; pre-admission Ask is the receiver's existing approval card (request id = delivery id), shown in the room as `awaiting_approval` with a link | FR-201, FR-213, FR-217 |
+| K46 | **changed** mail carriers | `mailbox_id` on `MailHtmlPreviewTokenRequest`, `MailAttachmentPreviewRequest`, `MailSignaturePreviewTokenRequest`, `MailboxNewMailSummary`, the create/configure body (replaces `MailboxConfigureRequest`: mailbox_id, label, address, servers, provider_template, password reference) and the panel/full-screen selection context; references issued with the mailbox id (§6.17) | FR-226–FR-228, FR-238 |
+| K47 | **new** `SecretRequestCreateRequest` (user origin); `POST /api/v1/secret-requests` | authenticated web user only; destination descriptor (kind `mailbox_password`, agent, workspace, reserved mailbox id, hosts, username); response: request id (value-free); then K5 submit/state | FR-236 |
+| K48 | **changed** `MailboxTestRequest`/`MailboxTestResult` (K42) | request carries the candidate fingerprint inputs and a client test id; result returns `test_token` bound to the fingerprint; Save requires a matching current token (or reruns the test) | FR-231 |
 | K17 | config | `agents.defaults.default_agent_id` ignored with warning (settings sanitiser and loader) | FR-120 |
 
 ### 7.2 Runtime validation (MAJ-004)
@@ -1422,7 +1484,7 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 **BDD-8.6 Mailbox readiness split** — US-8 AS-4 — Happy Path
 - Given valid incoming, invalid outgoing credentials
 - When `connect_mailbox` runs
-- Then read working, send not; no email sent (SMTP capture empty)
+- Then read working, send not, no email sent (SMTP capture empty), and the save outcome follows EQ-2 (spec written as: not saved, password kept and listed)
 
 **BDD-8.7 Valid token, wrong binding** — US-8 AS-2 — Error Path
 - Given a valid token but a target agent that is not a member of the target workspace
@@ -1554,6 +1616,10 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | MCP server `notion` | Settings → Connectors save |
 | channel `tg-1` | another helper |
 | mailbox mia/Sales | Settings → Mail save |
+| channel `tg-1`, only "Open to anyone" changed | Settings → Connectors save |
+| channel `tg-1`, only Anna's "Can use commands" changed | Settings → Connectors save |
+| mailbox mia/Sales, only support@'s signature changed | Settings → Mail save |
+| mailboxes mia/Sales, a sibling mailbox added | Settings → Add Email |
 | provider `ollama` (token `absent`) | Settings adds it |
 
 **BDD-11.10 Shared skill contended** — US-11 AS-4 — Error Path
@@ -1679,6 +1745,14 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | show hidden per-person conversations |
 | switch a person's "Can use commands" on in the People tab |
 | move between Setup, People, Conversations and Requests tabs |
+| tick "Open to anyone" and save |
+| Add Email: pick Gmail, follow the wizard links, enter the password on the card, run Test Connection, hear the result, save |
+| switch mailboxes in the Mail panel with a dirty draft and choose keep |
+
+**BDD-12.17 Add Email and mailbox switching by keyboard** — US-12 AS-6 — Edge Case
+- Given keyboard only, real shell
+- When the user adds a Gmail mailbox (template, wizard links, secure card, Test Connection, Save) and then switches mailboxes in the Mail panel with a dirty draft
+- Then focus starts on the template list and returns to the next step after each action, the test result is announced, Enter never submits a half-filled step, and the dirty-draft guard is reachable by keyboard
 
 ### Feature: No default agent (US-13)
 
@@ -1922,7 +1996,7 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 **BDD-17.7 Header shows members and cost** — US-17 AS-6 — Happy Path
 - Given squad Launch after two rounds
 - When the header renders
-- Then it lists Mia, Jim, Researcher2 and the room's cost = the sum of the room-originated turns in their main sessions
+- Then it lists Mia, Jim, Researcher2 and the room's allocated cost computed by §6.14 (in this fixture every consumed input came from this room, so it equals the sum of those turns)
 
 **BDD-17.8 Agent messages are input, never authority** — US-17 AS-7 — Error Path (Outline)
 - Given squad Launch with a pending approval in Mia's main chat and a pending question card to the user
@@ -2107,6 +2181,18 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | "@Mia hello" typed | refused "Several members are called Mia — pick from the list" |
 | "@Jim Smith go" via the picker, Jim renamed before sending | delivered to Jim by id |
 | "@Jim go" typed | unresolved; addresses nobody |
+
+**BDD-17.32 Receiver-commit crash cuts** — US-17 AS-14 — Edge Case (Outline)
+- Given "status?" to Mia and Jim and a crash `<cut>`
+- When the gateway restarts and the user retries
+- Then Mia's captures = 1, Mia's model starts ≤ 1, Jim's captures = 1, and the room shows each answer and each mention delivery once
+
+| cut |
+|---|
+| after the delivery id is recorded, before Mia's capture |
+| after Mia's capture and receiver append, before the room acknowledgement |
+| after Mia's answer append to the room, before the main mirror |
+| after the main mirror, before Mia's mention to Jim is admitted |
 
 **BDD-17.19 Agent message without @ reaches nobody** — US-17 AS-3 — Edge Case
 - Given squad Launch with Mia, Jim, Researcher2
@@ -2346,6 +2432,45 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - When Mia recalls in Marketing
 - Then the note is found (agent-wide by design, FQ-R3-B), while Sales's automatic notes and shared-room notes are not
 
+**BDD-16.24 Dead main, valid person row (and the inverse)** — US-16 AS-8 — Error Path (Outline)
+- Given tg-1 bound to Sales, main agent Mia, Anna's row talks to Jim
+- When `<state>` and `<sender>` writes
+- Then `<result>`
+
+| state | sender | result |
+|---|---|---|
+| Mia deleted, Jim a Sales member | Anna | Jim answers |
+| Mia deleted | Ben (no row, open connection) | loud drop "main agent mia not found" |
+| Jim removed from Sales, Mia fine | Anna | loud drop "person rule → jim not in Sales"; Mia does not answer |
+
+**BDD-16.25 Adapter prefilters call the central admission** — US-16 AS-10 — Error Path (Outline)
+- Given closed tg-1/discord-1/slack-1 whose People lists admit group G (and nobody individually)
+- When Carl (not listed) writes in G through `<entry>`
+- Then Carl is admitted (group admits members) and no adapter-level sender check drops him first
+
+| entry |
+|---|
+| Telegram message handler |
+| Discord message handler |
+| Slack message event |
+| Slack app mention |
+| Slack slash command |
+
+**BDD-16.26 Username rows and numeric ids** — US-16 AS-10 — Edge Case
+- Given Anna's Telegram row entered as "@anna" talking to Jim
+- When Anna (numeric id 12345, username anna) writes, then renames her username to "anna2" and writes again
+- Then the first message matches by username and records 12345 on the row; the second matches by 12345; a second row for 12345 is refused as a duplicate
+
+**BDD-16.27 Topics and threads stay in the group conversation** — US-16 AS-6 — Edge Case (Outline)
+- Given per-person mode
+- When a message arrives in `<place>`
+- Then it lands in the conversation of `<group>` and the reply goes to the same topic/thread
+
+| place | group |
+|---|---|
+| Telegram forum topic 7 of group -1001 | -1001 |
+| Slack thread under channel C123 | C123 |
+
 ### Feature: Several mailboxes (US-21)
 
 **BDD-21.1 Second mailbox for the same pair** — Traces to US-21 AS-1 — Happy Path
@@ -2373,7 +2498,8 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | send_email | no mailbox | refused: "Mia has 2 mailboxes here — choose one: support, invoices" |
 | send_email | mailbox: invoices | sent from invoices@ |
 | search_email | mailbox: support | searches support@ only |
-| read_message | a reference from invoices@ with mailbox: support | refused: reference belongs to another mailbox |
+| read_email_attachment | a `message_ref` issued for invoices@ with mailbox: support | refused: reference belongs to another mailbox |
+| read_message | uid 42 with mailbox: support | reads support@'s message 42 (uid interpreted within the selected mailbox) |
 | list_email_attachments | no mailbox | refused (same message) |
 
 **BDD-21.5 Other workspace's mailbox unreachable** — US-21 AS-4 — Error Path
@@ -2402,9 +2528,9 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - Then it links directly to Google's 2-Step Verification page and App Passwords page and explains to paste the 16-character app password into the secret field
 
 **BDD-21.8 Test Connection before save** — US-21 AS-5 — Error Path (Outline)
-- Given filled settings and a password on the secret card
+- Given filled settings and a password submitted on the secret card
 - When the user runs Test Connection and `<problem>`
-- Then nothing is saved and the result names `<class>`
+- Then no mailbox configuration is saved, the result names `<class>`, and the submitted password stays stored, unused, listed and removable (both facts shown)
 
 | problem | class |
 |---|---|
@@ -2413,7 +2539,7 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | port closed | connection refused |
 | certificate invalid | TLS problem |
 | no answer in time | timed out |
-| sending login fails, reading works | sending authentication failed |
+| sending login fails, reading works | sending authentication failed (save per EQ-2) |
 
 **BDD-21.9 Omnipus connect workflow** — US-21 AS-5 — Happy Path
 - Given W15 in Omnipus's chat for Mia in Sales, Gmail chosen
@@ -2434,6 +2560,39 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - Given a config with the old single-mailbox-per-pair shape
 - When the gateway loads and reloads
 - Then a warning names the entry, it is not used, and nothing else fails to start
+
+**BDD-21.13 Same-pair siblings stay apart** — US-21 AS-4 — Edge Case (Outline)
+- Given Mia@Sales has support@ and invoices@ on `<setup>`
+- When `<action>`
+- Then `<result>`
+
+| setup | action | result |
+|---|---|---|
+| the same server and account | both read concurrently | each sees only its own folders; the shared account cap holds |
+| identical UIDVALIDITY 7 and UID 42 in both | a support@ preview token is requested with invoices@'s reference | refused |
+| support@ unavailable | Mia sends with mailbox: support | refused; invoices@ is not used instead |
+| two mailboxes | support@'s password is rotated | invoices@ keeps working and its watcher keeps running |
+
+**BDD-21.14 Add Email without any model** — US-21 AS-5 — Happy Path
+- Given no AI provider works
+- When the user adds a Gmail mailbox for Mia in Sales in Connectors → Agent tools → Add Email
+- Then a mailbox id is reserved, the secure card appears inline in the panel, the password is stored by its user-origin request (no agent turn), Test Connection runs, and Save adds the mailbox
+
+**BDD-21.15 Test result bound to what is saved** — US-21 AS-5 — Error Path (Outline)
+- Given a successful test for settings A
+- When `<event>`
+- Then `<result>`
+
+| event | result |
+|---|---|
+| the user edits the port, then presses Save | Save requires a new test |
+| a slower old test for settings B finishes after A's | it does not enable Save for A |
+| Save's response is lost | reload shows the true saved state |
+
+**BDD-21.16 Mailbox switch keeps drafts and ignores late results** — US-21 AS-2 — Edge Case
+- Given an unsaved compose draft in support@ and a slow folder load in flight
+- When the user switches to invoices@
+- Then the existing unsaved-change guard asks to keep or discard the draft, and the late support@ result never appears in invoices@'s view
 
 ### Feature: Permission changes (US-14)
 
@@ -2613,7 +2772,7 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 111 | `pkg/gateway::TestGroupCreate_UserOnly_WorkspaceLocked_Audited` | Integration | 17.2, 17.9, 17.10 |
 | 112 | `pkg/groupchat::TestMentionResolution_AllDefaultAndNamed` (dataset D7) | Unit | 17.3, 17.4 |
 | 113 | `pkg/agent::TestRoomFanOut_RequestsToMains_AnswersAsGuestEntries` | Integration | 17.3, 17.4 |
-| 114 | `pkg/agent::TestRoomNoLimit_CostFromRoomOriginatedTurns` | Integration | 17.5, 17.7 |
+| 114 | `pkg/agent::TestRoomNoLimit_AllocatedCost_RoomOnlyFixture` | Integration | 17.5, 17.7 |
 | 115 | `pkg/agent::TestRoomPause_CancelsPending_RunningWorkUntouched_AfterPauseNoFanOut` | Integration | 17.6, 17.17 |
 | 116 | `pkg/agent::TestGroupAgentMessage_NoAuthority` | Integration | 17.8 |
 | 117 | `pkg/gateway::TestRoomMemberDecisions_InMainChat_RoomShowsWaiting` | Integration | 17.11 |
@@ -2668,6 +2827,19 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 166 | `tests/e2e/llm-omnipus-connect-mailbox-gmail.spec.ts` (live, fake mail server) | E2E | 21.9 |
 | 167 | `tests/e2e/omnipus-mailboxes.spec.ts` (add second mailbox, templates, wizard links, switcher, Connectors rows) | E2E | 21.1, 21.2, 21.6, 21.7, 21.11 |
 | 168 | `pkg/config::TestOldMailboxShape_IgnoredWithWarning_LoadReload` | Unit | 21.12 |
+| 169 | `pkg/agent::TestChannelIntake_DeadMainValidRule_AndInverse` | Integration | 16.24 |
+| 170 | `pkg/channels::TestAdapterEntryPoints_CallCentralAdmission` (Telegram, Discord, Slack event/mention/slash) | Integration | 16.25 |
+| 171 | `pkg/channels::TestTypedIdentities_UsernameAlias_TopicsThreads` | Unit | 16.26, 16.27 |
+| 172 | `src/lib/ws.roomFrames.test.ts` (generated outbound union parsing for K27/K45) | Unit | 17.26, 17.14 |
+| 173 | `pkg/gateway::TestRoomAttach_CursorCatchUpReconnect` | Integration | 17.6, 17.21 |
+| 174 | `pkg/agent::TestRoomFanOut_ReceiverCommitCrashCuts` (counts captures and model starts) | Integration | 17.32 |
+| 175 | `pkg/email::TestMailRuntime_PerMailboxTuple_SharedCaps_NoFallback` | Integration | 21.13 |
+| 176 | `pkg/email::TestMessageRef_MailboxBound_CollidingUID` | Unit | 21.4, 21.13 |
+| 177 | `pkg/gateway::TestUserOriginSecretRequest_AddEmail_NoModel` | Integration | 21.14 |
+| 178 | `pkg/gateway::TestMailboxTestToken_FingerprintEditLateResult` | Integration | 21.15 |
+| 179 | `src/components/mail/MailboxSwitcher.dirtyDraftLateResult.test.tsx` | Unit | 21.16 |
+| 180 | `tests/e2e/omnipus-add-email-keyboard.spec.ts` (real shell, keyboard only, announcements, narrow reflow) | E2E | 12.17, 21.14 |
+| 181 | `pkg/gateway::TestSharedResources_OpenToAnyoneSignatureSibling_Tokens` | Integration | 11.9 |
 
 Live-model specs use `openrouter` + `deepseek/deepseek-v4.1-flash`. Prompt-text tests prove wording only; a live pass does not prove the instruction-only Go gate cannot be bypassed (accepted R-A1).
 
@@ -2928,7 +3100,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-081**: QR pairing MUST render in the requesting chat, correlated by request and session id, with timeout, Stop and reconnect handling.
 - **FR-082**: `connect_mailbox` MUST reuse the mailbox configuration logic, run Test Connection before saving (FR-231), add the mailbox as one of the pair's mailboxes (FR-225), report read and send readiness separately, and send no email.
 - **FR-085**: Tool writes to providers, MCP servers, channel instances and mailboxes MUST acquire the gateway config write lock before the agent-loop lock (never the reverse), carry the expected revision token from the confirmed summary, and be refused when the current token differs; Settings writes to these resources MUST keep serializing on the same lock.
-- **FR-088**: Read tools MUST return a secret-free revision token per shared resource (`absent` for a missing entry); `list_providers` MUST also return endpoint, protocol and reference name.
+- **FR-088**: Read tools MUST return a secret-free revision token per shared resource (`absent` for a missing entry); `list_providers` MUST also return endpoint, protocol and reference name; `list_mailboxes` (Omnipus only) MUST return a pair's mailbox ids, labels, addresses, non-secret settings and the pair token.
 
 ### I. Messaging, attention, helpers
 - **FR-090**: Agents MUST reach Omnipus by ordinary message without a delegation edge; read-only questions MUST be answered without change tools; replies use the request-bound reply.
@@ -2956,7 +3128,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 
 ### K. No default agent and channel binding
 - **FR-120**: The system MUST have no default-agent concept (setting, seed, `Agent.default`, update field, tool arguments, delete guard, registry override, health check, every `GetDefaultAgent` call); the old key MUST be ignored with a warning on load and reload.
-- **FR-121**: An inbound message on an instance not bound to an available agent in a workspace MUST be dropped, logged at error level, audited and shown as the instance's `degraded` status with reason, before the routing ladder runs; a message the ladder leaves unrouted (former priority 7) MUST be dropped the same way; it MUST NOT reach any agent.
+- **FR-121**: Inbound channel routing MUST first check that the instance is bound to a workspace and names a main agent (otherwise drop loudly: "bind this channel to an agent in a workspace"); then resolve the destination (People row, else main agent); then validate the **selected** agent. A failed matched destination MUST drop loudly and never fall back to the main agent; an unavailable main agent MUST drop only senders without a matching row. Every drop is logged at error level, audited and shown as the instance's `degraded` status with reason; a dropped message MUST NOT reach any agent. The current pre-capture main-agent eligibility check (`admitBoundConnectorInputCtx`) moves after destination resolution.
 - **FR-122**: A WS frame starting a new session and a REST session create MUST name an agent; otherwise refused visibly.
 - **FR-123**: A task, goal turn or steering item MUST run only under its canonical owner; if that owner no longer resolves it MUST be refused visibly, even when another agent participates.
 - **FR-124**: Internal look-ups MUST use the owners in §6.4 (install-level state root, install-level MCP root, shared provider, iteration, shared skill loader).
@@ -3013,13 +3185,13 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-213**: Room requests MUST follow the §6.11 state machine, including approval before capture, refused, failed, interrupted and unavailable states; unknown is shown as unknown.
 - **FR-214**: A room request MUST NOT be steered into a member's running turn; it waits in that member's main FIFO until the turn settles.
 - **FR-215**: A room-origin answer MUST be appended to the room, mirrored once as a collapsed entry in the responder's main chat, and fanned out to its resolved mentions; it MUST NOT wake any agent owner.
-- **FR-216**: Each (room message, member) MUST have a stable delivery id recorded before admission; a Retry MUST admit only members without a recorded admission; an answer and its mention fan-out MUST be recorded once per answer entry; interrupted work MUST NOT be replayed automatically.
+- **FR-216**: Each (room message, member) MUST have a stable delivery id recorded in the room before admission and used **as** the receiver's request id for the capture and transcript entry; a Retry MUST first reconcile existing receiver facts for that id (a committed receiver append without a room acknowledgement is already admitted — record the acknowledgement, append and wake nothing) and admit only members with no receiver facts; the room answer id, the main-mirror id and each mention-delivery id MUST be derived deterministically from the request id and answer occurrence so each is written once; interrupted work MUST NOT be replayed automatically.
 - **FR-217**: Each room MUST keep a durable generation; `/pause` MUST increment it and cancel not-yet-consumed requests of older generations under the room lock; admission, approval completion and dequeue MUST re-check it; answers to work consumed before a pause MUST stay "after pause" after `/resume`; removed members and deleted rooms MUST receive no new deliveries.
 - **FR-218**: Every memory operation MUST receive an immutable (workspace, agent) scope from the turn context; retrospective writes and search, the carry-forward, the workspace-owned part of the bootstrap memory context and its prompt cache, recap success and fallback, automatic notes and the shared room MUST be per workspace; no agent-wide room MUST be the fallback for workspace-owned data.
 - **FR-219**: Notes saved deliberately with `remember` room "private" MUST stay agent-wide (visible to the agent in every workspace), as today; this is intended (FQ-R3-B), not a cross-workspace leak.
 - **FR-220**: Recaps MUST be keyed to transcript progress: a conversation is recapped again after new activity and a new idle period, skipped when unchanged; a late recap MUST NOT overwrite a newer one.
 - **FR-221**: The Connectors page MUST show two categories — Chat channels and Agent tools — grouped by type within each (EM-2, R34/R35); a chat channel's Configure side panel MUST have the tabs Setup, People, Conversations and Requests with per-type content, hidden (not disabled) controls where a type lacks them, and inline per-type identifier validation (§6.15).
-- **FR-222**: Email MUST NOT take part in routing, rooms, awareness or "who can reach": no People, Conversations or Requests for an email connector; its agent tools and `connect_mailbox` stay unchanged (EM-1).
+- **FR-222**: Email MUST NOT take part in routing, rooms, awareness or "who can reach": no People, Conversations or Requests for an email connector (EM-1). Its agent tools stay as they are except for the `mailbox` parameter added by EM-3 (FR-227); `connect_mailbox` stays and gains the EM-3 steps.
 - **FR-223**: The Requests tab MUST list recent strangers (from FR-145 events) with an "Add to People" action.
 - **FR-172**: Room creation, membership changes, mutes and deletion MUST be audited (who, which room, which agents, when).
 - **FR-173**: Direct session-to-session messages MUST keep the existing peer rules, including cross-workspace main-to-main messages; rooms never span workspaces.
@@ -3056,14 +3228,17 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-225**: An (agent, workspace) pair MUST be able to hold one or more mailboxes, each with a stable mailbox id (unique within the pair), a label, an address, its own credential reference, signature and identity record (#1109 T1).
 - **FR-226**: The Mail panel and the agent's email settings (shared agent editor slide-over) MUST offer a mailbox switcher listing the pair's mailboxes; folders, messages and compose follow the selected mailbox.
 - **FR-227**: Every email tool (`send_email`, `reply`, `read_inbox`, `search_email`, `read_message`, `create_email_draft`, `list_email_attachments`, `read_email_attachment`, `download_email_attachment`) MUST accept an optional `mailbox` parameter (id or address). With one mailbox in that workspace the tools MUST behave exactly as today; with more than one, a call without `mailbox` MUST be refused naming the choices (#1109 T2; amends EM-1 in this respect only).
-- **FR-228**: A message reference MUST be bound to its mailbox; using it with another mailbox MUST be refused; another workspace's mailbox MUST never be reachable.
+- **FR-228**: Every `message_ref` MUST be issued with its mailbox id and validated against the selected mailbox (plus the folder-epoch check); a reference from another mailbox MUST be refused even when UID and UIDVALIDITY collide; `read_message` keeps its `uid` interface within the selected mailbox; another workspace's mailbox MUST never be reachable.
 - **FR-229**: The Add Email flow (Connectors → Agent tools) and Omnipus's `connect_mailbox` workflow MUST offer provider templates (Gmail, Fastmail, iCloud, Nextcloud, Zoho, Outlook.com, generic IMAP) that fill editable server settings (#1109 T6).
 - **FR-230**: Choosing Gmail MUST offer an app-password wizard with deep links to Google's 2-Step Verification and App Passwords pages; the password is entered only on the secret card (OSA-7).
-- **FR-231**: Test Connection MUST run before saving, separately for reading and sending, and report one failure class (authentication failed, sending authentication failed, server not found, connection refused, TLS problem, timed out, unknown); a failing test MUST save nothing.
-- **FR-232**: No agent tool MUST create a mailbox except Omnipus's Ask-gated `connect_mailbox`, whose password comes only from the user's secret card (#1109 T8; EQ-1); every other agent's policy MUST deny it.
+- **FR-231**: Test Connection MUST run before saving, separately for reading and sending, and report one failure class (authentication failed, sending authentication failed, server not found, connection refused, TLS problem, timed out, unknown). A failed test MUST save no mailbox configuration; an already-submitted password stays stored, unused, listed and removable, and both facts are reported. A success MUST be bound to a fingerprint of the exact candidate (pair, mailbox id, hosts, ports, TLS, username, credential reference and version, relevant settings); any edit invalidates it and late results never enable a different candidate. Whether a read-only success (sending fails) may be saved is EQ-2.
+- **FR-232**: No agent tool MUST create a mailbox except Omnipus's Ask-gated `connect_mailbox`, whose password comes only from the user's secret card (#1109 T8; EQ-1 A); every other agent's policy MUST deny it.
 - **FR-233**: Connectors → Agent tools → Email MUST show one row per mailbox with address, owner agent and workspace, each with a Configure panel limited to mailbox setup (EM-1).
 - **FR-234**: Mail MUST never start an agent turn (#1109 decision 9, D27); the multi-mailbox watcher only updates the Mail panel.
 - **FR-235**: The old single-mailbox config shape MUST be ignored with a load/reload warning (greenfield, no migration).
+- **FR-236**: The Add Email panel MUST obtain the password through a user-origin secret request created by the authenticated web user (no agent turn, no session): the target pair and a reserved mailbox id are fixed first, the request is value-free and destination-bound, the same isolated card renders inline with focus returning to the next wizard step, and Submit, Cancel, lost-response recovery and reload follow K5/FR-079; the request is owned by the user account, never parked or resumed by an agent.
+- **FR-237**: Every adapter entry point listed in §6.16 MUST call the central admission and entitlement decision before any adapter-level check, early rejection or media work, using the typed identity mapping of §6.16 (username aliases recorded as canonical ids on first authenticated match; topics and threads only as reply targets; the group overlap rule).
+- **FR-238**: Every mail runtime owner listed in §6.17 MUST key by (agent, workspace, mailbox id) while keeping the shared physical-account and global connection caps; an unavailable, unknown or ambiguous mailbox choice MUST be refused without fallback; rotating, disabling or deleting one mailbox MUST affect only that mailbox.
 
 ### L. Documentation
 - **FR-130**: Every page in §14 MUST be updated in the same change as its behaviour and audited by docs-verifier.
@@ -3087,7 +3262,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **SC-013**: At every crash cut of BDD-6.24 the recovered request state matches the store (0 "interrupted" requests with stored references; 0 duplicate versions from re-submission).
 - **SC-014**: After each transition of BDD-6.25 the exact value of every stored card secret is masked in 100% of runs.
 - **SC-016**: For the BDD-16.2/16.3 fixture, 100% of messages reach the specified agent, 0 stranger messages start a turn, and the stranger count on the connection status equals the strangers sent.
-- **SC-017**: In a three-agent room, "status?" creates exactly 3 requests in members' main sessions and 3 room answers, "@Jim plan" exactly 1; after `/pause`, 0 pending room requests remain; the header cost equals the sum of room-originated turns.
+- **SC-017**: In a three-agent room, "status?" creates exactly 3 requests in members' main sessions and 3 room answers, "@Jim plan" exactly 1; after `/pause`, 0 pending room requests remain; the header shows the §6.14 allocated cost (equal to the room-only turns' sum in this room-only fixture).
 - **SC-018**: Across 20 runs, 0 awareness lists contain another workspace's conversation, note or carry-forward; 0 model calls are made to build the list.
 - **SC-019**: Every room request and room answer appears exactly once as a collapsed entry in the agent's main chat, and every addressed member's state in the room matches its request state after a reload.
 - **SC-015**: Tool-versus-Settings contention on each of the four shared resources produces 0 silent overwrites in 100 race iterations.
@@ -3162,7 +3337,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-080 | F:D11 | US-8 | 8.1, 8.2, 8.3, 8.7 | 36 |
 | FR-081 | OSA-5 | US-8 | 8.4, 8.5, 8.8 | 37 |
 | FR-082 | F:D11; EM-3 | US-8 | 8.6, 21.9 | 38, 166 |
-| FR-085 | MAJ-011; R2-MAJ-003 | US-11 | 11.9 | 75, 88 |
+| FR-085 | MAJ-011; R2-MAJ-003; R4-MAJ-001 | US-11 | 11.9 | 75, 88, 181 |
 | FR-088 | R2-MAJ-003 | US-11 | 11.9 | 88 |
 | FR-086 | FA:Q-R1-1 A; R2-MAJ-001 | US-6, US-7 | 6.19–6.23, 7.11 | 84, 85 |
 | FR-087 | R2-MAJ-002 | US-6 | 6.24 | 86 |
@@ -3182,13 +3357,13 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-106 | FA:FQ-9 A | US-12 | 12.6 | 29 |
 | FR-107 | F:D22 | US-12 | 12.11, 5.6 | 28 |
 | FR-108 | F:D18, D19, D23; FA:FQ-10 A | US-12 | 12.7, 12.8 | 53 |
-| FR-109 | OSA-10; MAJ-008 | US-12 | 12.9, 12.10, 12.14 | 25, 26, 52, 82 |
+| FR-109 | OSA-10; MAJ-008; R4-MAJ-010 | US-12 | 12.9, 12.10, 12.14, 12.17 | 25, 26, 52, 82, 180 |
 | FR-110 | OSA-10; MIN-002 | US-12 | 12.3, 12.9 | 25, 26 |
 | FR-111 | FA:FQ-1 B; MAJ-012 | US-12 | 12.12, 1.5 | 54 |
 | FR-112 | MAJ-008 | US-12 | 12.13, 5.9 | 26, 54 |
 | FR-113 | FA:OQ-2 B | US-12 | 12.15 | 81 |
 | FR-120 | FA:FQ-17 | US-13 | 13.5, 13.7 | 22, 46, 53 |
-| FR-121 | FA:FQ-17, OQ-2 | US-13 | 13.1, 13.2, 13.13 | 20, 21, 44, 97 |
+| FR-121 | FA:FQ-17, OQ-2; R4-MAJ-003 | US-13, US-16 | 13.1, 13.2, 13.13, 16.24 | 20, 21, 44, 97, 169 |
 | FR-133 | FA:FQ-17; PR-1 | US-13, US-16 | 13.13, 16.2 | 97, 98 |
 | FR-122 | FA:FQ-17 | US-13 | 13.3 | 45, 63 |
 | FR-123 | FA:FQ-17 | US-13 | 13.4 | 23 |
@@ -3239,11 +3414,11 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-210 | R3-MAJ-002 | US-16 | 16.17 | 140 |
 | FR-211 | R3-MAJ-002 | US-16 | 16.18 | 140 |
 | FR-212 | R3-MAJ-004 | US-19 | 19.8, 19.9 | 142, 151 |
-| FR-213 | R3-MAJ-006 | US-17 | 17.26, 17.14 | 143, 128 |
+| FR-213 | R3-MAJ-006; R4-MAJ-005 | US-17 | 17.26, 17.14 | 143, 128, 172 |
 | FR-214 | R3-MAJ-006; GC-8 | US-17 | 17.14 | 128 |
 | FR-215 | R3-MAJ-006 | US-17 | 17.15, 17.4 | 129, 113 |
-| FR-216 | R3-MAJ-007 | US-17 | 17.27 | 144 |
-| FR-217 | R3-MAJ-008 | US-17 | 17.28, 17.29 | 145 |
+| FR-216 | R3-MAJ-007; R4-MAJ-004 | US-17 | 17.27, 17.32 | 144, 174 |
+| FR-217 | R3-MAJ-008; R4-MAJ-005 | US-17 | 17.28, 17.29, 17.6 | 145, 173 |
 | FR-218 | R3-MAJ-009; AW-2 | US-20 | 20.8, 20.4 | 146, 126 |
 | FR-219 | FQ-R3-B | US-20 | 20.8, 20.10 | 146, 158 |
 | FR-220 | R3-MAJ-010; session-core D9 | US-20 | 20.9 | 147 |
@@ -3274,16 +3449,19 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-197 | AW-2; security | US-20 | 20.4 | 126 |
 | FR-198 | HC #6 | US-20 | 20.2, 20.5 | 125 |
 | FR-225 | EM-3; #1109 T1 | US-21 | 21.1 | 159, 167 |
-| FR-226 | EM-3; #1109 T1 | US-21 | 21.2 | 160, 167 |
+| FR-226 | EM-3; #1109 T1 | US-21 | 21.2, 21.16 | 160, 167, 179 |
 | FR-227 | EM-3; #1109 T2 | US-21 | 21.3, 21.4 | 161 |
-| FR-228 | EM-3; ADR-033 | US-21 | 21.4, 21.5 | 161 |
+| FR-228 | EM-3; ADR-033; R4-MAJ-007 | US-21 | 21.4, 21.5, 21.13 | 161, 176 |
 | FR-229 | EM-3; #1109 T6 | US-21 | 21.6, 21.9 | 162, 166, 167 |
 | FR-230 | EM-3; #1109 T6 | US-21 | 21.7 | 162, 167 |
-| FR-231 | EM-3; #1109 T6 | US-21 | 21.8, 21.9 | 163, 166 |
-| FR-232 | EM-3; #1109 T8; EQ-1 | US-21 | 21.10 | 164 |
+| FR-231 | EM-3; #1109 T6; R4-MAJ-009 | US-21 | 21.8, 21.9, 21.15 | 163, 166, 178 |
+| FR-232 | EM-3; #1109 T8; EQ-1 A | US-21 | 21.10 | 164 |
 | FR-233 | EM-2; EM-3 | US-21 | 21.11 | 167 |
 | FR-234 | #1109 decision 9; D27 | US-21 | 21.2 | 165 |
 | FR-235 | F:D22 | US-21 | 21.12 | 168 |
+| FR-236 | R4-MAJ-008; EM-3; OSA-7 | US-21 | 21.14 | 177, 180 |
+| FR-237 | R4-MAJ-002 | US-16 | 16.25, 16.26, 16.27 | 170, 171 |
+| FR-238 | R4-MAJ-006 | US-21 | 21.13 | 175 |
 | FR-130 | root CLAUDE.md DoD | all | — (docs-verifier) | docs-verifier report |
 
 ---
@@ -3323,7 +3501,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | `docs/skills.md` | Skills via Omnipus; target workspace shelf | WU-3 |
 | `docs/connectors.md`, `docs/connectors/telegram.md`, `docs/connectors/google-chat.md` (incl. Chat channels vs Agent tools categories; Configure tabs Setup/People/Conversations/Requests; per-type connect methods incl. WhatsApp QR; People "Talks to"/"Can use commands"; main-mode commands affect the shared main chat; steering flags, UI-only commands, paused-group notice) | `connect_channel` binds the channel's main agent in a workspace; proven vs not tested; QR in chat; unbound or unrouted messages fail loudly; **person table, allow list, "not authorised" replies and stranger status, conversation mode per connection, group behaviour, legacy type-level rules ignored** | WU-7, WU-1, WU-14 |
 | `docs/settings.md` | System agents; on the Connectors page each connection's Configure side panel requires a workspace and a main agent and holds the person table, allow list, steering flags and conversation mode; no default-agent or global conversation-scope setting; saved secrets list | WU-10, WU-1, WU-6, WU-14 |
-| `docs/group-chats.md` (**new page**) | Rooms (at least two agents): team room, squads, ad-hoc rooms; "Add participant" from a chat header; room commands (/pause, /resume, /mute, /unmute, /members, /help) and why steering commands are refused; each agent answers from its own main chat, where room traffic shows as collapsed entries and where its approvals appear; queued/held states; `/pause` cancels pending requests (running work finishes, "after pause"); @all default and @-names; agent-to-agent replies with no limit and visible cost (R-A4); Stop; members and audit; one workspace only | WU-15 |
+| `docs/group-chats.md` (**new page**) | Rooms (at least two agents): team room, squads, ad-hoc rooms; "Add participant" from a chat header; room commands (/pause, /resume, /mute, /unmute, /members, /help) and why steering commands are refused; each agent answers from its own main chat, where room traffic shows as collapsed entries and where its approvals appear; queued/held states; `/pause` cancels pending requests (running work finishes, "after pause"); @all default and @-names; agent-to-agent replies with no limit and visible allocated cost (R-A4); members and audit; one workspace only | WU-15 |
 | `docs/memory.md` | Conversation awareness: what the agent sees, `read_conversation`, automatic notes per workspace, recaps-off behaviour | WU-17 |
 | `docs/mail.md` (email is an agent tool, not a chat channel; no People/Conversations; several mailboxes per agent and the switcher; the `mailbox` choice in tools; provider templates, Gmail app-password steps, Test Connection failure classes; only people add mailboxes; `connect_mailbox`) | `connect_mailbox`; read vs send readiness | WU-7 |
 | `docs/providers-and-models.md` | What the provider check proves; Omnipus's model in System agents | WU-3, WU-10 |
@@ -3338,7 +3516,7 @@ Pages are drafted by the implementing lead in the same change; WU-12 is a final 
 
 | WU | Content | Size | Owner (security-lead reviews, never implements) | Depends on |
 |---|---|---|---|---|
-| WU-0 | Contracts K1–K39 (all of them, incl. the added routing, room and awareness carriers) + regeneration (**preparation commits**, not independently landable — K11/K12 remove fields existing code reads) | Standard | backend-lead | — |
+| WU-0 | Contracts K1–K48 (all of them, incl. routing, room, awareness and mail carriers) + regeneration (**preparation commits**, not independently landable — K11/K12 remove fields existing code reads) | Standard | backend-lead | — |
 | WU-1 | No default agent; mandatory channel binding; loud failure; browser warm-up (FR-120–FR-132, FR-113 backend) | Feature | backend-lead; frontend-lead (remove default UI; Configure side panel requires workspace + agent) | WU-0 |
 | WU-2 | Omnipus identity, Ava/Admin removal, membership, self-row, grant inventory, ceiling + ask-list, Omnipus per-agent Ask refusal, God Mode note, **and the permission split and management-grant refusal (FR-024, FR-025), committed together with the grants** | Feature | backend-lead; prometheus (prompt) | WU-0 |
 | WU-3 | Change-tool adaptations: target workspace, outcomes, provider/workspace checks, shared-resource lock order and revision tokens (FR-085, FR-088) | Feature | backend-lead | WU-2 |
@@ -3399,12 +3577,12 @@ UI development of WU-10 may start in parallel with WU-3/WU-4 against generated c
 
 ## 17. Open questions for the founder
 
-RQ-1–RQ-4, GQ-1–GQ-4, FQ-RM-1/2, Q-R3-1/2 and FQ-R3-A/B are answered (§0.7–§0.12). New with EM-3:
+RQ-1–RQ-4, GQ-1–GQ-4, FQ-RM-1/2, Q-R3-1/2, FQ-R3-A/B and EQ-1 (A) are answered (§0.7–§0.14). New from fix round 4:
 
-**EQ-1 — Does Omnipus's "connect mailbox" count as human-only provisioning?** Context: #1109 T8 says "no agent-facing mailbox creation — no tool lets an agent add a mailbox". You also placed the new setup steps (templates, Gmail wizard, Test Connection) inside Omnipus's `connect_mailbox` workflow, which is an agent tool. In that workflow the user types the password on the secure card, confirms the summary, and approves the tool. Impact: whether Omnipus may add mailboxes at all.
-- **A** — Yes: T8 means ordinary agents can never create mailboxes; Omnipus's Ask-gated, user-driven `connect_mailbox` stays (the spec is written this way).
-- **B** — No: remove `connect_mailbox`; Omnipus walks the user to Connectors → Agent tools → Add Email instead.
-- **Recommendation: A** — every secret and the final approval still come from the user; it keeps "set up a support agent with its mailbox" in one conversation.
+**EQ-2 — Save a mailbox whose sending test fails?** Context: Test Connection checks reading and sending separately. Sometimes reading works but sending does not (for example the outgoing server needs a different password). You decided a failing test saves nothing, but a mailbox that can only read might still be useful (the agent reads and drafts, but cannot send). Impact: whether such a mailbox can be added at all.
+- **A** — Not saved: both reading and sending must pass; the password stays stored and listed so the user can fix the outgoing settings and test again.
+- **B** — Saved as "read-only — sending not working", clearly marked in the switcher and on the Connectors row; send tools refuse for that mailbox until a later test passes.
+- **Recommendation: A** — one simple rule ("a mailbox is saved only when it fully works"), matching your "Test Connection before save".
 
 ---
 

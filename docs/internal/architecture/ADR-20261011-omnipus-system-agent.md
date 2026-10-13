@@ -117,6 +117,16 @@ Source: founder answers EM-3; issue #1109 "AgentEmail 2.0". Detail: specificatio
 | Unchanged | Email is an agent tool, never a chat channel, and never starts a turn (D27, EM-1). |
 | To confirm | EQ-1: whether Omnipus's Ask-gated, user-driven `connect_mailbox` counts as human-only provisioning (spec written as yes). |
 
+## Dated notes from specification fix round 4 (2026-10-13)
+
+| ADR text | Note |
+|---|---|
+| "not yet grilled" on the fix-round-3 notes and EM-3 | OSA-14, OSA-15 and OSA-16 were reviewed in specification grill rounds 3 and 4; EM-3 in round 4. Findings and their fixes: specification §0.11 and §0.14. |
+| EM-3 "To confirm" EQ-1 | **Answered A** (founder, 2026-10-13): Omnipus's Ask-gated, user-driven `connect_mailbox` stays as a human-driven provisioning path; ordinary agents never create mailboxes. |
+| OSA-15 "delivered once per member with retry reconciliation" | The delivery id is the receiver's request id (stored on its capture and transcript entry), so a retry recognises a receiver write that committed before the room acknowledgement; answer, mirror and mention ids are derived from it. Detail: spec §6.11. |
+| OSA-14 admission | Every channel adapter entry point calls the central admission before any adapter-local check, with one typed identity mapping per platform. Detail: spec §6.16. |
+| EM-3 data model | Every mail runtime owner (transport, credentials, generation, cache, watcher, preview grants, cleanup) and every message reference is keyed by the mailbox id; account connection caps stay shared. Settings → Add Email collects the password through a user-origin secret request, with no agent turn. Whether a mailbox whose sending test fails may be saved is founder question EQ-2 (spec §17). |
+
 
 
 
