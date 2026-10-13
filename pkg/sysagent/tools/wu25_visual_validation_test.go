@@ -15,13 +15,15 @@ type wu25InvalidVisual struct {
 }
 
 // Derived equivalence classes: closed-set miss, case/label/artwork confusion,
-// empty, null, and each non-string JSON kind. These are not guessed valid values.
+// whitespace, and each invalid non-string JSON kind. Chief Q1 A (2026-10-14):
+// CREATE null/empty selects a default, tested positively in the defaults file;
+// UPDATE null/empty remains invalid. These are not guessed valid values.
 func wu25InvalidVisuals(update bool) []wu25InvalidVisual {
 	cases := []wu25InvalidVisual{
 		{"figure", "unknown", "Dragon"}, {"figure", "art_key", "octopus"},
-		{"figure", "case", "robot"}, {"figure", "empty", ""}, {"figure", "whitespace", " Robot "},
+		{"figure", "case", "robot"}, {"figure", "whitespace", " Robot "},
 		{"role", "unknown", "administrator"}, {"role", "display_label", "General assistant"},
-		{"role", "case", "Writer"}, {"role", "empty", ""}, {"role", "whitespace", " writer "},
+		{"role", "case", "Writer"}, {"role", "whitespace", " writer "},
 		{"color", "outside_palette", "#22C55E"}, {"color", "retired_palette", "#3B82F6"},
 		{"color", "malformed", "not-a-hex"}, {"color", "short", "#123"},
 		{"color", "long", "#6E8BA800"}, {"color", "label", "Bronze"}, {"color", "whitespace", " #6E8BA8 "},
@@ -31,16 +33,17 @@ func wu25InvalidVisuals(update bool) []wu25InvalidVisual {
 			name  string
 			value any
 		}{
-			{"null", nil}, {"number", float64(0)}, {"boolean", false},
+			{"number", float64(0)}, {"boolean", false},
 			{"array", []any{"Robot"}}, {"object", map[string]any{"value": "Robot"}},
 		} {
 			cases = append(cases, wu25InvalidVisual{field: field, name: bad.name, value: bad.value})
 		}
-	}
-	if update {
-		// AgentColor.yaml: explicit invalid update is rejected, omission preserves.
-		// Empty CREATE color has a prior named default decision; not overridden here.
-		cases = append(cases, wu25InvalidVisual{field: "color", name: "empty", value: ""})
+		if update {
+			cases = append(cases,
+				wu25InvalidVisual{field: field, name: "null", value: nil},
+				wu25InvalidVisual{field: field, name: "empty", value: ""},
+			)
+		}
 	}
 	return cases
 }
@@ -80,21 +83,32 @@ func TestWU25CreateAgent_InvalidVisualsExplainChoicesAndWriteNothing(t *testing.
 }
 
 func TestWU25UpdateAgent_InvalidVisualsExplainChoicesAndWriteNothing(t *testing.T) {
-	for _, tc := range wu25InvalidVisuals(true) {
-		t.Run(tc.field+"/"+tc.name, func(t *testing.T) {
-			h := newWU25Harness(t)
-			id := wu25SeedAgent(t, h, "Main")
-			state := h.state(t, id)
-			before := wu25Snapshot(t, h.home)
-			result := h.call(t, "update_agent", map[string]any{
-				"id": id, "revision": state.Revision,
-				"description": "Must not change on refusal.", "soul": "Must not be persisted.",
-				tc.field: tc.value,
+	for _, runtimeType := range []string{"Main", "Subagent", "subagent_3p"} {
+		for _, tc := range wu25InvalidVisuals(true) {
+			name := tc.field + "/" + tc.name
+			if runtimeType != "Main" {
+				name = runtimeType + "/" + name
+			}
+			t.Run(name, func(t *testing.T) {
+				h := newWU25Harness(t)
+				id := wu25SeedAgent(t, h, runtimeType)
+				state := h.state(t, id)
+				before := wu25Snapshot(t, h.home)
+				args := map[string]any{
+					"id": id, "revision": state.Revision,
+					"description": "Must not change on refusal.", tc.field: tc.value,
+				}
+				if runtimeType != "subagent_3p" {
+					// External workers cannot edit SOUL. Keep their ordinary sibling
+					// legal so an unrelated runtime refusal cannot mask the visual.
+					args["soul"] = "Must not be persisted."
+				}
+				result := h.call(t, "update_agent", args)
+				require.True(t, result.IsError, "R1: invalid %s %s must be refused, got %s", tc.field, tc.name, result.ForLLM)
+				wu25AssertInvalidReason(t, result.ForLLM, tc.field)
+				assert.Equal(t, state, h.state(t, id), "R1: invalid update must preserve revision and all fields")
+				assert.Equal(t, before, wu25Snapshot(t, h.home), "R1: invalid update must not change any durable file")
 			})
-			require.True(t, result.IsError, "R1: invalid %s %s must be refused, got %s", tc.field, tc.name, result.ForLLM)
-			wu25AssertInvalidReason(t, result.ForLLM, tc.field)
-			assert.Equal(t, state, h.state(t, id), "R1: invalid update must preserve revision and all fields")
-			assert.Equal(t, before, wu25Snapshot(t, h.home), "R1: invalid update must not change any durable file")
-		})
+		}
 	}
 }

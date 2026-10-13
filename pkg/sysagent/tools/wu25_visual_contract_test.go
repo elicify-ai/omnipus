@@ -25,14 +25,27 @@ func TestWU25VisualContract_DisclosesExistingCatalogs(t *testing.T) {
 				}
 				property, ok := raw.(map[string]any)
 				require.True(t, ok)
-				assert.Equal(t, "string", property["type"], "visuals use the existing string catalogs")
+				// Chief Q1 A: CREATE may structurally expose null as a default
+				// sentinel, or normalize it before string-only validation.
+				if kinds, union := property["type"].([]any); name == "create_agent" && union {
+					assert.ElementsMatch(t, []any{"string", "null"}, kinds, "CREATE may only add the approved null-default input kind")
+				} else {
+					assert.Equal(t, "string", property["type"], "visual choices are strings; UPDATE admits no null-default sentinel")
+				}
 				if rawEnum, hasEnum := property["enum"]; hasEnum {
 					items, isArray := rawEnum.([]any)
 					require.True(t, isArray)
 					actual := make([]string, 0, len(items))
+					seen := map[any]bool{}
 					for _, item := range items {
 						value, isString := item.(string)
-						require.True(t, isString)
+						require.True(t, isString || (name == "create_agent" && item == nil), "enum value must be a choice string or an approved CREATE null sentinel")
+						require.False(t, seen[item], "schema enum must not duplicate a choice or default sentinel")
+						seen[item] = true
+						if name == "create_agent" && (item == nil || value == "") {
+							// Not a catalog choice: Q1 A defines this as use-the-default.
+							continue
+						}
 						actual = append(actual, value)
 					}
 					want := slices.Clone(catalog.values)
