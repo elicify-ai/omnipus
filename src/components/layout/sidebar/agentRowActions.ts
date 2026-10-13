@@ -124,24 +124,33 @@ export async function setHiddenFromSidebar(
  * the delegation graph minus the agent's edges, in one PUT. Returns null —
  * success without a PUT — when the record already satisfies the removal
  * (S4-08): the team does not list the agent, so another writer removed it.
- * Throws the visible refusal when the record carries NO core_team at all
- * (S4-01): a removal is never built from a list the record does not carry.
  *
- * R2-S4-02: that refusal is TRUTHFUL, not "unavailable". Every `record`
- * reaching this function is a fresh fetchWorkspace read (removeWorkspaceMember
- * refetches when the cached record has no team; retryOnceOnConflict refetches
- * on 409), and the gateway omits core_team on the wire ONLY when the stored
- * team is empty (rest_workspaces.go's toWire gates on len(CoreTeam) > 0) —
- * so undefined here means the team is genuinely empty. The message says
- * exactly that (the agent is not on the team any more) and does not send the
- * reader to retry, which cannot change a fresh answer. The roster can still
- * show a row for such an agent — workspaceRoster.ts::memberRoster falls back
- * to member_configs keys when core_team is absent — so this state is
- * reachable, and the refusal must not pretend the list is merely missing.
+ * A record carrying NO core_team at all is a genuinely EMPTY team, never a
+ * missing list: every `record` reaching this function is a fresh
+ * fetchWorkspace read (removeWorkspaceMember refetches when the cached record
+ * has no team; retryOnceOnConflict refetches on 409), and the gateway omits
+ * core_team on the wire ONLY when the stored team is empty
+ * (rest_workspaces.go's toWire gates on len(CoreTeam) > 0). The roster can
+ * still show a row for such an agent — workspaceRoster.ts::memberRoster falls
+ * back to member_configs keys when core_team is absent — a stale config that
+ * survived its member's removal. R2-S4-02 made the old refusal truthful but
+ * left it a dead end (CR-04 = SFH-02): the same error every time, the row
+ * forever. Remove therefore FINISHES the job through the existing contract —
+ * `{ revision, member_configs: {} }`, an EMPTY merge map. On the server that
+ * flips the member_configs-changed path (present-and-nil is the only "absent",
+ * so `{}` is present) and runs its own GC — entries whose agent is off the
+ * effective team are pruned (rest_workspaces.go applyUpdate, FR-022) — so the
+ * stale config is cleared server-side and the row loses its fallback key.
+ * core_team is deliberately NOT re-asserted: it is already empty, and a PUT
+ * equal to the stored team sets no changed flag, so the write — and with it
+ * the GC — would be skipped (persistAndRespond's no-op). Delegation is
+ * untouched: no team membership means no edges are stripped here, and the
+ * body carries no delegation field; the team path's retention rule stands —
+ * a main chat is never released.
  */
 async function removalBody(record: Workspace, agentId: string): Promise<WorkspaceUpdateRequest | null> {
   if (record.core_team === undefined) {
-    throw new Error("this workspace's team list is empty — the agent is not on the team any more")
+    return { revision: record.revision, member_configs: {} }
   }
   if (!record.core_team.includes(agentId)) return null // already removed elsewhere (S4-08)
   const graph = await fetchWorkspaceDelegation(record.id)
@@ -163,8 +172,10 @@ async function removalBody(record: Workspace, agentId: string): Promise<Workspac
  * removal body is never built from a record that lacks the list. When the
  * cached record has no core_team (it is optional on the wire and the
  * sidebar cache can be up to one 30 s poll stale), the fresh record is
- * fetched first; a record with no team even after that refetch refuses
- * visibly. A removal therefore only ever drops the ONE agent.
+ * fetched first. A fresh record with no team even after that refetch is a
+ * genuinely EMPTY team, not a missing list — there the removal completes by
+ * clearing the stale member_configs entry through the server's own GC
+ * (CR-04; see removalBody) instead of refusing.
  */
 export async function removeWorkspaceMember(workspace: Workspace, agentId: string): Promise<void> {
   const base = workspace.core_team === undefined ? await fetchWorkspace(workspace.id) : workspace

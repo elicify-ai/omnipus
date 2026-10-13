@@ -689,14 +689,23 @@ describe('D4/D8 — Remove · failure surfaces (S4-05 rejection, S4-01 refusal)'
     })
   })
 
-  it('a workspace with no core_team even after the refetch refuses visibly and PUTs nothing (S4-01)', async () => {
+  it('a member_configs-only row — no core_team even after the refetch — finishes the removal by clearing the stale config (CR-04)', async () => {
+    // CR-04 (= SFH-02): the server omits core_team only when the stored team
+    // is EMPTY (rest_workspaces.go toWire gates on len(CoreTeam) > 0), yet
+    // workspaceRoster.ts::memberRoster still renders a row from the
+    // member_configs key — a stale config that survived its member's removal.
+    // The R2-S4-02 refusal was truthful but a dead end: the same error every
+    // time, the row forever. The fresh read (a missing list is never trusted)
+    // IS the empty team, so Remove completes through the EXISTING PUT
+    // contract: an EMPTY member_configs merge map, which drives the server's
+    // own GC — entries whose agent is off the (empty) team are pruned
+    // (rest_workspaces.go applyUpdate) — and the row loses its fallback key.
     apiMocks.fetchWorkspace.mockResolvedValue(
       workspaceWith({ mia: miaMember, jim: jimMember }, { core_team: undefined, revision: FRESH_REV }),
     )
-    // The delegation mock RESOLVES: the flow must reach the refusal decision
-    // with every seam working, so the toast can only be the deliberate
-    // refusal — not a crash upstream of the PUT.
-    apiMocks.fetchWorkspaceDelegation.mockResolvedValue(delegation([]))
+    apiMocks.updateWorkspace.mockResolvedValue(
+      workspaceWith({}, { core_team: undefined, revision: '2'.repeat(64) }),
+    )
     renderList({
       workspace: workspaceWith({ mia: miaMember, jim: jimMember }, { core_team: undefined }),
     })
@@ -708,23 +717,26 @@ describe('D4/D8 — Remove · failure surfaces (S4-05 rejection, S4-01 refusal)'
       fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
     })
 
-    // The refetch DID happen (the cached record's missing list is never
-    // trusted); with even the fresh record carrying no team, nothing is PUT
-    // and the refusal is visible with its own wording — not an incidental
-    // crash message.
+    // The fresh record is read first (the cached record's missing list is
+    // never trusted)…
     expect(apiMocks.fetchWorkspace).toHaveBeenCalledWith(WS)
-    expect(apiMocks.updateWorkspace).not.toHaveBeenCalled()
-    const toast = useUiStore.getState().toasts.at(-1)
-    expect(toast?.variant).toBe('error')
-    expect(toast?.message).toContain('Could not remove Mia')
-    // R2-S4-02: a fresh record with no core_team IS an empty team — the wire
-    // omits the field only when the stored team is empty — so the refusal
-    // must say the truthful "empty / not on the team any more", not the old
-    // "unavailable — reopen the sidebar and try again", whose retry could
-    // never change the answer.
-    expect(toast?.message).toContain('team list is empty')
-    expect(toast?.message).toContain('not on the team any more')
-    expect(toast?.message).not.toContain('unavailable')
+    // …and exactly ONE PUT rides the existing contract: revision + the empty
+    // member_configs map. core_team is deliberately NOT re-asserted — it is
+    // already empty, and a PUT equal to the stored team sets no changed flag,
+    // so the server would skip the write and lose the GC.
+    expect(apiMocks.updateWorkspace).toHaveBeenCalledTimes(1)
+    expect(apiMocks.updateWorkspace).toHaveBeenCalledWith(WS, {
+      revision: FRESH_REV,
+      member_configs: {},
+    })
+    // The team path's delegation strip has nothing to do here: no team
+    // membership means no edges are stripped and the delegation seam is
+    // never read. (R2's ruling stands: no session is ever released.)
+    expect(apiMocks.fetchWorkspaceDelegation).not.toHaveBeenCalled()
+    // Success surfaces: the roster refresh lands and no error toast — the
+    // dead end is gone.
+    expect(invalidateSpy).toHaveBeenCalled()
+    expect(useUiStore.getState().toasts, 'a completed removal is not an error').toEqual([])
   })
 })
 
