@@ -167,8 +167,11 @@ describe('WU-10 System agents through the shared editor', () => {
     await screen.findByRole('button', { name: /edit omnipus/i })
     vi.mocked(fetchAgents).mockRejectedValue(new Error('System roster refresh offline'))
     await act(async () => { await client.invalidateQueries({ queryKey: ['agents'] }) })
-    expect(screen.getByRole('button', { name: /edit omnipus/i })).toBeVisible()
-    expect(screen.getByText(/may be out of date|last known|stale/i)).toBeVisible()
+    // Check both original postconditions after the deferred observer render.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /edit omnipus/i })).toBeVisible()
+      expect(screen.getByText(/may be out of date|last known|stale/i)).toBeVisible()
+    })
   })
   it('BDD-12.13 an uncertain model save says not confirmed and offers Retry, never Saved', async () => {
     vi.mocked(updateAgent).mockRejectedValue(new ApiError(0, 'Response lost after submit'))
