@@ -238,7 +238,7 @@ A shell command that would need a prompt (for example one that needs the network
 
 For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. An unattended call must either clear Auto-approve or have an effective Allow policy. Setting one agent to Allow cannot override a global Ask or Deny. If a required tool still resolves to Ask, review both policy layers. Changing the global ceiling affects every agent; use per-agent restrictions to retain tighter access elsewhere. Do not assume that having the chat open makes an automatically dispatched run attended. See [tools](tools.md).
 
-**What counts as unattended (founder decision, 2026-09-24).** This is not only the Schedules feature. It is every run nobody sent live:
+**What counts as unattended (founder decision, 2026-09-24).** This is not only scheduled work. It is every run nobody sent live:
 
 - a task fired by its own Calendar trigger on a workspace Board (once, recurring, or an RRULE occurrence);
 - a queued task the task drain picks up on its own polling cycle;
@@ -246,7 +246,7 @@ For example, with Auto-approve on, an unattended agent can write its report into
 - a plan's own member-task dispatch, driven by the plan engine's promotion loop;
 - a plan's automatic wake of its owner or supervisor agent, reacting to a plan-state change;
 - a parent task's automatic follow-up turn, fired once every child task reaches a terminal state;
-- the Schedules feature and per-agent heartbeats, both running on the cron engine.
+- a per-agent heartbeat, which runs on the cron engine.
 
 None of these ever shows a live approval card, even to an operator who happens to have that agent's chat window open at that moment — "someone was online" does not make a run attended. Only a turn a person actually started stays attended: a chat message, or clicking **Run now** on a task (`POST /api/v1/tasks/{id}/runs`, and the Board's "Start Task"/"Create & Run now" actions) while watching for the result. A task dispatched through the `run_task` or `execute_plan` agent tools inherits whichever of these two states the *calling* turn was already in — a chat-started delegation to `run_task` stays attended, one fired from inside an already-unattended run stays unattended.
 
