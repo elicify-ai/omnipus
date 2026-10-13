@@ -68,8 +68,18 @@ func (h *WSHandler) announceClearNotPerformed(sessionID, transcriptEntryID strin
 	if h == nil || h.agentLoop == nil {
 		return
 	}
-	clientID := h.clientMessageIDOf(sessionID, transcriptEntryID)
+	clientID, found := h.clientMessageIDLookup(sessionID, transcriptEntryID)
 	if clientID == "" {
+		// Never silent: the SPA has no timer any more, so without a failed frame
+		// the person's /clear row looks like a held one for ever. A client that
+		// sent no client_message_id has no correlated row to move, but the
+		// refusal text is in the chat and this line is the operator's trace.
+		reason := "the /clear row could not be found in the transcript"
+		if found {
+			reason = "the /clear message carried no client_message_id"
+		}
+		slog.Warn("ws: a refused /clear could not be framed as failed; its row will look held",
+			"session_id", sessionID, "entry_id", transcriptEntryID, "reason", reason)
 		return
 	}
 	h.dropPendingMessageStatus(sessionID, clientID)
@@ -84,20 +94,27 @@ func (h *WSHandler) announceClearNotPerformed(sessionID, transcriptEntryID strin
 // clientMessageIDOf returns the client_message_id the archived entry messageID
 // was persisted with, or "" when it had none or cannot be read.
 func (h *WSHandler) clientMessageIDOf(sessionID, messageID string) string {
+	id, _ := h.clientMessageIDLookup(sessionID, messageID)
+	return id
+}
+
+// clientMessageIDLookup is clientMessageIDOf plus whether the entry itself was
+// found (found with an empty id means the message carried none).
+func (h *WSHandler) clientMessageIDLookup(sessionID, messageID string) (clientID string, found bool) {
 	store := h.agentLoop.ResolveSessionStore(sessionID)
 	if store == nil {
-		return ""
+		return "", false
 	}
 	entries, err := store.ReadTranscript(sessionID)
 	if err != nil {
 		slog.Error("ws: discarded input: could not read the transcript to find the client message id",
 			"session_id", sessionID, "error", err)
-		return ""
+		return "", false
 	}
 	for _, e := range entries {
 		if e.ID == messageID {
-			return e.ClientMessageID
+			return e.ClientMessageID, true
 		}
 	}
-	return ""
+	return "", false
 }

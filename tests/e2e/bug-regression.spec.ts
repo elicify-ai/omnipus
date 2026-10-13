@@ -535,6 +535,11 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
 // existing sessions and only falls back to GetSessionStore when minting a
 // new session. See pkg/gateway/websocket.go (handleChatMessage).
 //
+// NOTE (2026-10-12): the per-agent stores were deleted (DEL-10; one shared
+// session store, pkg/agent/shared_session_store.go), so the store-split root
+// cause above can no longer occur. The test keeps its user-facing outcome and
+// seeds the session the way the shared store holds it (see step 3).
+//
 // This E2E asserts the user-facing outcome: a per-agent session can be
 // resumed and a follow-up message lands without the "session not found"
 // error toast, with the message appearing in the chat.
@@ -581,7 +586,7 @@ function requireBugHarnessHome(): void {
 // outbound `message` frame carried no `session_id`, and the gateway
 // minted a brand-new session in the shared store (attributed to the
 // default agent) instead of resuming the seeded one. Fixed by waiting
-// for the WS `done` frame that closes out `attach_session`'s replay
+// for the WS `catch_up_complete` frame that closes out `attach_session`'s catch-up
 // before sending anything — see the `expect.poll` below, right before
 // the follow-up is sent. Two harness-only bugs (unrelated to the
 // product) had to be fixed to even reach that race: the agent-creation
@@ -654,55 +659,25 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     expect(agentResp.ok(), `POST /agents failed: ${agentResp.status()} ${await agentResp.text()}`).toBe(true)
     const agent = (await agentResp.json()) as { id: string; name: string }
 
-    // 3. Seed a session directly under the agent's per-agent store —
-    //    mimicking what the task scheduler does when scheduling work to a
-    //    custom agent. The session_id ULID is from the gateway's normal
-    //    minting alphabet so validation.EntityID accepts it.
-    const sessionID = `session_${Date.now().toString(36).toUpperCase().padStart(26, 'A')}`
-    const sessionDir = path.join(
-      BUG_OMNIPUS_HOME,
-      'agents',
-      agent.id,
-      'sessions',
-      sessionID,
-    )
-    fs.mkdirSync(sessionDir, { recursive: true })
+    // 3. Create a session owned by that custom agent and seed its transcript -
+    //    what the task scheduler leaves behind when it schedules work to a
+    //    custom agent: a session with a prior user entry. There is ONE session
+    //    store now: the per-agent stores this test used to seed
+    //    (OMNIPUS_HOME/agents/<id>/sessions/) were deleted by DEL-10
+    //    (pkg/agent/shared_session_store.go: "There are no per-agent stores"),
+    //    so a session written there is invisible to REST ("404 session not
+    //    found") and the route can never attach it - every run failed at the
+    //    attach wait for that reason. Create it through the public REST API
+    //    (it lands in OMNIPUS_HOME/sessions/<id>) and seed the transcript there.
+    const sessionResp = await page.request.post(`${BUG_BASE_URL}/api/v1/sessions`, {
+      headers: authHeaders,
+      data: { agent_id: agent.id, type: 'chat' },
+    })
+    expect(sessionResp.ok(), `POST /sessions failed: ${sessionResp.status()} ${await sessionResp.text()}`).toBe(true)
+    const sessionID = ((await sessionResp.json()) as { id: string }).id
+    const sessionDir = path.join(BUG_OMNIPUS_HOME, 'sessions', sessionID)
+    expect(fs.existsSync(sessionDir), `session dir ${sessionDir} must exist after POST /sessions`).toBe(true)
     const nowISO = new Date().toISOString()
-    const meta = {
-      id: sessionID,
-      agent_id: agent.id,
-      title: `task done — open me to resume`,
-      status: 'active',
-      created_at: nowISO,
-      updated_at: nowISO,
-      stats: {
-        tokens_in: 0, tokens_out: 0, tokens_total: 0,
-        cost: 0, tool_calls: 0, message_count: 1,
-      },
-      channel: 'webchat',
-      partitions: null,
-      agent_ids: [agent.id],
-      active_agent_id: agent.id,
-      type: 'chat',
-    }
-    fs.writeFileSync(path.join(sessionDir, 'meta.json'), JSON.stringify(meta, null, 2))
-    // Seed a real one-line transcript entry, not an empty file — this is
-    // what a session the task scheduler actually created looks like (it
-    // always has at least the kickoff message). Shape matches
-    // session.TranscriptEntry (pkg/session/daypartition.go) exactly as
-    // production writes it for a real user message on the interactive WS
-    // path (uuid id, role, agent_id, content, RFC3339 timestamp —
-    // pkg/gateway/websocket.go's handleChatMessage, `entry :=
-    // session.TranscriptEntry{...}`).
-    //
-    // NOTE ON THE ORIGINAL 2026-05-30 DIAGNOSIS: this test was `.fixme`'d on
-    // the theory that an EMPTY seeded transcript reads to SPA hydration as
-    // "fresh chat", causing the follow-up to go out with no session_id.
-    // Reproducing this test live (instrumenting the real WS traffic) proved
-    // that theory wrong: an empty transcript.jsonl round-trips through
-    // attach_session/replay/done exactly as well as a seeded one. The real
-    // cause was a RACE, unrelated to transcript content — see the comment
-    // on the `expect.poll` wait below, right before the follow-up is sent.
     const priorEntry = {
       id: randomUUID(),
       role: 'user',
@@ -710,11 +685,22 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
       content: 'task done — open me to resume',
       timestamp: nowISO,
     }
-    fs.writeFileSync(path.join(sessionDir, 'transcript.jsonl'), JSON.stringify({ view_membership: 'chat', ...priorEntry }) + '\n')
+    fs.writeFileSync(
+      path.join(sessionDir, 'transcript.jsonl'),
+      JSON.stringify({ view_membership: 'chat', ...priorEntry }) + '\n',
+    )
 
     // 4. Navigate directly to the seeded session (TanStack Router hash form).
     await page.goto(`/#/sessions/${sessionID}`)
-    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+    // Wait for the chat surface to be bound to THIS session - not for the
+    // "banner" landmark. The only banner (WorkspaceTabContainer's <header>)
+    // belongs to the workspace route; a session with no workspace_id (this one:
+    // created for a custom agent with no workspace) renders the inline
+    // ChatScreen, which has none. A banner wait here is therefore a race with
+    // the route swap: it passed only if the first poll beat the swap (the old
+    // route's header still on screen) and failed 15 s later otherwise - failed
+    // the first attempt, passed on retry, in 3 of 4 runs.
+    await expect(page.locator(`[data-active-session-id="${sessionID}"]`)).toBeVisible({ timeout: 15_000 })
 
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 15_000 })
@@ -734,27 +720,56 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     // to the default agent) instead of resuming this one, and
     // `attach_session` for the real seeded session only goes out afterward.
     // That race, not an empty seeded transcript, is the actual, confirmed
-    // cause of this test's original failure. The server's `done` frame
-    // closing out `attach_session`'s replay (of the seeded transcript entry
-    // above) is the one genuine "session attached" signal in the WS
-    // vocabulary — there is no separate ack frame type for it.
-    await expect
+    // cause of this test's original failure. Since the #823 catch-up redesign
+    // the terminal frame of an attach_session response (incremental AND
+    // snapshot path) is `catch_up_complete` (contracts/asyncapi.yaml,
+    // receiveCatchUpComplete) - NOT `done`, which now only ends a TURN. This
+    // wait used to key on `done` and timed out on every run once the
+    // redesign landed: the same "attach finished" signal, renamed.
+    const frameDigest = () =>
+      receivedFrames
+        .map((raw) => {
+          try {
+            const f = JSON.parse(raw) as { type?: string; session_id?: string }
+            return `${f.type ?? '?'}:${f.session_id ?? '-'}`
+          } catch {
+            return 'unparseable'
+          }
+        })
+        .filter((d) => !d.startsWith('ping') && !d.startsWith('pong'))
+        .slice(-40)
+        .join(' ')
+    try {
+      await expect
       .poll(
         () =>
           receivedFrames.some((raw) => {
             try {
               const frame = JSON.parse(raw) as { type?: string; session_id?: string }
-              return frame.type === 'done' && frame.session_id === sessionID
+              return frame.type === 'catch_up_complete' && frame.session_id === sessionID
             } catch {
               return false
             }
           }),
         {
           timeout: 15_000,
-          message: `expected a WS 'done' frame for session ${sessionID} confirming attach_session's replay completed before sending a follow-up`,
+          message: `expected a WS 'catch_up_complete' frame for session ${sessionID} confirming attach_session's catch-up completed before sending a follow-up`,
         },
       )
       .toBe(true)
+    } catch (err) {
+      // Name what DID arrive: a missing terminal frame and a terminal frame
+      // carrying a different session id are different defects.
+      const detail = await page.request
+        .get(`${BUG_BASE_URL}/api/v1/sessions/${sessionID}`, { headers: authHeaders, failOnStatusCode: false })
+        .then(async (r) => `${r.status()} ${(await r.text()).slice(0, 300)}`)
+        .catch((e: unknown) => `request failed: ${String(e)}`)
+      throw new Error(
+        `${(err as Error).message}\nlast WS frames received (type:session_id): ${frameDigest()}\n` +
+          `GET /api/v1/sessions/${sessionID} -> ${detail}\npage url: ${page.url()}`,
+        { cause: err },
+      )
+    }
 
     // 5. Listen for the "session not found" error frame. If it arrives,
     //    the bug is back. We watch the page's connection store for a

@@ -308,7 +308,6 @@ func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
 	if !w.inTurn.Load() || w.systemTurn.Load() {
 		return false
 	}
-	w.parent.markRequestDelivered(msg.SessionID, msg.TranscriptEntryID)
 	if err := w.parent.enqueueSteeringFromMessage(msg); err != nil {
 		// A steering-rejected error here means the message was NOT accepted
 		// by the steering path (classify failure, revive failure). It is
@@ -319,6 +318,10 @@ func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
 			map[string]any{"scope": w.scope, "error": err.Error()})
 		return false
 	}
+	// Accepted into the live turn: the model gets the text at its next
+	// boundary. Marked only now - a rejected steer falls back to the inbox and
+	// is delivered (or dropped) by the turn that really admits it.
+	w.parent.markRequestDelivered(msg.SessionID, msg.TranscriptEntryID)
 	return true
 }
 
@@ -570,7 +573,9 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	// worker's in-turn flag are all settled. An unanswered request gets its one
 	// reminder (request_reminder.go).
 	defer al.remindUnansweredRequests(msg.SessionID)
-	al.markRequestDelivered(msg.SessionID, msg.TranscriptEntryID)
+	// No delivered mark here: the turn is not admitted yet, and a stopped agent
+	// drops this wake. The mark is written once the turn is admitted
+	// (runInboundTurnWithRevival), when the model really gets the text.
 	ctx, executionEntry := ordinaryExecutionContext(ctx)
 	defer func() {
 		if err := al.finishExecutionDisposition(executionEntry.disposition); err != nil {

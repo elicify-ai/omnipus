@@ -123,6 +123,13 @@ type Capture struct {
 	// held for a stopped receiver is delivered from here when the receiver runs
 	// again; the transcript entry alone does not reach the model.
 	Text string `json:"text,omitempty"`
+	// Held is set when the request was admitted while the receiver was stopped.
+	// Only a held request moves its sender's row on when it is finally delivered.
+	Held bool `json:"held,omitempty"`
+	// SenderMessageID is the sender's own message id (the web client_message_id)
+	// for a request a person sent from a chat, so delivery of a held request can
+	// move that message's row on. Empty for an agent sender or a connector.
+	SenderMessageID string `json:"sender_message_id,omitempty"`
 }
 
 // Validate checks a capture is complete enough to route an answer.

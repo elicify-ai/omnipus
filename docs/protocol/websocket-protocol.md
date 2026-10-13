@@ -66,7 +66,7 @@ Sends a user chat message to the agent for the given session.
 | session_id | string | no | Include to continue an existing session; omit to start a new session. |
 | agent_id | string | no | The agent to handle the message. If omitted, uses the active session's agent. |
 | client_message_id | string | no | Your ID for this message (1 to 128 characters). With it the gateway reports the message's delivery with `message_status` frames and ties any refusal to the message. |
-| recipient | object `{workspace_id, agent_id}` | no | Send the message as a request to a peer agent, the way the web app's `@` menu does. Valid only together with `session_id`; refused otherwise. The message text is delivered verbatim to that agent's own chat, and its answer comes back into this chat. |
+| recipient | object `{workspace_id, agent_id}` | no | Send the message as a request to a peer agent, the way the web app's `@` menu does. Valid only together with `session_id`; refused otherwise. The request is delivered to that agent's own chat under a header the server writes (who sent it, and how to answer); the agent's answer comes back into this chat as a reply from that agent. |
 | auto_approve | boolean or null | no | Auto-approve choice for a **new** session only: `true` turns Auto on for that chat, even if the global default is off; `false` turns it off; `null` or omission leaves it following the global default. Ignored when `session_id` is present; use `session_mode_update` to change an existing session. |
 
 To start a new chat with Auto off from its first tool call, carry the choice on the first `message` and omit `session_id`:

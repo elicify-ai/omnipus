@@ -335,10 +335,11 @@ export function busyFlagIsUnbacked(
   for (let i = b.messageOrder.length - 1; i >= 0; i--) {
     const m = b.messagesById[b.messageOrder[i]]
     if (m?.role !== 'assistant') continue
-    // A message-scoped refusal notice (frames.ts, the C2 branch) is an error
-    // bubble appended AFTER the closed-by-steer bubble while that turn keeps
-    // running: it is not the turn's reply, so look past it.
-    if (m.status === 'error' && !m.isStreaming) continue
+    // A message-scoped refusal notice (frames.ts, the C2 branch) is appended
+    // AFTER the closed-by-steer bubble while that turn keeps running: it is not
+    // the turn's reply, so look past it. A real turn-ending error bubble IS a
+    // reply and is not skipped.
+    if (m.refusalNotice) continue
     if (m.closedBySteer) return false
     break
   }

@@ -114,6 +114,8 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 			SessionID: srcID,
 		},
 		AskApproved: hcm.recipientAskApproved,
+		// The sender's own message id: a held request's delivery moves this row on.
+		SenderMessageID: hcm.clientMessageID,
 		// U8 r4 F12: every receiver authorization decision (including a late
 		// Ask and its approval wait) is finished before this runs; only then is
 		// the user's message saved and echoed, then the receiver's side written.
@@ -129,6 +131,14 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 	})
 	if errors.Is(err, errRecipientSourceRefused) {
 		return
+	}
+	if errors.Is(err, agent.ErrRequestRecordedNotStarted) {
+		// Recorded in the recipient's main and its ledger; only the wake could not
+		// be published. It is delivered when the recipient next runs, so the row
+		// says it is waiting - "failed" would invite a duplicate re-send.
+		logsafeWarn("ws: request recorded but the recipient's turn could not be started; reported as held",
+			"session_id", srcID, "error", err)
+		held, err = true, nil
 	}
 	if err != nil {
 		logsafeWarn("ws: could not deliver the request to the recipient", "session_id", srcID, "error", err)
@@ -146,8 +156,26 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 		// The recipient is stopped: the request waits until it runs again. The
 		// sender's row says so (after "received"); a held request is not a
 		// failure and no later tick reports it as one.
+		hcm.h.setAcceptedMessageState(hcm.sessionID, hcm.clientMessageID, "held")
 		hcm.sendMessageStatus("held")
 	}
+}
+
+// announceHeldRequestDelivered moves the sender's row on when a held request is
+// finally delivered to its recipient: message_status "working" through the same
+// hub path as every other tick (journaled, so a reload replays held then
+// working). Never "failed": delivery is the opposite of a failure.
+func (h *WSHandler) announceHeldRequestDelivered(senderSessionID, clientMessageID string) {
+	if h == nil || senderSessionID == "" || clientMessageID == "" {
+		return
+	}
+	h.setAcceptedMessageState(senderSessionID, clientMessageID, "working")
+	h.hubPublishFrame(senderSessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
+		Type:            string(generated.WsFrameTypeMessageStatus),
+		SessionId:       senderSessionID,
+		ClientMessageId: clientMessageID,
+		State:           "working",
+	}, nil)
 }
 
 // sendRecipientRefusalError sends the message-scoped refusal of an @-recipient

@@ -179,11 +179,14 @@ afterEach(() => {
  *
  * S5-12/N12: one macrotask is NOT a full observation window for a NEGATIVE
  * assertion. The comment here used to claim the code has "no timers of its
- * own"; it does - clear-refetch.ts arms setTimeout(onConfirmTimeout) and
- * frames.ts has gap/replay retry timers - so a regression that issued the read
- * from a later timer tick would sail past a bare `settle()`. Use this only
- * where the code under test genuinely has no timer path; the timer-covering
- * negative in the S5-12 block below advances a fake clock instead.
+ * own"; it does - frames.ts arms three (gapReattachRetryTimers,
+ * replayErrorRetryTimers, replayingClearTimers) - so a regression that issued
+ * the read from a later timer tick would sail past a bare `settle()`. Use this
+ * only where the code under test genuinely has no timer path; the
+ * timer-covering negative in the S5-12 block below advances a fake clock
+ * instead. (R2-X-qa-13: an earlier version of this note also named
+ * clear-refetch.ts's own bound, which ruling S3-02 DELETED - it is gone from
+ * the source, so it is gone from this comment.)
  */
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -796,10 +799,10 @@ describe('S5-12/N12 — a negative is checked past every timer window, not one m
       useChatStore.getState().handleFrame(doneFrame('turn-x', 1))
 
       // A bare `settle()` only proves "not called YET" — every path that could
-      // issue this read later runs from a timer (frames.ts's gap and replay
-      // retries, clear-refetch.ts's own bound), and the shortest of those is
-      // well under this window. Advancing the clock is what turns the negative
-      // into a real claim.
+      // issue this read later runs from a timer (frames.ts's three:
+      // gapReattachRetryTimers, replayErrorRetryTimers, replayingClearTimers),
+      // and the shortest of those is well under this window. Advancing the
+      // clock is what turns the negative into a real claim.
       await vi.advanceTimersByTimeAsync(5_000)
       expect(requestMock).not.toHaveBeenCalled()
     } finally {

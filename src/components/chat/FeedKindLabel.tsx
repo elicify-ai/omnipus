@@ -30,10 +30,20 @@ import { useId } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ListChecks } from '@phosphor-icons/react'
 import { fetchAgents } from '@/lib/api'
+import { logDiagnostic } from '@/lib/telemetry'
 import { feedKindLabel } from '@/lib/nav/chatKindLabel'
 import { isMainSession } from '@/lib/nav/sessionCoreSeam'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+
+// A header that cannot be named is left empty on purpose (nothing honest to
+// show); this leaves a trace, once per session, so the empty line is debuggable.
+const reportedUnavailable = new Set<string>()
+function noteHeaderUnavailable(sessionId: string): void {
+  if (reportedUnavailable.has(sessionId)) return
+  reportedUnavailable.add(sessionId)
+  logDiagnostic('chatHeaderLabelUnavailable', { sessionId })
+}
 
 export function FeedKindLabel() {
   const labelId = useId()
@@ -68,7 +78,10 @@ export function FeedKindLabel() {
     })
     // A main with neither a resolvable name nor an id (a failed roster and a
     // descriptor predating agent ids) shows nothing rather than a guess.
-    if (label == null) return null
+    if (label == null) {
+      noteHeaderUnavailable(descriptor.id)
+      return null
+    }
     return (
       <div
         role="status"

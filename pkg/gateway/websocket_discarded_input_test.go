@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -146,4 +148,49 @@ func TestClearNotPerformed_IsFramedAsAFailedMessageStatus(t *testing.T) {
 		t.Fatalf("an unknown row must frame nothing, got %s", raw)
 	case <-time.After(200 * time.Millisecond):
 	}
+}
+
+// R2-S2-01: a refused /clear whose row cannot be signalled must never be silent.
+// With the SPA timer gone, "no failed frame" reads as "held", so every web case
+// that cannot publish the frame leaves a Warn naming the session and the entry.
+func captureSlogWarn(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+func TestAnnounceClearNotPerformed_UnresolvableRowIsLoggedNotSilent(t *testing.T) {
+	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
+	wc := makeTestConn()
+	handler.handleChatMessageWithClientID(context.Background(), "chat-r2s2", "", "hello", "", nil,
+		"", "", false, "client-r2s2-1", nil, wc)
+	sessionID := readMessageStatusFrames(t, wc, 1)[0].SessionId
+
+	logs := captureSlogWarn(t)
+	handler.announceClearNotPerformed(sessionID, "no-such-entry")
+	out := logs.String()
+	assert.Contains(t, out, `"level":"WARN"`)
+	assert.Contains(t, out, sessionID)
+	assert.Contains(t, out, "no-such-entry")
+}
+
+func TestAnnounceClearNotPerformed_RowWithoutClientIDIsLoggedNotSilent(t *testing.T) {
+	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
+	wc := makeTestConn()
+	handler.handleChatMessageWithClientID(context.Background(), "chat-r2s2b", "", "hello", "", nil,
+		"", "", false, "client-r2s2-2", nil, wc)
+	sessionID := readMessageStatusFrames(t, wc, 1)[0].SessionId
+	store := handler.agentLoop.ResolveSessionStore(sessionID)
+	require.NoError(t, store.AppendTranscript(sessionID, session.TranscriptEntry{
+		ID: "clear-row-noid", Role: "user", Content: "/clear", Timestamp: time.Now().UTC(),
+	}))
+
+	logs := captureSlogWarn(t)
+	handler.announceClearNotPerformed(sessionID, "clear-row-noid")
+	out := logs.String()
+	assert.Contains(t, out, `"level":"WARN"`, "a refused /clear with no client_message_id cannot be framed; that must be logged")
+	assert.Contains(t, out, "clear-row-noid")
 }
