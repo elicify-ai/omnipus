@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -67,6 +68,26 @@ func ensureIsolatedTestOmnipusHome(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 }
 
+// pinConfigWorkspaceToTestHome re-points a config built BEFORE the per-test home
+// existed. config.DefaultConfig() resolves Agents.Defaults.Home (the "workspace" key) from
+// OMNIPUS_HOME / "$HOME/.omnipus" at the moment it is called, and the agent loop
+// derives its home (sessions, audit log, migration markers) from that workspace's
+// parent. A test that built its config first (newSchedulesTestAPI does) therefore
+// carried the user-home fallback path even after ensureIsolatedTestOmnipusHome had
+// set a temp OMNIPUS_HOME: it read and wrote ~/.omnipus. A workspace under the
+// process's fallback home is moved under the per-test home; anything else (a test
+// that set its own workspace) is left alone.
+func pinConfigWorkspaceToTestHome(cfg *config.Config) {
+	if cfg == nil || isolatedProcessHome == nil {
+		return
+	}
+	fallback := isolatedProcessHome.OmnipusDir + string(filepath.Separator)
+	ws := cfg.Agents.Defaults.Home
+	if rel, ok := strings.CutPrefix(ws, fallback); ok {
+		cfg.Agents.Defaults.Home = filepath.Join(config.OmnipusHomeDir(), rel)
+	}
+}
+
 // mustAgentLoop is a gateway test helper that calls agent.NewAgentLoop and
 // fatals on error. Reduces boilerplate after the return-type change (FR-029a).
 //
@@ -93,6 +114,7 @@ func mustAgentLoop(
 ) *agent.AgentLoop {
 	t.Helper()
 	ensureIsolatedTestOmnipusHome(t)
+	pinConfigWorkspaceToTestHome(cfg)
 	ensureTestWorkspaceMembership(t, cfg)
 	al, err := agent.NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {
@@ -153,6 +175,7 @@ func mustAgentLoopNoWorkspaceSeed(
 ) *agent.AgentLoop {
 	t.Helper()
 	ensureIsolatedTestOmnipusHome(t)
+	pinConfigWorkspaceToTestHome(cfg)
 	al, err := agent.NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {
 		t.Fatalf("agent.NewAgentLoop: %v", err)
