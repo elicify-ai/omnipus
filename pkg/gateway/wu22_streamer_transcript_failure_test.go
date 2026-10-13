@@ -129,8 +129,9 @@ func wu22GatewayFinalFrames(t *testing.T, h *wu22GatewayFinalizeHarness) ([][]by
 
 func wu22GatewayDoneFrames(t *testing.T, frames [][]byte) []generated.DoneFrame {
 	t.Helper()
-	var done []generated.DoneFrame
-	for _, raw := range framesOfType(t, frames, "done") {
+	doneRaw := framesOfType(t, frames, "done")
+	done := make([]generated.DoneFrame, 0, len(doneRaw))
+	for _, raw := range doneRaw {
 		var frame generated.DoneFrame
 		require.NoError(t, json.Unmarshal(raw, &frame))
 		done = append(done, frame)
