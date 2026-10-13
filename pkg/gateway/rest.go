@@ -82,11 +82,6 @@ type restAPI struct {
 	// preAuthOnboardingWindowOpen (rest_auth.go). False in test
 	// constructions, which is correct: they have no corrupt state file.
 	onboardingStateUnknown bool
-	// copilotProbe bounds the cost of the GitHub Copilot sign-in probe (C2):
-	// one concurrent vendor-CLI exec at a time, and one premium request per
-	// cache TTL rather than one per HTTP call. Zero value is ready; see
-	// copilotProbeGuard (rest_signin_copilot.go).
-	copilotProbe copilotProbeGuard
 	// searchChecks bounds manual diagnostic requests per static search service.
 	searchChecks searchCheckAdmission
 	homePath     string // ~/.omnipus — root of the data directory

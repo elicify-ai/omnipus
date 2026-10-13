@@ -5,6 +5,16 @@
 # KEEP: openai-chatgpt HTTP/OAuth, subagent_3p and external CLI drivers.
 # The runner-side Codex credential pre-check is explicitly allowed by SYMBOL,
 # not by exempting the runner directory from provider-id / mechanism checks.
+#
+# Historical decision records (ADRs, dated internal specs and their reviews,
+# research notes) may still name the retired kinds AS HISTORY: rewriting a
+# past decision's text to erase a name is falsifying the record, not removing
+# a trace — the same ruling as ADR-068 §2.4 for its own deletions. Those
+# records are enumerated per-path in scripts/no-cli-model-providers.allow
+# (data file, absent = no exemptions, so the self-check's fixture trees need
+# nothing); every row there is a hole in the guard, so new live product or
+# user docs never belong in it. Adjust it only with a stated reason in the
+# same commit, never to hide a remaining live reference.
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 2
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -51,8 +61,24 @@ def read_error(error):
     raise error
 
 
+allow_path = root / "scripts" / "no-cli-model-providers.allow"
+allow_res = []
+if allow_path.is_file():
+    try:
+        for raw_line in allow_path.read_text(encoding="utf-8").splitlines():
+            entry = raw_line.strip()
+            if not entry or entry.startswith("#"):
+                continue
+            allow_res.append(re.compile("^(" + entry + ")$"))
+    except re.error as error:
+        print(f"{name}: bad allow-list entry in {allow_path}: {error}", file=sys.stderr)
+        sys.exit(2)
+
+
 def historical(path):
-    return path == guard_path or path.startswith(archive_prefixes)
+    if path == guard_path or path.startswith(archive_prefixes):
+        return True
+    return any(pattern.match(path) for pattern in allow_res)
 
 
 def retirement_notice(path, line, retired_section):

@@ -47,7 +47,6 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 | CloudFerro Sherlock (`cloudferro-sherlock`) | API key | Unknown (not in catalog) |
 | Cloudflare AI Gateway (`cloudflare-ai-gateway`) | API key | Unknown (not in catalog) |
 | Cloudflare Workers AI (`cloudflare-workers-ai`) | API key | Unknown (not in catalog) |
-| Codex CLI (`codex-cli`) | sign in | Unknown (not in catalog) |
 | Cohere (`cohere`) | API key | Unknown (not in catalog) |
 | CoralBricks (`coralbricks`) | API key | Unknown (not in catalog) |
 | Cortecs (`cortecs`) | API key | Unknown (not in catalog) |
@@ -71,7 +70,6 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 | FreeModel (`freemodel`) | API key | Unknown (not in catalog) |
 | Friendli (`friendli`) | API key | Unknown (not in catalog) |
 | FrogBot (`frogbot`) | API key | Unknown (not in catalog) |
-| GitHub Copilot (`github-copilot`) | sign in | Unknown (not in catalog) |
 | GitLab Duo (`gitlab`) | API key | Unknown (not in catalog) |
 | GMI Cloud (`gmicloud`) | API key | Unknown (not in catalog) |
 | Google (`google`) | API key | Unknown (not in catalog) |
@@ -471,12 +469,6 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 | `@cf/deepseek-ai/deepseek-v4-flash-0731`<br>`@cf/deepseek-ai/deepseek-v4-pro-0813`<br>`@cf/google/gemma-4-26b-a4b-it`<br>`@cf/ibm-granite/granite-4.0-h-micro`<br>`@cf/meta/llama-3.3-70b-instruct-fp8-fast`<br>`@cf/meta/llama-4-scout-17b-16e-instruct`<br>`@cf/mistralai/mistral-small-3.1-24b-instruct`<br>`@cf/moonshotai/kimi-k2.6`<br>`@cf/moonshotai/kimi-k2.7-code`<br>`@cf/nvidia/nemotron-3-120b-a12b`<br>`@cf/openai/gpt-oss-120b`<br>`@cf/openai/gpt-oss-20b`<br>`@cf/qwen/qwen3-30b-a3b-fp8`<br>`@cf/qwen/qwen3.8-27b`<br>`@cf/zai-org/glm-4.7-flash`<br>`@cf/zai-org/glm-5.2` | Yes |
 | `@cf/aisingapore/gemma-sea-lion-v4-27b-it`<br>`@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`<br>`@cf/meta/llama-3.1-8b-instruct-fp8`<br>`@cf/meta/llama-3.2-11b-vision-instruct`<br>`@cf/meta/llama-3.2-1b-instruct`<br>`@cf/meta/llama-3.2-3b-instruct`<br>`@cf/meta/llama-guard-3-8b`<br>`@cf/qwen/qwen2.5-coder-32b-instruct`<br>`@cf/qwen/qwq-32b` | No |
 
-### Codex CLI (`codex-cli`)
-
-| Models | Tool use |
-|---|---|
-| `gpt-5.3-codex-spark`<br>`gpt-5.3-codex` | Yes |
-
 ### Cohere (`cohere`)
 
 | Models | Tool use |
@@ -622,12 +614,6 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 | Models | Tool use |
 |---|---|
 | `claude-haiku-4-5`<br>`claude-opus-4-6`<br>`claude-opus-4-7`<br>`claude-sonnet-4-6`<br>`deepseek-v4-pro`<br>`gemini-2.5-flash`<br>`gemini-2.5-pro`<br>`gemini-3-1-pro-preview`<br>`gemini-3-flash-preview`<br>`gpt-4o`<br>`gpt-5-3-codex`<br>`gpt-5-4-mini`<br>`gpt-5-4-nano`<br>`gpt-5-5`<br>`gpt-oss-120b`<br>`gpt-oss-20b`<br>`grok-4-1-fast-non-reasoning`<br>`grok-4-1-fast-reasoning`<br>`grok-4-3`<br>`grok-code-fast-1`<br>`kimi-k2-6`<br>`kimi-k2.5`<br>`minimax-m2-5`<br>`minimax-m2-7`<br>`qwen-3-6-plus`<br>`zai-glm-5-1` | Yes |
-
-### GitHub Copilot (`github-copilot`)
-
-| Models | Tool use |
-|---|---|
-| `claude-fable-5`<br>`claude-haiku-4.5`<br>`claude-opus-4.5`<br>`claude-opus-4.6`<br>`claude-opus-4.7`<br>`claude-opus-4.8`<br>`claude-opus-5`<br>`claude-sonnet-4.5`<br>`claude-sonnet-4.6`<br>`claude-sonnet-4`<br>`claude-sonnet-5`<br>`gemini-3.1-pro-preview`<br>`gemini-3.5-flash`<br>`gemini-3.6-flash`<br>`gemini-3.7-flash`<br>`gpt-4.1`<br>`gpt-5-mini`<br>`gpt-5.2-codex`<br>`gpt-5.2`<br>`gpt-5.3-codex`<br>`gpt-5.4-mini`<br>`gpt-5.4-nano`<br>`gpt-5.4`<br>`gpt-5.5`<br>`gpt-5.6-luna`<br>`gpt-5.6-sol`<br>`gpt-5.6-terra`<br>`grok-4.5`<br>`grok-4.6`<br>`kimi-k2.7-code`<br>`kimi-k3`<br>`mai-code-1-flash-picker`<br>`mai-code-1.1-flash` | Yes |
 
 ### GitLab Duo (`gitlab`)
 

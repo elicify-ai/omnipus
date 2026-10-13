@@ -51,26 +51,6 @@ func TestCreateProviderFromConfig_RemovedIDsAreUnknown(t *testing.T) {
 	}
 }
 
-// TestCreateProviderFromConfig_CodexCLI_StillDispatches — FR-003 deletion half:
-// the kept id `codex-cli` still dispatches to NewCodexCliProvider.
-func TestCreateProviderFromConfig_CodexCLI_StillDispatches(t *testing.T) {
-	cfg := &config.ModelConfig{
-		Provider: "codex-cli",
-		Model:    "gpt-5.4-codex",
-		Home:     t.TempDir(),
-	}
-	provider, modelID, err := CreateProviderFromConfig(cfg)
-	if err != nil {
-		t.Fatalf("CreateProviderFromConfig(codex-cli) error = %v", err)
-	}
-	if _, ok := provider.(*CodexCliProvider); !ok {
-		t.Fatalf("provider = %T, want *CodexCliProvider", provider)
-	}
-	if modelID != "gpt-5.4-codex" {
-		t.Errorf("modelID = %q, want %q", modelID, "gpt-5.4-codex")
-	}
-}
-
 // TestCreateProviderFromConfig_NoStoreOAuthLadder — FR-003: the id-keyed
 // store-OAuth ladder is gone. A ModelConfig for `openai` / `anthropic`
 // carrying the retired AuthMethod values must never consult the auth store;

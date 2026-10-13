@@ -349,7 +349,7 @@ func ScrubGatewayEnv() []string {
 //	OPENAI_BASE_URL      — Codex + opencode: provider endpoint override.
 //	CODEX_HOME           — Codex: override for ~/.codex (holds auth.json).
 //	                       Default ~/.codex is reached via HOME; this honors a
-//	                       custom location. See providers.CodexHomeEnvVar.
+//	                       custom location (the runner's codex_auth.go reader).
 //	CODEX_API_KEY        — Codex: the env var `codex exec` actually checks
 //	                       first for non-interactive auth (load_auth, gated by
 //	                       `enable_codex_api_key_env: true`, which `codex exec`

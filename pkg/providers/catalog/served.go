@@ -165,8 +165,6 @@ type providerJSON struct {
 	AuthMethods       []AuthMethod         `json:"auth_methods"`
 	Aliases           []string             `json:"aliases"`
 	Locality          Locality             `json:"locality"`
-	CLIKind           string               `json:"cli_kind,omitempty"`
-	TokenSource       string               `json:"token_source,omitempty"`
 	ResizeLimits      resizeLimitsJSON     `json:"resize_limits"`
 	Models            []modelJSON          `json:"models"`
 }
@@ -240,8 +238,6 @@ func providerToJSON(p *Provider, gate SignInGate) providerJSON {
 		AuthMethods:       ServedAuthMethods(p, gate),
 		Aliases:           p.Aliases,
 		Locality:          p.Locality,
-		CLIKind:           p.CLIKind,
-		TokenSource:       p.TokenSource,
 		ResizeLimits:      resizeLimitsJSON(p.ResizeLimits),
 		Models:            make([]modelJSON, 0, len(p.Models)),
 	}

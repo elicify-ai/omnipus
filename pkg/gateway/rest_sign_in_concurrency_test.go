@@ -201,12 +201,10 @@ func TestSignInPoll_SlowDownWidensStoredInterval(t *testing.T) {
 	require.Equal(t, http.StatusOK, startW.Code, startW.Body.String())
 	var startResp gen.SignInStartResponse
 	require.NoError(t, json.Unmarshal(startW.Body.Bytes(), &startResp))
-	deviceCode, err := startResp.AsSignInStartResponseDeviceCode()
-	require.NoError(t, err)
-	require.Equal(t, 1, deviceCode.IntervalSeconds, "the vendor mux reports interval 1")
+	require.Equal(t, 1, startResp.IntervalSeconds, "the vendor mux reports interval 1")
 
 	state = "slow_down"
-	pollBody := gen.SignInPollRequest{DeviceAuthId: deviceCode.DeviceAuthId}
+	pollBody := gen.SignInPollRequest{DeviceAuthId: startResp.DeviceAuthId}
 
 	for _, want := range []int{2, 4} {
 		w := doJSON(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/poll", pollBody)

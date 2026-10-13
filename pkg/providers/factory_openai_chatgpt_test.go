@@ -48,7 +48,8 @@ func openAIChatGPTTestConfig() *config.ModelConfig {
 
 // TestCreateProviderFromConfig_OpenAIChatGPT_Dispatches — ADR-068 §8b
 // (T068-14): "openai-chatgpt" dispatches to a *CodexProvider backed by a
-// store-OAuth token source, distinct from codex-cli's subprocess dispatch.
+// store-OAuth token source — the only OpenAI subscription transport since
+// the subprocess model providers were deleted (WU-24).
 func TestCreateProviderFromConfig_OpenAIChatGPT_Dispatches(t *testing.T) {
 	withTestCredentialStore(t)
 

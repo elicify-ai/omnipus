@@ -13,10 +13,11 @@ properties:
       - anthropic
       - google
       - ollama
-      - cli
       - bedrock
     description: >
-      Wire protocol to use (ADR-067 FR-013/FR-014). For a catalog provider:
+      Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess
+      protocol is no longer accepted — WU-24, founder 2026-10-14). For a
+      catalog provider:
       optional; absent → the catalog's primary; a protocol the provider does
       not offer → 400. For a custom row (id not in the catalog): required and
       restricted to openai-compatible | anthropic (400 otherwise).

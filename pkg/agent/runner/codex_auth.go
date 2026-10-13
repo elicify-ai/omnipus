@@ -1,4 +1,9 @@
-package providers
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+//
+// Copyright (c) 2026 Omnipus contributors
+
+package runner
 
 import (
 	"encoding/json"
@@ -14,10 +19,18 @@ import (
 const CodexHomeEnvVar = "CODEX_HOME"
 
 // CodexCliAuth represents the subset of the ~/.codex/auth.json file structure
-// that Omnipus reads. Only tokens.access_token and tokens.account_id are
-// modelled (ADR-068 FR-007): refresh_token is deliberately absent — Omnipus
-// never refreshes, writes or proxies the vendor credential file; a session
-// ends at expiry and needs `codex login`.
+// that the runner's connection pre-check reads. Only tokens.access_token and
+// tokens.account_id are modelled: refresh_token is deliberately absent — the
+// runner never refreshes, writes or proxies the vendor credential file; a
+// session ends at expiry and needs `codex login`.
+//
+// WU-24 (founder 2026-10-14): this reader lives in the RUNNER because the
+// third-party Codex worker's sign-in pre-check (conntest.go::supportedCLIs)
+// still needs it. The model-provider halves that used to share it — the
+// codex-cli/github-copilot subprocess providers, the openai-chatgpt
+// auth.json import, and the token_source sign-in probe — are deleted; this
+// is the one surviving consumer, and scripts/check-no-cli-model-providers.sh
+// allows these symbols nowhere else.
 type CodexCliAuth struct {
 	Tokens struct {
 		AccessToken string `json:"access_token"`
@@ -26,7 +39,7 @@ type CodexCliAuth struct {
 }
 
 // ReadCodexCliCredentials reads the access token and account id from the Codex
-// CLI's auth.json file. The file is read-only to Omnipus (FR-007).
+// CLI's auth.json file. The file is read-only to Omnipus.
 // Expiry is estimated as file modification time + 1 hour (same approach as moltbot).
 func ReadCodexCliCredentials() (accessToken, accountID string, expiresAt time.Time, err error) {
 	authPath, err := resolveCodexAuthPath()
@@ -56,25 +69,6 @@ func ReadCodexCliCredentials() (accessToken, accountID string, expiresAt time.Ti
 	}
 
 	return auth.Tokens.AccessToken, auth.Tokens.AccountID, expiresAt, nil
-}
-
-// CreateCodexCliTokenSource creates a token source that reads from ~/.codex/auth.json.
-// This allows the existing CodexProvider to reuse Codex CLI credentials.
-func CreateCodexCliTokenSource() func() (string, string, error) {
-	return func() (string, string, error) {
-		token, accountID, expiresAt, err := ReadCodexCliCredentials()
-		if err != nil {
-			return "", "", fmt.Errorf("reading codex cli credentials: %w", err)
-		}
-
-		if time.Now().After(expiresAt) {
-			return "", "", fmt.Errorf(
-				"codex cli credentials expired (auth.json last modified > 1h ago). Run: codex login",
-			)
-		}
-
-		return token, accountID, nil
-	}
 }
 
 func resolveCodexAuthPath() (string, error) {

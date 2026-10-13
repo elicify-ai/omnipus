@@ -34,13 +34,14 @@ func rowOffersSignIn(row catalog.Provider) bool {
 }
 
 // signInElsewhereMsg answers a sign-in request on a row that cannot sign in
-// by naming the rows of the SAME company that can — in-app sign-in rows
-// (no cli_kind) first, then vendor-CLI rows, catalog order within each. It
-// returns "" when providerID is not in doc, has no company, or no sibling
-// offers sign-in; the caller then keeps its generic refusal.
+// by naming the rows of the SAME company that can, catalog order. It returns
+// "" when providerID is not in doc, has no company, or no sibling offers
+// sign-in; the caller then keeps its generic refusal.
 //
 // Example (the committed catalog): `sign-in is not available for "OpenAI";
-// OpenAI sign-in lives on "ChatGPT (subscription)" or "Codex CLI"`.
+// OpenAI sign-in lives on "ChatGPT (subscription)"`. The vendor-CLI rows the
+// message used to name as a second group were deleted with the CLI-backed
+// model providers (WU-24, founder 2026-10-14).
 func signInElsewhereMsg(doc *catalog.Document, providerID string) string {
 	if doc == nil {
 		return ""
@@ -55,19 +56,14 @@ func signInElsewhereMsg(doc *catalog.Document, providerID string) string {
 	if self == nil || strings.TrimSpace(self.Company) == "" {
 		return ""
 	}
-	var inApp, viaCLI []string
+	var names []string
 	for i := range doc.Providers {
 		p := &doc.Providers[i]
 		if p.ID == self.ID || p.Company != self.Company || !rowOffersSignIn(*p) {
 			continue
 		}
-		if p.CLIKind == "" {
-			inApp = append(inApp, fmt.Sprintf("%q", p.Name))
-		} else {
-			viaCLI = append(viaCLI, fmt.Sprintf("%q", p.Name))
-		}
+		names = append(names, fmt.Sprintf("%q", p.Name))
 	}
-	names := append(inApp, viaCLI...)
 	if len(names) == 0 {
 		return ""
 	}

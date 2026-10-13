@@ -3,17 +3,17 @@
 // Drives `codex exec --json` without the
 // `--dangerously-bypass-approvals-and-sandbox` flag (FR-5.3 / US-5 requirement).
 //
-// Codex stream-json event shapes (from pkg/providers/codex_cli_provider.go):
+// Codex stream-json event shapes (the vendor CLI's own stream-json output):
 //
 //	{"type":"item.completed","item":{"id":"...","type":"agent_message","text":"...",...},...}
 //	{"type":"turn.completed","usage":{"input_tokens":N,"output_tokens":N},...}
 //	{"type":"error","message":"..."}
 //	{"type":"turn.failed","error":{"message":"..."}}
 //
-// NOTE: The shapes are defined in pkg/providers/codex_cli_provider.go.
-// Per the spec, these are REUSED here as a reference; that file is NOT modified.
-// The driver re-defines equivalent local types to avoid a dependency on the
-// providers package (which would create an import cycle: runner → providers → ...).
+// NOTE: These shapes are defined HERE and only here. The former subprocess
+// model provider that once mirrored them was deleted outright with the
+// CLI-backed model providers (WU-24, founder 2026-10-14); the external CLI
+// workers are a different mechanism and stay.
 
 package runner
 
@@ -39,9 +39,8 @@ var knownCodexVersionPrefixes = []string{"0.", "1.", "2."}
 // never overrides it.
 var codexBinName = "codex"
 
-// codexStreamEvent mirrors the shape from pkg/providers/codex_cli_provider.go.
-// It is defined locally to avoid an import cycle and is kept in sync with the
-// provider's codexEvent type by convention (both unmarshal the same NDJSON).
+// codexStreamEvent is this driver's local model of one NDJSON event line from
+// `codex exec --json` (see the file header for the shapes).
 type codexStreamEvent struct {
 	Type     string               `json:"type"`
 	ThreadID string               `json:"thread_id,omitempty"`
@@ -349,8 +348,6 @@ func (d *CodexDriver) buildEnv(opts RunOptions) []string {
 }
 
 // parseLine maps a single NDJSON line from `codex exec --json` to a RunEvent.
-// Uses the same event shape as pkg/providers/codex_cli_provider.go (spec: reuse
-// the shape, do NOT modify that file).
 func (d *CodexDriver) parseLine(
 	raw []byte,
 	runID string,

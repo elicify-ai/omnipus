@@ -21,9 +21,9 @@ properties:
     maxLength: 64
     description: >
       Provider id whose catalog row declares `sign_in` in auth_methods
-      (e.g. "codex-cli", "openai-chatgpt", "github-copilot"); any other id
+      (e.g. "openai-chatgpt"); any other id
       is rejected with 400 "provider does not support sign-in".
-    example: codex-cli
+    example: openai-chatgpt
   model:
     type: string
     minLength: 1

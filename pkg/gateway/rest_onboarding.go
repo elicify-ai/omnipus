@@ -1668,11 +1668,10 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// because it mints no authority. It still MUST close, because it spends
 	// the operator's money: with `auth: "sign_in"` the probe never looks at
 	// the request body for a credential at all — it reads the operator's OWN
-	// saved vendor login (Codex auth.json, or the Copilot CLI's stored token)
-	// and spends one real, billed completion per call, and on a cli_kind row
-	// spawns a subprocess to do it. An anonymous caller on a reopened window
-	// can burn Copilot premium requests or ChatGPT quota that is not theirs.
-	// The `auth: "api_key"` path carries the caller's own key, so its cost is
+	// stored OAuth credential and spends one real, billed completion per call.
+	// An anonymous caller on a reopened window can burn ChatGPT quota that is
+	// not theirs. The `auth: "api_key"` path carries the caller's own key, so
+	// its cost is
 	// an outbound request rather than the operator's balance — but it rides
 	// the same gate.
 	//
@@ -2026,11 +2025,11 @@ func writeProbeResult(
 const probeNotSignedInMsg = "not signed in"
 
 // probeSignInUnavailableMsg answers a row that declares `sign_in` but offers
-// no mechanism this gateway can exercise: no `cli_kind` (a vendor CLI holding
-// the login) and no `token_source` (a saved token Omnipus may read). Today
-// that is the device-code shape (xai) — its stored-OAuth token and the chat
-// client to spend it are separate, unlanded features — and any operator-named
-// custom row, which is not a catalog row and so declares no mechanism at all.
+// no mechanism this gateway can exercise: it is not a first-party OAuth owner
+// (the device-code rows — the only mechanism since the CLI-backed model
+// providers were deleted, WU-24 founder 2026-10-14). That is any operator-
+// named custom row, which is not a catalog row and so declares no mechanism
+// at all, and any catalog row the gate does not own.
 //
 // It is deliberately NOT "not signed in": whether the operator has an account
 // is unknown here, and guessing would send them to sign in again and again
@@ -2038,8 +2037,8 @@ const probeNotSignedInMsg = "not signed in"
 const probeSignInUnavailableMsg = "sign-in cannot be probed for this provider"
 
 // signInProbeTimeout bounds the ONE completion a sign-in probe runs. It is
-// wider than probeCompletion's 15s because the CLI mechanisms spawn a real
-// vendor binary that boots a runtime before it answers.
+// wider than probeCompletion's 15s to absorb a cold first call on a
+// subscription backend.
 const signInProbeTimeout = 90 * time.Second
 
 // signInProbePrompt is the smallest prompt that still forces a real turn.
@@ -2047,17 +2046,13 @@ const signInProbePrompt = "hi"
 
 // probeSignIn runs the `auth: sign_in` half of POST /onboarding/probe-provider.
 //
-// Which mechanism to use is CATALOG DATA, never a hardcoded id list:
-//
-//   - `cli_kind` (codex | copilot) — a `protocol: cli` row whose vendor binary
-//     holds the login. The probe is one subprocess completion with the chosen
-//     model.
-//   - a first-party OAuth owner — a device-code row whose access token lives in
-//     Omnipus' encrypted credential store. The probe is one ordinary completion
-//     carrying that token, classified by the same providers.ValidateKey the
-//     api_key path uses.
-//   - `token_source: codex-auth-json` — a legacy/read-only row that reuses the
-//     Codex CLI's saved access token against its own base URL.
+// Which rows probe is a fixed structural fact (providers.OAuthEntryOwner),
+// never a hardcoded id list: a first-party OAuth owner — a device-code row
+// whose access token lives in Omnipus' encrypted credential store. The probe
+// is one ordinary completion carrying that token, classified by the same
+// providers.ValidateKey the api_key path uses. The former subprocess and
+// auth.json-reuse mechanisms were deleted with the CLI-backed model
+// providers (WU-24, founder 2026-10-14).
 //
 // Returns (result, refusal). A non-empty refusal is a 400 on field `auth` and
 // the result is meaningless; an empty refusal means a completion ran and its
@@ -2082,9 +2077,6 @@ func (a *restAPI) probeSignIn(
 	defer cancel()
 
 	switch {
-	case row.CLIKind != "":
-		return a.probeSignInCLI(ctx, row, displayName, model)
-
 	case providers.OAuthEntryOwner(providerID):
 		store, err := a.resolveSignInCredStore()
 		if err != nil {
@@ -2125,156 +2117,7 @@ func (a *restAPI) probeSignIn(
 			"probed_model", result.ProbedModel, "detail", result.RawDetail)
 		return result, ""
 
-	case row.TokenSource == catalog.TokenSourceCodexAuthJSON:
-		// FR-007: the file is read, never written, refreshed or proxied.
-		token, _, _, err := providers.ReadCodexCliCredentials()
-		if err != nil {
-			slog.Debug("rest: probe-provider: no saved codex login for a token-source row",
-				"provider", providerID, "error", err)
-			return providers.ValidationResult{}, probeNotSignedInMsg
-		}
-		var probeModels []string
-		if model != "" {
-			probeModels = []string{model}
-		}
-		result := providers.ValidateKey(ctx, providers.ValidateInput{
-			ProviderID:   providerID,
-			ProviderName: displayName,
-			BaseURL:      baseURL,
-			APIKey:       token,
-			ProbeModels:  probeModels,
-		}, a.ssrfChk())
-		slog.Debug("rest: probe-provider: sign-in token probe result",
-			"provider", providerID, "outcome", result.Outcome,
-			"probed_model", result.ProbedModel, "detail", result.RawDetail)
-		return result, ""
-
 	default:
 		return providers.ValidationResult{}, probeSignInUnavailableMsg
 	}
-}
-
-// probeSignInCLI is the `cli_kind` half of probeSignIn: confirm a saved login
-// exists, then spend exactly one subprocess completion on the chosen model.
-//
-// The presence check is per-mechanism and comes FIRST, because the two failure
-// modes must not be conflated: "you have not signed in" is a 400 on field
-// `auth` that tells the operator what to do, while "the vendor answered no to
-// this model" is a 200 with success=false that tells them to pick another one.
-func (a *restAPI) probeSignInCLI(
-	ctx context.Context, row catalog.Provider, displayName, model string,
-) (providers.ValidationResult, string) {
-	switch row.CLIKind {
-	case catalog.CLIKindCodex:
-		// The Codex CLI's login IS its auth.json; no auth.json, no login.
-		if _, _, _, err := providers.ReadCodexCliCredentials(); err != nil {
-			slog.Debug("rest: probe-provider: no saved codex cli login",
-				"provider", row.ID, "error", err)
-			return providers.ValidationResult{}, probeNotSignedInMsg
-		}
-	case catalog.CLIKindCopilot:
-		// The Copilot CLI stores its token in the system credential store and
-		// exposes no status command (see CopilotSignIn's verified-behaviour
-		// note), so the only thing knowable WITHOUT spending a request is
-		// whether the binary exists at all. Its login state is read off the
-		// completion below, via the shared classifier.
-		if !providers.CopilotCLIAvailable("") {
-			return providers.ValidationResult{}, providers.CopilotCLIMissingHint
-		}
-	default:
-		slog.Warn("rest: probe-provider: catalog row carries an unknown cli_kind",
-			"provider", row.ID, "cli_kind", row.CLIKind)
-		return providers.ValidationResult{}, probeSignInUnavailableMsg
-	}
-
-	prov, err := providers.NewCliProviderForKind(row.CLIKind, "", "")
-	if err != nil {
-		slog.Warn("rest: probe-provider: no subprocess driver for cli_kind",
-			"provider", row.ID, "cli_kind", row.CLIKind, "error", err)
-		return providers.ValidationResult{}, probeSignInUnavailableMsg
-	}
-
-	_, chatErr := prov.Chat(ctx,
-		[]providers.Message{{Role: "user", Content: signInProbePrompt}}, nil, model, nil)
-	if chatErr == nil {
-		return providers.ValidationResult{Outcome: providers.OutcomeValid, ProbedModel: model}, ""
-	}
-	slog.Debug("rest: probe-provider: sign-in cli probe failed",
-		"provider", row.ID, "cli_kind", row.CLIKind, "model", model, "error", chatErr)
-
-	// Copilot only reveals "no credential" here, after the run — so report it
-	// as the sign-in refusal it is rather than as a rejected model. Only an
-	// EXPLICIT marker match counts: an unrecognised failure from a CLI that is
-	// installed, after a completion on the operator's chosen model, is far
-	// likelier to be that model or that plan, and answering it with "not
-	// signed in" would send them to re-authenticate against a problem
-	// authentication cannot fix (see MatchCopilotSignInFailure).
-	if row.CLIKind == catalog.CLIKindCopilot {
-		if state, matched := providers.MatchCopilotSignInFailure(chatErr.Error()); matched &&
-			(state == providers.CopilotNotSignedIn || state == providers.CopilotSignInExpired) {
-			return providers.ValidationResult{}, probeNotSignedInMsg
-		}
-	}
-
-	// The vendor still said no. That is the sign-in equivalent of a rejected
-	// key, so it maps to the one outcome that BLOCKS — `success:false`, Finish
-	// stays disabled (FR-029) — carrying a message written for a sign-in row
-	// rather than BuildMessage's key wording. SEC-16: chatErr stays in the
-	// debug log above, never on the wire.
-	//
-	// Only Codex had its saved login CONFIRMED above. For Copilot the only
-	// pre-check was "the binary exists", so its message must not claim a
-	// sign-in; see copilotProbeFailureMsg.
-	message := signInProbeFailureMsg(displayName, model)
-	if row.CLIKind == catalog.CLIKindCopilot {
-		message = copilotProbeFailureMsg(displayName, model)
-	}
-	return providers.ValidationResult{
-		Outcome:     providers.OutcomeInvalidKey,
-		Message:     message,
-		RawDetail:   chatErr.Error(),
-		ProbedModel: model,
-	}, ""
-}
-
-// copilotProbeFailureMsg is the Copilot counterpart of signInProbeFailureMsg
-// (SEC-16: no raw vendor detail).
-//
-// It never says "You're signed in". Nothing about the Copilot login is read
-// before the completion runs: the CLI keeps its token in the OS credential
-// store and has no status command (CopilotSignIn's verified-behaviour note), so
-// probeSignInCLI only confirms the binary exists. A timeout, a network or
-// certificate error, or a crash all land here, including on a machine that has
-// never run `copilot login`.
-//
-// Confirming the login first is not the fix: the only oracle is another prompt
-// run, which spends a second premium request on a probe ADR-068 specifies as
-// one dry-run completion (spec, "Vendor CLI" integration boundary; FR-036), on
-// a route reachable before any admin account exists (the C2 billing concern in
-// rest_signin_copilot.go). So the wording states what is known instead.
-func copilotProbeFailureMsg(displayName, model string) string {
-	if model == "" {
-		return fmt.Sprintf(
-			"The test message to %s failed, and Omnipus could not confirm your sign-in. "+
-				"Run `copilot login` in a terminal on this machine, then retry.",
-			displayName)
-	}
-	return fmt.Sprintf(
-		"The test message to %s failed for %q, and Omnipus could not confirm your sign-in. "+
-			"Check that model is available on your plan, or run `copilot login` again, then retry.",
-		displayName, model)
-}
-
-// signInProbeFailureMsg is the curated, user-facing text for a completion that
-// failed AFTER a saved login was confirmed (SEC-16: no raw vendor detail).
-func signInProbeFailureMsg(displayName, model string) string {
-	if model == "" {
-		return fmt.Sprintf(
-			"You're signed in to %s, but the test message failed. Try signing in again, then retry.",
-			displayName)
-	}
-	return fmt.Sprintf(
-		"You're signed in to %s, but the test message failed for %q. "+
-			"Check that model is available on your plan, or sign in again.",
-		displayName, model)
 }

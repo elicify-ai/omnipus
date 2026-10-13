@@ -1479,7 +1479,6 @@ func (e CatalogModelWindowSource) Valid() bool {
 const (
 	CatalogProtocolProtocolAnthropic        CatalogProtocolProtocol = "anthropic"
 	CatalogProtocolProtocolBedrock          CatalogProtocolProtocol = "bedrock"
-	CatalogProtocolProtocolCli              CatalogProtocolProtocol = "cli"
 	CatalogProtocolProtocolGoogle           CatalogProtocolProtocol = "google"
 	CatalogProtocolProtocolOllama           CatalogProtocolProtocol = "ollama"
 	CatalogProtocolProtocolOpenaiCompatible CatalogProtocolProtocol = "openai-compatible"
@@ -1491,8 +1490,6 @@ func (e CatalogProtocolProtocol) Valid() bool {
 	case CatalogProtocolProtocolAnthropic:
 		return true
 	case CatalogProtocolProtocolBedrock:
-		return true
-	case CatalogProtocolProtocolCli:
 		return true
 	case CatalogProtocolProtocolGoogle:
 		return true
@@ -1517,24 +1514,6 @@ func (e CatalogProviderAuthMethods) Valid() bool {
 	case CatalogProviderAuthMethodsApiKey:
 		return true
 	case CatalogProviderAuthMethodsSignIn:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for CatalogProviderCliKind.
-const (
-	CatalogProviderCliKindCodex   CatalogProviderCliKind = "codex"
-	CatalogProviderCliKindCopilot CatalogProviderCliKind = "copilot"
-)
-
-// Valid indicates whether the value is a known member of the CatalogProviderCliKind enum.
-func (e CatalogProviderCliKind) Valid() bool {
-	switch e {
-	case CatalogProviderCliKindCodex:
-		return true
-	case CatalogProviderCliKindCopilot:
 		return true
 	default:
 		return false
@@ -1662,7 +1641,6 @@ func (e CatalogProviderModelsWindowSource) Valid() bool {
 const (
 	CatalogProviderProtocolAnthropic        CatalogProviderProtocol = "anthropic"
 	CatalogProviderProtocolBedrock          CatalogProviderProtocol = "bedrock"
-	CatalogProviderProtocolCli              CatalogProviderProtocol = "cli"
 	CatalogProviderProtocolGoogle           CatalogProviderProtocol = "google"
 	CatalogProviderProtocolOllama           CatalogProviderProtocol = "ollama"
 	CatalogProviderProtocolOpenaiCompatible CatalogProviderProtocol = "openai-compatible"
@@ -1674,8 +1652,6 @@ func (e CatalogProviderProtocol) Valid() bool {
 	case CatalogProviderProtocolAnthropic:
 		return true
 	case CatalogProviderProtocolBedrock:
-		return true
-	case CatalogProviderProtocolCli:
 		return true
 	case CatalogProviderProtocolGoogle:
 		return true
@@ -1692,7 +1668,6 @@ func (e CatalogProviderProtocol) Valid() bool {
 const (
 	CatalogProviderProtocolsProtocolAnthropic        CatalogProviderProtocolsProtocol = "anthropic"
 	CatalogProviderProtocolsProtocolBedrock          CatalogProviderProtocolsProtocol = "bedrock"
-	CatalogProviderProtocolsProtocolCli              CatalogProviderProtocolsProtocol = "cli"
 	CatalogProviderProtocolsProtocolGoogle           CatalogProviderProtocolsProtocol = "google"
 	CatalogProviderProtocolsProtocolOllama           CatalogProviderProtocolsProtocol = "ollama"
 	CatalogProviderProtocolsProtocolOpenaiCompatible CatalogProviderProtocolsProtocol = "openai-compatible"
@@ -1704,8 +1679,6 @@ func (e CatalogProviderProtocolsProtocol) Valid() bool {
 	case CatalogProviderProtocolsProtocolAnthropic:
 		return true
 	case CatalogProviderProtocolsProtocolBedrock:
-		return true
-	case CatalogProviderProtocolsProtocolCli:
 		return true
 	case CatalogProviderProtocolsProtocolGoogle:
 		return true
@@ -8189,24 +8162,6 @@ func (e ProviderAuthMethod) Valid() bool {
 	}
 }
 
-// Defines values for ProviderCliKind.
-const (
-	ProviderCliKindCodex   ProviderCliKind = "codex"
-	ProviderCliKindCopilot ProviderCliKind = "copilot"
-)
-
-// Valid indicates whether the value is a known member of the ProviderCliKind enum.
-func (e ProviderCliKind) Valid() bool {
-	switch e {
-	case ProviderCliKindCodex:
-		return true
-	case ProviderCliKindCopilot:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ProviderDependentsRole.
 const (
 	ProviderDependentsRoleFallback    ProviderDependentsRole = "fallback"
@@ -8259,7 +8214,6 @@ func (e ProviderLocality) Valid() bool {
 const (
 	ProviderProtocolAnthropic        ProviderProtocol = "anthropic"
 	ProviderProtocolBedrock          ProviderProtocol = "bedrock"
-	ProviderProtocolCli              ProviderProtocol = "cli"
 	ProviderProtocolGoogle           ProviderProtocol = "google"
 	ProviderProtocolOllama           ProviderProtocol = "ollama"
 	ProviderProtocolOpenaiCompatible ProviderProtocol = "openai-compatible"
@@ -8271,8 +8225,6 @@ func (e ProviderProtocol) Valid() bool {
 	case ProviderProtocolAnthropic:
 		return true
 	case ProviderProtocolBedrock:
-		return true
-	case ProviderProtocolCli:
 		return true
 	case ProviderProtocolGoogle:
 		return true
@@ -8424,7 +8376,6 @@ func (e ProviderUpdateRequestAuthMethod) Valid() bool {
 const (
 	ProviderUpdateRequestProtocolAnthropic        ProviderUpdateRequestProtocol = "anthropic"
 	ProviderUpdateRequestProtocolBedrock          ProviderUpdateRequestProtocol = "bedrock"
-	ProviderUpdateRequestProtocolCli              ProviderUpdateRequestProtocol = "cli"
 	ProviderUpdateRequestProtocolGoogle           ProviderUpdateRequestProtocol = "google"
 	ProviderUpdateRequestProtocolOllama           ProviderUpdateRequestProtocol = "ollama"
 	ProviderUpdateRequestProtocolOpenaiCompatible ProviderUpdateRequestProtocol = "openai-compatible"
@@ -8436,8 +8387,6 @@ func (e ProviderUpdateRequestProtocol) Valid() bool {
 	case ProviderUpdateRequestProtocolAnthropic:
 		return true
 	case ProviderUpdateRequestProtocolBedrock:
-		return true
-	case ProviderUpdateRequestProtocolCli:
 		return true
 	case ProviderUpdateRequestProtocolGoogle:
 		return true
@@ -8462,24 +8411,6 @@ func (e ProvidersCatalogProvidersAuthMethods) Valid() bool {
 	case ProvidersCatalogProvidersAuthMethodsApiKey:
 		return true
 	case ProvidersCatalogProvidersAuthMethodsSignIn:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ProvidersCatalogProvidersCliKind.
-const (
-	ProvidersCatalogProvidersCliKindCodex   ProvidersCatalogProvidersCliKind = "codex"
-	ProvidersCatalogProvidersCliKindCopilot ProvidersCatalogProvidersCliKind = "copilot"
-)
-
-// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersCliKind enum.
-func (e ProvidersCatalogProvidersCliKind) Valid() bool {
-	switch e {
-	case ProvidersCatalogProvidersCliKindCodex:
-		return true
-	case ProvidersCatalogProvidersCliKindCopilot:
 		return true
 	default:
 		return false
@@ -8607,7 +8538,6 @@ func (e ProvidersCatalogProvidersModelsWindowSource) Valid() bool {
 const (
 	ProvidersCatalogProvidersProtocolAnthropic        ProvidersCatalogProvidersProtocol = "anthropic"
 	ProvidersCatalogProvidersProtocolBedrock          ProvidersCatalogProvidersProtocol = "bedrock"
-	ProvidersCatalogProvidersProtocolCli              ProvidersCatalogProvidersProtocol = "cli"
 	ProvidersCatalogProvidersProtocolGoogle           ProvidersCatalogProvidersProtocol = "google"
 	ProvidersCatalogProvidersProtocolOllama           ProvidersCatalogProvidersProtocol = "ollama"
 	ProvidersCatalogProvidersProtocolOpenaiCompatible ProvidersCatalogProvidersProtocol = "openai-compatible"
@@ -8619,8 +8549,6 @@ func (e ProvidersCatalogProvidersProtocol) Valid() bool {
 	case ProvidersCatalogProvidersProtocolAnthropic:
 		return true
 	case ProvidersCatalogProvidersProtocolBedrock:
-		return true
-	case ProvidersCatalogProvidersProtocolCli:
 		return true
 	case ProvidersCatalogProvidersProtocolGoogle:
 		return true
@@ -8637,7 +8565,6 @@ func (e ProvidersCatalogProvidersProtocol) Valid() bool {
 const (
 	ProvidersCatalogProvidersProtocolsProtocolAnthropic        ProvidersCatalogProvidersProtocolsProtocol = "anthropic"
 	ProvidersCatalogProvidersProtocolsProtocolBedrock          ProvidersCatalogProvidersProtocolsProtocol = "bedrock"
-	ProvidersCatalogProvidersProtocolsProtocolCli              ProvidersCatalogProvidersProtocolsProtocol = "cli"
 	ProvidersCatalogProvidersProtocolsProtocolGoogle           ProvidersCatalogProvidersProtocolsProtocol = "google"
 	ProvidersCatalogProvidersProtocolsProtocolOllama           ProvidersCatalogProvidersProtocolsProtocol = "ollama"
 	ProvidersCatalogProvidersProtocolsProtocolOpenaiCompatible ProvidersCatalogProvidersProtocolsProtocol = "openai-compatible"
@@ -8649,8 +8576,6 @@ func (e ProvidersCatalogProvidersProtocolsProtocol) Valid() bool {
 	case ProvidersCatalogProvidersProtocolsProtocolAnthropic:
 		return true
 	case ProvidersCatalogProvidersProtocolsProtocolBedrock:
-		return true
-	case ProvidersCatalogProvidersProtocolsProtocolCli:
 		return true
 	case ProvidersCatalogProvidersProtocolsProtocolGoogle:
 		return true
@@ -11192,15 +11117,15 @@ func (e SignInPollResponseState) Valid() bool {
 	}
 }
 
-// Defines values for SignInStartResponseCliLoginMethod.
+// Defines values for SignInStartResponseMethod.
 const (
-	SignInStartResponseCliLoginMethodCliLogin SignInStartResponseCliLoginMethod = "cli_login"
+	SignInStartResponseMethodDeviceCode SignInStartResponseMethod = "device_code"
 )
 
-// Valid indicates whether the value is a known member of the SignInStartResponseCliLoginMethod enum.
-func (e SignInStartResponseCliLoginMethod) Valid() bool {
+// Valid indicates whether the value is a known member of the SignInStartResponseMethod enum.
+func (e SignInStartResponseMethod) Valid() bool {
 	switch e {
-	case SignInStartResponseCliLoginMethodCliLogin:
+	case SignInStartResponseMethodDeviceCode:
 		return true
 	default:
 		return false
@@ -15566,9 +15491,6 @@ type CatalogProvider struct {
 	// AuthMethods Auth methods the provider offers (ADR-068 FR-004); the UI renders a sign-in control only when sign_in is present.
 	AuthMethods []CatalogProviderAuthMethods `json:"auth_methods"`
 
-	// CliKind Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
-	CliKind *CatalogProviderCliKind `json:"cli_kind,omitempty"`
-
 	// Company Grouping key for the picker (ADR-067 X-10): one tile/row per company, its plan × region variants being the providers that share it. Comes from overrides/ via the models.dev name family; defaults to name.
 	Company string `json:"company"`
 
@@ -15614,18 +15536,12 @@ type CatalogProvider struct {
 	// Tier Picker tier (ADR-067 FR-018, data not code). The popular set is rendered as pinned tiles in catalog order; "unsupported" rows are visible but disabled with unsupported_reason.
 	Tier CatalogProviderTier `json:"tier"`
 
-	// TokenSource Optional token source for sign-in HTTP rows (e.g. "codex-auth-json" for openai-chatgpt, X-41).
-	TokenSource *string `json:"token_source,omitempty"`
-
 	// UnsupportedReason Required when tier is "unsupported". "cloud-iam" = needs request signing (Bedrock, Vertex, watsonx, SAP AI Core); "deployment-url" = needs a per-deployment URL (Azure); "withdrawn" = vanished upstream. Never shown raw — the SPA maps it to copy.
 	UnsupportedReason *CatalogProviderUnsupportedReason `json:"unsupported_reason,omitempty"`
 }
 
 // CatalogProviderAuthMethods defines model for CatalogProvider.AuthMethods.
 type CatalogProviderAuthMethods string
-
-// CatalogProviderCliKind Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
-type CatalogProviderCliKind string
 
 // CatalogProviderLocality Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
 type CatalogProviderLocality string
@@ -21573,7 +21489,7 @@ type OnboardingProviderSignIn struct {
 	// Endpoint Optional custom API base URL, persisted as the provider entry's api_base.
 	Endpoint *string `json:"endpoint,omitempty"`
 
-	// Id Provider id whose catalog row declares `sign_in` in auth_methods (e.g. "codex-cli", "openai-chatgpt", "github-copilot"); any other id is rejected with 400 "provider does not support sign-in".
+	// Id Provider id whose catalog row declares `sign_in` in auth_methods (e.g. "openai-chatgpt"); any other id is rejected with 400 "provider does not support sign-in".
 	Id string `json:"id"`
 
 	// Model The model chosen for the first agent — the sign-in-probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
@@ -22767,9 +22683,6 @@ type Provider struct {
 	// BacksDefault True iff agents.defaults.default_model names this provider (ADR-068). Always present; such a row cannot be deleted without a new_default.
 	BacksDefault bool `json:"backs_default"`
 
-	// CliKind For protocol "cli" rows, the subprocess driver selected by the catalog row (ADR-067 X-14).
-	CliKind *ProviderCliKind `json:"cli_kind,omitempty"`
-
 	// Company Catalog grouping key (CatalogProvider.company) for the configured row's provider; absent for custom and unknown rows.
 	Company *string `json:"company,omitempty"`
 
@@ -22830,9 +22743,6 @@ type Provider struct {
 
 // ProviderAuthMethod How this row authenticates (ADR-068; closed set — oauth/token no longer exist). Always present; "api_key" until ADR-068's computation lands.
 type ProviderAuthMethod string
-
-// ProviderCliKind For protocol "cli" rows, the subprocess driver selected by the catalog row (ADR-067 X-14).
-type ProviderCliKind string
 
 // ProviderDependentsRole defines model for Provider.Dependents.Role.
 type ProviderDependentsRole string
@@ -22899,7 +22809,7 @@ type ProviderUpdateRequest struct {
 	// Models User-supplied catalogue of model slugs for a provider that does NOT expose a live /models endpoint (custom / unknown OpenAI-compatible gateways). When present, these slugs replace the provider's stored catalogue and constrain the model picker. Ignored for providers WITH a live endpoint (has_models_endpoint=true), whose catalogue is fetched from upstream. Omit to leave the existing list unchanged; send an empty array to clear it.
 	Models *[]string `json:"models,omitempty"`
 
-	// Protocol Wire protocol to use (ADR-067 FR-013/FR-014). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+	// Protocol Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
 	Protocol *ProviderUpdateRequestProtocol `json:"protocol,omitempty"`
 
 	// Region Issue #800 (Bedrock region contract): the selected region for a provider row whose catalog entry carries `regions` (CatalogProvider.regions). Precedence at runtime is row setting → `AWS_REGION` environment variable → the catalog's own default `region`. Ignored for a provider whose catalog entry carries no `regions`.
@@ -22909,7 +22819,7 @@ type ProviderUpdateRequest struct {
 // ProviderUpdateRequestAuthMethod Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted only for providers whose catalog auth_methods include it (400 otherwise) and must not be combined with api_key.
 type ProviderUpdateRequestAuthMethod string
 
-// ProviderUpdateRequestProtocol Wire protocol to use (ADR-067 FR-013/FR-014). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+// ProviderUpdateRequestProtocol Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
 type ProviderUpdateRequestProtocol string
 
 // ProviderValidation Classified outcome of a provider API-key validation probe. Carried as an optional field on Provider (PUT save 200), ProbeProviderResponse (onboarding probe), and OperationResult (Settings Test) whenever a key probe was performed. Absent on non-probing responses (e.g. model-only edits).
@@ -22948,9 +22858,6 @@ type ProvidersCatalog struct {
 
 // ProvidersCatalogProvidersAuthMethods defines model for ProvidersCatalog.Providers.AuthMethods.
 type ProvidersCatalogProvidersAuthMethods string
-
-// ProvidersCatalogProvidersCliKind Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
-type ProvidersCatalogProvidersCliKind string
 
 // ProvidersCatalogProvidersLocality Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
 type ProvidersCatalogProvidersLocality string
@@ -25696,25 +25603,29 @@ type SignInPollResponse struct {
 // SignInPollResponseState pending while the operator has not yet approved the session; signed_in once the OAuth tokens are stored; expired when the device-code session's own expires_at has passed; denied when the operator explicitly declined on the vendor's page.
 type SignInPollResponseState string
 
-// SignInStartResponse Response from POST /providers/{id}/sign-in (ADR-068 FR-008, amended 2026-08-23 §8b). `cli_login` for codex-cli / github-copilot: the vendor CLI's own login command, run by the operator in a terminal. `device_code` for openai-chatgpt (and xai once its catalog row carries sign_in): Omnipus requests a device code itself and the SPA shows the verification link and user code. Discriminated by `method`.
+// SignInStartResponse The `device_code` variant of SignInStartResponse (ADR-068 FR-008/FR-044, added 2026-08-23 §8b). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and the SPA renders the verification link and user code for the operator to approve on any device. `device_auth_id` is an opaque server-side handle for POST /providers/{id}/sign-in/poll — the vendor's own device code and any PKCE verifier are held only by the gateway and never appear on the wire.
 type SignInStartResponse struct {
-	union json.RawMessage
+	// DeviceAuthId Opaque handle identifying this device-code session for POST /providers/{id}/sign-in/poll. Never the vendor's own device code.
+	DeviceAuthId string `json:"device_auth_id"`
+
+	// ExpiresAt When this device-code session expires server-side (ceiling 15 minutes from start, FR-044). The dialog shows the matching expired end state once past this time.
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// IntervalSeconds Minimum seconds between polls. The SPA must never poll faster than this, and must back off when a later poll response raises it (FR-045, vendor slow_down).
+	IntervalSeconds int `json:"interval_seconds"`
+
+	// Method Discriminator — a device-code session was started; poll for completion.
+	Method SignInStartResponseMethod `json:"method"`
+
+	// UserCode Short code the operator enters (or confirms) on the verification page.
+	UserCode string `json:"user_code"`
+
+	// VerificationUrl The vendor page the operator opens (new tab) to approve the sign-in.
+	VerificationUrl string `json:"verification_url"`
 }
 
-// SignInStartResponseCliLogin The `cli_login` variant of SignInStartResponse (ADR-068 FR-008, amended 2026-08-23 §8b). For `codex-cli` and `github-copilot`: Omnipus never performs or stores the vendor login itself — this returns the one instruction the operator needs, the vendor CLI's own login command, so the SPA can show it beside a *Check sign-in* button.
-type SignInStartResponseCliLogin struct {
-	// Command The exact command the operator runs in a terminal (e.g. "codex login", "copilot login").
-	Command string `json:"command"`
-
-	// Instructions Human-readable guidance shown beside the command, ending with the prompt to click Check sign-in.
-	Instructions string `json:"instructions"`
-
-	// Method Discriminator — run the vendor CLI's login command.
-	Method SignInStartResponseCliLoginMethod `json:"method"`
-}
-
-// SignInStartResponseCliLoginMethod Discriminator — run the vendor CLI's login command.
-type SignInStartResponseCliLoginMethod string
+// SignInStartResponseMethod Discriminator — a device-code session was started; poll for completion.
+type SignInStartResponseMethod string
 
 // SignInStartResponseDeviceCode The `device_code` variant of SignInStartResponse (ADR-068 FR-008/FR-044, added 2026-08-23 §8b). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and the SPA renders the verification link and user code for the operator to approve on any device. `device_auth_id` is an opaque server-side handle for POST /providers/{id}/sign-in/poll — the vendor's own device code and any PKCE verifier are held only by the gateway and never appear on the wire.
 type SignInStartResponseDeviceCode struct {
@@ -25740,9 +25651,9 @@ type SignInStartResponseDeviceCode struct {
 // SignInStartResponseDeviceCodeMethod Discriminator — a device-code session was started; poll for completion.
 type SignInStartResponseDeviceCodeMethod string
 
-// SignInStatus Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009, amended 2026-08-23 §8b). For `cli_login` providers (codex-cli, github-copilot): read from the vendor CLI's saved login only — Omnipus never refreshes that file — `expired` follows the access token's JWT `exp` (decoded unverified, display only) when decodable, else the saved login file being older than one hour. For `device_code` providers (openai-chatgpt, and xai once its catalog row carries `sign_in`): the state comes from the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store — `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available. `pending` is returned only while a device-code session started by POST /sign-in is open and not yet approved.
+// SignInStatus Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009, amended 2026-08-23 §8b). The state comes from the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store (device_code providers: openai-chatgpt, and xai once its catalog row carries `sign_in`) — `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available. `pending` is returned only while a device-code session started by POST /sign-in is open and not yet approved. (The former vendor-CLI-file reads were deleted with the CLI-backed model providers — WU-24, founder 2026-10-14.)
 type SignInStatus struct {
-	// AccountLabel Opaque account identifier — `tokens.account_id` for codex-cli, the GitHub login for Copilot when the CLI reports one, or the stored OAuth entry's account_id for device_code providers. Present only when known; never an e-mail.
+	// AccountLabel Opaque account identifier — the stored OAuth entry's account_id. Present only when known; never an e-mail.
 	AccountLabel *string `json:"account_label,omitempty"`
 
 	// ExpiresAt The access token's expiry when known. Absent otherwise.
@@ -25751,11 +25662,11 @@ type SignInStatus struct {
 	// Reason Plain-language explanation, for the operator, of why a check reported `not_signed_in` when the check itself could not run or could not be interpreted (the CLI is missing, could not start, timed out, or printed an unrecognised message). Absent for every definite state — signed in, expired, a recognised not-signed-in, and pending — and absent when the reason is already implied by the state. Safe for display: it names the stage that failed, never the CLI's raw output or a filesystem path.
 	Reason *string `json:"reason,omitempty"`
 
-	// State not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
+	// State not_signed_in when no stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable OAuth entry exists; expired when it is past exp and cannot refresh.
 	State SignInStatusState `json:"state"`
 }
 
-// SignInStatusState not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
+// SignInStatusState not_signed_in when no stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable OAuth entry exists; expired when it is past exp and cannot refresh.
 type SignInStatusState string
 
 // Skill A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata.
@@ -31450,95 +31361,6 @@ func (t SessionMessage) MarshalJSON() ([]byte, error) {
 }
 
 func (t *SessionMessage) UnmarshalJSON(b []byte) error {
-	err := t.union.UnmarshalJSON(b)
-	return err
-}
-
-// AsSignInStartResponseCliLogin returns the union data inside the SignInStartResponse as a SignInStartResponseCliLogin
-func (t SignInStartResponse) AsSignInStartResponseCliLogin() (SignInStartResponseCliLogin, error) {
-	var body SignInStartResponseCliLogin
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromSignInStartResponseCliLogin overwrites any union data inside the SignInStartResponse as the provided SignInStartResponseCliLogin
-func (t *SignInStartResponse) FromSignInStartResponseCliLogin(v SignInStartResponseCliLogin) error {
-	v.Method = "cli_login"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeSignInStartResponseCliLogin performs a merge with any union data inside the SignInStartResponse, using the provided SignInStartResponseCliLogin
-func (t *SignInStartResponse) MergeSignInStartResponseCliLogin(v SignInStartResponseCliLogin) error {
-	v.Method = "cli_login"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsSignInStartResponseDeviceCode returns the union data inside the SignInStartResponse as a SignInStartResponseDeviceCode
-func (t SignInStartResponse) AsSignInStartResponseDeviceCode() (SignInStartResponseDeviceCode, error) {
-	var body SignInStartResponseDeviceCode
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromSignInStartResponseDeviceCode overwrites any union data inside the SignInStartResponse as the provided SignInStartResponseDeviceCode
-func (t *SignInStartResponse) FromSignInStartResponseDeviceCode(v SignInStartResponseDeviceCode) error {
-	v.Method = "device_code"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeSignInStartResponseDeviceCode performs a merge with any union data inside the SignInStartResponse, using the provided SignInStartResponseDeviceCode
-func (t *SignInStartResponse) MergeSignInStartResponseDeviceCode(v SignInStartResponseDeviceCode) error {
-	v.Method = "device_code"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-func (t SignInStartResponse) Discriminator() (string, error) {
-	var discriminator struct {
-		Discriminator string `json:"method"`
-	}
-	err := json.Unmarshal(t.union, &discriminator)
-	return discriminator.Discriminator, err
-}
-
-func (t SignInStartResponse) ValueByDiscriminator() (interface{}, error) {
-	discriminator, err := t.Discriminator()
-	if err != nil {
-		return nil, err
-	}
-	switch discriminator {
-	case "cli_login":
-		return t.AsSignInStartResponseCliLogin()
-	case "device_code":
-		return t.AsSignInStartResponseDeviceCode()
-	default:
-		return nil, errors.New("unknown discriminator value: " + discriminator)
-	}
-}
-
-func (t SignInStartResponse) MarshalJSON() ([]byte, error) {
-	b, err := t.union.MarshalJSON()
-	return b, err
-}
-
-func (t *SignInStartResponse) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }
