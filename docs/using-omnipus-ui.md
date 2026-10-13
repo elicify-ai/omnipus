@@ -108,6 +108,10 @@ When an agent asks you questions, a card docks above the message box with one ta
 - Each question except the last shows **Next**; the last is confirmed with **Answer**, which sends every answer at once and is available only when every question is answered. **Cancel** sends nothing.
 - No option is chosen for you in advance — the recommended one is only listed first and marked.
 
+### A secret card
+
+When an agent needs a key or password, a **secure card** appears above the message box in the chat it belongs to (an Omnipus helper's card appears in the Omnipus chat). It shows who asks, why, and where the value will be used, with one hidden field per value. Focus starts in the first field; **Enter** moves to the next field and saves from the last one, and what you type there never reaches the message box. **Save secret** stores the values; **Cancel** stores nothing. While saving it says **Submitting…**; if the server refuses the values, it says why and you can correct them; if the answer is lost, it says **Submission unknown** and checks with the server (**Check again**), never re-sending your values. When it finishes it shows **Saved** with the stored name, or **Cancelled**, **Stopped** or **Refused** — nothing stored — or **Request unavailable** if the gateway restarted first; **Dismiss** hides that result and returns you to the message box. See [security](security.md#secrets-typed-on-a-secure-card) for what the card promises.
+
 ### Who is replying
 
 Replies in the web app's chat show the agent's name above the text with a small portrait of that agent beside it — the same mark the sidebar and the @-mention menu use — including streaming replies, saved history, and another agent's replies in the same chat. The name and portrait are the whole label: no status word is printed next to them. When the reply records its author, the name follows that author rather than the current agent selection. Older replies without a recorded author fall back to the chat's current agent. If an agent's details cannot be found, its stored ID can appear instead of a name, and the portrait falls back to the general Omnipus mark.
