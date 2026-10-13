@@ -207,6 +207,18 @@ Two things to watch with external workers:
 - Omnipus tool permissions do not reach inside the external tool. It uses its own tools and its own safety settings; the allow, ask, and deny rules govern Omnipus [tools](tools.md) only.
 - The tool-call limit does reach it. An external worker follows the same global **Max tool calls per turn**, and can have its own lower limit on its **Advanced** tab like any other agent. Omnipus passes the limit to the tool as its cap on agent turns: Claude Code receives it as `--max-turns`, and for Codex and OpenCode Omnipus counts the turns and stops the run when it goes past the cap. There is no separate built-in default for external workers.
 
+## Agents messaging each other
+
+An agent can send a request to another agent without delegating a worker. It calls `send_message` with the recipient's `agent_id` (and `workspace_id` when the recipient is in another workspace; left out, it means the sender's own workspace). Do not combine this with `channel` or `chat_id`: a request is addressed by agent, not by chat.
+
+- **It lands in the recipient's main chat.** The request is saved there with a request id, and the recipient sees the text under a short header that names the sender and the id. An agent cannot send a request to itself.
+- **The recipient answers with `answer_request`** (or `send_message` with `reply_to` set to the request id). A plain reply in the recipient's own chat does not reach the sender.
+- **A stopped recipient holds it.** The sender is told the request will be delivered when the recipient runs again; nothing is lost.
+- **Policy still applies.** The recipient must be an eligible agent in that workspace, and the recipient's own `send_message` policy decides whether the request is let through (an `ask` policy asks first).
+- **Helpers cannot use it.** A worker that another agent delegated to messages only its own conversation, so it cannot send this kind of request.
+
+You can do the same thing yourself by typing `@` and an agent's name at the start of a chat message; see [the chat window](using-omnipus-ui.md).
+
 ## How to set up a heartbeat
 
 A heartbeat is a scheduled check-in for one agent in one workspace. The same agent can have a different heartbeat, or none, in each workspace. Workers cannot have heartbeats.
