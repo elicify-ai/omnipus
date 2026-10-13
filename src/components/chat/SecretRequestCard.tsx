@@ -227,6 +227,9 @@ function PendingForm({ entry }: { entry: SecretRequestEntry }) {
   const { send, checkState } = usePendingSubmit(entry, clearValues)
   const busy = localPhase === 'submitting'
   const unknown = localPhase === 'unknown'
+  // K1 / FR-071: a card holds 1–8 fields. Anything else is malformed and is
+  // never actionable (only Cancel stays available).
+  const malformed = request.fields.length < 1 || request.fields.length > 8
 
   // Focus starts on the first field (FR-109).
   useEffect(() => { inputs.current[0]?.focus() }, [])
@@ -234,6 +237,7 @@ function PendingForm({ entry }: { entry: SecretRequestEntry }) {
   useEffect(() => { if (checkRequired) void checkState() }, [checkRequired, checkState])
 
   const submit = () => {
+    if (malformed) return
     const nextErrors: Record<string, string> = {}
     for (const field of request.fields) {
       const error = secretValueError(values[field.key] ?? '')
@@ -286,15 +290,20 @@ function PendingForm({ entry }: { entry: SecretRequestEntry }) {
         {busy && <span className="text-[var(--color-muted)]">Submitting…</span>}
         {unknown && <span className="text-[var(--color-warning)]">Submission unknown — checking with the server. Your values will not be sent again.</span>}
         {localPhase === 'rejected' && localMessage && <span className="text-[var(--color-error)]">{localMessage}</span>}
-        {formError && <span className="text-[var(--color-error)]">{formError}</span>}
       </div>
+      {/* A whole-card problem is an alert, like a field error (FR-109). */}
+      {(formError || malformed) && (
+        <p role="alert" className="text-[length:var(--type-caption-size)] text-[var(--color-error)]" data-testid="secret-request-form-error">
+          {malformed ? 'This request cannot be filled in — it asks for no fields or too many. The agent can ask again.' : formError}
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
         {unknown ? (
           <Button type="button" variant="outline" size="sm" onClick={() => void checkState()} data-testid="secret-request-check">
             Check again
           </Button>
         ) : (
-          <Button type="button" size="sm" disabled={busy} onClick={submit} data-testid="secret-request-submit">
+          <Button type="button" size="sm" disabled={busy || malformed} onClick={submit} data-testid="secret-request-submit">
             <Key size={13} className="mr-[var(--space-1)]" aria-hidden="true" />
             Save secret
           </Button>

@@ -25,6 +25,7 @@ import { Label } from '@/components/ui/label'
 import { ErrorState } from '@/components/ui/error-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PRIVATE_SECRET_PROMISE } from '@/components/chat/SecretRequestCard'
+import { useQueryRefreshFailed } from '@/hooks/useQueryRefreshFailed'
 
 const STATE_LABEL: Record<SecretNameEntry['state'], string> = {
   selected: 'In use',
@@ -34,6 +35,7 @@ const STATE_LABEL: Record<SecretNameEntry['state'], string> = {
 
 export function AgentPrivateSecrets({ agentId }: { agentId: string }) {
   const query = useQuery({ queryKey: secretsQueryKeys.list(), queryFn: listSecrets, staleTime: 15_000 })
+  const refreshFailed = useQueryRefreshFailed(secretsQueryKeys.list())
   const queryClient = useQueryClient()
   const workspaces = queryClient.getQueryData<Workspace[]>(workspacesQueryKeys.list({ status: 'active' })) ?? []
   const workspaceName = (id: string) => workspaces.find((w) => w.id === id)?.name ?? id
@@ -65,7 +67,7 @@ export function AgentPrivateSecrets({ agentId }: { agentId: string }) {
         <ErrorState message="Could not load this agent's private secrets." onRetry={() => void query.refetch()} />
       ) : (
         <>
-          {query.isError && (
+          {(refreshFailed || (query.isError && !!query.data)) && (
             <div role="status" className="flex items-center gap-[var(--space-2)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
               <span className="flex-1">Could not refresh — this list may be out of date.</span>
               <Button variant="ghost" size="sm" onClick={() => void query.refetch()}>Retry</Button>
@@ -101,16 +103,19 @@ function PrivateSecretRow({ entry }: { entry: SecretNameEntry }) {
   const addToast = useUiStore((s) => s.addToast)
   const [saving, setSaving] = useState(false)
   const [uncertain, setUncertain] = useState<boolean | null>(null)
+  const [saved, setSaved] = useState(false)
   const checked = entry.available_in_channel_turns === true
 
   const write = async (next: boolean) => {
     setSaving(true)
+    setSaved(false)
     try {
       const updated = await updateSecretOptions(entry.reference, { available_in_channel_turns: next })
       queryClient.setQueryData<SecretNameEntry[]>(secretsQueryKeys.list(), (prev) =>
         prev?.map((row) => (row.reference === updated.reference ? updated : row)),
       )
       setUncertain(null)
+      setSaved(true)
     } catch (error) {
       if (classifyMutationFailure(error) === 'uncertain') {
         setUncertain(next)
@@ -146,6 +151,10 @@ function PrivateSecretRow({ entry }: { entry: SecretNameEntry }) {
           Available in channel conversations
         </Label>
       </div>
+      {/* §6.3 "Success: Saved" — only after the server confirmed the change. */}
+      <p role="status" aria-live="polite" className="mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        {saved ? 'Saved' : ''}
+      </p>
       {uncertain !== null && (
         <div role="status" className="mt-[var(--space-1)] flex items-center gap-[var(--space-2)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           <span className="flex-1">The change was not confirmed.</span>
