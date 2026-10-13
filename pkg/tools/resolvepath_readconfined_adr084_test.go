@@ -121,12 +121,20 @@ func TestResolvePath_ReadConfinedRefusesOutsideWorkdir(t *testing.T) {
 		confined   bool
 		path       string
 		wantRefuse bool
+		// carveOut marks rows whose refusal now comes from the #1284
+		// protected inventory (ErrCarveOut) rather than the read-confined
+		// posture (ErrOutsideScope).
+		carveOut bool
 	}{
 		{
+			// #1284: session transcripts are protected inventory now, so the
+			// refusal is the inventory's ErrCarveOut — stronger than the old
+			// posture-shaped ErrOutsideScope and identical for both postures.
 			name:       "confined turn cannot read another session's transcript",
 			confined:   true,
 			path:       tr.sessionsFile,
 			wantRefuse: true,
+			carveOut:   true,
 		},
 		{
 			name:       "confined turn cannot read a file unrelated to the install",
@@ -141,10 +149,14 @@ func TestResolvePath_ReadConfinedRefusesOutsideWorkdir(t *testing.T) {
 			wantRefuse: false,
 		},
 		{
-			name:       "unconfined turn reads another session's transcript exactly as ADR-063 FR-2.2 allows",
+			// Superseded by #1284 (amendment §2 D2): an unconfined turn no
+			// longer reads another session's transcript either — the
+			// inventory protects it from everyone, in every posture.
+			name:       "unconfined turn still cannot read another session's transcript (#1284 protects it from everyone)",
 			confined:   false,
 			path:       tr.sessionsFile,
-			wantRefuse: false,
+			wantRefuse: true,
+			carveOut:   true,
 		},
 		{
 			name:       "unconfined turn reads an unrelated file exactly as ADR-063 FR-2.2 allows",
@@ -169,6 +181,12 @@ func TestResolvePath_ReadConfinedRefusesOutsideWorkdir(t *testing.T) {
 				if err == nil {
 					handle.Close()
 					t.Fatalf("ResolvePath(%q) succeeded; JUDGE-FR-060 requires a refusal for a read-confined turn", tc.path)
+				}
+				if tc.carveOut {
+					if !errors.Is(err, ErrCarveOut) {
+						t.Fatalf("ResolvePath(%q) error = %v; #1284 protects session transcripts, so the refusal is ErrCarveOut", tc.path, err)
+					}
+					return
 				}
 				if !errors.Is(err, ErrOutsideScope) {
 					t.Fatalf("ResolvePath(%q) error = %v; JUDGE-FR-060 requires ErrOutsideScope", tc.path, err)
@@ -225,18 +243,24 @@ func TestResolvePath_ReadConfinedRefusesListAndSendToo(t *testing.T) {
 				handle.Close()
 				t.Fatalf("ResolvePath(op=%s, %q) succeeded; JUDGE-FR-060 confines all three of read/list/send", o.op, o.path)
 			}
-			if !errors.Is(err, ErrOutsideScope) {
-				t.Fatalf("ResolvePath(op=%s, %q) error = %v; want ErrOutsideScope", o.op, o.path, err)
+			// Both rows name paths under the install's sessions dir — #1284
+			// protected inventory — so the refusal is ErrCarveOut in either
+			// posture.
+			if !errors.Is(err, ErrCarveOut) {
+				t.Fatalf("ResolvePath(op=%s, %q) error = %v; #1284 protects the sessions dir, want ErrCarveOut", o.op, o.path, err)
 			}
 		})
 
-		t.Run(o.name+" is allowed when unconfined", func(t *testing.T) {
+		t.Run(o.name+" is refused when unconfined too (#1284)", func(t *testing.T) {
 			policy := readConfinedPolicy(t, tr, false)
 			handle, err := ResolvePath(ctx, policy, o.tool, "", o.op, o.path)
-			if err != nil {
-				t.Fatalf("ResolvePath(op=%s, %q) refused with %v; an unconfined turn keeps ADR-063 FR-2.2's open reach", o.op, o.path, err)
+			if err == nil {
+				handle.Close()
+				t.Fatalf("ResolvePath(op=%s, %q) succeeded; #1284 protects the sessions dir from unconfined turns as well", o.op, o.path)
 			}
-			handle.Close()
+			if !errors.Is(err, ErrCarveOut) {
+				t.Fatalf("ResolvePath(op=%s, %q) error = %v; want ErrCarveOut", o.op, o.path, err)
+			}
 		})
 	}
 
@@ -324,9 +348,12 @@ func TestWithReadConfined_CtxSeamSetByDispatchNotByTool(t *testing.T) {
 		}
 
 		// Effective reach, not a field value (JUDGE-FR-061's standard): the
-		// policy this seam produced must actually refuse the read.
-		if _, resolveErr := ResolvePath(ctx, policy, "read_file", "", FSOpRead, tr.sessionsFile); !errors.Is(resolveErr, ErrOutsideScope) {
-			t.Fatalf("a policy built through the ctx seam did not refuse an out-of-workdir read: %v", resolveErr)
+		// policy this seam produced must actually refuse the read. The
+		// transcript is #1284 protected inventory now, so the refusal is
+		// ErrCarveOut regardless of posture; the seam's own out-of-workdir
+		// shape is pinned by the ErrOutsideScope rows above.
+		if _, resolveErr := ResolvePath(ctx, policy, "read_file", "", FSOpRead, tr.sessionsFile); resolveErr == nil {
+			t.Fatal("a policy built through the ctx seam did not refuse an out-of-workdir read")
 		}
 	})
 

@@ -361,6 +361,15 @@ func skillsGateDenialError(rawPath string) error {
 		ErrCarveOut, rawPath)
 }
 
+// skillsRegistryListDenialError refuses a LIST whose path lands inside the
+// installed registry ($OMNIPUS_HOME/skills) — #1284 T-FT: a listing is a
+// name disclosure of whatever the directory holds, including the gated
+// instruction files.
+func skillsRegistryListDenialError(rawPath string) error {
+	return fmt.Errorf("%w: %q is inside the installed skill registry ($OMNIPUS_HOME/skills), which no file tool may list — browse skills with the Skill tool (ADR-072 D10.3; #1284)",
+		ErrCarveOut, rawPath)
+}
+
 // skillsRegistryNonReadDenialError refuses a WRITE, SERVE or EXEC whose path
 // lands in the installed registry ($OMNIPUS_HOME/skills).
 //
@@ -1103,8 +1112,18 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 	if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched {
 		switch rp.op {
 		case FSOpRead, FSOpList, FSOpSend:
-			if shelf == skillShelfRegistry && isSkillInstructionFile(rp.rawPath, realAbs) {
-				return nil, skillsGateDenialError(rp.rawPath)
+			if shelf == skillShelfRegistry {
+				// A LIST inside the installed registry discloses instruction-
+				// file names wholesale (#1284 T-FT: list_directory on a
+				// directory holding gated files is itself a disclosure), so
+				// the whole list op is refused — helper files stay readable
+				// individually, by exact path.
+				if rp.op == FSOpList {
+					return nil, skillsRegistryListDenialError(rp.rawPath)
+				}
+				if isSkillInstructionFile(rp.rawPath, realAbs) {
+					return nil, skillsGateDenialError(rp.rawPath)
+				}
 			}
 		case FSOpWrite, FSOpServe:
 			if shelf == skillShelfRegistry {

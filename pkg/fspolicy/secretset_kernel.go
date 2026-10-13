@@ -182,6 +182,17 @@ func KernelDenyEnumeration(home, workDir string, branches []KernelBranch) (denie
 		}
 		return false
 	}
+	// branchAtOrUnder reports whether any branch root IS p or lives beneath
+	// it — the condition under which a wholesale named deny would shadow a
+	// branch (see the named-inventory loop).
+	branchAtOrUnder := func(p string) bool {
+		for _, root := range branchRoots {
+			if CoversForDeny(p, root) {
+				return true
+			}
+		}
+		return false
+	}
 
 	seen := make(map[string]struct{}, 64)
 	addDenied := func(p string) {
@@ -193,14 +204,29 @@ func KernelDenyEnumeration(home, workDir string, branches []KernelBranch) (denie
 	}
 
 	// 1. The named inventory, always — except an entry that IS a branch root
-	// (a branch re-admits its own root; deeper inventory names inside it are
-	// handled by their own named entries).
-	for _, name := range ProtectedInventoryNames {
-		p := filepath.Join(cleanHome, name)
-		if isBranchRoot(filepath.Clean(p)) {
+	// or has a branch root beneath it: a branch re-admits its own subtree, so
+	// a named ANCESTOR of one (cache/ over a document-cache branch) is not
+	// denied wholesale here — the walk below refines it to the precise deny
+	// set (the branch's chain stays traversable, everything else under the
+	// named entry is denied entry by entry).
+	//
+	// SecretEntriesAlwaysPathOnly joins the named set even though it is not a
+	// ProtectedInventoryName: the kernel keeps the whole-directory skills
+	// deny for children (ADR-072 D10.3, accepted gap) and must deny it
+	// whether or not the registry exists on disk yet — a skill installed
+	// after this enumeration is covered by the deny entry, not by the walk.
+	// SecretEntriesPerTurn (agents/, workspaces/) joins for the same
+	// existence-independent reason: another agent's home and another
+	// workspace's tree are denied by NAME on every non-own turn, even on a
+	// fresh install where the directory does not exist yet — the walk can
+	// only deny what is on disk. The loop's branch skip keeps the caller's
+	// OWN root out (a branch beneath it re-admits it, and the walk refines).
+	for _, name := range append(append(append([]string{}, ProtectedInventoryNames...), SecretEntriesAlwaysPathOnly...), SecretEntriesPerTurn...) {
+		p := filepath.Clean(filepath.Join(cleanHome, name))
+		if branchAtOrUnder(p) {
 			continue
 		}
-		addDenied(filepath.Clean(p))
+		addDenied(p)
 	}
 
 	// 1b. D4 agent-home-internal entries inside an allowed branch: an

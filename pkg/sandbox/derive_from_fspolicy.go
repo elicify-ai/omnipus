@@ -447,9 +447,16 @@ func isSharedTmpPath(p string) bool {
 // ancestor directory. If a common God Mode flow breaks on that, the fix is to
 // document it in docs/security.md — never to weaken the floor.
 func deriveFloorPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput, policy SandboxPolicy, allowanceBranchRoots []string) SandboxPolicy {
+	// The floor's working branch is the turn's WHOLE work tree, not the
+	// exact per-turn WorkDir: a God setup child rooted at an installation
+	// prefix inside the workspace must keep reading (and writing) the
+	// workspace's own files — God Mode A opens everything except the
+	// protected set. Outside a workspace work tree the branch is unchanged.
+	floorWork := fspolicy.WorkTreeRootFor(in.HomePath, authored.WorkDir)
+
 	branches := make([]fspolicy.KernelBranch, 0, len(authored.AllowedRoots)+len(in.AllowedPaths)+len(in.AllowRoots)+2)
 	for _, root := range authored.AllowedRoots {
-		branches = append(branches, fspolicy.KernelBranch{Path: root, Writable: true})
+		branches = append(branches, fspolicy.KernelBranch{Path: fspolicy.WorkTreeRootFor(in.HomePath, root), Writable: true})
 	}
 	for _, p := range in.AllowedPaths {
 		branches = append(branches, fspolicy.KernelBranch{Path: p, Writable: true})
@@ -459,7 +466,7 @@ func deriveFloorPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput, policy Sa
 	}
 	branches = append(branches, fspolicy.KernelBaseBranches(in.HomePath)...)
 
-	denied, _, enumErr := fspolicy.KernelDenyEnumeration(in.HomePath, authored.WorkDir, branches)
+	denied, _, enumErr := fspolicy.KernelDenyEnumeration(in.HomePath, floorWork, branches)
 	if enumErr != nil {
 		if in.WarnFn != nil {
 			in.WarnFn(
@@ -474,7 +481,7 @@ func deriveFloorPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput, policy Sa
 	}
 	policy.DeniedPaths = denied
 	policy.WriteDeniedPaths = nil
-	policy.DeniedNodes = fspolicy.KernelDeniedNodesFor(in.HomePath, authored.WorkDir, allowanceBranchRoots...)
+	policy.DeniedNodes = fspolicy.KernelDeniedNodesFor(in.HomePath, floorWork, allowanceBranchRoots...)
 	policy.AllowedBranches = nil
 
 	// Free, network-open, uncapped: the floor carries no port rules and the

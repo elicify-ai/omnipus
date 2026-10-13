@@ -5,6 +5,7 @@
 package fspolicy
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -207,10 +208,14 @@ func IsProtectedHomePath(rawPath, home string) bool {
 		}
 	}
 
-	// Workspace shape, without a turn: the work tree is the one part of a
+	// Workspace shape, without a turn: the work tree of a workspace the
+	// gateway actually knows (its record file exists) is the one part of a
 	// workspace an agent legitimately reaches; the record files, the
-	// internal .omnipus directory and every other workspace entry stay
-	// protected.
+	// internal .omnipus directory, other workspaces' trees and every other
+	// workspace entry stay protected. The record-existence guard is what
+	// keeps a foreign or orphaned workspace's work tree denied here — with a
+	// real turn, IsCarveOut answers from the turn's actual WorkDir instead
+	// and this shape leg never runs.
 	rel, err := filepath.Rel(home, clean)
 	if err != nil {
 		return true
@@ -218,7 +223,10 @@ func IsProtectedHomePath(rawPath, home string) bool {
 	parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
 	if len(parts) >= 3 && strings.EqualFold(parts[0], "workspaces") {
 		if strings.EqualFold(parts[2], workspaceWorkDirName) {
-			return false
+			if workspaceRecordExists(home, parts[1]) {
+				return false
+			}
+			return true
 		}
 		if strings.EqualFold(parts[2], workspaceInternalDir) {
 			return true
@@ -240,4 +248,44 @@ func IsProtectedHomePath(rawPath, home string) bool {
 		}
 	}
 	return true
+}
+
+// workspaceRecordExists reports whether the workspace record file
+// workspaces/<id>.json exists under home. Existence only — the record is
+// NOT parsed — because this predicate runs without a turn and may only
+// narrow a deny when the gateway demonstrably knows the workspace; an
+// unreadable record still shows the workspace is managed.
+func workspaceRecordExists(home, wsID string) bool {
+	if wsID == "" || strings.ContainsAny(wsID, "/\\") || wsID == "." || wsID == ".." {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(home, "workspaces", wsID+".json"))
+	return err == nil
+}
+
+// WorkTreeRootFor widens path to its containing workspace work tree —
+// <home>/workspaces/<id>/work — when path lies inside one by shape, and
+// returns path unchanged otherwise. The God Mode floor uses this so its
+// enumeration keeps the turn's WHOLE work tree open (read and write) while a
+// deeper per-turn branch such as an environment_setup installation prefix
+// would otherwise leave the work tree's own files on the denied side of the
+// walk — the exact gap the D7 probe (workspace read from a setup child)
+// exercises.
+func WorkTreeRootFor(home, path string) string {
+	if home == "" || path == "" {
+		return path
+	}
+	cleanHome, cleanPath := filepath.Clean(home), filepath.Clean(path)
+	if !CoversForDeny(cleanHome, cleanPath) {
+		return path
+	}
+	rel, err := filepath.Rel(cleanHome, cleanPath)
+	if err != nil {
+		return path
+	}
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
+	if len(parts) >= 3 && strings.EqualFold(parts[0], "workspaces") && parts[1] != "" {
+		return filepath.Join(cleanHome, "workspaces", parts[1], workspaceWorkDirName)
+	}
+	return path
 }
