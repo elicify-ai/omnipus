@@ -485,6 +485,20 @@ func (al *AgentLoop) dispatchSystemMessageToSessionWorker(msg bus.InboundMessage
 	return al.dispatchSessionWorker(scope, msg)
 }
 
+// retireIfIdle is the idle-timeout decision. Under inboxMu (the lock pushInbox
+// holds) it either finds a message waiting and leaves the worker alive, or marks
+// the worker exiting so every later push is refused and re-dispatched. It
+// reports whether the worker is now exiting.
+func (w *sessionWorker) retireIfIdle() bool {
+	w.inboxMu.Lock()
+	defer w.inboxMu.Unlock()
+	if len(w.inbox)+len(w.overflow) > 0 {
+		return false
+	}
+	w.exiting.Store(true)
+	return true
+}
+
 // runLoop is the worker goroutine. It reads messages from inbox and processes
 // them one at a time by delegating to the parent AgentLoop's existing turn
 // execution path. It self-exits after workerIdleTimeout with no activity and
@@ -520,14 +534,10 @@ func (w *sessionWorker) runLoop() {
 			// that moment (exiting is set under inboxMu, the lock pushInbox
 			// holds): a message accepted a heartbeat before the exit is run,
 			// never stranded in a dead inbox.
-			w.inboxMu.Lock()
-			if len(w.inbox)+len(w.overflow) > 0 {
-				w.inboxMu.Unlock()
+			if !w.retireIfIdle() {
 				idleTimer.Reset(workerIdleTimeout)
 				continue
 			}
-			w.exiting.Store(true)
-			w.inboxMu.Unlock()
 			logger.DebugCF("agent.worker", "Session worker idle-timeout — exiting",
 				map[string]any{"scope": w.scope})
 			return

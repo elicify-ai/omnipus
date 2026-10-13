@@ -293,6 +293,14 @@ function applySeqGate(
   return 'drop-or-gap'
 }
 
+// R2-S3-05: a copy of an idle-mark set without one call id.
+function withoutIdleMark(marks: Record<string, true> | undefined, callId: string): Record<string, true> | undefined {
+  if (!marks || !(callId in marks)) return marks
+  const rest = { ...marks }
+  delete rest[callId]
+  return rest
+}
+
 // ADR-091 D7/D10 + #823 Opus review round 2 item 1 ("update moved tools by
 // call_id"): applies a tool_call_result to this session's own flat tool
 // call. The live entry can be gone not because this result is genuinely
@@ -305,12 +313,6 @@ function applySeqGate(
 // baked tool_calls for this call_id and update it in place. Extracted from
 // handleFrame to keep it under its grandfathered line budget
 // (scripts/budgets/functions.txt) — no behaviour change.
-function withoutIdleMark(marks: Record<string, true> | undefined, callId: string): Record<string, true> | undefined {
-  if (!marks || !(callId in marks)) return marks
-  const { [callId]: _dropped, ...rest } = marks
-  return rest
-}
-
 function applyToolCallResultFrame(
   b: SessionChatState,
   frame: ToolCallResultFrame,

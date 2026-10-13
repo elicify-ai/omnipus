@@ -58,6 +58,10 @@ case "$1 $2" in
         gate=${cmd##* }
         echo "RUNLOG: /cache/logs/$gate@x.log"
         echo "HEAD: $FAKE_SHORT selfcheck"
+        # case 4: another dispatcher takes the machine over while this gate runs - done
+        # here, at a fixed point after our marker was written, not by a racing
+        # background poller (which lost the race under load once this check ran in CI)
+        if [ -f "$D/foreign-$id" ]; then echo "ci-cluster:99999:other:1" > "$D/owner-$id"; fi
         if [ -f "$D/die-$id" ]; then echo stopped > "$D/state-$id"; echo "Error: ssh shell: wait: remote command exited without exit status or exit signal"; exit 1; fi
         echo "ALL GATES GREEN"; exit 0 ;;
       ls*) echo "/cache/logs/x.log"; exit 0 ;;
@@ -119,11 +123,8 @@ grep -q 'OVERALL: FAIL' "$OUT" || fail "(3) no OVERALL: FAIL"
 
 # 4. a machine we started now carries another dispatcher's marker -> not stopped
 new_case c4; echo stopped > "$FAKE_DIR/state-mA"; echo stopped > "$FAKE_DIR/state-mB"
-# simulate: once our marker is written on mB, another dispatcher overwrites it
-( for _ in $(seq 1 200); do [ -s "$FAKE_DIR/owner-mB" ] && { echo "ci-cluster:99999:other:1" > "$FAKE_DIR/owner-mB"; break; }; sleep 0.05; done ) &
-BG=$!
+touch "$FAKE_DIR/foreign-mB"   # the fake fly overwrites mB's marker once our gate is running
 run_cluster "$TIERS"
-wait "$BG" 2>/dev/null
 grep -q 'STOP mB' "$FAKE_DIR/stops.log" && fail "(4) stopped a machine carrying another dispatcher's marker"
 grep -q 'STOP mA' "$FAKE_DIR/stops.log" || fail "(4) control: the machine with our own marker (mA) was not stopped"
 [ "$FAIL" -eq 0 ] && ok "(4) foreign owner marker respected"
