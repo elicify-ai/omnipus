@@ -1,7 +1,7 @@
 # Feature Specification: The Omnipus system agent
 
-**Created**: 2026-10-12 · **Fix round 1**: 2026-10-13
-**Status**: Draft (fix round 1 applied; grill round 2 pending)
+**Created**: 2026-10-12 · **Fix round 1**: 2026-10-13 · **Fix round 2 (final)**: 2026-10-13
+**Status**: Draft (both fix rounds applied; no further grill round)
 **Size**: Feature (spec-driven; 5-reviewer gate; every engine/WebSocket bundle needs hands-on UAT by a tester and an independent validator on the exact landing commit — root `CLAUDE.md`, "Definition of Done")
 **Release**: v0.1.1 (founder answer R1 A, 2026-10-12, relayed by team-lead)
 
@@ -12,7 +12,9 @@
 | Founder answers | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/designs/omnipus-adr-founder-answers-20261012.md` — FQ-1…FQ-18, "After the correction round", "Spec open questions OQ-1..OQ-4", "Spec grill round 1 questions" | **FA:…**; later sections win |
 | Visual draft | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/omnipus-workflows/index.html` | Flows W1–W18 and screens, **WF** |
 | ADR grill | [ADR review](../architecture/ADR-20261011-omnipus-system-agent-review.md) at `cdab144f0` | Negative controls owned in §9.5 |
-| Spec grill round 1 | [Spec review](omnipus-system-agent-spec-review.md) at `54c38386b` | Findings dispositioned in §0 |
+| Spec grill round 1 | [Spec review](omnipus-system-agent-spec-review.md) at `54c38386b` | Findings dispositioned in §0.1 |
+| Spec grill round 2 (final) | [Spec review round 2](omnipus-system-agent-spec-review-round2.md) at `12e73f653` | Findings dispositioned in §0.4 |
+| Channel person routing | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/designs/channel-person-routing-decisions-20261013.md` (R1–R5, PR-1–PR-4) | **In scope** by founder decision 2026-10-13 (US-16, ADR OSA-14). Added after both grill rounds — not grilled |
 | Dependency | GitHub issue **#1277** (open) — "Gateway refuses to start or reload when an enabled channel's secret is missing" | Prerequisite for removing an in-use secret (FR-077). Its fix is **not** specified here |
 
 **Reading guide.** §0 records the fix round. §1–§6 describe behaviour only. §7 onward (contracts, BDD, TDD plan, requirements, traceability, reachability, documentation, work units) may name code. IDs: **FR-nnn**, **BDD-u.n**, **SC-nnn**, **OQ-n**. The plan-spec skill's interactive gates are served in this flow by the two grill rounds and the founder interviews after each (root `CLAUDE.md`, "Spec-Driven Workflow").
@@ -45,6 +47,8 @@
 
 Tally: 1 critical fixed, 13 major fixed, 2 minor fixed, 1 observation adopted. No finding was overridden.
 
+> **Correction (2026-10-13, fix round 2):** this tally said all 13 major findings and the landing observation were fixed. That was wrong: grill round 2 showed six of them (MAJ-001, 003, 006, 009, 010, 011) and OBS-001 were only partly fixed. Their residuals are closed in §0.4 (R2-MAJ-001…007, R2-MIN-001).
+
 ### 0.2 Founder answers applied in this round
 
 | Answer | Applied |
@@ -66,6 +70,34 @@ Tally: 1 critical fixed, 13 major fixed, 2 minor fixed, 1 observation adopted. N
 | ADR-029 legacy unbound channel routing | FA:OQ-2 B | Removed; every channel is bound to an agent in a workspace. |
 | ADR-022 password re-confirmation for credential writes | FA:Q-R1-2 B | Not required for the scoped secret card only; raw credential routes unchanged. |
 
+### 0.4 Fix round 2 (2026-10-13) — final correction
+
+| Finding | Disposition | Change |
+|---|---|---|
+| R2-MAJ-001 private version selection; truthful Stop/unused | Fixed | Three reference states: **stored** (not selected), **selected** (in use by its recorded consumer), **superseded**. First submit for a private variable with no selected version is selected at once (nothing is in use to keep). A replacement is stored only; the owner pair selects it through the new ask tool `select_secret_version` (scoped to the caller's own pair; Omnipus for a validated target) — no management grant to ordinary agents, no resolver exception. Cancel/Stop rule qualified: a not-yet-selected reference stays unused; selected references and completed changes stay and are reported (FR-064, FR-067, FR-072, FR-076, FR-086; BDD-6.5, 6.19–6.23, 7.8; K6). |
+| R2-MAJ-002 durable Submit vs request state | Fixed | A value-free **submit receipt** (request id → reference names, time) is written in the **same atomic credential-store publication** as the values; it is the commit fact. On restart the request state is derived from the receipt, so a committed submit is always `submitted`; no receipt means nothing stored (`interrupted`). Resume carries references only and is re-dispatched once, idempotently by request id (FR-087; BDD-6.24; test 86). |
+| R2-MAJ-003 shared-write boundary | Fixed | One boundary: the gateway config write lock, lock order **config lock → agent-loop lock, never the reverse**. Settings writes already hold it; tool writes to the four shared resources acquire it before entering the agent-loop mutation. Before-state is a secret-free **revision token** per resource (absent = `absent`) returned by the read tools; tools take `expected_revision` (§6.6; FR-085, FR-088; BDD-11.9 outline incl. Settings contention; tests 75, 88). |
+| R2-MAJ-004 gateway environment vs integration resolution | Fixed | The gateway-environment prohibition applies to the **agent-private kind only**. Provider keys and mailbox passwords keep the existing boot/reload resolution, which places them in the gateway process environment (`credentials.InjectFromConfig`); children never inherit them (child allowlist). Card copy and docs say so (FR-062, FR-076, §6.1, §6.7). |
+| R2-MAJ-005 masking across refresh/sign-in/restart | Fixed | One function computes the **complete** sensitive set (configured references, OAuth values, and every stored card secret of every kind, version and state); every full-set rebuild — boot, reload, Settings refresh, sign-in/token refresh, config clone — uses it; registrations are serialized so a stale computation cannot replace a newer one (FR-069, FR-089; BDD-6.25; tests 89, 90). |
+| R2-MAJ-006 first landable bundle | Fixed | B1–B3 are now **preparation stages** on the feature branch (CI + qa-lead CHECK per stage, not landed). There is **one landing**: the complete feature after the 5-reviewer gate, same-change docs and exact-commit UAT. The permission split (FR-024/FR-025) moves into WU-2 so it is committed together with Omnipus's grants (§15). |
+| R2-MAJ-007 protected names | Fixed | Protected set = child allowlist names and prefixes (`LC_`, `XDG_`, `OMNIPUS_CHILD_`), `OMNIPUS_`, `LD_`, `DYLD_`, the setup layer, and the document-runtime layer (`PATH`, `PYTHONPATH`, `NODE_PATH`, `XDG_CACHE_HOME`, `HOME`, `TMPDIR`, `OSL_SOCKET_PATH`, `LANG`, `LC_ALL`, `OMNIPUS_DOCUMENT_SKILLS`). Private variables are appended **after** all managed layers (the document layer strips names containing KEY/TOKEN/SECRET/CREDENTIAL/PASSWORD from inherited input, so earlier injection would lose them). Drift test runs the real composers on all three child paths with the document runtime enabled (D6; BDD-7.7, 7.10; tests 72, 91). |
+| R2-MIN-001 inherited controls | Fixed | §9.5 now owns: listing-OK/selected-model-unavailable, shared-skill contention, multi-consumer removal with failed reload / stale live value / next boot, policy reload during helper execution, target-shelf create/remove/discovery, target `environment_setup`. §9.4 names concrete existing test files (BDD-4.8, 9.7, 11.10, 11.11, 15.6). |
+| R2-OBS-001 composite evidence | Adopted | §13: the UAT evidence pack separates screen-level keyboard/focus/announcement, touch/reflow and reduced-motion checks from catalogue/manifest/Storybook checks. |
+
+Tally: 0 critical, 7 major fixed, 1 minor fixed, 1 observation adopted. No finding overridden.
+
+### 0.5 OQ-5 and channel person routing (founder, 2026-10-13)
+
+The founder first answered OQ-5 "keep the per-person/per-group rules; separate feature", then the same day decided that **channel person routing is part of this Omnipus implementation** (team-lead steer, 2026-10-13; decisions PR-1–PR-4). It is specified here as **US-16** (FR-140–FR-156, BDD-16.x, K18–K22, WU-14) and recorded in the ADR as **OSA-14**. It **reuses** the bindings engine (`Config.Bindings`, `BindingMatch`, the `ResolveRoute` ladder), `allow_from`, the session-key scopes behind `session.dm_scope`, `session.identity_links` and `group_trigger`, and closes their gaps. **This scope was added after both grill rounds and has not been grilled**; team-lead will ask the founder about a focused review. "No default agent" and loud failure for unrouted messages stay.
+
+### 0.6 Design choices made in fix round 2 (derived from founder answers; visible, non-blocking)
+
+| Choice | Derived from |
+|---|---|
+| First submit of a private variable with nothing selected is selected at once | Q-R1-1 A protects an *in-use* value; with none in use there is nothing to keep |
+| Private replacement is selected by an Ask tool scoped to the owner pair | Q-R1-1 A ("approved change tool selects"); FQ-3 A (no management grants to ordinary agents) |
+| Private secrets reach document-runtime runs too, appended after the managed layers | FQ-18 / OQ-1 ("injected into that agent's own sandboxed commands") |
+
 ---
 
 ## 1. Discovery summary
@@ -74,7 +106,7 @@ Tally: 1 critical fixed, 13 major fixed, 2 minor fixed, 1 observation adopted. N
 |---|---|---|
 | Actors | The user (single account, web app); Omnipus; its helper sessions; ordinary native agents (Mia, Jim, General Purpose, Planner, Researcher, custom); external-program workers; outside people on chat channels; AI providers, connector (MCP) servers, chat platforms, mail servers | F:D4, D10, D11 |
 | Problem | Two overlapping helpers; a blank create form; secrets typed into chat; unverified "done" claims; messages silently routed to a default agent | BRD §1; FA:FQ-17 |
-| In scope | One Omnipus agent; workflows as skills; summary + question gate with a narrow ask list; secret card for all native agents including agent-private secrets per workspace + agent; self-checks in change tools; connect-channel and connect-mailbox; helper decisions in the Omnipus chat; screen changes; removal of the Agents screen, create form, Ava, Admin, the default agent and unbound channel routing | F:D1–D27; FA |
+| In scope | One Omnipus agent; workflows as skills; summary + question gate with a narrow ask list; secret card for all native agents including agent-private secrets per workspace + agent; self-checks in change tools; connect-channel and connect-mailbox; helper decisions in the Omnipus chat; screen changes; removal of the Agents screen, create form, Ava, Admin, the default agent and unbound channel routing; **channel person routing per connection** (person table, allow list, main agent, stranger reply, conversation mode, derived per-agent list) | F:D1–D27; FA; PR-1–PR-4 |
 | Out of scope | Judge/Planner settings redesign, core security settings (F:D1); team templates (F:D25); secret files and connector sign-in (S5/S6); group chats; the #1277 fix | F:D1, D10, D25; FA:FQ-13 |
 | Constraints | Single Go binary, pure Go, two-layer tool policy (Hard Constraint #6), contract-first (#8), greenfield (F:D22), Linux/macOS/Windows | root `CLAUDE.md` |
 | Accepted risks | R-A1 foothold via allow tools; R-A2 read-to-web disclosure; R-A3 external-program worker planting — founder-accepted 2026-10-12 | ADR OSA-3 |
@@ -213,6 +245,9 @@ Any native agent can ask for a secret through a protected card. The value never 
 7. **Given** a secret already in use, **When** the user submits a replacement, **Then** it is stored as a new version; the integration keeps the old one until its approved change selects the new one.
 8. **Given** the card, **When** the user submits, **Then** no password re-entry is asked; the raw Settings credential routes still require it.
 9. **Given** an unauthenticated, foreign, stale, stopped or changed-recipient submit, **When** it arrives, **Then** nothing is written and no turn resumes.
+10. **Given** a stored replacement, **When** it is not yet selected, **Then** it is listed as stored, the current version stays selected, and Cancel or Stop leaves it unused; selected references and completed changes stay and are reported.
+11. **Given** the gateway stops right after a submit was stored, **When** it restarts, **Then** the request reads as submitted with its references, never as "nothing stored".
+12. **Given** a stored secret, **When** Settings are saved, the configuration reloads, a provider signs in or the gateway restarts, **Then** its exact value stays masked.
 
 ### US-7 — Agent-private secrets per workspace and agent (P1)
 
@@ -223,6 +258,7 @@ Any native agent can ask for a secret through a protected card. The value never 
 3. **Given** a command prints the exact value, **When** output returns, **Then** it is masked; a transformed value may not be.
 4. **Given** that secret, **When** Mia runs a command in Marketing, **Then** the Sales value is absent (Marketing has its own value or none).
 5. **Given** a variable name that is reserved or malformed, **When** stored, **Then** it is refused with the rule.
+6. **Given** Mia replaces her Sales `WEATHER_TOKEN`, **When** she has not yet selected the new version, **Then** her commands keep the old value; after the user approves the selection, they get the new one.
 
 ### US-8 — Connect a channel or a mailbox (P1)
 
@@ -259,6 +295,7 @@ Any native agent can ask for a secret through a protected card. The value never 
 2. **Given** a helper calls an ask tool, **When** pending, **Then** the card appears in the Omnipus chat naming the helper, with attention, whichever workspace is active.
 3. **Given** a helper needs an answer, **When** it asks, **Then** Omnipus asks the user on its own card and never answers for the user.
 4. **Given** two plans touch the same agent, skill, workspace or shared setting, **When** the second writes after the first, **Then** the stale write is refused and a changed plan returns to the user.
+5. **Given** a confirmed plan for a provider, **When** the user changes that provider in Settings before the helper writes, **Then** the helper's write is refused and the plan returns to the user.
 
 ### US-12 — Screens (P0)
 
@@ -285,6 +322,7 @@ Any native agent can ask for a secret through a protected card. The value never 
 5. **Given** Settings and the editor, **When** shown, **Then** no default-agent control exists.
 6. **Given** no default agent, **When** the gateway boots or reloads, **Then** skill, tool and startup listings and channel recording work.
 7. **Given** boot, **When** browsers are prepared, **Then** the default workspace's browser is warmed.
+8. **Given** a bound connection, **When** a message from an allowed person matches no person rule and the main agent is unavailable, **Then** it is dropped loudly — never routed elsewhere.
 
 ### US-14 — Permission changes ask (P1)
 
@@ -301,6 +339,19 @@ Any native agent can ask for a secret through a protected card. The value never 
 2. **Given** #1277 not landed, **When** an in-use secret is to be removed, **Then** it is refused with the consumer list.
 3. **Given** removal completes, **When** shown, **Then** durable deletion, live effect and boot validity are reported separately.
 4. **Given** an unused older version after a replacement, **When** removed, **Then** it is deleted and the integration is unaffected.
+
+### US-16 — Channel person routing per connection (P1)
+
+The operator decides, per connection (channel instance), who may talk to the workspace's agents and which agent answers each person or group; everyone else allowed reaches the connection's main agent; strangers are told they are not authorised. **Why P1**: founder decision 2026-10-13 (R1–R5, PR-1–PR-4). **Independent test**: connection tg-1 in Sales: allow list [Anna, Ben]; person rule Anna → Jim; main agent Mia; Anna reaches Jim, Ben reaches Mia, Carl gets "not authorised" and appears on the status.
+
+1. **Given** a connection bound to a workspace with a main agent, **When** an allowed person without a rule writes, **Then** the main agent answers.
+2. **Given** a person or group rule to an agent in the connection's workspace, **When** that person or group writes, **Then** that agent answers.
+3. **Given** a person not on the allow list, **When** they write, **Then** they get the "not authorised" reply and the operator sees it on the connection status and log.
+4. **Given** two connections of the same type in one workspace, **When** each has different rules, **Then** each applies only its own.
+5. **Given** an agent, **When** its editor opens, **Then** a read-only list shows who can reach it, through which connection, with a link to edit that connection.
+6. **Given** a connection's conversation mode is "agent's main chat" (default), **When** people write, **Then** their messages go into the agent's main chat; with "one chat per person", each person gets their own conversation — changed without restart.
+7. **Given** Omnipus connects a channel, **When** the plan is confirmed, **Then** the main agent is set and offered person rules are saved with it.
+8. **Given** a person rule naming an agent that is not a member of the workspace or no longer exists, **When** the rule is saved, **Then** it is refused; **When** such a rule exists and the person writes, **Then** the message is dropped loudly — never sent to the main agent instead.
 
 ---
 
@@ -351,7 +402,7 @@ Any native agent can ask for a secret through a protected card. The value never 
 
 - The system must not route any message to an agent that was not named, because FA:FQ-17.
 - The system must not route channel traffic unless the instance is bound to an agent in a workspace, because FA:OQ-2.
-- The system must not place a secret value in a transcript, frame, tool argument, log, error text, audit entry, resume record or the gateway process environment, because F:D10.
+- The system must not place a secret value in a transcript, frame, tool argument, log, error text, audit entry or resume record, because F:D10; and must not place an **agent-private** value in the gateway process environment or another agent's child, because FA:OQ-1. (Provider keys and mailbox passwords keep today's boot/reload resolution into the gateway process environment; children never inherit them.)
 - The system must not let a reference be selected for a recipient other than the one the card showed, because OSA-7.3.
 - The system must not let one workspace's private secret reach another workspace or another agent, because FA:OQ-1.
 - The system must not overwrite an in-use secret on submit, because FA:Q-R1-1 A.
@@ -364,6 +415,10 @@ Any native agent can ask for a secret through a protected card. The value never 
 - The system must not create agents through any UI other than Omnipus (REST create stays, FA:FQ-10 A), because F:D18.
 - The system must not forward old Agents-screen links, because F:D19.
 - The system must not answer a question or approval on the user's behalf, because WF §1.
+- The system must not reinvent person routing: it must reuse `Config.Bindings`/`BindingMatch` and the routing ladder at instance scope, because the founder's R4 (2026-10-13).
+- The system must not route a person-rule match to an agent outside the connection's workspace, nor fall back silently to the main agent when a person rule's agent is unavailable, because PR-1 and FA:FQ-17.
+- The system must not process a stranger's message, because PR-3.
+- The system must not activate a replacement secret before its owner or integration selects it, because FA:Q-R1-1 A.
 
 ### 6.2 Machine-verifiable constraints
 
@@ -414,7 +469,7 @@ Keyboard and focus (FR-109): every listed control is reachable by Tab/arrow keys
 |---|---|---|
 | `websocket_chat.go::resolveTargetAgent` (+ `firstChatTargetAgentID`) | The frame's `agent_id` for a new session; the session's canonical owner otherwise | Error frame "an agent must be named"; no first-agent fallback |
 | `rest_sessions.go::createSessionHTTP` (+ `firstChatTargetAgentID`) | Request `agent_id` (required) | 400; Omnipus → 409 with main id |
-| `loop_inbound.go::resolveMessageRoute` | Bound pair from the instance binding only | Loud drop (FR-121); no secondary resolution |
+| `loop_inbound.go::resolveMessageRoute` | The instance's workspace binding: allow list, then person table, then main agent (FR-142) | Loud drop (FR-121, FR-143); no fallback to any other agent |
 | `loop_inbound.go::resolveSystemMessageAgent` | Named async origin (unchanged) | Missing origin → discarded, error log + audit "system message without an addressable agent" |
 | `goal_triggers.go::resolveGoalAgent` | Canonical session owner only | Goal status error "owner agent X no longer exists"; never another participant |
 | `task_executor.go::processTaskDirect` | Task's agent | Existing truthful pre-dispatch failure; zero runs |
@@ -438,25 +493,30 @@ Keyboard and focus (FR-109): every listed control is reachable by Tab/arrow keys
 | `request_secret` | allow | allow | allow | allow (constructor override) | deny (fixed) | not available (no native tools) |
 | `list_secrets` | allow | allow (all names) | allow (own workspace+agent names) | allow | deny | — |
 | `remove_secret` | ask | allow-to-ceiling (asks) | deny | deny | deny | — |
+| `select_secret_version` | ask | allow-to-ceiling (asks; own or validated target pair) | allow-to-ceiling (asks; own pair only) | allow-to-ceiling (constructor) | deny | — |
 | `connect_channel`, `connect_mailbox`, `set_agent_permissions` | ask | allow-to-ceiling | deny | deny | deny | — |
 | Management family (agent/workspace/skill/connector/provider/channel change tools) | per ADR OSA-3 | allow-to-ceiling | deny | deny | deny | — |
 
-"allow-to-ceiling" = no per-agent entry (Omnipus never carries per-agent ask). Omnipus's exact supporting set: `list_agents`, `get_agent`, `get_agent_tools`, `read_agent_metadata`, `list_workspaces`, `get_workspace`, `list_models`, `list_providers`, `test_provider`, `list_mcp_servers`, `list_channels`, `test_channel`, `list_skills`, `find_skills`, `run_doctor`, `get_usage`, `list_secrets`, `AskUserQuestion`, `send_message`, `answer_request`, `message_parent`, `delegate`, `Skill`, `ToolSearch`, `remember`, `recall_memory`, `recall_conversation`, `run_retrospective`, `set_goal`, `goal_claim`, `read_file`, `write_file`, `edit_file`, `append_file`, `list_directory`, `grep`, `list_mounts`, `knowledge_describe`, `knowledge_find`, `knowledge_read`, `knowledge_list`, `search_web`, `fetch_url`, `create_agent`, `update_agent`, `delete_agent`, `update_workspace`, `create_skill`, `edit_skill`, `remove_skill`, `install_skill`, `add_mcp_server`, `remove_mcp_server`, `configure_provider`, `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `connect_mailbox`, `set_agent_permissions`, `request_secret`, `remove_secret`, `environment_setup`, `bash`. Everything else: explicit per-agent deny. Every new tool is registered in the static name list, the shipped ceiling, the role inventories, the custom constructor, the Auto classification table, the central metadata catalogue **and** the executable per-agent registry built at boot and on reload. This is seeded role data in the existing two layers — not a per-agent coverage backfill and not a resolver exception.
+"allow-to-ceiling" = no per-agent entry (Omnipus never carries per-agent ask). Omnipus's exact supporting set: `list_agents`, `get_agent`, `get_agent_tools`, `read_agent_metadata`, `list_workspaces`, `get_workspace`, `list_models`, `list_providers`, `test_provider`, `list_mcp_servers`, `list_channels`, `test_channel`, `list_skills`, `find_skills`, `run_doctor`, `get_usage`, `list_secrets`, `AskUserQuestion`, `send_message`, `answer_request`, `message_parent`, `delegate`, `Skill`, `ToolSearch`, `remember`, `recall_memory`, `recall_conversation`, `run_retrospective`, `set_goal`, `goal_claim`, `read_file`, `write_file`, `edit_file`, `append_file`, `list_directory`, `grep`, `list_mounts`, `knowledge_describe`, `knowledge_find`, `knowledge_read`, `knowledge_list`, `search_web`, `fetch_url`, `create_agent`, `update_agent`, `delete_agent`, `update_workspace`, `create_skill`, `edit_skill`, `remove_skill`, `install_skill`, `add_mcp_server`, `remove_mcp_server`, `configure_provider`, `enable_channel`, `disable_channel`, `configure_channel`, `connect_channel`, `connect_mailbox`, `set_agent_permissions`, `request_secret`, `select_secret_version`, `remove_secret`, `environment_setup`, `bash`. Everything else: explicit per-agent deny. Every new tool is registered in the static name list, the shipped ceiling, the role inventories, the custom constructor, the Auto classification table, the central metadata catalogue **and** the executable per-agent registry built at boot and on reload. This is seeded role data in the existing two layers — not a per-agent coverage backfill and not a resolver exception.
 
-### 6.6 Shared mutable setup resources (MAJ-011)
+### 6.6 Shared mutable setup resources (MAJ-011, R2-MAJ-003)
 
 | Resource | Scope | Existing precondition | Added rule |
 |---|---|---|---|
 | Agent | Global identity | `revision` (`CONFLICT`) | — |
 | Skill (global and project shelf) | Global / per workspace | `revision` (`CONFLICT`) | — |
 | Workspace team and graph | Per workspace | `revision` (`REVISION_CONFLICT`) | — |
-| Provider entry | Install-wide | None (config write lock only) | **Expected-before**: the tool receives the before-values from the summary and refuses under the config write lock if the current entry differs |
-| MCP server entry | Install-wide | Name-collision refusal only | Expected-before (as above) |
-| Channel instance | Install-wide | None | Expected-before |
-| Mailbox (agent, workspace) | Per pair | None | Expected-before |
-| Stored secret references | Per reference | Versioned names (FR-072) | Selection compares recipient |
+| Provider entry | Install-wide | None | Revision token + expected-revision check at the shared boundary |
+| MCP server entry | Install-wide | Name-collision refusal only | Same |
+| Channel instance | Install-wide | None | Same |
+| Mailbox (agent, workspace) | Per pair | None | Same |
+| Stored secret references | Per reference | Versioned names (FR-072) | Selection compares recipient (FR-064) |
 
-On refusal the helper relays a revised summary to the main for a new Go. No workflow transaction engine or cross-resource atomicity is introduced.
+**The one synchronization boundary.** Today Settings writes run under the gateway config write lock (`pkg/gateway/rest_config.go::safeUpdateConfigJSON` → `restAPI.configMu`) and then publish into the agent loop (`refreshConfigAndRewireServices` → `AgentLoop.SwapConfig`, agent-loop lock) — order *config lock → agent-loop lock*. System tools write through `Deps.WithConfig` → `AgentLoop.MutateConfig` (agent-loop lock only) and persist with `SaveConfigLocked`, which deliberately never takes the config lock (the documented AB-BA deadlock). Decision: for writes to the four shared resources above, the tool path **acquires the gateway config lock before entering `MutateConfig`** (order config lock → agent-loop lock, the same as Settings; never the reverse), checks the expected revision against the live configuration, writes, persists and releases. Settings writes to these resources are unchanged in locking and therefore serialize with tool writes; a Settings change bumps the revision, so a later tool write with the old token is refused.
+
+**Before-state projection.** Read tools return a secret-free revision token per shared resource: a stable hash over its non-secret fields (provider: id, effective endpoint, protocol, reference name; MCP: name, transport, command + arguments or URL, enabled, reference names; channel: instance, platform, binding pair, enabled, reference names; mailbox: hosts, username, reference name). A missing entry has the token `absent`. Resolved secret values never enter a token, summary or precondition. `list_providers` gains endpoint, protocol, reference name and token (today it returns only name and credential presence); the MCP, channel and mailbox read paths gain the token.
+
+On refusal the helper relays a revised summary to the main for a new Go. No workflow transaction engine, global lock framework or cross-resource atomicity is introduced.
 
 ### 6.7 Security and user promises for the secret card (MAJ-013, FA:Q-R1-2 B)
 
@@ -467,12 +527,14 @@ On refusal the helper relays a revised summary to the main for a new Go. No work
 | Submit checks (all before any write) | Caller authenticated; request exists and is accessible to the caller's account; request pending; its session exists, is not stopped or deleted; acting agent still exists; recipient descriptor unchanged since the request; payload valid. Any failure → zero store writes, zero resume |
 | Consent | Authenticated submit of the exact destination-bound card is consent for that scoped write only (**explicit exception to ADR-022's password re-confirmation, FA:Q-R1-2 B, 2026-10-12**). The card cannot write an arbitrary key and cannot delete. Raw Settings credential routes (`/api/v1/credentials`) keep `requireReAuth` |
 | Verification gate | security-lead verifies the request/session/recipient binding and the exception before WU-4 lands |
-| Selection | Only an approved change tool writing the recorded recipient may select a reference; live policy applies to that tool |
+| Selection | Integration kinds: only an approved change tool writing the recorded recipient selects a reference. Private kind: the first version is selected on submit; a replacement is selected only by `select_secret_version` (Ask) for the owner pair. Live policy applies |
 | Stop / deletion | Stop or session deletion terminates pending requests (no value existed) |
 | Bounds | 1 pending per session, 64 install-wide; terminal metadata as in §6.2 |
 | Audit | Value-free events: requested, submitted, cancelled, stopped, interrupted, refused (with reason code), selected, removed |
 | Errors | Store or validation errors never include a value; payload not logged |
-| Masking | Every stored value (≥ 4 bytes) is added to the sensitive-value set before any probe or connector activity, without replacing existing entries |
+| Masking | The complete sensitive set always includes every stored card value (all kinds, versions, states); every full-set rebuild uses the one complete computation; registrations are serialized (FR-069, FR-089) |
+| Commit | The submit receipt is written in the same atomic store publication as the values; request state after restart derives from it (FR-087) |
+| Gateway environment | Private values never enter it. Provider/mailbox values keep the existing boot/reload resolution into it; children never inherit them |
 | Private kind | Promise wording A (FA:OQ-1): "never typed into the chat, never in tool arguments, hidden in output where possible; a command you let the agent run can still reveal it" — on the card and in `docs/security.md` |
 
 ### 6.8 Component composition (MIN-002)
@@ -504,7 +566,7 @@ Order per change: schema in `contracts/components/schemas/` → reference from `
 | K3 | **new** `SecretRequestResolvedFrame` (WS) | request id, state enum `submitted` / `cancelled` / `stopped` / `interrupted` / `refused` | FR-074 |
 | K4 | **new** `SessionStateSecretRequest`; **changed** `SessionStateFrame`, `SessionSnapshotFrame` | `secret_requests` array (never null): pending plus terminal (bounded) entries with state | FR-079 |
 | K5 | **new** `SecretSubmitRequest`, `SecretRequestState` (REST) | `POST /api/v1/secret-requests/{id}/submit` body: exactly one of `values` (map field key → string) or `cancel: true`; response `SecretRequestState`. `GET /api/v1/secret-requests/{id}` → `SecretRequestState` (id, state, reference names when submitted, updated_at) | FR-062, FR-079 |
-| K6 | **new** `SecretNameEntry`; `GET /api/v1/secrets` | reference name, kind, version, recipient display, owner pair (private), consumers[], in_use | FR-073 |
+| K6 | **new** `SecretNameEntry`; `GET /api/v1/secrets` | reference name, kind, version, recipient display, owner pair (private), consumers[], `state` enum `stored` / `selected` / `superseded` | FR-073, FR-086 |
 | K7 | **changed** `ToolApprovalRequiredFrame`, `SessionStatePendingApproval` | optional `root_session_id` (server-derived), `acting_agent_name`; existing `workspace_id`, `session_id` kept; reconnect Deny-only stub semantics unchanged | FR-092 |
 | K8 | **changed** `MessageFrame` | optional `workflow_start` {`workflow` enum `W1`/`W18`, `target_workspace_id`} described as target data; rule "a frame without `session_id` must carry a nonblank `agent_id`" documented and enforced semantically | FR-012, FR-122 |
 | K9 | **changed** kickoff description | server-initiated into Omnipus's existing main; client kickoff with a session id stays refused | FR-047 |
@@ -515,6 +577,11 @@ Order per change: schema in `contracts/components/schemas/` → reference from `
 | K14 | **changed** `ChannelRouting` + `setChannelRouting`/`getChannelRouting` | write: `workspace_id` and agent required, nonblank; read: an existing unbound config is reported truthfully (fields empty, `bound: false`) — never an invented destination | FR-127–FR-129 |
 | K15 | **changed** `ChannelEntry` | `degraded` / `degraded_reason` cover routing failures; optional `last_dropped_at`; cleared when a valid binding is saved | FR-121 |
 | K16 | **changed** `SessionCreateRequest` | `agent_id` required | FR-122 |
+| K18 | **new** `ChannelPersonRule` | match kind enum `person` / `group` / `guild` / `team` / `account`, match id, display label (≤ 80), agent id | FR-141 |
+| K19 | **changed** `ChannelRouting` (read and write) | `agent_id` = main agent (required), `person_rules[]` (never null, ≤ 500), `conversation_mode` enum `main` / `per_person` (default `main`) | FR-140, FR-147 |
+| K20 | **changed** `ChannelEntry` status | `strangers_count`, `last_stranger_label` (display label or redacted id), `last_stranger_at` | FR-145 |
+| K21 | **new** `AgentReachabilityEntry`; `GET /api/v1/agents/{id}/reachability` | connection id, workspace id, via enum `main` / `person_rule`, match kind/label | FR-146 |
+| K22 | **changed** `BindingMatch` config shape (not wire) and session-scope route | `instance_id`; `/api/v1/security/session-scope` per RQ-4 | FR-141, FR-148 |
 | K17 | config | `agents.defaults.default_agent_id` ignored with warning (settings sanitiser and loader) | FR-120 |
 
 ### 7.2 Runtime validation (MAJ-004)
@@ -648,6 +715,7 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | connect_mailbox |
 | set_agent_permissions |
 | remove_secret |
+| select_secret_version |
 | environment_setup |
 
 **BDD-3.4 God Mode, fully specified** — US-3 AS-4 — Alternate Path
@@ -718,6 +786,18 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - Given a document agent whose skill needs a converter
 - When the summary appears and Go is given
 - Then the install is listed in the summary, `environment_setup` asks, and the report says "installed; readiness confirmed at the agent's first use" unless readiness was proven in that agent's sandbox
+
+**BDD-4.8 Other target-scoped verbs** — US-4 AS-5 — Happy Path (Outline)
+- Given Omnipus's main in the default workspace and target `<target>`
+- When Omnipus calls `<verb>`
+- Then the effect lands in `<target>` only
+
+| verb | target |
+|---|---|
+| `create_skill` (project) | Sales |
+| `remove_skill` (project slug also in Default) | Sales |
+| skill discovery for the plan | Sales |
+| `environment_setup` | Sales |
 
 ### Feature: Team setup and welcome (US-5)
 
@@ -809,8 +889,9 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | user cancels the card | nothing | cancelled |
 | Stop before submit | nothing | stopped |
 | gateway restart before submit | nothing | interrupted |
-| workflow Cancel after submit | secret stays, unused | submitted |
-| Stop after submit | secret stays, unused | submitted |
+| workflow Cancel after submit, before selection | secret stays, state stored (unused) | submitted |
+| Stop after submit, before selection | secret stays, state stored (unused) | submitted |
+| Stop after an integration selected it | secret stays, state selected; report lists the completed change | submitted |
 
 **BDD-6.6 Channel session refused** — US-6 AS-5 — Error Path
 - Given a Telegram-origin session
@@ -895,6 +976,65 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | a new custom native agent | stored; `list_secrets` shows it |
 | Judge | tool unavailable |
 
+**BDD-6.19 First private version is selected** — US-6 AS-10 — Happy Path
+- Given Mia in Sales has no `API_KEY`
+- When the user submits it on Mia's card
+- Then `.v1` is in state selected and Mia's next Sales command sees it
+
+**BDD-6.20 Private replacement waits for selection** — US-6 AS-10 — Happy Path
+- Given Mia's Sales `API_KEY.v1` is selected
+- When the user submits a replacement
+- Then `.v2` is stored, `.v1` stays selected, and Mia's commands still see `.v1`
+- And after Mia calls `select_secret_version` for `.v2` and the user approves, her next command sees `.v2` and `.v1` is superseded
+
+**BDD-6.21 Cancelled private replacement** — US-6 AS-10 — Alternate Path
+- Given `.v2` was stored for Mia's Sales `API_KEY`
+- When the plan is cancelled
+- Then `.v2` is listed as stored (unused) and removable; `.v1` stays selected
+
+**BDD-6.22 Concurrent selections** — US-6 AS-10 — Edge Case
+- Given `.v2` and `.v3` stored for the same private variable
+- When two approved selections arrive at the same time
+- Then exactly one version ends selected and the other selection is refused as stale
+
+**BDD-6.23 Selection outside the owner pair refused** — US-6 AS-10 — Error Path (Outline)
+- Given Mia's Sales `API_KEY.v2`
+- When `<caller>` selects it
+- Then `<result>`
+
+| caller | result |
+|---|---|
+| Mia in Sales | approval card, then selected |
+| Jim in Sales | refused |
+| Mia in Marketing | refused |
+| Omnipus with target Sales/mia | approval card, then selected |
+
+**BDD-6.24 Submit commit across crashes** — US-6 AS-11 — Edge Case (Outline)
+- Given a submit and a crash at `<cut>`
+- When the gateway restarts and the card reads the request state
+- Then state is `<state>`, stored references are `<stored>`, and the agent resumes `<resume>`
+
+| cut | state | stored | resume |
+|---|---|---|---|
+| before the store publication | interrupted | none | not at all |
+| after publication, before request metadata | submitted | the receipt's references | once, references only |
+| terminal metadata write fails | submitted | the receipt's references | once, references only |
+| resume dispatch fails | submitted | the receipt's references | once on next boot or attach |
+| response and frame lost, no crash | submitted | the receipt's references | already resumed; not again |
+
+**BDD-6.25 Masking survives every rebuild** — US-6 AS-12 — Edge Case (Outline)
+- Given filtering on and a stored card secret (selected or not) of at least 4 bytes
+- When `<transition>` happens and a command prints the exact value
+- Then the value is masked
+
+| transition |
+|---|
+| Settings save |
+| configuration reload |
+| provider sign-in / token refresh |
+| gateway restart |
+| two registrations at the same time |
+
 ### Feature: Agent-private secrets (US-7)
 
 **BDD-7.1 Owner pair sees variable** — US-7 AS-1 — Happy Path
@@ -936,6 +1076,11 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 |---|---|
 | WEATHER_TOKEN | accepted |
 | weather_token | refused (uppercase only) |
+| LC_ALL | refused (protected) |
+| XDG_CONFIG_HOME | refused (protected prefix) |
+| PYTHONPATH | refused (document runtime) |
+| NODE_PATH | refused (document runtime) |
+| OSL_SOCKET_PATH | refused (document runtime) |
 | PATH | refused (protected) |
 | HTTP_PROXY | refused (protected) |
 | OMNIPUS_X | refused (protected prefix) |
@@ -945,7 +1090,7 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 **BDD-7.8 Omnipus sets a private secret for a target** — US-7 AS-1 — Alternate Path
 - Given W1 for Sales needs Mia's token
 - When Omnipus requests a private secret with target Sales/mia
-- Then the card shows "Mia in Sales" and Mia's next Sales command sees it
+- Then the card shows "Mia in Sales"; as the first version it is selected, and Mia's next Sales command sees it
 - And a target where Mia is not a member is refused
 
 **BDD-7.9 All child paths, never the gateway** — US-7 AS-1 — Edge Case
@@ -953,6 +1098,16 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - When Mia runs a foreground `bash`, a background `bash` and `environment_setup`
 - Then each child sees it
 - And the gateway process environment does not contain it
+
+**BDD-7.10 Private names survive the document layer** — US-7 AS-1 — Edge Case
+- Given Mia's Sales `WEATHER_TOKEN` is selected and the document runtime is enabled
+- When Mia runs a document command
+- Then `WEATHER_TOKEN` is present, and `PYTHONPATH`, `NODE_PATH` and `OSL_SOCKET_PATH` keep the runtime's values
+
+**BDD-7.11 Replacement selection for commands** — US-7 AS-6 — Happy Path
+- Given Mia's Sales `WEATHER_TOKEN.v2` stored but not selected
+- When Mia runs a command, then selects `.v2` with approval, then runs again
+- Then the first run sees `.v1` and the second sees `.v2`
 
 ### Feature: Connect channel and mailbox (US-8)
 
@@ -1021,6 +1176,11 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - Given the config write fails after the reference was selected
 - When the result is read back after restart
 - Then the durable state is reported ("partly saved": reference stored, integration unchanged)
+
+**BDD-9.7 Listing works, chosen model does not** — US-9 AS-1 — Edge Case
+- Given a provider whose model list succeeds but whose plan-chosen model is unavailable
+- When `configure_provider` reports
+- Then it says "working: model listing" and names that model execution was not tested
 
 ### Feature: Messaging and attention (US-10)
 
@@ -1098,10 +1258,29 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - When the browser reloads
 - Then the approval is restored in the Omnipus chat from the snapshot
 
-**BDD-11.9 Shared provider across workspaces** — US-11 AS-4 — Error Path
-- Given helpers for Sales and Marketing both plan to change provider `openai`
-- When the second writes after the first
-- Then the expected-before check refuses and a revised summary returns to the main
+**BDD-11.9 Shared resource changed since the plan** — US-11 AS-5 — Error Path (Outline)
+- Given a confirmed plan carrying the revision token of `<resource>`
+- When `<other writer>` changes it first
+- Then the helper's write is refused, nothing is overwritten, and a revised summary returns to the main
+
+| resource | other writer |
+|---|---|
+| provider `openai` | Marketing's helper (tool) |
+| provider `openai` | Settings → Providers save |
+| MCP server `notion` | Settings → Connectors save |
+| channel `tg-1` | another helper |
+| mailbox mia/Sales | Settings → Mail save |
+| provider `ollama` (token `absent`) | Settings adds it |
+
+**BDD-11.10 Shared skill contended** — US-11 AS-4 — Error Path
+- Given helpers for Sales and Marketing both edit the global skill `crm`
+- When the second writes with the older revision
+- Then it receives `CONFLICT` and returns a revised summary
+
+**BDD-11.11 Policy reload during a helper** — US-11 AS-2 — Edge Case
+- Given an Omnipus helper is applying a plan
+- When the operator tightens `create_agent` to deny globally and the configuration reloads
+- Then the helper's next `create_agent` is refused under the new policy and the report lists it as not done
 
 ### Feature: Screens (US-12)
 
@@ -1288,6 +1467,96 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - When a valid binding is saved
 - Then degraded clears and the next message routes
 
+**BDD-13.13 Unrouted stays loud with person routing** — US-13 AS-8 — Error Path
+- Given connection tg-1 bound to Sales with main agent Mia, and Mia deleted
+- When an allowed person with no person rule writes
+- Then the message is dropped loudly ("main agent mia not found"); no other agent receives it
+
+### Feature: Channel person routing (US-16)
+
+**BDD-16.1 Main agent for allowed people without a rule** — Traces to US-16 AS-1 — Happy Path
+- Given tg-1 bound to Sales, main agent Mia, allow list [Anna, Ben], rule Anna → Jim
+- When Ben writes
+- Then Mia's turn starts in Sales
+
+**BDD-16.2 Person and group rules** — US-16 AS-2 — Happy Path (Outline)
+- Given tg-1 as above plus rule group G → Researcher2
+- When `<sender>` writes `<where>`
+- Then `<agent>` answers
+
+| sender | where | agent |
+|---|---|---|
+| Anna | direct | Jim |
+| Ben | in group G | Researcher2 |
+| Ben | direct | Mia |
+
+**BDD-16.3 Stranger reply and operator visibility** — US-16 AS-3 — Error Path
+- Given Carl is not on tg-1's allow list
+- When Carl writes twice within an hour
+- Then Carl receives "not authorised" once, no agent turn starts, the connection status shows 2 strangers and Carl as the last one, and a log + audit entry exists
+
+**BDD-16.4 Rules are per connection** — US-16 AS-4 — Happy Path
+- Given tg-1 and tg-2 in Sales, tg-1 rule Anna → Jim, tg-2 no rules (main Mia)
+- When Anna writes to tg-2
+- Then Mia answers
+
+**BDD-16.5 Type-only legacy rules ignored** — US-16 AS-4 — Edge Case
+- Given a legacy binding matching channel type "telegram" without an instance, and a legacy `channel_policies.telegram.routing_rules` entry
+- When the gateway loads
+- Then both are ignored with a warning naming them; routing uses only instance tables
+
+**BDD-16.6 Derived per-agent list** — US-16 AS-5 — Happy Path
+- Given Jim is the target of rule Anna on tg-1 and main agent of slack-1 in Marketing
+- When Jim's editor opens
+- Then it lists "tg-1 (Sales): Anna" and "slack-1 (Marketing): everyone allowed", read-only, each linking to its connection settings
+
+**BDD-16.7 Conversation mode** — US-16 AS-6 — Happy Path (Outline)
+- Given tg-1 conversation mode `<mode>`
+- When Anna and Ben each write to Mia
+- Then `<result>`
+
+| mode | result |
+|---|---|
+| agent's main chat (default) | both messages appear in Mia's Sales main chat |
+| one chat per person | two separate conversations, one per person, in Mia's Sales History |
+
+**BDD-16.8 Mode change without restart** — US-16 AS-6 — Edge Case
+- Given mode main chat
+- When the operator switches to one chat per person and saves
+- Then the next message uses the new mode without a gateway restart
+
+**BDD-16.9 Omnipus connect sets main agent and rules** — US-16 AS-7 — Happy Path
+- Given a confirmed W13 plan "Telegram for Sales, main agent Mia, Anna → Jim"
+- When `connect_channel` runs after approval
+- Then tg-1 is bound to Sales with main agent Mia and the rule Anna → Jim
+
+**BDD-16.10 Invalid rule refused on save** — US-16 AS-8 — Error Path (Outline)
+- Given tg-1 in Sales
+- When a rule to `<agent>` is saved
+- Then `<result>`
+
+| agent | result |
+|---|---|
+| Jim (Sales member) | saved |
+| Ray (not in Sales) | refused "Ray is not in Sales" |
+| a worker | refused "not a chat target" |
+| unknown id | refused "agent not found" |
+
+**BDD-16.11 Rule target removed later** — US-16 AS-8 — Error Path
+- Given rule Anna → Jim and Jim removed from Sales
+- When Anna writes
+- Then the message is dropped loudly ("person rule → jim not in Sales"); Mia does not receive it
+
+**BDD-16.12 Same person across connections** — US-16 AS-6 — Alternate Path
+- Given `identity_links` link Anna's Telegram and Slack ids and both connections use one chat per person
+- When Anna writes on both
+- Then both land in the same per-person conversation for that agent
+
+**BDD-16.13 Group trigger still applies** — US-16 AS-2 — Alternate Path
+- Given tg-1 with mention-only groups and rule group G → Researcher2
+- When a member writes in G without mentioning the bot
+- Then no agent turn starts (existing behaviour)
+
 ### Feature: Permission changes (US-14)
 
 **BDD-14.1 Permission tool asks** — US-14 AS-1 — Happy Path
@@ -1329,6 +1598,11 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - Given tg-1 switched to `.v2`
 - When `.v1` is removed
 - Then it is deleted; tg-1 keeps working
+
+**BDD-15.6 Multi-consumer removal with #1277** — US-15 AS-3 — Edge Case
+- Given #1277 landed and one secret used by an enabled channel and a mailbox
+- When removal is approved and the reload fails
+- Then the result names both consumers, reports the stale live value, and the next boot starts with both integrations degraded
 
 ---
 
@@ -1431,6 +1705,29 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 81 | `src/components/skills/ChannelConfigPanel.test.tsx` (workspace required) | Unit | 12.15 |
 | 82 | `src/components/layout/Sidebar.omnipusEntry.test.tsx` (attention unknown, keyboard) | Unit | 10.6, 12.14 |
 | 83 | `pkg/coreagent::TestOmnipusPrompt_DependencyAndRoutingRules` (wording only) | Unit | 4.7, 2.5 |
+| 84 | `pkg/secrets::TestPrivateVersion_FirstSelected_ReplacementStored` | Unit | 6.19, 6.20, 6.21 |
+| 85 | `pkg/gateway::TestSelectSecretVersion_ScopeAndConcurrency` | Integration | 6.22, 6.23, 7.11 |
+| 86 | `pkg/gateway::TestSecretSubmit_CommitReceipt_CrashCuts` (fault injection at each cut) | Integration | 6.24 |
+| 87 | `pkg/gateway::TestSecretStop_AfterSelection_ReportsTruthfully` | Integration | 6.5 |
+| 88 | `pkg/gateway::TestSharedResources_LockOrder_SettingsVsTool` (race; provider, MCP, channel, mailbox, absent) | Integration | 11.9 |
+| 89 | `pkg/gateway::TestSensitiveSet_CompleteAcrossRebuilds` (Settings save, reload, sign-in, restart) | Integration | 6.25 |
+| 90 | `pkg/config::TestRegisterSensitive_SerializedNoStaleReplace` (race) | Unit | 6.25 |
+| 91 | `pkg/tools::TestPrivateEnv_ProtectedSetDrift_AllChildPaths` (real composers, document runtime on) | Integration | 7.7, 7.10 |
+| 92 | `pkg/sysagent/tools::TestTargetScopedVerbs_SkillRemoveDiscoveryEnvSetup` | Integration | 4.8 |
+| 93 | `pkg/sysagent/tools::TestConfigureProvider_ListingOnlyScopeStated` | Unit | 9.7 |
+| 94 | `pkg/agent::TestSharedSkill_TwoHelpers_Conflict` | Integration | 11.10 |
+| 95 | `pkg/gateway::TestSecretRemoval_MultiConsumer_FailedReload_NextBoot` (requires #1277) | Integration | 15.6 |
+| 96 | `pkg/agent::TestHelper_PolicyReloadMidApply` | Integration | 11.11 |
+| 97 | `pkg/routing::TestUnrouted_MainAgentMissing_Loud` | Unit | 13.13 |
+| 98 | `pkg/routing::TestInstanceRouting_PersonGroupMain` (priorities 1–5 at instance scope, then main) | Unit | 16.1, 16.2, 16.4 |
+| 99 | `pkg/config::TestLegacyTypeBindingsAndRoutingRules_IgnoredWithWarning` | Unit | 16.5 |
+| 100 | `pkg/channels::TestStranger_ReplyOnceAndStatus` (rate limit; log; audit) | Integration | 16.3 |
+| 101 | `pkg/gateway::TestPersonRule_SaveValidation_And_RuntimeLoudDrop` | Integration | 16.10, 16.11 |
+| 102 | `pkg/routing::TestConversationMode_PerConnection_NoRestart` (incl. identity links) | Integration | 16.7, 16.8, 16.12 |
+| 103 | `pkg/channels::TestGroupTrigger_UnchangedWithPersonRules` | Unit | 16.13 |
+| 104 | `src/components/agents/ReachableBy.test.tsx` + `pkg/gateway::TestAgentReachability_Derived` | Integration | 16.6 |
+| 105 | `tests/e2e/omnipus-channel-routing.spec.ts` (connection settings: main agent, allow list, person table, mode, stranger status) | E2E | 16.1, 16.3, 16.7, 16.10 |
+| 106 | `tests/e2e/llm-omnipus-connect-channel-rules.spec.ts` (live) | E2E | 16.9 |
 
 Live-model specs use `openrouter` + `deepseek/deepseek-v4.1-flash`. Prompt-text tests prove wording only; a live pass does not prove the instruction-only Go gate cannot be bypassed (accepted R-A1).
 
@@ -1495,6 +1792,7 @@ Live-model specs use `openrouter` + `deepseek/deepseek-v4.1-flash`. Prompt-text 
 | set_agent_permissions | asks | asks | runs | BDD-14.1 |
 | environment_setup | asks | asks | runs | BDD-3.4 |
 | request_secret | runs (card appears) | runs | runs (card appears) | BDD-3.8 |
+| select_secret_version | asks | asks | runs | BDD-6.20 |
 
 **D6 — Private variable names and values** (tests 34, 72)
 
@@ -1508,26 +1806,28 @@ Live-model specs use `openrouter` + `deepseek/deepseek-v4.1-flash`. Prompt-text 
 | 6 | PATH, HOME, USER, LOGNAME, SHELL, TZ, LANG, TMPDIR, TERM | child allowlist | refused | BDD-7.7 |
 | 7 | HTTP_PROXY, HTTPS_PROXY, NO_PROXY | proxy | refused | BDD-7.7 |
 | 8 | PIP_CACHE_DIR, npm_config_cache-style names | setup env | refused (protected) | BDD-7.7 |
-| 9 | OMNIPUS_*, LD_*, DYLD_* | protected prefixes | refused | BDD-7.7 |
+| 9 | OMNIPUS_*, LD_*, DYLD_*, LC_*, XDG_* | protected prefixes | refused | BDD-7.7 |
+| 9a | LC_ALL, XDG_CONFIG_HOME, PYTHONPATH, NODE_PATH, OSL_SOCKET_PATH, OMNIPUS_DOCUMENT_SKILLS | document runtime / inherited families | refused | BDD-7.7 |
+| 9b | WEATHER_TOKEN with document runtime enabled | name contains TOKEN | present in the child (appended after the document layer) | BDD-7.10 |
 | 10 | 1TOKEN, TO-KEN | grammar | refused | BDD-7.7 |
 | 11 | Sales/mia=A, Marketing/mia=B | two workspaces | each sees own | BDD-7.5, 7.6 |
 | 12 | Sales/mia, Sales/jim | two agents | jim sees none | BDD-7.2 |
 
-The protected set is derived from `allowedChildEnvKeys` plus the names written by `setupEnv` and `composeExecutionEnv`; a drift test fails if those functions add a name not in the protected set.
+The protected set is one list owned next to the environment composers: `allowedChildEnvKeys` and `allowedChildEnvPrefixes` (`pkg/sandbox/hardened_exec.go`), the setup layer (`pkg/tools/environment_setup_runner.go::setupEnv`, `OMNIPUS_ENV_*`), `composeExecutionEnv` and the document layer (`pkg/documentruntime/runtime.go::ChildEnvironment`), plus `OMNIPUS_`, `LD_`, `DYLD_`. The drift test (test 91) runs the real composers on foreground `bash`, background `bash` and `environment_setup` with the document runtime enabled and asserts every emitted key is protected — a literal scan of function bodies is not sufficient. Names are uppercase only, so platform case folding cannot merge two names.
 
 ### 9.4 Regression requirements
 
 | Existing behaviour | Existing tests | New regression test | Notes |
 |---|---|---|---|
-| Two-layer merge, God Mode floor | `pkg/tools` compositor | No | Unchanged |
-| Reconcile keeps operator values | `TestReconcile*` | No | Ceiling values only |
-| Approval queue, expiry, reconnect Deny-only stub, resolution | gateway approval tests; `toolApproval` tests | Yes — BDD-11.3 | Non-Omnipus scope unchanged |
-| AskUserQuestion park/resume, delegated relay | `askuser_frames_contract_test.go`, registry tests | No | Reused |
-| Kickoff mint-only protection | websocket kickoff tests | Yes — BDD-5.8 | Client path refused |
-| ADR-029 bound routing | `channel-routing.spec.ts`, `channels-routing.spec.ts`, routing tests | Yes — D3 row 1 | Unbound-mode tests deleted (behaviour retired) |
-| Revision preconditions | sysagent revision tests | No | Reused |
-| Project-shelf authority | `skill_project_shelf_test.go` | Yes — test 14 | Target shelf |
-| Raw credential re-auth | ADR-022 tests | Yes — test 69 | Unchanged |
+| Two-layer merge, God Mode floor | `pkg/tools/compositor_godmode_test.go::TestResolveEffectivePolicy_GodMode_AgentCeilingSurvives`, `…_LiftsGlobalCeiling` | No | Unchanged |
+| Reconcile keeps operator values | `pkg/config/policy_ceiling_test.go` (`TestReconcileToolPolicyCeiling*`) | No | Ceiling values only |
+| Approval queue, expiry, reconnect Deny-only stub, resolution | `pkg/gateway` approval tests (`ws_tool_approval*_test.go`); `src/store/toolApproval.resolution.test.ts` | Yes — BDD-11.3 | Non-Omnipus scope unchanged |
+| AskUserQuestion park/resume, delegated relay | `pkg/api/generated/askuser_frames_contract_test.go`, `pkg/askuser/registry_test.go`, `registry_steer_test.go` | No | Reused |
+| Kickoff mint-only protection | `pkg/gateway/workspace_setup_kickoff_test.go` | Yes — BDD-5.8 | Client path refused |
+| ADR-029 bound routing and the bindings ladder | `pkg/routing/identity_route_test.go` (`TestResolveRoute*`), `channel-routing.spec.ts`, `channels-routing.spec.ts` | Yes — D3 row 1; BDD-13.13; tests 98–100 | Priority 1–5 match tests are kept and extended to instance scope; type-only cases rewritten as "ignored with warning"; `routing_default_test.go` priority-7 cases rewritten to the unrouted outcome; unbound-mode REST/UI tests deleted |
+| Revision preconditions | `pkg/sysagent/tools/workspace_revision_error_test.go`, `agent_revision_test.go` | No | Reused |
+| Project-shelf authority | `pkg/sysagent/tools/skill_project_shelf_test.go`, `pkg/skills/shelf_test.go` | Yes — tests 14, 92 | Target shelf |
+| Raw credential re-auth | `pkg/gateway/reauth_gate_test.go` | Yes — test 69 | Unchanged |
 | Hidden-engine fixed capabilities | seed tests | Yes — BDD-6.18 Judge row | Unchanged |
 | Main immutable owner, source-bound replies, Stop, no UI watchdog | session-core tests | No | Unchanged |
 
@@ -1553,6 +1853,17 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | Real shell mounting for frontend journeys | 12.13, 12.14 | 54, 52 |
 | Leak scan sees a deliberately leaked sentinel | 6.2 | 31 |
 | `default_safe` never on the Go question | 3.1 | 51, 57 |
+| Model listing succeeds but the selected model is unavailable | 9.7 | 93 |
+| Shared skill contended by two helpers | 11.10 | 94 |
+| Multi-consumer removal, failed reload, stale live value, next boot (needs #1277) | 15.6 | 95 |
+| Policy reload while a helper runs | 11.11 | 96 |
+| Target-shelf create/remove/discovery; target `environment_setup` | 4.8 | 92 |
+| Submit commit cut (before/after publication, failed terminal persistence, failed resume) | 6.24 | 86 |
+| Masking across Settings save, reload, sign-in, restart, concurrent registration | 6.25 | 89, 90 |
+| Settings write contends with a tool write | 11.9 | 88 |
+| Private names in document-runtime runs | 7.10 | 91 |
+| Stranger replies are rate-limited and never start a turn | 16.3 | 100 |
+| Person rule to an unavailable agent never falls back to main | 16.11 | 101 |
 
 ---
 
@@ -1578,7 +1889,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 
 ### C. Approval and permissions
 - **FR-020**: The shipped ceiling MUST set `delete_agent`, `remove_skill`, `add_mcp_server`, `configure_provider`, `enable_channel`, `configure_channel` to `ask`.
-- **FR-021**: `connect_channel`, `connect_mailbox`, `set_agent_permissions`, `remove_secret` MUST ship `ask` and be on the Auto ask-list; `request_secret` and `list_secrets` MUST ship `allow`.
+- **FR-021**: `connect_channel`, `connect_mailbox`, `set_agent_permissions`, `remove_secret`, `select_secret_version` MUST ship `ask` and be on the Auto ask-list; `request_secret` and `list_secrets` MUST ship `allow`.
 - **FR-022**: Every per-agent policy write path MUST refuse `ask` for Omnipus and accept `deny`; the editor MUST not offer Ask for Omnipus.
 - **FR-023**: In God Mode, Omnipus and its helpers MUST raise no approval and no Go question; clarification questions for genuinely missing information and secret cards MUST still appear.
 - **FR-024**: `set_agent_permissions` MUST be the only agent-tool path for per-agent tool policies and connector assignments of an existing agent; `update_agent` MUST refuse those fields.
@@ -1612,32 +1923,36 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 ### G. Secrets
 - **FR-060**: `request_secret` and `list_secrets` MUST be granted to every native agent per §6.5 (ordinary built-ins, custom constructor), denied to Judge and Plan Supervisor, unavailable to external-program workers, and wired into the executable registry at boot and reload.
 - **FR-061**: The card MUST show acting agent, purpose, server recipient display and, for the private kind, the owning workspace and agent; web sessions only — channel sessions refused with "open the web app".
-- **FR-062**: Values MUST travel only in the authenticated REST submit and MUST NOT appear in transcripts, frames, tool arguments, logs, audit entries, error texts, resume records or the gateway environment.
+- **FR-062**: Values MUST travel only in the authenticated REST submit and MUST NOT appear in transcripts, frames, tool arguments, logs, audit entries, error texts or resume records. Agent-private values MUST NOT enter the gateway process environment; provider and mailbox values keep the existing boot/reload resolution and MUST NOT reach any child process.
 - **FR-063**: Submit MUST store all fields durably in one atomic store write (all or none) under new reference names; duplicate submits MUST return 409 with the current state.
-- **FR-064**: A reference MUST be selectable only by an approved change tool writing its recorded recipient.
+- **FR-064**: Each reference MUST be in one state — stored, selected or superseded. An integration reference MUST be selectable only by an approved change tool writing its recorded recipient; a private reference only as in FR-086.
 - **FR-065**: The recipient descriptor MUST include the effective endpoint/account/executable/transport and field, and for the private kind `(workspace, agent, variable)`; any difference MUST refuse.
 - **FR-066**: Stored secrets MUST NOT expire. Pending requests MUST be limited to 1 per session and 64 install-wide; terminal request states (value-free) MUST be kept for the session's lifetime, at most the last 32 per session.
-- **FR-067**: Cancel, Stop or restart before submit MUST store nothing; workflow Cancel or Stop after submit MUST leave the secret stored, unused, listed and removable.
+- **FR-067**: Cancel, Stop or restart before submit MUST store nothing. After submit, Cancel or Stop MUST leave a not-yet-selected reference stored and unused; references already selected and changes already completed MUST stay in place and be reported truthfully.
 - **FR-068**: The resumed turn MUST carry reference names only.
-- **FR-069**: Every stored value MUST be added to the sensitive-value set before any probe or connector activity, without replacing other entries; values under 4 bytes MUST be refused.
+- **FR-069**: Every stored value MUST be in the sensitive-value set before any probe, connector or child activity can see it, and MUST stay there across every rebuild (FR-089); values under 4 bytes MUST be refused.
 - **FR-070**: Agent configuration tools MUST accept references only and refuse plaintext; Settings forms keep plaintext entry.
 - **FR-071**: A card MUST hold 1–8 fields; each value 4–16,384 bytes of UTF-8 without NUL; body ≤ 65,536 bytes.
-- **FR-072**: Replacing a secret MUST store a new version; the integration MUST keep its current reference until an approved change selects the new one; the old version MUST be listed and removable.
+- **FR-072**: Replacing a secret MUST store a new version in state stored; the integration or private owner MUST keep its selected version until an approved selection; the previous version then becomes superseded, listed and removable.
 - **FR-073**: `list_secrets` MUST return names, kind, version, recipient display, consumers and in-use flag, never values; an ordinary agent MUST see only its own private names in the current workspace; Omnipus sees all.
 - **FR-074**: The card MUST implement loading/unavailable, pending, submitting, rejected, submission unknown, submitted, cancelled, stopped, interrupted and refused, restored from the snapshot after reload.
 - **FR-075**: Values MUST live only in the isolated control, cleared on terminal state, navigation or disposal; never in drafts or shared stores; never re-sent automatically.
-- **FR-076**: Private secrets MUST be stored per `(workspace, agent, variable)` derived from the trusted execution context or Omnipus's validated target; names MUST match the grammar and avoid the protected set (D6); values MUST be injected only into that pair's own child executions (foreground and background `bash`, `environment_setup`), never into the gateway environment or other children; the card and `docs/security.md` MUST carry promise wording A.
+- **FR-076**: Private secrets MUST be stored per `(workspace, agent, variable)` derived from the trusted execution context or Omnipus's validated target; names MUST match the grammar and avoid the protected set (D6); only the **selected** version MUST be injected, and only into that pair's own child executions (foreground and background `bash`, `environment_setup`, including document-runtime runs), appended after all managed environment layers; never into the gateway environment or other children; the protected set MUST include the child allowlist names and prefixes, `OMNIPUS_`, `LD_`, `DYLD_`, the setup layer and the document-runtime layer (D6); the card and `docs/security.md` MUST carry promise wording A.
 - **FR-077**: `remove_secret` MUST list consumers before its approval, refuse while an enabled consumer exists until #1277 lands, and report durable deletion, live effect and boot validity separately.
 - **FR-078**: An Omnipus helper's secret card MUST render in Omnipus's main chat naming the helper; other agents' helpers MUST be refused.
 - **FR-079**: The system MUST offer a value-free request-state read and include pending and recent terminal requests in session snapshots; absence MUST NOT be read as success.
 - **FR-083**: The card submit MUST NOT require password re-entry (explicit exception, FA:Q-R1-2 B); the card MUST NOT write arbitrary keys or delete; raw credential routes MUST keep re-authentication; security-lead MUST verify the binding before WU-4 lands.
+- **FR-086**: The first submitted version of a private variable with no selected version MUST be selected on submit; a replacement MUST be selected only by `select_secret_version` (Ask), callable by the owner pair for itself or by Omnipus for a validated target pair; concurrent selections MUST resolve to exactly one selected version.
+- **FR-087**: A value-free submit receipt (request id → reference names, time) MUST be written in the same atomic store publication as the values; after restart the request state MUST be derived from it (`submitted` if present, `interrupted` and nothing stored if absent); resume MUST carry references only and be re-dispatched at most once per request.
+- **FR-089**: One computation MUST produce the complete sensitive-value set (configured references, OAuth values, every stored card value of every kind, version and state); boot, reload, Settings refresh, sign-in/token refresh and config cloning MUST use it; registrations MUST be serialized so an older computation never replaces a newer one.
 - **FR-084**: Submit MUST pass all §6.7 trust checks before any write; any failure MUST produce zero store writes and no resume; value-free audit events MUST be written for every request transition and selection/removal.
 
 ### H. Connect tools and shared resources
-- **FR-080**: `connect_channel` MUST configure, bind (agent + workspace), enable and live-test in one call, consume references, list proven and not-tested facts, and validate the binding before saving.
+- **FR-080**: `connect_channel` MUST configure, bind the instance's main agent in a workspace, enable and live-test in one call, consume references, list proven and not-tested facts, and validate the binding before saving.
 - **FR-081**: QR pairing MUST render in the requesting chat, correlated by request and session id, with timeout, Stop and reconnect handling.
 - **FR-082**: `connect_mailbox` MUST reuse the mailbox configuration logic, report read and send readiness separately, and send no email.
-- **FR-085**: Writes to install-wide providers, MCP servers, channel instances and mailboxes MUST carry the expected-before values from the confirmed summary and be refused under the config write lock when the current values differ.
+- **FR-085**: Tool writes to providers, MCP servers, channel instances and mailboxes MUST acquire the gateway config write lock before the agent-loop lock (never the reverse), carry the expected revision token from the confirmed summary, and be refused when the current token differs; Settings writes to these resources MUST keep serializing on the same lock.
+- **FR-088**: Read tools MUST return a secret-free revision token per shared resource (`absent` for a missing entry); `list_providers` MUST also return endpoint, protocol and reference name.
 
 ### I. Messaging, attention, helpers
 - **FR-090**: Agents MUST reach Omnipus by ordinary message without a delegation edge; read-only questions MUST be answered without change tools; replies use the request-bound reply.
@@ -1665,7 +1980,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 
 ### K. No default agent and channel binding
 - **FR-120**: The system MUST have no default-agent concept (setting, seed, `Agent.default`, update field, tool arguments, delete guard, registry override, health check, every `GetDefaultAgent` call); the old key MUST be ignored with a warning on load and reload.
-- **FR-121**: An inbound message on an instance not bound to an available agent in a workspace MUST be dropped, logged at error level, audited and shown as the instance's `degraded` status with reason, before any other resolution; it MUST NOT reach any agent.
+- **FR-121**: An inbound message on an instance not bound to an available agent in a workspace MUST be dropped, logged at error level, audited and shown as the instance's `degraded` status with reason, before the routing ladder runs; a message the ladder leaves unrouted (former priority 7) MUST be dropped the same way; it MUST NOT reach any agent.
 - **FR-122**: A WS frame starting a new session and a REST session create MUST name an agent; otherwise refused visibly.
 - **FR-123**: A task, goal turn or steering item MUST run only under its canonical owner; if that owner no longer resolves it MUST be refused visibly, even when another agent participates.
 - **FR-124**: Internal look-ups MUST use the owners in §6.4 (install-level state root, install-level MCP root, shared provider, iteration, shared skill loader).
@@ -1675,7 +1990,22 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-128**: The routing GET MUST report an existing unbound configuration truthfully, never an invented destination.
 - **FR-129**: Saving a valid binding MUST clear the routing `degraded` status.
 - **FR-131**: A system message without an addressable origin MUST be discarded with an error log and audit entry.
+- **FR-133**: Routing priority 7 (global default) MUST be replaced by the loud unrouted outcome; priorities 1–5 are reused at instance scope (US-16) and priority 6 (channel wildcard) is replaced by the connection's main agent.
 - **FR-132**: Publishing a reply without a producing agent MUST still publish it without borrowing another agent's state.
+
+### M. Channel person routing (US-16; PR-1–PR-4; not grilled)
+- **FR-140**: Each channel instance MUST hold, in its workspace binding, a **main agent** (a member of that workspace), an allow list (existing `allow_from`), a person table and a conversation mode; all are edited on the connection's settings.
+- **FR-141**: The person table MUST be stored as `Config.Bindings` entries whose match names the **instance** (new `instance_id` match field) plus a person (peer), group (parent peer), guild, team or account; it MUST NOT introduce a second rules store.
+- **FR-142**: For a bound instance the route MUST be: allow-list check → person table (priorities 1–5, instance-scoped) → main agent → loud unrouted drop; the bound identity no longer skips the bindings.
+- **FR-143**: A person-rule target MUST be a chat-target member of the instance's workspace; saving otherwise MUST be refused; at runtime an unavailable target MUST cause a loud drop, never a main-agent fallback.
+- **FR-144**: Bindings without an `instance_id` and `channel_policies.<ch>.routing_rules` MUST be ignored with a load/reload warning naming them (greenfield; the latter mapped user ids onto the bot-account match).
+- **FR-145**: A sender not on the allow list MUST NOT start any turn; the system MUST reply with the "not authorised" text (RQ-2) subject to the rate limit, and MUST record the event on the connection status (count, last stranger, time), in the log and in the audit log; group behaviour per RQ-3.
+- **FR-146**: The per-agent "who can reach this agent" list MUST be derived from all connection tables (main-agent and person-rule entries) and shown read-only in the agent editor with links to each connection's settings; it MUST NOT be stored separately.
+- **FR-147**: Each connection MUST have a conversation mode: `main` (default — the target agent's main chat in that workspace) or `per_person` (one conversation per person, keyed with the existing per-channel-peer scope and `identity_links`), applied without a gateway restart.
+- **FR-148**: The global `session.dm_scope` and its `/api/v1/security/session-scope` route MUST follow RQ-4 (proposed: retired, ignored with warning).
+- **FR-149**: `group_trigger` and per-instance channel settings MUST keep their behaviour.
+- **FR-150**: `connect_channel` MUST set the main agent and MAY save offered person rules and a conversation mode in the same approved call; `configure_channel` (Ask) MUST be able to change them later.
+- **FR-151**: Settings MUST provide the connection editor (main agent selector limited to workspace members, allow list, person table with label + id + agent, conversation mode, stranger status) with the §6.3 states and keyboard contract.
 
 ### L. Documentation
 - **FR-130**: Every page in §14 MUST be updated in the same change as its behaviour and audited by docs-verifier.
@@ -1696,6 +2026,10 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **SC-010**: `make verify-contracts` passes and tests 62–64 pass with inbound validation on and off.
 - **SC-011**: Mia's private secret is visible in 100% of her Sales runs and in 0% of Jim's Sales runs and Mia's Marketing runs, including concurrent runs.
 - **SC-012**: Untrusted submits (BDD-6.16) cause 0 store writes and 0 resumes.
+- **SC-013**: At every crash cut of BDD-6.24 the recovered request state matches the store (0 "interrupted" requests with stored references; 0 duplicate versions from re-submission).
+- **SC-014**: After each transition of BDD-6.25 the exact value of every stored card secret is masked in 100% of runs.
+- **SC-016**: For the BDD-16.2/16.3 fixture, 100% of messages reach the specified agent, 0 stranger messages start a turn, and the stranger count on the connection status equals the strangers sent.
+- **SC-015**: Tool-versus-Settings contention on each of the four shared resources produces 0 silent overwrites in 100 race iterations.
 
 ---
 
@@ -1726,10 +2060,10 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-026 | F:D6; FA:OQ-3 | US-3 | 3.1, 3.2 | 57, 60 |
 | FR-027 | FA:FQ-6 A | US-3 | 3.6 | 57 |
 | FR-030 | F:D9 | US-9 | 9.4, 9.6, 8.3 | 15, 76, 36 |
-| FR-031 | OSA-4 | US-9 | 9.1, 9.2, 9.3 | 12 |
+| FR-031 | OSA-4 | US-9 | 9.1, 9.2, 9.3, 9.7 | 12, 93 |
 | FR-032 | OSA-4 | US-9 | 9.5 | 16 |
 | FR-033 | F:D9 | US-9 | 9.4 | 57 |
-| FR-040 | OSA-9.1 | US-4 | 4.4, 4.6, 7.8 | 13, 73 |
+| FR-040 | OSA-9.1 | US-4 | 4.4, 4.6, 4.8, 7.8 | 13, 73, 92 |
 | FR-041 | F:D2 | US-4 | 4.4 | 13, 57 |
 | FR-042 | OSA-9.1 | US-4 | 4.5 | 14 |
 | FR-043 | OSA-9.1 | US-4 | 4.6 | 13 |
@@ -1744,22 +2078,22 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-053 | F:D3 | US-4 | 4.7 | 57, 83 |
 | FR-060 | F:D10 | US-6 | 6.12, 6.18 | 33, 65 |
 | FR-061 | F:D10 | US-6 | 6.1, 6.6 | 25, 32 |
-| FR-062 | F:D10 | US-6 | 6.2 | 31 |
+| FR-062 | F:D10; R2-MAJ-004 | US-6, US-7 | 6.2, 7.9 | 31, 74 |
 | FR-063 | FA:OQ-3 | US-6 | 6.4, 6.9, 6.10 | 7, 30 |
-| FR-064 | OSA-7.3 | US-6 | 6.3 | 10 |
+| FR-064 | OSA-7.3; FA:Q-R1-1 A | US-6 | 6.3, 6.19, 6.20 | 10, 84 |
 | FR-065 | OSA-7.3; FA:OQ-1 | US-6 | 6.3 | 10 |
 | FR-066 | FA:OQ-3 | US-6 | 6.17 | 68 |
-| FR-067 | FA:OQ-3 | US-6 | 6.5, 3.2 | 9, 55, 60 |
+| FR-067 | FA:OQ-3; R2-MAJ-001 | US-6 | 6.5, 3.2, 6.21 | 9, 55, 60, 84, 87 |
 | FR-068 | OSA-7 | US-6 | 6.2 | 31 |
-| FR-069 | OSA-7.6 | US-6 | 6.13 | 31, 62 |
+| FR-069 | OSA-7.6 | US-6 | 6.13, 6.25 | 31, 62, 89 |
 | FR-070 | OSA-7.10 | US-6 | 6.8 | 11 |
 | FR-071 | F:D10 S2 | US-6 | 6.9 | 7, 62 |
-| FR-072 | FA:Q-R1-1 A | US-6 | 6.14 | 8, 70 |
+| FR-072 | FA:Q-R1-1 A | US-6 | 6.14, 6.20, 7.11 | 8, 70, 85 |
 | FR-073 | F:D10 S4 | US-6 | 6.18, 3.2 | 65, 60 |
 | FR-074 | OSA-7 | US-6 | 6.5, 6.7 | 25, 55 |
 | FR-075 | OSA-7 | US-6 | 6.7 | 25, 55 |
-| FR-076 | FA:FQ-18, OQ-1 | US-7 | 7.1–7.9 | 34, 35, 71, 72, 73, 74 |
-| FR-077 | FA:FQ-13; #1277 | US-15 | 15.1–15.5 | 48, 49 |
+| FR-076 | FA:FQ-18, OQ-1; R2-MAJ-004, R2-MAJ-007 | US-7 | 7.1–7.11 | 34, 35, 71, 72, 73, 74, 91 |
+| FR-077 | FA:FQ-13; #1277 | US-15 | 15.1–15.6 | 48, 49, 95 |
 | FR-078 | FA:FQ-8 | US-6 | 6.11, 6.12 | 33 |
 | FR-079 | MAJ-003 | US-6 | 6.7 | 30, 55 |
 | FR-083 | FA:Q-R1-2 B | US-6 | 6.15 | 69, 55 |
@@ -1767,13 +2101,17 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-080 | F:D11 | US-8 | 8.1, 8.2, 8.3, 8.7 | 36 |
 | FR-081 | OSA-5 | US-8 | 8.4, 8.5, 8.8 | 37 |
 | FR-082 | F:D11 | US-8 | 8.6 | 38 |
-| FR-085 | MAJ-011 | US-11 | 11.9 | 75 |
+| FR-085 | MAJ-011; R2-MAJ-003 | US-11 | 11.9 | 75, 88 |
+| FR-088 | R2-MAJ-003 | US-11 | 11.9 | 88 |
+| FR-086 | FA:Q-R1-1 A; R2-MAJ-001 | US-6, US-7 | 6.19–6.23, 7.11 | 84, 85 |
+| FR-087 | R2-MAJ-002 | US-6 | 6.24 | 86 |
+| FR-089 | R2-MAJ-005 | US-6 | 6.25 | 89, 90 |
 | FR-090 | F:D4, D5 | US-10 | 10.1, 10.4, 10.5 | 41 |
 | FR-091 | F:D16; FA:FQ-8 | US-10 | 10.2, 10.3, 10.6 | 40, 82 |
 | FR-092 | FA:FQ-8, FQ-15 | US-11 | 11.2, 11.3, 11.8 | 24, 39, 56 |
 | FR-093 | F:D27 | US-11 | 11.1, 11.4 | 59 |
 | FR-094 | FA:FQ-1 B | US-11 | 11.6, 11.7 | 42 |
-| FR-095 | F:D27 | US-11 | 11.5 | 50 |
+| FR-095 | F:D27 | US-11 | 11.5, 11.10, 11.11 | 50, 94, 96 |
 | FR-100 | F:D15 | US-12 | 12.1, 12.2 | 52 |
 | FR-101 | F:D16 | US-12 | 10.2, 10.6 | 40, 82 |
 | FR-102 | F:D20 | US-12 | 12.3 | 26, 54 |
@@ -1789,7 +2127,8 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-112 | MAJ-008 | US-12 | 12.13, 5.9 | 26, 54 |
 | FR-113 | FA:OQ-2 B | US-12 | 12.15 | 81 |
 | FR-120 | FA:FQ-17 | US-13 | 13.5, 13.7 | 22, 46, 53 |
-| FR-121 | FA:FQ-17, OQ-2 | US-13 | 13.1, 13.2 | 20, 21, 44 |
+| FR-121 | FA:FQ-17, OQ-2 | US-13 | 13.1, 13.2, 13.13 | 20, 21, 44, 97 |
+| FR-133 | FA:FQ-17; PR-1 | US-13, US-16 | 13.13, 16.2 | 97, 98 |
 | FR-122 | FA:FQ-17 | US-13 | 13.3 | 45, 63 |
 | FR-123 | FA:FQ-17 | US-13 | 13.4 | 23 |
 | FR-124 | FA:FQ-17 | US-13 | 13.6 | 80 |
@@ -1800,6 +2139,18 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-129 | FA:OQ-2 B | US-13 | 13.12 | 44 |
 | FR-131 | FA:FQ-17 | US-13 | 13.9 | 77 |
 | FR-132 | FA:FQ-17 | US-13 | 13.10 | 78 |
+| FR-140 | PR-1 | US-16 | 16.1, 16.9 | 98, 105, 106 |
+| FR-141 | PR-1; R4 | US-16 | 16.2, 16.4 | 98 |
+| FR-142 | PR-1; FA:FQ-17 | US-16 | 16.1, 16.2, 16.11 | 98, 101 |
+| FR-143 | PR-1 | US-16 | 16.10, 16.11 | 101 |
+| FR-144 | R4 (decide merge or retire) | US-16 | 16.5 | 99 |
+| FR-145 | PR-3 | US-16 | 16.3 | 100, 105 |
+| FR-146 | PR-2 | US-16 | 16.6 | 104 |
+| FR-147 | PR-4 | US-16 | 16.7, 16.8, 16.12 | 102, 105 |
+| FR-148 | PR-4; RQ-4 | US-16 | 16.8 | 102 |
+| FR-149 | R4 | US-16 | 16.13 | 103 |
+| FR-150 | PR-1; team-lead steer | US-16 | 16.9 | 106 |
+| FR-151 | R5 | US-16 | 16.1, 16.3, 16.7, 16.10 | 105 |
 | FR-130 | root CLAUDE.md DoD | all | — (docs-verifier) | docs-verifier report |
 
 ---
@@ -1819,6 +2170,10 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 
 "Code correct and tested" and "reachable by a user or agent" stay separate claims in every report.
 
+**UAT evidence pack (R2-OBS-001).** Screen-level evidence — keyboard/focus/announcements in the real chat shell, the global entry after attach failure, touch and narrow reflow, reduced motion — is recorded separately from catalogue, manifest and static Storybook checks; a primitive-only pass does not count as screen acceptance.
+
+**Person routing reachability (US-16).** Connection settings show the main agent, allow list, person table, conversation mode and stranger status (E2E test 105); the agent editor shows the derived "who can reach this agent" list (test 104); Omnipus's `connect_channel` sets the main agent and optional person rules (live test 106).
+
 ---
 
 ## 14. User-facing documentation TODOs
@@ -1826,15 +2181,15 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | Page | TODO | WU |
 |---|---|---|
 | `docs/tools.md` | Replace the Agents-screen path in "How to change an agent's tool access" with Team card → Edit and Omnipus's permission workflow; ask list; Omnipus takes no per-agent Ask (Deny only); God Mode for Omnipus | WU-3, WU-10 |
-| `docs/security.md` | R-A1, R-A2 (read-to-web disclosure), R-A3 (external-program workers), each "accepted by the founder 2026-10-12"; secret card guarantees and the no-password exception; private secrets per workspace + agent with wording A; versioned replacement; removal and #1277; unbound channels fail loudly | WU-4, WU-5, WU-6, WU-1 |
+| `docs/security.md` | R-A1, R-A2 (read-to-web disclosure), R-A3 (external-program workers), each "accepted by the founder 2026-10-12"; secret card guarantees and the no-password exception; provider/mailbox values are resolved into the gateway process (never children) while private values never are; private secrets per workspace + agent with wording A; stored/selected/superseded versions; masking across reloads; removal and #1277; unbound channels fail loudly | WU-4, WU-5, WU-6, WU-1 |
 | `docs/agents.md` | Omnipus replaces Ava/Admin; only Omnipus creates agents (REST exception); Team as agent home; external-program workers and R-A3; no default agent | WU-2, WU-10, WU-11 |
 | `docs/workspaces.md` | Empty new workspaces; setup offer; W18; reuse unchanged; Team list/graph incl. Omnipus self-row in the default workspace; entry rule | WU-10 |
 | `docs/using-omnipus-ui.md` | Omnipus entry and attention (incl. unknown); helper cards in the Omnipus chat; secret card states; workspace entry; no Agents screen; System agents | WU-10, WU-4 |
 | `docs/getting-started.md`, `docs/tutorial.md` | First agent via Omnipus; provider first | WU-10 |
 | `docs/concepts.md` | Omnipus; workflows; no default agent; channels always bound | WU-2, WU-1 |
 | `docs/skills.md` | Skills via Omnipus; target workspace shelf | WU-3 |
-| `docs/connectors.md`, `docs/connectors/telegram.md` | `connect_channel`; proven vs not tested; QR in chat; every channel must be bound to an agent in a workspace | WU-7, WU-1 |
-| `docs/settings.md` | System agents; Channel settings require a workspace; no default-agent setting; saved secrets list | WU-10, WU-1, WU-6 |
+| `docs/connectors.md`, `docs/connectors/telegram.md`, `docs/connectors/google-chat.md` | `connect_channel` binds the channel's main agent in a workspace; proven vs not tested; QR in chat; unbound or unrouted messages fail loudly; **person table, allow list, "not authorised" replies and stranger status, conversation mode per connection, group behaviour, legacy type-level rules ignored** | WU-7, WU-1, WU-14 |
+| `docs/settings.md` | System agents; Channel settings require a workspace and a main agent; connection editor (person table, allow list, conversation mode); no default-agent or global conversation-scope setting; saved secrets list | WU-10, WU-1, WU-6, WU-14 |
 | `docs/mail.md` | `connect_mailbox`; read vs send readiness | WU-7 |
 | `docs/providers-and-models.md` | What the provider check proves; Omnipus's model in System agents | WU-3, WU-10 |
 | `docs/reference/built-in-tools.md` | New tools, policies, Auto classification | WU-2 |
@@ -1850,36 +2205,37 @@ Pages are drafted by the implementing lead in the same change; WU-12 is a final 
 |---|---|---|---|---|
 | WU-0 | Contracts K1–K17 + regeneration (**preparation commits**, not independently landable — K11/K12 remove fields existing code reads) | Standard | backend-lead | — |
 | WU-1 | No default agent; mandatory channel binding; loud failure; browser warm-up (FR-120–FR-132, FR-113 backend) | Feature | backend-lead; frontend-lead (remove default UI, Channel settings) | WU-0 |
-| WU-2 | Omnipus identity, Ava/Admin removal, membership, self-row, grant inventory, ceiling + ask-list, Omnipus per-agent Ask refusal, God Mode note | Feature | backend-lead; prometheus (prompt) | WU-0 |
-| WU-3 | Change-tool adaptations: target workspace, permission tool, management-grant refusal, outcomes, provider/workspace checks, expected-before | Feature | backend-lead | WU-2 |
-| WU-4 | Secret card core: request/submit/state read, atomic store, versioned references, descriptor, trust checks, audit, masking, card UI, references in config tools (**security-lead verification gate, FR-083**) | Feature | backend-lead, frontend-lead | WU-0, WU-3 |
-| WU-5 | Private secrets per workspace + agent | Feature | backend-lead | WU-4 |
+| WU-2 | Omnipus identity, Ava/Admin removal, membership, self-row, grant inventory, ceiling + ask-list, Omnipus per-agent Ask refusal, God Mode note, **and the permission split and management-grant refusal (FR-024, FR-025), committed together with the grants** | Feature | backend-lead; prometheus (prompt) | WU-0 |
+| WU-3 | Change-tool adaptations: target workspace, outcomes, provider/workspace checks, shared-resource lock order and revision tokens (FR-085, FR-088) | Feature | backend-lead | WU-2 |
+| WU-4 | Secret card core: request/submit/state read, atomic store with submit receipt, versioned references and states, descriptor, trust checks, audit, complete masking set across all rebuilds, card UI, references in config tools (**security-lead verification gate, FR-083**) | Feature | backend-lead, frontend-lead | WU-0, WU-3 |
+| WU-5 | Private secrets per workspace + agent: selection tool, protected set, injection after managed layers | Feature | backend-lead | WU-4 |
 | WU-6 | Secret listing UI hooks and removal | Feature | backend-lead | WU-4; **#1277** for in-use removal |
 | WU-7 | `connect_channel`, `connect_mailbox`, pairing in chat | Feature | backend-lead, frontend-lead | WU-3, WU-4 |
 | WU-8 | Helper decisions in the Omnipus main + attention | Feature | backend-lead, frontend-lead | WU-0, WU-2 |
 | WU-9 | Workflow skills, core prompt, routing table, `AskUserQuestion` text | Feature | prometheus; backend-lead wiring | WU-2, WU-3, WU-4, WU-7 |
 | WU-10 | Screens incl. state/keyboard contract, kickoff retarget, workspace entry | Feature | frontend-lead; backend-lead (kickoff) | WU-0, WU-2, WU-8 |
 | WU-11 | Removals, guard scripts, retired-surfaces list | Feature (structural, cross-tree) | frontend-lead; backend-lead; prometheus (CLAUDE.md) | WU-10 |
+| WU-14 | Channel person routing (US-16): instance-scoped bindings, allow-list stranger handling, main agent after person table, per-connection conversation mode, derived per-agent list, connection editor, `connect_channel`/`configure_channel` rule parameters (**not grilled — focused review per founder**) | Feature | backend-lead, frontend-lead; prometheus (W13 skill text) | WU-0, WU-1, WU-7 |
 | WU-12 | Docs sweep | Standard | implementing leads; docs-verifier | all |
 | WU-13 | UAT campaign | Gate | qa-lead plan; uat-tester + uat-validator | all |
 
-**Landing bundles** (each gated by the 5-reviewer gate, CI, and — for engine/WebSocket bundles — exact-commit UAT):
+**Preparation stages and the one landing (R2-MAJ-006).** The stages below are commits on the feature branch, each checked by CI and a qa-lead CHECK; **none is landed on its own**. The feature lands **once**, complete, after the 5-reviewer gate, same-change user docs, docs-verifier, and exact-commit hands-on UAT by a tester and an independent validator (engine and WebSocket paths included). This avoids an interim state where Omnipus holds grants without the Ask boundary or users have no entry point.
 
-| Bundle | Units | Engine/WS UAT |
+| Stage | Units | Purpose |
 |---|---|---|
-| B1 Foundation | WU-0 + WU-1 + WU-2 | Yes |
-| B2 Tools and secrets | WU-3 + WU-4 + WU-5 + WU-6 + WU-7 | Yes |
-| B3 Helpers and screens | WU-8 + WU-9 + WU-10 + WU-11 | Yes (WU-10 and WU-11 included) |
-| B4 Docs and acceptance | WU-12 + WU-13 | Whole-feature UAT |
+| S1 Foundation | WU-0 + WU-1 + WU-2 | Contracts; no default agent; identity, grants **with** the permission split |
+| S2 Tools and secrets | WU-3 + WU-4 + WU-5 + WU-6 + WU-7 + WU-14 | Change tools, secrets, connect tools, person routing |
+| S3 Helpers and screens | WU-8 + WU-9 + WU-10 + WU-11 | Decisions in main, skills, screens, removals |
+| Landing | S1–S3 + WU-12 + WU-13 | One gated, reachable, documented feature |
 
 ```
-WU-0 ─┬─► WU-1 ─────────────────────────────┐            (B1)
-      └─► WU-2 ─┬─► WU-3 ─► WU-4 ─┬─► WU-5  │            (B2)
+WU-0 ─┬─► WU-1 ─────────────────────────────┐            (S1)
+      └─► WU-2 ─┬─► WU-3 ─► WU-4 ─┬─► WU-5  │            (S2)
                 │                 ├─► WU-6 ◄── #1277
-                │                 └─► WU-7 ─┐
-                └─► WU-8 ───────────────────┼─► WU-9     (B3)
+                │                 └─► WU-7 ─┬─► WU-14 (person routing)
+                └─► WU-8 ───────────────────┼─► WU-9     (S3)
                                             └─► WU-10 ─► WU-11
-all ─► WU-12 ─► WU-13                                      (B4)
+all ─► WU-12 ─► WU-13 ─► one landing
 ```
 
 UI development of WU-10 may start in parallel with WU-3/WU-4 against generated contracts; its live-workflow acceptance waits for WU-9.
@@ -1901,10 +2257,28 @@ UI development of WU-10 may start in parallel with WU-3/WU-4 against generated c
 
 ## 17. Open questions for the founder
 
-**OQ-5 — Per-person routing rules on channels.** Context: you decided every channel is bound to one agent in one workspace (OQ-2). The configuration also allows older per-person or per-group rules ("messages from this Telegram user go to Ray"). Bound channels already ignore those rules today (ADR-029), so with every channel bound they can never apply again. Impact: whether those rules are removed or kept as inert settings.
-- **A** — Remove the per-person/per-group rules and their settings; one channel = one agent in one workspace.
-- **B** — Keep them in the configuration, ignored, with a startup warning listing them.
-- **Recommendation: A** — matches your one-rule model and avoids settings that look active but do nothing.
+None from the grill rounds. OQ-5 is applied (§0.5). The person-routing scope (US-16) raises these:
+
+**RQ-1 — Where per-person conversations appear.** Context: with conversation mode "one chat per person", each person who writes to a connection gets their own conversation with the agent. Impact: how the user finds them.
+- **A** — In the agent's History in that workspace, titled "<connection> · <person label>" (e.g. "Support bot · Anna").
+- **B** — Also as nested rows under the agent in the sidebar.
+- **Recommendation: A** — no new sidebar structure; History already lists extra chats.
+
+**RQ-2 — The stranger reply.** Context: someone not on the allow list writes to a connection; PR-3 says they get "not authorised" and the operator sees it. Impact: wording and how often a stranger is answered (a reply invites spam).
+- **A** — Fixed text "Sorry, you are not authorised to use this assistant.", sent at most once per stranger per connection per 24 hours; the connection status shows a count and the last stranger.
+- **B** — Same, with the text editable per connection.
+- **C** — Reply every time.
+- **Recommendation: A** — safe default; editing can come later.
+
+**RQ-3 — Group chats.** Context: in a group, the allow list could mean the group, each sender, or both; a "not authorised" reply inside a group is visible to everyone there. Impact: who in a group can reach the agent.
+- **A** — A group listed in the allow list or person table admits all its members; strangers inside an allowed group are never answered with "not authorised" (logged only); direct-chat strangers get the reply.
+- **B** — Every sender must be on the allow list, even in an allowed group.
+- **Recommendation: A** — matches how group bots are normally used and avoids public refusals.
+
+**RQ-4 — The global conversation setting.** Context: today one install-wide setting (`session.dm_scope`, changed with a restart) decides whether channel people share a conversation. The new per-connection mode replaces it. Impact: whether the global switch stays.
+- **A** — Retire the global setting (ignored with a warning); each connection has its own mode, default "agent's main chat", applied without restart. Keep "same person across channels" links (`identity_links`) global.
+- **B** — Keep the global setting as the default for connections without their own mode.
+- **Recommendation: A** — one place to look, no restart, and no hidden default.
 
 ---
 
@@ -1941,3 +2315,6 @@ UI development of WU-10 may start in parallel with WU-3/WU-4 against generated c
 - OQ-4 → warm the default workspace's browser.
 - Q-R1-1 → replacement stored as a new version; integration switches on approved change.
 - Q-R1-2 → no password step on the card; raw routes keep it; security-lead verifies.
+
+### 2026-10-13
+- OQ-5 → first "keep the rules, separate feature"; then the same day: channel person routing is **in scope** of this implementation (US-16, OSA-14), reusing the bindings engine.

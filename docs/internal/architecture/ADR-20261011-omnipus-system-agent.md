@@ -44,6 +44,21 @@ Recorded without a new correction round (source: founder answers file, sections 
 | OQ-4 B — warm the default workspace's browser at boot | Browser warm-up no longer depends on any agent. |
 | Q-R1-1 A — replacing an in-use secret stores a new version | The integration keeps its current reference until its approved change tool selects the new one. |
 | Q-R1-2 B — no password re-entry on the secret card | Explicit exception to ADR-022's re-confirmation for this scoped, destination-bound write only; raw credential routes keep it; security-lead verifies the request/session/recipient binding. |
+| OQ-5 (2026-10-13) — first "keep per-person routing rules, separate feature", then the same day superseded: person routing is in scope | See OSA-14 below. |
+
+## OSA-14 — Channel person routing per connection (founder decision, 2026-10-13)
+
+Recorded after both specification grill rounds; **this decision has not been grilled** (team-lead will ask the founder about a focused review). Source: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/designs/channel-person-routing-decisions-20261013.md` (R1–R5, PR-1–PR-4) and the team-lead steer of 2026-10-13. Detail: specification US-16, FR-140–FR-151, K18–K22, WU-14.
+
+| Topic | Decision |
+|---|---|
+| Structure (PR-1) | Each connection (channel instance) belongs to one workspace and holds an allow list, a person table (person or group → agent in that workspace) and one **main agent** for allowed people without a rule. ADR-029's bound identity becomes the main agent, applied **after** the person table instead of skipping all bindings. |
+| Reuse (R4) | The person table is stored as `Config.Bindings` entries with a new `instance_id` match field; the `ResolveRoute` match priorities (peer, parent peer, guild, team, account) run at instance scope; `allow_from`, the session-key scopes behind `session.dm_scope`, `session.identity_links` and `group_trigger` are reused. Type-only bindings and `channel_policies.<ch>.routing_rules` are retired (ignored with a warning). |
+| Route order | Unbound instance → loud failure (OQ-2); stranger → "not authorised" reply + operator status/log (PR-3); person rule → that agent (must be a workspace member; otherwise loud drop, never main-agent fallback); else main agent; else loud drop. No default agent anywhere (FQ-17). |
+| Per-agent list (PR-2) | Derived from the connection tables; shown read-only in the agent editor with links; not stored. |
+| Conversations (PR-4) | Per-connection mode: agent's main chat (default) or one chat per person; no restart. The install-wide `session.dm_scope` setting is proposed for retirement (founder question RQ-4). |
+| Omnipus | `connect_channel` sets the main agent and can save offered person rules in the same approved call. |
+
 
 ---
 
