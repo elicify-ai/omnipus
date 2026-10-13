@@ -3,12 +3,14 @@
  * Oracles are the review findings: no lost queued messages, no stale block on
  * a deliberately new chat, no source-chat/target-workspace send, and no
  * transport failure invented from a hidden foreground guard.
- * Real stores/flows; only network, diagnostic sink and unpublished main-ID
- * seam are mocked. No timing thresholds stand in for delivery.
+ * WU-10 FR-107 / BDD-12.11 / dataset D4 replaces Ava-first with the first
+ * conversation member. Real stores/flows and real generated main-id reader;
+ * only network and diagnostic sink are mocked. All recovery oracles remain.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session, Workspace, WorkspaceMemberConfig } from '@/lib/api'
-import { fetchSessions, fetchWorkspace } from '@/lib/api'
+import { fetchSessions, fetchWorkspace, fetchAgents } from '@/lib/api'
+import { MIA, JIM } from '../../tests/omnipus-l1-ui-red/fixtures'
 import { logDiagnostic } from '@/lib/telemetry'
 import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 import { beginPairExtra } from '@/components/layout/sidebar/pairExtra'
@@ -20,21 +22,12 @@ import { useSessionStore } from './session'
 import { useUiStore } from './ui'
 import { useWorkspacesStore } from './workspacesStore'
 
-const seam = vi.hoisted(() => ({ mains: new Map<object, string>() }))
-vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
-  // Real seam for everything the stubs don't override (notably
-  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
-  ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
-  mainSessionIdOfMember: (member: object) => seam.mains.get(member),
-  isMainSession: () => false,
-  sessionAttention: () => 'unknown',
-  attachAckFields: () => ({}),
-  attentionBoundOfFrame: () => undefined,
-}))
+// WU-10: main ids come from generated WorkspaceMemberConfig fields, not a seam mock.
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/api')>(),
   fetchSessions: vi.fn(),
   fetchWorkspace: vi.fn(),
+  fetchAgents: vi.fn(),
 }))
 vi.mock('@/lib/telemetry', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/telemetry')>(),
@@ -45,7 +38,8 @@ const SOURCE_WS = 'source-workspace'
 const TARGET_WS = 'target-workspace'
 const SOURCE = 'source-chat'
 const TARGET = 'target-chat'
-const AVA = 'ava-welcome'
+// Historical constant name retained; the amended welcome owner is Mia.
+const AVA = 'opaque-mia-welcome'
 const failed = {
   status: 'failed-attempt' as const,
   committed: { sessionId: SOURCE, agentId: 'jim' },
@@ -73,10 +67,10 @@ function targetSession(): Session {
 
 function targetWorkspace(member: WorkspaceMemberConfig = {}): Workspace {
   return {
-    id: TARGET_WS, name: 'Target', revision: 'rev-1', status: 'active',
+    id: TARGET_WS, name: 'Target', revision: '1'.repeat(64), status: 'active',
     pinned: false, pin_order: 0, task_count: 0,
     created_at: '2026-10-08T12:00:00Z', updated_at: '2026-10-08T12:00:00Z',
-    member_configs: { ava: member },
+    core_team: ['mia'], member_configs: { mia: member },
   }
 }
 
@@ -108,6 +102,7 @@ async function settleInputPromises() {
   await Promise.allSettled([
     vi.mocked(fetchSessions).mock.results[0]?.value,
     vi.mocked(fetchWorkspace).mock.results[0]?.value,
+    vi.mocked(fetchAgents).mock.results[0]?.value,
   ])
   await new Promise<void>((resolve) => queueMicrotask(resolve))
 }
@@ -115,7 +110,7 @@ async function settleInputPromises() {
 beforeEach(() => {
   localStorage.clear()
   vi.clearAllMocks()
-  seam.mains.clear()
+  vi.mocked(fetchAgents).mockResolvedValue([MIA, JIM])
   useChatStore.setState(useChatStore.getInitialState(), true)
   useSessionStore.setState(useSessionStore.getInitialState(), true)
   useConnectionStore.setState(useConnectionStore.getInitialState(), true)
@@ -315,8 +310,7 @@ describe('workspace-entry recovery — gate round 2', () => {
       if (pointer === 'wrong-workspace') {
         vi.mocked(fetchSessions).mockResolvedValue([{ ...targetSession(), workspace_id: SOURCE_WS }])
       }
-      const member: WorkspaceMemberConfig = {}
-      seam.mains.set(member, AVA)
+      const member: WorkspaceMemberConfig = { main_session_id: AVA }
       vi.mocked(fetchWorkspace).mockRejectedValueOnce(new Error('Workspace request offline'))
       const send = connect()
       await useSessionStore.getState().enterWorkspaceChat(TARGET_WS)

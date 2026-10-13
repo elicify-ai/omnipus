@@ -26,6 +26,7 @@ import { routeTree } from '@/routeTree.gen'
 
 const api = vi.hoisted(() => ({
   fetchWorkspace: vi.fn<typeof import('@/lib/api').fetchWorkspace>(),
+  fetchWorkspaces: vi.fn<typeof import('@/lib/api').fetchWorkspaces>(),
   fetchWorkspaceDelegation: vi.fn<typeof import('@/lib/api').fetchWorkspaceDelegation>(),
   fetchAgents: vi.fn<typeof import('@/lib/api').fetchAgents>(),
   fetchAppState: vi.fn<typeof import('@/lib/api').fetchAppState>(),
@@ -88,6 +89,8 @@ beforeAll(async () => {
 beforeEach(() => {
   for (const edge of Object.values(api)) edge.mockReset()
   api.fetchWorkspace.mockResolvedValue(WORKSPACE)
+  // FR-102 cards read workspace membership for the other-workspaces label.
+  api.fetchWorkspaces.mockResolvedValue([WORKSPACE])
   api.fetchWorkspaceDelegation.mockResolvedValue(DELEGATION)
   api.fetchAgents.mockResolvedValue([MEMBER])
   api.fetchAppState.mockResolvedValue(SIGNED_IN)
@@ -187,6 +190,9 @@ function assertShellRetained(presentation: 'docked' | 'fullscreen', router?: Ret
 
 async function assertMeaningfulTeam(client: QueryClient) {
   expect(await screen.findByRole('heading', { name: 'Team & delegation' })).toBeVisible()
+  // WU-10 FR-102 / BDD-12.3: recovery opens the list; explicitly choose Graph
+  // before preserving the original real graph-node and delegation assertions.
+  fireEvent.click(await screen.findByRole('radio', { name: /^Graph$/i }))
   expect(await screen.findByText(MEMBER.name, { exact: true })).toBeVisible()
   expect(screen.getByRole('button', { name: 'Add agent' })).toBeEnabled()
   expect(api.fetchWorkspaceDelegation).toHaveBeenCalledExactlyOnceWith(WORKSPACE_ID)

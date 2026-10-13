@@ -917,10 +917,11 @@ describe('request() with Zod schema — validation errors', () => {
     vi.resetModules()
   })
 
-  it('fetchAgents: throws ApiSchemaError when body fails Agent schema validation', async () => {
-    // Return a valid JSON body that fails Agent schema (missing required fields)
+  // WU-10 fruit #1076 Expected: a malformed ROW is isolated, not an array error.
+  // The rejection/count oracle remains for a malformed top-level container.
+  it('fetchAgents: throws ApiSchemaError when the top-level body is not an agent array', async () => {
     fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify([{ id: 'a', name: 'bad' }]), {
+      new Response(JSON.stringify({ id: 'a', name: 'not an array' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
@@ -931,20 +932,16 @@ describe('request() with Zod schema — validation errors', () => {
     expect(count()).toBe(1)
   })
 
-  it('fetchAgents: increments _apiSchemaErrorCount on validation failure', async () => {
+  it('fetchAgents: increments _apiSchemaErrorCount for malformed top-level data, not an isolated row', async () => {
     fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify([{ invalid: true }]), {
+      new Response(JSON.stringify({ invalid: true }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
     )
 
-    const { fetchAgents, getApiSchemaErrorCount: count } = await import('./api')
-    try {
-      await fetchAgents()
-    } catch {
-      // expected
-    }
+    const { fetchAgents, ApiSchemaError: ApiSchemaErrorClass, getApiSchemaErrorCount: count } = await import('./api')
+    await expect(fetchAgents()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
     expect(count()).toBe(1)
   })
 
