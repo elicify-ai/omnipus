@@ -68,6 +68,21 @@ Binding transitional ruling from team-lead: keep the legacy Admin exclusion/sear
 
 Interface handoff (not additional product requirements): System agents Settings tab `system-agents`; Team ViewSwitch radio labels List/Graph; picker optional `workspaces` input supplies orphan labels; singleton navigation goes to `/omnipus`; resolver input becomes `team: {coreTeam, memberConfigs, agents}`. Pure resolver tests dynamically load its unchanged module path so the pre-change signature does not cause TypeScript/collection failure. The real-store entry tests verify the result independently. Normal user message prose is not pinned to the implementer's wording; the generated W1/W18 target metadata is exact.
 
+## Founder-added #215 plan (2026-10-14, after the first two checkpoints)
+
+Authority: GitHub #215 Expected, read with `gh issue view 215` (exit 0), plus the founder's team-lead dispatch explicitly extending it to canonical `create_agent`, `update_agent`, `delete_agent` and workspace team data. The old issue's Ava/system.agent.* names are historical; the test uses the current canonical tools named in the dispatch.
+
+Real boundary: `useChatStore.handleFrame` receives generated `tool_call_start` and `tool_call_result` frames; the real application `queryClient` owns actual cached agents, active/archived workspace lists, the visible workspace's detail and delegation/team data. No query, reducer, helper or invalidation method is mocked/spied. Fixtures seed actual cached records; outcomes are exact cache invalidation flags and unchanged values on failure. A control uses the public QueryClient invalidation operation to prove the observation can detect an invalidation.
+
+| Cases | Expected | Independent source |
+|---|---|---|
+| create/update/delete success | Actual result reaches the real tool-call bucket; agents and workspace team caches become invalidated, without navigation or an extra agent_created broadcast | #215 Expected; founder-added WU-10 brief |
+| create/update/delete error | Actual error result recorded; every seeded query remains not invalidated and data unchanged | founder brief: failed call does not invalidate |
+| Mutation success in a helper not foreground | Same global freshness while active session stays unchanged | #215 user-visible immediacy and Omnipus helper workflow |
+| Ordinary read-tool success | No mutation-cache invalidation; manual public invalidation then flips the detector (instrument control only) | Scope of #215 is create/update/delete, not arbitrary tool results |
+
+Mutations for independent CHECK: remove one mutation tool from the refresh set; ignore success/error status; omit workspace detail/team prefix; gate refresh on the foreground session. Live follow-up: **#215: new agent appears without navigation**, including Team, sidebar and picker after Omnipus applies W1.
+
 ## Execution and gate
 
-Each new test file runs once, serially, with a saved verbose log and raw exit code. No full suite, remote CI, live instance or production data. A passing control is reported separately, never called observed RED. Missing implementation fatals are reported separately from behavioral assertion failures. GREEN, mutation probes and the Proof-of-failability checklist are deferred to an independent CHECK instance (qa-lead RED override). Only the local scanner/type gate may run additionally, if permitted. Final diff scope, authorship, staged files and push are independently checked. GitNexus MCP is unavailable; new-file-only scope and direct importer sweep are the documented fallback, Inferred rather than a graph result.
+Each final-state test file runs serially, with a saved verbose log and raw exit code. Initial instrument-correction runs are retained separately; final receipts never reuse a result from an edited file. No full suite, remote CI, live instance or production data. A passing control is reported separately, never called observed RED. Missing implementation fatals are reported separately from behavioral assertion failures. GREEN, mutation probes and the Proof-of-failability checklist are deferred to an independent CHECK instance (qa-lead RED override). Only the local scanner/type gate may run additionally, if permitted. Final diff scope, authorship, staged files and push are independently checked. GitNexus MCP is unavailable; the test-only Git diff and direct test-helper caller sweeps are the documented fallback, Inferred rather than a graph result.
