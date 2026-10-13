@@ -193,6 +193,12 @@ Tally: 13 major fixed, 2 minor fixed, 2 observations adopted; none overridden by
 | FQ-R3-A — every chat-channel connection has an explicit **"Open to anyone"** checkbox in the People tab. **Unticked (default for a new connection) = closed**: only listed people and groups are admitted; an empty list admits nobody. **Ticked** = anyone may write and reaches the main agent unless a row says otherwise. Commands and the #892 resume right still need an individual person row in both cases. Strangers are refused only when the connection is closed | FR-224; FR-145 amended; K19 `open_to_anyone`; BDD-16.22, 16.23; tests 156, 157 |
 | FQ-R3-B — **private memory stays agent-wide**: `remember` with room "private" stays agent-global as today (an agent's learning carries over across workspaces); room "shared" stays per workspace team; automatic conversation digests, carry-forward and awareness stay per workspace (AW-2) | Fix-round-3 text that made private notes per workspace is reverted: FR-195, FR-218, FR-219, §6.12, US-20 AS-4/AS-6, BDD-20.4, BDD-20.8, the §6.1 prohibition. **Deliberate private notes intentionally cross workspaces; that is not a leak.** |
 
+### 0.13 EM-3 — several mailboxes per agent (founder, 2026-10-13; adopts #1109 T1/T2/T6/T8)
+
+This spec **adopts** issue #1109 ("AgentEmail 2.0") items **T1** (several mailboxes per agent and workspace, with a switcher), **T2** (an explicit `mailbox` parameter on the email tools, required only when the agent has more than one mailbox in that workspace), **T6** (setup UX: provider templates, Gmail app-password wizard, Test Connection before save) and **T8** (human-only provisioning). **T3** (all-folder search/read), **T4** (all-folders Mail panel), **T5** (`email_forward`, `email_move`, `email_delete`, `email_mark`) and **T7** (To/CC/BCC/attachments — likely already covered) **stay in #1109** for later. The T2 parameter amends EM-1's "tools unchanged" in that one respect only. Email still never starts a turn (#1109 decision 9, D27). Detail: US-21, FR-225–FR-235, K40–K44, WU-18. **Migration: none (greenfield, F:D22)** — the old one-mailbox-per-pair config shape is not read; a load warning names any such entry and the operator re-adds the mailbox.
+
+**Interpretation to confirm (EQ-1):** T8 says no agent-facing mailbox creation; the founder also placed the T6 setup UX in Omnipus's `connect_mailbox` workflow. The spec reconciles them as: no ordinary agent can create a mailbox; Omnipus's `connect_mailbox` stays, Ask-gated, with the password entered by the user on the secret card and the summary confirmed by the user — a human-driven provisioning path. See §17.
+
 ---
 
 ## 1. Discovery summary
@@ -504,6 +510,18 @@ The agent behaves like a person who remembers their other conversations in this 
 
 ---
 
+### US-21 — Several mailboxes per agent, chosen explicitly (P1)
+
+An agent may hold more than one mailbox in a workspace (for example support@ and invoices@). The user switches between them in the Mail panel and the agent's email settings; the agent names the mailbox when it has more than one. Only people add mailboxes. **Why P1**: EM-3 (adopts #1109 T1/T2/T6/T8). **Independent test**: give Mia two mailboxes in Sales; the Mail panel switches between them; `send_email` without `mailbox` is refused listing both; with `mailbox: invoices` it sends from invoices@; with one mailbox it works exactly as today.
+
+1. **Given** Mia in Sales, **When** the user adds a second mailbox, **Then** both exist for Mia in Sales, each with its own address, credentials, signature and identity.
+2. **Given** two mailboxes, **When** the user opens the Mail panel or Mia's email settings, **Then** a mailbox switcher shows both and switches the view.
+3. **Given** Mia has one mailbox in that workspace, **When** she uses any email tool without `mailbox`, **Then** it behaves exactly as today.
+4. **Given** Mia has two mailboxes, **When** she uses an email tool without `mailbox`, **Then** it is refused, naming the mailboxes she can choose; with `mailbox` it acts on that one only.
+5. **Given** the user adds Email (Connectors → Agent tools → Add Email, or Omnipus's connect workflow), **When** they pick a provider, **Then** a template fills the server settings; for Gmail a wizard links to 2-Step Verification and App Passwords; **Test Connection** runs before saving and names the failure class; a failing test saves nothing.
+6. **Given** any agent, **When** it looks for a way to create a mailbox, **Then** none exists (only Omnipus's Ask-gated, user-driven `connect_mailbox`, per EQ-1).
+7. **Given** the Connectors page, **When** Agent tools → Email renders, **Then** there is one row per mailbox showing address, owner agent and workspace.
+
 ## 4. Behavioural contract
 
 **Primary**
@@ -808,7 +826,7 @@ Order per change: schema in `contracts/components/schemas/` → reference from `
 | # | Schema | Change | FR |
 |---|---|---|---|
 | K1 | **new** `SecretRequestFrame` (WS) | request id, session id, acting agent id + name, root session id (server-derived, optional), workspace id (optional), owner pair (private kind), purpose (≤ 500 chars), recipient display, fields[1..8] (key `^[a-z][a-z0-9_]{0,31}$`, label ≤ 80 chars, required) | FR-061 |
-| K2 | **new** `SecretRecipientDisplay` | kind enum `provider_key` / `mcp_env` / `channel_credential` / `mailbox_password` / `agent_private`; display lines (endpoint, transport + command/URL, instance + field, hosts + username, workspace + agent + variable) | FR-065 |
+| K2 | **new** `SecretRecipientDisplay` | kind enum `provider_key` / `mcp_env` / `channel_credential` / `mailbox_password` / `agent_private`; display lines (endpoint, transport + command/URL, instance + field, hosts + username + mailbox id, workspace + agent + variable) | FR-065 |
 | K3 | **new** `SecretRequestResolvedFrame` (WS) | request id, state enum `submitted` / `cancelled` / `stopped` / `interrupted` / `refused` | FR-074 |
 | K4 | **new** `SessionStateSecretRequest`; **changed** `SessionStateFrame`, `SessionSnapshotFrame` | `secret_requests` array (never null): pending plus terminal (bounded) entries with state | FR-079 |
 | K5 | **new** `SecretSubmitRequest`, `SecretRequestState` (REST) | `POST /api/v1/secret-requests/{id}/submit` body: exactly one of `values` (map field key → string) or `cancel: true`; response `SecretRequestState`. `GET /api/v1/secret-requests/{id}` → `SecretRequestState` (id, state, reference names when submitted, updated_at) | FR-062, FR-079 |
@@ -843,6 +861,11 @@ Order per change: schema in `contracts/components/schemas/` → reference from `
 | K37 | **new** `ChannelStrangerEntry`; `GET /api/v1/channels/{id}/requests` | identifier, label, last seen, count; action "Add to People" uses the routing write | FR-223 |
 | K38 | **changed** connector list response | `category` enum `chat_channel` / `agent_tool` per connector; email = `agent_tool` with no routing fields | FR-221, FR-222 |
 | K39 | **changed** `ChannelRouting` read shape | `bound` boolean, `revision` token (§6.6) | FR-128, FR-085 |
+| K40 | **changed** config `MailboxesConfig` (not wire) and **changed** `Mailbox` schema | agent → workspace → list of mailboxes; each `mailbox_id`, `label`, address, servers, `password_ref` (per mailbox), `provider_template`; identity sidecar keyed (agent, workspace, mailbox) | FR-225, FR-235 |
+| K41 | **changed** mailbox REST: `GET/POST /api/v1/agents/{id}/workspaces/{workspaceId}/mailboxes`, `GET/PUT/DELETE …/mailboxes/{mailboxId}` (replaces `/agents/{id}/mailboxes/{workspaceId}`); `MailboxCleanupRequest` gains `mailbox_id` | list never null; create is a human (web) route | FR-225, FR-226, FR-232 |
+| K42 | **new** `MailboxTestRequest`, `MailboxTestResult`; `POST …/mailboxes/test` (before save) | read and send results, each `ok` or failure class enum `auth_failed` / `send_auth_failed` / `server_not_found` / `connection_refused` / `tls_problem` / `timeout` / `unknown`, safe message | FR-231 |
+| K43 | **new** `MailProviderTemplate`; `GET /api/v1/mail/provider-templates` | id (`gmail`, `fastmail`, `icloud`, `nextcloud`, `zoho`, `outlook_com`, `generic_imap`), name, IMAP/SMTP hosts and ports, help links (Gmail: 2-Step Verification, App Passwords) | FR-229, FR-230 |
+| K44 | **changed** workspace mail routes (`/workspaces/{id}/mail/{agentId}/…`) | `mailbox` query parameter: optional with one mailbox, required with several (400 naming the choices) | FR-226, FR-227 |
 | K17 | config | `agents.defaults.default_agent_id` ignored with warning (settings sanitiser and loader) | FR-120 |
 
 ### 7.2 Runtime validation (MAJ-004)
@@ -2323,6 +2346,95 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - When Mia recalls in Marketing
 - Then the note is found (agent-wide by design, FQ-R3-B), while Sales's automatic notes and shared-room notes are not
 
+### Feature: Several mailboxes (US-21)
+
+**BDD-21.1 Second mailbox for the same pair** — Traces to US-21 AS-1 — Happy Path
+- Given Mia in Sales has support@acme.test
+- When the user adds invoices@acme.test for Mia in Sales
+- Then Mia in Sales has two mailboxes, each with its own credential reference, signature and identity record
+
+**BDD-21.2 Switcher** — US-21 AS-2 — Happy Path
+- Given Mia has support@ and invoices@ in Sales
+- When the user switches the Mail panel from support@ to invoices@
+- Then the folders and messages shown are invoices@'s, and the agent editor's email settings show the same two mailboxes
+
+**BDD-21.3 One mailbox behaves as today** — US-21 AS-3 — Edge Case (regression guard)
+- Given Mia has only support@ in Sales
+- When she calls `send_email`, `read_inbox`, `search_email` and `reply` without `mailbox`
+- Then each works exactly as before; passing `mailbox: support` also works; passing an unknown mailbox is refused
+
+**BDD-21.4 Mailbox required with two** — US-21 AS-4 — Error Path (Outline)
+- Given Mia has support@ and invoices@ in Sales
+- When she calls `<tool>` `<args>`
+- Then `<result>`
+
+| tool | args | result |
+|---|---|---|
+| send_email | no mailbox | refused: "Mia has 2 mailboxes here — choose one: support, invoices" |
+| send_email | mailbox: invoices | sent from invoices@ |
+| search_email | mailbox: support | searches support@ only |
+| read_message | a reference from invoices@ with mailbox: support | refused: reference belongs to another mailbox |
+| list_email_attachments | no mailbox | refused (same message) |
+
+**BDD-21.5 Other workspace's mailbox unreachable** — US-21 AS-4 — Error Path
+- Given Mia has billing@ in Marketing
+- When her Sales turn calls `send_email` with `mailbox: billing`
+- Then it is refused (mailboxes are per agent and workspace)
+
+**BDD-21.6 Provider templates** — US-21 AS-5 — Happy Path (Outline)
+- Given the Add Email flow
+- When the user picks `<provider>`
+- Then incoming and outgoing servers and ports are filled from the template and stay editable
+
+| provider |
+|---|
+| Gmail |
+| Fastmail |
+| iCloud |
+| Nextcloud |
+| Zoho |
+| Outlook.com |
+| Generic IMAP (nothing filled) |
+
+**BDD-21.7 Gmail app-password wizard** — US-21 AS-5 — Happy Path
+- Given the user picked Gmail
+- When the wizard opens
+- Then it links directly to Google's 2-Step Verification page and App Passwords page and explains to paste the 16-character app password into the secret field
+
+**BDD-21.8 Test Connection before save** — US-21 AS-5 — Error Path (Outline)
+- Given filled settings and a password on the secret card
+- When the user runs Test Connection and `<problem>`
+- Then nothing is saved and the result names `<class>`
+
+| problem | class |
+|---|---|
+| wrong password | authentication failed |
+| server name does not resolve | server not found |
+| port closed | connection refused |
+| certificate invalid | TLS problem |
+| no answer in time | timed out |
+| sending login fails, reading works | sending authentication failed |
+
+**BDD-21.9 Omnipus connect workflow** — US-21 AS-5 — Happy Path
+- Given W15 in Omnipus's chat for Mia in Sales, Gmail chosen
+- When the user completes the wizard, enters the app password on the secret card and confirms the summary
+- Then `connect_mailbox` runs Test Connection first, saves only on success, reports read and send readiness, and the new mailbox appears in the switcher and on the Connectors page
+
+**BDD-21.10 No agent mailbox creation** — US-21 AS-6 — Error Path
+- Given Mia, Jim, a custom agent and General Purpose
+- When their tools are listed
+- Then none can create a mailbox; only Omnipus holds `connect_mailbox` (Ask) and no tool accepts a mailbox password as an argument
+
+**BDD-21.11 Connectors rows** — US-21 AS-7 — Happy Path
+- Given Mia has support@ and invoices@ in Sales and Jim has ops@ in Marketing
+- When Connectors → Agent tools → Email renders
+- Then there are three rows, each showing address, owner agent and workspace, each with its own Configure (mailbox setup only)
+
+**BDD-21.12 Old config shape** — US-21 AS-1 — Edge Case
+- Given a config with the old single-mailbox-per-pair shape
+- When the gateway loads and reloads
+- Then a warning names the entry, it is not used, and nothing else fails to start
+
 ### Feature: Permission changes (US-14)
 
 **BDD-14.1 Permission tool asks** — US-14 AS-1 — Happy Path
@@ -2546,6 +2658,16 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 156 | `pkg/channels::TestNewConnection_ClosedByDefault_EmptyAdmitsNobody` | Unit | 16.22 |
 | 157 | `pkg/channels::TestOpenToAnyone_MainAgentDefault_CommandsNeedRow` | Integration | 16.23 |
 | 158 | `pkg/agent::TestPrivateNotes_AgentWide_DigestsAndSharedPerWorkspace` | Integration | 20.10 |
+| 159 | `pkg/config::TestMailboxes_SeveralPerPair_UniqueIDs_OwnRefs` | Unit | 21.1 |
+| 160 | `src/components/mail/MailboxSwitcher.test.tsx` | Unit | 21.2 |
+| 161 | `pkg/tools::TestEmailTools_MailboxParam_OneVsMany_RefBinding_Workspace` | Integration | 21.3, 21.4, 21.5 |
+| 162 | `src/components/connectors/AddEmail.templatesWizard.test.tsx` | Unit | 21.6, 21.7 |
+| 163 | `pkg/gateway::TestMailboxTestConnection_FailureClasses_NothingSaved` (fake IMAP/SMTP) | Integration | 21.8 |
+| 164 | `pkg/coreagent::TestNoMailboxCreation_ExceptOmnipusAsk` | Unit | 21.10 |
+| 165 | `pkg/email::TestMultiMailboxWatcher_NeverStartsTurn` | Integration | 21.2 |
+| 166 | `tests/e2e/llm-omnipus-connect-mailbox-gmail.spec.ts` (live, fake mail server) | E2E | 21.9 |
+| 167 | `tests/e2e/omnipus-mailboxes.spec.ts` (add second mailbox, templates, wizard links, switcher, Connectors rows) | E2E | 21.1, 21.2, 21.6, 21.7, 21.11 |
+| 168 | `pkg/config::TestOldMailboxShape_IgnoredWithWarning_LoadReload` | Unit | 21.12 |
 
 Live-model specs use `openrouter` + `deepseek/deepseek-v4.1-flash`. Prompt-text tests prove wording only; a live pass does not prove the instruction-only Go gate cannot be bypassed (accepted R-A1).
 
@@ -2804,7 +2926,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 ### H. Connect tools and shared resources
 - **FR-080**: `connect_channel` MUST configure, bind the instance's main agent in a workspace, enable and live-test in one call, consume references, list proven and not-tested facts, and validate the binding before saving.
 - **FR-081**: QR pairing MUST render in the requesting chat, correlated by request and session id, with timeout, Stop and reconnect handling.
-- **FR-082**: `connect_mailbox` MUST reuse the mailbox configuration logic, report read and send readiness separately, and send no email.
+- **FR-082**: `connect_mailbox` MUST reuse the mailbox configuration logic, run Test Connection before saving (FR-231), add the mailbox as one of the pair's mailboxes (FR-225), report read and send readiness separately, and send no email.
 - **FR-085**: Tool writes to providers, MCP servers, channel instances and mailboxes MUST acquire the gateway config write lock before the agent-loop lock (never the reverse), carry the expected revision token from the confirmed summary, and be refused when the current token differs; Settings writes to these resources MUST keep serializing on the same lock.
 - **FR-088**: Read tools MUST return a secret-free revision token per shared resource (`absent` for a missing entry); `list_providers` MUST also return endpoint, protocol and reference name.
 
@@ -2930,6 +3052,19 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-197**: The recap carry-forward (`last-session.md`) MUST be stored and read per (agent, workspace), so no workspace's recap reaches another workspace's sessions.
 - **FR-198**: `read_conversation` MUST have explicit policy entries: global ceiling `allow`; per-agent `deny` for Judge, Plan Supervisor, workers and external-program workers; Omnipus and chat-target native agents ride the ceiling.
 
+### R. Several mailboxes per agent (US-21; EM-3, adopts #1109 T1/T2/T6/T8; not grilled)
+- **FR-225**: An (agent, workspace) pair MUST be able to hold one or more mailboxes, each with a stable mailbox id (unique within the pair), a label, an address, its own credential reference, signature and identity record (#1109 T1).
+- **FR-226**: The Mail panel and the agent's email settings (shared agent editor slide-over) MUST offer a mailbox switcher listing the pair's mailboxes; folders, messages and compose follow the selected mailbox.
+- **FR-227**: Every email tool (`send_email`, `reply`, `read_inbox`, `search_email`, `read_message`, `create_email_draft`, `list_email_attachments`, `read_email_attachment`, `download_email_attachment`) MUST accept an optional `mailbox` parameter (id or address). With one mailbox in that workspace the tools MUST behave exactly as today; with more than one, a call without `mailbox` MUST be refused naming the choices (#1109 T2; amends EM-1 in this respect only).
+- **FR-228**: A message reference MUST be bound to its mailbox; using it with another mailbox MUST be refused; another workspace's mailbox MUST never be reachable.
+- **FR-229**: The Add Email flow (Connectors → Agent tools) and Omnipus's `connect_mailbox` workflow MUST offer provider templates (Gmail, Fastmail, iCloud, Nextcloud, Zoho, Outlook.com, generic IMAP) that fill editable server settings (#1109 T6).
+- **FR-230**: Choosing Gmail MUST offer an app-password wizard with deep links to Google's 2-Step Verification and App Passwords pages; the password is entered only on the secret card (OSA-7).
+- **FR-231**: Test Connection MUST run before saving, separately for reading and sending, and report one failure class (authentication failed, sending authentication failed, server not found, connection refused, TLS problem, timed out, unknown); a failing test MUST save nothing.
+- **FR-232**: No agent tool MUST create a mailbox except Omnipus's Ask-gated `connect_mailbox`, whose password comes only from the user's secret card (#1109 T8; EQ-1); every other agent's policy MUST deny it.
+- **FR-233**: Connectors → Agent tools → Email MUST show one row per mailbox with address, owner agent and workspace, each with a Configure panel limited to mailbox setup (EM-1).
+- **FR-234**: Mail MUST never start an agent turn (#1109 decision 9, D27); the multi-mailbox watcher only updates the Mail panel.
+- **FR-235**: The old single-mailbox config shape MUST be ignored with a load/reload warning (greenfield, no migration).
+
 ### L. Documentation
 - **FR-130**: Every page in §14 MUST be updated in the same change as its behaviour and audited by docs-verifier.
 
@@ -3026,7 +3161,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-084 | MAJ-013 | US-6 | 6.16, 6.17 | 68, 62 |
 | FR-080 | F:D11 | US-8 | 8.1, 8.2, 8.3, 8.7 | 36 |
 | FR-081 | OSA-5 | US-8 | 8.4, 8.5, 8.8 | 37 |
-| FR-082 | F:D11 | US-8 | 8.6 | 38 |
+| FR-082 | F:D11; EM-3 | US-8 | 8.6, 21.9 | 38, 166 |
 | FR-085 | MAJ-011; R2-MAJ-003 | US-11 | 11.9 | 75, 88 |
 | FR-088 | R2-MAJ-003 | US-11 | 11.9 | 88 |
 | FR-086 | FA:Q-R1-1 A; R2-MAJ-001 | US-6, US-7 | 6.19–6.23, 7.11 | 84, 85 |
@@ -3138,6 +3273,17 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-196 | AW-1 (cost) | US-20 | 20.7 | 124 |
 | FR-197 | AW-2; security | US-20 | 20.4 | 126 |
 | FR-198 | HC #6 | US-20 | 20.2, 20.5 | 125 |
+| FR-225 | EM-3; #1109 T1 | US-21 | 21.1 | 159, 167 |
+| FR-226 | EM-3; #1109 T1 | US-21 | 21.2 | 160, 167 |
+| FR-227 | EM-3; #1109 T2 | US-21 | 21.3, 21.4 | 161 |
+| FR-228 | EM-3; ADR-033 | US-21 | 21.4, 21.5 | 161 |
+| FR-229 | EM-3; #1109 T6 | US-21 | 21.6, 21.9 | 162, 166, 167 |
+| FR-230 | EM-3; #1109 T6 | US-21 | 21.7 | 162, 167 |
+| FR-231 | EM-3; #1109 T6 | US-21 | 21.8, 21.9 | 163, 166 |
+| FR-232 | EM-3; #1109 T8; EQ-1 | US-21 | 21.10 | 164 |
+| FR-233 | EM-2; EM-3 | US-21 | 21.11 | 167 |
+| FR-234 | #1109 decision 9; D27 | US-21 | 21.2 | 165 |
+| FR-235 | F:D22 | US-21 | 21.12 | 168 |
 | FR-130 | root CLAUDE.md DoD | all | — (docs-verifier) | docs-verifier report |
 
 ---
@@ -3179,9 +3325,9 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | `docs/settings.md` | System agents; on the Connectors page each connection's Configure side panel requires a workspace and a main agent and holds the person table, allow list, steering flags and conversation mode; no default-agent or global conversation-scope setting; saved secrets list | WU-10, WU-1, WU-6, WU-14 |
 | `docs/group-chats.md` (**new page**) | Rooms (at least two agents): team room, squads, ad-hoc rooms; "Add participant" from a chat header; room commands (/pause, /resume, /mute, /unmute, /members, /help) and why steering commands are refused; each agent answers from its own main chat, where room traffic shows as collapsed entries and where its approvals appear; queued/held states; `/pause` cancels pending requests (running work finishes, "after pause"); @all default and @-names; agent-to-agent replies with no limit and visible cost (R-A4); Stop; members and audit; one workspace only | WU-15 |
 | `docs/memory.md` | Conversation awareness: what the agent sees, `read_conversation`, automatic notes per workspace, recaps-off behaviour | WU-17 |
-| `docs/mail.md` (email is an agent tool, not a chat channel; no People/Conversations; `connect_mailbox`) | `connect_mailbox`; read vs send readiness | WU-7 |
+| `docs/mail.md` (email is an agent tool, not a chat channel; no People/Conversations; several mailboxes per agent and the switcher; the `mailbox` choice in tools; provider templates, Gmail app-password steps, Test Connection failure classes; only people add mailboxes; `connect_mailbox`) | `connect_mailbox`; read vs send readiness | WU-7 |
 | `docs/providers-and-models.md` | What the provider check proves; Omnipus's model in System agents | WU-3, WU-10 |
-| `docs/reference/built-in-tools.md` | New tools, policies, Auto classification | WU-2 |
+| `docs/reference/built-in-tools.md` (email tools' `mailbox` parameter) | New tools, policies, Auto classification | WU-2 |
 | Sweep | `docs/README.md`, `docs/troubleshooting.md`, `docs/plans.md`, `docs/goals.md`, `docs/browser.md`, `docs/using-omnipus-cli.md`, `docs/operations/observability.md`, `docs/connectors/google-chat.md` | WU-12 |
 
 Pages are drafted by the implementing lead in the same change; WU-12 is a final sweep, not a deferral.
@@ -3208,6 +3354,7 @@ Pages are drafted by the implementing lead in the same change; WU-12 is a final 
 | WU-15 | Rooms: room entity and transcript, fan-out over the existing request path (mentions, room context, member states, cancellation, cost attribution), room UI (sidebar section, header, @-picker, squad dialog), collapsed main-chat entries (**not grilled**; smaller than before — no per-member sessions, no hand-off) | Feature | backend-lead, frontend-lead | WU-0, WU-8, WU-10 |
 | WU-16 | Channel conversation control: stopped-group resume authority (#892), conversation-scoped commands (#955) (**not grilled**) | Feature | backend-lead | WU-14 |
 | WU-17 | Conversation awareness: turn-start list, `read_conversation` + policy entries, recap outcomes to per-workspace memory room, per-workspace carry-forward (**not grilled**) | Feature | backend-lead; prometheus (prompt text) | WU-14, WU-15 |
+| WU-18 | Several mailboxes per agent (EM-3; adopts #1109 T1/T2/T6/T8): config and identity per mailbox, mailbox REST, switcher, tool `mailbox` parameter, templates, Gmail wizard, Test Connection, Connectors Email rows, `connect_mailbox` steps (**not grilled**) | Feature | backend-lead, frontend-lead; prometheus (W15 skill text) | WU-0, WU-4, WU-7 |
 | WU-12 | Docs sweep | Standard | implementing leads; docs-verifier | all |
 | WU-13 | UAT campaign | Gate | qa-lead plan; uat-tester + uat-validator | all |
 
@@ -3218,7 +3365,7 @@ Pages are drafted by the implementing lead in the same change; WU-12 is a final 
 | S1 Foundation | WU-0 + WU-1 + WU-2 | Contracts; no default agent; identity, grants **with** the permission split |
 | S2 Tools and secrets | WU-3 + WU-4 + WU-5 + WU-6 + WU-7 + WU-14 | Change tools, secrets, connect tools, person routing |
 | S3 Helpers and screens | WU-8 + WU-9 + WU-10 + WU-11 | Decisions in main, skills, screens, removals |
-| S4 Conversations | WU-15 + WU-16 + WU-17 | Group chats, channel conversation control, awareness |
+| S4 Conversations | WU-15 + WU-16 + WU-17 + WU-18 | Group chats, channel conversation control, awareness |
 | Landing | S1–S4 + WU-12 + WU-13 | One gated, reachable, documented feature |
 
 ```
@@ -3252,7 +3399,12 @@ UI development of WU-10 may start in parallel with WU-3/WU-4 against generated c
 
 ## 17. Open questions for the founder
 
-None open. RQ-1–RQ-4, GQ-1–GQ-4, FQ-RM-1/2, Q-R3-1/2 and FQ-R3-A/B are answered (§0.7–§0.12).
+RQ-1–RQ-4, GQ-1–GQ-4, FQ-RM-1/2, Q-R3-1/2 and FQ-R3-A/B are answered (§0.7–§0.12). New with EM-3:
+
+**EQ-1 — Does Omnipus's "connect mailbox" count as human-only provisioning?** Context: #1109 T8 says "no agent-facing mailbox creation — no tool lets an agent add a mailbox". You also placed the new setup steps (templates, Gmail wizard, Test Connection) inside Omnipus's `connect_mailbox` workflow, which is an agent tool. In that workflow the user types the password on the secure card, confirms the summary, and approves the tool. Impact: whether Omnipus may add mailboxes at all.
+- **A** — Yes: T8 means ordinary agents can never create mailboxes; Omnipus's Ask-gated, user-driven `connect_mailbox` stays (the spec is written this way).
+- **B** — No: remove `connect_mailbox`; Omnipus walks the user to Connectors → Agent tools → Add Email instead.
+- **Recommendation: A** — every secret and the final approval still come from the user; it keeps "set up a support agent with its mailbox" in one conversation.
 
 ---
 

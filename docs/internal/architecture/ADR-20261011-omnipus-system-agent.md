@@ -105,6 +105,18 @@ Source: founder answers AW-1, AW-2. Detail: specification US-20, FR-190–FR-198
 | OSA-14 — admission (FQ-R3-A, 2026-10-13) | Each chat-channel connection has an "Open to anyone" checkbox, unticked (closed) by default: closed admits only listed people and groups (an empty list admits nobody); open admits anyone, who reaches the main agent unless a row says otherwise. Commands and the #892 resume right always need an individual person row. |
 | OSA-16 — private memory (FQ-R3-B, 2026-10-13) | Private memory (`remember` room "private") stays **agent-wide** — an agent's learning carries over across workspaces; this is intended, not a leak. Shared memory stays per workspace team; automatic digests, carry-forward and awareness stay per workspace (AW-2). |
 
+## EM-3 — Several mailboxes per agent (founder decision, 2026-10-13) — not yet grilled
+
+Source: founder answers EM-3; issue #1109 "AgentEmail 2.0". Detail: specification §0.13, US-21, FR-225–FR-235, K40–K44, WU-18.
+
+| Topic | Decision |
+|---|---|
+| Adopted from #1109 | **T1** several mailboxes per (agent, workspace) with a switcher in the Mail panel and the agent's email settings; **T2** an explicit `mailbox` parameter on the email tools, required only when the agent has more than one mailbox in that workspace (with one mailbox the tools behave exactly as today — this amends EM-1's "tools unchanged" in this respect only); **T6** setup UX in Connectors → Agent tools → Add Email and in Omnipus's `connect_mailbox` workflow: provider templates, Gmail app-password wizard, Test Connection before save with a failure class; **T8** human-only provisioning. |
+| Left in #1109 | **T3** all-folder search/read, **T4** all-folders Mail panel, **T5** `email_forward` / `email_move` / `email_delete` / `email_mark`, **T7** To/CC/BCC/attachments (likely already covered). |
+| Data model | ADR-033's per-pair mailbox becomes a list per pair: each mailbox has a stable id, label, own credential reference and identity record; the old one-mailbox shape is not migrated (greenfield). |
+| Unchanged | Email is an agent tool, never a chat channel, and never starts a turn (D27, EM-1). |
+| To confirm | EQ-1: whether Omnipus's Ask-gated, user-driven `connect_mailbox` counts as human-only provisioning (spec written as yes). |
+
 
 
 
