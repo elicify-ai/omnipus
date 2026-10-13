@@ -197,7 +197,7 @@ export function Sidebar() {
   // includeVerifier opt-in exists on the signature (UsageScreen uses it)
   // but is intentionally omitted here, so this stays the excluded default
   // by construction — do not add it.
-  const { data: allSessions = [] } = useQuery({
+  const { data: allSessions = [], isError: sessionsError, data: sessionsData } = useQuery({
     queryKey: ['sessions'],
     queryFn: () => fetchSessions(),
     staleTime: 15_000,
@@ -448,6 +448,7 @@ export function Sidebar() {
           workspacesLoading={projectsLoading}
           agents={agents}
           sessions={allSessions}
+          sessionsStatus={sessionsError ? (sessionsData ? 'stale' : 'failed') : 'fresh'}
           onOpened={() => {
             if (!effectivelyPinned) close()
           }}

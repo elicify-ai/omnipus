@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { ChatCircleDots, MagnifyingGlass, Plus, Star, UserPlus, Warning } from '@phosphor-icons/react'
 import {
   Popover,
+  PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
@@ -37,6 +38,13 @@ interface AddAgentPickerProps {
   listState?: PickerListState
   /** Retry loading the agents list (error and stale states). */
   onRetry?: () => void
+  /**
+   * Controlled mode for a host that owns the opening control (Team's Add
+   * agent menu, FR-103): the picker opens on `open`, anchors to `anchor`
+   * instead of rendering its own trigger, and shows the candidate list
+   * directly.
+   */
+  controlled?: { open: boolean; onOpenChange: (open: boolean) => void; anchor: React.ReactNode }
 }
 
 /**
@@ -78,11 +86,15 @@ export function AddAgentPicker({
   workspaces,
   listState = 'ready',
   onRetry,
+  controlled,
 }: AddAgentPickerProps) {
-  const [open, setOpen] = useState(false)
+  const [ownOpen, setOwnOpen] = useState(false)
+  const open = controlled ? controlled.open : ownOpen
+  const setOpen = controlled ? controlled.onOpenChange : setOwnOpen
   const [query, setQuery] = useState('')
   // FR-103: the two Add choices come first when Omnipus creation is wired.
-  const [step, setStep] = useState<'choose' | 'existing'>(onCreateWithOmnipus ? 'choose' : 'existing')
+  const choiceStep = !!onCreateWithOmnipus && !controlled
+  const [step, setStep] = useState<'choose' | 'existing'>(choiceStep ? 'choose' : 'existing')
 
   // F:D21: an agent no workspace's team lists. Unknown without the list.
   const inSomeWorkspace = useMemo(() => {
@@ -121,10 +133,13 @@ export function AddAgentPicker({
         setOpen(o)
         if (!o) {
           setQuery('')
-          setStep(onCreateWithOmnipus ? 'choose' : 'existing')
+          setStep(choiceStep ? 'choose' : 'existing')
         }
       }}
     >
+      {controlled ? (
+        <PopoverAnchor asChild>{controlled.anchor}</PopoverAnchor>
+      ) : (
       <PopoverTrigger asChild>
         <Button
           size="sm"
@@ -136,11 +151,12 @@ export function AddAgentPicker({
           Add agent
         </Button>
       </PopoverTrigger>
+      )}
       <PopoverContent
         align="end"
         className="w-72 border-[var(--color-border)] bg-[var(--color-surface-1)] p-0"
       >
-        {step === 'choose' && onCreateWithOmnipus ? (
+        {step === 'choose' && onCreateWithOmnipus && !controlled ? (
           <div className="flex flex-col py-[var(--space-1)]" role="group" aria-label="Add agent">
             <Button
               variant="ghost"

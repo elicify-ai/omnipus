@@ -30,12 +30,19 @@ export function OmnipusEntry({
   workspacesLoading,
   agents,
   sessions,
+  sessionsStatus = 'fresh',
   onOpened,
 }: {
   workspaces: Workspace[]
   workspacesLoading: boolean
   agents: Agent[]
   sessions: Session[]
+  /**
+   * The session list behind the attention signal: 'failed' (never loaded) →
+   * attention unknown; 'stale' (a refresh failed, cached list shown) → the
+   * cue is the last known value, said so (spec §6.3 row "Attention marker").
+   */
+  sessionsStatus?: 'fresh' | 'failed' | 'stale'
   /** Closes the overlay sidebar after the entry opened the chat. */
   onOpened: () => void
 }) {
@@ -55,14 +62,17 @@ export function OmnipusEntry({
   }
 
   const session = mainId ? sessions.find((candidate) => candidate.id === mainId) : undefined
-  const attention = mainId ? sessionAttention(session) : 'unknown'
+  const attention = mainId && sessionsStatus !== 'failed' ? sessionAttention(session) : 'unknown'
+  const stale = sessionsStatus === 'stale'
   const cue = !mainId
     ? null
     : attention === 'on'
-      ? 'Needs your attention'
+      ? (stale ? 'Needs attention (last known, may be out of date)' : 'Needs attention')
       : attention === 'unknown'
         ? 'Attention unknown'
-        : null
+        : stale
+          ? 'Attention last known — may be out of date'
+          : null
 
   const retry = () => {
     void queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list({ status: 'active' }), exact: true })
@@ -79,7 +89,7 @@ export function OmnipusEntry({
           variant="ghost"
           data-testid="sidebar-omnipus-entry"
           aria-current={selected ? 'page' : undefined}
-          aria-describedby={cue ? 'sidebar-omnipus-attention' : undefined}
+          aria-label={cue ? `Omnipus — ${cue.toLowerCase()}` : 'Omnipus'}
           onClick={() => {
             if (openOmnipus() !== 'attach-failed') onOpened()
           }}

@@ -37,6 +37,7 @@ import {
   AccordionContent,
 } from '@/components/ui/accordion'
 import { DeleteAgentControl } from './DeleteAgentControl'
+import { classifyMutationFailure } from '@/lib/mutationOutcome'
 import { AgentPrivateSecrets } from './AgentPrivateSecrets'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ExecutorSelector } from './ExecutorSelector'
@@ -297,6 +298,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   type ExecutorSig = { kind: ExecutorConfig['kind']; cli?: ExecutorConfig['cli']; cli_path?: string; agentId: string | null }
   const testedExecutorSig = useRef<ExecutorSig | null>(null)
 
+  // §6.3: the last save's outcome is unknown (transport failure), not refused.
+  const [saveUncertain, setSaveUncertain] = useState(false)
   // I2: conflict guard. Set in the 409 Conflict catch and cleared once the
   // refetchAgent() triggered by the "Refresh" toast action lands. While set,
   // the saveFn early-returns so subsequent debounced saves don't fire (and
@@ -908,12 +911,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           // hydration effect's `updated_at` monotonic check closes the window.
           // Set the ref here, synchronously, before dirty is cleared, so there
           // is no gap between "we know what we saved" and "hydration trusts it".
+          setSaveUncertain(false)
           if (resp) {
             reviewedAgentRef.current = resp
             queryClient.setQueryData(['agent', agentId], resp)
             if (resp.updated_at) lastIncorporatedUpdatedAtRef.current = resp.updated_at
           }
         } catch (err) {
+          // omnipus-system-agent §6.3 ("Save not confirmed + Retry"): an
+          // answer that never arrived may still have saved — say so.
+          setSaveUncertain(classifyMutationFailure(err) === 'uncertain')
           // W6-contracts: on a 409 Conflict, surface a toast with a Refresh
           // action that refetches the agent state and drops pending edits.
           if (isApiError(err) && err.status === 409) {
@@ -1822,7 +1829,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
           {/* omnipus-system-agent US-7 / FR-241: the private variables this
               agent's own commands see, per workspace — names only. */}
-          {showPrivateSecrets && <AgentPrivateSecrets agentId={agentId} />}
+          {showPrivateSecrets && <AgentPrivateSecrets agentId={agent.id} />}
 
     </div>
   )
@@ -2649,8 +2656,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       <div className="px-[var(--space-5)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0 flex items-center justify-between gap-[var(--space-2-5)]">
         <div className="flex flex-col gap-[var(--space-0-5)] min-w-0">
           <div data-testid="last-saved-indicator">
-            {/* #904: a refused limit is explained on the limit field; any other failure shows here. */}
-            <AutoSaveIndicator status={saveStatus} error={limitRefusal.isRefusalMessage(saveError) ? undefined : saveError} lastSavedAt={saveLastSavedAt} />
+            {saveStatus === 'error' && saveUncertain ? (
+              <span role="alert" className="inline-flex items-center gap-[var(--space-2)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
+                Save not confirmed — it may or may not have been stored.
+                <Button variant="ghost" size="sm" onClick={() => void saveAgentNow()} data-testid="agent-save-retry">Retry</Button>
+              </span>
+            ) : (
+              // #904: a refused limit is explained on the limit field; any other failure shows here.
+              <AutoSaveIndicator status={saveStatus} error={limitRefusal.isRefusalMessage(saveError) ? undefined : saveError} lastSavedAt={saveLastSavedAt} />
+            )}
           </div>
           {/* UAT 4b: make the autosave scope explicit — edits to a shared agent
               take effect in every chat / workspace / delegation it is used in. */}

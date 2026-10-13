@@ -503,6 +503,22 @@ export function TeamGraphView({ renderSaveStatus }: { renderSaveStatus: (state: 
         {renderSaveStatus({ status: saveStatus, error: saveError ?? undefined, lastSavedAt })}
       </div>
 
+      {/* spec §6.3 "Team graph — Stale / partial: cached + hint": a failed
+          refresh keeps the last graph and says so. */}
+      {delegationError && editState && (
+        <div
+          role="status"
+          data-testid="team-graph-stale"
+          className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+        >
+          <Info size={12} weight="fill" className="shrink-0" />
+          <span className="flex-1">Could not refresh the graph — it may be out of date.</span>
+          <Button variant="link" onClick={() => void refetchDelegation()} className="h-auto p-0 text-[length:var(--type-caption-size)]">
+            Retry
+          </Button>
+        </div>
+      )}
+
       {agentsError && (
         <div className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           <Info size={12} weight="fill" />

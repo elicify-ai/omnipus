@@ -1,11 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Graph, ListBullets, UsersThree } from '@phosphor-icons/react'
+import { Graph, ListBullets, Plus, UsersThree } from '@phosphor-icons/react'
 import { fetchAgents, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { useOpenOmnipus } from '@/hooks/useOpenOmnipus'
 import { useUiStore } from '@/store/ui'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { ViewSwitch } from '@/components/ui/view-switch'
 import { useActiveWorkspace } from './WorkspaceTabContainer'
 import { AddAgentPicker, type PickerListState } from './team/AddAgentPicker'
@@ -65,18 +71,23 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
     openOmnipus({ workflow, workspaceId: workspace.id, workspaceName: workspace.name })
 
   const addAgent = (
-    // ADR-075 FR-047: the browser-access disclosure travels inside the picker.
-    <AddAgentPicker
-      agents={agents}
-      memberIds={memberIds}
-      workspaces={workspacesQuery.data}
-      listState={pickerState}
-      onRetry={() => void agentsQuery.refetch()}
+    <TeamAddAgentMenu
       onCreateWithOmnipus={() => startWorkflow('W1')}
-      onAdd={(agentId) => {
-        const name = agents.find((agent) => agent.id === agentId)?.name ?? agentId
-        void membership.add(agentId, name)
-      }}
+      picker={(controlled) => (
+        // ADR-075 FR-047: the browser-access disclosure travels inside the picker.
+        <AddAgentPicker
+          agents={agents}
+          memberIds={memberIds}
+          workspaces={workspacesQuery.data}
+          listState={pickerState}
+          onRetry={() => void agentsQuery.refetch()}
+          controlled={controlled}
+          onAdd={(agentId) => {
+            const name = agents.find((agent) => agent.id === agentId)?.name ?? agentId
+            void membership.add(agentId, name)
+          }}
+        />
+      )}
     />
   )
 
@@ -133,4 +144,57 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
           store-driven (reads editAgentId) and hosted ONCE in the app shell. */}
     </div>
   )
+}
+
+type PickerControl = { open: boolean; onOpenChange: (open: boolean) => void; anchor: React.ReactNode } // not-wire-format: UI wiring between the Add menu and the picker
+
+/**
+ * FR-103: Team's Add agent is a menu with exactly two choices — "Create with
+ * Omnipus" and "Add an existing agent" (the eligibility picker, anchored to
+ * the same control). Opens on Enter/Space and on click, never on hover.
+ */
+function TeamAddAgentMenu({
+  onCreateWithOmnipus,
+  picker,
+}: {
+  onCreateWithOmnipus: () => void
+  picker: (control: PickerControl) => React.ReactNode
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false)
+  // Set when "Add an existing agent" is chosen: the menu's own focus return
+  // would otherwise dismiss the picker it is about to open.
+  const openPickerOnClose = useRef(false)
+  const menu = (
+    <span className="inline-flex">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="sm" variant="outline" data-testid="team-add-agent-menu" className="gap-[var(--space-1)]">
+            <Plus size={14} weight="bold" aria-hidden="true" />
+            Add agent
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="min-w-[220px] border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+          onCloseAutoFocus={(event) => {
+            if (!openPickerOnClose.current) return
+            openPickerOnClose.current = false
+            event.preventDefault()
+            setPickerOpen(true)
+          }}
+        >
+          <DropdownMenuItem data-testid="team-add-agent-create-with-omnipus" onSelect={onCreateWithOmnipus}>
+            Create with Omnipus
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            data-testid="team-add-agent-existing"
+            onSelect={() => { openPickerOnClose.current = true }}
+          >
+            Add an existing agent
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </span>
+  )
+  return <>{picker({ open: pickerOpen, onOpenChange: setPickerOpen, anchor: menu })}</>
 }

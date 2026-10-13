@@ -30,12 +30,7 @@ import { providerBindingCopy } from '@/components/agents/AgentCard'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { ErrorState } from '@/components/ui/error-state'
 import { IconButton } from '@/components/ui/icon-button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -85,7 +80,7 @@ export function TeamListView(props: TeamListViewProps) {
         <TeamEmptyState onSetUpTeam={props.onSetUpTeam} addAgent={props.addAgent} />
       ) : (
         <>
-          <TeamSection title="Conversation agents" members={conversation} {...props} />
+          <TeamSection title="Agents you chat with" members={conversation} {...props} />
           {workers.length > 0 && <TeamSection title="Workers" members={workers} {...props} />}
         </>
       )}
@@ -125,13 +120,16 @@ function workspacesWith(agentId: string, workspaces: Workspace[] | undefined): W
 function TeamAgentCard({ member, workspace, workspaces, busy, onRemove }: TeamListViewProps & { member: Member }) {
   const openEditAgentSlideOver = useUiStore((s) => s.openEditAgentSlideOver)
   const [confirm, setConfirm] = useState<'remove' | 'delete' | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
   const { agent, id } = member
   const name = agent?.name ?? id
   const memberOf = workspacesWith(id, workspaces)
   const others = memberOf?.filter((w) => w.id !== workspace.id)
   const binding = agent ? providerBindingCopy(agent) : null
   const deleteImpactKnown = memberOf !== undefined
-  const canDelete = !!agent && !agent.locked
+  // Every listed agent offers Delete everywhere (F:D20; BDD-12.18 deletes
+  // built-in Mia too) — the server decides and refuses visibly.
+  const canDelete = !!agent
 
   return (
     <Card className="flex h-full items-start gap-[var(--space-2-5)] p-[var(--space-2-5)]" data-testid={`team-card-${id}`}>
@@ -140,7 +138,7 @@ function TeamAgentCard({ member, workspace, workspaces, busy, onRemove }: TeamLi
         <p className="truncate font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">{name}</p>
         <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid={`team-card-kind-${id}`}>{kindLabel(agent)}</p>
         <p className="truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid={`team-card-model-${id}`}>
-          {agent?.model ? `Model: ${agent.model}` : 'No model set'}
+          {agent?.model ? <>Model <span className="text-[var(--color-secondary)]">{agent.model}</span></> : 'No model set'}
           {binding ? ` · ${binding}` : ''}
         </p>
         <p className="truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid={`team-card-workspaces-${id}`}>
@@ -151,8 +149,10 @@ function TeamAgentCard({ member, workspace, workspaces, busy, onRemove }: TeamLi
               : `Also in ${others.map((w) => w.name).join(', ')}`}
         </p>
       </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
+      {/* §6.8 "Popover menu (actions)": a button opens plain buttons — every
+          action is reachable by keyboard focus and touch, no hover (BDD-12.10). */}
+      <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+        <PopoverTrigger asChild>
           <IconButton
             aria-label={`Actions for ${name}`}
             data-testid={`team-card-actions-${id}`}
@@ -161,23 +161,32 @@ function TeamAgentCard({ member, workspace, workspaces, busy, onRemove }: TeamLi
           >
             <DotsThree size={18} weight="bold" />
           </IconButton>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[200px] border border-[var(--color-border)] bg-[var(--color-surface-1)]">
-          <DropdownMenuItem disabled={!agent} onSelect={() => openEditAgentSlideOver(id, workspace.id)}>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="flex w-56 flex-col border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-1)]">
+          <Button
+            variant="ghost"
+            className="justify-start"
+            aria-label={`Edit ${name}`}
+            disabled={!agent}
+            onClick={() => { setMenuOpen(false); openEditAgentSlideOver(id, workspace.id) }}
+          >
             Edit
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setConfirm('remove')}>Remove from this workspace</DropdownMenuItem>
+          </Button>
+          <Button variant="ghost" className="justify-start" onClick={() => { setMenuOpen(false); setConfirm('remove') }}>
+            Remove from this workspace
+          </Button>
           {canDelete && (
-            <DropdownMenuItem
+            <Button
+              variant="ghost"
+              className="justify-start text-[var(--color-error)]"
               disabled={!deleteImpactKnown}
-              onSelect={() => setConfirm('delete')}
-              className="text-[var(--color-error)]"
+              onClick={() => { setMenuOpen(false); setConfirm('delete') }}
             >
               {deleteImpactKnown ? 'Delete everywhere…' : 'Delete everywhere (workspaces not loaded)'}
-            </DropdownMenuItem>
+            </Button>
           )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+        </PopoverContent>
+      </Popover>
       <ConfirmDialog
         open={confirm === 'remove'}
         onOpenChange={(open) => { if (!open) setConfirm(null) }}

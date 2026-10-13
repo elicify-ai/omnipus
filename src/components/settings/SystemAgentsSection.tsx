@@ -62,6 +62,7 @@ export function SystemAgentsSection(): React.ReactElement {
 
       {isPending ? (
         <div className="space-y-[var(--space-2)]" data-testid="system-agents-loading" aria-busy="true">
+          <p role="status" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Loading system agents…</p>
           {SYSTEM_AGENT_IDS.map((id) => (
             <Skeleton key={id} className="h-[var(--space-7)] w-full" />
           ))}
