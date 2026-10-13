@@ -195,8 +195,9 @@ type modelJSON struct {
 
 // buildServed serialises doc into the envelope with the given origin
 // marker, computing stale against now, and returns the body + quoted
-// strong ETag as one pair.
-func buildServed(doc *Document, from ServedFrom, now time.Time) (servedPair, error) {
+// strong ETag as one pair. A non-nil gate filters each row's served
+// auth_methods (WithSignInGate); the ETag covers the filtered body.
+func buildServed(doc *Document, from ServedFrom, now time.Time, gate SignInGate) (servedPair, error) {
 	env := envelopeJSON{
 		SchemaVersion:       doc.SchemaVersion,
 		Version:             doc.Version.String(),
@@ -208,7 +209,7 @@ func buildServed(doc *Document, from ServedFrom, now time.Time) (servedPair, err
 		Stale:               now.Sub(doc.UpdatedAt) > StaleAfter,
 	}
 	for i := range doc.Providers {
-		env.Providers = append(env.Providers, providerToJSON(&doc.Providers[i]))
+		env.Providers = append(env.Providers, providerToJSON(&doc.Providers[i], gate))
 	}
 	body, err := json.Marshal(env)
 	if err != nil {
@@ -223,7 +224,7 @@ func buildServed(doc *Document, from ServedFrom, now time.Time) (servedPair, err
 	}, nil
 }
 
-func providerToJSON(p *Provider) providerJSON {
+func providerToJSON(p *Provider, gate SignInGate) providerJSON {
 	out := providerJSON{
 		ID:                p.ID,
 		Name:              p.Name,
@@ -236,7 +237,7 @@ func providerToJSON(p *Provider) providerJSON {
 		Regions:           providerRegionsToJSON(p.Regions),
 		Tier:              p.Tier,
 		UnsupportedReason: p.UnsupportedReason,
-		AuthMethods:       p.AuthMethods,
+		AuthMethods:       servedAuthMethods(p, gate),
 		Aliases:           p.Aliases,
 		Locality:          p.Locality,
 		CLIKind:           p.CLIKind,
@@ -288,4 +289,33 @@ func providerRegionsToJSON(regions []ProviderRegion) []providerRegionJSON {
 		out = append(out, providerRegionJSON(r))
 	}
 	return out
+}
+
+// servedAuthMethods is the row's auth_methods as served: `sign_in` is
+// dropped when gate rejects the row AND another method remains (the
+// contract's minItems: 1). The returned slice never aliases p.AuthMethods
+// when anything was dropped, so the Document stays untouched.
+func servedAuthMethods(p *Provider, gate SignInGate) []AuthMethod {
+	if gate == nil || !declaresSignIn(p.AuthMethods) || gate(*p) {
+		return p.AuthMethods
+	}
+	kept := make([]AuthMethod, 0, len(p.AuthMethods))
+	for _, m := range p.AuthMethods {
+		if m != AuthSignIn {
+			kept = append(kept, m)
+		}
+	}
+	if len(kept) == 0 {
+		return p.AuthMethods
+	}
+	return kept
+}
+
+func declaresSignIn(methods []AuthMethod) bool {
+	for _, m := range methods {
+		if m == AuthSignIn {
+			return true
+		}
+	}
+	return false
 }

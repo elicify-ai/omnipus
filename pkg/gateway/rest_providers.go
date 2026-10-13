@@ -392,6 +392,13 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 			p.Error = &credErrMsg
 		} else if copilotHint != "" {
 			p.Error = &copilotHint
+		} else if agg.authMethod[name] == config.AuthMethodSignIn {
+			// H1: a row saved with sign_in on a provider that cannot sign
+			// in (before the PUT gate existed) never connects — say where
+			// the sign-in really lives instead of a silent "disconnected".
+			if msg := a.misplacedSignInRowMsg(name); msg != "" {
+				p.Error = &msg
+			}
 		}
 	}
 	return p
@@ -542,8 +549,9 @@ func (a *restAPI) providerPutAdmit(w http.ResponseWriter, r *http.Request, sub s
 			return nil, false
 		}
 		if _, ok := a.signInMethodFor(p.providerID); !ok {
-			jsonErrField(w, http.StatusBadRequest,
-				"provider does not support sign-in", "auth_method")
+			// H1: name the row that CAN sign in when the catalog has one
+			// (e.g. OpenAI sign-in lives on ChatGPT (subscription)).
+			jsonErrField(w, http.StatusBadRequest, a.signInRefusalMsg(p.providerID), "auth_method")
 			return nil, false
 		}
 	}
@@ -1127,6 +1135,7 @@ func (a *restAPI) postProviderTestHTTP(w http.ResponseWriter, r *http.Request, s
 	// see describeCredentialResolutionError (fix #5, hardened to distinguish
 	// "ref not found" from "vault locked/undecryptable").
 	var credResolveErr error
+	signInRow := false
 	for _, entry := range providerList {
 		modelMap, ok := entry.(map[string]any)
 		if !ok {
@@ -1139,6 +1148,13 @@ func (a *restAPI) postProviderTestHTTP(w http.ResponseWriter, r *http.Request, s
 			// regional host / self-hosted gateway is probed at the SAME base
 			// the runtime factory will actually use (fix #3).
 			configuredAPIBase = strings.TrimSpace(strVal(modelMap, "api_base"))
+			// H3: a sign_in row has no key to look for — its credential is
+			// the vendor login. Test it with the sign-in probe below.
+			if strings.TrimSpace(strVal(modelMap, "auth_method")) == config.AuthMethodSignIn {
+				signInRow = true
+				firstModel = providerTestRowModel(modelMap)
+				break
+			}
 			// Check if API key is set: either via api_keys array or api_key_ref
 			// pointing to the encrypted credentials store.
 			apiKeys, _ := modelMap["api_keys"].([]any)
@@ -1186,6 +1202,10 @@ func (a *restAPI) postProviderTestHTTP(w http.ResponseWriter, r *http.Request, s
 	if !found {
 		errMsg := fmt.Sprintf("provider %q not configured", providerID)
 		jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
+		return
+	}
+	if signInRow {
+		jsonOK(w, a.providerTestSignIn(r.Context(), providerID, firstModel, configuredAPIBase))
 		return
 	}
 	// Resolve the base URL to probe: prefer the entry's configured api_base
@@ -1248,8 +1268,16 @@ func (a *restAPI) postProviderTestHTTP(w http.ResponseWriter, r *http.Request, s
 	}, a.ssrfChk())
 	slog.Debug("rest: provider test: classification complete",
 		"provider", providerID, "outcome", result.Outcome, "detail", result.RawDetail)
-	success := !result.Blocks()
-	resp := gen.OperationResult{Success: success}
+	jsonOK(w, providerTestOperationResult(providerID, result))
+}
+
+// providerTestOperationResult renders one classified probe as the /test
+// response (shared by the api_key and sign-in paths): success is the
+// complement of Blocks(), `validation` is present for non-valid outcomes
+// only, and `error` carries the curated message when the outcome blocks.
+// SEC-16: result.RawDetail never reaches the wire.
+func providerTestOperationResult(providerID string, result providers_pkg.ValidationResult) gen.OperationResult {
+	resp := gen.OperationResult{Success: !result.Blocks()}
 	if result.Outcome != providers_pkg.OutcomeValid {
 		outcomeStr := gen.OperationResultValidationOutcome(result.Outcome)
 		// Guard: only assign the validation object when the cast is a known wire value.
@@ -1268,9 +1296,63 @@ func (a *restAPI) postProviderTestHTTP(w http.ResponseWriter, r *http.Request, s
 		}
 	}
 	if result.Blocks() {
-		resp.Error = &result.Message
+		msg := result.Message
+		resp.Error = &msg
 	}
-	jsonOK(w, resp)
+	return resp
+}
+
+// providerTestRowModel is the model a /test of a config row exercises: the
+// row's own `model`, else the first of its `models[]`, else "" (the probe
+// then falls back to the catalog's Recommended-for-chat model).
+func providerTestRowModel(modelMap map[string]any) string {
+	if m := strings.TrimSpace(strVal(modelMap, "model")); m != "" {
+		return m
+	}
+	if configuredModels, _ := modelMap["models"].([]any); len(configuredModels) > 0 {
+		if m, _ := configuredModels[0].(string); strings.TrimSpace(m) != "" {
+			return strings.TrimSpace(m)
+		}
+	}
+	return ""
+}
+
+// providerTestSignIn is POST /providers/{id}/test for an auth_method sign_in
+// row (provider hotfix H3): the SAME real probe the sign-in path runs
+// (probeSignIn — one completion through the vendor login, on the row's model
+// or the catalog's recommended one), never a search for an API key the row
+// was never meant to have. A row whose catalog entry cannot sign in at all
+// is told where the vendor's sign-in lives.
+func (a *restAPI) providerTestSignIn(
+	ctx context.Context, providerID, model, configuredAPIBase string,
+) gen.OperationResult {
+	fail := func(msg string) gen.OperationResult {
+		return gen.OperationResult{Success: false, Error: &msg}
+	}
+	row, known := providers_pkg.CatalogProvider(providerID)
+	if !known || !rowOffersSignIn(row) {
+		return fail(a.signInRefusalMsg(providerID))
+	}
+	baseURL := configuredAPIBase
+	if baseURL == "" {
+		baseURL = providers_pkg.APIBaseFor(providerID)
+	}
+	// SEC-24: the configured api_base is operator-influenced (PUT
+	// /providers), so it is SSRF-checked before the token is sent to it —
+	// exactly as the api_key path checks it below.
+	if baseURL != "" && a.ssrfChecker != nil {
+		if err := a.ssrfChecker.CheckURL(ctx, baseURL); err != nil {
+			slog.Warn("rest: provider test: SSRF blocked api_base", "provider", providerID, "error", err)
+			return fail("endpoint not allowed")
+		}
+	}
+	result, refusal := a.probeSignIn(ctx, row, true, providerID, model, baseURL)
+	if refusal != "" {
+		return fail(refusal)
+	}
+	slog.Debug("rest: provider test: sign-in probe complete",
+		"provider", providerID, "outcome", result.Outcome, "detail", result.RawDetail)
+	return providerTestOperationResult(providerID, result)
 }
 
 // dedupeNonEmpty trims, drops empties, and de-duplicates a slice of strings,
