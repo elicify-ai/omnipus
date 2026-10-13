@@ -220,6 +220,18 @@ function performResendMessage(
     logDiagnostic('chatRecipientResendBlockedNoSession', { agentName: addressCheck.addressed.agentName })
     return
   }
+  // FR-122 (K16): a '__pending' retry mints a NEW chat, and a new chat names
+  // its agent on the minting frame — the gateway refuses an agent-less one.
+  // Refuse visibly before the 'sending' reset so the row keeps its failed
+  // state (Retry stays available once an agent is picked).
+  if (targetSid === '__pending' && !useSessionStore.getState().activeAgentId) {
+    useUiStore.getState().addToast({
+      message: 'Select an agent before sending — there is no default agent.',
+      variant: 'warning',
+    })
+    logDiagnostic('chatResendBlockedNoAgentNamed', { messageId })
+    return
+  }
 
   // Reset the SAME message in place first — 'sending' — never a second
   // bubble, unlike the pre-fix `sendMessage(content)` call this replaces.
@@ -798,6 +810,19 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           return
         }
 
+        // FR-122 (K16): there is no default agent — a NEW chat names its agent
+        // on the minting frame, and the gateway refuses an agent-less one with
+        // the error frame "an agent must be named". Never put that frame on the
+        // wire: refuse here, visibly, before any optimistic state is built.
+        // (Follow-up frames on a REAL session are unaffected — the gateway
+        // routes those to the session's canonical owner.)
+        if (!activeAgentId) {
+          useUiStore.getState().addToast({
+            message: 'Select an agent before sending — there is no default agent.',
+            variant: 'warning',
+          })
+          return
+        }
         runtime.agentIdAtLastMintSend = activeAgentId ?? null
         const autoApproveChoice = get().pendingAutoApproveChoice
         startOrdinaryFirstSend({ set, get, withBucket }, {

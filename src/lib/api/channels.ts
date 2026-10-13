@@ -18,6 +18,7 @@ import type {
   ChannelEnabledResponse,
   OperationResult,
   ChannelRouting,
+  ChannelRoutingUpdateRequest,
   // ADR-029 channel-instance CRUD (US-6/US-10/US-11):
   ChannelCreateRequest,
   ChannelCreateResponse,
@@ -78,7 +79,12 @@ export function fetchChannelRouting(id: string): Promise<ChannelRouting> {
   )
 }
 
-export function setChannelRouting(id: string, body: ChannelRouting): Promise<ChannelRouting> {
+// PUT body is ChannelRoutingUpdateRequest — {workspace_id, default_agent_id},
+// both required and nonblank (omnipus-system-agent K14): there is no unbound
+// mode and no global default agent to fall back to. The read-back shape
+// (ChannelRouting) additionally carries `bound`; an unbound instance reports
+// bound:false with empty ids and drops inbound messages until bound (FR-128).
+export function setChannelRouting(id: string, body: ChannelRoutingUpdateRequest): Promise<ChannelRouting> {
   return request<ChannelRouting>(
     `/channels/${encodeURIComponent(id)}/routing`,
     { method: 'PUT', body: JSON.stringify(body) },

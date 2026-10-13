@@ -24,7 +24,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import '../reactflow-theme.css'
-import { Star, Lightning, Trash, Warning, PencilSimple, X, Scales } from '@phosphor-icons/react'
+import { Lightning, Trash, Warning, PencilSimple, X, Scales } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { IconButton } from '@/components/ui/icon-button'
 import { AgentMark } from '@/components/agents/AgentMark'
@@ -321,20 +321,18 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             <PencilSimple size={12} weight="bold" />
           </IconButton>
         )}
-        {!model.isDefault && (
-          <IconButton
-            data-node-action="remove"
-            aria-label={`Remove ${model.name} from team`}
-            title="Remove from this workspace's team"
-            className="nodrag h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-error)]/15 hover:text-[var(--color-error)]"
-            onClick={(e) => {
-              e.stopPropagation()
-              data.onRemoveMember(id)
-            }}
-          >
-            <Trash size={12} weight="bold" />
-          </IconButton>
-        )}
+        <IconButton
+          data-node-action="remove"
+          aria-label={`Remove ${model.name} from team`}
+          title="Remove from this workspace's team"
+          className="nodrag h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-error)]/15 hover:text-[var(--color-error)]"
+          onClick={(e) => {
+            e.stopPropagation()
+            data.onRemoveMember(id)
+          }}
+        >
+          <Trash size={12} weight="bold" />
+        </IconButton>
       </div>
 
       <div className="pointer-events-none flex items-center gap-[var(--space-2)]">
@@ -344,14 +342,6 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             <span className="truncate font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
               {model.name}
             </span>
-            {model.isDefault && (
-              <Star
-                size={12}
-                weight="fill"
-                className="shrink-0 text-[var(--color-accent)]"
-                aria-label="Default agent"
-              />
-            )}
           </div>
           <div className="mt-[var(--space-0-5)] flex items-center gap-[var(--space-1)]">
             <span className="truncate text-[length:var(--type-caption-size)] font-medium text-[var(--color-muted)]">

@@ -56,7 +56,6 @@ function node(id: string, over: Partial<TeamNodeModel> = {}): TeamNodeModel {
     name: id.charAt(0).toUpperCase() + id.slice(1),
     type: 'Main',
     role: 'Main agent',
-    isDefault: false,
     isWorker: false,
     isGhost: false,
     isImplicit: false,

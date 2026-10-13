@@ -50,6 +50,7 @@ import { EmailMailboxPanel } from '@/components/connectors/EmailMailboxPanel'
 import { SkeletonList, ErrorState } from '@/components/shared/ListStates'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { logError } from '@/lib/telemetry'
+import { formatDateTime } from '@/lib/dateFormat'
 
 const WEBCHAT_ID = 'webchat'
 
@@ -174,6 +175,9 @@ function ChannelInstanceRow({
   // the binding just because a name couldn't be resolved.
   const workspaceName = workspaceId ? workspaceNameById.get(workspaceId) ?? workspaceId : undefined
   const agentName = agentId ? agentNameById.get(agentId) ?? agentId : undefined
+  // FR-128: an unbound instance is reported truthfully — bound:false with
+  // empty ids. Never an invented or legacy destination.
+  const isUnbound = routing?.bound === false
 
   const connectionStatus = connectionStatusOf(channel)
   const isDegraded = connectionStatus === 'degraded'
@@ -208,7 +212,9 @@ function ChannelInstanceRow({
               className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] italic"
               data-testid={`channel-binding-${instanceId}`}
             >
-              No workspace bound
+              {isUnbound
+                ? 'Not bound — choose a workspace and agent'
+                : 'No workspace bound'}
             </span>
           )}
           <Badge variant="outline" className="text-[length:var(--type-caption-size)] font-mono">
@@ -223,7 +229,14 @@ function ChannelInstanceRow({
         </div>
         {isDegraded && channel.degraded_reason && (
           <p className="mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] truncate max-w-xs">
+            {/* K15: degraded also carries a routing drop — a channel that
+                dropped an inbound message it could not route. The drop time
+                rides the same display as the reason (present only while the
+                degradation is active). */}
             {channel.degraded_reason}
+            {channel.last_dropped_at && (
+              <> · last dropped {formatDateTime(channel.last_dropped_at)}</>
+            )}
           </p>
         )}
       </div>
@@ -485,9 +498,11 @@ function CreateChannelSheet({
       // not orphan the flow — the instance exists; binding can be finished in
       // Configure — so it is reported, not fatal.
       try {
+        // canSubmit (checked in handleSubmit before doCreate) guarantees both
+        // picks are named; the routing PUT requires the nonblank pair (K14).
         await setChannelRouting(created.id, {
-          workspace_id: selectedWorkspaceId,
-          default_agent_id: selectedAgentId,
+          workspace_id: selectedWorkspaceId as string,
+          default_agent_id: selectedAgentId as string,
         })
       } catch (err) {
         logError({ event: 'createChannelBindingFailed', instanceId: created.id, message: (err as Error).message })

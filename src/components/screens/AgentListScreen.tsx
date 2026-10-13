@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -20,7 +20,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents, fetchWorkspaces, updateAgent, fetchCliDetect, isApiError, isWorker } from '@/lib/api'
+import { fetchAgents, fetchWorkspaces, fetchCliDetect, isWorker } from '@/lib/api'
 import type { Agent, Workspace, CliDetect } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
@@ -122,7 +122,6 @@ function WorkspaceTeamsView({ workspaces }: WorkspaceTeamsViewProps) {
 interface AgentsLibraryViewProps {
   agents: Agent[]
   workspaces: Workspace[]
-  onSetDefault: (agent: Agent) => void
   openCreateAgentModal: (type: 'Main' | 'Subagent' | 'subagent_3p', cli?: WizardCli) => void
   hostClis: CliDetect
   cliDetectFailed: boolean
@@ -141,7 +140,6 @@ interface AgentsLibraryViewProps {
 function AgentsLibraryView({
   agents,
   workspaces,
-  onSetDefault,
   openCreateAgentModal,
   hostClis,
   cliDetectFailed,
@@ -334,7 +332,6 @@ function AgentsLibraryView({
                         <AgentCard
                           key={agent.id}
                           agent={agent}
-                          onSetDefault={() => onSetDefault(agent)}
                         />
                       ))}
                     </div>
@@ -352,7 +349,7 @@ function AgentsLibraryView({
                   Main agents
                 </h2>
                 <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-                  Chat colleagues — message them, set a default, and delegate work.
+                  Chat colleagues — message them and delegate work.
                 </p>
               </div>
               <Button
@@ -382,7 +379,6 @@ function AgentsLibraryView({
                   <AgentCard
                     key={agent.id}
                     agent={agent}
-                    onSetDefault={() => onSetDefault(agent)}
                   />
                 ))}
               </div>
@@ -507,8 +503,8 @@ function AgentsLibraryView({
 
           {/* System agents — ADR-049 D3/FR-095/SD-C16: a locked, non-chat,
               non-delegable roster (the seeded Judge). Cloned from the
-              Built-in accordion above, minus onSetDefault (mirrors
-              WorkerCard — System agents are never ★-eligible). */}
+              Built-in accordion above (mirrors WorkerCard — System agents
+              are never chat targets). */}
           {systemAgents.length > 0 && (
             <section data-testid="system-agents-section">
               <Accordion
@@ -548,14 +544,13 @@ function AgentsLibraryView({
 // ── Main screen ───────────────────────────────────────────────────────────────
 
 export function AgentListScreen() {
-  const { openCreateAgentModal, addToast } = useUiStore()
+  const { openCreateAgentModal } = useUiStore()
   // MIN-9: defer authed fetches (including cli-detect) until we know who's
   // logged in. Auth is the omnipus-session HttpOnly cookie (US-5 / FR-010) —
   // there is no JS-visible token to gate on anymore, so this uses the
   // display-only `username` (set at the same point login/onboarding used to
   // set the token) as the "we've completed sign-in" signal instead.
   const username = useAuthStore((s) => s.username)
-  const queryClient = useQueryClient()
 
   const { data: agents = [], isLoading: agentsLoading, isError: agentsError, refetch: refetchAgents } = useQuery({
     queryKey: ['agents'],
@@ -613,29 +608,6 @@ export function AgentListScreen() {
       cancelled = true
     }
   }, [username])
-
-  const { mutate: doSetDefault } = useMutation({
-    mutationFn: (agent: Agent) =>
-      updateAgent(agent.id, { revision: agent.revision, default: true }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      addToast({ message: 'Default agent updated', variant: 'success' })
-    },
-    onError: (err: unknown) => {
-      if (isApiError(err) && err.status === 409) {
-        addToast({
-          message: 'Agent was changed elsewhere. Reload and review before trying again.',
-          variant: 'error',
-        })
-        queryClient.invalidateQueries({ queryKey: ['agents'] })
-        return
-      }
-      addToast({
-        message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to set default',
-        variant: 'error',
-      })
-    },
-  })
 
   if (isLoading) {
     return (
@@ -701,7 +673,6 @@ export function AgentListScreen() {
             <AgentsLibraryView
               agents={agents}
               workspaces={workspaces}
-              onSetDefault={doSetDefault}
               openCreateAgentModal={openCreateAgentModal}
               hostClis={hostClis}
               cliDetectFailed={cliDetectFailed}

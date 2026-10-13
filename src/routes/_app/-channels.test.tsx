@@ -321,8 +321,8 @@ describe('ChannelConfigPanel — Routing section', () => {
       { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' } as never,
       { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim' } as never,
     ])
-    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
-    vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: 'mia' })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: '', workspace_id: '', bound: false })
+    vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: 'mia', workspace_id: 'ws-1', bound: true })
   })
 
   it('renders the Routing section header', async () => {
@@ -382,16 +382,19 @@ describe('ChannelConfigPanel — Routing section', () => {
     })
   })
 
-  // NOTE (ADR-029): the former "selecting an agent ID …" and "selecting (Global
-  // default) …" behavioral tests were REMOVED here. They asserted the pre-ADR-029
-  // routing UX — a flat agent picker with a "(Global default)" sentinel that PUTs
-  // `{ default_agent_id }` with no workspace. That UX is replaced by the
-  // workspace-bound flow (select workspace → workspace-filtered agents → mandatory
-  // agent → PUT `{ workspace_id, default_agent_id }`; "no workspace" = unbind).
-  // The new-flow routing assertions (workspace select, member filtering, mandatory
-  // + hint, no global-default option, unbind) now live authoritatively in
-  // src/components/skills/ChannelConfigPanel.test.tsx, which mocks fetchWorkspaces/
-  // fetchWorkspace + core_team and asserts the setChannelRouting payload.
+  // NOTE (ADR-029, amended omnipus-system-agent K14): the former "selecting an
+  // agent ID …" and "selecting (Global default) …" behavioral tests were REMOVED
+  // here. They asserted the pre-ADR-029 routing UX — a flat agent picker with a
+  // "(Global default)" sentinel that PUTs `{ default_agent_id }` with no
+  // workspace. That UX is replaced by the workspace-bound flow (select workspace
+  // → workspace-filtered agents → mandatory agent → PUT
+  // `{ workspace_id, default_agent_id }`); the unbind mode is itself removed now —
+  // the PUT requires the nonblank pair and an unbound instance reports
+  // `bound: false`. The new-flow routing assertions (workspace select, member
+  // filtering, mandatory + hint, no global-default option, unbound display) now
+  // live authoritatively in src/components/skills/ChannelConfigPanel.test.tsx,
+  // which mocks fetchWorkspaces/fetchWorkspace + core_team and asserts the
+  // setChannelRouting payload.
 })
 
 // ── Section 3: ChannelsScreen degraded state ──────────────────────────────────
@@ -416,8 +419,8 @@ describe('ChannelsScreen — degraded channel state', () => {
     mockUiStore()
     // ConnectorsScreen resolves each configured row's workspace→agent binding
     // via these queries — give them deterministic empty defaults so the
-    // "No workspace bound" fallback renders instead of an unmocked real fetch.
-    vi.mocked(fetchChannelRouting).mockResolvedValue({})
+    // unbound fallback renders instead of an unmocked real fetch.
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: '', workspace_id: '', bound: false })
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchAgents).mockResolvedValue([])
   })

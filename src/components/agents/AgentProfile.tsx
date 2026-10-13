@@ -4,7 +4,6 @@ import {
   X,
   CaretDown,
   Sparkle,
-  Star,
   Lightning,
   ArrowUp,
   ArrowDown,
@@ -363,11 +362,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
   const [selectedFigure, setSelectedFigure] = useState<AgentFigure>('Omnipus')
   const [selectedRole, setSelectedRole] = useState<AgentRole>('general')
-  // W6-B4 / G3: `default` flag mirrors Agent.default on the wire. At most one
-  // agent is default across the roster; the backend enforces that on PUT.
-  // The toggle in the Identity strip is the only way to flip it from the
-  // Edit profile (previously, users had to go back to the Agents list).
-  const [isDefault, setIsDefault] = useState(false)
   // Fallback chain — the wire shape is `[{model, provider}]`; the editor
   // tracks it 1:1 with `provider` always populated (see FallbackEntry
   // type). Provider is needed for the chip badge; the wire payload in
@@ -597,10 +591,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setSelectedColor(agent.color)
     setSelectedFigure(agent.figure ?? 'Omnipus')
     setSelectedRole(agent.role ?? 'general')
-    // W6-B4 / G3: hydrate the `default` flag from the agent response. The
-    // wire field is a plain boolean; absent = false. The Identity strip
-    // shows the current state of this flag and lets the user flip it.
-    setIsDefault(agent.default ?? false)
     // Hydrate the fallback chain from the wire. `provider` is optional on
     // the wire type; narrow to required by looking up via modelToProvider,
     // else empty string (renders as a muted dash in the chip).
@@ -680,9 +670,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // Omnipus-native fields are irrelevant or explicitly rejected by the
     // backend. Build a restricted payload for that tier.
     const isSubagent3p = agent?.type === 'subagent_3p'
-    const identity = isSubagent3p
-      ? { name, description, color: selectedColor, figure: selectedFigure, role: selectedRole }
-      : { name, description, color: selectedColor, figure: selectedFigure, role: selectedRole, default: isDefault }
+    const identity = { name, description, color: selectedColor, figure: selectedFigure, role: selectedRole }
     if (isSubagent3p) {
       // #904 D14 supersedes agent-types-field-matrix.md Decisions #1: the
       // own tool-iteration limit is the CLI's turn cap, sent only when the
@@ -770,7 +758,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       executor,
     }
   }, [
-    agent?.type, name, description, model, primaryProvider, selectedColor, selectedFigure, selectedRole, isDefault, fallbackModels,
+    agent?.type, name, description, model, primaryProvider, selectedColor, selectedFigure, selectedRole, fallbackModels,
     temperature, maxTokens, soul, memoryEnabled, voice,
     maxToolIterationsEdit, contextWindowOverride,
     agentSkills, executor,
@@ -1114,30 +1102,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     closeEditAgentSlideOver()
   }
 
-  // W6-B4 / G3 fix: the "Default agent" toggle used to fire its success
-  // toast (and invalidate ['agents']) the instant the Switch was flipped —
-  // BEFORE the debounced autosave had actually persisted the flag.
-  // A slow network or a failed save left the toast lying: the operator saw
-  // "X is now the default agent" while the server still had the old value.
-  // This ref records the pending default-flag change; the effect below only
-  // fires the toast once `saveStatus` confirms it actually landed (and
-  // silently drops the pending flag on error — the AutoSaveIndicator already
-  // surfaces the failure, and a wrong-tense success toast would be worse).
-  const pendingDefaultToastRef = useRef<{ next: boolean; label: string } | null>(null)
-  useEffect(() => {
-    if (saveStatus === 'saved' && pendingDefaultToastRef.current) {
-      const { next, label } = pendingDefaultToastRef.current
-      pendingDefaultToastRef.current = null
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      addToast({
-        message: next ? `${label} is now the default agent` : `${label} is no longer the default agent`,
-        variant: 'success',
-      })
-    } else if (saveStatus === 'error') {
-      pendingDefaultToastRef.current = null
-    }
-  }, [saveStatus, queryClient, addToast])
-
   // Add a fallback from the <ModelSelector> dropdown. Pairs the picked
   // model with the provider that owns it (via modelToProvider). De-dupes
   // by model — the fallback list cannot have the same model twice
@@ -1369,48 +1333,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   className="text-[length:var(--type-body-compact-size)] resize-none"
                 />
               </div>
-              {/* W6-B4 / G3: Default agent toggle. Locked core agents keep
-                  this editable (operator decision 2026-07-03 — execution/
-                  identity display knobs unhide for locked). Hidden for
-                  workers — the locked concept makes "default" a non-worker
-                  concept. ADR-049 D3/SD-C18: also hidden for System agents
-                  (the Judge) — unlike core, a System agent is never
-                  ★-eligible at all. */}
-              {!isWorkerAgent && !isSystemAgent && (
-                <div
-                  data-testid="default-toggle-row"
-                  className="flex items-center justify-between gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)]"
-                >
-                  <div className="flex items-center gap-[var(--space-2)] min-w-0">
-                    <Star
-                      size={14}
-                      weight={isDefault ? 'fill' : 'regular'}
-                      className={isDefault ? 'text-[var(--color-accent)] shrink-0' : 'text-[var(--color-muted)] shrink-0'}
-                      aria-hidden="true"
-                    />
-                    <div className="min-w-0">
-                      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Default agent</p>
-                      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
-                        Handles inbound messages with no more-specific routing rule. Only one agent is default at a time.
-                      </p>
-                    </div>
-                  </div>
-                  <Switch
-                    data-testid="default-toggle"
-                    checked={isDefault}
-                    disabled={!isFieldEditable('default')}
-                    onCheckedChange={(v) => {
-                      markDirty()
-                      setIsDefault(v)
-                      // Toast is deferred to the autosave success path (see
-                      // `pendingDefaultToastRef` effect above) — this flag
-                      // has not persisted yet.
-                      pendingDefaultToastRef.current = { next: v, label: name || agent.name }
-                    }}
-                    aria-label={isDefault ? 'Unset as default agent' : 'Set as default agent'}
-                  />
-                </div>
-              )}
               {/* W1-6 / FR-020: the look (role badge, figure, colour) stays
                   visible for built-ins, locked per field by the server's field
                   descriptors. The same AgentLookPicker as the create wizard;

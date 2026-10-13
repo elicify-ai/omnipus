@@ -52,7 +52,7 @@ function agent(id: string, over: Partial<Agent> = {}): Agent {
 }
 
 const AGENTS: Agent[] = [
-  agent('mia', { name: 'Mia', default: true, color: '#6E8BA8' }),
+  agent('mia', { name: 'Mia', color: '#6E8BA8' }),
   agent('jim', { name: 'Jim' }),
   agent('planner', { name: 'Planner', type: 'Subagent' }),
   agent('explorer', { name: 'Explorer', type: 'Subagent' }),
@@ -147,12 +147,11 @@ describe('buildTeamGraphModel', () => {
     ],
   })
 
-  it('renders one node per team agent with name/role/default/worker flags', () => {
+  it('renders one node per team agent with name/role/worker flags', () => {
     const { nodes } = buildTeamGraphModel(s, AGENTS)
     expect(nodes).toHaveLength(3)
     const mia = nodes.find((n) => n.id === 'mia')!
     expect(mia.name).toBe('Mia')
-    expect(mia.isDefault).toBe(true)
     expect(mia.isWorker).toBe(false)
     expect(mia.role).toBe('Main agent')
     const planner = nodes.find((n) => n.id === 'planner')!

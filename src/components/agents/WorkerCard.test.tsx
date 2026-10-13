@@ -77,11 +77,9 @@ describe('WorkerCard — content', () => {
 })
 
 describe('WorkerCard — omitted colleague affordances', () => {
-  it('does NOT render a default-★ / "Set as default" control', () => {
-    renderCard(makeWorker({ default: true }))
-    expect(screen.queryByLabelText('Default agent')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /set .* as default/i })).not.toBeInTheDocument()
-  })
+  // The "no default-★" test was deleted with the feature itself
+  // (omnipus-system-agent K11/K12, bundle B1): no card renders a default
+  // control any more, so there is nothing left to differentiate.
 
   it('does NOT render a chat/open-conversation entry point', () => {
     renderCard(makeWorker())

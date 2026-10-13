@@ -176,7 +176,7 @@ describe('ConnectorsScreen — email mailbox account section', () => {
     vi.mocked(fetchMailboxes).mockResolvedValue([])
     vi.mocked(fetchAgents).mockResolvedValue([])
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
-    vi.mocked(fetchChannelRouting).mockResolvedValue({})
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: '', workspace_id: '', bound: false })
   })
 
   it('renders the email mailbox account card (empty state)', async () => {
@@ -228,7 +228,7 @@ describe('ConnectorsScreen — multi-mailbox roster (one row per (agent, workspa
       { id: 'telegram', instance_id: 'telegram', name: 'Telegram', transport: 'webhook', enabled: false, identity: { kind: 'agent', id: 'mia' } } as never,
       { id: 'email', name: 'Email', transport: 'email', enabled: false } as never,
     ])
-    vi.mocked(fetchChannelRouting).mockResolvedValue({})
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: '', workspace_id: '', bound: false })
   })
 
   it('renders one row per mailbox, titled with the owning agent\'s display name', async () => {
