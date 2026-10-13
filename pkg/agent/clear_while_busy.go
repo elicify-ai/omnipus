@@ -64,6 +64,9 @@ func (w *sessionWorker) deferClearUntilStopped(msg bus.InboundMessage) bool {
 	if !busy {
 		return false
 	}
+	// Held from here until the stop settles and the clear runs. Reported BEFORE
+	// the stop starts, so a later not-performed report can never precede it.
+	w.parent.notifyClearHeld(msg)
 	go w.stopThenClear(msg)
 	return true
 }

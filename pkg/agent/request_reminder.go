@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -58,19 +59,17 @@ func (al *AgentLoop) markRequestDelivered(sessionID, transcriptEntryID string) {
 		return
 	}
 	if ledger := al.RequestLedger(); ledger != nil {
-		// Read before the mark: only the FIRST delivery of a request that was
-		// held moves its sender's row on.
-		prior, found, getErr := ledger.Get(sessionID, transcriptEntryID)
-		if getErr != nil {
-			logger.WarnCF("agent", "request capture could not be read before its delivery mark",
-				map[string]any{"session_id": sessionID, "request_id": transcriptEntryID, "error": getErr.Error()})
-		}
-		if err := ledger.MarkDelivered(sessionID, transcriptEntryID); err != nil {
-			logger.WarnCF("agent", "request delivery could not be recorded; it may be delivered again on the next turn",
+		// Read and mark in ONE ledger operation: only the FIRST delivery of a
+		// request that was held moves its sender's row on, and a failed read
+		// marks nothing, so the transition (and the tick) is retried by the
+		// next delivery instead of being lost while the request reads delivered.
+		prior, first, err := ledger.MarkDeliveredFirst(sessionID, transcriptEntryID)
+		if err != nil {
+			logger.ErrorCF("agent", "request delivery could not be recorded; it stays undelivered, is retried on the next turn, and its sender's row waits until then",
 				map[string]any{"session_id": sessionID, "request_id": transcriptEntryID, "error": err.Error()})
 			return
 		}
-		if found && prior.Held && !prior.Delivered && prior.SenderMessageID != "" &&
+		if first && prior.Held && prior.SenderMessageID != "" &&
 			prior.Source.Kind == addressing.SourceConversation && prior.Source.SessionID != "" {
 			al.notifyHeldRequestDelivered(prior.Source.SessionID, prior.SenderMessageID)
 		}
@@ -202,7 +201,7 @@ func (al *AgentLoop) receiverStopped(sessionID string) bool {
 // A request whose asker's conversation is definitively gone is discarded and
 // logged instead, never delivered into a void. A request whose asker could not
 // be read (a transient error) stays held and is retried by the next turn.
-func (al *AgentLoop) deliverHeldRequests(sessionID string) {
+func (al *AgentLoop) deliverHeldRequests(sessionID string, skipRequestID ...string) {
 	ledger := al.RequestLedger()
 	if ledger == nil || sessionID == "" {
 		return
@@ -214,6 +213,12 @@ func (al *AgentLoop) deliverHeldRequests(sessionID string) {
 		return
 	}
 	for _, c := range held {
+		if slices.Contains(skipRequestID, c.RequestID) {
+			// The turn being admitted IS this request's own wake: it is about to be
+			// given to the model, and republishing it (the in-flight marker may be
+			// older than its TTL after a long system turn) would show it twice.
+			continue
+		}
 		gone, reason, readErr := al.askerStatus(c)
 		if readErr != nil {
 			logger.WarnCF("agent", "held request kept: the asker's conversation could not be read; it is retried on the next turn",

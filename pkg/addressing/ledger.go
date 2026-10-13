@@ -225,6 +225,57 @@ func (l *Ledger) MarkDelivered(sessionID, requestID string) error {
 	return fileutil.AppendJSONLSync(p, c)
 }
 
+// MarkDeliveredFirst is MarkDelivered that reads and marks in ONE operation and
+// reports the capture as it was BEFORE the mark and whether this call performed
+// the not-delivered-to-delivered transition. A caller that must act once on the
+// first delivery (moving a held request's sender row on) uses it so a failed read
+// can never be followed by a successful mark that loses the transition: on any
+// error nothing is marked and the transition stays available to the next try.
+func (l *Ledger) MarkDeliveredFirst(sessionID, requestID string) (prior Capture, first bool, err error) {
+	p, err := l.path(sessionID)
+	if err != nil {
+		return Capture{}, false, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	c, ok, err := readLatest(p, requestID)
+	if err != nil || !ok || c.Delivered {
+		return c, false, err
+	}
+	prior = c
+	c.Delivered = true
+	if err := repairTornTail(p); err != nil {
+		return Capture{}, false, err
+	}
+	if err := fileutil.AppendJSONLSync(p, c); err != nil {
+		return Capture{}, false, err
+	}
+	return prior, true, nil
+}
+
+// MarkHeld records that the request's sender was told it is waiting, for a
+// request admitted to a receiver that was not stopped but whose wake could not
+// be published: it is delivered by the receiver's next turn like any held
+// request. A request that was never captured, or is already delivered or
+// discarded, is left alone.
+func (l *Ledger) MarkHeld(sessionID, requestID string) error {
+	p, err := l.path(sessionID)
+	if err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	c, ok, err := readLatest(p, requestID)
+	if err != nil || !ok || c.Held || c.Delivered || c.Discarded {
+		return err
+	}
+	c.Held = true
+	if err := repairTornTail(p); err != nil {
+		return err
+	}
+	return fileutil.AppendJSONLSync(p, c)
+}
+
 // Undelivered lists the session's held requests - captured, not yet given to a
 // running turn, not discarded - in admission order.
 func (l *Ledger) Undelivered(sessionID string) ([]Capture, error) {

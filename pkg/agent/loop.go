@@ -225,6 +225,10 @@ type AgentLoop struct {
 	// (clear_not_performed.go). Set once by the gateway's WS handler.
 	clearNotPerformedHook atomic.Pointer[ClearNotPerformedFunc]
 
+	// clearHeldHook receives a /clear the server holds while it stops the running
+	// reply (clear_held.go). Set once by the gateway's WS handler.
+	clearHeldHook atomic.Pointer[ClearHeldFunc]
+
 	// requestDeliveredHook receives a held request's delivery (request_delivered_hook.go).
 	requestDeliveredHook atomic.Pointer[RequestDeliveredFunc]
 

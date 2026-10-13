@@ -205,6 +205,10 @@ type WSHandler struct {
 	// already accepted, so a retried send is answered instead of starting a
 	// second turn (ws_client_message_dedupe.go). Guarded by mu.
 	acceptedClientMsgs map[string]*acceptedClientMessages
+	// heldTickMu orders a request's "held" tick against its "working" tick: the
+	// recipient can resume and take the request before the sender's handler has
+	// sent "held", and the row must never go back from working to waiting.
+	heldTickMu sync.Mutex
 
 	// firstMessageMu serializes ID-bearing, session-less ordinary sends through
 	// persistence/cache population, never bus admission. It is not a keyed claim store.
@@ -550,6 +554,7 @@ func newWSHandler(
 	if agentLoop != nil {
 		agentLoop.SetEventSyncTap(h.hubSyncTap)
 		agentLoop.SetClearNotPerformedHook(h.announceClearNotPerformed)
+		agentLoop.SetClearHeldHook(h.announceClearHeld)
 		agentLoop.SetRequestDeliveredHook(h.announceHeldRequestDelivered)
 	}
 	// Per-session state kept outside the hub is released with the hub

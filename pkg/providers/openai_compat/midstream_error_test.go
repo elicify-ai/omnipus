@@ -59,3 +59,30 @@ func TestParseStream_FinishReasonErrorAloneIsAnError(t *testing.T) {
 		t.Fatalf("got %+v err %v, want an ErrStreamProviderError", got, err)
 	}
 }
+
+// R3-SRV-SFH-04: OpenRouter sends `"code": null` for an upstream failure with no
+// numeric code. json.RawMessage keeps the literal `null`, which used to become
+// the string "null", classify as StreamErrorOther and lose the retry round 2
+// gave it. A JSON null is an absent code.
+func TestParseStream_NullErrorCodeIsAnAbsentCodeAndStaysRetryable(t *testing.T) {
+	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"par\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"error\":{\"code\":null,\"message\":\"Provider returned error\"},\"choices\":[{\"delta\":{},\"finish_reason\":\"error\"}]}\n\n" +
+		"data: [DONE]\n\n"
+	_, err := parseStreamResponse(context.Background(), strings.NewReader(stream), nil, nil, nil)
+	var spe *common.StreamProviderError
+	if !errors.As(err, &spe) {
+		t.Fatalf("error = %T %v, want *common.StreamProviderError", err, err)
+	}
+	if spe.Code != "" {
+		t.Errorf("a JSON null code must read as absent, got %q", spe.Code)
+	}
+	if got := spe.Kind(); got != common.StreamErrorTransient {
+		t.Errorf("an error chunk with a null code is a transient fault (retried), got kind %d", got)
+	}
+	// Control: a quoted code still arrives as itself.
+	quoted := strings.Replace(stream, `"code":null`, `"code":"server_error"`, 1)
+	_, err = parseStreamResponse(context.Background(), strings.NewReader(quoted), nil, nil, nil)
+	if !errors.As(err, &spe) || spe.Code != "server_error" {
+		t.Fatalf("control: a string code was not carried through: %v %+v", err, spe)
+	}
+}

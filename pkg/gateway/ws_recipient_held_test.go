@@ -150,3 +150,30 @@ func TestRecipient_RecordedButWakeFailedIsHeldNotFailed(t *testing.T) {
 	assert.NotContains(t, states, "failed", "a recorded request is not a failed one: %v", states)
 	assert.Equal(t, []string{"received", "held"}, states)
 }
+
+// R3 N1: the wake of a RUNNING recipient could not be published, so the request
+// is recorded and reported held. When it is finally delivered the row must move
+// on to working, exactly like a request held for a stopped recipient - the
+// capture used to say Held=false and the row stayed "Waiting" for ever.
+func TestRecipient_WakeFailedRequest_DeliveryMovesTheRowToWorking(t *testing.T) {
+	h, b, _ := newRecipientHandler(t)
+	wc := makeTestConn()
+	sid := mintOwnerChat(t, h, b, wc)
+	bindTestConnToSession(h, "chat-owner", sid, wc)
+	statusStates(t, wc, 50*time.Millisecond)
+	b.Close() // the recipient's wake cannot be published
+
+	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray hello", "ann", nil, "", "ws-1", false, "held-cid-n1", nil, &to, wc)
+	require.Equal(t, []string{"received", "held"}, statusStates(t, wc, 300*time.Millisecond))
+
+	recvMain, err := session.MainSessionID("ws-1", "ray")
+	require.NoError(t, err)
+	entries, err := h.agentLoop.GetSessionStore().ReadTranscript(recvMain)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "the request is durable in the recipient's main")
+
+	h.agentLoop.MarkRequestDeliveredForTest(recvMain, entries[0].ID)
+	assert.Equal(t, []string{"working"}, statusStates(t, wc, 300*time.Millisecond),
+		"delivery of a recorded-but-unwoken request moves the sender's row on")
+}

@@ -256,8 +256,12 @@ func TestPeerSend_HeldReceipt_TellsTheAskerItIsWaiting(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected refusal: %s", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "ava is stopped") || !strings.Contains(res.ForLLM, "delivered when") {
-		t.Fatalf("receipt text = %q, want it to say ava is stopped and the request will be delivered when it runs again", res.ForLLM)
+	// R3 N1: "held" also covers a request whose wake could not be published, so
+	// the receipt must not claim the receiver is stopped - it says the request is
+	// queued, will be delivered when the receiver next runs, and must not be re-sent.
+	if !strings.Contains(res.ForLLM, "queued for ava") || !strings.Contains(res.ForLLM, "delivered when") ||
+		!strings.Contains(res.ForLLM, "do not send it again") || strings.Contains(strings.ToLower(res.ForLLM), "refused") {
+		t.Fatalf("receipt text = %q, want it to say the request is queued, delivered when ava next runs, not to be re-sent, and never refused", res.ForLLM)
 	}
 }
 

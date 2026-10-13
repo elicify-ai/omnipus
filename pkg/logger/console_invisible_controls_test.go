@@ -15,12 +15,18 @@ import (
 //
 // ORACLE: the ruling's own code-point list, spelled out here as literals rather
 // than derived from the implementation: U+202A-202E, U+2066-2069, U+200E/200F
-// (bidirectional), U+200B-200D and U+FEFF (zero-width).
+// (bidirectional), U+200B-200D and U+FEFF (zero-width); plus, from R3-SEC-01,
+// U+061C, U+2060-2064 and U+00AD.
 var invisibleControlRunes = []rune{
 	0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
 	0x2066, 0x2067, 0x2068, 0x2069,
 	0x200E, 0x200F,
 	0x200B, 0x200C, 0x200D, 0xFEFF,
+	// R3-SEC-01 (founder: fix now): the Arabic Letter Mark (a bidi control), the
+	// word joiner and invisible operators U+2060-2064, and the soft hyphen.
+	0x061C,
+	0x2060, 0x2061, 0x2062, 0x2063, 0x2064,
+	0x00AD,
 }
 
 func assertNoInvisibleControl(t *testing.T, where, got string) {
@@ -39,7 +45,12 @@ func TestConsole_BidiAndZeroWidthControls_AreEscapedEverywhere(t *testing.T) {
 	for _, r := range invisibleControlRunes {
 		t.Run(fmt.Sprintf("U+%04X", r), func(t *testing.T) {
 			raw := "a" + string(r) + "b"
+			// The escaper writes \xNN below U+0100 (as it does for the C1 controls) and
+			// \uNNNN above; the soft hyphen is the only member below U+0100.
 			wantEscaped := fmt.Sprintf(`a\u%04xb`, r)
+			if r < 0x100 {
+				wantEscaped = fmt.Sprintf(`a\x%02xb`, r)
+			}
 
 			msg := captureConsole(t, func() { Warn("m:" + raw) })
 			assertNoInvisibleControl(t, "message", msg)
