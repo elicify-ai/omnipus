@@ -173,7 +173,8 @@ func needsControlEscape(r rune) bool {
 // controls, which reorder the visible text of a line (U+202A-202E embeddings and
 // overrides, U+2066-2069 isolates, U+200E/U+200F marks), and the zero-width
 // characters, which hide a difference between identical-looking values
-// (U+200B-200D and the byte-order mark U+FEFF). A precise list, not a category
+// (U+200B-200D and the byte-order mark U+FEFF), plus the Arabic Letter Mark
+// U+061C, U+2060-2064 and the soft hyphen U+00AD (R3-SEC-01). A precise list, not a category
 // test: ordinary non-ASCII text is left alone.
 func isInvisibleFormatControl(r rune) bool {
 	switch {
@@ -182,6 +183,12 @@ func isInvisibleFormatControl(r rune) bool {
 	case r == 0x200E, r == 0x200F:
 		return true
 	case r >= 0x200B && r <= 0x200D, r == 0xFEFF:
+		return true
+	case r == 0x061C: // Arabic Letter Mark, a bidirectional control (R3-SEC-01)
+		return true
+	case r >= 0x2060 && r <= 0x2064: // word joiner and the invisible function/operator characters
+		return true
+	case r == 0x00AD: // soft hyphen: invisible unless the line wraps
 		return true
 	}
 	return false

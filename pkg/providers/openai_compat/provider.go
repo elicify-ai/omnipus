@@ -377,7 +377,7 @@ func parseStreamResponse(
 		}
 		if chunk.Error != nil && streamErr == nil {
 			streamErr = &common.StreamProviderError{
-				Code:    strings.Trim(string(chunk.Error.Code), `"`),
+				Code:    streamErrorCode(chunk.Error.Code),
 				Message: chunk.Error.Message,
 			}
 		}
@@ -661,4 +661,14 @@ func completionTokens(u *UsageInfo) int {
 		return 0
 	}
 	return u.CompletionTokens
+}
+
+// streamErrorCode is the provider's error code as text. A JSON null (OpenRouter
+// sends one for an upstream failure with no code) is an ABSENT code, not the
+// word "null": the latter classifies as an unknown code and loses the retry.
+func streamErrorCode(raw json.RawMessage) string {
+	if strings.TrimSpace(string(raw)) == "null" {
+		return ""
+	}
+	return strings.Trim(string(raw), `"`)
 }
