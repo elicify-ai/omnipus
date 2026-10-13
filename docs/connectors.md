@@ -28,11 +28,11 @@ Email works differently. An email mailbox belongs to one agent in one workspace.
 
 ## Choosing which agent answers
 
-A workspace-bound connector sends every incoming message on that account to the agent you selected. The selected agent must remain a member of that workspace and must be able to answer chats.
+Every connector is bound to a workspace and names the agent that answers it. A bound connector sends every incoming message on that account to that agent. The agent must remain a member of that workspace and must be able to answer chats.
 
-An unbound connector can use a connector-level default agent. If that choice is empty, Omnipus uses the starred default agent from [Agents](agents.md).
+There is no unbound mode and no global default agent. Until a connector is bound to a workspace and an agent, it shows **Not bound — choose a workspace and agent**, and incoming messages on that account are dropped (the connector's card says so, with the reason and the time of the last dropped message).
 
-More specific rules can override the unbound connector's choice. Omnipus checks them from most specific to least specific.
+More specific rules can override the binding. Omnipus checks them from most specific to least specific.
 
 | Match | What it identifies | Priority |
 |---|---|---|
@@ -41,7 +41,7 @@ More specific rules can override the unbound connector's choice. Omnipus checks 
 | Team | A Slack team | After guild |
 | Account | One account on a platform | After team |
 | Connector wildcard | Any account on one platform | After account |
-| Default agent | Messages with no matching rule | Last |
+| Bound agent | Messages with no matching rule | Last |
 
 The first matching rule decides which agent answers. Detailed rules are set in configuration rather than on the Connectors screen.
 
@@ -96,7 +96,7 @@ Back in the workspace, select **Mail** to open the [mailbox panel](mail.md#set-u
 
 ## Related pages
 
-- [Agents](agents.md) — choose the starred default agent and manage agents that can answer chats.
+- [Agents](agents.md) — manage the agents that can answer chats.
 - [Workspaces](workspaces.md) — manage the team available to a workspace-bound connector.
 - [Security](security.md) — understand how Omnipus protects connector credentials.
 - [Tools](tools.md) — learn about the email tools agents use.

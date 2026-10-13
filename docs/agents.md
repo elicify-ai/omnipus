@@ -43,17 +43,13 @@ Omnipus replaces the earlier Ava and Admin agents. It lives in your default work
 
 When an agent changes another agent through its tools, permissions are a separate step: `update_agent` changes identity, model and skills, while per-agent tool permissions and connector assignments change only through `set_agent_permissions`, which always asks you first. A newly created agent can never be granted a management tool (agent, workspace, skill, connector, provider, channel, permission, secret or settings changes) — those stay with Omnipus.
 
-## How to set your default agent
+## How a conversation finds its agent
 
-Omnipus picks the default when a conversation has no specific agent assigned.
+Every conversation names its agent — there is no global default agent any more.
 
-1. Open **Agents** in the sidebar.
-2. Find the card of the agent you want as the default.
-3. Click **Set as default** on the card. The star moves to that agent.
-
-Any chat colleague can hold the star, built-in or one you created. Workers never can.
-
-A connector can also name its own default, which wins there. See [connectors](connectors.md).
+- A chat in the sidebar always opens one agent's main chat; you pick the agent by the row you click.
+- A new chat names its agent on the first message: pick an agent before you send, because there is no default to fall back to.
+- A connector answers through the workspace and agent it is bound to; an unbound connector delivers nothing. See [connectors](connectors.md).
 
 ## How to create your own agent
 
@@ -124,7 +120,7 @@ Open a built-in agent's card, then **Basics**: the role badge, look, and colour 
 
 Agent identity is the figure, role badge and palette colour. The legacy icon is not an editable identity field.
 
-A built-in agent keeps working wherever it sits, and the sidebar's row menu treats it accordingly. **Hide from sidebar** is available for every member row, built-ins included — hiding only removes the row from one workspace's list; it never touches membership, tasks or the main chat. **Remove** is different: it ends the agent's membership in that one workspace (the agent stays in the Agents list and in other workspaces, and its chat history is kept — deletion is still the only thing that removes an agent and its data). A workspace's default agent cannot be removed, and a built-in agent cannot be removed from the default workspace, because Omnipus re-adds the built-ins there every time the server starts; the row's **Remove** action is disabled and states the reason instead of failing silently.
+A built-in agent keeps working wherever it sits, and the sidebar's row menu treats it accordingly. **Hide from sidebar** is available for every member row, built-ins included — hiding only removes the row from one workspace's list; it never touches membership, tasks or the main chat. **Remove** is different: it ends the agent's membership in that one workspace (the agent stays in the Agents list and in other workspaces, and its chat history is kept — deletion is still the only thing that removes an agent and its data). A built-in agent cannot be removed from the default workspace, because Omnipus re-adds the built-ins there every time the server starts; the row's **Remove** action is disabled and states the reason instead of failing silently.
 
 ### Existing agents' identity
 
@@ -252,7 +248,7 @@ If nothing needs attention, the agent records an all-clear. The sidebar lists ch
 ## Related pages
 
 - [Workspaces](workspaces.md) — where teams live and delegation trust is set
-- [Connectors](connectors.md) — per-connector default agents and routing
+- [Connectors](connectors.md) — binding a connector to a workspace and agent
 - [Tools](tools.md) — the allow, ask, and deny rules for Omnipus tools
 - [Skills](skills.md) — reusable playbooks an agent picks up
 - [Calendar](calendar.md) — scheduled task work, separate from heartbeats

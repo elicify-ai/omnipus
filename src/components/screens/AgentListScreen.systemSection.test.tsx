@@ -116,7 +116,9 @@ describe('AgentListScreen — System section (ADR-049 D3/SD-C16)', () => {
     expect(within(mainSection).queryByTestId('agent-card-judge')).not.toBeInTheDocument()
   })
 
-  it('omits the ★ "Set as default" control on the System agent card', async () => {
+  it('renders no "Set as default" control on the System agent card', async () => {
+    // The default-agent feature is removed (omnipus-system-agent K11/K12,
+    // bundle B1): no card anywhere renders a default control.
     vi.mocked(fetchAgents).mockResolvedValue([
       makeAgent({ id: 'mia', name: 'Mia', type: 'core' }),
       makeAgent({ id: 'judge', name: 'Judge', type: 'system', locked: true }),

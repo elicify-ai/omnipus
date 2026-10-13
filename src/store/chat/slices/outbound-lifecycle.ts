@@ -32,6 +32,23 @@ import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
 // grandfathered line budgets (scripts/budgets/functions.txt) — see
 // docs/internal/architecture/draft-module-map.md, "Size budgets".
 
+/** FR-122 (omnipus-system-agent K16): there is no default agent — a NEW chat
+ * names its agent on the minting frame, and the gateway refuses an agent-less
+ * one with the error frame "an agent must be named". Both mint sites (a fresh
+ * sendMessage and a '__pending' delivery retry) refuse here instead: visible
+ * warning, nothing put on the wire. Returns true when the caller must stop.
+ * (Follow-up frames on a REAL session are unaffected — the gateway routes
+ * those to the session's canonical owner.) */
+function refuseAgentlessNewChat(agentId: string | null | undefined, where: string): boolean {
+  if (agentId) return false
+  useUiStore.getState().addToast({
+    message: 'Select an agent before sending — there is no default agent.',
+    variant: 'warning',
+  })
+  logDiagnostic('chatNewChatRefusedNoAgentNamed', { where })
+  return true
+}
+
 /** Resolves the client-generated correlation id + queued timestamp for a
  * send, defaulting both when the caller (a fresh sendMessage call, not a
  * queue replay) didn't supply them. */
@@ -220,18 +237,9 @@ function performResendMessage(
     logDiagnostic('chatRecipientResendBlockedNoSession', { agentName: addressCheck.addressed.agentName })
     return
   }
-  // FR-122 (K16): a '__pending' retry mints a NEW chat, and a new chat names
-  // its agent on the minting frame — the gateway refuses an agent-less one.
-  // Refuse visibly before the 'sending' reset so the row keeps its failed
-  // state (Retry stays available once an agent is picked).
-  if (targetSid === '__pending' && !useSessionStore.getState().activeAgentId) {
-    useUiStore.getState().addToast({
-      message: 'Select an agent before sending — there is no default agent.',
-      variant: 'warning',
-    })
-    logDiagnostic('chatResendBlockedNoAgentNamed', { messageId })
-    return
-  }
+  // A '__pending' retry mints a NEW chat, so it names its agent too (K16) —
+  // refused before the 'sending' reset so the row keeps its failed state.
+  if (targetSid === '__pending' && refuseAgentlessNewChat(useSessionStore.getState().activeAgentId, 'resend')) return
 
   // Reset the SAME message in place first — 'sending' — never a second
   // bubble, unlike the pre-fix `sendMessage(content)` call this replaces.
@@ -810,19 +818,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           return
         }
 
-        // FR-122 (K16): there is no default agent — a NEW chat names its agent
-        // on the minting frame, and the gateway refuses an agent-less one with
-        // the error frame "an agent must be named". Never put that frame on the
-        // wire: refuse here, visibly, before any optimistic state is built.
-        // (Follow-up frames on a REAL session are unaffected — the gateway
-        // routes those to the session's canonical owner.)
-        if (!activeAgentId) {
-          useUiStore.getState().addToast({
-            message: 'Select an agent before sending — there is no default agent.',
-            variant: 'warning',
-          })
-          return
-        }
+        if (refuseAgentlessNewChat(activeAgentId, 'send')) return
         runtime.agentIdAtLastMintSend = activeAgentId ?? null
         const autoApproveChoice = get().pendingAutoApproveChoice
         startOrdinaryFirstSend({ set, get, withBucket }, {

@@ -346,24 +346,17 @@ describe('ChannelConfigPanel — Routing section', () => {
     })
   })
 
-  it('renders help text about global default fallback', async () => {
-    // Content test: routing section includes the description copy about (Global default).
-    renderChannelConfigPanel('telegram')
-    await waitFor(() => {
-      const matches = screen.getAllByText(/global.?default/i)
-      expect(matches.length).toBeGreaterThan(0)
-      // At least one match must be the help text paragraph (not the SmartSelect option).
-      expect(
-        matches.some((el) => el.tagName.toLowerCase() === 'p'),
-      ).toBe(true)
-    })
-  })
+  // The "renders help text about global default fallback" test was deleted
+  // with the global default itself (omnipus-system-agent K14): the routing
+  // section no longer offers or mentions any global default.
 
   it('shows the current routing agent name when routing is pre-seeded', async () => {
     // Persistence test: pre-seeded routing with "mia" causes SmartSelect to show "Mia".
     const client = makeQueryClient()
-    client.setQueryData(['channel-routing', 'telegram'], { default_agent_id: 'mia' })
+    client.setQueryData(['channel-routing', 'telegram'], { default_agent_id: 'mia', workspace_id: 'ws-1', bound: true })
     client.setQueryData(['agents'], [{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }, { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim' }])
+    client.setQueryData(['workspaces', { status: 'active' }], [{ id: 'ws-1', name: 'WS One', status: 'active', is_default: false, pinned: false, pin_order: 0, task_count: 0, revision: '0'.repeat(64), created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }])
+    client.setQueryData(['workspaces', 'ws-1'], { id: 'ws-1', name: 'WS One', status: 'active', is_default: false, pinned: false, pin_order: 0, task_count: 0, revision: '0'.repeat(64), created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', core_team: ['mia'] })
     client.setQueryData(['channel-config', 'telegram'], {})
 
     render(
@@ -459,6 +452,51 @@ describe('ChannelsScreen — degraded channel state', () => {
     await waitFor(() => {
       expect(screen.getByText('missing SLACK_BOT_TOKEN credential')).toBeInTheDocument()
     })
+  })
+
+  it('shows last_dropped_at beside the reason on a routing drop (K15)', async () => {
+    // K15: degraded/degraded_reason also carry a ROUTING drop — a channel that
+    // dropped an inbound message it could not route (unbound instance, missing
+    // or ineligible bound agent). The drop time rides the same degraded display.
+    vi.mocked(fetchChannels).mockResolvedValue([
+      makeChannel({
+        id: 'whatsapp',
+        name: 'WhatsApp',
+        enabled: true,
+        degraded: true,
+        degraded_reason: 'bind this channel to an agent in a workspace',
+        last_dropped_at: '2026-10-14T09:30:00Z',
+      }),
+    ])
+
+    renderRealChannelsScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText(/bind this channel to an agent in a workspace/)).toBeInTheDocument()
+    })
+    const row = screen.getByText(/bind this channel to an agent in a workspace/).closest('p')
+    expect(row?.textContent).toContain('last dropped')
+    expect(row?.textContent).toContain('2026')
+  })
+
+  it('does not show a drop time when last_dropped_at is absent (K15)', async () => {
+    vi.mocked(fetchChannels).mockResolvedValue([
+      makeChannel({
+        id: 'slack',
+        name: 'Slack',
+        enabled: true,
+        degraded: true,
+        degraded_reason: 'missing SLACK_BOT_TOKEN credential',
+      }),
+    ])
+
+    renderRealChannelsScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText('missing SLACK_BOT_TOKEN credential')).toBeInTheDocument()
+    })
+    const row = screen.getByText('missing SLACK_BOT_TOKEN credential').closest('p')
+    expect(row?.textContent).not.toContain('last dropped')
   })
 
   it('does not show degraded_reason text when degraded_reason is absent', async () => {
