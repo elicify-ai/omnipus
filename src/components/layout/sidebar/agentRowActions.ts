@@ -125,13 +125,23 @@ export async function setHiddenFromSidebar(
  * success without a PUT — when the record already satisfies the removal
  * (S4-08): the team does not list the agent, so another writer removed it.
  * Throws the visible refusal when the record carries NO core_team at all
- * (S4-01): the field is optional on the wire — the server omits it for an
- * empty team (pkg/workspace/workspace.go, `core_team,omitempty`) — and a
- * removal is never built from a list the record does not carry.
+ * (S4-01): a removal is never built from a list the record does not carry.
+ *
+ * R2-S4-02: that refusal is TRUTHFUL, not "unavailable". Every `record`
+ * reaching this function is a fresh fetchWorkspace read (removeWorkspaceMember
+ * refetches when the cached record has no team; retryOnceOnConflict refetches
+ * on 409), and the gateway omits core_team on the wire ONLY when the stored
+ * team is empty (rest_workspaces.go's toWire gates on len(CoreTeam) > 0) —
+ * so undefined here means the team is genuinely empty. The message says
+ * exactly that (the agent is not on the team any more) and does not send the
+ * reader to retry, which cannot change a fresh answer. The roster can still
+ * show a row for such an agent — workspaceRoster.ts::memberRoster falls back
+ * to member_configs keys when core_team is absent — so this state is
+ * reachable, and the refusal must not pretend the list is merely missing.
  */
 async function removalBody(record: Workspace, agentId: string): Promise<WorkspaceUpdateRequest | null> {
   if (record.core_team === undefined) {
-    throw new Error("this workspace's team list is unavailable — reopen the sidebar and try again")
+    throw new Error("this workspace's team list is empty — the agent is not on the team any more")
   }
   if (!record.core_team.includes(agentId)) return null // already removed elsewhere (S4-08)
   const graph = await fetchWorkspaceDelegation(record.id)

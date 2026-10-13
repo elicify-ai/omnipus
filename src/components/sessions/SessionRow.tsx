@@ -45,8 +45,10 @@ export function SessionRow({ session, isActive, isHighlighted, onSelect, onRenam
    * Display name of the row group's agent (founder feedback 2026-10-11,
    * point 4): an untitled MAIN row reads "<Agent> - Main Session" instead of
    * "Untitled session", derived from this CURRENT name so a rename flows
-   * through on the next render. Optional; unresolved names render as
-   * "Unknown agent - Main Session", never "Untitled".
+   * through on the next render. Optional; an unresolved name falls back to
+   * the session's own agent id ("jim - Main Session" — the server's own
+   * empty-name fallback), never a fabricated placeholder (R2-S4-01 retired
+   * the stale "Unknown agent" wording here).
    */
   agentName?: string
 }) {
@@ -89,13 +91,18 @@ export function SessionRow({ session, isActive, isHighlighted, onSelect, onRenam
     )
   }
 
-  // Display title (founder feedback 2026-10-11, point 4): server title when
-  // present; for an untitled main the "<Agent> - Main Session" derivation
-  // from the CURRENT agentName prop — recomputed every render, never cached,
-  // so a rename flows straight through. Non-main rows keep "Untitled
+  // Display title (founder feedback 2026-10-11, point 4; R2-S4-01): server
+  // title when present; for an untitled main the "<Agent> - Main Session"
+  // derivation from the CURRENT agentName prop — recomputed every render,
+  // never cached, so a rename flows straight through. The session's own
+  // agent_id is the 4th argument — the id fallback the ruling accepts (the
+  // server's own empty-name fallback) — so an unresolved name lands on
+  // "jim - Main Session", and the ?? keeps the derivation's null (no name
+  // AND no id — unreachable on the wire, which requires agent_id) out of the
+  // accessible names and the confirm text. Non-main rows keep "Untitled
   // session" (core owns their auto-titling). Computed before the early
   // returns so the delete-confirm wording reads the same title.
-  const title = sessionDisplayTitle(session, agentName, 'Untitled session')
+  const title = sessionDisplayTitle(session, agentName, 'Untitled session', session.agent_id) ?? 'Untitled session'
 
   if (confirmDelete) {
     return (

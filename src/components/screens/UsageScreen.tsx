@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
+import { ErrorState } from '@/components/ui/error-state'
 import { fetchTokenStats, fetchSessions, fetchAgents, tokenStatsQueryKeys, type TokenStatsPeriod, type Session } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
 import { sessionDisplayTitle } from '@/lib/nav/sessionDisplayTitle'
@@ -305,8 +306,18 @@ export function UsageScreen() {
   // mid-load); a FAILED roster falls back to the AGENT ID — the server's own
   // empty-name fallback (pkg/gateway/session_title.go::withDisplayTitle) —
   // never "Unknown agent", and never "Untitled" on a main
-  // (S4-04/S2-05, 2026-10-12).
-  const { data: agents = [], isPending: agentsLoading } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+  // (S4-04/S2-05, 2026-10-12). R2-S4-03: that id fallback is not silent —
+  // when the roster FAILED outright (no retained data, the same condition
+  // the search modal's banner uses) the by-session tab shows the same honest
+  // "unavailable" note, so "jim - Main Session" never reads as a real name.
+  const {
+    data: agentsData,
+    isPending: agentsLoading,
+    isError: agentsError,
+    refetch: refetchAgents,
+  } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+  const agents = agentsData ?? []
+  const agentNamesUnavailable = agentsError && agentsData === undefined
 
   const isLoading = statsLoading || sessionsLoading || agentsLoading
 
@@ -528,7 +539,22 @@ export function UsageScreen() {
                     </Button>
                   </div>
                 ) : (
-                  <SessionsTable rows={sessionRows} />
+                  <>
+                    {/* R2-S4-03: the id fallback in the rows below is never
+                        silent — the same honest note the search modal shows
+                        when the roster fails (catalogued ErrorState, its
+                        Retry re-runs the roster fetch). Not rendered while
+                        the roster is merely loading: the skeleton owns that
+                        window. */}
+                    {agentNamesUnavailable && (
+                      <ErrorState
+                        message="Agent names could not be loaded — sessions show their agent id."
+                        onRetry={() => void refetchAgents()}
+                        className="mb-[var(--space-3)]"
+                      />
+                    )}
+                    <SessionsTable rows={sessionRows} />
+                  </>
                 )}
               </TabsContent>
             </Tabs>
