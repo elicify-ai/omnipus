@@ -46,17 +46,17 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
    **If it does not look like that:** A blank name cannot be saved. If creation fails, keep working in **My Workspace** and retry after checking the error message.
 
-6. **Create a teammate agent.** Open **Agents** from the sidebar and select **+ New Main**. On **Identity**, give the agent a name, short description, and a model from your connected provider. On **Personality**, write a direct instruction such as `You turn research into short, factual briefings.` Review **Tools**, then select **Create agent**.
+6. **Create a teammate agent with Omnipus.** Your provider from step 1 must be working first — Omnipus uses a model to plan the agent. In `First project`, open **Team**, select **Add agent**, then **Create with Omnipus**. (The **Add agent** row under the workspace in the sidebar does the same.) Omnipus's chat opens with "Create an agent in First project" already sent. Answer its questions — for example, that the agent turns research into short, factual briefings — and choose **Go** on its summary.
 
-   **What you see:** The new agent appears in the Agents list. The wizard shows **Identity**, **Personality**, and **Tools** as its three steps.
+   **What you see:** You stay in `First project`; Omnipus's chat opens from its entry at the top of the sidebar. After **Go**, Omnipus reports each part (created, joined the team, main chat ready) as working or not, and the new agent appears on `First project`'s **Team** list and under the workspace in the sidebar.
 
-   **If it does not look like that:** **Next** stays unavailable until the required fields on that step are complete. If no model appears, reconnect a provider in Settings. If creation fails, leave the advanced options unchanged and retry with the required fields only. See [agents](agents.md) before choosing a different agent type.
+   **If it does not look like that:** If Omnipus says no model works, fix the provider in **Settings → Providers**, or Omnipus's own model in **Settings → System agents**, then try again. If the entry says **Omnipus unavailable**, select **Retry**. See [Omnipus](using-omnipus-ui.md#omnipus).
 
-7. **Add the agent to your workspace team.** Return to `First project`, open **Team**, and select **Add agent**. Choose the agent you created.
+7. **Or add an agent you already have.** In **Team**, select **Add agent**, then **Add an existing agent**, and choose one from the list. Agents that are in no workspace yet are marked **Not in any workspace**.
 
-   **What you see:** The agent appears in **Team & delegation**. It also becomes available where the workspace asks you to choose an agent.
+   **What you see:** The agent appears on the **Team** list with a short "Added" notice and **Undo**. It also becomes available where the workspace asks you to choose an agent.
 
-   **If it does not look like that:** The picker only offers agents that are not already on the team. Return to **Agents** and confirm that your new agent exists, then reopen the Team panel. [Workspaces](workspaces.md) covers team membership and delegation.
+   **If it does not look like that:** The list offers only agents that are not already on the team. If the change says it was **not confirmed**, select **Retry**. [Workspaces](workspaces.md) covers team membership and delegation.
 
 8. **Give the agent a task.** Open **Tasks**, choose **Board**, and select **New task**. Enter a short title and a concrete goal. Add at least one acceptance criterion and one definition-of-done item. Choose your new agent, then select **Create & Run**.
 

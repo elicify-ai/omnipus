@@ -47,7 +47,9 @@ A connector can also name its own default, which wins there. See [connectors](co
 
 ## How to create your own agent
 
-You create one of three types. The create buttons sit in the section headers of the roster.
+**With Omnipus (the way the app is moving to).** In a workspace, select **Add agent** under it in the sidebar, or **Team → Add agent → Create with Omnipus**. Omnipus's chat opens with creating an agent for that workspace already started: it asks what the agent is for, shows one summary of what it will create (and any gaps it cannot cover), and creates the agent in that workspace after you choose **Go**. It needs a working model — fix providers in **Settings → Providers** and Omnipus's own model in **Settings → System agents**. The workspace's **Team** panel is the home of its agents: each card offers **Edit**, **Remove from this workspace** and **Delete everywhere…**.
+
+**With the form (until it is retired).** You create one of three types. The create buttons sit in the section headers of the roster.
 
 | Type | Runs on | Works for | You can chat with it |
 |---|---|---|---|

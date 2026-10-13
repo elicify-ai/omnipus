@@ -31,6 +31,8 @@ Use a fallback chain when an agent must keep working through temporary failures.
 5. Select **Continue**, then complete the connection step. The provider appears in your configured provider list.
 6. Choose a model in the **Default model** card, or open an agent and choose its model there.
 
+**Omnipus's model.** Omnipus, the system agent that creates and changes your agents, uses a model like any agent. If none works, it cannot plan — fix it without a chat: open **Settings → System agents**, choose **Edit** on Omnipus and pick a model from a connected provider. Saving works even while no model works, because it is a settings change, not a chat with the model.
+
 For a custom endpoint, choose either the `openai-compatible` or `anthropic` protocol. Enter the exact model names that the endpoint accepts. Omnipus cannot discover a custom endpoint's catalog for you.
 
 ## Models known to support tools

@@ -6,8 +6,8 @@
 // the mock's emoji glyphs (repo rule: no emoji in UI chrome).
 //
 // Behaviors (spec US-1..US-4, test 9):
-//   - Tabs: short header labels + index, answered tabs marked, n/M counter,
-//     auto-advance to the next unanswered question on selection.
+//   - Tabs: short header labels + index, answered tabs marked, n/M counter;
+//     moving to the next unanswered question happens only on confirm (#1066).
 //   - Options: flat rows, hover/selected tint, recommended badge LISTED
 //     FIRST and never pre-selected; multi_select turns rows into toggles.
 //   - Free text: underline input under every question; typing deselects,
@@ -111,15 +111,6 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
     return d.selected.length > 0 || d.freeText.trim() !== '' || autoResolved.has(q.header)
   }
 
-  function advanceFrom(_header: string, nextDrafts: Record<string, AnswerDraft>) {
-    // Auto-advance to the first question still unanswered under nextDrafts.
-    const idx = questions.findIndex((q) => !answeredIn(q, nextDrafts))
-    if (idx >= 0) {
-      focusOnSwitch.current = true
-      setActive(idx)
-    }
-  }
-
   // #1066: confirm the question at `index` — by the visible Next/Answer
   // control or by Enter. Moves to the next unanswered question after it
   // (wrapping), or submits the whole card from the last question once every
@@ -155,8 +146,10 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
   }
 
   function optionKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, q: Question, index: number, label: string) {
-    if (event.key !== 'Enter' || !q.multi_select) return
-    // Multi-select: Enter confirms instead of toggling (Space toggles).
+    if (event.key !== 'Enter') return
+    // Enter confirms (Space selects). With nothing chosen yet, Enter on an
+    // option chooses it and confirms in one step; otherwise it confirms the
+    // current choice unchanged.
     event.preventDefault()
     const cur = draftFor(q.header)
     if (cur.selected.length === 0 && cur.freeText.trim() === '') {
@@ -181,12 +174,9 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
         selected = [label]
       }
       // EC-3: re-selecting drops the free text (last interaction wins).
-      const next = { ...prev, [q.header]: { selected, freeText: '' } }
-      if (selected.length > 0 && !q.multi_select) {
-        // Auto-advance shortly after a single-select choice.
-        setTimeout(() => advanceFrom(q.header, next), 200)
-      }
-      return next
+      // #1066 (CHECK F1): choosing an option never moves on by itself — single
+      // and multiple choice alike advance only on an explicit confirm.
+      return { ...prev, [q.header]: { selected, freeText: '' } }
     })
   }
 
@@ -467,7 +457,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
               Next
             </Button>
             <span className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid="ask-user-keys-hint">
-              ↑↓ move · {q.multi_select ? 'Space select · ' : ''}Enter next
+              ↑↓ move · Space select · Enter next
             </span>
           </div>
         )}

@@ -104,7 +104,7 @@ The chat is a conversation with the workspace's agents. When the open conversati
 When an agent asks you questions, a card docks above the message box with one tab per question. Every question can be answered with the keyboard alone:
 
 - **↑** and **↓** move between the options and the free-text field; **Space** selects or clears an option.
-- **Enter** confirms the question and moves to the next unanswered one. On a single-choice question, choosing an option also moves on. On a multiple-choice question with nothing selected yet, **Enter** on an option picks it and moves on.
+- **Enter** confirms the question and moves to the next unanswered one. Choosing an option — by click or **Space** — never moves on by itself; on a question with nothing chosen yet, **Enter** on an option picks it and moves on in one step.
 - Each question except the last shows **Next**; the last is confirmed with **Answer**, which sends every answer at once and is available only when every question is answered. **Cancel** sends nothing.
 - No option is chosen for you in advance — the recommended one is only listed first and marked.
 
@@ -144,7 +144,7 @@ Your own messages sit on the right with no name. Every other message in the conv
 
 Names are plain text. A name that contains characters that look like formatting shows them exactly as written, never styled.
 
-When an agent answers someone — for example a reply that goes back out to a message that arrived on Telegram — the reply shows **Ava → Alice · Telegram** above the text, with the answering agent's small portrait beside it: who answered, and who it went to. If a reply records only that it was a reply, without who it went to, it shows **Ava → reply** instead. The tool card for the send that produced such a reply is hidden from the conversation, because the reply itself already shows what was sent and to whom; while that answer is still streaming in live, the card can remain until the reply finishes.
+When an agent answers someone — for example a reply that goes back out to a message that arrived on Telegram — the reply shows **Mia → Alice · Telegram** above the text, with the answering agent's small portrait beside it: who answered, and who it went to. If a reply records only that it was a reply, without who it went to, it shows **Mia → reply** instead. The tool card for the send that produced such a reply is hidden from the conversation, because the reply itself already shows what was sent and to whom; while that answer is still streaming in live, the card can remain until the reply finishes.
 
 A failure or refusal routed to an existing chat appears in that conversation, including when no reply has started. It does not turn into an app-wide connection banner when you open another conversation or start a new chat. Connection and routing-protocol failures remain separate app-wide problems.
 
