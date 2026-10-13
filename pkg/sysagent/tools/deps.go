@@ -235,7 +235,7 @@ type Deps struct {
 	// that agent's *AgentInstance into the live registry
 	// (AgentLoop.UpsertAgentFast) and rebuild the resolver/default-agent
 	// override so the agent is immediately resolvable via
-	// GetAgent/ResolveRoute/GetDefaultAgent — not merely present in a map
+	// GetAgent/ResolveRoute — not merely present in a map
 	// (see pkg/agent/registry.go's UpsertAgentFast doc comment for the two
 	// traps that requires closing).
 	//

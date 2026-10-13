@@ -1039,23 +1039,23 @@ func (al *AgentLoop) enqueueSteeringItemWithStatus(scope, agentID string, item s
 		return EnqueueStatusNormal, fmt.Errorf("steering queue is not initialized")
 	}
 	// FR-123 / §6.4: an item with no named sender runs under the session's
-	// canonical owner; when that owner no longer resolves the item is refused
+	// canonical owner. When the scope names an owner (an agent-scoped key, or
+	// a stored session's owner) that no longer resolves, the item is refused
 	// visibly here — never queued for a drain that would lose it, and never
-	// handed to an invented sender.
+	// handed to an invented sender. A scope that names no owner at all is
+	// queued as before, with no sender attributed.
 	if strings.TrimSpace(agentID) == "" {
-		owner := al.agentForSession(scope)
-		if owner == nil {
-			ownerID := "(unknown)"
-			if parsed := routing.ParseAgentSessionKey(normalizeSteeringScope(scope)); parsed != nil && parsed.AgentID != "" {
-				ownerID = parsed.AgentID
-			}
+		ownerID, owner, named := al.steeringScopeOwner(scope)
+		if named && owner == nil {
 			err := fmt.Errorf("steering refused: the session's owner agent %s no longer exists", ownerID)
 			logger.WarnCF("agent", "Steering refused: no canonical owner", map[string]any{
 				"scope": normalizeSteeringScope(scope), "owner_agent_id": ownerID,
 			})
 			return EnqueueStatusNormal, err
 		}
-		agentID = owner.ID
+		if owner != nil {
+			agentID = owner.ID
+		}
 	}
 
 	var status EnqueueStatus
@@ -1460,20 +1460,42 @@ func (al *AgentLoop) continueWithSteeringMessages(
 // duplicated side effect.
 var errContinuePostDequeueFailure = errors.New("continue: turn failed after dequeuing steering messages")
 
+// steeringScopeOwner resolves the canonical owner a steering scope names:
+// the agent of an agent-scoped key, else the owner of the stored session the
+// scope is. named reports whether the scope names an owner at all; owner is
+// nil when the named owner does not resolve in the live registry.
+func (al *AgentLoop) steeringScopeOwner(scope string) (ownerID string, owner *AgentInstance, named bool) {
+	registry := al.GetRegistry()
+	key := normalizeSteeringScope(scope)
+	if parsed := routing.ParseAgentSessionKey(key); parsed != nil && parsed.AgentID != "" {
+		ownerID, named = parsed.AgentID, true
+	} else if key != "" {
+		if store := al.ResolveSessionStore(key); store != nil {
+			if meta, err := store.GetMeta(key); err == nil && meta != nil && strings.TrimSpace(meta.AgentID) != "" {
+				ownerID, named = strings.TrimSpace(meta.AgentID), true
+			}
+		}
+	}
+	if !named || registry == nil {
+		return ownerID, nil, named
+	}
+	if inst, ok := registry.GetAgent(ownerID); ok {
+		return ownerID, inst, true
+	}
+	return ownerID, nil, true
+}
+
 func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 	registry := al.GetRegistry()
 	if registry == nil {
 		return nil
 	}
 
-	// The canonical owner named by the session key only — a missing owner is
-	// nil, never a default agent (FR-123, §6.4).
-	if parsed := routing.ParseAgentSessionKey(sessionKey); parsed != nil {
-		if agent, ok := registry.GetAgent(parsed.AgentID); ok {
-			return agent
-		}
-	}
-	return nil
+	// The canonical owner the key names (an agent-scoped key, or a stored
+	// session's owner) — a missing owner is nil, never a default agent
+	// (FR-123, §6.4).
+	_, owner, _ := al.steeringScopeOwner(sessionKey)
+	return owner
 }
 
 // continuePendingSteering is the one destructive dequeue-and-run path for an

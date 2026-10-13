@@ -163,10 +163,9 @@ func (s *Store) Get(id string) (*config.AgentConfig, error) {
 // Callers MUST distinguish `skipped` from "never existed" per D6 rule 2
 // (dangling is surfaced, never fatal): a binding or delegation target naming
 // a skipped ID is a different, more serious case ("this agent's record is
-// broken") than one naming an ID that was simply never created. See
-// pkg/agent.AgentRegistry.EvaluateDefaultAgentHealth for R3's specific
-// consumer of this distinction (the configured default agent's record failed
-// to load → mark degraded, but keep routing via the fallback ladder).
+// broken") than one naming an ID that was simply never created: routing
+// drops a skipped channel main agent rather than re-routing it
+// (pkg/routing.RouteResolver.ResolveRoute).
 func (s *Store) List() (agents []config.AgentConfig, skipped []string, err error) {
 	agents, skipped, err = s.inner.List()
 	if err != nil {

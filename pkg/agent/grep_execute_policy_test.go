@@ -141,7 +141,7 @@ func TestGrepTool_ExecuteAndPolicy(t *testing.T) {
 		_, err := al.processDirectPrimaryForTest(ctx, "please grep for needle", "test-session-grep-allow")
 		require.NoError(t, err)
 
-		const resolvedSessionKey = "agent:mia:main"
+		resolvedSessionKey := directTurnHistoryKeyForTest("mia", "cli", "direct")
 		history := defaultAgent.Sessions.GetHistory(resolvedSessionKey)
 		require.NotEmpty(t, history, "session history must not be empty after a completed turn")
 
@@ -242,7 +242,7 @@ func TestGrepTool_ExecuteAndPolicy(t *testing.T) {
 		// result actually reached session history, not just an audit line.
 		defaultAgent, ok := al.GetRegistry().GetAgent("mia")
 		require.True(t, ok)
-		history := defaultAgent.Sessions.GetHistory("agent:mia:main")
+		history := defaultAgent.Sessions.GetHistory(directTurnHistoryKeyForTest("mia", "cli", "direct"))
 		require.NotEmpty(t, history)
 
 		var denyMsgFound bool

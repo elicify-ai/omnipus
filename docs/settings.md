@@ -268,7 +268,7 @@ Three protections are fixed in the code on purpose. They guard against malformed
 
 - [security](security.md) — the rest of the Security tab: the sandbox, the encrypted credential vault, and the audit log.
 - [tools](tools.md) — which tools agents may use, and the allow, ask, and deny permissions that govern them.
-- [agents](agents.md) — giving one agent its own model instead of the default, and choosing the default agent.
+- [agents](agents.md) — giving one agent its own model instead of the default.
 - [memory](memory.md) — what the team remembers between chats, behind the Memory tab.
 - [connectors](connectors.md) — connector accounts and their credentials, managed on the Connectors screen.
 - [providers and models](providers-and-models.md) — how providers, sign-in methods, models, and defaults fit together.

@@ -56,7 +56,7 @@ func runPlainHistoryNoProgress(t *testing.T, history []providers.Message, reject
 	}
 	reliefEvents := observePlainHistoryRelief(al)
 	// Preserve the fresh Anthropic fixture's real inbound routing path too.
-	_, routed, err := al.processMessage(context.Background(), bus.InboundMessage{
+	_, routed, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "test", ChatID: "plain-no-progress-chat", Sender: bus.SenderInfo{CanonicalID: "user1"}, SessionKey: key, Content: trigger,
 	})
 	require.Same(t, agent, routed, "fixture: the exact seeded scope must execute under Mia")

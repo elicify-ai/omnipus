@@ -53,7 +53,7 @@ func TestRunTurn_StreamingMessageID_ReachesRealStreamer(t *testing.T) {
 	streamer := &identityStampRecordingStreamer{}
 	msgBus.SetStreamDelegate(&identityStampStreamDelegate{streamer: streamer})
 
-	_, agent, err := al.processMessage(context.Background(), bus.InboundMessage{
+	_, agent, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "webchat",
 		Sender:  bus.SenderInfo{CanonicalID: "user:1", DisplayName: "Tester"},
 		ChatID:  "direct",

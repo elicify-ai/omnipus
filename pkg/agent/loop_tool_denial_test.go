@@ -221,14 +221,12 @@ func TestRunTurn_TimeoutDenial_PersistedPayloadNeverClaimsUserDenied(t *testing.
 	assert.False(t, stub.wasCalled.Load(), "the tool must never execute — it was denied, not approved")
 	assert.Equal(t, 1, approver.callCount())
 
-	// Locate the persisted role="tool" permission_denied message. Same
-	// session-key derivation as scenario_runturn_test.go's precedent:
-	// ProcessDirect's channel="cli"/chatID="direct" resolves to DMScopeMain,
-	// producing session key "agent:mia:main" via BuildAgentMainSessionKey
-	// ("mia" is the only agent baseLoopDenialTestConfig registers).
+	// Locate the persisted role="tool" permission_denied message under the
+	// direct turn's explicit-agent route key ("mia" is the only agent
+	// baseLoopDenialTestConfig registers).
 	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent)
-	const resolvedSessionKey = "agent:mia:main"
+	resolvedSessionKey := directTurnHistoryKeyForTest("mia", "cli", "direct")
 	history := defaultAgent.Sessions.GetHistory(resolvedSessionKey)
 	require.NotEmpty(t, history)
 

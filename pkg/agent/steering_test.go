@@ -183,7 +183,7 @@ func TestAgentLoop_Continue_NoMessages(t *testing.T) {
 		t.Fatal("expected provider to be initialized")
 	}
 
-	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
+	resp, err := al.Continue(context.Background(), "agent:mia:session:test-session", "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -229,11 +229,11 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 
 	// DEL-04: the steering queue is scoped; a message is enqueued in the scope
 	// of the session that will consume it (there is no shared fallback bucket).
-	correlationID, _, err := al.enqueueSteeringMessage("test-session", "", providers.Message{Role: "user", Content: "new direction"}, "")
+	correlationID, _, err := al.enqueueSteeringMessage("agent:mia:session:test-session", "", providers.Message{Role: "user", Content: "new direction"}, "")
 	require.NoError(t, err, "SETUP: the steering enqueue must succeed")
 	require.NotEmpty(t, correlationID, "every queued steering item is minted a correlation id")
 
-	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
+	resp, err := al.Continue(context.Background(), "agent:mia:session:test-session", "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -714,7 +714,7 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 	// DEL-04: enqueue in the scope of the session whose turn will poll it.
 	route, _, routeErr := al.resolveMessageRoute(bus.InboundMessage{
 		Channel: "test", ChatID: "chat1", SessionKey: "test-session", Content: "initial message",
-		Sender: bus.SenderInfo{CanonicalID: "cron"},
+		Sender: bus.SenderInfo{CanonicalID: "cron"}, Metadata: map[string]string{"agent_id": "mia"},
 	})
 	if routeErr != nil {
 		t.Fatalf("resolve route: %v", routeErr)
@@ -804,7 +804,8 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	}()
 
 	first := bus.InboundMessage{
-		Channel: "test",
+		Channel:  "test",
+		Metadata: map[string]string{"agent_id": "mia"},
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
@@ -816,7 +817,8 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 		},
 	}
 	late := bus.InboundMessage{
-		Channel: "test",
+		Channel:  "test",
+		Metadata: map[string]string{"agent_id": "mia"},
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},

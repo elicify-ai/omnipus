@@ -228,7 +228,7 @@ func TestDecommission_LongConversationMakesNoExtraModelCalls(t *testing.T) {
 	const sessionKey = "agent:mia:chat:decommission-no-extra-calls"
 
 	for i := 0; i < turns; i++ {
-		_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+		_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 			Channel:    "discord",
 			InstanceID: "discord.test",
 			ChatID:     "chat-decommission",

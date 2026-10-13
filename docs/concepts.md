@@ -47,7 +47,7 @@ You can also create your own agents, in three kinds. A **Main** agent is a chat 
 
 ## Connectors
 
-A connector links a chat platform you already use — Telegram, Discord, Slack, among others — to your agents. You write where you already write. The connector delivers the message into the workspace it is bound to, and the answer comes back in the same conversation. See [connectors](connectors.md).
+A connector links a chat platform you already use — Telegram, Discord, Slack, among others — to your agents. You write where you already write. Every connector is bound to a workspace and the agent that answers it; the connector delivers the message to that agent, and the answer comes back in the same conversation. There is no default agent: a connector that is not bound drops messages and shows why on the Connectors page. See [connectors](connectors.md).
 
 ## Tasks, plans, and goals
 

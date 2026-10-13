@@ -83,10 +83,10 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
 
-	// Resolve the session key that ProcessDirect will use.
-	// ProcessDirect → channel="cli", chatID="direct" → DMScopeMain → "agent:mia:main"
-	// ("mia" is the only agent this test's cfg.Agents.List registers — no "main" sentinel anymore).
-	const resolvedSessionKey = "agent:mia:main"
+	// Resolve the session key the direct turn will use: the explicit-agent
+	// route's key for channel "cli", chat "direct" ("mia" is the only agent
+	// this test's cfg.Agents.List registers).
+	resolvedSessionKey := directTurnHistoryKeyForTest("mia", "cli", "direct")
 
 	// Seed the default agent's session store with an orphaned history.
 	// An orphaned history = assistant message with tool_calls but NO subsequent
@@ -239,7 +239,7 @@ func TestRecoverOrphan_CleanSession_IsNoOp(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
 
-	const resolvedSessionKey = "agent:mia:main"
+	resolvedSessionKey := directTurnHistoryKeyForTest("mia", "cli", "direct")
 
 	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent)

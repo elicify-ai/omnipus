@@ -311,19 +311,9 @@ func emitOrStderr(auditLog AuditEmitter, event, severity string, fields map[stri
 	fmt.Fprintln(os.Stderr, sb.String())
 }
 
-// NOTE (ADR-054 D6.4): RepairMultipleDefaults used to live here — it enforced
-// an at-most-one AgentConfig.Default==true invariant across cfg.Agents.List,
-// called from loadConfigInternal (F11). It is retired, not merely renamed:
-// once agents split into independent per-entity files, "at most one
-// Default==true" is no longer an invariant anything needs enforced, because
-// nothing resolves the routing default from that per-entity field anymore —
-// AgentRegistry.GetDefaultAgent and RouteResolver.resolveDefaultAgentID both
-// consult only the settings singleton (Agents.Defaults.DefaultAgentID) now.
-// A per-entity bool could never be a sound at-most-one singleton once two
-// different agents' files can be written concurrently with no shared lock
-// (each write's delta is individually valid, the composition — two "the
-// defaults" — is not); moving the signal to a single settings string removes
-// the invariant instead of needing a new cross-entity lock to guard it.
+// NOTE: RepairMultipleDefaults (an at-most-one AgentConfig.Default
+// invariant, ADR-054 D6.4) is retired, and since omnipus-system-agent FR-120
+// there is no default agent at all — nothing to repair.
 
 // RepairStaleChannelWildcardBindings enforces the ADR-029 FR-029 two-representation
 // rule: a channel instance persists routing EITHER as cfg.Channels[id].{WorkspaceID,

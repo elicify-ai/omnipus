@@ -111,7 +111,7 @@ func TestProcessMessage_NewestUserMessageReachesModelOnce(t *testing.T) {
 			if tc.preWritten {
 				entryID = "entry-newest"
 			}
-			_, _, err := h.al.processMessage(context.Background(), bus.InboundMessage{
+			_, _, err := h.al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 				Channel:           tc.channel,
 				ChatID:            "chat-once",
 				SessionID:         h.transcriptID,
@@ -163,7 +163,7 @@ func sendWebchat(t *testing.T, h *attachHarness, content string) {
 // entry the inbound path wrote for this message ("" when none was written).
 func runTurnFor(t *testing.T, h *attachHarness, channel, content, entryID string) {
 	t.Helper()
-	if _, _, err := h.al.processMessage(context.Background(), bus.InboundMessage{
+	if _, _, err := h.al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel:           channel,
 		ChatID:            "chat-once",
 		SessionID:         h.transcriptID,

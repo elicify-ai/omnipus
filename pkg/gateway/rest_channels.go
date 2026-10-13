@@ -585,14 +585,14 @@ func (scr *restAPISetChannelRouting) handleBound() bool {
 		// non-chat-target — the spec requires the system-specific 400.
 		if foundAgent.IsSystem() {
 			jsonErr(scr.w, http.StatusBadRequest,
-				"system agents are not chat targets and cannot be a channel's default agent")
+				"system agents are not chat targets and cannot be a channel's main agent")
 			return true
 		}
 		if foundAgent.IsWorker() {
 			jsonErr(
 				scr.w,
 				http.StatusUnprocessableEntity,
-				"workers are not chat targets and cannot be a channel's default agent",
+				"workers are not chat targets and cannot be a channel's main agent",
 			)
 			return true
 		}

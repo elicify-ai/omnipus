@@ -114,6 +114,12 @@ func (al *AgentLoop) admitBoundConnectorInputCtx(ctx context.Context, msg *bus.I
 		return unroutable, fmt.Errorf("connector intake: eligibility of %s/%s could not be determined: %w", pair.WorkspaceID, pair.AgentID, eErr)
 	}
 	if !eligible {
+		// FR-121: a drop is never silent — error log, audit entry and the
+		// connector's degraded status, exactly as for an unbound instance.
+		instanceID := connectorInstanceKey(*msg)
+		al.recordRouteDrop(*msg, &routeDropError{instanceID: instanceID,
+			reason: fmt.Sprintf("bound agent %s cannot answer in workspace %s", pair.AgentID, pair.WorkspaceID),
+			bound:  true, workspaceID: pair.WorkspaceID, intendedAgent: pair.AgentID})
 		return unroutable, fmt.Errorf("connector intake: %s/%s has no eligible main", pair.WorkspaceID, pair.AgentID)
 	}
 	// 2b. Expand voice parts so the bounds below see the real turn text.

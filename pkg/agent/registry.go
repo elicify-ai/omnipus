@@ -220,7 +220,7 @@ func (r *AgentRegistry) Close() {
 // UpsertAgent inserts or replaces a single agent instance in the registry
 // in-place, without rebuilding the other N-1 agents (ADR-054 §5 originally
 // designed this as the target of a pkg/agentstore write-notification hook so
-// routing/read paths — GetAgent, ResolveRoute, GetDefaultAgent — could
+// routing/read paths — GetAgent, ResolveRoute — could
 // observe a create/update at zero extra disk I/O, without a full registry
 // rebuild).
 //
@@ -321,8 +321,8 @@ var upsertAgentFastTestHook func(attempt int)
 // full config reload — finish ADR-054's split on the read path"). ADR-054
 // already split agents into per-entity files, fixing *parallel* agent
 // creation on the WRITE side; this closes the matching gap on the READ
-// side — AgentRegistry, which actually serves GetAgent/ResolveRoute/
-// GetDefaultAgent, was still rebuilt from scratch (NewAgentRegistry) for a
+// side — AgentRegistry, which actually serves GetAgent/ResolveRoute,
+// was still rebuilt from scratch (NewAgentRegistry) for a
 // one-agent change, which is what forced a full handleConfigReload
 // (channels/cron/schedulers/the plan engine all restart, up to ~60s under
 // load — 30s service drain + 30s provider rebuild, worst case).
@@ -364,7 +364,7 @@ var upsertAgentFastTestHook func(attempt int)
 // down (it, too, builds and wires a whole new registry before ever taking
 // al.mu; wireDelegationInjectors' own doc comment spells out why that is
 // safe: "no other goroutine holds a reference to registry yet"). A
-// concurrent GetAgent/ResolveRoute/GetDefaultAgent therefore always
+// concurrent GetAgent/ResolveRoute therefore always
 // observes either the fully-wired OLD registry or the fully-wired NEW one —
 // never an agent that is in the map but not yet wired.
 //

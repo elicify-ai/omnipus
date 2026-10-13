@@ -217,7 +217,7 @@ func forgetRosterBaseline(homePath string) {
 // for that sentinel. pkg/config/defaults.go seeds that global floor "allow"
 // for bash, write_file, edit_file, delegate, send_email, and more. So a
 // wiped roster silently promotes ALL routed traffic (via
-// AgentRegistry.GetDefaultAgent's fallback ladder) to an unrestricted
+// the former default-agent fallback ladder) to an unrestricted
 // agent — and repairAndValidateToolPolicyCoverage (this file), which walks
 // cfg.Agents.List to find coverage gaps, finds ZERO agents to check and
 // vacuously PASSES an empty roster, so the existing coverage gate does not

@@ -352,12 +352,11 @@ func TestOrdinaryAdmission_HandbackWakeDuringHumanTail_WaitsThenRuns(t *testing.
 	}
 }
 
-// The channel-binding branch of the routing cascade, with a session id set,
-// also yields a per-session route key.
-func TestResolveMessageRoute_BindingBranch_SessionKeyIsPerSession(t *testing.T) {
-	al, _, sidA, sidB := newAdmissionSessionsLoopCfg(t, newGatedProvider(), func(cfg *config.Config) {
-		cfg.Bindings = []config.AgentBinding{{AgentID: "mia", Match: config.BindingMatch{Channel: "webchat"}}}
-	})
+// A message addressed to an existing session routes to that session's
+// canonical owner (§6.4 — the channel-binding cascade is retired), and the
+// route key is per session.
+func TestResolveMessageRoute_SessionOwnerBranch_SessionKeyIsPerSession(t *testing.T) {
+	al, _, sidA, sidB := newAdmissionSessionsLoopCfg(t, newGatedProvider(), nil)
 	msgFor := func(sid string) bus.InboundMessage {
 		return bus.InboundMessage{Channel: "webchat", ChatID: "chat-" + sid, SessionID: sid,
 			Sender: bus.SenderInfo{CanonicalID: "webchat_user"}}
@@ -366,7 +365,7 @@ func TestResolveMessageRoute_BindingBranch_SessionKeyIsPerSession(t *testing.T) 
 	require.NoError(t, err)
 	routeB, _, err := al.resolveMessageRoute(msgFor(sidB))
 	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(routeA.MatchedBy, "binding."), "the test must go through a binding branch, got %q", routeA.MatchedBy)
+	require.Equal(t, "session.owner", routeA.MatchedBy, "the test must go through the session-owner branch")
 	require.NotEqual(t, routeA.SessionKey, routeB.SessionKey)
 	require.Contains(t, routeA.SessionKey, sidA)
 	require.Contains(t, routeB.SessionKey, sidB)

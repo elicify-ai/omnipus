@@ -173,7 +173,7 @@ func (h *d2bRoot) humanTurn(t *testing.T, content string) (string, error) {
 		GatewayUserID: "d2b-owner", UserInitiated: true,
 		Sender: bus.SenderInfo{CanonicalID: "human:d2b-owner"},
 	}
-	reply, _, err := h.al.processMessage(context.Background(), msg)
+	reply, _, err := h.al.processMessageAsPrimaryForTest(context.Background(), msg)
 	return reply, err
 }
 

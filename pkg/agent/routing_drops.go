@@ -72,6 +72,12 @@ const unboundChannelReason = "bind this channel to an agent in a workspace"
 type routeDropError struct {
 	instanceID string
 	reason     string
+	// bound is true when the instance is bound and its main agent cannot
+	// answer (missing, not a chat target, not on the team) — audited as the
+	// ADR-029 drift drop; false for an unbound instance.
+	bound         bool
+	workspaceID   string
+	intendedAgent string
 }
 
 func (e *routeDropError) Error() string { return "message dropped: " + e.reason }
@@ -141,13 +147,23 @@ func (al *AgentLoop) recordRouteDrop(msg bus.InboundMessage, drop *routeDropErro
 	})
 	al.driftDropped.Add(1)
 	if al.auditLogger != nil {
-		if err := al.auditLogger.Log(&audit.Entry{
+		entry := &audit.Entry{
 			Event:    audit.EventChannelMessageDropped,
 			Decision: audit.DecisionDeny,
 			Details: map[string]any{
 				"instance_id": drop.instanceID, "channel": msg.Channel, "chat_id": msg.ChatID, "reason": drop.reason,
 			},
-		}); err != nil {
+		}
+		if drop.bound {
+			// ADR-029 FR-028: a bound instance whose agent cannot answer keeps
+			// its drift-drop event and fields.
+			entry.Event = audit.EventChannelRoutingDriftDrop
+			entry.Details = map[string]any{
+				"instance_id": drop.instanceID, "workspace_id": drop.workspaceID,
+				"intended_agent_id": drop.intendedAgent, "chat_id": msg.ChatID, "reason": drop.reason,
+			}
+		}
+		if err := al.auditLogger.Log(entry); err != nil {
 			logger.ErrorCF("agent", "audit write failed for a dropped inbound message",
 				map[string]any{"instance_id": drop.instanceID, "error": err.Error()})
 		}

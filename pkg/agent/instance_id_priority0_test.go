@@ -25,6 +25,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/routing"
 )
 
 // TestInstanceID_DrivesPriority0_EndToEnd_StampedVsTypeKey is the O-2 false-green
@@ -76,8 +77,9 @@ func TestInstanceID_DrivesPriority0_EndToEnd_StampedVsTypeKey(t *testing.T) {
 	t.Cleanup(func() { al.Close() })
 	registerInstance(t, al, cfg, home, "mia", config.AgentTypeCustom)
 	registerInstance(t, al, cfg, home, "ray", config.AgentTypeCustom)
+	writeWorkspaceTeamRecord(t, home, "sales", false, []string{"ray"}, "Sales", "")
 
-	// ── Case A: stamped InstanceID drives Priority-0 to "ray" ───────────────
+	// ── Case A: stamped InstanceID resolves the bound main agent "ray" ──────
 	stampedMsg := bus.InboundMessage{
 		Channel:    "whatsapp",
 		InstanceID: "whatsapp.eu", // trusted stamp from the adapter
@@ -89,21 +91,21 @@ func TestInstanceID_DrivesPriority0_EndToEnd_StampedVsTypeKey(t *testing.T) {
 		t.Fatalf("Case A (stamped): resolveMessageRoute returned error: %v", errA)
 	}
 	if agentA == nil || agentA.ID != "ray" {
-		t.Errorf("Case A (stamped): agent = %v, want ray — Priority-0 must fire on InstanceID 'whatsapp.eu'",
+		t.Errorf("Case A (stamped): agent = %v, want ray — the binding must fire on InstanceID 'whatsapp.eu'",
 			agentA)
 	}
 	if routeA.AgentID != "ray" {
 		t.Errorf("Case A (stamped): route.AgentID = %q, want %q", routeA.AgentID, "ray")
 	}
-	if routeA.MatchedBy != "identity.agent" {
-		t.Errorf("Case A (stamped): route.MatchedBy = %q, want %q", routeA.MatchedBy, "identity.agent")
+	if routeA.MatchedBy != routing.MatchedByMainAgent {
+		t.Errorf("Case A (stamped): route.MatchedBy = %q, want %q", routeA.MatchedBy, routing.MatchedByMainAgent)
 	}
 	if routeA.Drop {
 		t.Error("Case A (stamped): route.Drop is true; must be false for a valid bound agent")
 	}
 
-	// ── Case B: empty InstanceID falls back to the bare type key → default ──
-	// cfg.Channels["whatsapp"] is absent → no bound instance → normal cascade.
+	// ── Case B: empty InstanceID falls back to the bare type key, which has no
+	// binding → the message drops (FR-121: no default agent). ─────────────────
 	unstampedMsg := bus.InboundMessage{
 		Channel:    "whatsapp",
 		InstanceID: "", // adapter did NOT stamp — inboundInstanceID falls back to Channel
@@ -111,38 +113,13 @@ func TestInstanceID_DrivesPriority0_EndToEnd_StampedVsTypeKey(t *testing.T) {
 		Content:    "hello",
 	}
 	routeB, agentB, errB := al.resolveMessageRoute(unstampedMsg)
-	if errB != nil {
-		t.Fatalf("Case B (type fallback): resolveMessageRoute returned error: %v", errB)
+	if errB == nil {
+		t.Fatalf("Case B (type fallback): an unbound type key must drop, got agent %v", agentB)
 	}
-	if agentB == nil {
-		t.Fatal("Case B (type fallback): resolveMessageRoute returned nil agent; want the default 'mia'")
+	if agentB != nil {
+		t.Errorf("Case B (type fallback): routed to %q — an unbound key must reach no agent", agentB.ID)
 	}
-	// The bare-type fallback has no bound config → must NOT route to "ray".
-	if agentB.ID == "ray" {
-		t.Errorf(
-			"Case B (type fallback): routed to 'ray' — this would be a false-green regression; the bare 'whatsapp' key has no binding so the default (mia) should be used",
-		)
-	}
-	if agentB.ID != "mia" {
-		t.Errorf("Case B (type fallback): agent = %q, want %q (default cascade)", agentB.ID, "mia")
-	}
-	if routeB.AgentID != "mia" {
-		t.Errorf("Case B (type fallback): route.AgentID = %q, want %q", routeB.AgentID, "mia")
-	}
-	if routeB.Drop {
-		t.Error("Case B (type fallback): route.Drop is true for an unbound default route; must be false")
-	}
-
-	// ── Differentiation guard: the two cases must resolve to DIFFERENT agents ─
-	// This is the core of the O-2 guard: if a regression collapsed both to the
-	// type-key fallback, both cases would route to the same agent and this check
-	// would catch it.
-	if routeA.AgentID == routeB.AgentID {
-		t.Errorf(
-			"Differentiation FAILED: both stamped and unstamped inbounds route to the same agent %q — "+
-				"this is the O-2 false-green class; the stamped path must use 'whatsapp.eu' (→ray) "+
-				"and the unstamped path must use 'whatsapp' fallback (→mia)",
-			routeA.AgentID,
-		)
+	if !routeB.Drop {
+		t.Error("Case B (type fallback): route.Drop must be true for the unbound type key")
 	}
 }

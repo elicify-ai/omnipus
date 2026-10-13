@@ -404,18 +404,25 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 	// FR-121: resolveMessageRoute is side-effect-free (several callers resolve
 	// the same message); the drop is logged, audited and shown on the
 	// channel exactly once, at processMessage's rejection point.
+	boundWS, intended := "", ""
+	if bound {
+		boundWS = strings.TrimSpace(cfg.Channels[instanceID].WorkspaceID)
+		intended = strings.TrimSpace(identity.ID)
+	}
+	dropErr := func(reason string) *routeDropError {
+		return &routeDropError{instanceID: instanceID, reason: reason, bound: bound, workspaceID: boundWS, intendedAgent: intended}
+	}
 	if route.Drop {
-		return route, nil, &routeDropError{instanceID: instanceID, reason: routeDropReason(route, identity)}
+		return route, nil, dropErr(routeDropReason(route, identity))
 	}
 	agent, ok := registry.GetAgent(route.AgentID)
 	if !ok || agent == nil {
 		route.Drop = true
-		return route, nil, &routeDropError{instanceID: instanceID,
-			reason: fmt.Sprintf("bound agent %s not found", route.AgentID)}
+		return route, nil, dropErr(fmt.Sprintf("bound agent %s not found", route.AgentID))
 	}
-	if reason := al.boundMemberRefusal(cfg.Channels[instanceID].WorkspaceID, agent.ID); reason != "" {
+	if reason := al.boundMemberRefusal(boundWS, agent.ID); reason != "" {
 		route.Drop = true
-		return route, nil, &routeDropError{instanceID: instanceID, reason: reason}
+		return route, nil, dropErr(reason)
 	}
 
 	// A message addressed to a concrete chat session runs under that session's

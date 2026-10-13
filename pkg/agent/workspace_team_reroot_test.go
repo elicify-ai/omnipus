@@ -247,7 +247,7 @@ func TestRunTurn_WorkspacelessAgentRefused_ViaProcessMessage(t *testing.T) {
 	// metadata workspace_id either, so the refusal isn't merely "explicit id
 	// not found" but the identity-only FindForAgentPreferring path (mirrors
 	// a plain channel message with no workspace binding).
-	_, _, procErr := al.processMessage(ctx, bus.InboundMessage{
+	_, _, procErr := al.processMessageAsPrimaryForTest(ctx, bus.InboundMessage{
 		Channel:    "cli",
 		ChatID:     "direct",
 		Content:    "please write proof.txt for me",
@@ -519,7 +519,7 @@ func TestRunTurn_MemberGetsWorkspaceWorkDir(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	finalContent, _, procErr := al.processMessage(ctx, bus.InboundMessage{
+	finalContent, _, procErr := al.processMessageAsPrimaryForTest(ctx, bus.InboundMessage{
 		Channel:    "cli",
 		ChatID:     "direct",
 		Content:    "please write explicit.txt for me",

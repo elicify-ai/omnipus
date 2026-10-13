@@ -82,7 +82,7 @@ func TestSessionCreation_InheritsWorkspaceID(t *testing.T) {
 			DisplayName: "Alice",
 		},
 	}
-	_, _, processErr := al.processMessage(context.Background(), msg)
+	_, _, processErr := al.processMessageAsPrimaryForTest(context.Background(), msg)
 	require.NoError(t, processErr, "processMessage must succeed for a valid bound inbound")
 
 	// Retrieve the created session.
@@ -138,7 +138,7 @@ func TestSessionCreation_UnboundInstance_NoWorkspaceID(t *testing.T) {
 		Content: "hi",
 		Sender:  bus.SenderInfo{DisplayName: "Bob"},
 	}
-	_, _, err := al.processMessage(context.Background(), msg)
+	_, _, err := al.processMessageAsPrimaryForTest(context.Background(), msg)
 	require.NoError(t, err)
 
 	sessions, err := al.sharedSessionStore.ListSessions()
@@ -211,9 +211,9 @@ func TestSessionCreation_TwoInstancesDifferentWorkspaces(t *testing.T) {
 		Content:    "message for ops",
 	}
 
-	_, _, err := al.processMessage(context.Background(), msgEU)
+	_, _, err := al.processMessageAsPrimaryForTest(context.Background(), msgEU)
 	require.NoError(t, err, "processMessage for whatsapp.eu must succeed")
-	_, _, err = al.processMessage(context.Background(), msgUS)
+	_, _, err = al.processMessageAsPrimaryForTest(context.Background(), msgUS)
 	require.NoError(t, err, "processMessage for whatsapp.us must succeed")
 
 	sessions, err := al.sharedSessionStore.ListSessions()

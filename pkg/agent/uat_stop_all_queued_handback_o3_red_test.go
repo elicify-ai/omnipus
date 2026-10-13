@@ -102,7 +102,7 @@ func newUATO3QueuedHandback(t *testing.T) *uatO3Fixture {
 	rootResult := &rootHumanResult{}
 	go func() {
 		defer close(rootDone)
-		rootResult.response, _, rootResult.err = al.processMessage(context.Background(), bus.InboundMessage{
+		rootResult.response, _, rootResult.err = al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 			Channel: "webchat", ChatID: meta.ID, SessionID: meta.ID,
 			Sender: bus.SenderInfo{CanonicalID: owner}, GatewayUserID: owner, UserInitiated: true,
 			Content: "Wait for the requested helper work", Metadata: map[string]string{"agent_id": parentAgent.ID, "workspace_id": ws},
@@ -186,7 +186,7 @@ func TestUATO3_StopAllSupersedesQueuedHandbackWithoutAnotherParentTurn(t *testin
 	callsAtStop := f.parent.calls.Load()
 	require.Equal(t, int32(1), callsAtStop, "only the original human root call has executed")
 	wake := f.queuedWake(t)
-	_, _, wakeErr := f.al.processMessage(context.Background(), wake) // Actual system inbound/admission path.
+	_, _, wakeErr := f.al.processMessageAsPrimaryForTest(context.Background(), wake) // Actual system inbound/admission path.
 	t.Logf("actual queued wake after Stop all: response error=%v", wakeErr)
 	if calls := f.parent.calls.Load(); calls != callsAtStop {
 		t.Errorf("UAT O3: queued helper hand-back started %d new parent provider turn(s) after Stop all landed; want 0 — the stopped chat must stay quiet until an explicit resume", calls-callsAtStop)
@@ -219,7 +219,7 @@ func TestUATO3_UnstoppedQueuedHandbackActuallyRunsOneParentTurn(t *testing.T) {
 	require.NoError(t, f.rootResult.err, "the unstopped original root must really finish successfully")
 	require.Equal(t, uatO3ParentAnswer, f.rootResult.response)
 	wake := f.queuedWake(t)
-	response, _, err := f.al.processMessage(context.Background(), wake)
+	response, _, err := f.al.processMessageAsPrimaryForTest(context.Background(), wake)
 	require.NoError(t, err)
 	require.Equal(t, uatO3ParentAnswer, response)
 	require.Equal(t, int32(2), f.parent.calls.Load(), "one original root plus exactly one actual queued hand-back turn")

@@ -1566,7 +1566,7 @@ func (al *AgentLoop) ProcessScheduled(
 	}
 
 	// Owner pinning (FR-001): a missing owner is a hard error — NEVER fall back
-	// to GetDefaultAgent.
+	// to another agent (there is no default agent).
 	agent, ok := al.GetRegistry().GetAgent(ownerAgentID)
 	if !ok || agent == nil {
 		return "", fmt.Errorf("owner unavailable: agent %q not found", ownerAgentID)

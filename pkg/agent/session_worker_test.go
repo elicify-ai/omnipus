@@ -53,6 +53,9 @@ func makeSessionMsg(sessionID, content string) bus.InboundMessage {
 		},
 		SessionID: sessionID,
 		Content:   content,
+		// The fixture sessions are not in the store; name the fixture's chat
+		// agent explicitly (there is no default agent, FR-120).
+		Metadata: map[string]string{"agent_id": testDefaultAgentID},
 	}
 }
 

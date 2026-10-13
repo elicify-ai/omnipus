@@ -683,7 +683,7 @@ func TestProcessSystemMessage_MediaToolDelivery_StampsWorkspaceID(t *testing.T) 
 	ws := "sales"
 	require.NoError(t, al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &ws}))
 
-	resp, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	resp, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "system",
 		// originChannel/originChatID parse from ChatID as "channel:chat_id".
 		ChatID: "telegram:chat1",
@@ -710,7 +710,7 @@ func TestProcessSystemMessage_MediaToolDelivery_StampsWorkspaceID(t *testing.T) 
 func TestBuildContinuationTarget_ResolvesWorkspaceID_FromSessionMeta(t *testing.T) {
 	al := newMediaWorkspaceIDTestLoopOnly(t, "telegram")
 
-	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "web", "main")
+	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "web", "mia")
 	require.NoError(t, err)
 	ws := "sales"
 	require.NoError(t, al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &ws}))
@@ -745,10 +745,12 @@ func TestBuildContinuationTarget_ResolvesWorkspaceID_FromChannelBinding(t *testi
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Channels: map[string]config.ChannelInstanceConfig{
+			// FR-121: a binding names its workspace AND main agent.
 			"telegram.sales": {
 				Type:        "telegram",
 				Enabled:     true,
 				WorkspaceID: "sales",
+				Identity:    &config.ChannelIdentity{Kind: "agent", ID: "mia"},
 			},
 		},
 	}
@@ -756,6 +758,7 @@ func TestBuildContinuationTarget_ResolvesWorkspaceID_FromChannelBinding(t *testi
 	t.Cleanup(func() { msgBus.Close() })
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
 	t.Cleanup(al.Close)
+	writeWorkspaceTeamRecord(t, omnipusHome(), "sales", false, []string{"mia"}, "Sales", "")
 
 	target, err := al.buildContinuationTarget(bus.InboundMessage{
 		Channel:    "telegram",

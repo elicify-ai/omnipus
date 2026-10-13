@@ -25,7 +25,7 @@ func TestOwnerWake_AfterLandedStop_DoesNotReviveOrRun(t *testing.T) {
 	wake := ownerWakeInbound(addressing.Capture{RequestID: "q1", Source: addressing.Source{SessionID: h.id}},
 		meta.AgentID, meta.WorkspaceID, session.TranscriptEntry{ID: "ans-1", AgentID: "guest"})
 
-	reply, _, perr := h.al.processMessage(context.Background(), wake)
+	reply, _, perr := h.al.processMessageAsPrimaryForTest(context.Background(), wake)
 	require.NoError(t, perr, "a stop is not a failure: the retained wake reports no error")
 	assert.Empty(t, reply, "and publishes no reply into the answer pseudo-chat")
 
@@ -44,7 +44,7 @@ func TestOwnerWake_AfterLandedStop_ControlsStillWork(t *testing.T) {
 	require.NoError(t, err)
 	wake := ownerWakeInbound(addressing.Capture{RequestID: "q1", Source: addressing.Source{SessionID: h.id}},
 		meta.AgentID, meta.WorkspaceID, session.TranscriptEntry{ID: "ans-1", AgentID: "guest"})
-	_, _, err = h.al.processMessage(context.Background(), wake)
+	_, _, err = h.al.processMessageAsPrimaryForTest(context.Background(), wake)
 	require.NoError(t, err)
 	assert.Len(t, h.provider.calls(), 1, "an idle owner must still be woken by an answer")
 

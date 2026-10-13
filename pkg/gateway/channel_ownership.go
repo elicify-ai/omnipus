@@ -89,8 +89,7 @@ func (r *channelOwnershipResolver) OwnerOf(instanceID string) (workspaceID, agen
 // workspaceID and agentID are compared with exact (case-sensitive) string
 // equality. Unlike instance ids, workspace ids and agent ids are opaque
 // identifiers compared exactly everywhere else they appear in this codebase
-// (e.g. the default-agent resolution ladder's "ac.ID ==
-// cfg.Agents.Defaults.DefaultAgentID" in pkg/routing/route.go, and
+// (e.g. pkg/routing/route.go's agent lookups, and
 // ChannelIdentity.ID itself, which config.ChannelIdentity.Validate never
 // case-folds) — there is no established convention of case-insensitive
 // workspace/agent id comparison to match, so this does not invent one.

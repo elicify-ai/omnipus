@@ -24,7 +24,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,11 +123,7 @@ func TestLoop_RunningTurnKeepsStartLimit(t *testing.T) {
 	}
 	// Second witness for turn 1, from the instance the turn ran on: history
 	// = user + 3x(assistant, tool) + final = 8 (cf. TestLoop_StopsAtEffectiveLimit).
-	route := al.GetRegistry().ResolveRoute(routing.RouteInput{
-		Channel: "test",
-		Peer:    &routing.RoutePeer{Kind: string(bus.PeerDirect), ID: "cron"},
-	})
-	if h := started.Sessions.GetHistory(route.SessionKey); len(h) != 8 {
+	if h := started.Sessions.GetHistory(directTurnHistoryKeyForTest(started.ID, "test", "chat1")); len(h) != 8 {
 		t.Fatalf("turn 1 history len = %d, want 8 (3 tool rounds)", len(h))
 	}
 

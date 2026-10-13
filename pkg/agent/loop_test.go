@@ -24,7 +24,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
 )
@@ -204,7 +203,7 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	provider := &recordingProvider{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "discord",
 		Sender: bus.SenderInfo{
 			CanonicalID: "discord:123",
@@ -306,7 +305,7 @@ func TestProcessMessage_WebRenderingNoteWiring(t *testing.T) {
 	t.Run("webchat turn injects web-rendering note into provider messages", func(t *testing.T) {
 		al, provider := setup(t)
 
-		_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+		_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 			Channel: "webchat",
 			Sender:  bus.SenderInfo{CanonicalID: "user-web-1"},
 			ChatID:  "chat-web-1",
@@ -345,7 +344,7 @@ func TestProcessMessage_WebRenderingNoteWiring(t *testing.T) {
 			t.Run(channel, func(t *testing.T) {
 				al, provider := setup(t)
 
-				_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+				_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 					Channel: channel,
 					Sender:  bus.SenderInfo{CanonicalID: "user-1"},
 					ChatID:  "chat-1",
@@ -408,7 +407,7 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
 	// /shell is the skill slug; the message follows directly. One-shot: no arm.
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:123",
@@ -475,7 +474,7 @@ func TestProcessMessage_SkillTokenAloneRunsSkill(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
 	// "/shell" alone — one-shot skill run; turn proceeds with empty user message.
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:123",
@@ -716,7 +715,7 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 		Policies: map[string]config.ToolPolicy{"handled_media_tool": "allow"},
 	})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
@@ -756,7 +755,7 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 	default:
 	}
 
-	route, _, err := al.resolveMessageRoute(bus.InboundMessage{
+	route, _, err := al.resolveMessageRouteAsPrimaryForTest(bus.InboundMessage{
 		Channel: "telegram",
 		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
@@ -823,7 +822,7 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 		Policies: map[string]config.ToolPolicy{"handled_media_with_steering_tool": "allow"},
 	})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
@@ -906,7 +905,7 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 		},
 	})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
@@ -1554,7 +1553,7 @@ func (h testHelper) executeAndGetResponse(tb testing.TB, ctx context.Context, ms
 	timeoutCtx, cancel := context.WithTimeout(ctx, responseTimeout)
 	defer cancel()
 
-	response, _, err := h.al.processMessage(timeoutCtx, msg)
+	response, _, err := h.al.processMessageAsPrimaryForTest(timeoutCtx, msg)
 	if err != nil {
 		tb.Fatalf("processMessage failed: %v", err)
 	}
@@ -1608,10 +1607,10 @@ func TestProcessMessage_UsesRouteSessionKey(t *testing.T) {
 		},
 	}
 
-	route := al.registry.ResolveRoute(routing.RouteInput{
-		Channel: msg.Channel,
-		Peer:    extractPeer(msg),
-	})
+	route, _, routeErr := al.resolveMessageRouteAsPrimaryForTest(msg)
+	if routeErr != nil {
+		t.Fatalf("resolve route: %v", routeErr)
+	}
 	sessionKey := route.SessionKey
 
 	defaultAgent := al.registry.primaryChatAgentForTest()
@@ -2405,14 +2404,7 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	if defaultAgent == nil {
 		t.Fatal("No default agent found")
 	}
-	route := al.registry.ResolveRoute(routing.RouteInput{
-		Channel: "test",
-		Peer: &routing.RoutePeer{
-			Kind: string(bus.PeerDirect),
-			ID:   "cron",
-		},
-	})
-	history := defaultAgent.Sessions.GetHistory(route.SessionKey)
+	history := defaultAgent.Sessions.GetHistory(directTurnHistoryKeyForTest(defaultAgent.ID, "test", "chat1"))
 	if len(history) != 4 {
 		t.Fatalf("history len = %d, want 4", len(history))
 	}
@@ -2850,7 +2842,7 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 		Policies: map[string]config.ToolPolicy{"read_file": "allow"},
 	})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user-1",

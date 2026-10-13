@@ -189,7 +189,7 @@ func TestSessionWorker_Continue_UnrelatedActiveSession_MustNotStrandOwnQueuedFol
 	// drain tail starts (real precondition, run once here via a plain,
 	// non-blocking call — its own outcome is not asserted on; only the
 	// steering queue and activeTurnStates state afterward matter).
-	if _, _, err := al.processMessage(context.Background(), msgB); err != nil {
+	if _, _, err := al.processMessageAsPrimaryForTest(context.Background(), msgB); err != nil {
 		t.Fatalf("processMessage(msgB) unexpected error: %v", err)
 	}
 

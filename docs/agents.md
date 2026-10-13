@@ -43,17 +43,9 @@ Omnipus replaces the earlier Ava and Admin agents. It lives in your default work
 
 When an agent changes another agent through its tools, permissions are a separate step: `update_agent` changes identity, model and skills, while per-agent tool permissions and connector assignments change only through `set_agent_permissions`, which always asks you first. A newly created agent can never be granted a management tool (agent, workspace, skill, connector, provider, channel, permission, secret or settings changes) — those stay with Omnipus.
 
-## How to set your default agent
+## Who answers when you start a chat
 
-Omnipus picks the default when a conversation has no specific agent assigned.
-
-1. Open **Agents** in the sidebar.
-2. Find the card of the agent you want as the default.
-3. Click **Set as default** on the card. The star moves to that agent.
-
-Any chat colleague can hold the star, built-in or one you created. Workers never can.
-
-A connector can also name its own default, which wins there. See [connectors](connectors.md).
+There is no default agent. Every new chat names the agent it is with, and every connector is bound to a workspace and the agent that answers it (see [connectors](connectors.md)). Omnipus has exactly one conversation, its main chat; asking for a second one opens that main chat instead.
 
 ## How to create your own agent
 
@@ -253,7 +245,7 @@ If nothing needs attention, the agent records an all-clear. The sidebar lists ch
 ## Related pages
 
 - [Workspaces](workspaces.md) — where teams live and delegation trust is set
-- [Connectors](connectors.md) — per-connector default agents and routing
+- [Connectors](connectors.md) — binding a connector to a workspace and its main agent
 - [Tools](tools.md) — the allow, ask, and deny rules for Omnipus tools
 - [Skills](skills.md) — reusable playbooks an agent picks up
 - [Calendar](calendar.md) — scheduled task work, separate from heartbeats

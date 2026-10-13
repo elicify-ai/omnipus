@@ -362,7 +362,7 @@ func TestAdr093RevivedRoot_DoesNotOverlapTheDyingTurn(t *testing.T) {
 
 	firstDone := make(chan struct{})
 	go func() {
-		_, _, _ = al.processMessage(context.Background(), adr093HumanMessage("still working", parentID))
+		_, _, _ = al.processMessageAsPrimaryForTest(context.Background(), adr093HumanMessage("still working", parentID))
 		close(firstDone)
 	}()
 	select {
@@ -594,7 +594,7 @@ func TestAdr093RevivePredicate_SteerWakeOnWebchatDoesNotRevive(t *testing.T) {
 
 	msg := adr093HumanMessage("this is a steer wake, not a person", parentID)
 	msg.Metadata = map[string]string{"steer_message_id": "wake-1"}
-	if _, _, err := al.processMessage(context.Background(), msg); err != nil {
+	if _, _, err := al.processMessageAsPrimaryForTest(context.Background(), msg); err != nil {
 		t.Fatalf("processMessage: %v", err)
 	}
 	got := adr093Load(t, al, parentID)

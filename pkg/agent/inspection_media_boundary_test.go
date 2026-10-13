@@ -87,7 +87,7 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"read_file": "allow"}})
 
 	msg := bus.InboundMessage{Channel: "telegram", ChatID: "privacy", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect this"}
-	if _, _, err := al.processMessage(context.Background(), msg); err != nil {
+	if _, _, err := al.processMessageAsPrimaryForTest(context.Background(), msg); err != nil {
 		t.Fatal(err)
 	}
 	if len(provider.requests) != 2 || !requestHasInspectionMedia(provider.requests[1]) {
@@ -100,7 +100,7 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 	default:
 	}
 
-	route, _, err := al.resolveMessageRoute(msg)
+	route, _, err := al.resolveMessageRouteAsPrimaryForTest(msg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 	}
 	assertInspectionRecordsPrivate(t, reloadedArchive, imageBytes, imagePath)
 
-	if _, _, procErr := al.processMessage(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "privacy", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "continue"}); procErr != nil {
+	if _, _, procErr := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "privacy", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "continue"}); procErr != nil {
 		t.Fatal(procErr)
 	}
 	if requestHasInspectionMedia(provider.requests[len(provider.requests)-1]) {
@@ -245,7 +245,7 @@ func TestReadImage_InterruptedTurnDoesNotPersistInspection(t *testing.T) {
 	done := make(chan error, 1)
 	msg := bus.InboundMessage{Channel: "telegram", ChatID: "interrupted", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect then stop"}
 	go func() {
-		_, _, err := al.processMessage(ctx, msg)
+		_, _, err := al.processMessageAsPrimaryForTest(ctx, msg)
 		done <- err
 	}()
 	select {
@@ -259,7 +259,7 @@ func TestReadImage_InterruptedTurnDoesNotPersistInspection(t *testing.T) {
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("interrupted turn error = %v, want context.Canceled", err)
 	}
-	route, _, err := al.resolveMessageRoute(msg)
+	route, _, err := al.resolveMessageRouteAsPrimaryForTest(msg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestReadImage_ProviderImageRejectionStaysIncomplete(t *testing.T) {
 	agent := al.GetRegistry().primaryChatAgentForTest()
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"boundary_inspection": "allow"}})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "rejected", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect this"})
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "rejected", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect this"})
 	if err != nil {
 		t.Fatal(err)
 	}

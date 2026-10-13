@@ -191,7 +191,7 @@ func runPlainHistoryEntryRecovery(t *testing.T, direct bool) {
 		response, err = al.processDirectWithChannelPrimaryForTest(context.Background(), trigger, key, "test", "plain-entry-chat")
 	} else {
 		var routed *AgentInstance
-		response, routed, err = al.processMessage(context.Background(), bus.InboundMessage{
+		response, routed, err = al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 			Channel: "test", ChatID: "plain-entry-chat", Sender: bus.SenderInfo{CanonicalID: "user1"}, SessionKey: key, Content: trigger,
 		})
 		require.Same(t, agent, routed, "fixture: seeded Mia must execute")

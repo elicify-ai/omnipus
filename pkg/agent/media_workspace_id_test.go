@@ -93,7 +93,7 @@ func TestProcessMessage_MediaToolDelivery_StampsWorkspaceID(t *testing.T) {
 		Policies: map[string]config.ToolPolicy{"handled_media_tool": "allow"},
 	})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel:    "telegram",
 		InstanceID: "telegram.sales",
 		ChatID:     "chat1",
@@ -156,7 +156,7 @@ func TestProcessMessage_MediaToolDelivery_UnboundChannel_EmptyWorkspaceID(t *tes
 		Policies: map[string]config.ToolPolicy{"handled_media_tool": "allow"},
 	})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		ChatID:  "chat1",
 		Sender: bus.SenderInfo{

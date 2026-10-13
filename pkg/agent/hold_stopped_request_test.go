@@ -178,7 +178,7 @@ func TestHeldRequest_DroppedAgain_IsRepublishedByTheNextTurn(t *testing.T) {
 	}
 
 	mintGenuineBootEpochForLoop(t, f.al)
-	if _, _, err := f.al.processMessage(context.Background(), wake); err != nil {
+	if _, _, err := f.al.processMessageAsPrimaryForTest(context.Background(), wake); err != nil {
 		t.Fatalf("a dropped owner wake must not surface as an error to anyone: %v", err)
 	}
 	if _, inFlight := f.al.heldRepublished.Load(id); inFlight {
@@ -292,7 +292,7 @@ func TestHeldRequest_HumanResumeOfTheStoppedAgentDeliversIt(t *testing.T) {
 			t.Fatalf("delivered wake = %+v, want the held request for the resumed session", in)
 		}
 		processed = make(chan struct{})
-		go func() { defer close(processed); _, _, _ = al.processMessage(ctx, in) }()
+		go func() { defer close(processed); _, _, _ = al.processMessageAsPrimaryForTest(ctx, in) }()
 	case <-time.After(5 * time.Second):
 		// The text may instead have been steered straight into the resumed turn.
 	}
