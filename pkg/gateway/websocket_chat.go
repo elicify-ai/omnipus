@@ -970,13 +970,13 @@ func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 // Kickoffs and legacy no-ID oversized refusals keep their acknowledgement path.
 // Returns true when the message was rejected.
 func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
-	// Navigation FR-038: Admin has no standalone, workspace-less session; a first
-	// message to Admin is accepted only inside the default workspace.
+	// omnipus-system-agent FR-003: a first message to Omnipus is accepted only
+	// inside the default workspace.
 	home := hcm.h.home
 	if home == "" {
 		home = config.OmnipusHomeDir()
 	}
-	if hcm.refuseAdminChat(home, hcm.targetAgentID, hcm.workspaceID, "") {
+	if hcm.refuseOmnipusChat(home, hcm.targetAgentID, hcm.workspaceID, "") {
 		return true
 	}
 	// No session_id in frame: mint a new session so all subsequent frames have one.
@@ -1097,14 +1097,14 @@ func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
 	// existing binding (e.g. a non-workspace-aware channel message
 	// resuming a workspace-bound session), it just leaves it as-is.
 	if hcm.workspaceID != "" && existingMeta != nil && existingMeta.WorkspaceID != hcm.workspaceID {
-		// Navigation FR-038: an Admin chat lives in the default workspace only; a
-		// frame naming another workspace must not re-bind it there.
-		if sessionIsAdminChat(existingMeta) {
+		// FR-003: an Omnipus chat lives in the default workspace only; a frame
+		// naming another workspace must not re-bind it there.
+		if sessionIsOmnipusChat(existingMeta) {
 			home := hcm.h.home
 			if home == "" {
 				home = config.OmnipusHomeDir()
 			}
-			if hcm.refuseAdminChat(home, string(coreagent.IDAdmin), hcm.workspaceID, hcm.sessionID) {
+			if hcm.refuseOmnipusChat(home, string(coreagent.IDOmnipus), hcm.workspaceID, hcm.sessionID) {
 				return true
 			}
 		}
@@ -1560,19 +1560,20 @@ func (hcm *wsHandlerHandleChatMessage) addressesExistingHelperOf(workerID string
 	return rec.SteeredBy != nil && rec.AgentID == workerID
 }
 
-// sessionIsAdminChat reports whether meta is a chat owned by the Admin agent.
-func sessionIsAdminChat(meta *session.UnifiedMeta) bool {
-	return meta != nil && len(meta.AgentIDs) > 0 && meta.AgentIDs[0] == string(coreagent.IDAdmin)
+// sessionIsOmnipusChat reports whether meta is a chat owned by Omnipus.
+func sessionIsOmnipusChat(meta *session.UnifiedMeta) bool {
+	return meta != nil && len(meta.AgentIDs) > 0 && meta.AgentIDs[0] == string(coreagent.IDOmnipus)
 }
 
-// refuseAdminChat applies adminChatRefusal at a WebSocket door: it sends the
-// client ONE error frame and returns true when the Admin chat must not proceed,
-// the refusal text for a user-facing no, the fixed server-failure text for a
-// storage fault. sessionID names the session the frame concerns ("" when none yet).
-func (hcm *wsHandlerHandleChatMessage) refuseAdminChat(home, agentID, workspaceID, sessionID string) bool {
-	msg, fault := adminChatRefusal(home, agentID, workspaceID)
+// refuseOmnipusChat applies omnipusChatRefusal at a WebSocket door: it sends
+// the client ONE error frame and returns true when the Omnipus chat must not
+// proceed, the refusal text for a user-facing no, the fixed server-failure text
+// for a storage fault. sessionID names the session the frame concerns ("" when
+// none yet).
+func (hcm *wsHandlerHandleChatMessage) refuseOmnipusChat(home, agentID, workspaceID, sessionID string) bool {
+	msg, fault := omnipusChatRefusal(home, agentID, workspaceID)
 	if fault != nil {
-		msg = serverFailureText("could not check where Admin's chat may live", fault)
+		msg = serverFailureText("could not check where Omnipus's chat may live", fault)
 	}
 	if msg == "" {
 		return false

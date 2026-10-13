@@ -69,10 +69,10 @@ func (s *targetRecordingStore) BeginInstall(appDataRoot, workspaceRoot, scope st
 // newTargetTestTool builds the tool over an isolated home.
 func newTargetTestTool(home string, admin bool, store *targetRecordingStore) *EnvironmentSetupTool {
 	return NewEnvironmentSetupTool(EnvironmentSetupToolDeps{
-		Home:         home,
-		AgentWorkDir: filepath.Join(home, "agents", "fixture"),
-		Admin:        admin,
-		Store:        store,
+		Home:           home,
+		AgentWorkDir:   filepath.Join(home, "agents", "fixture"),
+		SetupAuthority: admin,
+		Store:          store,
 	})
 }
 
@@ -181,7 +181,7 @@ func TestEnvironmentSetupTarget_NonAdmin_OtherWorkspace_BlockedBeforeAllocation(
 	require.True(t, res.IsError)
 	assert.Equal(t, 0, store.began, "unauthorized target must be refused BEFORE allocation")
 	assert.Contains(t, res.ForLLM, "target_workspace")
-	assert.Contains(t, res.ForLLM, "only Admin can target another workspace")
+	assert.Contains(t, res.ForLLM, "only Omnipus can target another workspace")
 }
 
 func TestEnvironmentSetupTarget_Admin_NonexistentWorkspace_Refused(t *testing.T) {

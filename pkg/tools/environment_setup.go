@@ -89,10 +89,11 @@ type EnvironmentSetupToolDeps struct {
 	// when the turn carries no workspace re-rooting and no explicit target.
 	AgentWorkDir string
 
-	// Admin marks this tool instance as holding cross-workspace setup
-	// authority (server-derived). Non-Admin callers may install into their
-	// own current workspace context only.
-	Admin bool
+	// SetupAuthority marks this tool instance as holding the cross-workspace
+	// setup authority (server-derived; only Omnipus —
+	// coreagent.HasCrossWorkspaceSetupAuthority, omnipus-system-agent FR-006).
+	// Other callers may install into their own current workspace context only.
+	SetupAuthority bool
 
 	// GodMode skips child hardening exactly as it does for this agent's bash
 	// children (resolved once at wiring time; never per-call).
@@ -116,11 +117,11 @@ type EnvironmentSetupToolDeps struct {
 type EnvironmentSetupTool struct {
 	BaseTool
 
-	home         string
-	agentWorkDir string
-	admin        bool
-	godMode      bool
-	proxy        *sandbox.EgressProxy
+	home           string
+	agentWorkDir   string
+	setupAuthority bool
+	godMode        bool
+	proxy          *sandbox.EgressProxy
 
 	store EnvironmentSetupStore
 
@@ -141,7 +142,7 @@ func NewEnvironmentSetupTool(deps EnvironmentSetupToolDeps) *EnvironmentSetupToo
 	return &EnvironmentSetupTool{
 		home:            deps.Home,
 		agentWorkDir:    deps.AgentWorkDir,
-		admin:           deps.Admin,
+		setupAuthority:  deps.SetupAuthority,
 		godMode:         deps.GodMode,
 		proxy:           deps.Proxy,
 		store:           deps.Store,
@@ -298,9 +299,9 @@ func (t *EnvironmentSetupTool) resolveTarget(ctx context.Context, requested stri
 		return environmentSetupTarget{ID: ownID, Root: ownDir}, nil
 	}
 
-	if !t.admin {
+	if !t.setupAuthority {
 		return environmentSetupTarget{}, fmt.Errorf(
-			"target_workspace %q is outside your authorized workspace; only Admin can target another workspace", requested)
+			"target_workspace %q is outside your authorized workspace; only Omnipus can target another workspace", requested)
 	}
 
 	// Admin cross-workspace authority WITHOUT membership (ES-BDD-10): the

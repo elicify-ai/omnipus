@@ -47,7 +47,7 @@ func TestCoreAgentSeed_ServeWebIsGeneralPurposeOnly(t *testing.T) {
 			"nobody and this test would pass while asserting nothing")
 	}
 
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDAdmin, coreagent.IDPlanner, coreagent.IDResearcher} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDOmnipus, coreagent.IDPlanner, coreagent.IDResearcher} {
 		if got := d2Resolve(t, id, "serve_web"); got != "deny" {
 			t.Errorf("%s serve_web resolves %q, want deny", id, got)
 		}

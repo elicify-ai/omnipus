@@ -35,11 +35,18 @@ func SelfEdgeSeedRow(agentID string, excluded map[string]bool, ceiling int) (Del
 	if id == "" || excluded[id] {
 		return DelegationEdge{}, false
 	}
+	// The role's seed data may lower the self pin (DelegationPolicy.SelfDepth —
+	// Omnipus's self-row ships depth 1, omnipus-system-agent §6.2). Read from
+	// the seed, never from an identity check here.
+	var selfDepth *int
+	if dp := coreagent.SeedDelegationEdges(coreagent.CoreAgentID(id)); dp != nil {
+		selfDepth = dp.SelfDepth
+	}
 	return DelegationEdge{
 		FromAgent: id,
 		ToAgent:   id,
 		Modes:     []DelegationMode{ModeDirect, ModeTask},
-		Depth:     coreagent.SeededEdgeDepth(id, id, nil, ceiling),
+		Depth:     coreagent.SeededEdgeDepthWithSelf(id, id, nil, selfDepth, ceiling),
 	}, true
 }
 

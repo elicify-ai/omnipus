@@ -10,12 +10,35 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
+// agentUpdateArgNames is update_agent's field vocabulary. Per-agent tool
+// policies (tool_policy_changes) and connector assignments (mcp_servers) are
+// NOT in it: set_agent_permissions is the only agent-tool path for those on an
+// existing agent (omnipus-system-agent FR-024), and update_agent refuses them
+// by name (permissionFieldRefusal) rather than as unknown fields.
 var agentUpdateArgNames = map[string]struct{}{
 	"id": {}, "revision": {}, "name": {}, "description": {}, "soul": {},
 	"model": {}, "provider": {}, "fallback_models": {}, "color": {},
-	"max_tool_iterations": {}, "skills": {}, "mcp_servers": {}, "tool_policy_changes": {},
+	"max_tool_iterations": {}, "skills": {},
 	"memory_enabled": {}, "default": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
+}
+
+// permissionFieldNames are the capability fields only set_agent_permissions
+// may write on an existing agent (FR-024).
+var permissionFieldNames = []string{"tool_policy_changes", "mcp_servers"}
+
+// permissionFieldRefusal returns update_agent's refusal when args carries a
+// permission field — present at all, a clear or a null included — so the
+// whole call is refused before any write (BDD-14.2). Nil otherwise.
+func permissionFieldRefusal(args map[string]any) *tools.ToolResult {
+	for _, name := range permissionFieldNames {
+		if _, present := args[name]; present {
+			return tools.ErrorResult(errorJSON("USE_SET_AGENT_PERMISSIONS",
+				name+" cannot be changed with update_agent; per-agent tool policies and connector assignments change only through set_agent_permissions",
+				"Call set_agent_permissions with the agent id, its revision and the capability change"))
+		}
+	}
+	return nil
 }
 
 var agentCreateArgNames = map[string]struct{}{

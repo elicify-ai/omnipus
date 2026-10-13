@@ -8,10 +8,9 @@
 // and its get-or-create). This file owns WHO is entitled to one:
 //
 //   - an eligible native member of a workspace (a chat target: not a worker,
-//     not a System Agent), and
-//   - Admin, in the DEFAULT workspace only (Admin is deliberately never a
-//     team member — see coreagent.ExcludedFromWorkspaceTeams — so the Admin
-//     main is not created by a membership write at all).
+//     not a System Agent). Omnipus is an ordinary member of the default
+//     workspace only (omnipus-system-agent FR-003), so its main is the
+//     default workspace's ordinary member main.
 //
 // Nothing here mints a second identity, a hashed id or a member row: every
 // path funnels into UnifiedStore.GetOrCreateMainSession under the pair's one
@@ -55,21 +54,14 @@ type mainSessionAccessor interface {
 }
 
 // mainAgentEligible reports whether agentID is a kind of agent that can own a
-// main at all, in workspace ws. Two rules, both from C-MAIN/FR-002:
-//
-//   - Admin owns a main in the DEFAULT workspace only. Admin sits on no team,
-//     so this is the whole of Admin's rule.
-//   - Every other agent must be a member (checked by mainSessionPairEligible)
-//     AND a chat target: workers are delegation-only labor and System Agents
-//     are out-of-turn internal-LLM agents, so neither gets a standing
-//     conversation. An agent ID absent from the live config is not eligible —
-//     a stale team entry never mints an identity.
-func mainAgentEligible(cfg *config.Config, ws storedWorkspace, agentID string) bool {
+// main at all (C-MAIN/FR-002): a member (checked by mainSessionPairEligible)
+// AND a chat target — workers are delegation-only labor and System Agents are
+// out-of-turn internal-LLM agents, so neither gets a standing conversation. An
+// agent ID absent from the live config is not eligible — a stale team entry
+// never mints an identity.
+func mainAgentEligible(cfg *config.Config, _ storedWorkspace, agentID string) bool {
 	if cfg == nil || agentID == "" {
 		return false
-	}
-	if agentID == string(coreagent.IDAdmin) {
-		return ws.IsDefault
 	}
 	for _, ac := range cfg.Agents.List {
 		if ac.ID == agentID {
@@ -80,14 +72,10 @@ func mainAgentEligible(cfg *config.Config, ws storedWorkspace, agentID string) b
 }
 
 // mainSessionPairEligible reports whether (ws, agentID) is a pair that owns a
-// main: an eligible agent that is also a member of this workspace (Admin's
-// exemption above aside).
+// main: an eligible agent that is also a member of this workspace.
 func mainSessionPairEligible(cfg *config.Config, ws storedWorkspace, agentID string) bool {
 	if !mainAgentEligible(cfg, ws, agentID) {
 		return false
-	}
-	if agentID == string(coreagent.IDAdmin) {
-		return true
 	}
 	for _, id := range ws.CoreTeam {
 		if id == agentID {
@@ -147,34 +135,35 @@ func mainSessionGate(home string, cfg *config.Config, id string) (isMain, eligib
 	return true, mainSessionPairEligible(cfg, ws, agentID), nil
 }
 
-// adminStandaloneRefusal is the fixed client text for a request to create a chat
-// with Admin outside the default workspace.
-const adminStandaloneRefusal = "Admin's chats live in the default workspace; open Admin's main chat there."
+// omnipusStandaloneRefusal is the fixed client text for a request to create a
+// chat with Omnipus outside the default workspace.
+const omnipusStandaloneRefusal = "Omnipus's chats live in the default workspace; open Omnipus's main chat there."
 
-// adminChatRefusal enforces navigation FR-038 / "one main per agent per workspace"
-// at every door that mints or re-binds a chat session (POST /sessions, the first
-// WebSocket message, and a later frame naming another workspace): Admin has no
-// team and no standalone, workspace-less session. A chat with Admin is accepted
-// only inside the DEFAULT workspace; anything else (no workspace, another
-// workspace, no default yet) returns the refusal text. Other agents return "".
-// home is the OMNIPUS_HOME the workspaces live under.
+// omnipusChatRefusal enforces "one main per agent per workspace" for the
+// system agent at every door that mints or re-binds a chat session (POST
+// /sessions, the first WebSocket message, and a later frame naming another
+// workspace): Omnipus belongs to the default workspace only
+// (omnipus-system-agent FR-003), so a chat with it is accepted only inside the
+// DEFAULT workspace; anything else (no workspace, another workspace, no
+// default yet) returns the refusal text. Other agents return "". home is the
+// OMNIPUS_HOME the workspaces live under.
 //
 // A failure to READ the workspaces (anything but "there is no default yet") is a
 // server fault, returned as the error and never as a refusal: the caller answers
 // it as a 500 with the fixed server-failure text, not as the user-facing 400.
-func adminChatRefusal(home, agentID, workspaceID string) (string, error) {
-	if agentID != string(coreagent.IDAdmin) {
+func omnipusChatRefusal(home, agentID, workspaceID string) (string, error) {
+	if agentID != string(coreagent.IDOmnipus) {
 		return "", nil
 	}
 	def, err := workspace.ResolveDefaultID(home)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNoDefault) {
-			return adminStandaloneRefusal, nil
+			return omnipusStandaloneRefusal, nil
 		}
 		return "", err
 	}
 	if def == "" || strings.TrimSpace(workspaceID) != def {
-		return adminStandaloneRefusal, nil
+		return omnipusStandaloneRefusal, nil
 	}
 	return "", nil
 }
@@ -393,14 +382,13 @@ func (a *restAPI) ensureWorkspaceMains(workspaceID string) error {
 }
 
 // ensureBootMains eagerly establishes every main that FR-002 says exists
-// without any later event: Admin's main in the default workspace, and one main
-// per eligible member of EVERY existing workspace team. It runs from the boot
-// path after the default workspace is ensured, so a fresh install's seeded
-// team owns its mains at first boot — a same-team PUT is a no-op and never the
-// trigger. Admin has no membership to hang a main on, so it is handled here
-// explicitly. Best-effort and idempotent: ensureMainSession reuses an existing
-// main, and an unresolvable pair is logged and skipped. An install with no
-// default workspace gets no Admin main — never a guessed workspace.
+// without any later event: one main per eligible member of EVERY existing
+// workspace team — Omnipus's included, as an ordinary member of the default
+// workspace. It runs from the boot path after the default workspace is
+// ensured, so a fresh install's seeded team owns its mains at first boot — a
+// same-team PUT is a no-op and never the trigger. Best-effort and idempotent:
+// ensureMainSession reuses an existing main, and an unresolvable pair is
+// logged and skipped.
 func (a *restAPI) ensureBootMains() {
 	workspaces, err := listWorkspaceFiles(a.homePath)
 	if err != nil {
@@ -408,12 +396,6 @@ func (a *restAPI) ensureBootMains() {
 		return
 	}
 	for _, ws := range workspaces {
-		if ws.IsDefault {
-			if _, err := a.ensureMainSession(ws.ID, string(coreagent.IDAdmin)); err != nil {
-				slog.Error("rest: boot mains: Admin's main was not created; it is re-attempted when the chat is opened",
-					"workspace_id", ws.ID, "agent_id", string(coreagent.IDAdmin), "error", err)
-			}
-		}
 		if err := a.ensureMainsForTeam(ws); err != nil {
 			slog.Error("rest: boot mains: some team mains were not created; each is re-attempted when its chat is opened",
 				"workspace_id", ws.ID, "error", err)

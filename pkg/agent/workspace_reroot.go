@@ -107,29 +107,22 @@ func resolveTurnWorkDirAndWorkspaceOrRefuse(ctx context.Context, agentID, agentH
 		return dir, "", herr
 	}
 
-	// ADR-090 §2.2 / FR-001: the Admin standalone operator. Admin is a
-	// chat-able CORE agent that is deliberately a member of NO workspace —
-	// its turns root at its own agent home (the same safe rooting
-	// systemAgentHomeDir already gives System Agents), so Admin chat keeps
-	// working once every membership write path excludes it.
+	// omnipus-system-agent OSA-9.1 / L1 amendment §2.2 D4: Omnipus is an
+	// ordinary hidden member of the default workspace (FR-003), but its turns
+	// root at its own agent home — the workspace a request names is TARGET
+	// data, never the turn's root (the same safe rooting systemAgentHomeDir
+	// already gives System Agents). Its reach into workspace folders comes
+	// from its setup authority (FR-006, fspolicy.FSPolicy.SetupRoots), not
+	// from re-rooting.
 	//
 	// This branch is UNCONDITIONAL and runs BEFORE FindForAgentPreferring on
 	// purpose. The workspace record (workspaces/<id>.json) is writable by the
 	// sandboxed child (the reason the delegation store lives in entities/ —
-	// see pkg/workspace/delegationstore.go), so a membership-driven Admin
-	// branch (e.g. "admin home only when no workspace claims admin") would
-	// let a forged core_team entry re-root the operator's turns into a
+	// see pkg/workspace/delegationstore.go), so a membership-driven branch
+	// would let a forged core_team entry re-root Omnipus's turns into a
 	// child-writable workspace. Rooting is decided by ROLE here, never by
 	// file state.
-	//
-	// Standalone grants NO permissions beyond it: TurnWorkspaceDir simply
-	// roots the turn at Admin's home (ordinary tool policies, fspolicy, and
-	// the os.Root confinement apply unchanged); FindForAgentPreferring-based
-	// mounts and knowledge scoping resolve nothing for a member-of-nothing
-	// agent, so no implicit workspace or knowledge access appears. Ordinary
-	// unassigned agents keep the hard refusal below — standalone is Admin's
-	// role property, not a general relaxation.
-	if coreagent.CoreAgentID(agentID) == coreagent.IDAdmin {
+	if coreagent.CoreAgentID(agentID) == coreagent.IDOmnipus {
 		dir, herr := systemAgentHomeDir(agentID, agentHome)
 		return dir, "", herr
 	}

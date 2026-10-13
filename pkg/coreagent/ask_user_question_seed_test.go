@@ -54,10 +54,10 @@ func TestAskUserQuestion_ResolvedPostureAcrossSeededRoster(t *testing.T) {
 	require.True(t, coreagent.SeedConfig(cfg))
 
 	want := map[coreagent.CoreAgentID]string{
-		coreagent.IDMia:   "allow",
-		coreagent.IDJim:   "allow",
-		coreagent.IDAva:   "allow",
-		coreagent.IDAdmin: "allow",
+		coreagent.IDMia: "allow",
+		coreagent.IDJim: "allow",
+		// Omnipus: AskUserQuestion is in its §6.5 supporting set (Go question).
+		coreagent.IDOmnipus: "allow",
 		// Subagent tier: allow (US-7 S1 — "core roster, subagent tier"). The
 		// Worker's sparse map inherits the ceiling's allow; the other three
 		// carry an explicit allow override.

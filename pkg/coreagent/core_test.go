@@ -36,12 +36,12 @@ import (
 //	Then 4 base agents + 1 worker returned (base in display order, Mia first)"
 func TestCoreAgentCount(t *testing.T) {
 	base := coreagent.BaseAgents()
-	require.Len(t, base, 4,
-		"BaseAgents() must return ADR-090's four chat-capable built-ins")
+	require.Len(t, base, 3,
+		"BaseAgents() must return the three chat-capable built-ins: Mia, Jim and Omnipus (omnipus-system-agent FR-001/FR-008)")
 
 	all := coreagent.All()
-	require.Len(t, all, 7,
-		"All() must return 4 chat-capable agents plus Planner, Researcher, and General Purpose")
+	require.Len(t, all, 6,
+		"All() must return 3 chat-capable agents plus Planner, Researcher, and General Purpose")
 
 	// The worker is present and is the only generic-worker entry.
 	workerCount := 0
@@ -83,9 +83,8 @@ func TestCoreAgentIDs(t *testing.T) {
 		// Dataset: Spec-3 4-base roster. Names are the full display strings seeded
 		// into config so users see the role alongside the name in the roster card.
 		{coreagent.IDJim, "Jim"},
-		{coreagent.IDAva, "Ava"},
 		{coreagent.IDMia, "Mia"},
-		{coreagent.IDAdmin, "Admin"},
+		{coreagent.IDOmnipus, "Omnipus"},
 	}
 
 	for _, tc := range tests {
@@ -201,42 +200,13 @@ func TestCoreAgentPromptsHardcoded(t *testing.T) {
 // Traces to: Spec-3 — compiled prompts for the 4-base roster.
 func TestCoreAgentPromptsDifferentiation(t *testing.T) {
 	jimPrompt := coreagent.GetPrompt("jim")
-	avaPrompt := coreagent.GetPrompt("ava")
-	assert.NotEqual(t, jimPrompt, avaPrompt,
-		"Jim and Ava must have different compiled prompts — not the same hardcoded string")
+	omnipusPrompt := coreagent.GetPrompt("omnipus")
+	assert.NotEqual(t, jimPrompt, omnipusPrompt,
+		"Jim and Omnipus must have different compiled prompts — not the same hardcoded string")
 
 	miaPrompt := coreagent.GetPrompt("mia")
-	adminPrompt := coreagent.GetPrompt("admin")
-	assert.NotEqual(t, miaPrompt, adminPrompt,
-		"Mia and Admin must have different compiled prompts")
-}
-
-// TestAvaPromptContainsWorkspaceSetupInterview verifies Ava's compiled prompt
-// carries the workspace-setup kickoff interview instructions: the
-// plain (user-role) message announcing a new workspace's team needs setting
-// up must produce a first-person greeting from Ava, followed by a short
-// interview and the update_workspace/create_agent team-assembly steps. The
-// kickoff reaches Ava as an ordinary user-role chat message (pkg/gateway's
-// handleChatMessage publishes it with Role: "user" — only the PERSISTED/
-// REPLAYED transcript entry is recorded as a neutral system-role event), so
-// the prompt must not claim it arrives "as a system message".
-//
-// Traces to: contracts/asyncapi.yaml metadata.workspace_setup_kickoff,
-// pkg/workspace/workspace.go Workspace.SetupPending.
-func TestAvaPromptContainsWorkspaceSetupInterview(t *testing.T) {
-	avaPrompt := coreagent.GetPrompt("ava")
-	require.NotEmpty(t, avaPrompt)
-
-	assert.Contains(t, avaPrompt, "combined proposal",
-		"Ava must combine configuration changes before asking for consent")
-	assert.Contains(t, avaPrompt, "AskUserQuestion",
-		"Ava must use the owner-session question tool for the single confirmation")
-	assert.Contains(t, avaPrompt, "update_workspace",
-		"the interview must end in setting the workspace's core_team via update_workspace")
-	assert.Contains(t, avaPrompt, "create_agent",
-		"the interview must cover creating specialists that don't already exist")
-	assert.Contains(t, avaPrompt, "get_agent_tools")
-	assert.Contains(t, avaPrompt, "delegation graph")
+	assert.NotEqual(t, miaPrompt, omnipusPrompt,
+		"Mia and Omnipus must have different compiled prompts")
 }
 
 // TestGetPromptUnknownID verifies GetPrompt returns empty string for unknown IDs.
@@ -288,9 +258,10 @@ func TestCoreAgentIsCoreAgentFunction(t *testing.T) {
 	}{
 		// Dataset: the 4 base core agents that must be protected from deletion
 		{"jim", true, "Jim is a core agent (Orchestrator)"},
-		{"ava", true, "Ava is a core agent (Builder)"},
 		{"mia", true, "Mia is a core agent (Assistant)"},
-		{"admin", true, "Admin is a core agent (operator)"},
+		{"omnipus", true, "Omnipus is the core system agent (omnipus-system-agent FR-001)"},
+		{"ava", false, "Ava is retired (omnipus-system-agent FR-008)"},
+		{"admin", false, "Admin is retired (omnipus-system-agent FR-008)"},
 		{"ray", false, "Ray is retired by ADR-090"},
 		// Max is retired from the seeded base — must NOT be identified as core
 		{"max", false, "Max was retired from the seeded base (Spec-3); not a core agent"},
@@ -556,7 +527,7 @@ func TestSeed_GoalClaimResolvesForEveryAgent(t *testing.T) {
 	}
 
 	allowIDs := []coreagent.CoreAgentID{
-		coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDAdmin,
+		coreagent.IDMia, coreagent.IDJim, coreagent.IDOmnipus,
 		coreagent.IDWorker, coreagent.IDPlanner, coreagent.IDResearcher,
 	}
 	for _, id := range allowIDs {
@@ -608,7 +579,7 @@ func TestSeed_BrowserHandoverAtAllThreeSites(t *testing.T) {
 	for _, ac := range cfg.Agents.List {
 		byID[ac.ID] = ac
 	}
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDAva} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim} {
 		_, ok := byID[string(id)]
 		require.True(t, ok, "agent %q must be seeded", id)
 		assert.Equal(t, "allow", resolveFor(t, cfg, string(id), "browser_handover", nil),
@@ -624,7 +595,7 @@ func TestSeed_NonBrowserRolesResolveDenyForBrowserHandover(t *testing.T) {
 	for _, ac := range cfg.Agents.List {
 		byID[ac.ID] = ac
 	}
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDAdmin, coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDOmnipus, coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker} {
 		_, ok := byID[string(id)]
 		require.True(t, ok, "agent %q must be seeded", id)
 		assert.Equal(t, "deny", resolveFor(t, cfg, string(id), "browser_handover", nil),

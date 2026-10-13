@@ -4,20 +4,22 @@
 
 package systools_test
 
-// adr090_admin_team_write_test.go — pins ADR-090 FR-006 on the TOOL write
-// path ("Admin and hidden agents cannot be added as ordinary teammates to
-// bypass role boundaries"):
+// omnipus_team_write_test.go — pins the team-membership refusals on the
+// TOOL write path. Admin is retired (omnipus-system-agent FR-008); the
+// membership boundary it carried now belongs to Omnipus, which may sit on the
+// DEFAULT workspace's team only (FR-003), and to the hidden System Agents
+// (ADR-090 FR-006):
 //
 //   - create_workspace / update_workspace must REJECT a core_team that
-//     introduces Admin (the standalone operator, FR-001 "no team
-//     membership") or a hidden System Agent BEFORE any write lands;
-//   - an explicit delegation arg with an Admin endpoint must be rejected
-//     with INVALID_DELEGATION_EDGE (endpoint not on team) — Admin neither
-//     delegates nor is delegated, ADR-090 §3;
-//   - the delta rule still heals: an update that REMOVES a (forged,
-//     pre-existing) Admin entry must succeed — the exclusion is a gate on
-//     INTRODUCING members (mirroring the REST PUT's ADR-054 D6 rule 1), not
-//     a brick that wedges any workspace a tampered record ever touched.
+//     puts Omnipus on a non-default workspace, or introduces a hidden
+//     System Agent, BEFORE any write lands;
+//   - an explicit delegation arg with an Omnipus endpoint on a team without
+//     Omnipus must be rejected with INVALID_DELEGATION_EDGE (endpoint not
+//     on team);
+//   - the heal rule: an update that REMOVES a (forged, pre-existing)
+//     Omnipus entry from a non-default workspace must succeed — the refusal
+//     gates putting Omnipus there, not a brick that wedges any workspace a
+//     tampered record ever touched.
 //
 // This is the surface that BYPASSES the REST validator
 // (gateway.rest_workspaces.go's validateCoreTeamMembers): sanitizeCoreTeam
@@ -56,23 +58,23 @@ func errorField(t *testing.T, body map[string]any, field string) string {
 	return s
 }
 
-// TestWorkspaceCreate_RejectsAdminTeamBeforeWrites — the whole-list rule on
-// create: an initial core_team containing Admin is INVALID_INPUT naming
-// admin, and NOTHING is persisted (no workspace record at all).
-func TestWorkspaceCreate_RejectsAdminTeamBeforeWrites(t *testing.T) {
-	deps, home := newTestDepsWithHomeAndAgents(t, "mia", "jim", "admin")
+// TestWorkspaceCreate_RejectsOmnipusTeamBeforeWrites — the whole-list rule on
+// create: an initial core_team containing Omnipus is INVALID_INPUT naming
+// Omnipus, and NOTHING is persisted (no workspace record at all).
+func TestWorkspaceCreate_RejectsOmnipusTeamBeforeWrites(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "mia", "jim", "omnipus")
 
 	result := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
-		"name": "Admin Team", "core_team": []any{"mia", "admin", "jim"},
+		"name": "Omnipus Team", "core_team": []any{"mia", "omnipus", "jim"},
 	})
 	if !result.IsError {
-		t.Fatal("create_workspace with admin on core_team unexpectedly succeeded")
+		t.Fatal("create_workspace with omnipus on a non-default core_team unexpectedly succeeded")
 	}
 	parsed := parseError(t, result.ForLLM)
 	if code := errorField(t, parsed, "code"); code != "INVALID_INPUT" {
 		t.Fatalf("error code = %q, want INVALID_INPUT", code)
 	}
-	if msg := strings.ToLower(errorField(t, parsed, "message")); !strings.Contains(msg, "admin") {
+	if msg := strings.ToLower(errorField(t, parsed, "message")); !strings.Contains(msg, "omnipus") {
 		t.Fatalf("error message must name the offending member, got: %q", errorField(t, parsed, "message"))
 	}
 
@@ -101,11 +103,11 @@ func TestWorkspaceCreate_RejectsHiddenSystemAgentTeam(t *testing.T) {
 	}
 }
 
-// TestWorkspaceUpdate_RejectsIntroducingAdminBeforeWrites — the delta rule on
-// update: introducing Admin onto an existing ordinary team is rejected and
+// TestWorkspaceUpdate_RejectsIntroducingOmnipusBeforeWrites — the delta rule on
+// update: introducing Omnipus onto an existing non-default team is rejected and
 // the stored record is byte-identical afterwards.
-func TestWorkspaceUpdate_RejectsIntroducingAdminBeforeWrites(t *testing.T) {
-	deps, home := newTestDepsWithHomeAndAgents(t, "mia", "jim", "admin")
+func TestWorkspaceUpdate_RejectsIntroducingOmnipusBeforeWrites(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "mia", "jim", "omnipus")
 	created := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name": "Ordinary", "core_team": []any{"mia", "jim"},
 	})
@@ -117,13 +119,13 @@ func TestWorkspaceUpdate_RejectsIntroducingAdminBeforeWrites(t *testing.T) {
 
 	result := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id": id, "revision": currentWorkspaceRevision(t, home, id),
-		"core_team": []any{"mia", "jim", "admin"},
+		"core_team": []any{"mia", "jim", "omnipus"},
 	})
 	if !result.IsError {
-		t.Fatal("update_workspace introducing admin onto core_team unexpectedly succeeded")
+		t.Fatal("update_workspace introducing omnipus onto a non-default core_team unexpectedly succeeded")
 	}
 	parsed := parseError(t, result.ForLLM)
-	if msg := strings.ToLower(errorField(t, parsed, "message")); !strings.Contains(msg, "admin") {
+	if msg := strings.ToLower(errorField(t, parsed, "message")); !strings.Contains(msg, "omnipus") {
 		t.Fatalf("error message must name the offending member, got: %q", errorField(t, parsed, "message"))
 	}
 
@@ -132,20 +134,20 @@ func TestWorkspaceUpdate_RejectsIntroducingAdminBeforeWrites(t *testing.T) {
 	}
 }
 
-// TestWorkspaceUpdate_RemovingForgedAdminEntryHeals — the delta rule cuts the
-// other way too: a record that ALREADY contains admin (only reachable by
+// TestWorkspaceUpdate_RemovingForgedOmnipusEntryHeals — the delta rule cuts the
+// other way too: a record that ALREADY contains omnipus (only reachable by
 // direct tampering — every writer now refuses to introduce it) can still be
 // healed by an update whose team simply omits it. The exclusion gates
 // INTRODUCED members; it must not wedge every workspace a tampered record
 // ever touched.
-func TestWorkspaceUpdate_RemovingForgedAdminEntryHeals(t *testing.T) {
+func TestWorkspaceUpdate_RemovingForgedOmnipusEntryHeals(t *testing.T) {
 	deps, home := newTestDepsWithHomeAndAgents(t, "mia", "jim")
 	id := "01JXADR090HEALFORGED0001"
 	wsPath := filepath.Join(home, "workspaces", id+".json")
 	if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	forged := `{"id":"` + id + `","name":"Tampered","status":"active","core_team":["mia","admin"],"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`
+	forged := `{"id":"` + id + `","name":"Tampered","status":"active","core_team":["mia","omnipus"],"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`
 	if err := os.WriteFile(wsPath, []byte(forged), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -155,30 +157,30 @@ func TestWorkspaceUpdate_RemovingForgedAdminEntryHeals(t *testing.T) {
 		"core_team": []any{"mia", "jim"},
 	})
 	if result.IsError {
-		t.Fatalf("healing update (dropping forged admin entry) failed: %s", result.ForLLM)
+		t.Fatalf("healing update (dropping forged omnipus entry) failed: %s", result.ForLLM)
 	}
 
 	after := assertWorkspaceBytes(t, home, id)
-	if strings.Contains(after, "admin") {
-		t.Fatalf("healed workspace still lists admin: %s", after)
+	if strings.Contains(after, "omnipus") {
+		t.Fatalf("healed workspace still lists omnipus: %s", after)
 	}
 }
 
-// TestWorkspaceCreate_ExplicitDelegationAdminEndpointRejected — the
-// delegation surface: an explicit edge with an Admin endpoint is
-// INVALID_DELEGATION_EDGE (Admin is not a team member and never can be), and
+// TestWorkspaceCreate_ExplicitDelegationOmnipusEndpointRejected — the
+// delegation surface: an explicit edge with an Omnipus endpoint is
+// INVALID_DELEGATION_EDGE (Omnipus is not on this team and never can be), and
 // the rejection is zero-write.
-func TestWorkspaceCreate_ExplicitDelegationAdminEndpointRejected(t *testing.T) {
-	deps, home := newTestDepsWithHomeAndAgents(t, "mia", "jim", "admin")
+func TestWorkspaceCreate_ExplicitDelegationOmnipusEndpointRejected(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "mia", "jim", "omnipus")
 
 	result := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name": "Graph", "core_team": []any{"mia", "jim"},
 		"delegation": []any{map[string]any{
-			"from_agent": "jim", "to_agent": "admin", "modes": []any{"direct"},
+			"from_agent": "jim", "to_agent": "omnipus", "modes": []any{"direct"},
 		}},
 	})
 	if !result.IsError {
-		t.Fatal("create_workspace with a jim->admin delegation edge unexpectedly succeeded")
+		t.Fatal("create_workspace with a jim->omnipus delegation edge unexpectedly succeeded")
 	}
 	parsed := parseError(t, result.ForLLM)
 	if code := errorField(t, parsed, "code"); code != "INVALID_DELEGATION_EDGE" {
@@ -191,12 +193,12 @@ func TestWorkspaceCreate_ExplicitDelegationAdminEndpointRejected(t *testing.T) {
 	}
 }
 
-// TestWorkspaceUpdate_ExplicitDelegationAdminEndpointRejected — same
-// guarantee on update: an explicit graph naming Admin as an endpoint fails
+// TestWorkspaceUpdate_ExplicitDelegationOmnipusEndpointRejected — same
+// guarantee on update: an explicit graph naming Omnipus as an endpoint fails
 // against the team set and leaves both the record and any delegation store
 // untouched.
-func TestWorkspaceUpdate_ExplicitDelegationAdminEndpointRejected(t *testing.T) {
-	deps, home := newTestDepsWithHomeAndAgents(t, "mia", "jim", "admin")
+func TestWorkspaceUpdate_ExplicitDelegationOmnipusEndpointRejected(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "mia", "jim", "omnipus")
 	created := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name": "Graph", "core_team": []any{"mia", "jim"},
 	})
@@ -214,11 +216,11 @@ func TestWorkspaceUpdate_ExplicitDelegationAdminEndpointRejected(t *testing.T) {
 	result := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id": id, "revision": currentWorkspaceRevision(t, home, id),
 		"delegation": []any{map[string]any{
-			"from_agent": "admin", "to_agent": "jim", "modes": []any{"direct"},
+			"from_agent": "omnipus", "to_agent": "jim", "modes": []any{"direct"},
 		}},
 	})
 	if !result.IsError {
-		t.Fatal("update_workspace with an admin->jim delegation edge unexpectedly succeeded")
+		t.Fatal("update_workspace with an omnipus->jim delegation edge unexpectedly succeeded")
 	}
 	parsed := parseError(t, result.ForLLM)
 	if code := errorField(t, parsed, "code"); code != "INVALID_DELEGATION_EDGE" {

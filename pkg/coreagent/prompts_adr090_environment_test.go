@@ -70,16 +70,3 @@ func TestPrompt_WorkerRequestsSetupItself(t *testing.T) {
 		t.Fatalf("worker prompt must not carry the retired structured-dependency wording: %s", prompt)
 	}
 }
-
-func TestPrompt_AdminKeepsConnectorRoleWithoutDocumentInstallDuty(t *testing.T) {
-	prompt := GetPrompt("admin")
-	if strings.Contains(prompt, "Install missing document prerequisites") {
-		t.Fatalf("admin prompt must drop the document prerequisite install instruction: %s", prompt)
-	}
-	if !strings.Contains(prompt, "connector") {
-		t.Fatalf("admin persona unchanged: connector role must remain: %s", prompt)
-	}
-	if !strings.Contains(prompt, "tool:environment_setup") {
-		t.Fatalf("admin prompt must name environment_setup for explicit cross-workspace setup requests: %s", prompt)
-	}
-}

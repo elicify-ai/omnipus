@@ -142,6 +142,14 @@ type ContextBuilder struct {
 	// the one actually applied.
 	workingDirInjector func(workspaceID string) string
 
+	// modeNoteInjector is an optional per-turn callback returning a one-line
+	// mode note (or "" for none). It runs in buildDynamicContext (the
+	// UN-CACHED path) because God Mode can be switched at any time: Omnipus's
+	// per-turn context carries the God Mode note exactly while God Mode is
+	// active (omnipus-system-agent FR-015). Set via WithModeNoteInjector;
+	// wired by wireModeNoteInjectors in loop_env.go.
+	modeNoteInjector func() string
+
 	// env carries the environment provider + any per-builder env state. Split
 	// into a nested struct so context_env.go owns the mutation surface without
 	// touching the core ContextBuilder definition.
@@ -184,6 +192,14 @@ func (cb *ContextBuilder) WithDelegationInjector(fn func(workspaceID string, cur
 // omit it). Passing nil disables the block.
 func (cb *ContextBuilder) WithWorkingDirInjector(fn func(workspaceID string) string) *ContextBuilder {
 	cb.workingDirInjector = fn
+	return cb
+}
+
+// WithModeNoteInjector installs the per-turn mode-note callback. fn returns
+// the one-line note to render under "## Mode", or "" to omit the block.
+// Passing nil disables it.
+func (cb *ContextBuilder) WithModeNoteInjector(fn func() string) *ContextBuilder {
+	cb.modeNoteInjector = fn
 	return cb
 }
 
@@ -1254,6 +1270,14 @@ func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, 
 	if cb.workingDirInjector != nil {
 		if block := cb.workingDirInjector(workspaceID); block != "" {
 			fmt.Fprintf(&sb, "\n\n%s", block)
+		}
+	}
+
+	// Mode note (FR-015): read live every turn, so switching God Mode on or
+	// off takes effect on the very next turn.
+	if cb.modeNoteInjector != nil {
+		if note := cb.modeNoteInjector(); note != "" {
+			fmt.Fprintf(&sb, "\n\n## Mode\n%s", note)
 		}
 	}
 

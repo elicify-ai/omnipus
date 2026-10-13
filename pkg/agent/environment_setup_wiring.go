@@ -13,6 +13,7 @@ package agent
 
 import (
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/environmentsetup"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -87,7 +88,7 @@ func (al *AgentLoop) wireEnvironmentSetupDepsOn(registry *AgentRegistry, cfg *co
 		agent.Tools.RegisterReplacing(tools.NewEnvironmentSetupTool(tools.EnvironmentSetupToolDeps{
 			Home:            config.OmnipusHomeDir(),
 			AgentWorkDir:    agent.Home,
-			Admin:           agentID == "admin",
+			SetupAuthority:  coreagent.HasCrossWorkspaceSetupAuthority(agentID),
 			GodMode:         godMode,
 			Proxy:           al.sandboxEgressProxy,
 			Store:           store,

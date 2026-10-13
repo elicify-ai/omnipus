@@ -335,6 +335,17 @@ var allStaticToolNames = []string{
 	// defaultToolPoliciesGeneral), the per-agent seeds and this literal land
 	// together.
 	"environment_setup",
+	// Omnipus system agent (omnipus-system-agent spec §6.5, FR-007, FR-021):
+	// the secret, connection, permission and conversation tools are
+	// classified here — and in the shipped ceiling, the role inventories, the
+	// custom constructor and the Auto table — in the same change, ahead of
+	// their implementations landing (WU-4/5/6/7, landing 2 for
+	// read_conversation and list_mailboxes), under the same rule as the
+	// ADR-052 four above. set_agent_permissions is implemented in
+	// pkg/sysagent/tools (FR-024).
+	"request_secret", "list_secrets", "remove_secret", "select_secret_version",
+	"connect_channel", "connect_mailbox", "set_agent_permissions",
+	"read_conversation", "list_mailboxes",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -413,10 +424,6 @@ func coreAgentSkills(id CoreAgentID) []string {
 		return []string{"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
 	case IDJim:
 		return []string{"interview", "orchestrate", "plan", "define-goal"}
-	case IDAva:
-		return []string{"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team"}
-	case IDAdmin:
-		return []string{"interview", "mcp-install", "provider-setup", "channel-setup", "doctor"}
 	case IDPlanner:
 		return []string{"plan", "define-goal"}
 	case IDResearcher:
@@ -429,17 +436,19 @@ func coreAgentSkills(id CoreAgentID) []string {
 }
 
 // HasSystemAllowsInConstructorSeed returns true if the named core agent's
-// constructor seed contains explicit system.* allow entries (FR-062).
-// Today only Ava qualifies. This is the predicate for the boot-time
-// "critical abort on corrupt config" path.
+// seed grants the system-management tools (FR-062). Today only Omnipus
+// qualifies (spec §6.5: the management family rides the ceiling for it alone).
+// This is the predicate for the boot-time "critical abort on corrupt config"
+// path.
 func HasSystemAllowsInConstructorSeed(agentID string) bool {
-	return CoreAgentID(agentID) == IDAva
+	return CoreAgentID(agentID) == IDOmnipus
 }
 
 // coreAgentDelegation supplies fresh workspace graph defaults: Jim can assign
-// Planner, Researcher, General Purpose, himself and Ava for configuration
-// proposals; Mia can hand work to General Purpose and fork herself; Planner can
-// ask Researcher and fork itself; General Purpose can fork itself.
+// Planner, Researcher, General Purpose and himself; Mia can hand work to
+// General Purpose and fork herself; Planner can ask Researcher and fork
+// itself; General Purpose can fork itself; Omnipus forks itself for its
+// helpers at depth 1.
 //
 // SELF-EDGE (settled design, 2026-10-09): EVERY agent gets a self-edge
 // CANDIDATE — it may fork a NEW session running the same agent exactly like any
@@ -470,7 +479,7 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 	switch id {
 	case IDJim:
 		return &config.DelegationPolicy{
-			To: []config.AgentRef{ref(IDPlanner), ref(IDResearcher), ref(IDWorker), ref(IDJim), ref(IDAva)},
+			To: []config.AgentRef{ref(IDPlanner), ref(IDResearcher), ref(IDWorker), ref(IDJim)},
 			Modes: []config.DelegationMode{
 				config.DelegationModeTask,
 				config.DelegationModeBackground,
@@ -499,8 +508,12 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 			To:    []config.AgentRef{ref(IDWorker)},
 			Modes: []config.DelegationMode{config.DelegationModeTask, config.DelegationModeBackground},
 		}
+	case IDOmnipus:
+		// Omnipus's one ordinary self-row (OSA-8) runs its helpers; its depth
+		// is exactly 1 (spec §6.2) — a helper never forks again.
+		return &config.DelegationPolicy{To: []config.AgentRef{ref(IDOmnipus)}, SelfDepth: intPtr(1)}
 	default:
-		// Every other agent (Ava, Admin, Researcher, the hidden System
+		// Every other agent (Researcher, the hidden System
 		// Agents, and every custom agent created later) gets a SINGLE self-edge
 		// CANDIDATE. Which ids actually receive the row is decided by the WRITERS
 		// from the operator's exclusion data (config.workspace_seed_defaults.
@@ -554,10 +567,22 @@ const FreshSelfDelegationMaxDepth = 3
 // (delegationDepthCeiling / workspaceDelegationDepthCeiling); non-positive
 // is treated as unset and the pin stays 3.
 func SeededEdgeDepth(from, to string, policyDepth *int, ceiling int) *int {
+	return SeededEdgeDepthWithSelf(from, to, policyDepth, nil, ceiling)
+}
+
+// SeededEdgeDepthWithSelf is SeededEdgeDepth plus a role's SelfDepth data
+// (config.DelegationPolicy.SelfDepth): for a self-edge it lowers the fresh pin
+// further to selfDepth when that is set and smaller — Omnipus's self-row ships
+// depth 1 (spec §6.2). It never raises the pin and never touches a non-self
+// edge. Callers that hold the seeded DelegationPolicy pass its SelfDepth.
+func SeededEdgeDepthWithSelf(from, to string, policyDepth, selfDepth *int, ceiling int) *int {
 	if from == to {
 		d := FreshSelfDelegationMaxDepth
 		if ceiling > 0 && ceiling < d {
 			d = ceiling
+		}
+		if selfDepth != nil && *selfDepth > 0 && *selfDepth < d {
+			d = *selfDepth
 		}
 		return &d
 	}
@@ -964,6 +989,13 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"recall_memory":       allow,
 				"run_retrospective":   allow,
 				"recall_conversation": allow,
+				// Spec §6.5 (FR-007): a new custom MAIN agent may ask for its
+				// own secrets on the card, list them and read its own
+				// conversations. The worker tier gets deny instead —
+				// RestrictForWorkerTier applies that at creation time.
+				"request_secret":    allow,
+				"list_secrets":      allow,
+				"read_conversation": allow,
 				// Structural floor (CLAUDE.md constraint 6): every agent needs
 				// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
 				// seeded here as real data rather than the retired compositor.go
@@ -1002,4 +1034,21 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 		},
 	}
 	return policies
+}
+
+// workerTierDeniedTools are the §6.5 tools a new custom MAIN agent is
+// granted but the worker tier (wire Subagent / subagent_3p) is not
+// (OR-MIN-002): workers never see the secret card or other conversations.
+var workerTierDeniedTools = []string{"request_secret", "list_secrets", "read_conversation"}
+
+// RestrictForWorkerTier tightens a NewCustomAgentToolsCfg map for a new
+// worker-tier agent: the §6.5 main-only tools become explicit deny. A nil
+// cfg is left alone.
+func RestrictForWorkerTier(cfg *config.AgentToolsCfg) {
+	if cfg == nil || cfg.Builtin.Policies == nil {
+		return
+	}
+	for _, name := range workerTierDeniedTools {
+		cfg.Builtin.Policies[name] = config.ToolPolicyDeny
+	}
 }

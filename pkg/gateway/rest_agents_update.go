@@ -271,7 +271,30 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	if !acceptAgentIdentityWrite(uf.w, &uf.ru.req, uf.presence) {
 		return true
 	}
+	if uf.refuseOmnipusRules() {
+		return true
+	}
 	return uf.validateMaxToolIterations()
+}
+
+// refuseOmnipusRules applies the Omnipus system agent's write rules before any
+// field is persisted: a rename to the reserved name is refused (FR-002), and a
+// per-agent "ask" for Omnipus in either capability form is refused (FR-022).
+func (uf *restAPIUpdateAgentFlow) refuseOmnipusRules() bool {
+	if uf.ru.req.Name != nil && refuseReservedAgentName(uf.w, *uf.ru.req.Name) {
+		return true
+	}
+	if changes := uf.ru.req.ToolPolicyChanges; changes != nil && changes.Set != nil {
+		if refuseOmnipusPerAgentAsk(uf.w, uf.ru.id, policyMapOf(*changes.Set)) {
+			return true
+		}
+	}
+	if tc := uf.ru.req.ToolsCfg; tc != nil && tc.Builtin != nil {
+		if refuseOmnipusPerAgentAsk(uf.w, uf.ru.id, policyMapOf(tc.Builtin.Policies)) {
+			return true
+		}
+	}
+	return false
 }
 
 // acceptAgentIdentityWrite rejects a present figure, role, or colour that is

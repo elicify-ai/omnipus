@@ -22,6 +22,7 @@ func AllTools(d *Deps) []tools.Tool {
 		NewAgentGetTool(d),
 		NewAgentGetToolsTool(d),
 		NewAgentUpdateTool(d),
+		NewAgentPermissionsTool(d),
 		NewAgentDeleteTool(d),
 		NewAgentReadMetadataTool(d),
 
