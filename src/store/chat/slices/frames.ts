@@ -115,7 +115,13 @@ function applyMessageStatusFrame(bucket: SessionChatState, frame: MessageStatusF
     // ruling pins the queued look while the clear is in flight, not after it
     // has settled. failed and discarded are settle outcomes: the row must
     // resolve (C1), never wait forever on a marker that will never come.
-    if (frame.state !== 'failed' && frame.state !== 'discarded' && isClearCommandText(message.content)) return
+    if (frame.state !== 'failed' && frame.state !== 'discarded' && isClearCommandText(message.content)) {
+      // A /clear row records ONE in-flight state: held (a running reply is being
+      // stopped so the clear can apply). It stays held until the clear marker
+      // replaces the row or failed settles it; other acks never move it.
+      if (frame.state === 'held') message.deliveryStatus = 'held'
+      return
+    }
     message.deliveryStatus = frame.state === 'failed' ? 'failed' : frame.state
     message.status = frame.state === 'failed' ? 'error' : 'done'
   }) as Partial<SessionChatState>

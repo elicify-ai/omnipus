@@ -25,6 +25,6 @@ function HeldDeliveryStatus({ content, ...props }: DeliveryProps & { content: st
 }
 
 export function RowDeliveryStatus({ content, ...props }: DeliveryProps & { content: string }) {
-  if (props.state === 'held') return <HeldDeliveryStatus content={content} {...props} />
+  if (props.state === 'held' && !props.isClearCommand) return <HeldDeliveryStatus content={content} {...props} />
   return <UserMessageDeliveryStatus {...props} />
 }
