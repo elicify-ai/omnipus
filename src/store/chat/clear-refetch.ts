@@ -150,12 +150,16 @@ function findClearRowId(bucket: SessionChatState, clientMessageId: string): stri
 export const FREE_UNRESOLVED_READS = 5
 export const MAX_TURN_ENDS_BETWEEN_READS = 16
 
-function skipBackedOffRead(op: PendingClearRefresh): boolean {
+function skipBackedOffRead(sid: string, op: PendingClearRefresh): boolean {
   const reads = op.unresolvedReads ?? 0
   if (reads < FREE_UNRESOLVED_READS) return false
   const gap = Math.min(2 ** (reads - FREE_UNRESOLVED_READS + 1), MAX_TURN_ENDS_BETWEEN_READS)
   op.turnEndsSinceRead = (op.turnEndsSinceRead ?? 0) + 1
-  if (op.turnEndsSinceRead < gap) return true
+  if (op.turnEndsSinceRead < gap) {
+    // One line per run of skipped turn ends, so a late-applied clear can be traced.
+    if (op.turnEndsSinceRead === 1) logDiagnostic('clearRefetchBackoffSkip', { sessionId: sid, operationId: op.clientMessageId, reads, gap })
+    return true
+  }
   op.turnEndsSinceRead = 0
   return false
 }
@@ -168,8 +172,11 @@ function skipBackedOffRead(op: PendingClearRefresh): boolean {
  * 2) or message_status failed (signal 1). A user-initiated Retry that
  * cannot settle says so immediately instead of going quiet.
  */
-function noteUnresolved(sid: string, op: PendingClearRefresh, userInitiated: boolean): void {
-  op.unresolvedReads = (op.unresolvedReads ?? 0) + 1
+function noteUnresolved(sid: string, op: PendingClearRefresh, userInitiated: boolean, joinedInFlight = false): void {
+  // A read that merely JOINED a fetch already running on the shared key was
+  // not a real look at the post-clear transcript, so it is not a miss and
+  // must not spend the free reads (R3-SPA-SFH-05).
+  if (!joinedInFlight) op.unresolvedReads = (op.unresolvedReads ?? 0) + 1
   logDiagnostic('clearRefetchNoMarkerYet', { sessionId: sid, operationId: op.clientMessageId, reads: op.unresolvedReads })
   if (userInitiated) tell("Can't confirm the /clear result yet. It will be checked again after the next reply.")
 }
@@ -204,7 +211,7 @@ export function settleClearRefetchAfterTurn(sid: string, doneTurnId: string | un
   // message_status failed in frames.ts, which retires the intent directly,
   // whatever turn id the explanatory reply's done carries.
   if (doneTurnId !== undefined && intent.turnIdAtArm !== null && doneTurnId === intent.turnIdAtArm) return
-  if (skipBackedOffRead(intent)) return
+  if (skipBackedOffRead(sid, intent)) return
   void runClearRefetch(sid, withBucket)
 }
 
@@ -295,7 +302,7 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
   // local-only rows above the /clear bubble can never vanish — audit D2),
   // and the intent survives for the next opportunity.
   if (joinedInFlight || !projectionCarriesFreshMarker(fresh, op)) {
-    noteUnresolved(sid, op, userInitiated)
+    noteUnresolved(sid, op, userInitiated, joinedInFlight)
     return
   }
   let deferred = false

@@ -312,6 +312,35 @@ describe('R2-S3-05: a stale idle-armed mark cannot blink Stop off in a later tur
   })
 })
 
+describe('R3-SPA-SFH-04: idle marks never outlive the turn they were armed in', () => {
+  const marks = () => Object.keys(bucket().sessionsById[SID]?.idleArmedToolCalls ?? {})
+  const armStraggler = () => { feed(TOKEN, DONE, TOOL_START); expect(marks(), 'armed by the straggler start').toEqual(['late-1']) }
+
+  it('a later turn\'s done clears a mark whose result never came', () => {
+    armStraggler()
+    feed({ type: 'token', content: 'next', turn_id: 't2', message_id: 'm2' }, { type: 'done', turn_id: 't2', message_id: 'm2', stats: {} })
+    expect(marks()).toEqual([])
+  })
+
+  it('an error frame clears it', () => {
+    armStraggler()
+    feed({ type: 'error', code: 'provider_error', message: 'boom' })
+    expect(marks()).toEqual([])
+  })
+
+  it('Stop clears it', () => {
+    armStraggler()
+    act(() => { useChatStore.getState().cancelStream() })
+    expect(marks()).toEqual([])
+  })
+
+  it('negative control: a mark armed by a live straggler is kept while its tool still runs', () => {
+    armStraggler()
+    expect(anyRunningTool()).toBe(true)
+    expect(marks()).toEqual(['late-1'])
+  })
+})
+
 describe('C11: no Stop blink between a mid-turn tool result and the next token', () => {
   it('a live turn whose last bubble is already finalized keeps the flag up after a tool result', () => {
     // Turn is running (flag armed by the user's send), the last assistant bubble

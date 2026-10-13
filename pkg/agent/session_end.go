@@ -711,7 +711,7 @@ func (rr *agentLoopRunRecap) persistResponse() {
 		"agent_id", rr.agentInst.ID,
 		"workspace", rr.agentInst.Home,
 	)
-	if err := memory.WriteLastSession(parsed.Recap); err != nil {
+	if err := memory.WriteLastSession(formatLastSession(parsed.Recap, parsed.WorthRemembering)); err != nil {
 		slog.Warn("session_end: failed to write LAST_SESSION.md",
 			"session_id", rr.sessionID,
 			"agent_id", rr.agentInst.ID,
@@ -751,6 +751,25 @@ func (rr *agentLoopRunRecap) persistResponse() {
 // ErrFallbackRecapSkipped is returned by the heuristic fallback when there is
 // no agent or memory store to write to: nothing was recorded.
 var ErrFallbackRecapSkipped = errors.New("session_end: fallback recap skipped")
+
+// formatLastSession returns the text persisted to last-session.md on the
+// success path: the free-text recap, then the model's worth_remembering items.
+// The items are persisted because the model may state a user-given fact (a
+// codename, a number) there and leave it out of the free-text recap; persisting
+// only the recap would drop the fact before the next session sees it. Blank
+// items are dropped; with no items the recap is returned exactly as given.
+func formatLastSession(recap string, worthRemembering []string) string {
+	var items []string
+	for _, it := range worthRemembering {
+		if it = strings.TrimSpace(it); it != "" {
+			items = append(items, "- "+it)
+		}
+	}
+	if len(items) == 0 {
+		return recap
+	}
+	return recap + "\n\nWorth remembering:\n" + strings.Join(items, "\n")
+}
 
 // writeHeuristicFallbackRetro writes a fallback retro entry when recap fails
 // without the transcript pre-read available. Prefer the _WithCount variant

@@ -139,7 +139,7 @@ The reply streams to stdout; tool activity and progress go to stderr, so you can
 omnipus jim "List the top 5 files by size" > files.txt
 ```
 
-Run `omnipus` with no arguments to list the agents you can address, by ID and name — on a fresh install that is `mia`, `jim`, `ava`, and `ray`.
+Run `omnipus` with no arguments to list the agents you can address, by ID and name — on a fresh install that is `mia`, `jim`, `ava`, and `admin`.
 
 Some tools, such as an agent's shell, require approval. Without `--yes` they are denied and the run continues; with it, approvals are granted for this run only:
 

@@ -7,7 +7,8 @@
 import type { ComponentProps } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchAgents } from '@/lib/api'
-import { parseAddressedAgent } from '@/lib/recipientAddress'
+import { addressableAgents, parseAddressedAgent } from '@/lib/recipientAddress'
+import { useSessionStore } from '@/store/session'
 import { UserMessageDeliveryStatus } from './ConnectionStatus'
 
 /** Used when the roster no longer matches the address (e.g. the agent was renamed since). */
@@ -17,7 +18,9 @@ type DeliveryProps = ComponentProps<typeof UserMessageDeliveryStatus>
 
 function HeldDeliveryStatus({ content, ...props }: DeliveryProps & { content: string }) {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
-  const addressee = parseAddressedAgent(content, agents)?.name ?? UNMATCHED_ADDRESSEE
+  const activeAgentId = useSessionStore((s) => s.activeAgentId)
+  // The send path's own candidate filter, so the row names who was addressed.
+  const addressee = parseAddressedAgent(content, addressableAgents(agents, activeAgentId))?.name ?? UNMATCHED_ADDRESSEE
   return <UserMessageDeliveryStatus {...props} agentName={addressee} />
 }
 
