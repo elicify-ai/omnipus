@@ -43,7 +43,7 @@ func TestWU22ProjectionMetadataWriteErrorIsReturned(t *testing.T) {
 				done <- errors.Join(err, pipe.Close())
 				return
 			}
-			_, writeErr := pipe.Write([]byte("{}"))
+			_, writeErr := pipe.WriteString("{}")
 			done <- errors.Join(writeErr, pipe.Close())
 		}()
 		pk := memory.ProjectionKey{ToolCallID: "wu22-call", ArchiveLine: 0}

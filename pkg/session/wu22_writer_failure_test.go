@@ -68,6 +68,9 @@ func TestWU22WriterArchiveFailureReturnsCause(t *testing.T) {
 		for _, method := range []string{"AddMessage", "AddFullMessage"} {
 			t.Run(method, func(t *testing.T) {
 				path := filepath.Join(base, key, "transcript.jsonl")
+				// NewSession pre-creates a regular archive file. Replace it so
+				// setup reaches the same append fault under both implementations.
+				require.NoError(t, os.RemoveAll(path), "SETUP: replace the pre-created archive file")
 				require.NoError(t, os.MkdirAll(path, 0o700)) // directory, never chmod/root-dependent
 				var err error
 				var returned bool
