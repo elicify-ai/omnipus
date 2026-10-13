@@ -8,6 +8,7 @@ package propindex
 
 import (
 	"runtime"
+	"runtime/debug"
 	"testing"
 )
 
@@ -51,6 +52,15 @@ func TestReadOwnVmHWM_SeesMemoryTheProcessHolds(t *testing.T) {
 	// garbage collector is timed. (PR 1260 CI: the peak was already 61.7 MiB, the
 	// process held far less, and a delta-against-the-old-peak check missed by
 	// 256 KiB.)
+	//
+	// The baseline must also be TRUE. An earlier test in this binary may have left
+	// a large Go heap that is freed but still resident (the scavenger returns pages
+	// slowly), and the ballast below would then be served from those resident
+	// pages: RSS barely moves, the peak stays near the baseline, and the test fails
+	// although the instrument is fine (R4-S5-PTA-01). FreeOSMemory forces a
+	// collection and returns the freed pages to the OS first, so the baseline is
+	// what the process really holds and the ballast needs fresh pages.
+	debug.FreeOSMemory()
 	rssBefore, err := readOwnVmRSS()
 	if err != nil || rssBefore <= 0 {
 		t.Fatalf("readOwnVmRSS() = (%d, %v), want a positive reading", rssBefore, err)
