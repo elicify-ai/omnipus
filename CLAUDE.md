@@ -112,8 +112,8 @@ mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/inde
 **Never run the full Go test suite locally — CI is the authority for Go test/build results.** `go test ./...` OOM-kills this environment; push and read the checks instead. At most one narrowly-scoped local test when you must (`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/`); never run multiple Go test suites in parallel.
 
 **Remote CI cluster — run heavy gates here, not locally.** `ci-omnipus-1` (Fly, `sin`) is
-**5 machines**, each a TIER with its own `/cache` volume (repo clone, Go build cache,
-`node_modules`) and its own `/tmp/runci.lock`. They are sized per test type on purpose
+**5 machines**, each with its own `/cache` volume (repo clone, Go build cache,
+`node_modules`) and its own `/tmp/runci.lock`; three of them each run one TIER (`go`, `node`, `xplat`) and two shared machines are spare. They are sized per test type on purpose
 (founder ruling 2026-10-12, no resizing): ONE `performance` 8x machine (`080d74db170408`)
 for the heavy sustained work - the `go` tier and the full `e2e` gate, one after the other,
 never in parallel - and `shared` 8x machines for `node` (default `d8d0d90a1e9648`) and `xplat`

@@ -10,7 +10,7 @@ You don't enable these. They run on every install, by default, with no extra ser
 
 ## Session transcript
 
-Each session has a single JSONL file at `~/.omnipus/agents/<agentID>/sessions/<session-id>/transcript.jsonl` (one line per entry, append-only, atomic writes via temp-file-rename). Note that this is the **unified** store path used by the live runtime; the older `pkg/session/daypartition.go::PartitionStore` writes day-partitioned files under a `sessions/<session_id>/<YYYY-MM-DD>.jsonl` layout for the legacy backend. The replay APIs surface the unified store.
+Each session has a folder at `$OMNIPUS_HOME/sessions/<session-id>/` (`~/.omnipus/sessions/<session-id>/` by default). All sessions live in this one shared store; there are no per-agent session folders. The history is one append-only stream of entries (one line per entry, atomic writes via temp-file-rename), split into one file per UTC day: `transcript.jsonl` holds the current day, and earlier days are frozen as `<YYYY-MM-DD>.jsonl` beside it (a small `transcript.day` file records which day `transcript.jsonl` holds). A script that reads a whole session must read all of these files in date order. The replay APIs do this for you.
 
 ### Entry types (`pkg/session/daypartition.go::EntryType`)
 
@@ -24,6 +24,7 @@ Each session has a single JSONL file at `~/.omnipus/agents/<agentID>/sessions/<s
 | `provider_fallback` | The note that a fallback model answered, with the models involved, written once per session and model pair |
 | `judge_verdict` | The Judge agent's verdict on a task's completion claim |
 | `context_window_notice` | A context-window diagnostic shown only in Verbose chat; never part of the model's history |
+| `model_ref`, `tool_call_effect` | Internal records that point at, or correct, an earlier entry. They are written into the same files and are not shown in chat |
 
 ### What's on every entry (`pkg/session/daypartition.go::TranscriptEntry`)
 
@@ -64,7 +65,7 @@ When a turn is cancelled, a dedicated `turn_canceled` entry is appended carrying
 
 ### Replay
 
-The SPA reads the transcript from disk on demand. There's no separate "chat history" database — the JSONL **is** the history. To replay a session in code or in tests, call `UnifiedStore.ReadTranscript(sessionID)` (`pkg/session/unified_write.go::ReadTranscript`) — this is the live runtime store, not the legacy `PartitionStore` day-partitioned backend. `ReadTranscript` returns the entries in order.
+The SPA reads the transcript from disk on demand. There's no separate "chat history" database — the JSONL **is** the history. To replay a session in code or in tests, call `UnifiedStore.ReadTranscript(sessionID)` (`pkg/session/unified_write.go::ReadTranscript`) — it reads the day files in order and returns the entries in order.
 
 ## Live event stream
 
@@ -103,7 +104,7 @@ Stop and cancel requests write these audit events:
 |---|---|---|
 | `turn.cancel.attempt` | INFO | Every Stop request, including duplicates and requests that find nothing running. `was_fired` says whether it interrupted a turn. One row per request. |
 | `turn.cancelled` | INFO | A cancelled turn has fully exited; carries `cancel_method` (`graceful` or `hard`) and the descendants cancelled with it. |
-| `turn.cancel.stuck` | WARN | The turn did not exit within 5 seconds of the hard abort and was detached. |
+| `turn.cancel.stuck` | WARN | The turn did not exit within 3 seconds of the forced stop and was detached. |
 | `turn.cancel.background_killed` | INFO | The cancel killed the session's background jobs (the count may be 0). Written whether or not a turn was running. |
 | `cancel.abuse_pattern` | WARN | One person and channel sent 10 or more cancel requests within 60 seconds. |
 
@@ -136,7 +137,7 @@ For `tool_exec_start` the payload includes the tool name, arguments preview, and
 
 ### Buffer sizes
 
-The observer subscription buffer is 1024 events (`pkg/agent/hooks.go::hookObserverBufferSize`, raised from 64 after a sustained-burst load test in #165). A slow consumer that falls behind drops events past the buffer rather than blocking the agent loop. The drop counter is exposed at `EventSubscription.Dropped()` for monitoring.
+The observer subscription buffer is 1024 events (`pkg/agent/hooks.go::hookObserverBufferSize`, raised from 64 after a sustained-burst load test in #165). A slow consumer that falls behind drops events past the buffer rather than blocking the agent loop (a few critical event kinds get one short bounded wait first). The event bus keeps a drop count per event kind, `EventBus.Dropped(kind)` (`pkg/agent/eventbus.go`), for monitoring.
 
 ## Putting it together
 
