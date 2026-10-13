@@ -22,7 +22,7 @@ import {
   FolderOpen,
 } from '@phosphor-icons/react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
+import { useSidebarStore, isSidebarOverlayOpen, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
@@ -305,11 +305,20 @@ export function Sidebar() {
       // wide sidebar is not an overlay, so Escape leaves it; below 1024px a
       // saved dock is not on screen, and close() drops the overlay without
       // clearing that dock.
-      if (e.key === 'Escape' && !e.defaultPrevented && isOpen && !effectivelyPinned) {
+      //
+      // R3 N6: the "overlay is open" half of the condition is the SHARED
+      // isSidebarOverlayOpen predicate, not this component's render state —
+      // useCancelState's global cancel handler stands down on the very same
+      // predicate, so the two Escape owners read one source of truth and
+      // cannot disagree about who owns a keypress (the handler must never
+      // cancel a streaming turn while this overlay is the top surface).
+      // With the cancel handler standing down, the Escape arrives here NOT
+      // defaultPrevented, and only the sidebar closes.
+      if (e.key === 'Escape' && !e.defaultPrevented && isSidebarOverlayOpen()) {
         close()
       }
     },
-    [isVisible, hide, open, close, isOpen, effectivelyPinned]
+    [isVisible, hide, open, close]
   )
 
   // Track when the viewport crosses the pin breakpoint.

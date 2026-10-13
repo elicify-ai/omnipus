@@ -51,12 +51,9 @@ describe('FeedKindLabel empty-header diagnostic', () => {
     setDescriptor('jim', 'sid-diag-2')
     vi.mocked(fetchAgents).mockRejectedValue(new Error('roster down'))
     const { qc, view } = renderLabel()
-    await waitFor(() => expect(view.container.textContent).toContain('jim - Main Session'))
-    // R2-S4-03 (nav-r2 merge): the id fallback now carries the visible
-    // "agent names unavailable" marker — the header still NAMES the agent,
-    // which is what this negative control guards, so the empty-header
-    // diagnostic below must still NOT fire (the label is not null here).
-    expect(view.container.textContent).toContain('agent names unavailable')
+    // R3-QA-03: strict equality — the component renders exactly one line,
+    // the id-derived title plus the unavailability marker, nothing else.
+    await waitFor(() => expect(view.container.textContent).toBe('jim - Main Session — agent names unavailable'))
     expect(qc.getQueryState(['agents'])?.status).toBe('error')
     expect(logDiagnostic.mock.calls.filter(([event]) => event === 'chatHeaderLabelUnavailable')).toHaveLength(0)
   })

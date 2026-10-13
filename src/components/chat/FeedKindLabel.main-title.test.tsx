@@ -93,14 +93,13 @@ describe('FeedKindLabel — main-session header title (S4-04/S2-05 honest states
   it('when the agents list has FAILED the line falls back to the AGENT ID — the server’s own empty-name fallback', async () => {
     vi.mocked(fetchAgents).mockRejectedValue(new Error('roster down'))
     renderLabel()
+    // R3-QA-03: strict equality again — the WHOLE line is the id-derived
+    // title, an em dash, and the unavailability marker, in that order. Two
+    // separate substring checks would also pass a line that interleaved
+    // other text between them.
     await waitFor(() => {
-      expect(label()?.textContent).toContain('jim - Main Session')
+      expect(label()?.textContent).toBe('jim - Main Session — agent names unavailable')
     })
-    // R2-S4-03 (this round): the id fallback is no longer silent — the strip
-    // marks it, so a rendered id never reads as an actual agent name. (The
-    // exact-equality assertion this replaces pinned the pre-R2-S4-03
-    // behaviour where the fallback line carried no signal at all.)
-    expect(label()?.textContent).toContain('agent names unavailable')
     expect(screen.queryByText(/Unknown agent/)).not.toBeInTheDocument()
   })
 

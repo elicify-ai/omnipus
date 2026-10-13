@@ -25,6 +25,13 @@ import { makeAgent } from '@/test/factories'
 const fixture = vi.hoisted(() => ({
   agents: [] as Agent[],
   workspaces: [] as Workspace[],
+  // Per-key query state (PTA-04): the loading/failed cases flip these instead
+  // of the data fixtures, so the mock mirrors React Query's shape — loading
+  // carries NO data, a failure carries whatever was retained ([] = nothing).
+  agentsLoading: false,
+  agentsError: false,
+  workspacesLoading: false,
+  workspacesError: false,
 }))
 
 const workspace = (overrides: { is_default?: boolean; core_team?: string[] }): Workspace =>
@@ -44,8 +51,22 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       const key = opts.queryKey
       if (Array.isArray(key) && key[0] === 'commands') return { data: [], isError: false, isLoading: false, refetch: vi.fn() }
       if (Array.isArray(key) && key[0] === 'skills') return { data: [], isError: false, isLoading: false, refetch: vi.fn() }
-      if (Array.isArray(key) && key[0] === 'agents') return { data: fixture.agents, isError: false, isLoading: false, refetch: vi.fn() }
-      if (Array.isArray(key) && key[0] === 'workspaces') return { data: fixture.workspaces, isError: false, isLoading: false, refetch: vi.fn() }
+      if (Array.isArray(key) && key[0] === 'agents') {
+        return {
+          data: fixture.agentsLoading ? undefined : fixture.agents,
+          isError: fixture.agentsError,
+          isLoading: fixture.agentsLoading,
+          refetch: vi.fn(),
+        }
+      }
+      if (Array.isArray(key) && key[0] === 'workspaces') {
+        return {
+          data: fixture.workspacesLoading ? undefined : fixture.workspaces,
+          isError: fixture.workspacesError,
+          isLoading: fixture.workspacesLoading,
+          refetch: vi.fn(),
+        }
+      }
       return { data: [], isError: false, isLoading: false, refetch: vi.fn() }
     },
   }
@@ -97,6 +118,10 @@ beforeEach(() => {
     makeAgent({ id: 'admin', name: 'Admin', type: 'core', status: 'active' }),
   ]
   fixture.workspaces = [workspace({})]
+  fixture.agentsLoading = false
+  fixture.agentsError = false
+  fixture.workspacesLoading = false
+  fixture.workspacesError = false
   act(() => {
     useSessionStore.setState({ activeAgentId: null, activeSessionId: null })
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
@@ -128,5 +153,46 @@ describe('@ mention menu — Admin only in the default workspace (R2-S2-DV-07)',
     const { result } = renderMenu('@')
     act(() => result.current.onInputChange('@mi'))
     expect(result.current.slashItems.map((item) => item.key)).toEqual(['mia'])
+  })
+})
+
+// PTA-04 (combined review round 3): the Admin rule while the data behind it
+// is not there yet. activeWorkspaceIsDefault reads FALSE whenever the
+// workspaces list carries no active workspace — loading or failed — so Admin
+// drops out of @ until the real answer lands (useChatAgents: "Unknown reads
+// as false — the safe side"): the menu never offers a pick the gateway would
+// refuse, at the cost of a late-arriving Admin. A failed AGENTS roster with
+// no cached data empties the candidates entirely — a name-less menu, never a
+// fabricated one.
+describe('@ mention menu — Admin rule while the roster or workspace list is loading/failed (PTA-04)', () => {
+  it('while the workspaces list is LOADING, Admin is hidden even in the default workspace; teammates stay', () => {
+    fixture.workspaces = [workspace({ is_default: true })]
+    fixture.workspacesLoading = true
+    const { result } = renderMenu('@')
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashItems.map((item) => item.key)).toEqual(['mia'])
+    // Typing Admin's name matches nothing — the silence is the safe side.
+    act(() => result.current.onInputChange('@admin'))
+    expect(result.current.slashItems).toEqual([])
+  })
+
+  it('when the workspaces list has FAILED with nothing retained, Admin stays hidden; teammates stay', () => {
+    fixture.workspaces = [workspace({ is_default: true })]
+    fixture.workspacesError = true
+    fixture.workspaces = []
+    const { result } = renderMenu('@')
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashItems.map((item) => item.key)).toEqual(['mia'])
+    act(() => result.current.onInputChange('@admin'))
+    expect(result.current.slashItems).toEqual([])
+  })
+
+  it('when the AGENTS roster has FAILED with nothing cached, the menu offers no agents at all', () => {
+    fixture.workspaces = [workspace({ is_default: true })]
+    fixture.agentsError = true
+    fixture.agents = []
+    const { result } = renderMenu('@')
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashItems).toEqual([])
   })
 })

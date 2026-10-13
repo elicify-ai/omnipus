@@ -85,10 +85,11 @@ describe('FeedKindLabel — an id-fallback line is marked as such (R2-S4-03)', (
   it('when the roster has FAILED and the line shows the agent id, the strip says names are unavailable', async () => {
     vi.mocked(fetchAgents).mockRejectedValue(new Error('roster down'))
     renderLabel()
+    // R3-QA-03: strict equality — the marker is the line's SUFFIX, not a
+    // fragment that may appear anywhere in it.
     await waitFor(() => {
-      expect(label()?.textContent).toContain('jim - Main Session')
+      expect(label()?.textContent).toBe('jim - Main Session — agent names unavailable')
     })
-    expect(label()?.textContent).toContain('agent names unavailable')
   })
 
   it('while the roster is merely LOADING the line is absent — no signal, existing behaviour', () => {

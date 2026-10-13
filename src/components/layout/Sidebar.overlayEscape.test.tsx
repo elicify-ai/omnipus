@@ -28,9 +28,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSessionStore } from '@/store/session'
+import { useChatStore } from '@/store/chat'
 import { fetchAgents, fetchAppState, fetchGodMode, fetchSessionPage, fetchSessions, fetchWorkspaces, logout } from '@/lib/api'
 import type { Session, Workspace } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
+import { useCancelState } from '@/hooks/useCancelState'
 
 const WS = 'ws-overlay-escape'
 const REV = '0'.repeat(64)
@@ -186,6 +188,37 @@ function overlayPanel(): HTMLElement | null {
 
 import { Sidebar } from './Sidebar'
 
+// The OTHER Escape owner (combined-review R3 N6): useCancelState registers a
+// DOCUMENT-level bubble keydown that cancels a streaming turn. The probe mounts
+// it for real alongside the Sidebar so the two listeners compete for the same
+// native keydown exactly as they do in the app — dispatching on a target inside
+// the document bubbles document → window, so both handlers run in DOM order.
+let cancelProbe: ReturnType<typeof useCancelState> | null = null
+const cancelStreamSpy = vi.fn(() => true)
+function CancelProbe({ isStreaming }: { isStreaming: boolean }) {
+  cancelProbe = useCancelState(isStreaming, cancelStreamSpy)
+  return null
+}
+
+/** Renders the Sidebar overlay AND the cancel-state probe with a streaming
+ * turn (both the hook prop and the live chat-store read the handler consults).
+ * Same store setup as renderOpenOverlay, plus the streaming turn. */
+function renderOpenOverlayWhileStreaming() {
+  act(() => {
+    useSidebarStore.setState({ isOpen: true, isPinned: false })
+    useWorkspacesStore.setState({ activeWorkspaceId: WS })
+    useChatStore.setState({ isStreaming: true })
+  })
+  render(
+    <>
+      <Sidebar />
+      <CancelProbe isStreaming />
+    </>,
+    { wrapper: makeWrapper() },
+  )
+  expect(document.getElementById('sidebar-overlay-panel')).not.toBeNull()
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(fetchWorkspaces).mockResolvedValue([workspace])
@@ -260,5 +293,101 @@ describe('Sidebar overlay — Escape dismisses only the topmost layer', () => {
     expect(screen.queryByPlaceholderText('Workspace name…')).toBeNull()
     expect(useSidebarStore.getState().isOpen).toBe(true)
     expect(overlayPanel()).not.toBeNull()
+  })
+})
+
+// Combined-review R3 N6 (the regression the nav-ci3 fix 18f04543e introduced):
+// useCancelState's global handler is a DOCUMENT-level bubble listener that
+// cancelS a streaming turn and then preventDefaults the key — so the Sidebar's
+// WINDOW-level listener saw the event arrive already defaultPrevented and
+// stood down. The overlay stayed open while the turn died, and repeated
+// Escapes escalated to a Stop-all confirmation. The rule this pins (team-lead
+// ruling): Escape acts on the TOPMOST layer only — a Radix layer above the
+// sidebar wins; else the overlay sidebar wins (and the turn is NOT touched);
+// only with nothing else open does Escape cancel the turn.
+describe('Sidebar overlay — Escape precedence over the turn-cancel handler (R3 N6)', () => {
+  beforeEach(() => {
+    cancelStreamSpy.mockClear()
+    cancelProbe = null
+  })
+
+  afterEach(() => {
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+    })
+  })
+
+  it('STREAMING + overlay open: Escape closes ONLY the sidebar — the turn keeps streaming and no Stop window is armed', async () => {
+    renderOpenOverlayWhileStreaming()
+
+    // The keydown must originate INSIDE the document (a real keypress's
+    // target) so it bubbles document → window through BOTH handlers; a
+    // dispatch straight on window would skip the document listener entirely.
+    fireEvent.keyDown(overlayPanel()!, { key: 'Escape' })
+
+    // The sidebar closed…
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+    await waitFor(() => expect(overlayPanel()).toBeNull())
+    // …and the turn was NOT cancelled: no cancel frame, no armed Stop-all
+    // window. (The pre-fix bug died here twice over: the turn was cancelled
+    // AND the overlay stayed open.)
+    expect(cancelStreamSpy).not.toHaveBeenCalled()
+    expect(cancelProbe?.stopAllArmed).toBe(false)
+
+    // A SECOND Escape, with the overlay gone, is a first (session-scoped)
+    // cancel — proof the first Escape did not silently arm the window whose
+    // confirmation would have escalated to Stop all.
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(cancelStreamSpy).toHaveBeenCalledTimes(1)
+    expect(cancelStreamSpy).toHaveBeenCalledWith()
+    expect(cancelProbe?.stopAllArmed).toBe(true)
+  })
+
+  it('STREAMING + row menu open: Escape closes ONLY the menu — sidebar stays open, the turn is not cancelled', async () => {
+    renderOpenOverlayWhileStreaming()
+    const menu = await openMiaRowMenu()
+
+    fireEvent.keyDown(menu, { key: 'Escape' })
+
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    expect(useSidebarStore.getState().isOpen).toBe(true)
+    expect(overlayPanel()).not.toBeNull()
+    // The Radix layer ranks above BOTH the sidebar and the turn-cancel: the
+    // menu's dismissal preventDefaults the key before the document-level
+    // cancel handler ever sees it.
+    expect(cancelStreamSpy).not.toHaveBeenCalled()
+    expect(cancelProbe?.stopAllArmed).toBe(false)
+  })
+
+  it('nothing else open + STREAMING: Escape cancels the turn as today (unchanged behaviour)', () => {
+    // Sidebar closed — the cancel handler owns Escape alone.
+    render(
+      <CancelProbe isStreaming />,
+      { wrapper: makeWrapper() },
+    )
+    expect(overlayPanel()).toBeNull()
+
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    expect(cancelStreamSpy).toHaveBeenCalledTimes(1)
+    expect(cancelStreamSpy).toHaveBeenCalledWith()
+    expect(cancelProbe?.stopAllArmed).toBe(true)
+  })
+
+  it('an armed Stop-all window is NOT confirmed by an Escape that only closes the overlay', () => {
+    renderOpenOverlayWhileStreaming()
+
+    // First activation (the Stop button's twin): session cancel + the 3 s
+    // confirmation window, with the overlay still open.
+    act(() => cancelProbe?.cancelUnconditional())
+    expect(cancelStreamSpy).toHaveBeenCalledTimes(1)
+    expect(cancelProbe?.stopAllArmed).toBe(true)
+
+    // Escape now belongs to the TOPMOST layer — the overlay. It closes the
+    // sidebar and must NOT be the confirming second activation.
+    fireEvent.keyDown(overlayPanel()!, { key: 'Escape' })
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+    expect(cancelStreamSpy).toHaveBeenCalledTimes(1)
+    expect(cancelProbe?.stopAllArmed).toBe(true)
   })
 })
