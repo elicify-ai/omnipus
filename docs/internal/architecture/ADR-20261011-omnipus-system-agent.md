@@ -128,6 +128,48 @@ Source: founder answers EM-3; issue #1109 "AgentEmail 2.0". Detail: specificatio
 | EM-3 data model | Every mail runtime owner (transport, credentials, generation, cache, watcher, preview grants, cleanup) and every message reference is keyed by the mailbox id; account connection caps stay shared. Settings → Add Email collects the password through a user-origin secret request, with no agent turn. |
 | OSA-5 `connect_mailbox` "read readiness … and send readiness … separately"; documentation map `docs/mail.md` "read vs send readiness" | **Superseded by EQ-2** (founder, 2026-10-13: "the READ test is sufficient, keep it simple"): Test Connection — in Settings and in `connect_mailbox` — checks reading only; a mailbox is saved when reading passes; sending is reported as not tested before save and a later send failure surfaces through the send tool's own error. Detail: spec §0.15, FR-231. |
 
+## Dated notes from the independent Opus review and its fix (2026-10-13)
+
+Review: `docs/internal/specs/omnipus-system-agent-spec-review-opus.md` at `f3911d0f8` (BLOCK; 1 critical, 23 major). Founder answers Q1–Q9: founder-answers file, section "Independent Opus review questions (2026-10-13)". Specification detail: §0.16. Code claims re-read at `f3911d0f8`.
+
+| ADR text | Note |
+|---|---|
+| OSA-15 "Mechanism (GC-8, reuse)": `AdmitRequest` … `replyIntoConversation` | **Corrected — not plain reuse.** In the code `requestReceiverApproval` raises the Ask in the **sender's** session, `replyIntoConversation` needs a source session (`store.GetMeta(c.Source.SessionID)`) and wakes its owner, and `AdmitRequest` "starts (or joins)" the receiver's turn. Rooms therefore get: a caller-supplied request id and a no-join intake mode on `AdmitRequest`; a receiver-side approval surface (card in the receiver's main chat, approved by the user); a new room reply branch. A stopped receiver keeps today's meaning: the request is **held** and delivered when it runs again; the approval wait is called "awaiting approval". Spec §0.9, §6.11, FR-200, FR-214, FR-251, FR-252. |
+| OSA-15 "the team room exists from two conversation agents" | Below two agents the team room is hidden and read-only with its history kept; it reappears with that history when a second agent joins (spec FR-160). |
+| OSA-14 group admission | **Founder answer Q4:** on a closed connection an unlisted group is never answered — even when a listed person added the bot — until the user confirms it in the web app; it waits as pending in the connection's Requests tab. Changeable or unauthenticated identifiers (Telegram `@username`, IRC nick) admit and route but never carry commands or resume until a stable id is confirmed (never on IRC); WhatsApp hidden ids are resolved to phone numbers or treated as unlisted. Stranger handling is bounded. Spec §6.16, FR-245–FR-247, FR-145. |
+| OSA-7.7 "Web only; channel sessions are refused" | Decided by **turn origin**, not by session: any turn that consumed a channel person's input cannot raise a card, in per-person conversations and in the shared main chat alike; approval cards in such turns name the person and connection. An agent's private secrets reach such turns' commands only when the user marked the variable "available in channel conversations". Spec §6.18, FR-240, FR-241. |
+| OSA-7.8 private kind — replacement selection | **Founder answer Q7 A:** a private replacement submitted on the owner's card takes effect at once (no second approval); the old version is superseded, listed and removable. Integrations keep approve-to-switch (FA:Q-R1-1 A). `select_secret_version` stays only with Omnipus (rollback). |
+| Gateway environment (spec R2-MAJ-004) | Today four spawn sites pass the whole gateway environment to their child (browser `cdppipe`, process hooks, worktree git, exec proxy). The spec now adds the work to scrub every site (FR-239, WU-19 in landing 1) and forbids claiming "children never inherit" before it lands. |
+| EM-3 / OSA-5 mailbox password in Settings | **Founder answer Q6 A:** Settings → Add Email keeps its existing hidden password field (F:D17); the secret card is used only in chats. The user-origin secret request of fix round 4 is withdrawn. Saving tests reading on exactly the submitted settings; Test Connection is a preview. In the chat path, changing a recipient field after the password was stored asks for it again. |
+| `delete_agent` "Deletes owned chats and memory" | **Founder answer Q8:** deleting an agent, or removing it from a workspace, is refused with its dependency list (connections it answers, People rows targeting it, its mailboxes, its private secrets, rooms) unless the user ticks "delete everything", which removes its mailboxes and private secrets and leaves those connections without a main agent (they fail loudly). Workspace deletion lists and removes the workspace's per-pair data in addition to today's cascade. Spec §6.19, FR-243, FR-244. |
+| OSA-13 release and landing | **Founder answer Q5:** two landings — 1. Omnipus core together with group rooms; 2. channels (routing and channel control) together with mailboxes, with awareness (it needs per-person conversations). Everything that gives Omnipus its tools stays in landing 1. Spec §15. |
+| OSA-16 awareness | Text derived from other conversations reaches a turn only as a quoted, source-marked untrusted block, never as instructions (spec FR-242). Awareness itself stays in every turn (founder answer Q2, accepted risk below). |
+| "Removed — retired surfaces to add to root `CLAUDE.md`" | Add: unbound channel routing; `session.dm_scope` and `/api/v1/security/session-scope`; `channel_policies.<ch>.routing_rules`; type-only (instance-less) bindings; the one-mailbox-per-pair config shape — with guard scripts where greppable; the ADR-090 runtime-exception paragraph is amended (Admin → Omnipus) in root `CLAUDE.md` and `AGENTS.md` together (spec FR-253). |
+
+### Founder-accepted risks — consolidated (dated 2026-10-13)
+
+Accepted by the founder, Daniel Piatkowski, on the dates shown. This table supersedes scattered mentions for reading purposes; each original record stays where it is.
+
+| # | Risk | Accepted | Mitigation (only) |
+|---|---|---|---|
+| R-A1 | Persistent foothold through `allow` change tools | FA:FQ-4 A, 2026-10-12 | Prompt rules; ask list |
+| R-A2 | Read-to-web disclosure | FA:FQ-11 A, 2026-10-12, after a stress test | Documented |
+| R-A3 | External-program worker planting | FA:FQ-12 C, 2026-10-12, after a stress test | Documented |
+| R-A4 | No limit on agent-to-agent replies in rooms | GC-5, 2026-10-13, after a stress test | Allocated cost; `/pause` |
+| R-A5 | God Mode = nothing asks; no per-agent Ask for Omnipus | F:D7; FA:FQ-16 B, 2026-10-12 | Mode note |
+| R-A6 | God Mode also skips the Go question and approvals for changes another agent asked Omnipus for (outsider → agent → Omnipus, no human) | **Q3 B, 2026-10-13** | Closed-by-default connections |
+| R-A7 | No password re-entry on the secret card | FA:Q-R1-2 B, 2026-10-12 | Destination-bound card; raw routes keep re-authentication |
+| R-A8 | Private-secret wording A ("a command you let the agent run can still reveal it") | FA:OQ-1 / FQ-18, 2026-10-12 | Masking; channel turns gated |
+| R-A9 | Private notes are agent-wide across workspaces | FQ-R3-B, 2026-10-13 | — |
+| R-A10 | Outsiders' turns may read and write the agent's private memory | **Q1 B, 2026-10-13** | — |
+| R-A11 | Channel steering in main-chat mode changes the shared main chat for everyone | Q-R3-1 A, 2026-10-13 | Steering off by default; labelled |
+| R-A12 | Awareness in every turn: an outsider can ask the agent about its other conversations (resolves the review's OR-CRIT-001 by acceptance) | **Q2, 2026-10-13** | Untrusted-text marking (instructions only) |
+| R-A13 | In main-chat mode outsiders share the agent's main chat with the user and can be told anything said there | **Q9 A, 2026-10-13** | Steering off by default; closed-by-default connections; Configure warning |
+| R-A14 | Agent creation needs a working model | F:D18 | Fixable in Settings |
+
+Named, **not** separately accepted: provider and mailbox values in the gateway process environment (existing behaviour; children scrubbed by FR-239); Omnipus's `bash` together with its cross-workspace filesystem authority widens R-A1's reach (review OR-OBS-003) — listed for the founder at approval, non-blocking.
+
+
 
 
 
