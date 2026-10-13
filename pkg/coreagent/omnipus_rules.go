@@ -70,6 +70,32 @@ func ManagementGrantViolation(policies map[string]config.ToolPolicy) (string, bo
 	return names[0], true
 }
 
+// ManagementRemoveViolation reports the first management tool (sorted) that
+// a new agent's requested changes would REMOVE. Removing the constructor's
+// explicit Deny is a grant too: the agent then rides the ceiling, which is
+// allow or ask for the management family (FR-025). ("", false) when there is
+// none.
+func ManagementRemoveViolation(remove []string) (string, bool) {
+	names := make([]string, 0)
+	for _, name := range remove {
+		if managementTools[name] {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return "", false
+	}
+	sort.Strings(names)
+	return names[0], true
+}
+
+// ManagementRemoveRefusal is the refusal text for removing a new agent's
+// management-tool Deny (FR-025), naming the tool.
+func ManagementRemoveRefusal(tool string) string {
+	return "a new agent cannot have its deny on the management tool " + tool +
+		" removed — management tools stay with Omnipus; leave it out of remove"
+}
+
 // ManagementGrantRefusal is the refusal text for FR-025, naming the tool.
 func ManagementGrantRefusal(tool string) string {
 	return "a new agent cannot be granted the management tool " + tool +

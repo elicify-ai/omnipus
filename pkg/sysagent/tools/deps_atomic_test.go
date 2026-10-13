@@ -60,10 +60,13 @@ func TestRegistry_ToolDepsContract(t *testing.T) {
 		}
 	})
 
-	t.Run("AllTools_returns_exactly_31", func(t *testing.T) {
+	t.Run("AllTools_returns_exactly_32", func(t *testing.T) {
 		all := AllTools(nil)
-		if len(all) != 31 {
-			t.Errorf("AllTools(nil) returned %d tools; want == 31 (FR-001/FR-002; the four *_in_workspace tools retired by DEL-23)", len(all))
+		if len(all) != 32 {
+			t.Errorf("AllTools(nil) returned %d tools; want == 32 (FR-001/FR-002; the four *_in_workspace tools retired by DEL-23; omnipus-system-agent FR-024 added set_agent_permissions)", len(all))
+		}
+		if !hasToolNamed(all, "set_agent_permissions") {
+			t.Errorf("FR-024: AllTools(nil) must include set_agent_permissions")
 		}
 		for _, tool := range all {
 			// Basic liveness checks — must not panic.
