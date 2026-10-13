@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
@@ -95,7 +96,7 @@ func NewAgentCreateTool(d *Deps) *AgentCreateTool { return &AgentCreateTool{deps
 func (t *AgentCreateTool) Name() string           { return "create_agent" }
 func (t *AgentCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentCreateTool) Description() string {
-	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul and model are required. color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
+	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description and model are required; soul is required for native agents ('Main'/'Subagent') and must be omitted for 'subagent_3p' (an external CLI worker has no soul; supplying one is refused). An optional cli_path must be an existing executable file when set; leave it empty to use the CLI's default binary on PATH. color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
 }
 
 func (t *AgentCreateTool) Parameters() map[string]any {
@@ -109,8 +110,10 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"description": "One-line description of the agent's purpose",
 			},
 			"soul": map[string]any{
-				"type":        "string",
-				"description": "The agent's personality, role, and behavioral instructions (written to SOUL.md)",
+				"type": "string",
+				"description": "The agent's personality, role, and behavioral instructions (written to SOUL.md). " +
+					"REQUIRED for native agents ('Main'/'Subagent'); NOT supported for 'subagent_3p' — an external " +
+					"CLI worker has no native soul, and supplying one is refused.",
 			},
 			"model": map[string]any{
 				"type":        "string",
@@ -130,7 +133,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"cli_path": map[string]any{
 				"type":        "string",
-				"description": "Optional. Absolute path to the external CLI binary. Leave EMPTY to use the CLI's default binary on $PATH (claude / codex / opencode). Set it only when this machine invokes the CLI via a wrapper or a non-standard path — and derive the real path on this system, never hardcode a guess.",
+				"description": "Optional. Absolute path to the external CLI binary. Leave EMPTY to use the CLI's default binary on $PATH (claude / codex / opencode). Set it only when this machine invokes the CLI via a wrapper or a non-standard path — and derive the real path on this system, never hardcode a guess. When set, the path must be an existing executable file (not a directory); anything else is refused.",
 			},
 			"provider": map[string]any{
 				"type":        "string",
@@ -162,7 +165,12 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"model_params": modelParamsParameters(),
 		},
-		"required": []string{"name", "description", "soul", "model"},
+		// soul is deliberately NOT in the schema required list: it is required
+		// for native agents ('Main'/'Subagent') only. External CLI workers
+		// ('subagent_3p') have no native soul — validate() enforces the
+		// conditional requirement, and the store refuses a supplied external
+		// soul as an unsupported field (issue #1274, chief ruling Q1 B).
+		"required": []string{"name", "description", "model"},
 	}
 }
 
@@ -236,8 +244,24 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 			errorJSON("INVALID_INPUT", "description is required", "Provide a one-line description"),
 		), true
 	}
+	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
+	// Resolved BEFORE the soul check: soul is required for native agents only —
+	// an external CLI worker ('subagent_3p') has no native soul, and supplying
+	// one stays an unsupported-field refusal (agentmutation.ValidateFields,
+	// issue #1274, chief ruling Q1 B).
+	ac.agentType, _ = ac.args["agent_type"].(string)
+	if ac.agentType == "" {
+		ac.agentType = "Main"
+	}
+	switch ac.agentType {
+	case "Main", "Subagent", "subagent_3p":
+	default:
+		return tools.ErrorResult(errorJSON("INVALID_INPUT",
+			"agent_type must be one of Main, Subagent, subagent_3p",
+			"Use 'subagent_3p' for an external CLI worker")), true
+	}
 	ac.soul, _ = ac.args["soul"].(string)
-	if strings.TrimSpace(ac.soul) == "" {
+	if ac.agentType != "subagent_3p" && strings.TrimSpace(ac.soul) == "" {
 		return tools.ErrorResult(
 			errorJSON(
 				"INVALID_INPUT",
@@ -263,19 +287,6 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	// so an explicit empty colour cannot overwrite the default.
 	ac.args["color"] = ac.color
 
-	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
-	ac.agentType, _ = ac.args["agent_type"].(string)
-	if ac.agentType == "" {
-		ac.agentType = "Main"
-	}
-
-	switch ac.agentType {
-	case "Main", "Subagent", "subagent_3p":
-	default:
-		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			"agent_type must be one of Main, Subagent, subagent_3p",
-			"Use 'subagent_3p' for an external CLI worker")), true
-	}
 	if ac.agentType == "subagent_3p" {
 		ac.execCLI, _ = ac.args["cli"].(string)
 		switch ac.execCLI {
@@ -287,8 +298,16 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 		}
 		// cli_path is OPTIONAL: when empty the driver invokes the CLI's default
 		// binary name on $PATH (claude / codex / opencode). Set it only when this
-		// machine uses a wrapper or a non-standard binary path.
+		// machine uses a wrapper or a non-standard binary path — and then it must
+		// name an executable file, refused with the path in the reason otherwise
+		// (issue #1274): a bad path must fail here, before any entity, workspace
+		// or config write, not at the worker's first delegated run.
 		ac.execCLIPath, _ = ac.args["cli_path"].(string)
+		if strings.TrimSpace(ac.execCLIPath) != "" {
+			if err := validateExternalCLIPath(ac.execCLIPath); err != nil {
+				return fieldErrorResult(err), true
+			}
+		}
 	}
 
 	if err := rejectUnknownAgentFields(ac.args, agentCreateArgNames); err != nil {
@@ -333,6 +352,28 @@ func refuseManagementGrants(args map[string]any) (*tools.ToolResult, bool) {
 			"Leave "+tool+" out of remove; ask Omnipus to make management changes")), true
 	}
 	return nil, false
+}
+
+// validateExternalCLIPath refuses a supplied cli_path the OS could not execute:
+// a missing path, a path that is not a regular file (e.g. a directory), or —
+// outside Windows, where the execute bit is not meaningful — a file with no
+// execute permission (issue #1274). The refusal names cli_path, the exact
+// supplied path and the specific fault so the model can correct it. Symlinks
+// are resolved by os.Stat, matching what the driver would exec. An empty path
+// is the caller's "use the CLI's default binary on PATH" request and never
+// reaches this check.
+func validateExternalCLIPath(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fieldErr("cli_path", fmt.Sprintf("%q does not exist: set cli_path to an existing executable CLI binary, or leave it empty to use the CLI's default binary on PATH (stat: %v)", path, err))
+	}
+	if !fi.Mode().IsRegular() {
+		return fieldErr("cli_path", fmt.Sprintf("%q is a directory, not a regular file: point cli_path at the CLI executable itself, or leave it empty to use the CLI's default binary on PATH", path))
+	}
+	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o111 == 0 {
+		return fieldErr("cli_path", fmt.Sprintf("%q is not executable (no execute permission): make the file executable or leave cli_path empty to use the CLI's default binary on PATH", path))
+	}
+	return nil
 }
 
 // prepareConfig builds the persisted agent configuration from required and optional arguments.

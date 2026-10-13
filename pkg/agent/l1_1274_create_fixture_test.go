@@ -92,12 +92,12 @@ func newL11274Fixture(t *testing.T, ceiling string, agentDeny bool) *l11274Fixtu
 	al.SetSessionMessagingStores(session.NewMessageInboxStore(filepath.Join(home, "session_messages")),
 		session.NewLifecycleStore(filepath.Join(home, "session_lifecycle")))
 	bootDir := filepath.Join(home, "boot_epoch")
-	if err := os.MkdirAll(bootDir, 0o700); err != nil {
-		t.Fatalf("SETUP: create boot epoch directory: %v", err)
+	if mkErr := os.MkdirAll(bootDir, 0o700); mkErr != nil {
+		t.Fatalf("SETUP: create boot epoch directory: %v", mkErr)
 	}
 	boot := session.NewBootEpochStore(bootDir)
-	if _, err := boot.Mint(); err != nil {
-		t.Fatalf("SETUP: mint boot epoch: %v", err)
+	if _, mintErr := boot.Mint(); mintErr != nil {
+		t.Fatalf("SETUP: mint boot epoch: %v", mintErr)
 	}
 	al.SetBootEpochStore(boot)
 	// Gateway boot explicitly injects these; NewAgentLoop alone deliberately

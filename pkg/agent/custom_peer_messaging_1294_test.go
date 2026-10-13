@@ -53,9 +53,9 @@ func TestFounder1294_FreshCustomAgentReceivesAndAnswersAPeerRequest(t *testing.T
 	}
 
 	t.Run("explicit_deny_still_refuses", func(t *testing.T) {
-		_, err := request("closed")
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrPeerRefused), "per-agent deny must refuse the peer request: %v", err)
+		_, reqErr := request("closed")
+		require.Error(t, reqErr)
+		assert.True(t, errors.Is(reqErr, ErrPeerRefused), "per-agent deny must refuse the peer request: %v", reqErr)
 	})
 
 	receipt, err := request("scout")

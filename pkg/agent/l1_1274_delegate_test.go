@@ -65,13 +65,13 @@ func l11274DelegatingContext(t *testing.T, f *l11274Fixture, workerID string, al
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.home, "workspaces", l11274WorkspaceID+".json"), data, 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(f.home, "workspaces", l11274WorkspaceID+".json"), data, 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	if allow {
 		state.Delegation = append(state.Delegation, workspace.DelegationEdge{FromAgent: "jim", ToAgent: workerID})
-		if err := workspace.SaveDelegation(f.home, l11274WorkspaceID, state.Delegation); err != nil {
-			t.Fatal(err)
+		if saveErr := workspace.SaveDelegation(f.home, l11274WorkspaceID, state.Delegation); saveErr != nil {
+			t.Fatal(saveErr)
 		}
 	}
 	main, err := f.al.GetSessionStore().GetOrCreateMainSession(l11274WorkspaceID, "jim")

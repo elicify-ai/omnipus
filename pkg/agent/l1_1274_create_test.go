@@ -148,8 +148,8 @@ func TestL11274DescriptionColourExampleIsInContractAndAcceptedVerbatim(t *testin
 	var contract struct {
 		Enum []string `yaml:"enum"`
 	}
-	if err := yaml.Unmarshal(data, &contract); err != nil || len(contract.Enum) != 10 {
-		t.Fatalf("instrument: AgentColor contract must supply its ten values, got %v, err=%v", contract.Enum, err)
+	if yamlErr := yaml.Unmarshal(data, &contract); yamlErr != nil || len(contract.Enum) != 10 {
+		t.Fatalf("instrument: AgentColor contract must supply its ten values, got %v, err=%v", contract.Enum, yamlErr)
 	}
 	palette := make(map[string]bool, len(contract.Enum))
 	for _, color := range contract.Enum {
