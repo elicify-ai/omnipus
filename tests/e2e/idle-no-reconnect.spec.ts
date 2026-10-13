@@ -61,24 +61,31 @@ test(
 
     await page.goto(BASE_URL)
 
-    // Wait for the page to stabilise — networkidle fires once the SPA is
-    // mounted and the initial WS handshake completes. If the gateway has not
-    // yet been set up (onboarding required) the test will fail here; run
-    // against a pre-onboarded gateway instance.
+    // Wait for the SPA to open its chat WebSocket, then for the page to settle.
+    // `networkidle` alone is NOT a readiness signal for the socket: it fires
+    // after 500 ms without HTTP traffic, which can land in the middle of boot,
+    // before the SPA has opened the socket (measured: the socket opens ~0.9 s
+    // after navigation, while networkidle fires anywhere from ~1.4 s to ~2.3 s
+    // depending on how the router sequences its chunk loads — about 1 load in
+    // 30 saw the socket open only AFTER networkidle). Waiting for the socket
+    // first makes the count below a positive observation instead of a race.
+    // If the gateway has not yet been set up (onboarding required) the socket
+    // never opens and this fails here; run against a pre-onboarded instance.
+    await expect
+      .poll(() => wsOpens.length, {
+        message: [
+          'The SPA must open at least one WebSocket (the chat WS) after load.',
+          'If this fails, the gateway may not be running or onboarding has not been completed.',
+          `Base URL: ${BASE_URL}`,
+        ].join(' '),
+        timeout: 30_000,
+      })
+      .toBeGreaterThanOrEqual(1)
     await page.waitForLoadState('networkidle', { timeout: 30_000 })
 
-    // Record the WebSocket count after initial load. At least one WS must have
-    // been opened (the chat WS). If the page is not yet past onboarding, this
-    // assertion will fail with a clear message — see the NOTE above.
+    // Record the WebSocket count once the socket is up and the page is quiet:
+    // any entry added during the idle window below is a reconnect.
     const initialWsCount = wsOpens.length
-    expect(
-      initialWsCount,
-      [
-        'At least one WebSocket must have been opened by the time the page reaches networkidle.',
-        'If this fails, the gateway may not be running or onboarding has not been completed.',
-        `Base URL: ${BASE_URL}`,
-      ].join(' '),
-    ).toBeGreaterThanOrEqual(1)
 
     // Idle for 90 s. Before the heartbeat fix, the client force-closed after
     // 60 s (2 × 30 s heartbeat interval with no server frames). With the fix,

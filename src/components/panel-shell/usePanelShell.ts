@@ -115,8 +115,15 @@ async function expandActivePanel(options: {
       // App windows have no tabs. Use the existing full-screen route without
       // a popout owner; its Back control re-docks in this same window. Await
       // navigation before closing so takeover history cannot back out of it.
+      const intentBeforeNavigation = usePanelShellStore.getState().panelIntentRevision
       await navigateFullScreen(definition.id, definition.fullScreen.toSearch(context))
-      finishClose(activePanel.id, 'chat')
+      // The router may settle this navigation late: the full-screen route can
+      // already be on screen, and Back already pressed (which re-docks the
+      // panel), before the promise resolves. Close the dock only if nobody
+      // has opened or closed a panel since we left; a newer intent wins.
+      if (usePanelShellStore.getState().panelIntentRevision === intentBeforeNavigation) {
+        finishClose(activePanel.id, 'chat')
+      }
       return 'opened'
     } catch (error) {
       console.error('[side-panel] Same-window Expand navigation failed', error)

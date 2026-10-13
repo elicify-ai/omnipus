@@ -398,10 +398,13 @@ async function createTask(
     // (pkg/agent/goal_compile.go's compiledGoalCriteriaFor). A DELIVERY
     // statement, never a restatement of `critText` — the whole point of this
     // eval is that the criterion's own met/unmet answer is unambiguous.
+    // The DoD must also be checkable from the evidence the Judge receives (the
+    // worker's claim and the transcript window), not from the task record:
+    // `result` is written only after a met verdict, so it is empty at judging time.
     dod: [
       {
         kind: 'prose',
-        text: 'the worker ran this task and left its reply on the task record',
+        text: "the worker ran this task and gave a reply, which appears in the worker's completion claim and in the session transcript window",
         author: { kind: 'user', id: 'admin' },
         status: 'pending',
       },

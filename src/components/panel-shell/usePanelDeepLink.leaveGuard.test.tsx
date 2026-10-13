@@ -4,7 +4,7 @@
 // cleanedSearch, which would erase the destination's own `?tab=chat`.
 //
 // Oracle: the hook owns the Chat route's search only (usePanelDeepLink.ts
-// header); a navigation builds from router.pendingBuiltLocation ??
+// header); a navigation builds from router._pendingLocation ??
 // router.latestLocation (router-core buildLocation), so that is the address
 // the writers must respect. Positive controls prove each writer DOES write
 // while the chat is the addressed route, so a silent hook cannot pass.
@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, act } from '@testing-library/react'
 
 let mockSearch: Record<string, unknown> = {}
-const mockRouter: { latestLocation: { pathname: string }; pendingBuiltLocation?: { pathname: string } } = {
+const mockRouter: { latestLocation: { pathname: string }; _pendingLocation?: { pathname: string } } = {
   latestLocation: { pathname: '/workspaces/ws-1/chat' },
 }
 const mockNavigate = vi.fn()
@@ -55,7 +55,7 @@ function Harness({ panel }: { panel: string | undefined }) {
 
 const toSettings = () => {
   mockRouter.latestLocation = { pathname: '/settings' }
-  mockRouter.pendingBuiltLocation = undefined
+  mockRouter._pendingLocation = undefined
 }
 
 beforeEach(() => {
@@ -63,7 +63,7 @@ beforeEach(() => {
   mockSearch = {}
   mockActivePanel = null
   mockRouter.latestLocation = { pathname: '/workspaces/ws-1/chat' }
-  mockRouter.pendingBuiltLocation = undefined
+  mockRouter._pendingLocation = undefined
 })
 
 describe('usePanelDeepLink search writers respect the addressed route', () => {
@@ -119,10 +119,10 @@ describe('usePanelDeepLink search writers respect the addressed route', () => {
     expect(mockNavigate).toHaveBeenCalledTimes(1)
   })
 
-  it('a pending navigation target counts as the addressed route (builds from pendingBuiltLocation)', async () => {
+  it('a pending navigation target counts as the addressed route (builds from _pendingLocation)', async () => {
     render(<Harness panel={undefined} />)
     await act(async () => {})
-    mockRouter.pendingBuiltLocation = { pathname: '/settings' }
+    mockRouter._pendingLocation = { pathname: '/settings' }
     mockNavigate.mockClear()
     await act(async () => { window.dispatchEvent(new PopStateEvent('popstate')) })
     expect(mockNavigate).not.toHaveBeenCalled()

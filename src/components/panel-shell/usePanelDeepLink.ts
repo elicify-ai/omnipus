@@ -153,7 +153,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
   // replaceSearch, so this one check, on that location, keeps the destination's
   // own query (`/settings?tab=chat`) out of reach of cleanedSearch.
   const isOwningChat = useCallback((): boolean => {
-    const { pathname } = router.pendingBuiltLocation ?? router.latestLocation
+    const { pathname } = router._pendingLocation ?? router.latestLocation
     return pathname.replace(/\/+$/, '') === owningChatPath
   }, [router, owningChatPath])
   const navigate = useNavigate()
