@@ -138,6 +138,29 @@ function findClearRowId(bucket: SessionChatState, clientMessageId: string): stri
 }
 
 /**
+ * R2-S3-06: reads that settle nothing are free for this many turn ends - a
+ * clear that executes normally is found within the first two or three (the
+ * stopped turn's own done, then the clear's reply turn). Past this, the
+ * re-read backs off so a clear that can never be found (it never reached the
+ * server, or its marker is not recognised) stops costing a full transcript
+ * read per turn end. Nothing is given up (ruling S3-02: no deadline, no user
+ * surface): the intent stays armed and the read still repeats, doubling the
+ * gap up to MAX_TURN_ENDS_BETWEEN_READS; a user Retry always reads at once.
+ */
+export const FREE_UNRESOLVED_READS = 5
+export const MAX_TURN_ENDS_BETWEEN_READS = 16
+
+function skipBackedOffRead(op: PendingClearRefresh): boolean {
+  const reads = op.unresolvedReads ?? 0
+  if (reads < FREE_UNRESOLVED_READS) return false
+  const gap = Math.min(2 ** (reads - FREE_UNRESOLVED_READS + 1), MAX_TURN_ENDS_BETWEEN_READS)
+  op.turnEndsSinceRead = (op.turnEndsSinceRead ?? 0) + 1
+  if (op.turnEndsSinceRead < gap) return true
+  op.turnEndsSinceRead = 0
+  return false
+}
+
+/**
  * E1/E2: a re-read that could not settle the operation (no own user row, or
  * no marker for it yet). There is NO bound (ruling S3-02): the read is a
  * diagnostic counter only, the intent stays armed, and every later turn end
@@ -181,6 +204,7 @@ export function settleClearRefetchAfterTurn(sid: string, doneTurnId: string | un
   // message_status failed in frames.ts, which retires the intent directly,
   // whatever turn id the explanatory reply's done carries.
   if (doneTurnId !== undefined && intent.turnIdAtArm !== null && doneTurnId === intent.turnIdAtArm) return
+  if (skipBackedOffRead(intent)) return
   void runClearRefetch(sid, withBucket)
 }
 

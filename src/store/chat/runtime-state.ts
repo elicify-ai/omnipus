@@ -68,6 +68,8 @@ export interface PendingClearRefresh {
   knownMarkerIds?: string[]
   /** Re-reads that did not settle this operation (no own user row, or no marker yet) — diagnostic only; there is NO bound (ruling S3-02). */
   unresolvedReads?: number
+  /** Turn ends skipped since the last re-read while backing off (R2-S3-06). */
+  turnEndsSinceRead?: number
   /** True once the user was told an application failure is being retried, so it is said once. */
   applyFailureShown?: boolean
 }
