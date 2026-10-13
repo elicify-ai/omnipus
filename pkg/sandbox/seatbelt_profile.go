@@ -260,11 +260,45 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	// blanket allows too, which the measurements show are harmless — being
 	// stricter than the platform requires costs nothing here, and it removes
 	// the need for a future reader to re-derive which allows are safe.
-	if len(rs.policy.DeniedPaths) > 0 || len(rs.policy.DeniedNodes) > 0 || len(rs.policy.DeniedPathPrefixes) > 0 {
+	if len(rs.policy.DeniedPaths) > 0 || len(rs.policy.DeniedNodes) > 0 || len(rs.policy.DeniedPathPrefixes) > 0 || len(rs.policy.WriteDeniedPaths) > 0 {
 		rs.b.WriteString("\n;; --- Secret set: denied last so no earlier allow can re-open it ---\n")
 	}
 	if err := rs.renderDeniedPaths(); err != nil {
 		return "", err
+	}
+
+	// --- Write-denied branches (SandboxPolicy.WriteDeniedPaths): readable
+	// and, where granted, executable subtrees that must never gain a write —
+	// the read-only allow-list entries of amendment §2 D3 (media, the
+	// session-scoped upload dirs, published runtime generations, the document
+	// prefix). Write-ONLY: a full read+write deny here would kill the read
+	// the entry exists to grant, so these cannot share DeniedPaths' loop.
+	// Emitted inside the final deny block, so no earlier allow — including
+	// $OMNIPUS_HOME's RWX grant — can re-open writes (the same measured
+	// precedence rule the subpath denies above rely on).
+	if len(rs.policy.WriteDeniedPaths) > 0 {
+		rs.b.WriteString("\n;; --- Read-only branches: write denied last so no earlier allow can re-open it ---\n")
+		emittedWrites := make(map[string]struct{}, len(rs.policy.WriteDeniedPaths)*2)
+		for _, raw := range rs.policy.WriteDeniedPaths {
+			clean, expanded := expandUserPath(raw)
+			if !expanded {
+				return "", fmt.Errorf("seatbelt: write-denied path %q is not absolute and could not be expanded", raw)
+			}
+			if err := validateSeatbeltPath(clean); err != nil {
+				return "", fmt.Errorf("seatbelt: write-denied path %q: %w", raw, err)
+			}
+			target, _ := resolveSeatbeltPath(clean)
+			for _, path := range []string{clean, target} {
+				if err := validateSeatbeltPath(path); err != nil {
+					return "", fmt.Errorf("seatbelt: write-denied path %q resolved to %q: %w", raw, path, err)
+				}
+				if _, dup := emittedWrites[path]; dup {
+					continue
+				}
+				emittedWrites[path] = struct{}{}
+				fmt.Fprintf(&rs.b, "(deny file-write* (subpath %q))\n", path)
+			}
+		}
 	}
 
 	// --- Denied NODES: the directory entries on the chain down to the work
@@ -330,7 +364,9 @@ func (rs *renderSeatbeltProfileState) renderNetwork() {
 	// --- Network. Under (deny default) all network is already denied; the
 	// explicit (deny network*) is emitted for auditor clarity and to make the
 	// posture assertable in tests. Port allow-lists re-enable only what the
-	// policy enumerates.
+	// policy enumerates. A policy with NetworkUnhandled set (the God Mode
+	// floor, amendment §2 D7) expresses NO network restriction: blanket
+	// outbound + bind allows replace the deny and the port list entirely.
 	//
 	// Ordering was verified empirically rather than assumed: with this
 	// (deny network*) sitting BETWEEN the preamble's resolver allow and the
@@ -338,6 +374,12 @@ func (rs *renderSeatbeltProfileState) renderNetwork() {
 	// both still succeed, and a non-allow-listed port is still refused. The
 	// deny does not revoke the earlier resolver allow, so it is deliberately
 	// NOT re-emitted here.
+	if rs.policy.NetworkUnhandled {
+		rs.b.WriteString("\n;; --- Network (unhandled: the God Mode floor imposes no network restriction) ---\n")
+		rs.b.WriteString("(allow network-outbound)\n")
+		rs.b.WriteString("(allow network-bind)\n")
+		return
+	}
 	rs.b.WriteString("\n;; --- Network (default-deny; explicit port allow-list) ---\n")
 	rs.b.WriteString("(deny network*)\n")
 	for _, r := range rs.policy.BindPortRules {

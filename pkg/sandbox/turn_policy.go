@@ -65,6 +65,9 @@ func RegisterTurnPolicyBase(in *TurnPolicyInput) {
 	cp.AllowedExecPaths = append([]string(nil), in.AllowedExecPaths...)
 	cp.BindPorts = append([]uint16(nil), in.BindPorts...)
 	cp.ConnectPorts = append([]uint16(nil), in.ConnectPorts...)
+	if in.AllowRoots != nil {
+		cp.AllowRoots = append([]fspolicy.AllowRoot(nil), in.AllowRoots...)
+	}
 	turnPolicyBase.Store(&cp)
 }
 

@@ -35,6 +35,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
 
 // BuildLimits returns the sandbox.Limits every bash foreground-exec /
@@ -63,21 +65,59 @@ func BuildLimits(workspaceDir string, proxy *EgressProxy, timeoutSec int32) (Lim
 
 // ResolveLimits returns the fixed Limits for a bash foreground-exec /
 // background-session (ADR-036 merge of the former workspace_shell{,_bg})
-// invocation, or the zero value when godMode is true. God mode bypasses
-// hardening entirely, so BuildLimits' side effects (workspace mkdir, proxy
-// resolution) are also skipped rather than computed and discarded — this
-// matches the pre-ADR-035 behavior where the "off" profile short-circuited
-// before any filesystem touch, and closes the asymmetry where the foreground
-// path (then the separate workspace_shell tool, now bash's foreground mode)
-// called BuildLimits unconditionally (a real MkdirAll that could fail on an
-// empty/invalid workspaceDir even though its result was immediately
-// overwritten) while the background path (then workspace_shell_bg, now
-// bash's background mode) skipped it under god mode.
+// invocation. Under godMode it returns the God Mode FLOOR (amendment §2 D7,
+// founder Q1 answer A): a kernel policy that keeps the protected internal
+// files denied while leaving everything else — writes anywhere, network open,
+// no resource caps, no egress proxy — exactly as God Mode documented. God
+// Mode never lifts the protection; it lifts everything else.
+//
+// The floor is derived from the boot-registered turn-policy base, so it
+// exists only where a kernel policy is in force at all: with no base
+// registered (sandbox off, degraded backend, nogodmode builds) the zero
+// Limits is returned — the pre-#1284 god-mode behaviour unchanged.
+//
+// BuildLimits' workspace mkdir is still skipped under god mode, for the same
+// reason the pre-ADR-035 behaviour skipped it: the "off" profile short-
+// circuits before any filesystem touch.
 func ResolveLimits(godMode bool, workspaceDir string, proxy *EgressProxy, timeoutSec int32) (Limits, error) {
 	if godMode {
-		return Limits{}, nil
+		return godFloorLimits(workspaceDir, timeoutSec)
 	}
 	return BuildLimits(workspaceDir, proxy, timeoutSec)
+}
+
+// godFloorLimits derives the God Mode floor from the registered boot base.
+// The authored half is deliberately minimal: the floor's filesystem posture
+// is "open minus the protected set", so the only authored input that matters
+// is the turn's work dir (the one branch of the home that stays a working
+// area). HomeGuard carries the base allowances so this derivation and the
+// app-layer predicate answer from the same list.
+func godFloorLimits(workspaceDir string, timeoutSec int32) (Limits, error) {
+	base := turnPolicyBase.Load()
+	if base == nil || !GodModeAvailable {
+		return Limits{}, nil
+	}
+	wsDir := ""
+	if workspaceDir != "" {
+		abs, err := filepath.Abs(workspaceDir)
+		if err != nil {
+			return Limits{}, fmt.Errorf("sandbox.ResolveLimits: %w", err)
+		}
+		wsDir = filepath.Clean(abs)
+	}
+	authored := fspolicy.FSPolicy{
+		WorkDir:   wsDir,
+		Scope:     fspolicy.FSScopeConfined,
+		HomeGuard: fspolicy.BaseHomeGuard(base.HomePath),
+	}
+	in := *base
+	in.Floor = true
+	policy := DeriveKernelPolicy(authored, in)
+	return Limits{
+		TimeoutSeconds: timeoutSec,
+		WorkspaceDir:   wsDir,
+		KernelPolicy:   &policy,
+	}, nil
 }
 
 // resolveWorkspaceDir returns an absolute, clean workspace path, creating the

@@ -205,6 +205,20 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string, pathGr
 		return msg
 	}
 
+	// #1284 protected-internal-file leg (amendment §2 D6): UNCONDITIONAL — it
+	// runs in front of the restrictToWorkspace early return, exactly beside
+	// substitutionGuard, because the internal files are protected from every
+	// agent in every mode (God Mode included) and are never grantable. It
+	// resolves each operand the command text names to a path and asks the ONE
+	// predicate (IsCarveOut, via inTurnSecretSet) — identity-based, not a
+	// regex over names, so it does not reintroduce the retired command-text
+	// block list (scripts/check-no-shell-deny-patterns.sh's banned symbols
+	// appear nowhere here). A command naming a protected path is refused
+	// outright: never prompted, never widened.
+	if msg := t.guardProtectedOperands(ctx, command); msg != "" {
+		return msg
+	}
+
 	if !t.restrictToWorkspace {
 		return ""
 	}
@@ -413,6 +427,72 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string, pathGr
 	}
 
 	return ""
+}
+
+// guardProtectedOperands scans the command TEXT for absolute-path candidates
+// (the same extraction, boundary and expansion-resolution machinery the
+// workspace scan below uses) and refuses any candidate that lands on the
+// #1284 protected internal files. It is the unconditional leg of
+// guardCommand: restrictToWorkspace=false and God Mode never skip it, and no
+// approval can widen it (the protected set is never grantable).
+//
+// A candidate whose expansion prefix cannot be resolved (a shell variable
+// whose value this process does not know) is not classified — the same
+// documented dynamic-path residual the Windows story has; on platforms with a
+// kernel backend the floor profile still confines the child by real path.
+func (t *ExecTool) guardProtectedOperands(ctx context.Context, command string) string {
+	home := config.OmnipusHomeDir()
+	if home == "" {
+		return ""
+	}
+	turnPolicy, policyOK := fspolicy.FSPolicy{}, false
+	if authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace); err == nil {
+		turnPolicy, policyOK = authored, true
+	}
+
+	cmd := strings.TrimSpace(command)
+	for _, loc := range absolutePathPattern.FindAllStringSubmatchIndex(cmd, -1) {
+		start, end := loc[2], loc[3]
+		if start < 0 || end < 0 {
+			continue
+		}
+		raw := cmd[start:end]
+		if loc[0] >= 0 && loc[0] < start {
+			if prefix, resolved, isExpansion := expandCandidatePrefix(cmd[loc[0]:start]); isExpansion {
+				if !resolved {
+					continue // unclassifiable dynamic path — documented residual
+				}
+				raw = filepath.Join(prefix, raw)
+			}
+		}
+		p, err := filepath.Abs(raw)
+		if err != nil {
+			continue
+		}
+		if t.operandIsProtected(p, turnPolicy, policyOK, home) {
+			return fmt.Sprintf(
+				"Command blocked: %q is inside Omnipus's protected internal files, which no agent command may "+
+					"read or change in any mode — God Mode included. This is never grantable; work inside the "+
+					"workspace and use the dedicated internal tools where one exists.", p)
+		}
+	}
+	return ""
+}
+
+// operandIsProtected asks the ONE predicate about a resolved operand. With a
+// turn policy it is exactly inTurnSecretSet (IsCarveOut plus the child-only
+// skills deny). Without one it fails closed toward the protected set using
+// the turn-free conservative form — a missing turn policy must not turn the
+// unconditional leg off.
+func (t *ExecTool) operandIsProtected(p string, policy fspolicy.FSPolicy, policyOK bool, home string) bool {
+	if policyOK {
+		return t.inTurnSecretSet(p, policy)
+	}
+	protected := fspolicy.IsProtectedHomePath(p, home) || fspolicy.CoversChildOnlySecretPath(p, home)
+	if resolved, err := resolvePathAgainstExistingAncestor(p); err == nil && resolved != p {
+		protected = protected || fspolicy.IsProtectedHomePath(resolved, home) || fspolicy.CoversChildOnlySecretPath(resolved, home)
+	}
+	return protected
 }
 
 // pathUseVerdict is what the classifier can say about one absolute-path

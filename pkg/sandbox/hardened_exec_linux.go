@@ -306,3 +306,12 @@ func applyPostStartHardening(cmd *exec.Cmd, lim Limits) error {
 	}
 	return nil
 }
+
+// applyKernelPolicyOnly is a no-op on Linux: a child that runs "unconfined"
+// (God Mode floor, amendment §2 D7) receives the floor through
+// StartLockedWithPolicy, which builds the spawning thread's Landlock domain
+// from the policy so the forked child inherits it. There is no pre-start
+// cmd-level hook to fill here.
+func applyKernelPolicyOnly(_ *exec.Cmd, _ *SandboxPolicy) error {
+	return nil
+}

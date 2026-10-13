@@ -1026,6 +1026,23 @@ func ApplyChildPostStartHardening(cmd *exec.Cmd, lim Limits) error {
 	return applyPostStartHardening(cmd, lim)
 }
 
+// ApplyChildKernelPolicy applies ONLY the per-turn kernel policy to a child
+// that is otherwise running unconfined — the God Mode floor's application
+// hook (amendment §2 D7): macOS renders it into the child's Seatbelt profile;
+// on Linux it is a no-op here, because the floor reaches the child through
+// StartLockedWithPolicy's per-thread restriction before the fork; on Windows
+// there is no backend and it is a no-op. A nil policy is a no-op.
+//
+// This deliberately does NOT apply the rest of ApplyChildHardening (process
+// groups, Pdeathsig, resource limits): God Mode keeps its documented meaning
+// of no hardening, and the floor is the one piece it must still carry.
+func ApplyChildKernelPolicy(cmd *exec.Cmd, policy *SandboxPolicy) error {
+	if cmd == nil || policy == nil {
+		return nil
+	}
+	return applyKernelPolicyOnly(cmd, policy)
+}
+
 // StderrTail returns the last n bytes of stderr (or all of it when shorter).
 // Useful for surfacing build failures to the agent without dumping the entire
 // log into the LLM context.

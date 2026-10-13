@@ -25,8 +25,11 @@ import (
 )
 
 // planningStatusMigrationSentinelFile is the completion marker (ADR-051 D5),
-// $OMNIPUS_HOME/.planning_status_migrated.
-const planningStatusMigrationSentinelFile = ".planning_status_migrated"
+// $OMNIPUS_HOME/tasks/.planning_status_migrated. It lives inside tasks/ —
+// not at the home root — so every top-level entry the gateway creates stays
+// inside the classified protected inventory (#1284 amendment §2 D8/T-INV: an
+// unclassified fresh-home top-level entry is a failed build).
+const planningStatusMigrationSentinelFile = "tasks/.planning_status_migrated"
 
 // legacyPlanningStatus is the removed `planning` task status value. Kept as an
 // unexported string literal — deliberately NOT a Status constant — because the

@@ -147,6 +147,18 @@ func (lb *LinuxBackend) computeRights() {
 	}
 }
 
+// effectiveHandledAccessNet resolves the net-handling mask for one policy:
+// the backend's ABI-derived mask, or zero when the policy declares network
+// unhandled (the God Mode floor — amendment §2 D7). Zero means the ruleset
+// handles no net access at all, so connect(2)/bind(2) are unrestricted
+// instead of deny-all-under-an-empty-allow-list.
+func effectiveHandledAccessNet(lb *LinuxBackend, policy SandboxPolicy) uint64 {
+	if policy.NetworkUnhandled {
+		return 0
+	}
+	return lb.handledAccessNet
+}
+
 func (lb *LinuxBackend) Name() string {
 	return fmt.Sprintf("landlock-v%d", lb.abiVersion)
 }
@@ -282,10 +294,14 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 	// Create ruleset. handledAccessNet is set on ABI ≥ 4 to enable
 	// kernel-level enforcement of NET_BIND_TCP / NET_CONNECT_TCP — see
 	// computeRights for the rationale. On older ABIs it stays 0 and the
-	// kernel ignores the field.
+	// kernel ignores the field. A policy with NetworkUnhandled set (the God
+	// Mode floor, amendment §2 D7) declares NO net handling at all: the
+	// child's connect(2)/bind(2) stay unrestricted instead of landing in the
+	// deny-all-on-empty-allow-list that handledAccessNet with no rules would
+	// otherwise be.
 	attr := landlockRulesetAttr{
 		handledAccessFS:  lb.allRights,
-		handledAccessNet: lb.handledAccessNet,
+		handledAccessNet: effectiveHandledAccessNet(lb, policy),
 	}
 	rulesetFd, _, errno := unix.Syscall(
 		sysLandlockCreateRuleset,
@@ -349,7 +365,7 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 	// the FS rules still take effect. On capable kernels, every entry in
 	// BindPortRules is registered as an allow-rule; any bind to a port not
 	// listed will be denied with EACCES.
-	if lb.abiVersion >= 4 {
+	if effectiveHandledAccessNet(lb, policy) != 0 {
 		for _, rule := range policy.BindPortRules {
 			if err := addLandlockNetPortRule(rulesetFdInt, rule.Port, landlockAccessNetBindTcp); err != nil {
 				// B1.4-c: On ABI >=4 the kernel explicitly claims NET_BIND_TCP
@@ -730,7 +746,7 @@ func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) e
 	// 2. Build a fresh ruleset matching the saved policy.
 	attr := landlockRulesetAttr{
 		handledAccessFS:  lb.allRights,
-		handledAccessNet: lb.handledAccessNet,
+		handledAccessNet: effectiveHandledAccessNet(lb, effective),
 	}
 	rulesetFd, _, errno := unix.Syscall(
 		sysLandlockCreateRuleset,
@@ -788,7 +804,7 @@ func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) e
 			return fmt.Errorf("landlock: re-add path %q: %w", rule.Path, err)
 		}
 	}
-	if lb.abiVersion >= 4 {
+	if effectiveHandledAccessNet(lb, effective) != 0 {
 		for _, rule := range effective.BindPortRules {
 			if err := addLandlockNetPortRule(rulesetFdInt, rule.Port, landlockAccessNetBindTcp); err != nil {
 				// B1.4-c: same hard-error contract as in ApplyWithMode. On ABI >=4
@@ -885,5 +901,5 @@ func (lb *LinuxBackend) linuxFilesystemRules(policy SandboxPolicy, forChild bool
 	if !forChild {
 		return rules, nil
 	}
-	return ExpandRulesExcluding(rules, policy.DeniedPaths, policy.DeniedNodes, policy.DeniedPathPrefixes)
+	return ExpandRulesExcluding(rules, policy.DeniedPaths, policy.DeniedNodes, policy.DeniedPathPrefixes, policy.AllowedBranches)
 }

@@ -255,7 +255,18 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 
 	var startErr error
 	if t.godMode {
-		startErr = cmd.Start()
+		// God Mode FLOOR (amendment §2 D7): the setup child applies the same
+		// floor bash's foreground and background paths do — ResolveLimits
+		// returned it in plan.lim.KernelPolicy; macOS renders it into the
+		// child's Seatbelt profile, Linux applies it to the spawning thread
+		// before the fork. A nil policy (sandbox off, degraded backend,
+		// nogodmode build) reproduces the pre-floor god path exactly.
+		if plan.lim.KernelPolicy != nil {
+			if err := sandbox.ApplyChildKernelPolicy(cmd, plan.lim.KernelPolicy); err != nil {
+				return setupStartAbortResult(plan.area, fmt.Sprintf("sandbox floor failed: %v", err))
+			}
+		}
+		startErr = sandbox.StartLockedWithPolicy(cmd, plan.lim.KernelPolicy)
 	} else {
 		// CRIT-1: the per-turn kernel policy must reach the Linux child —
 		// StartLocked applies only the boot-global domain on the spawning

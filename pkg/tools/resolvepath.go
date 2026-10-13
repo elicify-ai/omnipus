@@ -46,6 +46,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -189,23 +190,19 @@ const (
 	skillShelfProject  = "project"
 )
 
-// skillInstructionFileLeaves are the filenames D10.3's narrowed Part A gates
-// — a skill's INSTRUCTIONS, not its directory. Matched case-sensitively
-// against the final path component only (the existing custom-agent-format
-// precedent: structured AGENT.md singular, with legacy AGENTS.md plural
-// still loading as fallback — see CLAUDE.md's "Custom-agent format" note).
-var skillInstructionFileLeaves = map[string]bool{
-	"SKILL.md":  true,
-	"AGENT.md":  true,
-	"AGENTS.md": true,
-}
-
 // isSkillInstructionFileLeaf reports whether rawPath's final path component
 // is one of a skill's recognised instruction filenames (D10.3). Applied only
 // to the REGISTRY shelf's classification — project-shelf paths are never
 // read-denied at all under D10.3, regardless of leaf name.
+//
+// The names are single-sourced in fspolicy.SkillInstructionLeaves, which the
+// #1284 home-guard predicate also evaluates (A7: instruction files stay
+// gated at the predicate level, with this gate keeping its specific redirect
+// message on top). Deny-side case folding: on a case-insensitive volume
+// SKILL.MD IS SKILL.md, and over-matching a distinctly-named file under the
+// registry shelf withholds only a read the Skill tool exists to route.
 func isSkillInstructionFileLeaf(rawPath string) bool {
-	return skillInstructionFileLeaves[filepath.Base(rawPath)]
+	return fspolicy.IsSkillInstructionLeaf(filepath.Base(rawPath))
 }
 
 // isSkillInstructionFile applies isSkillInstructionFileLeaf to BOTH spellings
@@ -1569,6 +1566,29 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool, g
 	if mountWorkspaceID != "" {
 		policy.AllowedRoots = workspace.AllowedMountRoots(home, mountWorkspaceID)
 	}
+
+	// #1284 home guard (amendment §2 D3): the per-turn allowances ride the
+	// SAME policy object the app-layer predicate (IsCarveOut) evaluates, so
+	// every consumer — ResolvePath, grep, the bash command check, the D7
+	// pre-flight — sees the identical set. EffectiveFSPolicy already seeded
+	// the base entries (media, skills helper files); the turn adds its
+	// session-scoped upload dirs (A4) and its workspace mounts (A2). No
+	// entry can reopen a protected-inventory path: the inventory is
+	// evaluated first and always wins.
+	if policy.HomeGuard.Home != "" {
+		for _, mount := range policy.AllowedRoots {
+			if mount == "" {
+				continue
+			}
+			policy.HomeGuard.Allow = append(policy.HomeGuard.Allow, fspolicy.AllowRoot{Path: filepath.Clean(mount), Writable: true})
+		}
+		for _, sessionID := range []string{ToolTranscriptSessionID(ctx), ToolRootChatSessionID(ctx)} {
+			if dir, ok := media.SessionUploadsDir(sessionID); ok {
+				policy.HomeGuard.Allow = append(policy.HomeGuard.Allow, fspolicy.AllowRoot{Path: filepath.Clean(dir), Writable: false})
+			}
+		}
+	}
+
 	if len(grantOverlay) > 0 && len(grantOverlay[0]) > 0 {
 		policy.PathGrants = append(append([]fspolicy.PathGrant(nil), policy.PathGrants...), grantOverlay[0]...)
 	}

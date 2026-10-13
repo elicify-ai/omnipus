@@ -133,6 +133,17 @@ func IsCarveOut(resolvedAbsPath string, policy FSPolicy) bool {
 		return true
 	}
 
+	// #1284 home guard (amendment §2 D1/D4/D5): the named protected inventory
+	// always wins, then default-deny inside $OMNIPUS_HOME with the explicit
+	// allowances and the (D4-narrowed) own-tree exception. Runs BEFORE the
+	// per-root loop so every consumer of this one predicate — ResolvePath,
+	// grep's carveOutFS, the bash command check, the D7 pre-flight — inherits
+	// it. A zero HomeGuard (Home == "") disables the leg and leaves the
+	// pre-#1284 behaviour untouched.
+	if homeGuardDeny(cleanPath, policy) {
+		return true
+	}
+
 	// A hard link whose other end lies inside a DIRECTORY-shaped carve-out.
 	//
 	// Checked here, ahead of the per-root loop, because the loop cannot answer

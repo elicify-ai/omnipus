@@ -968,13 +968,15 @@ func buildShellArgv(command string) []string {
 }
 
 // runForeground executes command synchronously and returns its output. Under
-// god mode, hardening is skipped entirely (runUnconstrained); otherwise the
-// command is routed through sandbox.Run, which applies Landlock/seccomp
-// inheritance, resource limits, the egress proxy, and the wall-clock timeout
-// uniformly (FR-B6). timeoutSeconds is passed explicitly (not read from
-// lim.TimeoutSeconds) because sandbox.ResolveLimits returns the ZERO VALUE
-// under god mode (lim.TimeoutSeconds would be 0) — workspace_shell's run()
-// used the same explicit-parameter pattern for exactly this reason.
+// god mode, hardening is skipped entirely (runUnconstrained) — but the God
+// Mode FLOOR (amendment §2 D7) still applies: sandbox.ResolveLimits returned
+// it in lim.KernelPolicy, and runUnconstrained applies it via the backend's
+// child-confinement hook. Otherwise the command is routed through
+// sandbox.Run, which applies Landlock/seccomp inheritance, resource limits,
+// the egress proxy, and the wall-clock timeout uniformly (FR-B6).
+// timeoutSeconds is passed explicitly (not read from lim.TimeoutSeconds) so
+// the god path can carry its own timeout — workspace_shell's run() used the
+// same explicit-parameter pattern for exactly this reason.
 func (t *ExecTool) runForeground(
 	ctx context.Context,
 	command string,
@@ -985,7 +987,7 @@ func (t *ExecTool) runForeground(
 	argv := buildShellArgv(command)
 
 	if t.godMode {
-		return t.runUnconstrained(ctx, argv, lim.WorkspaceDir, timeoutSeconds, execEnv)
+		return t.runUnconstrained(ctx, argv, lim, timeoutSeconds, execEnv)
 	}
 
 	res, err := sandbox.Run(ctx, argv, execEnv, lim)
@@ -1068,14 +1070,19 @@ func scrubbedEnv(base []string) []string {
 }
 
 // runUnconstrained runs the command without ApplyChildHardening/sandbox.Run.
-// Used only under the global god-mode override. The command still runs in
-// the resolved cwd and honors the caller-supplied timeout via context
+// Used only under the global god-mode override. The God Mode FLOOR
+// (amendment §2 D7) still applies: when lim.KernelPolicy carries the floor,
+// macOS renders it into the child's Seatbelt profile (sandbox.ApplyChild
+// KernelPolicy) and Linux applies it to the spawning thread before the fork
+// (sandbox.StartLockedWithPolicy), so the child inherits the protected-file
+// deny set while everything else stays free. The command still runs in the
+// resolved cwd and honors the caller-supplied timeout via context
 // cancellation (exec.CommandContext); the parent environment is inherited
 // with sensitive Omnipus credentials stripped.
 func (t *ExecTool) runUnconstrained(
 	ctx context.Context,
 	argv []string,
-	cwdPath string,
+	lim sandbox.Limits,
 	timeoutSeconds int32,
 	execEnv []string,
 ) *ToolResult {
@@ -1083,8 +1090,8 @@ func (t *ExecTool) runUnconstrained(
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
-	if cwdPath != "" {
-		cmd.Dir = cwdPath
+	if lim.WorkspaceDir != "" {
+		cmd.Dir = lim.WorkspaceDir
 	}
 	cmd.Env = execEnv
 
@@ -1092,8 +1099,25 @@ func (t *ExecTool) runUnconstrained(
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
+	// The floor: profile first (macOS), then the locked-thread spawn that
+	// carries the policy to the child on Linux. A nil policy — sandbox off,
+	// degraded backend, nogodmode build — reproduces the pre-floor god path
+	// exactly (plain Start on this goroutine).
+	startErr := func() error {
+		if lim.KernelPolicy == nil {
+			return cmd.Start()
+		}
+		if err := sandbox.ApplyChildKernelPolicy(cmd, lim.KernelPolicy); err != nil {
+			return err
+		}
+		return sandbox.StartLockedWithPolicy(cmd, lim.KernelPolicy)
+	}()
+	if startErr != nil {
+		return ErrorResult(fmt.Sprintf("command failed to start: %v", startErr))
+	}
+
 	start := time.Now()
-	runErr := cmd.Run()
+	runErr := cmd.Wait()
 	dur := time.Since(start)
 
 	timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)

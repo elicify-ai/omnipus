@@ -78,6 +78,42 @@ type PathGrant struct {
 	Access uint64
 }
 
+// AllowRoot is one explicit allowance inside $OMNIPUS_HOME (amendment §2 D3,
+// chief ruling 2026-10-13): a path the default-deny home guard re-admits, and
+// whether that admission carries write. A Writable=false entry is read (and
+// execute) only — a write through a read-only entry is refused. An entry can
+// never reopen a protected-inventory path: the inventory is evaluated first
+// and always wins.
+type AllowRoot struct {
+	// Path is the resolved absolute path this allowance covers (a subtree).
+	Path string
+
+	// Writable grants write on top of read when true; read-only when false.
+	Writable bool
+}
+
+// HomeGuard carries the default-deny protection of $OMNIPUS_HOME
+// (amendment §2 D1/D5): the home anchor and the explicit allowances inside
+// it. It lives on FSPolicy so the ONE predicate (IsCarveOut) — and through it
+// ResolvePath, grep, the bash command check and the D7 pre-flight — inherits
+// the protection, with no second construction site.
+//
+// A zero HomeGuard (Home == "") means "no home guard in force": every policy
+// built before this field existed, and every hand-constructed test policy,
+// keeps exactly its pre-#1284 behaviour. EffectiveFSPolicy always populates
+// it.
+type HomeGuard struct {
+	// Home is the resolved (realpath'd) $OMNIPUS_HOME this guard denies by
+	// default. Empty disables the guard.
+	Home string
+
+	// Allow are the explicit allowances inside Home (amendment §2 D3):
+	// base entries (media, skills helper files) from BaseHomeGuard, the
+	// turn's session-scoped upload dirs, and workspace mounts. Inventory
+	// paths are never re-admitted by any entry.
+	Allow []AllowRoot
+}
+
 // FSPolicy is the effective, fully-resolved filesystem policy for one agent
 // turn — the single source of record both the app-layer resolver and the
 // future kernel ruleset builder consume (FR-036).
@@ -178,6 +214,16 @@ type FSPolicy struct {
 	// carve-out check, which runs unconditionally and earlier — a confined
 	// policy can never make a previously-denied path reachable.
 	ReadConfined bool
+
+	// HomeGuard is the #1284 default-deny protection of $OMNIPUS_HOME
+	// (amendment §2 D1/D5): the named protected inventory always wins, every
+	// other path under Home is denied unless an Allow entry or the turn's
+	// WorkDir re-admits it. Evaluated by IsCarveOut BEFORE the CarveOuts
+	// loop, so the app-layer resolver, grep, the bash command check and the
+	// D7 pre-flight all inherit it through that one predicate. Zero value
+	// (Home == "") disables the leg — the documented pre-#1284 behaviour for
+	// hand-constructed policies.
+	HomeGuard HomeGuard
 }
 
 // Validate asserts the structural invariants ResolvePath depends on before
@@ -383,6 +429,7 @@ func EffectiveFSPolicyWithReadConfined(
 		CarveOuts:    buildCarveOuts(resolvedHome),
 		AllowedRoots: nil,
 		ReadConfined: readConfined,
+		HomeGuard:    BaseHomeGuard(resolvedHome),
 	}, nil
 }
 
