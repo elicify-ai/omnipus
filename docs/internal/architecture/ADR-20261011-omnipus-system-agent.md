@@ -102,6 +102,8 @@ Source: founder answers AW-1, AW-2. Detail: specification US-20, FR-190–FR-198
 | OSA-14 and the R34 "Email is a channel like any other" line | **Superseded by EM-1:** email is an agent tool, not a chat channel — no routing, rooms, awareness or "who can reach" for email; its tools and `connect_mailbox` stay. The Connectors page has two categories, Chat channels and Agent tools (EM-2). |
 | OSA-15 (rooms) | Rooms are their own record (not sessions with an optional agent); room requests follow an explicit state machine, are never steered into a running turn, carry a pause generation, and are delivered once per member with retry reconciliation. Detail: spec §6.11, §6.13, §6.14. |
 | OSA-16 (awareness) | Every memory path takes an immutable (workspace, agent) scope; recaps refresh after new activity (session-core D9). Whether ordinary private notes become per workspace is founder question FQ-R3-B. |
+| OSA-14 — admission (FQ-R3-A, 2026-10-13) | Each chat-channel connection has an "Open to anyone" checkbox, unticked (closed) by default: closed admits only listed people and groups (an empty list admits nobody); open admits anyone, who reaches the main agent unless a row says otherwise. Commands and the #892 resume right always need an individual person row. |
+| OSA-16 — private memory (FQ-R3-B, 2026-10-13) | Private memory (`remember` room "private") stays **agent-wide** — an agent's learning carries over across workspaces; this is intended, not a leak. Shared memory stays per workspace team; automatic digests, carry-forward and awareness stay per workspace (AW-2). |
 
 
 

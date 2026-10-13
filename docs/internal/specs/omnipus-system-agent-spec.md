@@ -174,7 +174,7 @@ GC-8 supersedes the "hidden working session per member" design of §0.7. A group
 | R3-MAJ-006 room admission/reply/failure | Fixed | §6.11 room state machine (approval before capture, refused, failed, interrupted, unavailable); room-origin intake rule (no steering into a live turn); room-origin reply branch (no owner wake, one main mirror, mention fan-out); FR-213–FR-215 |
 | R3-MAJ-007 partial fan-out retry | Fixed | Stable delivery ids stored before admission; Retry admits only unadmitted members; answer and mention fan-out deduplicated; interrupted work shown, never replayed; FR-216; BDD-17.26, 17.27 |
 | R3-MAJ-008 pause fence | Fixed | Durable room generation bumped by `/pause`; admission, approval completion and dequeue check it under the room lock; after-pause answers keep that mark after `/resume`; member removal / room deletion races; FR-217; BDD-17.28, 17.29 |
-| R3-MAJ-009 memory scope pointer | Fixed (ordinary private notes: FQ-R3-B) | Every memory operation takes an immutable (workspace, agent) scope; inventory of all paths; FR-218, FR-219; BDD-20.8 |
+| R3-MAJ-009 memory scope pointer | Fixed (private notes stay agent-wide by FQ-R3-B, §0.12) | Every memory operation takes an immutable (workspace, agent) scope; inventory of all paths; FR-218, FR-219; BDD-20.8 |
 | R3-MAJ-010 lifetime-once recap | Fixed | Recap keyed to transcript progress (session-core D9: repeated idle episodes recap again); FR-220; BDD-20.9 |
 | R3-MAJ-011 mention namespace | Fixed | §6.13 mention rules: picker ids authoritative, exact unique full-name match for typed text, ambiguity refused, `all` reserved; FR-164 amended; dataset D7 extended |
 | R3-MAJ-012 room cost oracle | Fixed | §6.14 formula (equal weight per newly admitted input, fixed at turn start; micro-dollar rounding; "unknown price" labelled); FR-171 amended; BDD-17.30 |
@@ -185,6 +185,13 @@ GC-8 supersedes the "hidden working session per member" design of §0.7. A group
 | R3-OBS-002 composite accessibility | Adopted | §6.8 extended (mention picker, membership dialog, disclosure, People list switches, Configure tabs); BDD-12.16 |
 
 Tally: 13 major fixed, 2 minor fixed, 2 observations adopted; none overridden by the author (Q-R3-1 A overrides the grill's recommendation B on the founder's authority).
+
+### 0.12 Founder answers FQ-R3-A and FQ-R3-B (2026-10-13)
+
+| Answer | Applied |
+|---|---|
+| FQ-R3-A — every chat-channel connection has an explicit **"Open to anyone"** checkbox in the People tab. **Unticked (default for a new connection) = closed**: only listed people and groups are admitted; an empty list admits nobody. **Ticked** = anyone may write and reaches the main agent unless a row says otherwise. Commands and the #892 resume right still need an individual person row in both cases. Strangers are refused only when the connection is closed | FR-224; FR-145 amended; K19 `open_to_anyone`; BDD-16.22, 16.23; tests 156, 157 |
+| FQ-R3-B — **private memory stays agent-wide**: `remember` with room "private" stays agent-global as today (an agent's learning carries over across workspaces); room "shared" stays per workspace team; automatic conversation digests, carry-forward and awareness stay per workspace (AW-2) | Fix-round-3 text that made private notes per workspace is reverted: FR-195, FR-218, FR-219, §6.12, US-20 AS-4/AS-6, BDD-20.4, BDD-20.8, the §6.1 prohibition. **Deliberate private notes intentionally cross workspaces; that is not a leak.** |
 
 ---
 
@@ -434,7 +441,7 @@ The operator decides, per connection (channel instance), who may talk to the wor
 
 1. **Given** a connection bound to a workspace with a main agent, **When** an allowed person without a rule writes, **Then** the main agent answers.
 2. **Given** a person or group rule to an agent in the connection's workspace, **When** that person or group writes, **Then** that agent answers.
-3. **Given** a person not on the allow list, **When** they write, **Then** they get the "not authorised" reply and the operator sees it on the connection status and log.
+3. **Given** a closed connection and a person not on its People list, **When** they write, **Then** they get the "not authorised" reply and the operator sees it on the connection status and log.
 4. **Given** two connections of the same type in one workspace, **When** each has different rules, **Then** each applies only its own.
 5. **Given** an agent, **When** its editor opens, **Then** a read-only list shows who can reach it, through which connection, with a link to edit that connection.
 6. **Given** a connection's conversation mode is "agent's main chat" (default), **When** people write, **Then** their messages go into the agent's main chat; with "one chat per person", each person gets their own conversation — changed without restart.
@@ -443,6 +450,8 @@ The operator decides, per connection (channel instance), who may talk to the wor
 9. **Given** per-person conversations exist, **When** the sidebar renders, **Then** they are hidden under the agent by default, can be un-hidden one by one, and are always in the agent's History.
 10. **Given** a person's message on a connection, **When** it is routed, **Then** the person's row ("Talks to") decides the agent, else the main agent, before any conversation is prepared, and the answer goes back on the same connection only while that routing still holds.
 11. **Given** the Connectors page, **When** it renders, **Then** chat channels and agent tools are separate categories, and a chat channel's Configure panel has Setup, People, Conversations and Requests tabs whose content fits its type; email has no routing tabs.
+12. **Given** the People tab, **When** "Open to anyone" is unticked (the default) or ticked, **Then** the connection admits only listed people and groups (an empty list admits nobody) or anyone (who reaches the main agent unless a row says otherwise); commands and resume always need an individual person row.
+
 
 ### US-17 — Group chats as rooms: team room, squads, ad-hoc rooms (P1)
 
@@ -488,9 +497,9 @@ The agent behaves like a person who remembers their other conversations in this 
 1. **Given** Mia's main chat in Sales, **When** a turn starts, **Then** her context lists her other Sales conversations (who, where, last activity, one-line summary — no content).
 2. **Given** that list, **When** Mia needs details, **Then** she opens one of those conversations read-only with a tool.
 3. **Given** a conversation's idle recap produced items worth remembering, **When** it is written, **Then** they are noted into Mia's memory for Sales automatically.
-4. **Given** Mia works in Marketing too, **When** her Sales main chat runs, **Then** no Marketing conversation, summary, note or carry-forward reaches it.
+4. **Given** Mia works in Marketing too, **When** her Sales main chat runs, **Then** no Marketing conversation, summary, automatic note, shared-room note or carry-forward reaches it; her own private notes (agent-wide by design) are available everywhere.
 5. **Given** the read-only tool, **When** it is called on a conversation Mia is not part of or in another workspace, **Then** it is refused.
-6. **Given** Mia works in Sales and Marketing at the same time, **When** either workspace saves or reads memory, **Then** each only touches its own workspace's notes, retrospectives and carry-forward.
+6. **Given** Mia works in Sales and Marketing at the same time, **When** either workspace saves or reads memory, **Then** each only touches its own workspace's automatic notes, shared notes, retrospectives and carry-forward.
 7. **Given** a recapped conversation gets new activity and goes idle again, **When** the next recap runs, **Then** its summary and notes are refreshed.
 
 ---
@@ -570,7 +579,7 @@ The agent behaves like a person who remembers their other conversations in this 
 - The system must not let an agent create a squad, because GC-3.
 - The system must not let any channel command change agent or global settings, because GC-6 and #955.
 - The system must not let a stopped channel group conversation be resumed by an automatic wake or by a person admitted only through the group, because #892.
-- The system must not put another workspace's conversation, summary, memory note or carry-forward into an agent's context, because AW-2.
+- The system must not put another workspace's conversation, summary, automatic memory note, shared-room note or carry-forward into an agent's context, because AW-2. (Deliberate private notes are agent-wide by design, FQ-R3-B.)
 - The system must not activate a replacement secret before its owner or integration selects it, because FA:Q-R1-1 A.
 
 ### 6.2 Machine-verifiable constraints
@@ -768,7 +777,7 @@ recorded ─► awaiting approval (receiver policy ask; before capture) ─► r
 
 ### 6.12 Workspace-scoped memory (R3-MAJ-009, R3-MAJ-010)
 
-Every memory operation receives an immutable (workspace, agent) scope from the turn context; no shared, mutable "current workspace" pointer is used. Paths in scope: automatic recap notes, retrospective writes and search, the recap carry-forward (`last-session.md`), the bootstrap memory context and its prompt cache (keyed by agent + workspace), recap success and fallback writers, `recall_memory` (shared, private, both) — and ordinary private notes per FQ-R3-B. An agent-wide room is never the fallback for workspace-owned data. Recaps are keyed to transcript progress: a conversation is recapped again after new activity and a new idle period (session-core D9), skipped when unchanged, and an older recap finishing after a newer one never overwrites it.
+Every memory operation receives an immutable (workspace, agent) scope from the turn context; no shared, mutable "current workspace" pointer is used. **Per workspace (AW-2):** automatic recap notes, retrospective writes and search, the recap carry-forward (`last-session.md`), the workspace-owned part of the bootstrap memory context and its prompt cache (keyed by agent + workspace), recap success and fallback writers, and `remember`/`recall_memory` with room "shared" (the workspace team room). **Agent-wide by design (FQ-R3-B):** notes saved deliberately with `remember` room "private" stay agent-global, as today (`pkg/memrooms/rooms.go`: "agent-global, workspace-independent") — an agent's learning carries over across workspaces; that is intended, not a leak. An agent-wide room is never the fallback for workspace-owned data. Recaps are keyed to transcript progress: a conversation is recapped again after new activity and a new idle period (session-core D9), skipped when unchanged, and an older recap finishing after a newer one never overwrites it.
 
 ### 6.13 Mention rules (R3-MAJ-011)
 
@@ -815,7 +824,7 @@ Order per change: schema in `contracts/components/schemas/` → reference from `
 | K15 | **changed** `ChannelEntry` | `degraded` / `degraded_reason` cover routing failures; optional `last_dropped_at`; cleared when a valid binding is saved | FR-121 |
 | K16 | **changed** `SessionCreateRequest` | `agent_id` required | FR-122 |
 | K18 | **new** `ChannelPersonRule` | match kind enum `person` / `group` / `guild` / `team` / `account`, match id, display label (≤ 80), agent id | FR-141 |
-| K19 | **changed** `ChannelRouting` (read and write) | `agent_id` = main agent (required), `person_rules[]` (never null, ≤ 500), `conversation_mode` enum `main` / `per_person` (default `main`) | FR-140, FR-147 |
+| K19 | **changed** `ChannelRouting` (read and write) | `agent_id` = main agent (required), `open_to_anyone` boolean (default `false` on create; FQ-R3-A), `person_rules[]` (never null, ≤ 500), `conversation_mode` enum `main` / `per_person` (default `main`) | FR-140, FR-147 |
 | K20 | **changed** `ChannelEntry` status | `strangers_count`, `last_stranger_label` (display label or redacted id), `last_stranger_at` | FR-145 |
 | K21 | **new** `AgentReachabilityEntry`; `GET /api/v1/agents/{id}/reachability` | connection id, workspace id, via enum `main` / `person_rule`, match kind/label | FR-146 |
 | K22 | **changed** `BindingMatch` config shape (not wire) and session-scope route | `instance_id`; `/api/v1/security/session-scope` per RQ-4 | FR-141, FR-148 |
@@ -1757,7 +1766,7 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | Ben | direct | Mia |
 
 **BDD-16.3 Stranger reply and operator visibility** — US-16 AS-3 — Error Path
-- Given Carl is not on tg-1's allow list
+- Given tg-1 is closed ("Open to anyone" unticked) and Carl is not on its People list
 - When Carl writes twice within an hour
 - Then Carl receives "not authorised" once, no agent turn starts, the connection status shows 2 strangers and Carl as the last one, and a log + audit entry exists
 
@@ -2206,9 +2215,9 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - Then a memory note tagged with Anna's conversation exists in Mia's Sales memory, and `recall_memory` in Sales finds it
 
 **BDD-20.4 Other workspaces invisible** — US-20 AS-4 — Error Path (Outline)
-- Given Mia also has Marketing conversations, notes and a Marketing recap
+- Given Mia also has Marketing conversations, automatic notes, Marketing shared-room notes and a Marketing recap
 - When Mia's Sales main chat runs `<step>`
-- Then nothing from Marketing appears
+- Then nothing workspace-owned from Marketing appears
 
 | step |
 |---|
@@ -2273,12 +2282,12 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 **BDD-16.21 Requests tab** — US-16 AS-3 — Alternate Path
 - Given Carl was refused on tg-1
 - When the operator opens Requests and chooses "Add to People" for Carl
-- Then Carl's row appears in People (talks to the main agent, commands off) and his next message is admitted
+- Then Carl's row appears in People (talks to the main agent, commands off) and his next message is admitted on the closed connection
 
 **BDD-20.8 Concurrent workspaces keep memory apart** — US-20 AS-6 — Error Path
-- Given Mia runs at the same time in Sales and Marketing, each with a distinct sentinel note, retrospective and carry-forward
+- Given Mia runs at the same time in Sales and Marketing, each with a distinct sentinel automatic note, shared-room note, retrospective and carry-forward
 - When both save and recall with the same query through the real tools and context building
-- Then each sees only its own workspace's sentinels (private notes per FQ-R3-B)
+- Then each sees only its own workspace's sentinels
 
 **BDD-20.9 Recap refresh** — US-20 AS-7 — Edge Case (Outline)
 - Given Anna's conversation was recapped
@@ -2291,6 +2300,28 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | no new messages, a new idle period | not recapped |
 | an older recap finishes after a newer one | the newer summary stays |
 | gateway restart after new activity | the next idle period recaps |
+
+**BDD-16.22 New connection is closed** — US-16 AS-12 — Error Path
+- Given a newly connected Telegram bot tg-3 with an empty People list and "Open to anyone" unticked (default)
+- When Anna writes
+- Then no turn starts and Anna gets the "not authorised" reply once
+
+**BDD-16.23 Open to anyone** — US-16 AS-12 — Alternate Path (Outline)
+- Given tg-1 with "Open to anyone" ticked, main agent Mia and Anna's row talking to Jim with commands on
+- When `<sender>` sends `<text>`
+- Then `<result>`
+
+| sender | text | result |
+|---|---|---|
+| Carl (no row) | "hi" | Mia answers; no stranger event |
+| Carl (no row) | "/model x" | refused as an un-entitled command |
+| Anna | "hi" | Jim answers |
+| Anna | "/clear" | allowed (individual row with commands on) |
+
+**BDD-20.10 Private notes carry over by design** — US-20 AS-4 — Alternate Path
+- Given Mia saved "Customers prefer short answers" with `remember` room private while in Sales
+- When Mia recalls in Marketing
+- Then the note is found (agent-wide by design, FQ-R3-B), while Sales's automatic notes and shared-room notes are not
 
 ### Feature: Permission changes (US-14)
 
@@ -2512,6 +2543,9 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 153 | `pkg/routing::TestConversationKeys_CanonicalTuple` (dataset D8) | Unit | 16.12 |
 | 154 | `pkg/agent::TestRoomCost_AllocatedFormula_Unpriced` | Unit | 17.30 |
 | 155 | `pkg/groupchat::TestMentions_DuplicateRenameReserved` | Unit | 17.31 |
+| 156 | `pkg/channels::TestNewConnection_ClosedByDefault_EmptyAdmitsNobody` | Unit | 16.22 |
+| 157 | `pkg/channels::TestOpenToAnyone_MainAgentDefault_CommandsNeedRow` | Integration | 16.23 |
+| 158 | `pkg/agent::TestPrivateNotes_AgentWide_DigestsAndSharedPerWorkspace` | Integration | 20.10 |
 
 Live-model specs use `openrouter` + `deepseek/deepseek-v4.1-flash`. Prompt-text tests prove wording only; a live pass does not prove the instruction-only Go gate cannot be bypassed (accepted R-A1).
 
@@ -2819,7 +2853,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-142**: For a bound instance the route MUST be: allow-list check → person table (priorities 1–5, instance-scoped) → main agent → loud unrouted drop; the bound identity no longer skips the bindings.
 - **FR-143**: A person-rule target MUST be a chat-target member of the instance's workspace; saving otherwise MUST be refused; at runtime an unavailable target MUST cause a loud drop, never a main-agent fallback.
 - **FR-144**: Bindings without an `instance_id` and `channel_policies.<ch>.routing_rules` MUST be ignored with a load/reload warning naming them (greenfield; the latter mapped user ids onto the bot-account match).
-- **FR-145**: A sender not on the allow list MUST NOT start any turn. In a direct chat the system MUST reply "Sorry, you are not authorised to use this assistant." at most once per stranger per connection per 24 hours; a group on the allow list or person table admits all its members, and a stranger inside a non-admitted group is never answered publicly (logged only). Every stranger event MUST be recorded on the connection status (count, last stranger, time), in the log and in the audit log (RQ-2 A, RQ-3 A).
+- **FR-145**: When a connection is closed ("Open to anyone" unticked), a sender not on its People list MUST NOT start any turn. In a direct chat the system MUST reply "Sorry, you are not authorised to use this assistant." at most once per stranger per connection per 24 hours; a group row admits all its members, and a stranger inside a non-admitted group is never answered publicly (logged only). Every stranger event MUST be recorded on the connection status (count, last stranger, time), in the log and in the audit log (RQ-2 A, RQ-3 A). An open connection has no strangers.
 - **FR-146**: The per-agent "who can reach this agent" list MUST be derived from all connection tables (main-agent and person-rule entries) and shown read-only in the shared agent editor slide-over (there is no Agents page) with links to each connection's Configure side panel; it MUST NOT be stored separately.
 - **FR-147**: Each connection MUST have a conversation mode: `main` (default — the routed agent's main chat in that workspace) or `per_person` (one conversation per person keyed by workspace, agent, connection and normalized sender id; one per group keyed by workspace, agent, connection and group id), applied without a gateway restart. Identity links MUST only label and recognise people; they MUST NOT merge conversations across connections, agents or workspaces (Q-R3-2 B).
 - **FR-148**: The global `session.dm_scope` setting and its `/api/v1/security/session-scope` route MUST be retired (an existing value is ignored with a load warning); `session.identity_links` stays global (RQ-4 A).
@@ -2849,6 +2883,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-206**: `/members` MUST list members with their request state and mute status; room commands MUST be usable only by the user (agent text is never a command, FR-168).
 - **FR-207**: The chat header MUST show an "Add participant" control at the top-left that offers **agents only** (conversation agents of the chat's workspace; never channel people, workers, hidden engine agents or Omnipus). In an agent's main chat, choosing an agent MUST create a new ad-hoc room with the user and both agents, open it empty with a link back to the main chat, and leave the main chat unchanged and one-to-one (GC-10).
 - **FR-208**: In a squad or ad-hoc room, "Add participant" MUST add the chosen agent (audited); in the team room it MUST be disabled with "Team room members are the workspace's agents — add the agent to the workspace"; it MUST be absent in Omnipus's chat.
+- **FR-224**: Every chat-channel connection MUST have an "Open to anyone" checkbox in the People tab, **unticked by default** for a new connection. Unticked: only listed people and groups are admitted and an empty People list admits nobody. Ticked: anyone may write and reaches the main agent unless a People row routes them elsewhere. In both cases "Can use commands" and the #892 resume right MUST require an individual person row (FQ-R3-A).
 - **FR-209**: The People tab's "Can use commands" help and `/help` on a connection in `main` mode MUST state that commands change the agent's main chat for everyone, including the user (Q-R3-1 A).
 - **FR-210**: Inbound channel routing MUST resolve admission, entitlement, destination (person/group row, else main agent) and conversation mode before preparing the receiver session or writing the capture (§6.10); the capture MUST record the connection as source owner and the routed agent as responder.
 - **FR-211**: Reply egress MUST be accepted only while the connection is still bound to that workspace and the responder is still the routed agent for that sender; otherwise refused and logged.
@@ -2858,8 +2893,8 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-215**: A room-origin answer MUST be appended to the room, mirrored once as a collapsed entry in the responder's main chat, and fanned out to its resolved mentions; it MUST NOT wake any agent owner.
 - **FR-216**: Each (room message, member) MUST have a stable delivery id recorded before admission; a Retry MUST admit only members without a recorded admission; an answer and its mention fan-out MUST be recorded once per answer entry; interrupted work MUST NOT be replayed automatically.
 - **FR-217**: Each room MUST keep a durable generation; `/pause` MUST increment it and cancel not-yet-consumed requests of older generations under the room lock; admission, approval completion and dequeue MUST re-check it; answers to work consumed before a pause MUST stay "after pause" after `/resume`; removed members and deleted rooms MUST receive no new deliveries.
-- **FR-218**: Every memory operation MUST receive an immutable (workspace, agent) scope from the turn context; retrospective writes and search, the carry-forward, bootstrap memory context and its prompt cache, recap success and fallback, and automatic notes MUST be per (workspace, agent); no agent-wide room MUST be the fallback for workspace-owned data.
-- **FR-219**: Ordinary private notes saved with `remember` MUST follow FQ-R3-B.
+- **FR-218**: Every memory operation MUST receive an immutable (workspace, agent) scope from the turn context; retrospective writes and search, the carry-forward, the workspace-owned part of the bootstrap memory context and its prompt cache, recap success and fallback, automatic notes and the shared room MUST be per workspace; no agent-wide room MUST be the fallback for workspace-owned data.
+- **FR-219**: Notes saved deliberately with `remember` room "private" MUST stay agent-wide (visible to the agent in every workspace), as today; this is intended (FQ-R3-B), not a cross-workspace leak.
 - **FR-220**: Recaps MUST be keyed to transcript progress: a conversation is recapped again after new activity and a new idle period, skipped when unchanged; a late recap MUST NOT overwrite a newer one.
 - **FR-221**: The Connectors page MUST show two categories — Chat channels and Agent tools — grouped by type within each (EM-2, R34/R35); a chat channel's Configure side panel MUST have the tabs Setup, People, Conversations and Requests with per-type content, hidden (not disabled) controls where a type lacks them, and inline per-type identifier validation (§6.15).
 - **FR-222**: Email MUST NOT take part in routing, rooms, awareness or "who can reach": no People, Conversations or Requests for an email connector; its agent tools and `connect_mailbox` stay unchanged (EM-1).
@@ -2890,7 +2925,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-192**: A new read-only tool `read_conversation` MUST return recent entries (text only, paged, at most 50 per page) of one of the caller's own conversations or groups in the same workspace; it MUST NOT send, resume, change or mark anything in that conversation.
 - **FR-193**: `read_conversation` MUST be refused for conversations the caller is not part of, for other workspaces and for unknown ids.
 - **FR-194**: "Important outcomes" MUST be the `worth_remembering` items of a conversation's idle recap (existing recap output, ≤ 5 per recap, ≤ 200 characters each); they MUST be written automatically to the agent's memory room for that workspace, tagged with the source conversation, deduplicated by text.
-- **FR-195**: The agent's memory MUST gain a per-(agent, workspace) private room used for these notes; `recall_memory` in a workspace MUST search only that workspace's rooms plus the existing shared workspace room.
+- **FR-195**: Automatic conversation notes MUST be written to a per-(agent, workspace) digest room; `recall_memory` in a workspace MUST search that workspace's digest room, the workspace's shared room and the agent's private (agent-wide) room — never another workspace's digest or shared room.
 - **FR-196**: Cost: awareness MUST add no model calls (summaries and outcomes come from existing recaps); the list adds at most 2,000 characters per main-chat turn. With recaps turned off, summaries fall back to titles and no notes are written, stated in the docs.
 - **FR-197**: The recap carry-forward (`last-session.md`) MUST be stored and read per (agent, workspace), so no workspace's recap reaches another workspace's sessions.
 - **FR-198**: `read_conversation` MUST have explicit policy entries: global ceiling `allow`; per-agent `deny` for Judge, Plan Supervisor, workers and external-program workers; Omnipus and chat-target native agents ride the ceiling.
@@ -3035,7 +3070,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-142 | PR-1; FA:FQ-17 | US-16 | 16.1, 16.2, 16.11 | 98, 101 |
 | FR-143 | PR-1 | US-16 | 16.10, 16.11 | 101 |
 | FR-144 | R4 (decide merge or retire) | US-16 | 16.5 | 99 |
-| FR-145 | PR-3; RQ-2 A, RQ-3 A | US-16 | 16.3, 16.15 | 100, 105, 108 |
+| FR-145 | PR-3; RQ-2 A, RQ-3 A; FQ-R3-A | US-16 | 16.3, 16.15, 16.23 | 100, 105, 108, 157 |
 | FR-146 | PR-2 | US-16 | 16.6 | 104 |
 | FR-147 | PR-4; Q-R3-2 B | US-16 | 16.7, 16.8, 16.12 | 102, 105, 153 |
 | FR-148 | PR-4; RQ-4 A | US-16 | 16.8, 16.16 | 102, 109 |
@@ -3064,6 +3099,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-206 | FQ-RM-1 | US-17 | 17.21, 17.23 | 136 |
 | FR-207 | GC-10 | US-17 | 17.24, 17.25 | 138, 139 |
 | FR-208 | GC-10 | US-17 | 17.25 | 139 |
+| FR-224 | FQ-R3-A | US-16 | 16.22, 16.23 | 156, 157 |
 | FR-209 | Q-R3-1 A | US-19 | 19.1, 19.10 | 122, 141 |
 | FR-210 | R3-MAJ-002 | US-16 | 16.17 | 140 |
 | FR-211 | R3-MAJ-002 | US-16 | 16.18 | 140 |
@@ -3074,7 +3110,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-216 | R3-MAJ-007 | US-17 | 17.27 | 144 |
 | FR-217 | R3-MAJ-008 | US-17 | 17.28, 17.29 | 145 |
 | FR-218 | R3-MAJ-009; AW-2 | US-20 | 20.8, 20.4 | 146, 126 |
-| FR-219 | FQ-R3-B | US-20 | 20.8 | 146 |
+| FR-219 | FQ-R3-B | US-20 | 20.8, 20.10 | 146, 158 |
 | FR-220 | R3-MAJ-010; session-core D9 | US-20 | 20.9 | 147 |
 | FR-221 | EM-2; R34/R35; wireframe v4/v5 | US-16 | 16.19, 12.16 | 148 |
 | FR-222 | EM-1 | US-16 | 16.20 | 149 |
@@ -3216,17 +3252,7 @@ UI development of WU-10 may start in parallel with WU-3/WU-4 against generated c
 
 ## 17. Open questions for the founder
 
-RQ-1–RQ-4, GQ-1–GQ-4, FQ-RM-1/2, Q-R3-1/2 are answered. New from fix round 3:
-
-**FQ-R3-A — What an empty People list means.** Context: today a connection with an empty allow list lets **anyone** talk to the agent. With the new People list, strangers get "not authorised" — but an empty list would then lock everyone out of a freshly connected bot. Impact: whether a new Telegram bot is open to the world or closed by default.
-- **A** — Keep today's meaning: an empty People list means "anyone may talk" (shown in the People tab as "Anyone can talk to <Agent> — add people to restrict"); "Can use commands" and the #892 resume right still need an individual row.
-- **B** — Closed by default: an empty list admits nobody; the operator must add people (or use Requests → "Add to People").
-- **Recommendation: B** — safer for an assistant that holds the user's context; the Requests tab makes adding people one click. (A matches today's behaviour.)
-
-**FQ-R3-B — Are an agent's ordinary private notes per workspace too?** Context: AW-2 and the security rule keep conversation digests, retrospectives and carry-forward per workspace. Notes an agent saves on purpose with `remember` (room "private") are agent-wide today, so a note Mia saved in Sales shows up when she recalls in Marketing. Impact: whether anything an agent remembers privately crosses workspaces.
-- **A** — Yes: private notes are per (workspace, agent); the agent-wide private room is retired (greenfield).
-- **B** — No: deliberate private notes stay agent-wide; only automatic digests are per workspace.
-- **Recommendation: A** — one rule ("nothing crosses workspaces") is easier to trust and to test.
+None open. RQ-1–RQ-4, GQ-1–GQ-4, FQ-RM-1/2, Q-R3-1/2 and FQ-R3-A/B are answered (§0.7–§0.12).
 
 ---
 
