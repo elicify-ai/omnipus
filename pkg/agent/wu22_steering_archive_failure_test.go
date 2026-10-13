@@ -18,14 +18,14 @@ func TestWU22SteeredInstructionArchiveFailureReachesCaller(t *testing.T) {
 	h := wu22NewHarness(t, wu22HealthyProvider())
 	restore := wu22BlockModelWrite(t, h.store, h.sid)
 	err := h.al.appendSteeredInstruction(h.sid, h.agent.ID, "WU22 steered instruction", false)
-	restore()
 	var cause *os.PathError
 	assert.ErrorAs(t, err, &cause, "§4.2: steering must return the failed model write instead of false success")
 	if cause != nil {
 		assert.Contains(t, cause.Path, "ordinal_rows.log")
 	}
+	h.assertSiblingWritable(t) // no repair before proving isolation
+	restore()
 	assert.Empty(t, h.store.GetHistory(h.sid), "missing steering instruction must not be reported model-visible")
-	h.assertSiblingWritable(t)
 }
 
 func TestWU22SteeredInstructionHealthyStoreRecordsBothViews(t *testing.T) {
@@ -49,12 +49,12 @@ func TestWU22ChildHistoryArchiveFailureReachesLauncher(t *testing.T) {
 	err := launcher.writeChildMetaAndHistory(h.store, h.sid, "WU22 child", "", "", "", steer.LaunchRequest{
 		TargetAgentID: h.agent.ID, Task: "WU22 child instruction",
 	})
-	restore()
 	assert.ErrorIs(t, err, steer.ErrStoreWrite, "mandatory first-message archive failure must refuse launch (§4.2)")
 	var cause *os.PathError
 	assert.ErrorAs(t, err, &cause, "launch must retain original write cause")
+	h.assertSiblingWritable(t) // no repair before proving isolation
+	restore()
 	assert.Empty(t, h.store.GetHistory(h.sid), "child has no model-visible first instruction")
-	h.assertSiblingWritable(t)
 }
 
 func TestWU22ChildHistoryHealthyStoreSeedsLaunch(t *testing.T) {

@@ -43,8 +43,12 @@ func TestWU22FinalizeTurnArchiveFailureIsVisibleInRealLoop(t *testing.T) {
 	_, err := h.al.runTurn(context.Background(), h.ts) // real conductor, all stages and defers
 	require.Equal(t, 1, provider.calls, "instrument: the real loop must reach the provider before arming the fault")
 	require.NotNil(t, restore, "instrument: final-write fault was installed")
+	h.assertSaveFailure(t, err) // sibling succeeds while the fault is still armed
 	restore()
-	h.assertSaveFailure(t, err)
+	var notSaved *messageNotSavedError
+	if errors.As(err, &notSaved) {
+		assert.Equal(t, "assistant", notSaved.role, "§4.2: final assistant write uses the assistant save-error wrapper")
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var statuses []TurnEndStatus
@@ -96,10 +100,10 @@ func TestWU22PrepareToolSurfaceArchiveFailureEndsTurn(t *testing.T) {
 	rq := wu22DuplicateSurface(h)
 	restore := wu22BlockModelWrite(t, h.store, h.sid)
 	flow := rq.prepareToolSurface()
-	restore()
 	assert.Equal(t, agentLoopRunTurnRequestReturn, flow)
 	assert.Equal(t, TurnEndStatusError, rq.ri.turnStatus)
-	h.assertSaveFailure(t, rq.ret1)
+	h.assertSaveFailure(t, rq.ret1) // sibling writes with the failed path still blocked
+	restore()
 }
 
 func TestWU22PrepareToolSurfaceHealthyStorePersistsDenial(t *testing.T) {
@@ -133,8 +137,8 @@ func TestWU22FlushContinuationArchiveFailureStopsToolRound(t *testing.T) {
 	rr := wu22ContinuationStage(h)
 	restore := wu22BlockModelWrite(t, h.store, h.sid)
 	err := rr.recordToolCalls() // real consumer must stop on flush failure
+	h.assertSaveFailure(t, err) // sibling writes with the failed path still blocked
 	restore()
-	h.assertSaveFailure(t, err)
 	assert.Empty(t, rr.normalizedToolCalls, "no new tool round is admitted after the failed continuation flush")
 	assert.Empty(t, rr.rq.ri.messages, "failed flush must not install the following tool-call message")
 }
@@ -191,10 +195,10 @@ func TestWU22FinishCallSubTurnArchiveFailureEndsTurn(t *testing.T) {
 	})
 	flow := ex.finishCall(0)
 	require.NotNil(t, restore, "instrument: preceding result checkpoint must succeed and reach the SubTurn cut")
-	restore()
 	assert.Equal(t, agentLoopRunTurnToolsExecuteReturn, flow, "failed SubTurn window write must not continue the turn")
 	assert.Equal(t, TurnEndStatusError, ex.rx.rr.rq.ri.turnStatus)
-	h.assertSaveFailure(t, ex.rx.ret1)
+	h.assertSaveFailure(t, ex.rx.ret1) // sibling writes before repairing the failed path
+	restore()
 }
 
 func TestWU22FinishCallSubTurnHealthyStorePersistsResult(t *testing.T) {
