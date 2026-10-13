@@ -849,7 +849,12 @@ func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction st
 	if store == nil {
 		return fmt.Errorf("record the new instruction for %q: no session store owns this session", sessionID)
 	}
-	store.AddMessage(sessionID, "user", instruction)
+	// #1178 (amendment §4.2): the model-history write is the first half of the
+	// pair; if it fails, the revived turn would start without the instruction
+	// it was told to run. Return the write's error instead of a false success.
+	if err := store.AddMessage(sessionID, "user", instruction); err != nil {
+		return fmt.Errorf("record the new instruction for %q in the model history: %w", sessionID, err)
+	}
 	entryID := sessionID + "-instruction-" + uuid.NewString()
 	if asRedirect {
 		entryID = "redirect-" + uuid.NewString()

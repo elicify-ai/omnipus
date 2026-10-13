@@ -67,7 +67,16 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setFinalContent(rz.rc.rx.finalContent)
 	if !rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory {
 		finalMsg := providers.Message{Role: "assistant", Content: rz.rc.rx.finalContent}
-		rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddMessage(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, finalMsg.Role, finalMsg.Content)
+		// #1178 (amendment §4.2): a failed final write is a failed turn,
+		// never a false success. Wrap with the existing assistant
+		// save-error wrapper, run the session_save error path below and
+		// markTurnFailed — DoneStats.TurnFailed must be true.
+		if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddMessage(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, finalMsg.Role, finalMsg.Content); addErr != nil {
+			notSaved := &messageNotSavedError{role: finalMsg.Role, cause: addErr}
+			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
+			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+			return turnResult{}, notSaved
+		}
 		if err := rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.Save(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); err != nil {
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
 			// Wave 1: never surface raw err.Error() (session-save is a
@@ -831,7 +840,18 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		}
 		syntheticDenyMsg := providers.Message{Role: "system", Content: denyMsg}
 		if !rq.ri.rf.rt.ts.opts.NoHistory {
-			rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rq.ri.rf.rt.ts.sessionKey, syntheticDenyMsg)
+			// #1178 (amendment §4.2): a failed window write ends the turn —
+			// the denial never reached the archive, so reporting it as a
+			// persisted denial would be a second false statement. Same
+			// messageNotSavedError wrap, markTurnFailed and existing exit.
+			if addErr := rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rq.ri.rf.rt.ts.sessionKey, syntheticDenyMsg); addErr != nil {
+				notSaved := &messageNotSavedError{role: syntheticDenyMsg.Role, cause: addErr}
+				rq.ri.rf.rt.al.reportSessionSaveFailure(rq.ri.rf.rt.ts, notSaved)
+				rq.ri.turnStatus = TurnEndStatusError
+				rq.ret0 = turnResult{status: TurnEndStatusError, finalContent: messageNotSavedReply}
+				rq.ret1 = notSaved
+				return agentLoopRunTurnRequestReturn
+			}
 		}
 		// ADR-058 §3.2/§10.A3: this branch used to also invoke FR-084's
 		// per-turn synthetic-deny counter-and-abort helper before

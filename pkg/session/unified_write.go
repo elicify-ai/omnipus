@@ -271,19 +271,20 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 }
 
 // AddMessage implements SessionStore — appends a simple role/content message to
-// the addressed archive (session-core Decision D; the .context backend is gone).
-func (us *UnifiedStore) AddMessage(sessionKey, role, content string) {
+// the addressed archive (session-core Decision D; the .context backend is gone)
+// and forwards its error (#1178, amendment §4.2).
+func (us *UnifiedStore) AddMessage(sessionKey, role, content string) error {
 	h := us.lockSession(owningSessionID(sessionKey))
 	defer h.Unlock()
-	us.backend.AddMessage(sessionKey, role, content)
+	return us.backend.AddMessage(sessionKey, role, content)
 }
 
 // AddFullMessage implements SessionStore — appends a complete message to the
-// addressed archive.
-func (us *UnifiedStore) AddFullMessage(sessionKey string, msg providers.Message) {
+// addressed archive and forwards its error (#1178, amendment §4.2).
+func (us *UnifiedStore) AddFullMessage(sessionKey string, msg providers.Message) error {
 	h := us.lockSession(owningSessionID(sessionKey))
 	defer h.Unlock()
-	us.backend.AddFullMessage(sessionKey, msg)
+	return us.backend.AddFullMessage(sessionKey, msg)
 }
 
 // GetHistory implements SessionStore — returns the live model window.
@@ -296,9 +297,10 @@ func (us *UnifiedStore) Projection(sessionKey string) memory.ProjectionMeta {
 	return us.backend.Projection(sessionKey)
 }
 
-// SetProjectionState implements SessionStore.
-func (us *UnifiedStore) SetProjectionState(sessionKey string, pk memory.ProjectionKey, state memory.ProjectionState) {
-	us.backend.SetProjectionState(sessionKey, pk, state)
+// SetProjectionState implements SessionStore and forwards the backend's
+// validation, metadata-read or metadata-write error (#1178, amendment §4.2).
+func (us *UnifiedStore) SetProjectionState(sessionKey string, pk memory.ProjectionKey, state memory.ProjectionState) error {
+	return us.backend.SetProjectionState(sessionKey, pk, state)
 }
 
 // ReadArchive implements SessionStore — returns the full archived log for

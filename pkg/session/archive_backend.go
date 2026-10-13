@@ -204,30 +204,38 @@ func (b *archiveBackend) Projection(key string) memory.ProjectionMeta {
 }
 
 // --- SessionWriter ---
+//
+// Every writer returns its own write's error (#1178, amendment §4.2) in
+// addition to logging it: the log is operator detail, the return is the
+// caller's only signal.
 
-func (b *archiveBackend) AddMessage(sessionKey, role, content string) {
+func (b *archiveBackend) AddMessage(sessionKey, role, content string) error {
 	if err := b.appendMessage(sessionKey, providers.Message{Role: role, Content: content}); err != nil {
 		slog.Error("archive_backend: add message", "key", sessionKey, "error", err)
+		return err
 	}
+	return nil
 }
 
-func (b *archiveBackend) AddFullMessage(sessionKey string, msg providers.Message) {
+func (b *archiveBackend) AddFullMessage(sessionKey string, msg providers.Message) error {
 	if err := b.appendMessage(sessionKey, msg); err != nil {
 		slog.Error("archive_backend: add full message", "key", sessionKey, "error", err)
+		return err
 	}
+	return nil
 }
 
-func (b *archiveBackend) SetProjectionState(key string, pk memory.ProjectionKey, state memory.ProjectionState) {
+func (b *archiveBackend) SetProjectionState(key string, pk memory.ProjectionKey, state memory.ProjectionState) error {
 	if err := validateArchiveProjection(pk, state); err != nil {
 		slog.Error("archive_backend: set projection", "key", key, "error", err)
-		return
+		return err
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	meta, err := b.loadMetaLocked(key)
 	if err != nil {
 		slog.Error("archive_backend: set projection: read meta", "key", key, "error", err)
-		return
+		return err
 	}
 	pm := projectionFromMeta(meta)
 	pm.Entries[pk] = state
@@ -237,7 +245,9 @@ func (b *archiveBackend) SetProjectionState(key string, pk memory.ProjectionKey,
 	meta.Projection = metaFromProjection(pm)
 	if err := b.saveMetaLocked(key, meta); err != nil {
 		slog.Error("archive_backend: set projection: write meta", "key", key, "error", err)
+		return err
 	}
+	return nil
 }
 
 // Save is a no-op: every append already fsyncs, and evicted lines must stay.

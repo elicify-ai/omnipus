@@ -1374,14 +1374,7 @@ func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 			`{"type":"turn_canceled_restart","session_key":%q,"reason":"graceful_shutdown"}`,
 			sessionKey,
 		)
-		ts.agent.Sessions.AddMessage(sessionKey, "system", syntheticContent)
-		if err := ts.agent.Sessions.Save(sessionKey); err != nil {
-			logger.WarnCF("agent", "FR-048: failed to persist turn_canceled_restart on shutdown",
-				map[string]any{"session_key": sessionKey, "error": err.Error()})
-		} else {
-			logger.InfoCF("agent", "FR-048: turn_canceled_restart written on graceful shutdown",
-				map[string]any{"session_key": sessionKey})
-		}
+		al.writeTurnCancelledRestartMarker(ts, sessionKey, syntheticContent)
 
 		// Emit audit event (FR-048).
 		// CRIT-6 + typed-Decision/Event migration: route through audit.EmitEntry
