@@ -334,10 +334,10 @@ func clearAllDo(env *u1Env) (int, string) {
 func TestGW_ClearAll_MainsSurviveWithTheirHistory(t *testing.T) {
 	env := u1NewEnv(t, false)
 	const ws = "01JGWGATECLRWS0000000000001"
-	env.seedWorkspace(t, ws, true, "mia") // the default workspace: Admin owns a main here too
+	env.seedWorkspace(t, ws, true, "mia", "omnipus") // the default workspace: Omnipus, a member, owns a main here too
 	mia := u1MainID(ws, "mia")
-	admin := u1MainID(ws, "admin")
-	for _, id := range []string{mia, admin} {
+	omnipus := u1MainID(ws, "omnipus")
+	for _, id := range []string{mia, omnipus} {
 		code, _ := sf1Do(env, http.MethodGet, "/api/v1/sessions/"+id, "")
 		require.Equal(t, http.StatusOK, code, "precondition: %s opens", id)
 		require.NoError(t, env.store(t).AppendTranscript(id, session.TranscriptEntry{
@@ -349,7 +349,7 @@ func TestGW_ClearAll_MainsSurviveWithTheirHistory(t *testing.T) {
 	code, body := clearAllDo(env)
 
 	require.Equal(t, http.StatusOK, code, body)
-	for _, id := range []string{mia, admin} {
+	for _, id := range []string{mia, omnipus} {
 		entries, err := env.store(t).ReadTranscript(id)
 		require.NoError(t, err, "a main must survive delete-all: %s", id)
 		require.Len(t, entries, 1, "its history is kept")

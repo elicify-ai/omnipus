@@ -31,18 +31,17 @@ Read this page once before [getting started](getting-started.md), so the words a
 
 ## The workspace
 
-A workspace is the container your work happens in. Every chat, task, plan, file, and calendar entry belongs to exactly one workspace, and each workspace keeps its own team of agents and its own memory. On a fresh install you start with one workspace, named My Workspace, with Mia, Jim, Ava, Planner, Researcher and General Purpose already on the team (Admin works as a standalone operator, outside any team). The same agent can sit on several workspaces, so you can split work by client or by topic without doubling up. See [workspaces](workspaces.md).
+A workspace is the container your work happens in. Every chat, task, plan, file, and calendar entry belongs to exactly one workspace, and each workspace keeps its own team of agents and its own memory. On a fresh install you start with one workspace, named My Workspace, with Mia, Jim, Omnipus, Planner, Researcher and General Purpose already on the team (Omnipus belongs to this default workspace only). The same agent can sit on several workspaces, so you can split work by client or by topic without doubling up. See [workspaces](workspaces.md).
 
 ## The agents
 
-Agents are who does the work. Four of them ship with Omnipus, and Mia is the default on a fresh install:
+Agents are who does the work. Three chat agents ship with Omnipus, and Mia is the default on a fresh install:
 
 | Agent | Role | Reach for them when |
 |---|---|---|
 | Mia | Assistant | You want an everyday starting point. She answers and connects you with the right specialist. |
 | Jim | Planner and Orchestrator | A job has many steps. He breaks it into tasks, hands them out, and tracks them to done. |
-| Ava | Builder | You want a new agent. She interviews you, then creates it. |
-| Admin | Operator | You need to set up connectors, providers, channels, diagnostics or document dependencies. |
+| Omnipus | System agent | You want to set up or change agents, teams, skills, connectors, providers or channels. It shows you one summary and asks before it changes anything. |
 
 You can also create your own agents, in three kinds. A **Main** agent is a chat colleague. A **Subagent** is a worker that other agents hand work to. An **external worker** runs on a command-line agent tool you already have. Workers never chat with you. See [agents](agents.md).
 

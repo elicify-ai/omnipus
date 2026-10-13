@@ -1,12 +1,12 @@
 # Agents
 
-Agents do the work in Omnipus. Omnipus ships four built-in chat colleagues—Mia, Jim, Ava and Admin—plus the native workers Planner, Researcher and General Purpose. Judge and Plan Supervisor are internal engine agents. You can create your own Main agents and workers from Agents.
+Agents do the work in Omnipus. Omnipus ships three built-in chat colleagues—Mia, Jim and the system agent Omnipus—plus the native workers Planner, Researcher and General Purpose. Judge and Plan Supervisor are internal engine agents. You can create your own Main agents and workers from Agents.
 
 ## What it is
 
 Open **Agents** in the sidebar and the roster has four sections:
 
-- **Built-in roster** — Mia, Jim, Ava and Admin. Their identity and base instructions are protected, and Mia is the initial default.
+- **Built-in roster** — Mia, Jim and Omnipus. Their identity and base instructions are protected, and Mia is the initial default.
 - **Main agents** — chat colleagues you create yourself.
 - **Sub-agent workers** — shipped and user-created workers. They are not chat colleagues; other agents delegate work to them, and you can assign workspace tasks to workers on the team.
 - **System** — Judge and Plan Supervisor, internal engine agents that cannot be selected for chat or delegation.
@@ -22,16 +22,26 @@ A filter above the roster narrows the list to one [workspace](workspaces.md) tea
 
 ## The base agents
 
-The four built-in agents cover the everyday jobs.
+The three built-in chat agents cover the everyday jobs.
 
 | Agent | Role | What it is for |
 |---|---|---|
 | Mia | Assistant | Your everyday starting point. Answers questions and connects you with the right specialist. |
 | Jim | Planner and Orchestrator | Turns a complex goal into tasks, delegates them to the right agents, and tracks the work to completion. |
-| Ava | Builder | Interviews you about what you need, then creates a custom agent with the personality and tools you asked for. |
-| Admin | Operator | Configures connectors, providers, channels, diagnostics and document dependencies. |
+| Omnipus | System agent | Sets up and changes your agents, teams, skills, connectors, providers and channels, for every workspace, from one conversation. |
 
-Any chat colleague can ask a teammate for help: start a message with `@` and pick the agent, and the request is delivered to that agent's own chat. Omnipus no longer moves your conversation over to another agent. Ava is also a shortcut for creating agents: skip the form and describe what you want to her in chat.
+Any chat colleague can ask a teammate for help: start a message with `@` and pick the agent, and the request is delivered to that agent's own chat. Omnipus no longer moves your conversation over to another agent.
+
+### The Omnipus system agent
+
+Omnipus replaces the earlier Ava and Admin agents. It lives in your default workspace only: it cannot be added to another workspace or removed from the default one, and its chats live there. It works from its own folder, and its file tools can still reach the work folders of every workspace (and their mounts) to set them up — never a workspace's record or its private memory folder. Other agents keep to their own workspace.
+
+- **Protected name.** No other agent can be created or renamed to "Omnipus" (spaces and letter case do not matter). A similar name such as "Omnipus Helper" is fine.
+- **Approvals.** Deleting an agent, removing a skill or connector, adding a connector, configuring a provider, and enabling or configuring a channel ask for your approval, as does changing an agent's permissions (`set_agent_permissions`). This holds even with Auto-approve on.
+- **No per-agent Ask for Omnipus.** You can set any of Omnipus's tools to Deny, but not to Ask on Omnipus itself; set Ask on the global tool policy instead. Every path that changes per-agent permissions refuses it with "Omnipus takes no per-agent Ask; set Ask globally or use Deny".
+- **God Mode.** While God Mode is on, Omnipus is told so in every turn; it then proceeds without approvals.
+
+When an agent changes another agent through its tools, permissions are a separate step: `update_agent` changes identity, model and skills, while per-agent tool permissions and connector assignments change only through `set_agent_permissions`, which always asks you first. A newly created agent can never be granted a management tool (agent, workspace, skill, connector, provider, channel, permission, secret or settings changes) — those stay with Omnipus.
 
 ## How to set your default agent
 
@@ -107,8 +117,7 @@ Open a built-in agent's card, then **Basics**: the role badge, look, and colour 
 |---|---|---|---|
 | Mia | Omnipus | General assistant | Steel blue |
 | Jim | Omnipus | General assistant | Verdigris |
-| Ava | Omnipus | General assistant | Bronze |
-| Admin | Omnipus | Security | Champagne |
+| Omnipus | Omnipus | General assistant | Bronze |
 | Planner | Omnipus | General assistant | Titanium |
 | Researcher | Omnipus | General assistant | Graphite violet |
 | General Purpose | Omnipus | General assistant | Pewter |
@@ -141,7 +150,7 @@ You can also set the value when you create the agent: open **Advanced** in the c
 
 A value above the global limit is not saved. On the profile, the field shows the refusal, which names the global limit and suggests raising it in Settings, Performance; your other changes on the profile still save. In the create form, creating the agent fails with the same message. Values must be whole numbers from 1 to 1000.
 
-The same rules apply everywhere an agent is created or changed, including when you ask an agent in a chat to do it, as you would with Ava. The `create_agent` and `update_agent` tools refuse a value above the global limit or outside 1 to 1000, and sending an empty value (`null`) to `update_agent` clears the agent's own value.
+The same rules apply everywhere an agent is created or changed, including when you ask an agent in a chat to do it, as you would with Omnipus. The `create_agent` and `update_agent` tools refuse a value above the global limit or outside 1 to 1000, and sending an empty value (`null`) to `update_agent` clears the agent's own value.
 
 **An old higher value.** Earlier releases let an agent's own limit be higher than the global one. Upgrading keeps that stored value untouched, but it no longer applies: the agent runs at the global limit, and its profile says the value has no effect. The gateway log lists every such agent in one warning at start-up. Type a lower value or click **Use global limit** to clear the warning. Lowering the global limit in Settings is the only thing that ever rewrites an agent's own value, and it asks you first.
 

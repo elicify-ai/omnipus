@@ -1345,6 +1345,34 @@ func (rc *runContextWithOptions) prepareSkillServices() {
 	}
 }
 
+// sysagentFastUpsert is the agent tools' publish hook (create_agent,
+// update_agent, set_agent_permissions): it re-derives the agent roster from the
+// entity store, then republishes ONE agent into the live registry — so a
+// permission change made by an agent tool takes effect on the next turn
+// without a restart. It falls back to a full reload when one is already
+// pending or the fast path fails.
+func sysagentFastUpsert(al *agent.AgentLoop, home string, reloadTrigger func() error) func(string) error {
+	return func(agentID string) error {
+		if al.IsReloadPending() {
+			return reloadTrigger()
+		}
+		if err := al.MutateConfig(func(cfg *config.Config) error {
+			return populateAgentsListFromEntityStoreStrict(cfg, home)
+		}); err != nil {
+			slog.Warn("gateway: sysagent fast agent upsert: could not refresh the agent roster "+
+				"from the entity store; falling back to full reload",
+				"agent_id", agentID, "error", err)
+			return reloadTrigger()
+		}
+		if _, err := al.UpsertAgentFast(al.GetConfig(), agentID); err != nil {
+			slog.Warn("gateway: sysagent fast agent upsert failed; falling back to full reload",
+				"agent_id", agentID, "error", err)
+			return reloadTrigger()
+		}
+		return nil
+	}
+}
+
 // wireSystemTools wires system-tool dependencies and refreshes the central builtin registry.
 func (rc *runContextWithOptions) wireSystemTools() {
 	sysAgentDeps := &systools.Deps{
@@ -1417,25 +1445,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// is serialized with every other al.mu-guarded reader/writer, rather
 		// than reloading config.json from disk or re-resolving credentials
 		// (neither of which agent CRUD via the entity store can affect).
-		UpsertAgentFastFunc: func(agentID string) error {
-			if rc.agentLoop.IsReloadPending() {
-				return rc.reloadTrigger()
-			}
-			if err := rc.agentLoop.MutateConfig(func(cfg *config.Config) error {
-				return populateAgentsListFromEntityStoreStrict(cfg, rc.homePath)
-			}); err != nil {
-				slog.Warn("gateway: sysagent fast agent upsert: could not refresh the agent roster "+
-					"from the entity store; falling back to full reload",
-					"agent_id", agentID, "error", err)
-				return rc.reloadTrigger()
-			}
-			if _, err := rc.agentLoop.UpsertAgentFast(rc.agentLoop.GetConfig(), agentID); err != nil {
-				slog.Warn("gateway: sysagent fast agent upsert failed; falling back to full reload",
-					"agent_id", agentID, "error", err)
-				return rc.reloadTrigger()
-			}
-			return nil
-		},
+		UpsertAgentFastFunc: sysagentFastUpsert(rc.agentLoop, rc.homePath, rc.reloadTrigger),
 		// agent-picker-freshness fix (#1009): create_agent's own counterpart
 		// to the REST createAgent handler's emitAgentCreated call — see
 		// systools.Deps.NotifyAgentCreated's doc comment. restAPIRef is

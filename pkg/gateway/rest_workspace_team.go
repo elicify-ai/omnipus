@@ -73,10 +73,10 @@ func ensureBuiltinRosterPresent(home string, w storedWorkspace, cfg *config.Conf
 // workspace's Team tab.
 //
 // Ids excluded from workspace teams by ROLE (coreagent.
-// ExcludedFromWorkspaceTeams — the Admin standalone operator, and the hidden
-// System Agents) are skipped: they are members of nothing BY DESIGN
-// (ADR-090 FR-001), so naming them here would cry wolf on every boot over
-// the designed state and drown the agents that actually need a remedy.
+// ExcludedFromWorkspaceTeams — the hidden System Agents) are skipped: they
+// are members of nothing BY DESIGN (ADR-090 FR-001), so naming them here
+// would cry wolf on every boot over the designed state and drown the agents
+// that actually need a remedy.
 func logWorkspacelessAgents(home string, cfg *config.Config) {
 	if cfg == nil || len(cfg.Agents.List) == 0 {
 		return

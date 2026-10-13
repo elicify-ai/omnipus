@@ -116,7 +116,7 @@ func TestADR090_DiscoveryExec_DeletedAgentAndUnregisteredStillDeny(t *testing.T)
 func TestADR090_DiscoveryExec_DeniedTargetAndMidturnRevoke(t *testing.T) {
 	const target = "knowledge_edit"
 	al := discoveryExecLoop(t, nil)
-	ava, ok := al.registry.GetAgent(string(coreagent.IDAva))
+	ava, ok := al.registry.GetAgent(string(coreagent.IDOmnipus))
 	require.True(t, ok)
 	_, registered := ava.Tools.Get(target)
 	require.True(t, registered)

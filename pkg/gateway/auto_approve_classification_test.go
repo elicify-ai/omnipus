@@ -28,18 +28,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// goldenAskList27 is a literal, reviewable copy of the 27 catalog tool names
+// goldenAskList is a literal, reviewable copy of the 27 catalog tool names
 // the founder's ruled choices file
 // (/Users/danielpiatkowski/Desktop/auto-approve-choices.json, saved
 // 2026-09-23T14:20:18Z) marks "asks" — every non-MCP entry with
 // choice=="asks". Moving a tool off this list, or onto it, needs a
 // deliberate edit HERE as well as in pkg/tools/auto_approve.go's table
 // (§6 point 6): that is the point of the golden copy.
-var goldenAskList27 = []string{
+var goldenAskList = []string{
 	"add_mcp_server",
 	"browser_evaluate",
 	"browser_upload_file",
@@ -67,6 +68,14 @@ var goldenAskList27 = []string{
 	"test_provider",
 	"update_agent",
 	"update_workspace",
+	// omnipus-system-agent FR-021 (2026-10-13): the connection, permission
+	// and secret-removal/selection tools join the ask-list — the deliberate
+	// two-place edit (this golden copy and pkg/tools/auto_approve.go).
+	"connect_channel",
+	"connect_mailbox",
+	"remove_secret",
+	"select_secret_version",
+	"set_agent_permissions",
 }
 
 // catalogToolNames returns every name buildCentralBuiltinRegistry(nil) —
@@ -139,8 +148,18 @@ func checkNoStaleEntries(catalogNames []string, table map[string]tools.AutoAppro
 	return errs
 }
 
+// classifiedNames is the set a table entry may legitimately name: every tool
+// in the builtin catalog PLUS the static catalog names classified ahead of
+// their implementation (coreagent.AllStaticToolNames — omnipus-system-agent
+// §6.5 requires a new tool's Auto entry in the same change as its catalogue,
+// ceiling and role entries). A name in neither is stale.
+func classifiedNames(t *testing.T) []string {
+	t.Helper()
+	return append(catalogToolNames(t), coreagent.AllStaticToolNames()...)
+}
+
 func TestAutoApproveClassification_NoStaleTableEntries(t *testing.T) {
-	names := catalogToolNames(t)
+	names := classifiedNames(t)
 	table := tools.AutoApproveClassTable()
 	if errs := checkNoStaleEntries(names, table); len(errs) > 0 {
 		t.Errorf("stale classification table entries:\n%s", strings.Join(errs, "\n"))
@@ -148,7 +167,7 @@ func TestAutoApproveClassification_NoStaleTableEntries(t *testing.T) {
 }
 
 func TestAutoApproveClassification_MutationSelfCheck_NoStaleEntriesCatchesGhostEntry(t *testing.T) {
-	names := catalogToolNames(t)
+	names := classifiedNames(t)
 	table := tools.AutoApproveClassTable()
 	if errs := checkNoStaleEntries(names, table); len(errs) != 0 {
 		t.Fatalf("precondition failed: the real table already has stale entries: %v", errs)
@@ -337,18 +356,18 @@ func checkAskListLock(table map[string]tools.AutoApproveClass, golden []string) 
 }
 
 func TestAutoApproveClassification_AskListMatchesGoldenCopy(t *testing.T) {
-	if len(goldenAskList27) != 27 {
-		t.Fatalf("goldenAskList27 has %d names, want 27 (founder file tally minus the DEL-23 retired delete_task_in_workspace)", len(goldenAskList27))
+	if len(goldenAskList) != 32 {
+		t.Fatalf("goldenAskList has %d names, want 32 (founder file tally minus the DEL-23 retired delete_task_in_workspace = 27, plus the five FR-021 ask-list tools)", len(goldenAskList))
 	}
 	table := tools.AutoApproveClassTable()
-	if errs := checkAskListLock(table, goldenAskList27); len(errs) > 0 {
+	if errs := checkAskListLock(table, goldenAskList); len(errs) > 0 {
 		t.Errorf("ask-list drift against the founder-file golden copy:\n%s", strings.Join(errs, "\n"))
 	}
 }
 
 func TestAutoApproveClassification_MutationSelfCheck_AskListLockCatchesMovedTool(t *testing.T) {
 	table := tools.AutoApproveClassTable()
-	if errs := checkAskListLock(table, goldenAskList27); len(errs) != 0 {
+	if errs := checkAskListLock(table, goldenAskList); len(errs) != 0 {
 		t.Fatalf("precondition failed: the real table already drifts from the golden ask-list: %v", errs)
 	}
 	// Move "delete_task" off the ask-list without touching the golden copy —
@@ -361,7 +380,7 @@ func TestAutoApproveClassification_MutationSelfCheck_AskListLockCatchesMovedTool
 		t.Fatal("test fixture assumption broken: delete_task is not classified AutoAsks in the real table")
 	}
 	mutated["delete_task"] = tools.AutoRuns
-	if errs := checkAskListLock(mutated, goldenAskList27); len(errs) == 0 {
+	if errs := checkAskListLock(mutated, goldenAskList); len(errs) == 0 {
 		t.Fatal("mutation self-check failed: moving delete_task off ASKS did not make the ask-list-lock check fail")
 	}
 }

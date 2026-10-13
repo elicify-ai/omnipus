@@ -16,6 +16,16 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 			result[name] = policy
 		}
 	}
+	if id == IDOmnipus {
+		// Spec §6.5: Omnipus's EXACT supporting set rides the ceiling (allow,
+		// or ask for the ask-list tools); everything else — the role-wide
+		// grants below included — stays deny.
+		ceiling := config.DefaultConfig().Sandbox.ToolPolicies
+		for _, name := range omnipusSupportedTools {
+			grant(config.ToolPolicy(ceiling[name]), name)
+		}
+		return result
+	}
 	// create_email_draft (email-mail-view-spec §2.7 point 3): drafting is
 	// the safe mail path — it writes only a Drafts copy and can never
 	// send — so every role carries allow, including Admin, whose five
@@ -58,13 +68,6 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 	case IDJim:
 		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "send_file", "create_task", "update_task", "list_tasks", "list_jobs", "set_todos", "delegate", "create_plan", "execute_plan", "stop_plan", "find_skills", "list_skills")...)
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "browser_upload_file")
-	case IDOmnipus:
-		// Spec §6.5: the exact supporting set rides the ceiling (allow, or ask
-		// for the ask-list tools); everything else is explicit deny.
-		ceiling := config.DefaultConfig().Sandbox.ToolPolicies
-		for _, name := range omnipusSupportedTools {
-			grant(config.ToolPolicy(ceiling[name]), name)
-		}
 	case IDPlanner:
 		grant(allow, append(commonWork, "search_web", "fetch_url", "create_task", "update_task", "list_tasks", "delegate")...)
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount")
