@@ -164,29 +164,29 @@ function StatusActionButton({
  *     text was never read, which is false for a held-then-discarded command.
  * (Ruling S3-02 deleted the 'not-performed' and 'unconfirmed' variants: a
  * refused /clear is the wire's message_status failed — the failed chip in
- * UserMessageDeliveryStatus covers it — and a held clear stays 'queued'
- * with no deadline.) Both are passive (no action button): the honest repair
+ * UserMessageDeliveryStatus covers it — and a /clear the server holds
+ * (message_status held) shows the held copy, with no deadline.) Both are passive (no action button): the honest repair
  * for a /clear is to send /clear again, which the tooltip says.
  */
 function deliveryStateCopy(
   state: UserDeliveryState,
   agentName: string,
   isClearCommand: boolean,
-  connected: boolean,
 ): { label: string; tooltip: string; icon: React.ReactNode } {
-  if (state === 'queued' && isClearCommand && connected) {
-    // The connection is up, so a /clear still queued is one the server is
-    // holding (e.g. its agent is stopped) - "back online" would be false.
-    return {
-      label: `Waiting \u2014 your /clear is applied when ${agentName} runs it`,
-      tooltip: `Your /clear is waiting for ${agentName}. Nothing has been cleared yet; it is applied as soon as ${agentName} can run it.`,
-      icon: <Clock size={14} aria-hidden="true" />,
-    }
-  }
   if (state === 'queued') {
     return {
       label: 'Not sent yet, will be sent automatically',
       tooltip: "Not sent yet — it will be sent automatically as soon as you're back online.",
+      icon: <Clock size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'held' && isClearCommand) {
+    // The server holds this /clear while it stops the agent's running reply so
+    // the clear can apply (message_status held) - the only state in which a
+    // /clear shows a pending look at all.
+    return {
+      label: 'Not sent yet, will be sent automatically',
+      tooltip: `Stopping ${agentName}'s current reply first. Your /clear is applied as soon as it has stopped. Nothing has been cleared yet.`,
       icon: <Clock size={14} aria-hidden="true" />,
     }
   }
@@ -297,7 +297,11 @@ export function UserMessageDeliveryStatus({
     )
   }
 
-  const copy = deliveryStateCopy(state, agentName, isClearCommand, connected)
+  // A /clear in flight on a connected chat (queued, not held) shows no chip:
+  // "not sent yet" would be false, and only a held /clear has anything to say.
+  if (state === 'queued' && isClearCommand && connected) return null
+
+  const copy = deliveryStateCopy(state, agentName, isClearCommand)
 
   return (
     <div role="status" aria-live="polite" data-testid="user-message-delivery-status" className="flex min-h-8 items-center justify-end">

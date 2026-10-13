@@ -341,6 +341,50 @@ describe('R3-SPA-SFH-04: idle marks never outlive the turn they were armed in', 
   })
 })
 
+describe('held /clear: the held state is recorded on a /clear row only', () => {
+  let sent: Array<Record<string, unknown>> = []
+  beforeEach(() => {
+    sent = []
+    useConnectionStore.setState({
+      connection: { send: (p: unknown) => { sent.push(p as Record<string, unknown>); return true }, close: () => {} } as never,
+      isConnected: true,
+    } as never)
+  })
+  const clearRow = () => bucket().messages.find((m) => m.role === 'user' && m.content === '/clear')!
+
+  it('message_status held marks the /clear row held', () => {
+    act(() => { useChatStore.getState().sendMessage('/clear') })
+    expect(clearRow().deliveryStatus, 'in flight: the queued look').toBe('queued')
+    feed({ type: 'message_status', client_message_id: String(sent[0].client_message_id), state: 'held' })
+    expect(clearRow().deliveryStatus).toBe('held')
+  })
+
+  it('in-flight acks that are NOT held leave a /clear row queued', () => {
+    act(() => { useChatStore.getState().sendMessage('/clear') })
+    const cid = String(sent[0].client_message_id)
+    feed({ type: 'message_status', client_message_id: cid, state: 'received' })
+    feed({ type: 'message_status', client_message_id: cid, state: 'working' })
+    expect(clearRow().deliveryStatus).toBe('queued')
+  })
+
+  it('a held /clear stays held through later in-flight acks, until the clear lands or it fails', () => {
+    act(() => { useChatStore.getState().sendMessage('/clear') })
+    const cid = String(sent[0].client_message_id)
+    feed({ type: 'message_status', client_message_id: cid, state: 'held' })
+    feed({ type: 'message_status', client_message_id: cid, state: 'received' })
+    feed({ type: 'message_status', client_message_id: cid, state: 'working' })
+    expect(clearRow().deliveryStatus).toBe('held')
+  })
+
+  it('a held /clear that is then refused still ends on the failed chip', () => {
+    act(() => { useChatStore.getState().sendMessage('/clear') })
+    const cid = String(sent[0].client_message_id)
+    feed({ type: 'message_status', client_message_id: cid, state: 'held' })
+    feed({ type: 'message_status', client_message_id: cid, state: 'failed' })
+    expect(clearRow().deliveryStatus).toBe('failed')
+  })
+})
+
 describe('C11: no Stop blink between a mid-turn tool result and the next token', () => {
   it('a live turn whose last bubble is already finalized keeps the flag up after a tool result', () => {
     // Turn is running (flag armed by the user's send), the last assistant bubble
