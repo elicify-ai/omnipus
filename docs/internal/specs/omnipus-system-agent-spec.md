@@ -214,12 +214,16 @@ Review status: person routing (US-16), rooms (US-17), channel control (US-18/19)
 | R4-MAJ-006 mailbox runtime identity | Fixed | §6.17 runtime tuple (agent, workspace, mailbox) through transport, credentials, generation, read-flight, cache, watcher, presence, preview grants and cleanup; shared account caps kept; no healthy-sibling fallback; FR-238; BDD-21.13 |
 | R4-MAJ-007 mail selectors and reference binding | Fixed | References embed the mailbox id at issue and are validated against the selected mailbox; preview-token bodies, new-mail summary, create/configure, cleanup and panel context carry `mailbox_id` (K46); WU-0 owns K1–K48; BDD-21.4 uses `read_email_attachment` (consumes `message_ref`); `read_message` keeps its `uid` interface within the selected mailbox; FR-228 amended |
 | R4-MAJ-008 Settings secret entry | Fixed | User-origin secret request (no agent turn): the Add Email panel creates a value-free, destination-bound request (mailbox id reserved first), renders the same isolated card inline, submits through K5; K47; FR-236; BDD-21.14 with no model configured |
-| R4-MAJ-009 Test Connection truth | Fixed (read-only case: EQ-2) | A failed test saves no mailbox configuration; already-submitted passwords stay stored, unused, listed and removable — both reported; success is bound to a candidate fingerprint and invalidated by any edit; late results ignored; FR-231 amended; BDD-21.8 rewritten; BDD-21.15 |
+| R4-MAJ-009 Test Connection truth | Fixed (EQ-2 answered: reading test only, §0.15) | A failed test saves no mailbox configuration; already-submitted passwords stay stored, unused, listed and removable — both reported; success is bound to a candidate fingerprint and invalidated by any edit; late results ignored; FR-231 amended; BDD-21.8 rewritten; BDD-21.15 |
 | R4-MAJ-010 mailbox/Configure states and keyboard | Fixed | §6.3 rows for categories, add picker, Email template/wizard/test/save, Mail switcher, email settings; stale-result rejection and dirty-draft guard on mailbox switch; BDD-12.17, 21.16 |
 | R4-MIN-001 stale handoff text | Fixed | EQ-1 marked answered; FR-222 qualified by EM-3; §1 scope updated; room docs row without bare Stop |
 | R4-MIN-002 old cost oracles | Fixed | BDD-17.7 and SC-017 use the §6.14 allocated cost |
 | R4-OBS-001 duplicate descriptions | Adopted | §6.9–§6.13, §6.16, §6.17 are the normative owners; K27 and stories point to them |
 | R4-OBS-002 component mapping | Adopted | §6.8: Checkbox, DisclosureRow/R35 accordion, Command-based switcher, Sheet + Tabs for the wizard; field errors through Field's own error slot (FormError has no public export) |
+
+### 0.15 Founder answer EQ-2 (2026-10-13)
+
+Founder: "the READ test is sufficient, keep it simple". Test Connection checks **reading** (incoming-server login and folder listing) only; a mailbox is saved when reading passes. Sending is not tested before save — the result says so — and a later send problem surfaces through the send tool's own error, as today. The separate send check and its failure class are removed: US-8 AS-4, BDD-8.6, BDD-21.8, BDD-21.9, §6.3, K42, FR-082, FR-231, tests 38 and 163. Everything else from fix round 4 stays.
 
 ---
 
@@ -390,7 +394,7 @@ Any native agent can ask for a secret through a protected card. The value never 
 1. **Given** a confirmed plan, **When** connect-channel runs, **Then** it configures, binds (agent + workspace), enables and tests in one call behind one approval.
 2. **Given** a part the test cannot prove, **When** the result is shown, **Then** it is "not tested" and routing is not "working".
 3. **Given** a QR-paired channel, **When** pairing starts, **Then** code and progress appear in the requesting chat.
-4. **Given** connect-mailbox, **When** it runs, **Then** read and send readiness are reported separately and no email is sent.
+4. **Given** connect-mailbox, **When** it runs, **Then** reading is tested, sending is reported as "not tested before save", and no email is sent (EQ-2).
 
 ### US-9 — Truthful results from change tools (P1)
 
@@ -670,7 +674,7 @@ An agent may hold more than one mailbox in a workspace (for example support@ and
 | Connectors page categories (Chat channels, Agent tools) and Add connector picker | Skeleton groups | "Nothing connected yet" + picker inline | Error + Retry (never an empty list) | Cached + hint | — | Grouped rows | — |
 | Add Email: template list | Loading templates | — | Error + Retry; Generic IMAP is offered only as an explicit choice, never as a silent fallback | — | — | Fields filled | Next until a template or Generic is chosen |
 | Add Email: Gmail wizard and secure card | — | — | Card unavailable + Retry | — | Card "submission unknown" → state read | Stored; next step focused | Test until a password is stored |
-| Add Email: Test Connection | "Testing…" (announced) | — | Each failure class shown per read/send; timeout is a failure, never "ready" | — | Late result ignored (client test id) | "Reading OK · Sending OK" | Save until the current fingerprint passed (EQ-2 for read-only) |
+| Add Email: Test Connection | "Testing…" (announced) | — | The reading failure class shown; timeout is a failure, never "ready" | — | Late result ignored (client test id) | "Reading OK · sending not tested before save" | Save until the current fingerprint passed reading |
 | Add Email / mailbox settings: Save | Saving… | — | Rejected save with reason | — | "Not confirmed" + reload shows the true state | Mailbox listed and in the switcher | — |
 | Mail panel mailbox switcher | Loading mailboxes | "No mailbox yet" + Add Email link | Error + Retry; an unavailable mailbox is marked, not hidden | Cached + hint | — | Switched view | Switch while a dirty draft is unresolved (guard) |
 | Agent editor email settings (mailbox list) | Loading | "No mailbox" | Error + Retry | Cached + hint | Edit "not confirmed" | Saved | — |
@@ -921,7 +925,7 @@ Order per change: schema in `contracts/components/schemas/` → reference from `
 | K39 | **changed** `ChannelRouting` read shape | `bound` boolean, `revision` token (§6.6) | FR-128, FR-085 |
 | K40 | **changed** config `MailboxesConfig` (not wire) and **changed** `Mailbox` schema | agent → workspace → list of mailboxes; each `mailbox_id`, `label`, address, servers, `password_ref` (per mailbox), `provider_template`; identity sidecar keyed (agent, workspace, mailbox) | FR-225, FR-235 |
 | K41 | **changed** mailbox REST: `GET/POST /api/v1/agents/{id}/workspaces/{workspaceId}/mailboxes`, `GET/PUT/DELETE …/mailboxes/{mailboxId}` (replaces `/agents/{id}/mailboxes/{workspaceId}`); `MailboxCleanupRequest` gains `mailbox_id` | list never null; create is a human (web) route | FR-225, FR-226, FR-232 |
-| K42 | **new** `MailboxTestRequest`, `MailboxTestResult`; `POST …/mailboxes/test` (before save) | read and send results, each `ok` or failure class enum `auth_failed` / `send_auth_failed` / `server_not_found` / `connection_refused` / `tls_problem` / `timeout` / `unknown`, safe message | FR-231 |
+| K42 | **new** `MailboxTestRequest`, `MailboxTestResult`; `POST …/mailboxes/test` (before save) | reading result only (EQ-2): `ok` or failure class enum `auth_failed` / `server_not_found` / `connection_refused` / `tls_problem` / `timeout` / `unknown`, safe message; no send check | FR-231 |
 | K43 | **new** `MailProviderTemplate`; `GET /api/v1/mail/provider-templates` | id (`gmail`, `fastmail`, `icloud`, `nextcloud`, `zoho`, `outlook_com`, `generic_imap`), name, IMAP/SMTP hosts and ports, help links (Gmail: 2-Step Verification, App Passwords) | FR-229, FR-230 |
 | K44 | **changed** workspace mail routes (`/workspaces/{id}/mail/{agentId}/…`) | `mailbox` query parameter: optional with one mailbox, required with several (400 naming the choices) | FR-226, FR-227 |
 | K45 | **new** WS `AttachRoomFrame` {room_id, after_seq} → `RoomSnapshotFrame` (entries after the cursor in order, members, mutes, states, paused, generation, allocated cost, `complete` flag) then live `RoomEntryFrame`, `RoomMemberStateFrame`, `RoomMetaFrame` (members/mute/pause/cost/read-only), each with `seq`; carried on the existing hub connection without an agent session | Room viewing and reconnect; pre-admission Ask is the receiver's existing approval card (request id = delivery id), shown in the room as `awaiting_approval` with a link | FR-201, FR-213, FR-217 |
@@ -1481,10 +1485,10 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - When the timeout passes
 - Then "saved but not working: pairing timed out"
 
-**BDD-8.6 Mailbox readiness split** — US-8 AS-4 — Happy Path
+**BDD-8.6 Mailbox: reading tested, sending not** — US-8 AS-4 — Happy Path
 - Given valid incoming, invalid outgoing credentials
 - When `connect_mailbox` runs
-- Then read working, send not, no email sent (SMTP capture empty), and the save outcome follows EQ-2 (spec written as: not saved, password kept and listed)
+- Then reading passes and the mailbox is saved, the result says "sending not tested before save", no outgoing-server connection is made and no email is sent (SMTP capture empty); the first `send_email` later fails with the send tool's own authentication error (EQ-2)
 
 **BDD-8.7 Valid token, wrong binding** — US-8 AS-2 — Error Path
 - Given a valid token but a target agent that is not a member of the target workspace
@@ -2539,12 +2543,11 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 | port closed | connection refused |
 | certificate invalid | TLS problem |
 | no answer in time | timed out |
-| sending login fails, reading works | sending authentication failed (save per EQ-2) |
 
 **BDD-21.9 Omnipus connect workflow** — US-21 AS-5 — Happy Path
 - Given W15 in Omnipus's chat for Mia in Sales, Gmail chosen
 - When the user completes the wizard, enters the app password on the secret card and confirms the summary
-- Then `connect_mailbox` runs Test Connection first, saves only on success, reports read and send readiness, and the new mailbox appears in the switcher and on the Connectors page
+- Then `connect_mailbox` runs Test Connection (reading) first, saves only on success, reports "reading OK · sending not tested before save", and the new mailbox appears in the switcher and on the Connectors page
 
 **BDD-21.10 No agent mailbox creation** — US-21 AS-6 — Error Path
 - Given Mia, Jim, a custom agent and General Purpose
@@ -2696,7 +2699,7 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 35 | `pkg/agent::TestPrivateSecret_OutputMaskingLimits` | Integration | 7.3 |
 | 36 | `pkg/gateway::TestConnectChannel_ProvenFacts_WrongBinding` (fake platform) | Integration | 8.1, 8.2, 8.3, 8.7 |
 | 37 | `pkg/gateway::TestConnectChannel_PairingCorrelated_Teardown` | Integration | 8.4, 8.5, 8.8 |
-| 38 | `pkg/gateway::TestConnectMailbox_ReadSendSplit_NoSend` | Integration | 8.6 |
+| 38 | `pkg/gateway::TestConnectMailbox_ReadTestOnly_NoSMTP_SendFailsLater` | Integration | 8.6 |
 | 39 | `pkg/gateway::TestApprovalFrame_RootSessionForOmnipusHelper_Snapshot` | Integration | 11.2, 11.8 |
 | 40 | `pkg/gateway::TestNeedsAttention_OmnipusIncludesHelperDecisions` | Integration | 10.2, 10.3 |
 | 41 | `pkg/gateway::TestPeerMessage_ToOmnipus_NoEdge_ReadOnly` | Integration | 10.1, 10.4, 10.5 |
@@ -2821,7 +2824,7 @@ CI is the authority; locally at most one narrow test at a time; `npm run typeche
 | 160 | `src/components/mail/MailboxSwitcher.test.tsx` | Unit | 21.2 |
 | 161 | `pkg/tools::TestEmailTools_MailboxParam_OneVsMany_RefBinding_Workspace` | Integration | 21.3, 21.4, 21.5 |
 | 162 | `src/components/connectors/AddEmail.templatesWizard.test.tsx` | Unit | 21.6, 21.7 |
-| 163 | `pkg/gateway::TestMailboxTestConnection_FailureClasses_NothingSaved` (fake IMAP/SMTP) | Integration | 21.8 |
+| 163 | `pkg/gateway::TestMailboxTestConnection_ReadFailureClasses_NothingSaved` (fake IMAP; SMTP listener asserts zero connections) | Integration | 21.8 |
 | 164 | `pkg/coreagent::TestNoMailboxCreation_ExceptOmnipusAsk` | Unit | 21.10 |
 | 165 | `pkg/email::TestMultiMailboxWatcher_NeverStartsTurn` | Integration | 21.2 |
 | 166 | `tests/e2e/llm-omnipus-connect-mailbox-gmail.spec.ts` (live, fake mail server) | E2E | 21.9 |
@@ -3098,7 +3101,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 ### H. Connect tools and shared resources
 - **FR-080**: `connect_channel` MUST configure, bind the instance's main agent in a workspace, enable and live-test in one call, consume references, list proven and not-tested facts, and validate the binding before saving.
 - **FR-081**: QR pairing MUST render in the requesting chat, correlated by request and session id, with timeout, Stop and reconnect handling.
-- **FR-082**: `connect_mailbox` MUST reuse the mailbox configuration logic, run Test Connection before saving (FR-231), add the mailbox as one of the pair's mailboxes (FR-225), report read and send readiness separately, and send no email.
+- **FR-082**: `connect_mailbox` MUST reuse the mailbox configuration logic, run Test Connection (reading only) before saving (FR-231), add the mailbox as one of the pair's mailboxes (FR-225), report that sending is not tested before save, and send no email.
 - **FR-085**: Tool writes to providers, MCP servers, channel instances and mailboxes MUST acquire the gateway config write lock before the agent-loop lock (never the reverse), carry the expected revision token from the confirmed summary, and be refused when the current token differs; Settings writes to these resources MUST keep serializing on the same lock.
 - **FR-088**: Read tools MUST return a secret-free revision token per shared resource (`absent` for a missing entry); `list_providers` MUST also return endpoint, protocol and reference name; `list_mailboxes` (Omnipus only) MUST return a pair's mailbox ids, labels, addresses, non-secret settings and the pair token.
 
@@ -3231,7 +3234,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 - **FR-228**: Every `message_ref` MUST be issued with its mailbox id and validated against the selected mailbox (plus the folder-epoch check); a reference from another mailbox MUST be refused even when UID and UIDVALIDITY collide; `read_message` keeps its `uid` interface within the selected mailbox; another workspace's mailbox MUST never be reachable.
 - **FR-229**: The Add Email flow (Connectors → Agent tools) and Omnipus's `connect_mailbox` workflow MUST offer provider templates (Gmail, Fastmail, iCloud, Nextcloud, Zoho, Outlook.com, generic IMAP) that fill editable server settings (#1109 T6).
 - **FR-230**: Choosing Gmail MUST offer an app-password wizard with deep links to Google's 2-Step Verification and App Passwords pages; the password is entered only on the secret card (OSA-7).
-- **FR-231**: Test Connection MUST run before saving, separately for reading and sending, and report one failure class (authentication failed, sending authentication failed, server not found, connection refused, TLS problem, timed out, unknown). A failed test MUST save no mailbox configuration; an already-submitted password stays stored, unused, listed and removable, and both facts are reported. A success MUST be bound to a fingerprint of the exact candidate (pair, mailbox id, hosts, ports, TLS, username, credential reference and version, relevant settings); any edit invalidates it and late results never enable a different candidate. Whether a read-only success (sending fails) may be saved is EQ-2.
+- **FR-231**: Test Connection MUST run before saving and check **reading only** (incoming-server login and folder listing; EQ-2), reporting one failure class (authentication failed, server not found, connection refused, TLS problem, timed out, unknown); it MUST NOT connect to the outgoing server. A mailbox is saved when reading passes; the result states that sending is not tested, and a later send failure surfaces through the send tool's own error. A failed test MUST save no mailbox configuration; an already-submitted password stays stored, unused, listed and removable, and both facts are reported. A success MUST be bound to a fingerprint of the exact candidate (pair, mailbox id, incoming and outgoing hosts, ports, TLS, username, credential reference and version, relevant settings); any edit invalidates it and late results never enable a different candidate.
 - **FR-232**: No agent tool MUST create a mailbox except Omnipus's Ask-gated `connect_mailbox`, whose password comes only from the user's secret card (#1109 T8; EQ-1 A); every other agent's policy MUST deny it.
 - **FR-233**: Connectors → Agent tools → Email MUST show one row per mailbox with address, owner agent and workspace, each with a Configure panel limited to mailbox setup (EM-1).
 - **FR-234**: Mail MUST never start an agent turn (#1109 decision 9, D27); the multi-mailbox watcher only updates the Mail panel.
@@ -3336,7 +3339,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-084 | MAJ-013 | US-6 | 6.16, 6.17 | 68, 62 |
 | FR-080 | F:D11 | US-8 | 8.1, 8.2, 8.3, 8.7 | 36 |
 | FR-081 | OSA-5 | US-8 | 8.4, 8.5, 8.8 | 37 |
-| FR-082 | F:D11; EM-3 | US-8 | 8.6, 21.9 | 38, 166 |
+| FR-082 | F:D11; EM-3; EQ-2 | US-8 | 8.6, 21.9 | 38, 166 |
 | FR-085 | MAJ-011; R2-MAJ-003; R4-MAJ-001 | US-11 | 11.9 | 75, 88, 181 |
 | FR-088 | R2-MAJ-003 | US-11 | 11.9 | 88 |
 | FR-086 | FA:Q-R1-1 A; R2-MAJ-001 | US-6, US-7 | 6.19–6.23, 7.11 | 84, 85 |
@@ -3454,7 +3457,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | FR-228 | EM-3; ADR-033; R4-MAJ-007 | US-21 | 21.4, 21.5, 21.13 | 161, 176 |
 | FR-229 | EM-3; #1109 T6 | US-21 | 21.6, 21.9 | 162, 166, 167 |
 | FR-230 | EM-3; #1109 T6 | US-21 | 21.7 | 162, 167 |
-| FR-231 | EM-3; #1109 T6; R4-MAJ-009 | US-21 | 21.8, 21.9, 21.15 | 163, 166, 178 |
+| FR-231 | EM-3; #1109 T6; R4-MAJ-009; EQ-2 | US-21 | 21.8, 21.9, 21.15 | 163, 166, 178 |
 | FR-232 | EM-3; #1109 T8; EQ-1 A | US-21 | 21.10 | 164 |
 | FR-233 | EM-2; EM-3 | US-21 | 21.11 | 167 |
 | FR-234 | #1109 decision 9; D27 | US-21 | 21.2 | 165 |
@@ -3503,7 +3506,7 @@ Tests asserting Ava/Admin, the default agent or unbound channel routing are dele
 | `docs/settings.md` | System agents; on the Connectors page each connection's Configure side panel requires a workspace and a main agent and holds the person table, allow list, steering flags and conversation mode; no default-agent or global conversation-scope setting; saved secrets list | WU-10, WU-1, WU-6, WU-14 |
 | `docs/group-chats.md` (**new page**) | Rooms (at least two agents): team room, squads, ad-hoc rooms; "Add participant" from a chat header; room commands (/pause, /resume, /mute, /unmute, /members, /help) and why steering commands are refused; each agent answers from its own main chat, where room traffic shows as collapsed entries and where its approvals appear; queued/held states; `/pause` cancels pending requests (running work finishes, "after pause"); @all default and @-names; agent-to-agent replies with no limit and visible allocated cost (R-A4); members and audit; one workspace only | WU-15 |
 | `docs/memory.md` | Conversation awareness: what the agent sees, `read_conversation`, automatic notes per workspace, recaps-off behaviour | WU-17 |
-| `docs/mail.md` (email is an agent tool, not a chat channel; no People/Conversations; several mailboxes per agent and the switcher; the `mailbox` choice in tools; provider templates, Gmail app-password steps, Test Connection failure classes; only people add mailboxes; `connect_mailbox`) | `connect_mailbox`; read vs send readiness | WU-7 |
+| `docs/mail.md` (email is an agent tool, not a chat channel; no People/Conversations; several mailboxes per agent and the switcher; the `mailbox` choice in tools; provider templates, Gmail app-password steps, Test Connection checks reading only and its failure classes; only people add mailboxes; `connect_mailbox`) | `connect_mailbox`; reading tested, sending not tested before save | WU-7 |
 | `docs/providers-and-models.md` | What the provider check proves; Omnipus's model in System agents | WU-3, WU-10 |
 | `docs/reference/built-in-tools.md` (email tools' `mailbox` parameter) | New tools, policies, Auto classification | WU-2 |
 | Sweep | `docs/README.md`, `docs/troubleshooting.md`, `docs/plans.md`, `docs/goals.md`, `docs/browser.md`, `docs/using-omnipus-cli.md`, `docs/operations/observability.md`, `docs/connectors/google-chat.md` | WU-12 |
@@ -3577,12 +3580,7 @@ UI development of WU-10 may start in parallel with WU-3/WU-4 against generated c
 
 ## 17. Open questions for the founder
 
-RQ-1–RQ-4, GQ-1–GQ-4, FQ-RM-1/2, Q-R3-1/2, FQ-R3-A/B and EQ-1 (A) are answered (§0.7–§0.14). New from fix round 4:
-
-**EQ-2 — Save a mailbox whose sending test fails?** Context: Test Connection checks reading and sending separately. Sometimes reading works but sending does not (for example the outgoing server needs a different password). You decided a failing test saves nothing, but a mailbox that can only read might still be useful (the agent reads and drafts, but cannot send). Impact: whether such a mailbox can be added at all.
-- **A** — Not saved: both reading and sending must pass; the password stays stored and listed so the user can fix the outgoing settings and test again.
-- **B** — Saved as "read-only — sending not working", clearly marked in the switcher and on the Connectors row; send tools refuse for that mailbox until a later test passes.
-- **Recommendation: A** — one simple rule ("a mailbox is saved only when it fully works"), matching your "Test Connection before save".
+RQ-1–RQ-4, GQ-1–GQ-4, FQ-RM-1/2, Q-R3-1/2, FQ-R3-A/B, EQ-1 (A) and EQ-2 (reading test only) are answered (§0.7–§0.15). **No founder questions are open.**
 
 ---
 
