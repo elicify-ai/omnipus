@@ -189,7 +189,7 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 		if clean == "" || clean == "." || !filepath.IsAbs(clean) {
 			continue
 		}
-		access := uint64(AccessRead | AccessExecute)
+		access := AccessRead | AccessExecute
 		if root.Writable {
 			access = AccessRead | AccessWrite
 		}
@@ -286,7 +286,7 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 		branches = append(branches, fspolicy.KernelBranch{Path: p, Writable: true})
 	}
 	for _, root := range in.AllowRoots {
-		branches = append(branches, fspolicy.KernelBranch{Path: root.Path, Writable: root.Writable})
+		branches = append(branches, fspolicy.KernelBranch(root))
 	}
 	branches = append(branches, fspolicy.KernelBaseBranches(in.HomePath)...)
 
@@ -462,7 +462,7 @@ func deriveFloorPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput, policy Sa
 		branches = append(branches, fspolicy.KernelBranch{Path: p, Writable: true})
 	}
 	for _, root := range in.AllowRoots {
-		branches = append(branches, fspolicy.KernelBranch{Path: root.Path, Writable: root.Writable})
+		branches = append(branches, fspolicy.KernelBranch(root))
 	}
 	branches = append(branches, fspolicy.KernelBaseBranches(in.HomePath)...)
 

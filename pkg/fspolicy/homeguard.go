@@ -223,10 +223,7 @@ func IsProtectedHomePath(rawPath, home string) bool {
 	parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
 	if len(parts) >= 3 && strings.EqualFold(parts[0], "workspaces") {
 		if strings.EqualFold(parts[2], workspaceWorkDirName) {
-			if workspaceRecordExists(home, parts[1]) {
-				return false
-			}
-			return true
+			return !workspaceRecordExists(home, parts[1])
 		}
 		if strings.EqualFold(parts[2], workspaceInternalDir) {
 			return true

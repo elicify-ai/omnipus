@@ -528,49 +528,6 @@ func descendingComponents(root, workDir string) ([]string, error) {
 	return components, nil
 }
 
-// siblingsOutsideOwnBranch returns every entry under root that is NOT on the
-// path from root down to workDir.
-//
-// It walks one directory level at a time rather than recursing: once an entry is
-// off the chain, denying that entry covers its whole subtree, so there is
-// nothing below it worth visiting. The walk therefore costs one ReadDir per
-// component of the work dir's path below root — two, for both shapes the
-// product actually produces.
-//
-// workDir MUST be a proper descendant of root; the caller checks that.
-func siblingsOutsideOwnBranch(root, workDir string) ([]string, error) {
-	// descendingComponents, not a bare filepath.Rel: a chain containing ".."
-	// makes this loop ReadDir its way UP to "/" and deny every entry of every
-	// directory on the way. See chainRootFor for the measured consequences.
-	components, err := descendingComponents(root, workDir)
-	if err != nil {
-		return nil, err
-	}
-
-	var out []string
-	current := root
-	for _, onChain := range components {
-		entries, readErr := os.ReadDir(current)
-		if readErr != nil {
-			// A chain component that does not exist yet (a workspace whose
-			// work/ dir is created lazily) is not an error: there are no
-			// siblings to deny inside a directory that is not there.
-			if errors.Is(readErr, os.ErrNotExist) {
-				return out, nil
-			}
-			return nil, fmt.Errorf("list %q: %w", current, readErr)
-		}
-		for _, e := range entries {
-			if e.Name() == onChain {
-				continue
-			}
-			out = append(out, filepath.Join(current, e.Name()))
-		}
-		current = filepath.Join(current, onChain)
-	}
-	return out, nil
-}
-
 // splitPathComponents splits a cleaned relative path into its components.
 // Returns nil for "." (no components).
 func splitPathComponents(rel string) []string {

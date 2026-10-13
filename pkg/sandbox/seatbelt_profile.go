@@ -266,39 +266,8 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	if err := rs.renderDeniedPaths(); err != nil {
 		return "", err
 	}
-
-	// --- Write-denied branches (SandboxPolicy.WriteDeniedPaths): readable
-	// and, where granted, executable subtrees that must never gain a write —
-	// the read-only allow-list entries of amendment §2 D3 (media, the
-	// session-scoped upload dirs, published runtime generations, the document
-	// prefix). Write-ONLY: a full read+write deny here would kill the read
-	// the entry exists to grant, so these cannot share DeniedPaths' loop.
-	// Emitted inside the final deny block, so no earlier allow — including
-	// $OMNIPUS_HOME's RWX grant — can re-open writes (the same measured
-	// precedence rule the subpath denies above rely on).
-	if len(rs.policy.WriteDeniedPaths) > 0 {
-		rs.b.WriteString("\n;; --- Read-only branches: write denied last so no earlier allow can re-open it ---\n")
-		emittedWrites := make(map[string]struct{}, len(rs.policy.WriteDeniedPaths)*2)
-		for _, raw := range rs.policy.WriteDeniedPaths {
-			clean, expanded := expandUserPath(raw)
-			if !expanded {
-				return "", fmt.Errorf("seatbelt: write-denied path %q is not absolute and could not be expanded", raw)
-			}
-			if err := validateSeatbeltPath(clean); err != nil {
-				return "", fmt.Errorf("seatbelt: write-denied path %q: %w", raw, err)
-			}
-			target, _ := resolveSeatbeltPath(clean)
-			for _, path := range []string{clean, target} {
-				if err := validateSeatbeltPath(path); err != nil {
-					return "", fmt.Errorf("seatbelt: write-denied path %q resolved to %q: %w", raw, path, err)
-				}
-				if _, dup := emittedWrites[path]; dup {
-					continue
-				}
-				emittedWrites[path] = struct{}{}
-				fmt.Fprintf(&rs.b, "(deny file-write* (subpath %q))\n", path)
-			}
-		}
+	if err := rs.renderWriteDeniedPaths(); err != nil {
+		return "", err
 	}
 
 	// --- Denied NODES: the directory entries on the chain down to the work
@@ -455,6 +424,44 @@ func (rs *renderSeatbeltProfileState) renderDeniedPaths() error {
 			// irreversibly without reading anything at all. Both were
 			// executed against a real child before this line was written.
 			fmt.Fprintf(&rs.b, "(deny file-read* (subpath %q))\n", path)
+			fmt.Fprintf(&rs.b, "(deny file-write* (subpath %q))\n", path)
+		}
+	}
+	return nil
+}
+
+// renderWriteDeniedPaths writes the SUBTREE WRITE-ONLY denies for
+// SandboxPolicy.WriteDeniedPaths — readable and, where granted, executable
+// subtrees that must never gain a write (amendment §2 D3's read-only
+// allow-list entries: media, the session-scoped upload dirs, published
+// runtime generations, the document prefix). Write-ONLY: a full read+write
+// deny here would kill the read the entry exists to grant, so these cannot
+// share renderDeniedPaths' loop. Emitted inside the final deny block, so no
+// earlier allow — including $OMNIPUS_HOME's RWX grant — can re-open writes
+// (the same measured precedence rule the subpath denies rely on).
+func (rs *renderSeatbeltProfileState) renderWriteDeniedPaths() error {
+	if len(rs.policy.WriteDeniedPaths) == 0 {
+		return nil
+	}
+	rs.b.WriteString("\n;; --- Read-only branches: write denied last so no earlier allow can re-open it ---\n")
+	emitted := make(map[string]struct{}, len(rs.policy.WriteDeniedPaths)*2)
+	for _, raw := range rs.policy.WriteDeniedPaths {
+		clean, expanded := expandUserPath(raw)
+		if !expanded {
+			return fmt.Errorf("seatbelt: write-denied path %q is not absolute and could not be expanded", raw)
+		}
+		if err := validateSeatbeltPath(clean); err != nil {
+			return fmt.Errorf("seatbelt: write-denied path %q: %w", raw, err)
+		}
+		target, _ := resolveSeatbeltPath(clean)
+		for _, path := range []string{clean, target} {
+			if err := validateSeatbeltPath(path); err != nil {
+				return fmt.Errorf("seatbelt: write-denied path %q resolved to %q: %w", raw, path, err)
+			}
+			if _, dup := emitted[path]; dup {
+				continue
+			}
+			emitted[path] = struct{}{}
 			fmt.Fprintf(&rs.b, "(deny file-write* (subpath %q))\n", path)
 		}
 	}
