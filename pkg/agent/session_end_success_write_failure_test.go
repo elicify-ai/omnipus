@@ -81,3 +81,25 @@ func TestPersistResponse_WriteOK_AuditedSuccessAndRetroFiled(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, strings.Contains(string(got), "ORCHID-7"))
 }
+
+// A failed retro append on the success path is a visible failure too: the audit
+// outcome names the failed step, never "success". The retro is the marker that
+// blocks a later recap, and it was not written, so a later pass can retry; the
+// recap itself did land in last-session.md.
+func TestPersistResponse_RetroAppendFails_AuditedAndRetryable(t *testing.T) {
+	rr, auditDir, roomRoot := newRecapPersistFixture(t, "sess_retro_fail")
+
+	// A regular file where the retros directory belongs: the append cannot create it.
+	require.NoError(t, os.WriteFile(filepath.Join(roomRoot, "retros"), []byte("x"), 0o600))
+
+	rr.persistResponse()
+
+	outcome := lastRecapOutcome(t, auditDir)
+	require.Equal(t, "write_failed:retro", outcome, "a failed retro append must not be audited as success")
+	require.NotContains(t, outcome, roomRoot, "no filesystem path may reach the audit string")
+	require.False(t, rr.al.agentSessionHasRetro(rr.agentInst, rr.sessionID),
+		"no retro exists, so a later recap pass is not blocked")
+	got, err := os.ReadFile(filepath.Join(roomRoot, memrooms.LastSessionFile))
+	require.NoError(t, err, "the recap itself did land")
+	require.True(t, strings.Contains(string(got), "ORCHID-7"))
+}
