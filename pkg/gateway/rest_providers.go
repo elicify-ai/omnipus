@@ -233,25 +233,19 @@ func (a *restAPI) aggregateProviderRows(cfg *config.Config) providerAggregate {
 			agg.userModels[providerName] = append(agg.userModels[providerName], m.Models...)
 		}
 		// Resolve API key for upstream model fetching. The credential STORE is
-		// the authority, not the process environment (#1277): InjectFromConfig
-		// leaves a removed credential's stale value in the env until the next
-		// boot/reload, and trusting it reported a row whose store ref is gone
-		// as "connected". Every row with an api_key_ref now re-checks the
-		// store; a missing or unreadable reference is recorded as the row's
-		// cred error — naming the exact ref — and the stale env value is never
-		// promoted to a key. An entry that EXISTS but stores an empty value is
-		// "not configured" (disconnected), the pre-#1277 semantics — not an
-		// error state.
+		// the SOLE authority for a row with an api_key_ref (#1277): the process
+		// environment only ever mirrors the store (InjectFromConfig writes it
+		// from the vault and never unsets), so a stale mirror — a value left
+		// from before the entry was deleted or emptied — must never promote the
+		// row to "connected". A missing or unreadable reference is the row's
+		// cred error, naming the exact ref; an entry that exists but stores an
+		// empty value is "not configured" (disconnected) — not an error state.
 		if _, hasKey := agg.apiKeys[providerName]; !hasKey && m.APIKeyRef != "" {
-			resolved := m.APIKey()
 			if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
 				slog.Warn("rest: could not resolve provider credential", "ref", m.APIKeyRef, "error", err)
 				agg.credErrors[providerName] = providerCredentialRefError(m.APIKeyRef, err)
 			} else if strings.TrimSpace(v) != "" {
-				resolved = v
-			}
-			if resolved != "" && agg.credErrors[providerName] == "" {
-				agg.apiKeys[providerName] = resolved
+				agg.apiKeys[providerName] = v
 			}
 		}
 	}
