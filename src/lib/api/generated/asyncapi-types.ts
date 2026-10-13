@@ -84,9 +84,158 @@ export type WsFrameType =
   | "agent_created"
   | "mail_panel_observer"
   | "mail_panel_observer_ack"
-  | "mail_panel_observer_error";
+  | "mail_panel_observer_error"
+  | "secret_request"
+  | "secret_request_resolved"
+  | "attach_room"
+  | "room_snapshot"
+  | "room_entry"
+  | "room_member_state"
+  | "room_meta";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
+
+export interface RoomRef {
+  room_id: string;
+  room_name: string;
+  request_id: string;
+  role: "request" | "answer";
+}
+
+export interface WorkflowStart {
+  workflow: "W1" | "W18";
+  target_workspace_id: string;
+}
+
+export interface SecretRecipientDisplay {
+  kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
+  lines: Array<string>;
+}
+
+export interface SecretRequestField {
+  key: string;
+  label: string;
+}
+
+export interface SecretRequestFrame {
+  type: "secret_request";
+  request_id: string;
+  session_id: string;
+  root_session_id?: string;
+  acting_agent_id: string;
+  acting_agent_name: string;
+  origin_label?: string;
+  workspace_id?: string;
+  owner?: {
+    workspace_id: string;
+    agent_id: string;
+  };
+  purpose: string;
+  recipient: SecretRecipientDisplay;
+  fields: Array<SecretRequestField>;
+}
+
+export interface SecretRequestResolvedFrame {
+  type: "secret_request_resolved";
+  request_id: string;
+  state: "submitted" | "cancelled" | "stopped" | "interrupted" | "refused";
+  session_id?: string;
+  root_session_id?: string;
+}
+
+export interface SessionStateSecretRequest {
+  request_id: string;
+  session_id: string;
+  root_session_id?: string;
+  state: "pending" | "submitted" | "cancelled" | "stopped" | "interrupted" | "refused";
+  acting_agent_id: string;
+  acting_agent_name: string;
+  origin_label?: string;
+  workspace_id?: string;
+  owner?: {
+    workspace_id: string;
+    agent_id: string;
+  };
+  purpose: string;
+  recipient: SecretRecipientDisplay;
+  fields: Array<SecretRequestField>;
+  reference_names?: Array<string>;
+  updated_at: string;
+}
+
+export interface RoomEntryAuthor {
+  kind: "user" | "agent";
+  agent_id?: string;
+}
+
+export interface RoomDeliveryState {
+  agent_id: string;
+  request_id: string;
+  state: "recorded" | "awaiting_approval" | "admitted" | "held" | "working" | "waiting_on_user" | "answered" | "refused" | "failed" | "interrupted" | "unavailable" | "cancelled" | "unknown";
+  reason?: string;
+}
+
+export interface RoomEntry {
+  id: string;
+  room_id: string;
+  seq: number;
+  client_message_id?: string;
+  author: RoomEntryAuthor;
+  text: string;
+  addressees: Array<string>;
+  after_pause: boolean;
+  deliveries: Array<RoomDeliveryState>;
+  timestamp: string;
+}
+
+export interface RoomEntryFrame {
+  type: "room_entry";
+  room_id: string;
+  seq: number;
+  entry: RoomEntry;
+}
+
+export interface RoomMemberStateFrame {
+  type: "room_member_state";
+  room_id: string;
+  seq: number;
+  delivery: RoomDeliveryState;
+}
+
+export interface AttachRoomFrame {
+  type: "attach_room";
+  room_id: string;
+  after_seq: number;
+}
+
+export interface RoomSnapshotFrame {
+  type: "room_snapshot";
+  room_id: string;
+  seq: number;
+  entries: Array<RoomEntry>;
+  members: Array<string>;
+  muted: Array<string>;
+  member_states: Array<RoomDeliveryState>;
+  paused: boolean;
+  generation: number;
+  read_only_reason?: string;
+  allocated_cost_micro_usd: number;
+  allocated_cost_unpriced: boolean;
+  complete: boolean;
+}
+
+export interface RoomMetaFrame {
+  type: "room_meta";
+  room_id: string;
+  seq: number;
+  members: Array<string>;
+  muted: Array<string>;
+  paused: boolean;
+  generation: number;
+  read_only_reason?: string;
+  allocated_cost_micro_usd: number;
+  allocated_cost_unpriced: boolean;
+}
 
 export interface ChatParticipant {
   kind: "human" | "agent";
@@ -104,6 +253,7 @@ export interface AuthFrame {
 }
 
 export interface MessageFrame {
+  workflow_start?: WorkflowStart;
   type: "message";
   client_message_id?: string;
   content: string;
@@ -178,6 +328,7 @@ export interface MessageStatusFrame {
 }
 
 export interface TokenFrame {
+  room_ref?: RoomRef;
   type: "token";
   session_id: string;
   content: string;
@@ -207,6 +358,7 @@ export interface DoneStats {
 }
 
 export interface DoneFrame {
+  room_ref?: RoomRef;
   type: "done";
   session_id: string;
   stats?: DoneStats;
@@ -420,6 +572,7 @@ export interface TaskRunStatusFrame {
 }
 
 export interface ReplayMessageFrame {
+  room_ref?: RoomRef;
   type: "replay_message";
   session_id: string;
   content: string;
@@ -567,6 +720,10 @@ export interface CommandSegmentInfo {
 }
 
 export interface ToolApprovalRequiredFrame {
+  root_session_id?: string;
+  acting_agent_name?: string;
+  origin_label?: string;
+  room_ref?: RoomRef;
   type: "tool_approval_required";
   approval_id: string;
   tool_call_id: string;
@@ -583,6 +740,7 @@ export interface ToolApprovalRequiredFrame {
 }
 
 export interface ToolApprovalResolvedFrame {
+  root_session_id?: string;
   type: "tool_approval_resolved";
   approval_id: string;
   state: "approved" | "denied_user" | "denied_timeout" | "denied_cancel" | "denied_restart" | "denied_batch_short_circuit";
@@ -637,6 +795,16 @@ export interface AskUserAnswerFrame {
 }
 
 export interface SessionStatePendingApproval {
+  tool_call_id?: string;
+  turn_id?: string;
+  args?: {
+    [key: string]: unknown;
+  };
+  segments?: Array<CommandSegmentInfo>;
+  root_session_id?: string;
+  acting_agent_name?: string;
+  origin_label?: string;
+  room_ref?: RoomRef;
   approval_id: string;
   session_id: string;
   tool_name: string;
@@ -652,6 +820,7 @@ export interface SessionStateActiveTurn {
 }
 
 export interface SessionStateFrame {
+  secret_requests?: Array<SessionStateSecretRequest>;
   type: "session_state";
   user_id: string;
   pending_approvals: Array<SessionStatePendingApproval>;
@@ -719,6 +888,8 @@ export interface DevicePairingRequestFrame {
 }
 
 export interface WhatsAppPairingFrame {
+  request_id?: string;
+  session_id?: string;
   type: "whatsapp_pairing";
   channel_id: string;
   status: "waiting" | "code" | "linked" | "timeout" | "error";
@@ -727,6 +898,8 @@ export interface WhatsAppPairingFrame {
 }
 
 export interface WhatsAppPairingSubscribeFrame {
+  request_id?: string;
+  session_id?: string;
   type: "whatsapp_pairing_subscribe";
   channel_id: string;
   active: boolean;
@@ -1126,6 +1299,7 @@ export interface BrowserInputControlAckFrame {
 }
 
 export interface SessionSnapshotFrame {
+  secret_requests?: Array<SessionStateSecretRequest>;
   type: "session_snapshot";
   session_id: string;
   seq: number;
@@ -1143,6 +1317,7 @@ export interface CatchUpCompleteFrame {
 }
 
 export interface UserMessageFrame {
+  room_ref?: RoomRef;
   type: "user_message";
   session_id: string;
   id: string;
@@ -1190,6 +1365,13 @@ export interface MailPanelObserverErrorFrame {
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
+  | SecretRequestFrame
+  | SecretRequestResolvedFrame
+  | RoomEntryFrame
+  | RoomMemberStateFrame
+  | AttachRoomFrame
+  | RoomSnapshotFrame
+  | RoomMetaFrame
   | AuthFrame
   | MessageFrame
   | CancelFrame
@@ -1273,6 +1455,7 @@ export type WsFrame =
 // ── Client → server frames ──────────────────────────────────────────────────
 
 export type ClientFrame =
+  | AttachRoomFrame
   | AuthFrame
   | MessageFrame
   | CancelFrame
@@ -1296,11 +1479,17 @@ export type ClientFrame =
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
+export const ClientFrameTypes = ["attach_room", "auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
 export type ServerFrame =
+  | SecretRequestFrame
+  | SecretRequestResolvedFrame
+  | RoomEntryFrame
+  | RoomMemberStateFrame
+  | RoomSnapshotFrame
+  | RoomMetaFrame
   | PongFrame
   | SessionStartedFrame
   | MessageStatusFrame

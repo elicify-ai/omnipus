@@ -1,0 +1,29 @@
+title: RoomEntryFrame
+description: >
+  Server → client (spec omnipus-system-agent K26, K45). A new room entry,
+  live, after attach_room. THIS FILE EXISTS for the Constraint #8 5-step
+  process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is
+  the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by
+  hand. Landing 1, WU-15 produces it.
+type: object
+required:
+  - type
+  - room_id
+  - seq
+  - entry
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: room_entry
+  room_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: Room stream position of this frame.
+  entry:
+    $ref: './RoomEntry.yaml'

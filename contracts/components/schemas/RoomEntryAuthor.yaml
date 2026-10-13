@@ -1,0 +1,21 @@
+title: RoomEntryAuthor
+description: >
+  Author of a room entry (spec omnipus-system-agent K26): the person (kind
+  `user`) or a member agent (kind `agent`, with agent_id). Mirrored inline
+  in contracts/asyncapi.yaml (components.schemas.RoomEntryAuthor) — keep
+  both copies in sync by hand.
+type: object
+required:
+  - kind
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - user
+      - agent
+  agent_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Present iff kind is `agent`.

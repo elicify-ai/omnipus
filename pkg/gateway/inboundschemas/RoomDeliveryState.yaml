@@ -1,0 +1,46 @@
+title: RoomDeliveryState
+description: >
+  State of one (room message, member) delivery (spec omnipus-system-agent
+  K27, §6.11; FR-169, FR-201, FR-213). request_id is the stable delivery id,
+  which is also the receiver's request id. The values are exactly the
+  §6.11 states; the UI labels are in the §6.11 table. Anything the server
+  cannot prove after a restart is `unknown`, never `working`. Mirrored
+  inline in contracts/asyncapi.yaml (components.schemas.RoomDeliveryState)
+  — keep both copies in sync by hand.
+type: object
+required:
+  - agent_id
+  - request_id
+  - state
+additionalProperties: false
+properties:
+  agent_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: The member agent.
+  request_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  state:
+    type: string
+    enum:
+      - recorded
+      - awaiting_approval
+      - admitted
+      - held
+      - working
+      - waiting_on_user
+      - answered
+      - refused
+      - failed
+      - interrupted
+      - unavailable
+      - cancelled
+      - unknown
+  reason:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: Optional reason, e.g. `rate_limit` or `removed`.

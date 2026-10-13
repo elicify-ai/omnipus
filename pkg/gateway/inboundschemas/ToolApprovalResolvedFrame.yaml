@@ -45,3 +45,12 @@ properties:
       The acting session id the approval belonged to (the same value its
       tool_approval_required frame carried). Omitted when the approval was
       recorded without one.
+  root_session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
+      session's chain (ParentSessionID walk, 16 hops, cycle guard): lets the
+      root chat's card clear without a lookup.
+      Omitted when equal to session_id.

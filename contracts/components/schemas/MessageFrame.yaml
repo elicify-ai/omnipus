@@ -59,7 +59,11 @@ properties:
     maxLength: 128
     description: >
       Route this message to a specific agent by ID. If omitted the default
-      agent (typically "main") handles the message.
+      agent (typically "main") handles the message. Spec
+      omnipus-system-agent K8 (FR-122, landing 1, WU-1): a frame without
+      `session_id` MUST carry a nonblank `agent_id`; the server enforces this
+      semantically (error frame "an agent must be named") with inbound
+      validation on and off, and there is no default agent.
   recipient:
     $ref: ./AgentAddress.yaml
     description: >
@@ -168,5 +172,14 @@ properties:
           instruction; a system-role entry is recorded; the workspace's
           `setup_pending` flag is cleared exactly once (idempotency-guarded);
           duplicate and malformed kickoffs are rejected with an error frame.
-          Absent/false for ordinary messages.
+          Absent/false for ordinary messages. Spec omnipus-system-agent K9
+          (FR-047, landing 1, WU-10): the kickoff turn is server-initiated
+          into Omnipus's existing main session; a client kickoff that names
+          a session id stays refused.
         example: true
+  workflow_start:
+    $ref: './WorkflowStart.yaml'
+    description: >
+      Spec omnipus-system-agent K8 (FR-012). Optional target data naming the
+      workflow (W1 / W18) and the target workspace the user picked on a
+      screen. Data only, never an instruction.

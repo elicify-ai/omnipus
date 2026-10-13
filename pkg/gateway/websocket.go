@@ -1473,6 +1473,12 @@ func wsFrameSchemaName(frameType string) string {
 		return "WhatsAppPairingSubscribeFrame"
 	case string(generated.WsFrameTypeAskUserAnswer):
 		return "AskUserAnswerFrame"
+	// Spec omnipus-system-agent K45: the room attach frame's shape is
+	// validated here from the contract onward; its handler arrives with
+	// WU-15, so until then a schema-valid attach_room falls through to
+	// dispatchFrame's "unknown frame type ignored" default.
+	case string(generated.WsFrameTypeAttachRoom):
+		return "AttachRoomFrame"
 	case string(generated.WsFrameTypePing):
 		return "PingFrame"
 	// ADR-038 finding #3: the 4 browser-live client→server frame types.

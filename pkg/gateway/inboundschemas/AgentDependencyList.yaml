@@ -1,0 +1,22 @@
+title: AgentDependencyList
+description: >
+  Everything that depends on an agent (spec omnipus-system-agent K50, §6.19;
+  FR-243, FR-244). Returned by GET /api/v1/agents/{id}/dependencies, and as
+  the 409 body when a delete is refused because the list is non-empty and
+  `delete_everything` was not true.
+type: object
+required:
+  - agent_id
+  - dependencies
+additionalProperties: false
+properties:
+  agent_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  dependencies:
+    type: array
+    maxItems: 10000
+    items:
+      $ref: './AgentDependency.yaml'
+    description: Never null; empty when nothing depends on the agent.

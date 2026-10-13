@@ -73,3 +73,14 @@ properties:
       remembered position predates the restart and must not be trusted. A boot_id
       mismatch is checked and answered BEFORE the ordinary since_seq
       servability check, so it always wins over the other three reasons.
+  secret_requests:
+    type: array
+    maxItems: 1000
+    items:
+      $ref: './SessionStateSecretRequest.yaml'
+    description: >
+      Spec omnipus-system-agent K4 (FR-079). Pending and recent terminal
+      secret requests visible to this connection, so a reloaded secret card
+      restores its true state. Always an array when present, never null;
+      absence of a request is never read as success. Optional: an emit that
+      carries no secret-request state omits it.
