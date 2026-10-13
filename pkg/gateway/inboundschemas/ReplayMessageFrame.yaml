@@ -166,3 +166,10 @@ properties:
       of merging it into the preceding same-turn assistant entry. Absent on
       every other frame, including entries written before this field existed.
     example: true
+  room_ref:
+    $ref: './RoomRef.yaml'
+    description: >
+      Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+      main-session entry is a room request to this agent or this agent's
+      answer into a room, so live, history and replay render the same
+      collapsed entry.

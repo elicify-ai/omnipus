@@ -1,0 +1,28 @@
+title: AttachRoomFrame
+description: >
+  Client → server (spec omnipus-system-agent K45; FR-201, FR-213, FR-217).
+  Attach this connection to a room and catch up from after_seq. Carried on
+  the existing hub connection without an agent session. The server answers
+  with room_snapshot (entries after the cursor, in order), then live
+  room_entry / room_member_state / room_meta frames, each with seq.
+  Landing 1, WU-15 handles it; until then the server has no handler for
+  this frame type.
+type: object
+required:
+  - type
+  - room_id
+  - after_seq
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: attach_room
+  room_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  after_seq:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Highest room seq the client already has; 0 for a first load.

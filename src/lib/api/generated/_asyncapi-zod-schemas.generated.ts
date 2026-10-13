@@ -6,7 +6,183 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta"]);
+
+export const RoomRef = z
+  .object({
+    room_id: z.string().min(1).max(128),
+    room_name: z.string().min(1).max(80),
+    request_id: z.string().min(1).max(128),
+    role: z.enum(["request", "answer"]),
+  })
+  .strict();
+
+export const WorkflowStart = z
+  .object({
+    workflow: z.enum(["W1", "W18"]),
+    target_workspace_id: z.string().min(1).max(128),
+  })
+  .strict();
+
+export const SecretRecipientDisplay = z
+  .object({
+    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private"]),
+    lines: z.array(z.string().min(1).max(500)).min(1).max(8),
+  })
+  .strict();
+
+export const SecretRequestField = z
+  .object({
+    key: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
+    label: z.string().min(1).max(80),
+  })
+  .strict();
+
+export const SecretRequestFrame = z
+  .object({
+    type: z.literal("secret_request"),
+    request_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
+    root_session_id: z.string().min(1).max(128).optional(),
+    acting_agent_id: z.string().min(1).max(128),
+    acting_agent_name: z.string().min(1).max(128),
+    origin_label: z.string().min(1).max(200).optional(),
+    workspace_id: z.string().min(1).max(128).optional(),
+    owner: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .strict().optional(),
+    purpose: z.string().min(1).max(500),
+    recipient: SecretRecipientDisplay,
+    fields: z.array(SecretRequestField).min(1).max(8),
+  })
+  .strict();
+
+export const SecretRequestResolvedFrame = z
+  .object({
+    type: z.literal("secret_request_resolved"),
+    request_id: z.string().min(1).max(128),
+    state: z.enum(["submitted", "cancelled", "stopped", "interrupted", "refused"]),
+    session_id: z.string().min(1).max(255).optional(),
+    root_session_id: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
+export const SessionStateSecretRequest = z
+  .object({
+    request_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
+    root_session_id: z.string().min(1).max(128).optional(),
+    state: z.enum(["pending", "submitted", "cancelled", "stopped", "interrupted", "refused"]),
+    acting_agent_id: z.string().min(1).max(128),
+    acting_agent_name: z.string().min(1).max(128),
+    origin_label: z.string().min(1).max(200).optional(),
+    workspace_id: z.string().min(1).max(128).optional(),
+    owner: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .strict().optional(),
+    purpose: z.string().min(1).max(500),
+    recipient: SecretRecipientDisplay,
+    fields: z.array(SecretRequestField).min(1).max(8),
+    reference_names: z.array(z.string().min(1).max(256)).max(8).optional(),
+    updated_at: z.string(),
+  })
+  .strict();
+
+export const RoomEntryAuthor = z
+  .object({
+    kind: z.enum(["user", "agent"]),
+    agent_id: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
+export const RoomDeliveryState = z
+  .object({
+    agent_id: z.string().min(1).max(128),
+    request_id: z.string().min(1).max(128),
+    state: z.enum(["recorded", "awaiting_approval", "admitted", "held", "working", "waiting_on_user", "answered", "refused", "failed", "interrupted", "unavailable", "cancelled", "unknown"]),
+    reason: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+export const RoomEntry = z
+  .object({
+    id: z.string().min(1).max(128),
+    room_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    client_message_id: z.string().min(1).max(128).optional(),
+    author: RoomEntryAuthor,
+    text: z.string().max(5242880),
+    addressees: z.array(z.string().min(1).max(128)).max(256),
+    after_pause: z.boolean(),
+    deliveries: z.array(RoomDeliveryState).max(256),
+    timestamp: z.string(),
+  })
+  .strict();
+
+export const RoomEntryFrame = z
+  .object({
+    type: z.literal("room_entry"),
+    room_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    entry: RoomEntry,
+  })
+  .strict();
+
+export const RoomMemberStateFrame = z
+  .object({
+    type: z.literal("room_member_state"),
+    room_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    delivery: RoomDeliveryState,
+  })
+  .strict();
+
+export const AttachRoomFrame = z
+  .object({
+    type: z.literal("attach_room"),
+    room_id: z.string().min(1).max(128),
+    after_seq: z.number().int().min(0),
+  })
+  .strict();
+
+export const RoomSnapshotFrame = z
+  .object({
+    type: z.literal("room_snapshot"),
+    room_id: z.string().min(1).max(128),
+    seq: z.number().int().min(0),
+    entries: z.array(RoomEntry).max(10000),
+    members: z.array(z.string().min(1).max(128)).max(256),
+    muted: z.array(z.string().min(1).max(128)).max(256),
+    member_states: z.array(RoomDeliveryState).max(10000),
+    paused: z.boolean(),
+    generation: z.number().int().min(0),
+    read_only_reason: z.string().min(1).max(200).optional(),
+    allocated_cost_micro_usd: z.number().int().min(0),
+    allocated_cost_unpriced: z.boolean(),
+    complete: z.boolean(),
+  })
+  .strict();
+
+export const RoomMetaFrame = z
+  .object({
+    type: z.literal("room_meta"),
+    room_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    members: z.array(z.string().min(1).max(128)).max(256),
+    muted: z.array(z.string().min(1).max(128)).max(256),
+    paused: z.boolean(),
+    generation: z.number().int().min(0),
+    read_only_reason: z.string().min(1).max(200).optional(),
+    allocated_cost_micro_usd: z.number().int().min(0),
+    allocated_cost_unpriced: z.boolean(),
+  })
+  .strict();
 
 export const ChatParticipant = z
   .object({
@@ -31,6 +207,7 @@ export const AuthFrame = z
 
 export const MessageFrameBase = z
   .object({
+    workflow_start: WorkflowStart.optional(),
     type: z.literal("message"),
     client_message_id: z.string().min(1).max(128).optional(),
     content: z.string().max(5242880),
@@ -130,6 +307,7 @@ export const MessageStatusFrame = z
 
 export const TokenFrame = z
   .object({
+    room_ref: RoomRef.optional(),
     type: z.literal("token"),
     session_id: z.string().min(1).max(255),
     content: z.string().max(65536),
@@ -162,6 +340,7 @@ export const DoneStats = z
 
 export const DoneFrame = z
   .object({
+    room_ref: RoomRef.optional(),
     type: z.literal("done"),
     session_id: z.string().min(1),
     stats: DoneStats.optional(),
@@ -421,6 +600,7 @@ export const TaskRunStatusFrame = z
 
 export const ReplayMessageFrame = z
   .object({
+    room_ref: RoomRef.optional(),
     type: z.literal("replay_message"),
     session_id: z.string().min(1),
     content: z.string(),
@@ -598,6 +778,10 @@ export const CommandSegmentInfo = z
 
 export const ToolApprovalRequiredFrame = z
   .object({
+    root_session_id: z.string().min(1).max(128).optional(),
+    acting_agent_name: z.string().min(1).max(128).optional(),
+    origin_label: z.string().min(1).max(200).optional(),
+    room_ref: RoomRef.optional(),
     type: z.literal("tool_approval_required"),
     approval_id: z.string().min(1),
     tool_call_id: z.string().min(1),
@@ -614,6 +798,7 @@ export const ToolApprovalRequiredFrame = z
 
 export const ToolApprovalResolvedFrame = z
   .object({
+    root_session_id: z.string().min(1).max(128).optional(),
     type: z.literal("tool_approval_resolved"),
     approval_id: z.string().min(1),
     state: z.enum(["approved", "denied_user", "denied_timeout", "denied_cancel", "denied_restart", "denied_batch_short_circuit"]),
@@ -684,6 +869,14 @@ export const AskUserAnswerFrame = z
 
 export const SessionStatePendingApproval = z
   .object({
+    tool_call_id: z.string().min(1).optional(),
+    turn_id: z.string().min(1).optional(),
+    args: z.record(z.unknown()).optional(),
+    segments: z.array(CommandSegmentInfo).optional(),
+    root_session_id: z.string().min(1).max(128).optional(),
+    acting_agent_name: z.string().min(1).max(128).optional(),
+    origin_label: z.string().min(1).max(200).optional(),
+    room_ref: RoomRef.optional(),
     approval_id: z.string().min(1),
     session_id: z.string().min(1),
     tool_name: z.string().min(1).max(128),
@@ -703,6 +896,7 @@ export const SessionStateActiveTurn = z
 
 export const SessionStateFrame = z
   .object({
+    secret_requests: z.array(SessionStateSecretRequest).max(1000).optional(),
     type: z.literal("session_state"),
     user_id: z.string(),
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
@@ -787,6 +981,8 @@ export const DevicePairingRequestFrame = z
 
 export const WhatsAppPairingFrame = z
   .object({
+    request_id: z.string().min(1).max(128).optional(),
+    session_id: z.string().min(1).max(255).optional(),
     type: z.literal("whatsapp_pairing"),
     channel_id: z.string().min(1),
     status: z.enum(["waiting", "code", "linked", "timeout", "error"]),
@@ -797,6 +993,8 @@ export const WhatsAppPairingFrame = z
 
 export const WhatsAppPairingSubscribeFrame = z
   .object({
+    request_id: z.string().min(1).max(128).optional(),
+    session_id: z.string().min(1).max(255).optional(),
     type: z.literal("whatsapp_pairing_subscribe"),
     channel_id: z.string().min(1),
     active: z.boolean(),
@@ -1286,6 +1484,7 @@ export const BrowserInputControlAckFrame = z
 
 export const SessionSnapshotFrame = z
   .object({
+    secret_requests: z.array(SessionStateSecretRequest).max(1000).optional(),
     type: z.literal("session_snapshot"),
     session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
@@ -1307,6 +1506,7 @@ export const CatchUpCompleteFrame = z
 
 export const UserMessageFrame = z
   .object({
+    room_ref: RoomRef.optional(),
     type: z.literal("user_message"),
     session_id: z.string().min(1).max(255),
     id: z.string().min(1),
@@ -1365,6 +1565,13 @@ export const MailPanelObserverErrorFrame = z
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
+  SecretRequestFrame,
+  SecretRequestResolvedFrame,
+  RoomEntryFrame,
+  RoomMemberStateFrame,
+  AttachRoomFrame,
+  RoomSnapshotFrame,
+  RoomMetaFrame,
   AuthFrame,
   MessageFrameBase,
   CancelFrame,
