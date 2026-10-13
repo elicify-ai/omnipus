@@ -147,67 +147,10 @@ func TestMemoryRetroRoundTrip(t *testing.T) {
 	}
 }
 
-// TestMemoryLastSession verifies WriteLastSession + ReadLastSession.
-func TestMemoryLastSession(t *testing.T) {
-	dir := t.TempDir()
-	home := t.TempDir()
-	ms := NewMemoryStore(dir, home)
-	t.Cleanup(ms.Close)
-
-	// ReadLastSession on a fresh workspace returns empty string, no error.
-	content, err := ms.ReadLastSession()
-	if err != nil {
-		t.Fatalf("ReadLastSession on fresh workspace: %v", err)
-	}
-	if content != "" {
-		t.Errorf("expected empty, got %q", content)
-	}
-
-	// Write and read back.
-	const payload = "## Session summary\nWe built the memory store."
-	if writeErr := ms.WriteLastSession(payload); writeErr != nil {
-		t.Fatalf("WriteLastSession: %v", writeErr)
-	}
-	got, err := ms.ReadLastSession()
-	if err != nil {
-		t.Fatalf("ReadLastSession after write: %v", err)
-	}
-	if got != payload {
-		t.Errorf("got %q, want %q", got, payload)
-	}
-}
-
-// TestGetMemoryContextIncludes verifies GetMemoryContext returns last session + memory.
-func TestGetMemoryContextIncludes(t *testing.T) {
-	dir := t.TempDir()
-	home := t.TempDir()
-	ms := NewMemoryStore(dir, home)
-	t.Cleanup(ms.Close)
-
-	// Write LAST_SESSION.md.
-	if err := ms.WriteLastSession("Last session was productive."); err != nil {
-		t.Fatalf("WriteLastSession: %v", err)
-	}
-
-	// Append a few long-term entries.
-	for i := range 3 {
-		if i > 0 {
-			time.Sleep(2 * time.Millisecond)
-		}
-		cat := []string{"key_decision", "reference", "lesson_learned"}[i]
-		if err := ms.AppendLongTerm("entry number "+string(rune('1'+i)), cat); err != nil {
-			t.Fatalf("AppendLongTerm %d: %v", i, err)
-		}
-	}
-
-	ctx := ms.GetMemoryContext()
-	if ctx == "" {
-		t.Fatal("GetMemoryContext returned empty string")
-	}
-	if !strings.Contains(ctx, "## Last Session") {
-		t.Error("GetMemoryContext missing ## Last Session header")
-	}
-	if !strings.Contains(ctx, "## Long-term memory") {
-		t.Error("GetMemoryContext missing ## Long-term memory header")
-	}
-}
+// TestMemoryLastSession and TestGetMemoryContextIncludes were retired with the
+// removed agent-wide last-session API (WU-21 / #1197, amendment §3.2(7)):
+// TestMemoryLastSession's write/read roundtrip is covered by
+// TestWU21_CarryForwardAPIExactLocationScopeAndMode, and GetMemoryContext no
+// longer carries a "## Last Session" block (§3.2(4)) — its long-term section is
+// covered by TestIntegration_AutoInject20Recent and the removal by
+// TestWU21_OldAgentFileIsIgnoredAndUntouched.

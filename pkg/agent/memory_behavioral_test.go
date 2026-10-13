@@ -189,46 +189,11 @@ func TestMemoryStore_SearchEntries_LiteralSubstring(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestMemoryStore_WriteLastSession_OverwritesAtomically
-// Traces to: room topology (last-session.md per room)
-// ---------------------------------------------------------------------------
-
-func TestMemoryStore_WriteLastSession_OverwritesAtomically(t *testing.T) {
-	dir := t.TempDir()
-	home := t.TempDir()
-	ms := NewMemoryStore(dir, home)
-	t.Cleanup(ms.Close)
-
-	if err := ms.WriteLastSession("initial content"); err != nil {
-		t.Fatalf("WriteLastSession initial: %v", err)
-	}
-
-	newContent := "## Updated last session\nThis overwrites the previous content."
-	if err := ms.WriteLastSession(newContent); err != nil {
-		t.Fatalf("WriteLastSession overwrite: %v", err)
-	}
-
-	got, err := ms.ReadLastSession()
-	if err != nil {
-		t.Fatalf("ReadLastSession: %v", err)
-	}
-	if got != newContent {
-		t.Errorf("ReadLastSession got %q, want %q", got, newContent)
-	}
-	if strings.Contains(got, "initial content") {
-		t.Error("last-session.md still contains old content after overwrite")
-	}
-
-	differentContent := "## Session 2\nA different session."
-	if err := ms.WriteLastSession(differentContent); err != nil {
-		t.Fatalf("WriteLastSession differentContent: %v", err)
-	}
-	got2, _ := ms.ReadLastSession()
-	if got2 == got {
-		t.Error("WriteLastSession: two different writes produced the same read")
-	}
-}
+// TestMemoryStore_WriteLastSession_OverwritesAtomically was retired with the
+// removed agent-wide last-session API (WU-21 / #1197, amendment §3.2(7)); its
+// atomic-overwrite coverage lives on in
+// TestWU21_CarryForwardAPIExactLocationScopeAndMode (replacement read +
+// atomic_read_snapshots subtest) against the workspace-scoped pair file.
 
 // ---------------------------------------------------------------------------
 // TestMemoryStore_AppendRetro_ValidatesSessionID
@@ -366,36 +331,11 @@ func TestMemoryStore_SweepRetros_Deletes30DayOld(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestMemoryStore_GetMemoryContext_ContainsBothSections
-// Traces to: FR-7.3 (GetMemoryContext used by system prompt)
-// ---------------------------------------------------------------------------
-
-func TestMemoryStore_GetMemoryContext_ContainsBothSections(t *testing.T) {
-	dir := t.TempDir()
-	home := t.TempDir()
-	ms := NewMemoryStore(dir, home)
-	t.Cleanup(ms.Close)
-
-	if err := ms.WriteLastSession("## Last session\nWe shipped the rooms."); err != nil {
-		t.Fatalf("WriteLastSession: %v", err)
-	}
-	if err := ms.AppendLongTerm("rooms keystone shipped", "key_decision"); err != nil {
-		t.Fatalf("AppendLongTerm: %v", err)
-	}
-
-	ctx := ms.GetMemoryContext()
-
-	if !strings.Contains(ctx, "## Last Session") {
-		t.Errorf("GetMemoryContext missing '## Last Session'; got:\n%s", truncateStr2(ctx, 300))
-	}
-	if !strings.Contains(ctx, "## Long-term memory") {
-		t.Errorf("GetMemoryContext missing '## Long-term memory'; got:\n%s", truncateStr2(ctx, 300))
-	}
-	if !strings.Contains(ctx, "rooms keystone shipped") {
-		t.Errorf("GetMemoryContext missing expected content; got:\n%s", ctx)
-	}
-}
+// TestMemoryStore_GetMemoryContext_ContainsBothSections was retired with the
+// removed agent-wide last-session API (WU-21 / #1197): GetMemoryContext no
+// longer emits a "## Last Session" block (amendment §3.2(4)). The long-term
+// section it also covered is pinned by TestIntegration_AutoInject20Recent, and
+// the block's removal by TestWU21_OldAgentFileIsIgnoredAndUntouched.
 
 // ---------------------------------------------------------------------------
 // TestMemoryStore_AppendLongTerm_MaxRune4096
@@ -420,15 +360,4 @@ func TestMemoryStore_AppendLongTerm_MaxRune4096(t *testing.T) {
 	if err := ms.AppendLongTerm(content4097, "reference"); err == nil {
 		t.Error("AppendLongTerm at 4097 runes should fail, got nil")
 	}
-}
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
-func truncateStr2(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }
