@@ -28,7 +28,7 @@ func TestRefreshConfigAndRewireServices_UnreadableChannelCredentialApplies(t *te
 	f := newIssue1277Fixture(t)
 	require.NoError(t, f.store.Set(issue1277BrokenRef, "qa1277-before-tamper"))
 	cfg, bundle, _ := f.boot(t)
-	api, _, _, _ := f.startRuntime(t, cfg, bundle)
+	api := f.startAPI(t, cfg, bundle)
 	issue1277TamperSingleEntry(t, f, issue1277BrokenRef)
 	f.cfg.Gateway.LogLevel = "debug"
 	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))
@@ -52,7 +52,7 @@ func TestRefreshConfigAndRewireServices_MissingChannelCredentialApplies(t *testi
 	f := newIssue1277Fixture(t)
 	require.NoError(t, f.store.Set(issue1277BrokenRef, "qa1277-before-delete"))
 	cfg, bundle, _ := f.boot(t)
-	api, _, _, _ := f.startRuntime(t, cfg, bundle)
+	api := f.startAPI(t, cfg, bundle)
 	require.NoError(t, f.store.Delete(issue1277BrokenRef))
 	f.cfg.Gateway.LogLevel = "debug"
 	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))
@@ -84,7 +84,7 @@ func TestRefreshConfigAndRewireServices_UnreadableMailboxCredentialApplies(t *te
 	}
 	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))
 	cfg, bundle, _ := f.boot(t)
-	api, _, _, _ := f.startRuntime(t, cfg, bundle)
+	api := f.startAPI(t, cfg, bundle)
 	issue1277TamperSingleEntry(t, f, badRef)
 	f.cfg.Gateway.LogLevel = "debug"
 	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))

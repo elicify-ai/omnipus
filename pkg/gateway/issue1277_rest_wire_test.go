@@ -107,7 +107,7 @@ func TestIssue1277_RESTProviderMissingRemovedSecretNamesRef(t *testing.T) {
 				Provider: "qa1277-wire-bad", Model: "health-probe", Models: []string{"health-probe"}, Custom: true,
 				Protocol: "openai-compatible", APIBase: cfg.Providers[0].APIBase, APIKeyRef: issue1277WireBadProvRef,
 			})
-			api, _, _, _ := f.startRuntime(t, cfg, bundle)
+			api := f.startAPI(t, cfg, bundle)
 			rows := issue1277WireProviderRows(t, api)
 			require.Len(t, rows, 2)
 			good := rows["qa1277"]
@@ -132,7 +132,7 @@ func TestIssue1277_RESTProviderHealthySecretIsConnectedWithoutError(t *testing.T
 	})
 	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))
 	cfg, bundle, _ := f.boot(t)
-	api, _, _, _ := f.startRuntime(t, cfg, bundle)
+	api := f.startAPI(t, cfg, bundle)
 	rows := issue1277WireProviderRows(t, api)
 	require.Len(t, rows, 2)
 	for _, id := range []string{"qa1277", "qa1277-wire-bad"} {

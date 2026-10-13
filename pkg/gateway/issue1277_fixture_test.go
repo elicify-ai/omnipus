@@ -168,7 +168,28 @@ func (f *issue1277Fixture) boot(t *testing.T) (*config.Config, credentials.Secre
 	return cfg, bundle, store
 }
 
+// issue1277RuntimeState is test setup state, never a wire-format payload.
+type issue1277RuntimeState struct {
+	api      *restAPI
+	services *services
+	bus      *bus.MessageBus
+	provider providers.LLMProvider
+}
+
 func (f *issue1277Fixture) startRuntime(t *testing.T, cfg *config.Config, bundle credentials.SecretBundle) (*restAPI, *services, *bus.MessageBus, providers.LLMProvider) {
+	t.Helper()
+	runtime := f.startRuntimeState(t, cfg, bundle)
+	return runtime.api, runtime.services, runtime.bus, runtime.provider
+}
+
+// startAPI keeps API-only tests from discarding three unrelated return values.
+// All constructors, assertions, cleanup and startup still run in the same helper.
+func (f *issue1277Fixture) startAPI(t *testing.T, cfg *config.Config, bundle credentials.SecretBundle) *restAPI {
+	t.Helper()
+	return f.startRuntimeState(t, cfg, bundle).api
+}
+
+func (f *issue1277Fixture) startRuntimeState(t *testing.T, cfg *config.Config, bundle credentials.SecretBundle) issue1277RuntimeState {
 	t.Helper()
 	p, _, err := createStartupProvider(cfg, false)
 	require.NoError(t, err)
@@ -190,7 +211,7 @@ func (f *issue1277Fixture) startRuntime(t *testing.T, cfg *config.Config, bundle
 	svc.loadConfigForSwap = func() (*config.Config, error) { return config.LoadConfigWithStore(f.configPath, f.store) }
 	t.Cleanup(func() { stopAndCleanupServices(svc, 5*time.Second, false) })
 	require.NoError(t, mgr.StartAll(context.Background()), "#1277: the shared HTTP listener and healthy channels must start")
-	return api, svc, msgBus, p
+	return issue1277RuntimeState{api: api, services: svc, bus: msgBus, provider: p}
 }
 
 func issue1277ChannelRows(t *testing.T, api *restAPI) map[string]gen.ChannelEntry {

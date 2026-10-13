@@ -104,7 +104,7 @@ func TestIssue1277_RESTRefreshAppliesWithMissingChannelSecret(t *testing.T) {
 	f := newIssue1277Fixture(t)
 	require.NoError(t, f.store.Set(issue1277BrokenRef, "qa1277-before-delete"))
 	cfg, bundle, _ := f.boot(t)
-	api, _, _, _ := f.startRuntime(t, cfg, bundle)
+	api := f.startAPI(t, cfg, bundle)
 	require.NoError(t, f.store.Delete(issue1277BrokenRef))
 	f.cfg.Gateway.LogLevel = "debug" // unrelated user setting must not be rolled back.
 	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))

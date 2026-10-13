@@ -112,7 +112,7 @@ func newIssue1277WireMCP(t *testing.T, state string) (*issue1277Fixture, *restAP
 	}
 	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))
 	cfg, bundle, _ := f.boot(t)
-	api, _, _, _ := f.startRuntime(t, cfg, bundle)
+	api := f.startAPI(t, cfg, bundle)
 	api.mcpRegistry = tools.NewMCPRegistry()
 	api.agentLoop.SetCentralMCPRegistries(api.mcpRegistry, tools.NewBuiltinRegistry())
 	require.NoError(t, api.agentLoop.ReconcileMCP(t.Context()), "one bad connector must not abort reconciliation")
@@ -140,7 +140,7 @@ func newIssue1277WireMailbox(t *testing.T, state string) (*issue1277Fixture, *re
 				IMAPHost: "127.0.0.1", SMTPHost: "127.0.0.1", Username: "good@example.invalid"},
 		},
 	}
-	api, _, _, _ := f.startRuntime(t, cfg, bundle)
+	api := f.startAPI(t, cfg, bundle)
 	return f, api
 }
 
