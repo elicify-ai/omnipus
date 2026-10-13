@@ -2,6 +2,7 @@ package systools_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -74,7 +75,7 @@ func TestWU21_AgentDeleteRemovesAllPairSummariesAndPreservesOtherAgents(t *testi
 		t.Fatalf("healthy delete failed: warnings=%v error=%v", out.Warnings, out.DeletionErr)
 	}
 	for _, ws := range []string{"alpha", "beta"} {
-		if _, err := os.Stat(wu21PairPath(home, ws, "self")); !os.IsNotExist(err) {
+		if _, err := os.Stat(wu21PairPath(home, ws, "self")); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("§3.2(6): deleted agent's %s carry-forward survives (err=%v)", ws, err)
 		}
 		b, err := os.ReadFile(wu21PairPath(home, ws, "other"))

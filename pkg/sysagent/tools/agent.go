@@ -21,10 +21,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
 	"github.com/elicify-ai/omnipus/pkg/entity"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/validation"
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -1227,6 +1229,16 @@ func RunAgentDeleteCascade(omnipusHome, agentID, revision string, sessions Agent
 	res.WorkspacesUpdated, res.EdgesRemoved, w = cascadeCleanAgentWorkspaceReferences(omnipusHome, agentID)
 	res.Warnings = append(res.Warnings, w...)
 
+	// Step 2b (WU-21 / #1197, amendment §3.2(6)): the agent's end-of-chat
+	// summaries are workspace-owned files — one per (agent, workspace) pair —
+	// so delete_agent removes this agent's pair file in EVERY workspace.
+	// Other agents' files, and workspaces the agent merely left (membership
+	// removal), stay untouched. A failure is an FR-037 warning that keeps the
+	// record visible for retry, never a recursive erase of an unexpected
+	// directory and never a claimed success.
+	w = cascadeDeleteAgentCarryForwardFiles(omnipusHome, agentID)
+	res.Warnings = append(res.Warnings, w...)
+
 	// FR-037: if any owned-data cleanup step failed, STOP — the record must
 	// remain VISIBLE so the same Delete can retry, and the result must say the
 	// agent is only partly deleted rather than claim success.
@@ -1241,6 +1253,35 @@ func RunAgentDeleteCascade(omnipusHome, agentID, revision string, sessions Agent
 	// this resource.
 	res.Deletion, res.DeletionErr = agentstore.New(omnipusHome).DeleteState(agentID, revision)
 	return res
+}
+
+// cascadeDeleteAgentCarryForwardFiles removes this agent's end-of-chat summary
+// file — workspaces/<id>/.omnipus/carry-forward/<agentID>.md — in every
+// workspace under $OMNIPUS_HOME (WU-21 / #1197, amendment §3.2(6)). It returns
+// one warning per file it could not remove (an FR-037 cleanup failure: the
+// caller keeps the entity record for retry) and none when there was nothing
+// to remove. Membership-only removal never reaches this function.
+func cascadeDeleteAgentCarryForwardFiles(omnipusHome, agentID string) []string {
+	if err := validation.EntityID(agentID); err != nil {
+		return []string{fmt.Sprintf("carry-forward cleanup skipped: invalid agent id: %v", err)}
+	}
+	pattern := filepath.Join(omnipusHome, memrooms.WorkspacesDirName, "*", memrooms.OmnipusRoomDir, "carry-forward", agentID+".md")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return []string{fmt.Sprintf("carry-forward cleanup failed: cannot scan workspaces: %v", err)}
+	}
+	var warnings []string
+	for _, path := range matches {
+		// os.Remove deliberately refuses a directory: a non-file at the pair
+		// path is reported, never recursively erased.
+		if rmErr := os.Remove(path); rmErr != nil {
+			// path = <home>/workspaces/<ws>/.omnipus/carry-forward/<agent>.md —
+			// name the owning workspace in the warning.
+			ws := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(path)))))
+			warnings = append(warnings, fmt.Sprintf("carry-forward cleanup failed for workspace %q: %v", ws, rmErr))
+		}
+	}
+	return warnings
 }
 
 // deleteAndCascade runs the shared cleanup-first, record-last cascade

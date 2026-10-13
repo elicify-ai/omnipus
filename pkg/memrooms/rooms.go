@@ -9,12 +9,13 @@
 //	workspaces/<workspace_id>/.omnipus/
 //	    memories/          ← per-memory .md files (FR-7.2 frontmatter)
 //	    counters.jsonl     ← frozen access/cited log (FR-7.5)
-//	    (no last-session.md — D19: continuity is the agent's, not the workspace's)
+//	    carry-forward/     ← per-agent end-of-chat summaries, one file per
+//	                         (agent, workspace) pair (WU-21 / #1197; written
+//	                         by pkg/agent's MemoryStore, not here)
 //
 //	agents/<agent_id>/.omnipus/
 //	    memories/
 //	    counters.jsonl
-//	    last-session.md    ← last session summary (private room only, D19)
 //
 // The ".index/" subtree (bleve, edges.jsonl, tags.json, minhash.jsonl) is a
 // DERIVED artifact — it is NOT included here and is rebuilt from the .md
@@ -40,9 +41,6 @@ const (
 
 	// CountersFile is the append-only frozen log of memory access/cited events (FR-7.5).
 	CountersFile = "counters.jsonl"
-
-	// LastSessionFile holds a summary of the most recent session.
-	LastSessionFile = "last-session.md"
 
 	// WorkspacesDirName is the top-level directory under $OMNIPUS_HOME for workspace rooms.
 	WorkspacesDirName = "workspaces"

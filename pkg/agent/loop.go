@@ -517,7 +517,7 @@ type AgentLoop struct {
 	claimedCloseSessions sync.Map // sessionID (string) → true
 
 	// Session-end recap drain (#265). Recap goroutines (CloseSession → runRecap)
-	// write LAST_SESSION.md / retro files and emit audit entries in the
+	// write carry-forward summaries / retro files and emit audit entries in the
 	// background. Close() drains them (recapWG.Wait) BEFORE it tears down the
 	// registry, session stores, and audit logger they write through, so the
 	// recaps both complete and finish writing before shutdown returns — leaving

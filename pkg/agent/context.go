@@ -17,10 +17,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/utils"
+	"github.com/elicify-ai/omnipus/pkg/validation"
 )
 
 type ContextBuilder struct {
@@ -527,26 +529,30 @@ Only a subset of your allowed tools are sent as callable definitions every turn 
 }
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {
-	return cb.buildSystemPromptForShelf(cb.projectShelf)
+	return cb.buildSystemPromptForShelf(cb.projectShelf, "")
 }
 
 // BuildSystemPromptForWorkspace is BuildSystemPrompt with the "# Skills"
 // menu resolved against the project shelf for a specific workspace (ADR-072
 // D8) via effectiveProjectShelf, rather than the single shelf
-// WithProjectShelf sets. It is a strict superset of BuildSystemPrompt: with
-// no resolver installed (WithProjectShelfResolver never called),
-// effectiveProjectShelf falls back to cb.projectShelf for every
-// workspaceID, so output is identical to BuildSystemPrompt() regardless of
-// which workspaceID is passed.
+// WithProjectShelf sets, plus the workspace's own carry-forward summary
+// rendered under "# Memory" (WU-21 / #1197: the end-of-chat summary is stored
+// and read per (agent, workspace) — amendment §3.2(4)). It is a strict
+// superset of BuildSystemPrompt: with no resolver installed
+// (WithProjectShelfResolver never called), effectiveProjectShelf falls back
+// to cb.projectShelf for every workspaceID, so the skills menu matches
+// BuildSystemPrompt(); the carry-forward block is the only section that can
+// differ, and BuildSystemPrompt() itself never carries one.
 func (cb *ContextBuilder) BuildSystemPromptForWorkspace(workspaceID string) string {
-	return cb.buildSystemPromptForShelf(cb.effectiveProjectShelf(workspaceID))
+	return cb.buildSystemPromptForShelf(cb.effectiveProjectShelf(workspaceID), workspaceID)
 }
 
 // buildSystemPromptForShelf is the shared assembly body for
 // BuildSystemPrompt/BuildSystemPromptForWorkspace: every section is
-// identical between the two; only which project shelf feeds the "# Skills"
-// menu differs; shelf may be nil.
-func (cb *ContextBuilder) buildSystemPromptForShelf(shelf skills.ProjectShelf) string {
+// identical between the two; which project shelf feeds the "# Skills" menu
+// and whether the workspace's carry-forward summary is rendered differ;
+// shelf may be nil. A workspaceID of "" renders no carry-forward block.
+func (cb *ContextBuilder) buildSystemPromptForShelf(shelf skills.ProjectShelf, workspaceID string) string {
 	parts := []string{}
 
 	// FR-053: prepend env preamble at parts[0] when a provider is wired.
@@ -602,7 +608,20 @@ The following skills extend your capabilities. When a task matches one, call the
 	// e.g. the verifier role — so verdicts stay reproducible/impartial
 	// rather than drifting with episodic memory across adjudications).
 	if cb.memoryEnabled {
-		memoryContext := cb.memory.GetMemoryContext()
+		var memoryContext string
+		// WU-21 (§3.2(4)): the workspace's own end-of-chat summary leads the
+		// memory section. Only a workspace-scoped build reads one — a summary
+		// written in workspace A must never reach a session of the same agent
+		// in workspace B, and a no-workspace build gets no block at all.
+		if carry := cb.carryForwardContext(workspaceID); carry != "" {
+			memoryContext += "## Last Session\n" + carry
+		}
+		if longTerm := cb.memory.GetMemoryContext(); longTerm != "" {
+			if memoryContext != "" {
+				memoryContext += "\n\n"
+			}
+			memoryContext += longTerm
+		}
 		if memoryContext != "" {
 			parts = append(parts, "# Memory\n\n"+memoryContext)
 		}
@@ -648,7 +667,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 	// so the next sourceFilesChangedLocked check will correctly trigger a
 	// rebuild. The alternative (baseline after build) risks caching stale
 	// content with a too-new baseline, making the staleness invisible.
-	baseline := cb.buildCacheBaseline()
+	baseline := cb.buildCacheBaseline("")
 	prompt := cb.BuildSystemPrompt()
 	cb.cachedSystemPrompt = prompt
 	cb.cachedAt = baseline.maxMtime
@@ -778,19 +797,27 @@ func fileChangedSinceBaseline(existedAtCache map[string]bool, cachedAt time.Time
 // workspaceVariantStaleLocked mirrors sourceFilesChangedLocked's mtime-based
 // staleness check (tracked source files, then skill roots, then the
 // recursive skill-file snapshot) but evaluates it against one workspace
-// variant's own snapshot instead of the legacy per-agent fields. It does
-// NOT check workspace-membership or mount-deletion staleness — those are
-// invisible to any mtime sweep by design (ADR-072 D8 items 2/3) and are
+// variant's own snapshot instead of the legacy per-agent fields. On top of
+// those it tracks the variant's OWN carry-forward pair file (WU-21, amendment
+// §3.2(5)): a recap written into this workspace's pair file rebuilds this
+// variant and only this variant — a recap for another workspace, or a change
+// to the retired agent-wide file, must leave the cached variant a hit.
+// It does NOT check workspace-membership or mount-deletion staleness — those
+// are invisible to any mtime sweep by design (ADR-072 D8 items 2/3) and are
 // handled by the separate, explicit EvictWorkspacePrompt call.
 //
 // Caller MUST hold cb.workspacePromptCache.mu.
-func (cb *ContextBuilder) workspaceVariantStaleLocked(v *workspacePromptVariant) bool {
+func (cb *ContextBuilder) workspaceVariantStaleLocked(v *workspacePromptVariant, workspaceID string) bool {
 	if v.cachedAt.IsZero() {
 		return true
 	}
 	if slices.ContainsFunc(cb.sourcePaths(), func(p string) bool {
 		return fileChangedSinceBaseline(v.existedAtCache, v.cachedAt, p)
 	}) {
+		return true
+	}
+	if pairPath := cb.variantCarryForwardPath(workspaceID); pairPath != "" &&
+		fileChangedSinceBaseline(v.existedAtCache, v.cachedAt, pairPath) {
 		return true
 	}
 	for _, root := range cb.skillRoots() {
@@ -869,7 +896,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCacheForWorkspace(workspaceID str
 	wc.mu.Lock()
 	defer wc.mu.Unlock()
 
-	if v, ok := wc.variants[workspaceID]; ok && !cb.workspaceVariantStaleLocked(v) {
+	if v, ok := wc.variants[workspaceID]; ok && !cb.workspaceVariantStaleLocked(v, workspaceID) {
 		wc.lru.MoveToBack(v.elem)
 		return v.prompt
 	}
@@ -878,7 +905,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCacheForWorkspace(workspaceID str
 	// BuildSystemPromptWithCache does: a file modified mid-build gets a
 	// mtime after this baseline, so the next staleness check still catches
 	// it rather than caching it as if it were already reflected.
-	baseline := cb.buildCacheBaseline()
+	baseline := cb.buildCacheBaseline(workspaceID)
 	prompt := cb.BuildSystemPromptForWorkspace(workspaceID)
 
 	if len(prompt) > wc.effectiveMaxBytes() {
@@ -937,17 +964,53 @@ func (cb *ContextBuilder) EvictWorkspacePrompt(workspaceID string) {
 	cb.evictWorkspaceVariantLocked(workspaceID)
 }
 
+// carryForwardContext returns the workspace's own carry-forward summary for
+// the "# Memory" section, or "" when workspaceID is empty (no block), the
+// agent has no usable id/scope yet, or the read fails (a missing file is the
+// normal first-session-in-workspace case). Never panics and never blocks the
+// prompt build on a read error: the block is additive context.
+func (cb *ContextBuilder) carryForwardContext(workspaceID string) string {
+	if workspaceID == "" || cb.memory == nil {
+		return ""
+	}
+	scope := CarryForwardScope{AgentID: cb.agentID, WorkspaceID: workspaceID}
+	carry, err := cb.memory.ReadCarryForward(scope)
+	if err != nil {
+		return ""
+	}
+	return carry
+}
+
+// variantCarryForwardPath returns the carry-forward pair file this workspace's
+// prompt variant must track for staleness, or "" when there is none
+// (no-workspace builds track no carry-forward path — amendment §3.2(5)).
+func (cb *ContextBuilder) variantCarryForwardPath(workspaceID string) string {
+	if workspaceID == "" || cb.memory == nil {
+		return ""
+	}
+	scope := CarryForwardScope{AgentID: cb.agentID, WorkspaceID: workspaceID}
+	if err := validation.EntityID(scope.AgentID); err != nil {
+		return ""
+	}
+	if err := validation.EntityID(scope.WorkspaceID); err != nil {
+		return ""
+	}
+	return cb.memory.carryForwardPath(scope)
+}
+
 // sourcePaths returns non-skill workspace source files tracked for cache
 // invalidation (bootstrap files + memory). Skill roots are handled separately
 // because they require both directory-level and recursive file-level checks.
+// The agent-wide last-session.md is gone (WU-21): each workspace prompt
+// variant tracks its own carry-forward pair path instead — see
+// variantCarryForwardPath / buildCacheBaseline / workspaceVariantStaleLocked.
 func (cb *ContextBuilder) sourcePaths() []string {
 	agentDefinition := cb.LoadAgentDefinition()
 	paths := agentDefinition.trackedPaths(cb.workspace)
-	// Track the private room's memories directory and last-session.md for cache invalidation.
+	// Track the private room's memories directory for cache invalidation.
 	// The memories dir mtime changes on any new .md write (directory mtime update).
-	privateRoomRoot := filepath.Join(cb.workspace, ".omnipus")
-	paths = append(paths, filepath.Join(privateRoomRoot, "memories"))
-	paths = append(paths, filepath.Join(privateRoomRoot, "last-session.md"))
+	privateRoomRoot := filepath.Join(cb.workspace, memrooms.OmnipusRoomDir)
+	paths = append(paths, filepath.Join(privateRoomRoot, memrooms.MemoriesSubdir))
 	return uniquePaths(paths)
 }
 
@@ -975,15 +1038,21 @@ type cacheBaseline struct {
 
 // buildCacheBaseline records which tracked paths currently exist and computes
 // the latest mtime across all tracked files + skills directory contents.
-// Called under write lock when the cache is built.
-func (cb *ContextBuilder) buildCacheBaseline() cacheBaseline {
+// The workspaceID form also snapshots the workspace's OWN carry-forward pair
+// file (WU-21, amendment §3.2(5)) so the variant keyed by that workspace
+// detects its recap; the legacy ("" form) baseline tracks no carry-forward
+// path at all. Called under write lock when the cache is built.
+func (cb *ContextBuilder) buildCacheBaseline(workspaceID string) cacheBaseline {
 	skillRoots := cb.skillRoots()
 	srcPaths := cb.sourcePaths()
 
 	// C3: Use explicit allocation to avoid mutating the underlying array of sourcePaths.
-	allPaths := make([]string, 0, len(srcPaths)+len(skillRoots))
+	allPaths := make([]string, 0, len(srcPaths)+len(skillRoots)+1)
 	allPaths = append(allPaths, srcPaths...)
 	allPaths = append(allPaths, skillRoots...)
+	if pairPath := cb.variantCarryForwardPath(workspaceID); pairPath != "" {
+		allPaths = append(allPaths, pairPath)
+	}
 
 	existed := make(map[string]bool, len(allPaths))
 	skillFiles := make(map[string]time.Time)

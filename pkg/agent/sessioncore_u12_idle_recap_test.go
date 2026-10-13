@@ -46,13 +46,16 @@ func u12WireAgent(t *testing.T, al *AgentLoop, cfg *config.Config, script *scrip
 	return ag.Home
 }
 
-// u12NewSession creates a chat session for agentID with one transcript entry.
+// u12NewSession creates a chat session for agentID with one transcript entry,
+// stamped with the shared test workspace (WU-21 re-aim #1197: the recap needs
+// an (agent, workspace) carry-forward target).
 func u12NewSession(t *testing.T, store *session.UnifiedStore, agentID string) string {
 	t.Helper()
 	meta, err := store.NewSession(session.SessionTypeChat, "webchat", agentID)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID)
 	if err := store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "hello",
@@ -64,9 +67,11 @@ func u12NewSession(t *testing.T, store *session.UnifiedStore, agentID string) st
 	return meta.ID
 }
 
-// u12WaitForLastSession polls for an agent's last-session.md within budget.
-func u12WaitForLastSession(agentHome string, budget time.Duration) []byte {
-	path := filepath.Join(agentHome, ".omnipus", "last-session.md")
+// u12WaitForLastSession polls for an agent's carry-forward summary in the
+// shared test workspace within budget (WU-21 re-aim: the (agent, workspace)
+// pair path replaced the agent-wide last-session.md).
+func u12WaitForLastSession(home, agentID string, budget time.Duration) []byte {
+	path := wu21ReaimPairPath(home, agentID)
 	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
 		if data, err := os.ReadFile(path); err == nil {
@@ -101,8 +106,10 @@ func TestSessionCoreU12_ExplicitSessionCloseDoesNotRecap(t *testing.T) {
 	}
 	al.sharedSessionStore = store
 
-	explicitHome := u12WireAgent(t, al, cfg, script, "explicit-agent", home)
-	idleHome := u12WireAgent(t, al, cfg, script, "idle-agent", home)
+	// The two agents' homes are under <home>/agents/<id>; the WU-21 re-aim
+	// observers watch the shared test workspace's pair files instead.
+	_ = u12WireAgent(t, al, cfg, script, "explicit-agent", home)
+	_ = u12WireAgent(t, al, cfg, script, "idle-agent", home)
 
 	explicitSID := u12NewSession(t, store, "explicit-agent")
 	idleSID := u12NewSession(t, store, "idle-agent")
@@ -111,13 +118,13 @@ func TestSessionCoreU12_ExplicitSessionCloseDoesNotRecap(t *testing.T) {
 	// vacuous (the instrument could not observe a recap at all).
 	al.resetIdleTicker(idleSID)
 	al.fireIdleTimeout(idleSID)
-	if u12WaitForLastSession(idleHome, 5*time.Second) == nil {
-		t.Fatal("instrument: idle recap produced no last-session.md — the negative assertion below would be vacuous")
+	if u12WaitForLastSession(home, "idle-agent", 5*time.Second) == nil {
+		t.Fatal("instrument: idle recap produced no carry-forward summary — the negative assertion below would be vacuous")
 	}
 
 	// Explicit: the deleted trigger path. It must produce NO recap.
 	al.CloseSession(explicitSID, "explicit")
-	if got := u12WaitForLastSession(explicitHome, 3*time.Second); got != nil {
-		t.Fatalf("FR-036/DEL-08: an explicit session-close must NOT recap; last-session.md was written:\n%s", got)
+	if got := u12WaitForLastSession(home, "explicit-agent", 3*time.Second); got != nil {
+		t.Fatalf("FR-036/DEL-08: an explicit session-close must NOT recap; a carry-forward summary was written:\n%s", got)
 	}
 }

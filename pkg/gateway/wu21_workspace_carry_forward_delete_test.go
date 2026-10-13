@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -37,7 +38,7 @@ func TestWU21_WorkspaceDeleteOwnsPairSummaries(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("workspace delete failed: status=%d body=%s", w.Code, w.Body.String())
 	}
-	if _, err := os.Stat(pairPath(a)); !os.IsNotExist(err) {
+	if _, err := os.Stat(pairPath(a)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("§3.2(6): deleted workspace's pair summary survives: %v", err)
 	}
 	data, err := os.ReadFile(pairPath(b))

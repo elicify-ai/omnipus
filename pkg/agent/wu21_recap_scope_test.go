@@ -42,8 +42,8 @@ func wu21New(t *testing.T) wu21Fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Errorf("close session store: %v", err)
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close session store: %v", closeErr)
 		}
 	})
 	auditDir := t.TempDir()
@@ -66,11 +66,11 @@ func (f wu21Fixture) recap(t *testing.T, ws, text string) *agentLoopRunRecap {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.store.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
-		t.Fatal(err)
+	if setErr := f.store.SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &ws}); setErr != nil {
+		t.Fatal(setErr)
 	}
-	if err := f.store.AppendTranscript(meta.ID, session.TranscriptEntry{Role: "user", Content: text, AgentID: "self"}); err != nil {
-		t.Fatal(err)
+	if appendErr := f.store.AppendTranscript(meta.ID, session.TranscriptEntry{Role: "user", Content: text, AgentID: "self"}); appendErr != nil {
+		t.Fatal(appendErr)
 	}
 	body, err := json.Marshal(map[string]any{"recap": text, "went_well": []string{}, "needs_improvement": []string{}, "worth_remembering": []string{}})
 	if err != nil {
@@ -119,7 +119,7 @@ func TestWU21_RealRecapInAIsAbsentFromSessionB(t *testing.T) {
 	if err != nil || !strings.Contains(string(b), "WU21_ALPHA_RECAP") {
 		t.Errorf("§3.2(2): own pair file missing or wrong: err=%v", err)
 	}
-	if _, err := os.Stat(f.path("beta", "self")); !os.IsNotExist(err) {
+	if _, err := os.Stat(f.path("beta", "self")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("immutable scope: recap A wrote to mutable workspace B; err=%v", err)
 	}
 }
@@ -188,7 +188,7 @@ func TestWU21_NoWorkspaceRecapHasNoAgentWideFallback(t *testing.T) {
 			t.Errorf("§3.2(1): audit=%q want skipped_no_workspace", outcome)
 		}
 		old := filepath.Join(f.agentHome, ".omnipus", "last-session.md")
-		if _, err := os.Stat(old); !os.IsNotExist(err) {
+		if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("§3.2(1/7): no-workspace recap created old agent-wide file (err=%v)", err)
 		}
 		if strings.Contains(f.ag.ContextBuilder.BuildSystemPrompt(), "WU21_NO_WORKSPACE") {

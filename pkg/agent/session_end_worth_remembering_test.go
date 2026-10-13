@@ -1,5 +1,5 @@
 // session_end_worth_remembering_test.go — the recap's "worth_remembering" items
-// must reach last-session.md.
+// must reach the workspace's carry-forward summary (WU-21 re-aim #1197).
 //
 // The recap prompt asks the model for {"recap", "went_well", "needs_improvement",
 // "worth_remembering"}. A model may state a user-given fact (a codename, a
@@ -57,6 +57,7 @@ func TestRunRecap_WorthRemembering_ReachesLastSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: carry-forward target.
 	if appendErr := store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "Remember for later: the launch codename is " + nonce + ".",
@@ -68,7 +69,7 @@ func TestRunRecap_WorthRemembering_ReachesLastSession(t *testing.T) {
 
 	al.CloseSession(meta.ID, "idle")
 
-	path := filepath.Join(ag.Home, ".omnipus", "last-session.md")
+	path := wu21ReaimPairPath(home, "wr-agent")
 	deadline := time.Now().Add(5 * time.Second)
 	var content []byte
 	for time.Now().Before(deadline) {
@@ -79,14 +80,14 @@ func TestRunRecap_WorthRemembering_ReachesLastSession(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if len(content) == 0 {
-		t.Fatal("last-session.md not produced within 5s")
+		t.Fatal("carry-forward summary not produced within 5s")
 	}
 	got := string(content)
 	if !strings.Contains(got, "The user gave a launch codename to remember.") {
-		t.Errorf("last-session.md lost the recap text; got:\n%s", got)
+		t.Errorf("carry-forward summary lost the recap text; got:\n%s", got)
 	}
 	if !strings.Contains(got, nonce) {
-		t.Errorf("last-session.md must carry the worth_remembering item %q; got:\n%s", nonce, got)
+		t.Errorf("carry-forward summary must carry the worth_remembering item %q; got:\n%s", nonce, got)
 	}
 	if strings.Contains(got, "Fallback reason:") {
 		t.Errorf("this is the success path, not the fallback; got:\n%s", got)

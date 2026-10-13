@@ -117,7 +117,8 @@ func TestBuildCarryForward_NonceInLastTurnAlwaysSurvives(t *testing.T) {
 
 // TestRunRecap_AllCandidatesFail_CarriesRecentContextForward is the product-level
 // regression for the recap-fallback content-loss gap: when every recap candidate
-// fails (the degraded-under-load path), last-session.md must still carry the
+// fails (the degraded-under-load path), the workspace's carry-forward summary
+// must still carry the
 // user's stated fact forward verbatim, not just a content-free status stub.
 func TestRunRecap_AllCandidatesFail_CarriesRecentContextForward(t *testing.T) {
 	home := t.TempDir()
@@ -151,6 +152,7 @@ func TestRunRecap_AllCandidatesFail_CarriesRecentContextForward(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: carry-forward target.
 	const nonce = "the launch codename is BLUEHERON-42"
 	if appendErr := store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
@@ -163,22 +165,22 @@ func TestRunRecap_AllCandidatesFail_CarriesRecentContextForward(t *testing.T) {
 
 	al.CloseSession(meta.ID, "idle")
 
-	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
+	carryForwardPath := wu21ReaimPairPath(home, "cf-agent")
 	deadline := time.Now().Add(5 * time.Second)
 	var content []byte
 	for time.Now().Before(deadline) {
-		if b, readErr := os.ReadFile(lastSessionPath); readErr == nil && len(b) > 0 {
+		if b, readErr := os.ReadFile(carryForwardPath); readErr == nil && len(b) > 0 {
 			content = b
 			break
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
 	if len(content) == 0 {
-		t.Fatalf("last-session.md not produced within 5s after all-candidates-fail recap")
+		t.Fatalf("carry-forward summary not produced within 5s after all-candidates-fail recap")
 	}
 	if !strings.Contains(string(content), nonce) {
 		t.Fatalf(
-			"fallback last-session.md must carry the recent user fact forward verbatim.\nwant substring: %q\ngot:\n%s",
+			"fallback carry-forward summary must carry the recent user fact forward verbatim.\nwant substring: %q\ngot:\n%s",
 			nonce,
 			content,
 		)
