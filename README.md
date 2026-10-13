@@ -101,8 +101,6 @@ Pick from 35+ AI providers — including fully-local options like Ollama.
 
 **Encrypted credential vault** — AES-256-GCM; when the key comes from a typed passphrase it is derived with Argon2id. → [Master key and encryption](docs/operations/security-considerations.md#master-key-provisioning)
 
-> Note: the "Credential encryption" link in the First-boot section currently points to a doc that does not exist yet — the target will be re-aimed in a follow-up by another agent.
-
 **Full audit trail** — every tool call, LLM request, and agent event lands in a replayable on-disk transcript that feeds the UI, subprocess hooks, and a tamper-evident audit log. → [Session transcript](docs/operations/observability.md#session-transcript)
 
 **13 in-process chat channels and 35+ LLM providers** — with fallback chains, multi-key rotation, streaming, and vision. → [Connectors](docs/connectors.md) · [Providers](docs/providers-and-models.md)
@@ -167,7 +165,7 @@ Customise via environment:
 | `OMNIPUS_INSTALL_DIR` | `/usr/local/bin` | Use `$HOME/.local/bin` if you don't have sudo |
 | `OMNIPUS_REPO` | `elicify-ai/omnipus` | Override only for forks |
 
-**Browser tools.** On the first `browser.navigate` / `browser.screenshot` / `web_serve` call, the gateway looks for `google-chrome` / `chromium` / `chromium-browser` on `$PATH`. If one is found it's used as-is; if not, a managed Chromium is downloaded to `$OMNIPUS_HOME/browser/chromium/` (Chrome for Testing, ~150 MB, one-time).
+**Browser tools.** On the first `browser_navigate` / `browser_screenshot` / `serve_web` call, the gateway looks for `google-chrome` / `chromium` / `chromium-browser` on `$PATH`. If one is found it's used as-is; if not, a managed Chromium is downloaded to `$OMNIPUS_HOME/browser/chromium/` (Chrome for Testing, ~150 MB, one-time).
 
 That download needs glibc, so on Alpine hosts install `chromium` via `apk` first — the PATH lookup then resolves and the managed download is skipped.
 
@@ -195,7 +193,7 @@ docker run -d \
 
 Or with compose: `curl -O https://raw.githubusercontent.com/elicify-ai/omnipus/main/docker/docker-compose.yml && docker compose up`.
 
-The published image (`ghcr.io/elicify-ai/omnipus:latest`) is built from [`docker/Dockerfile`](docker/Dockerfile): an Alpine multi-stage build that produces a **~71 MB** runtime image with only `ca-certificates`, `tzdata`, and `curl` on top of the Go binary.
+The published image (`ghcr.io/elicify-ai/omnipus:latest`) is built from [`docker/Dockerfile.goreleaser`](docker/Dockerfile.goreleaser): an Alpine image with only `ca-certificates` and `tzdata` on top of the Go binary.
 
 Same SPA, same channels, same memory + sessions + audit log as the native install.
 
@@ -203,11 +201,11 @@ Same SPA, same channels, same memory + sessions + audit log as the native instal
 
 The minimal image **deliberately excludes Chromium** to keep the artefact small. As a result:
 
-All `browser.*` tools (`navigate`, `screenshot`, `read_content`, `console_logs`, `action`) and the entire `web_serve` preview flow **will not work** out of the box.
+All `browser_*` tools (for example `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_get_text`) and the entire `serve_web` preview flow **will not work** out of the box.
 
 The auto-download fallback in `pkg/tools/browser/manager.go` does fetch a managed Chromium from Chrome for Testing — but that binary is **glibc-linked** while the runtime is **Alpine (musl)**, so `exec` fails with a misleading `no such file or directory`. (The missing piece is the ELF interpreter `/lib64/ld-linux-x86-64.so.2`, not the binary itself.)
 
-Agents gracefully fall back to `web_fetch` for read-only tasks and explains the missing capability to the user.
+Agents gracefully fall back to `fetch_url` for read-only tasks and explain the missing capability to the user.
 
 If you need browser tools inside Docker, use the heavy image below.
 
@@ -222,9 +220,9 @@ docker run -d \
   omnipus:heavy
 ```
 
-Built from [`docker/Dockerfile.heavy`](docker/Dockerfile.heavy): the same three-stage SPA + Go build as the minimal image, but the runtime stage adds `chromium`, `python3`, `py3-pip`, `uv` / `uvx`, `git`, `jq`, and a global `agent-browser` npm install.
+Built from [`docker/Dockerfile.heavy`](docker/Dockerfile.heavy): it builds the web app and the Go binary itself (three stages in all), and its runtime stage is a Debian base, not Alpine. That stage adds Chrome (the full Chrome for Testing build, downloaded while the image is built), `python3` with `pip`, `uv` / `uvx`, `git`, `jq`, and `curl`.
 
-About **1.08 GB** on disk, in exchange for first-class browser tools and Python MCP server support out of the box.
+The image is much larger than the minimal one, in exchange for first-class browser tools and Python MCP server support out of the box.
 
 Heavy image is not currently published to GHCR — build it yourself per the snippet above. (Tracked: ship it from the same release pipeline.)
 

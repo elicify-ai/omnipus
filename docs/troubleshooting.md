@@ -63,6 +63,20 @@ Finish onboarding to fix it. Open `http://localhost:5000` — on a fresh install
 
 If a turn fails after text starts streaming, chat shows a failure message in place of the unfinished reply, even with **Verbose chat** off. Enable **Settings → Chat → Verbose chat** before retrying to inspect tool activity and any available technical details. A turn you stop yourself still keeps its partial reply.
 
+A provider can also report an error after it has already started streaming a reply (OpenRouter does this when an upstream model fails). Omnipus discards the partial text, runs no tools, and names the failure by the provider's own error code instead of calling everything a network fault:
+
+| What the provider reported | What you see | Retried? |
+|---|---|---|
+| A temporary fault (server error, overloaded, timeout) | The connection-failure message | Yes, inline, like a dropped connection |
+| Rate limit (429) | The rate-limit message | Handed to the fallback chain |
+| Billing or credit (402) | The billing message | No |
+| Bad or missing key (401, 403) | The provider-rejected-your-key message | No |
+| The request itself was rejected (400, 422) | The provider-rejected message | No |
+| Moderation or content policy | The content-policy message | No |
+| A code Omnipus does not recognise | The generic unknown-failure message | No |
+
+A billing or key error is never retried, because every attempt would be billed and fail the same way. The provider's own error text appears only with **Verbose chat** on.
+
 If the agent reaches its tool-call limit before a final answer, chat keeps the narration and adds a separate limit notice that remains when you reopen the conversation. Closing the originating browser connection does not cancel the turn or redirect that notice to another conversation: terminal delivery retains the conversation's session ID. Conflicting tool names produce the standard “This turn didn’t finish, and we can’t tell why” failure notice rather than silence.
 
 ## A task is refused before work starts

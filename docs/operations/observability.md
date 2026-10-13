@@ -92,6 +92,16 @@ External processes can subscribe to the same event feed via JSON-RPC over stdin/
 
 A subset of security-relevant events (tool calls, denials, sandbox state changes, cancel events, rate limits) are mirrored into `~/.omnipus/system/audit.jsonl` with HMAC chain integrity (#155 hardening, item 1). See [Security for users](../security.md).
 
+Stop and cancel requests write these audit events:
+
+| Event | Level | When |
+|---|---|---|
+| `turn.cancel.attempt` | INFO | Every Stop request, including duplicates and requests that find nothing running. `was_fired` says whether it interrupted a turn. One row per request. |
+| `turn.cancelled` | INFO | A cancelled turn has fully exited; carries `cancel_method` (`graceful` or `hard`) and the descendants cancelled with it. |
+| `turn.cancel.stuck` | WARN | The turn did not exit within 5 seconds of the hard abort and was detached. |
+| `turn.cancel.background_killed` | INFO | The cancel killed the session's background jobs (the count may be 0). Written whether or not a turn was running. |
+| `cancel.abuse_pattern` | WARN | One person and channel sent 10 or more cancel requests within 60 seconds. |
+
 ### Event payload shape
 
 Every event carries:
