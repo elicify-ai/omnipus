@@ -210,6 +210,10 @@ export function Step1Identity({
             models={[...flatModels]}
             providerGroups={providerGroups}
             value={payload.model}
+            // H6: the picked provider narrows the check to ONE provider's row
+            // when two connected providers serve the same slug. Undefined
+            // until a pick is made (the value is '' then anyway).
+            valueProvider={payload.provider}
             onChange={(m) => setField('model', m)}
             onPairChange={({ provider: p }) => setField('provider', p)}
             placeholder="Pick a connected model"
