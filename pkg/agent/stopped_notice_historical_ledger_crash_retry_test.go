@@ -130,6 +130,16 @@ func TestW1HistoricalLedgerNotice_AppendFailureKeepsStopLandedAndResumedRetryDel
 		return err == nil && cur.State == session.LifecycleStopped
 	})
 
+	// The child's STATE is durable BEFORE its landed-stop history line is appended
+	// (steer_completion_commit.go and steer_cancel.go record the history only once
+	// the stopped state is durable, so a failed append keeps the landing). Seeing
+	// "stopped" therefore does not yet mean the ledger has the event: wait for that
+	// real event, as the sibling pack tests do, before judging the history. A
+	// history line that never arrives still fails the assertion below.
+	w1hWaitFor(t, 10*time.Second, "landed-stop history line", func() bool {
+		seen, listErr := lifecycle.ListStoppedTransitions(childID)
+		return listErr == nil && len(seen) >= 1
+	})
 	got, err := lifecycle.ListStoppedTransitions(childID)
 	if err != nil {
 		t.Fatalf("ListStoppedTransitions(after failed-append stop): %v", err)
