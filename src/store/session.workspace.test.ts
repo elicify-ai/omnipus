@@ -21,10 +21,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchSessions: vi.fn(),
     fetchWorkspace: vi.fn(),
+    fetchAgents: vi.fn(),
   }
 })
 
-import { fetchSessions, fetchWorkspace } from '@/lib/api'
+import { fetchSessions, fetchWorkspace, fetchAgents } from '@/lib/api'
+import { MIA } from '../../tests/omnipus-l1-ui-red/fixtures'
 import { useSessionStore, registerChatResetForReplay, registerChatClearPendingAutoApprove } from './session'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -61,11 +63,13 @@ function resetAll() {
     liteMode: false,
   })
   vi.mocked(fetchSessions).mockReset()
-  // Entry reads BOTH network inputs. A missing workspace mock used to be
-  // swallowed as "no main"; the transport-failure fix must not hide it.
+  // WU-10 FR-107: entry also reads the agent roster. Keep the original
+  // missing-main scenario (first colleague Mia, unresolved), not an empty team.
+  // Generic descriptor-memory oracles below are unrelated and stay intact.
+  vi.mocked(fetchAgents).mockReset().mockResolvedValue([MIA])
   vi.mocked(fetchWorkspace).mockReset().mockImplementation(async (id) => ({
-    id, name: id, revision: 'rev-1', status: 'active', pinned: false,
-    pin_order: 0, task_count: 0, member_configs: {},
+    id, name: id, revision: '1'.repeat(64), status: 'active', pinned: false,
+    pin_order: 0, task_count: 0, core_team: ['mia'], member_configs: {},
     created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
   }))
   // Cross-context session-bleed fix: sessionByWorkspace is now mirrored into

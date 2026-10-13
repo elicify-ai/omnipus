@@ -69,7 +69,7 @@ describe('AddAgentPicker — System agent exclusion (SD-C17, ADR-049 D3)', () =>
   it('when the Judge is the only non-member agent, the picker shows the empty-team-add state, not the Judge', () => {
     renderPicker({ agents: [JIM, JUDGE], memberIds: new Set(['jim']) })
     expect(screen.queryByTestId(/team-add-agent-option-/)).not.toBeInTheDocument()
-    expect(screen.getByText('Every agent is already on this team.')).toBeInTheDocument()
+    expect(screen.getByText('No other agents')).toBeInTheDocument()
   })
 })
 
@@ -127,10 +127,12 @@ describe('AddAgentPicker — selection', () => {
   })
 })
 
+// WU-10 §6.3 / FR-112: empty candidate list is "No other agents".
+// Candidate exclusion and all selection/search assertions are unchanged.
 describe('AddAgentPicker — empty states', () => {
-  it('shows "Every agent is already on this team." when every agent is a member', () => {
+  it('shows "No other agents" when every agent is a member', () => {
     renderPicker({ memberIds: new Set(['jim', 'mars', 'judge']) })
-    expect(screen.getByText('Every agent is already on this team.')).toBeInTheDocument()
+    expect(screen.getByText('No other agents')).toBeInTheDocument()
   })
 
   it('shows "No matching agents." when a search matches nothing', async () => {
@@ -165,6 +167,6 @@ describe('AddAgentPicker — Admin standalone-operator exclusion (ADR-090 FR-001
   it('when admin is the only non-member agent, the picker shows the empty state, not admin', () => {
     renderPicker({ agents: [JIM, ADMIN], memberIds: new Set(['jim']) })
     expect(screen.queryByTestId(/team-add-agent-option-/)).not.toBeInTheDocument()
-    expect(screen.getByText('Every agent is already on this team.')).toBeInTheDocument()
+    expect(screen.getByText('No other agents')).toBeInTheDocument()
   })
 })

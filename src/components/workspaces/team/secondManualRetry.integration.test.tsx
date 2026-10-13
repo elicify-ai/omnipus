@@ -10,7 +10,7 @@
 // GREEN and mutation/proof-of-failability: deferred to a different CHECK agent.
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -106,6 +106,9 @@ async function serveHttp(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (method === 'GET' && path === `/api/v1/workspaces/${OTHER_WORKSPACE_ID}`) return jsonResponse(OTHER_WORKSPACE)
   if (method === 'GET' && path === `${WORKSPACE_PATH}/delegation`) return jsonResponse(DELEGATION)
   if (method === 'GET' && path === '/api/v1/agents') return jsonResponse([INITIAL_MEMBER, NEW_MEMBER, OTHER_MEMBER])
+  // WU-10 FR-102: other-workspace labels require this additional read, with
+  // an exact typed fixture. This is not a fallback for unspecified HTTP calls.
+  if (method === 'GET' && path === '/api/v1/workspaces') return jsonResponse([INITIAL_WORKSPACE, OTHER_WORKSPACE])
   if (method === 'GET' && path === '/api/v1/state') return jsonResponse(SIGNED_IN)
   if (method === 'GET' && ['/api/v1/providers', '/api/v1/skills'].includes(path)) return jsonResponse([])
   if (method === 'GET' && path === '/api/v1/activity') return jsonResponse({ events: [] })
@@ -185,6 +188,9 @@ function assertSourceRetained(presentation: Presentation, router?: TeamRouter, w
 
 async function assertMembers(ids: string[]) {
   expect(await screen.findByRole('heading', { name: 'Team & delegation' })).toBeVisible()
+  // WU-10 FR-102 / BDD-12.3: explicitly open Graph before keeping every
+  // retained-node, editor-usability and repeated-retry assertion unchanged.
+  fireEvent.click(await screen.findByRole('radio', { name: /^Graph$/i }))
   expect(screen.getByRole('button', { name: 'Add agent' })).toBeEnabled()
   await waitFor(() => {
     const actualIds = Array.from(screen.getByTestId('team-graph-canvas').querySelectorAll('.react-flow__node[data-id]'), (node) => node.getAttribute('data-id'))
