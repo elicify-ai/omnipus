@@ -49,10 +49,10 @@ Omnipus provides these four memory tools. Which an agent can use depends on its 
 With Auto recap on (Settings → Memory; it is on by default on a new install):
 
 1. A session closes after it has been idle for the timeout you set — 30 minutes by default. After a gateway restart, any session that never got a recap gets one then, spread out a few per minute.
-2. A background model call summarizes the conversation: a recap of at most 150 words, up to five wins, and up to five items to improve.
-3. The recap is written to the agent's private room and injected into its next session. The retrospective is filed under its date and appears in `recall_memory` results.
+2. A background model call summarizes the conversation: a recap of at most 150 words, up to five wins, up to five items to improve, and up to five items worth remembering.
+3. The recap, followed by any items worth remembering, is written to the agent's private room (`last-session.md`) and injected into its next session. If that write fails, no retrospective is filed, so the session still counts as not recapped and the next recap pass retries it. The retrospective is filed under its date and appears in `recall_memory` results.
 4. If the summary call fails, the most recent user messages are carried forward word for word, and the file is marked as a fallback — the session is not silently forgotten.
-5. The summary also proposes items worth remembering long-term. Nothing from that list is saved automatically; the agent still has to call `remember` for anything it wants to keep.
+5. The items worth remembering reach the agent's next session through `last-session.md`, so a fact you gave in the last conversation is still in front of the agent. They are not saved as notes: only the agent's `remember` tool creates a note. Each recap replaces `last-session.md`, so the carried items last until the next recap is written; a note made with `remember` stays.
 
 Delegated sub-task sessions never get a recap — only real conversations do.
 

@@ -127,7 +127,21 @@ func TestCreateAgent_EmptyOrOmittedColorDefaultsToPewter(t *testing.T) {
 func TestCreateAgent_SchemaSaysColorIsOptional(t *testing.T) {
 	deps, _ := newTestDepsWithHome(t)
 	tool := systools.NewAgentCreateTool(deps)
-	required, _ := tool.Parameters()["required"].([]string)
+	// Instrument check: the loop below proves "color" is absent only if the list
+	// was actually read. A type change (for example to []any) would make the
+	// comma-ok assertion fail quietly and the loop see nothing, passing for any
+	// content. name is required today, so a list that was read must contain it.
+	required, ok := tool.Parameters()["required"].([]string)
+	if !ok {
+		t.Fatalf("the required list is not a []string: %T", tool.Parameters()["required"])
+	}
+	hasName := false
+	for _, r := range required {
+		hasName = hasName || r == "name"
+	}
+	if !hasName {
+		t.Fatalf("instrument check: name must be in the required list that was read, got %v", required)
+	}
 	for _, r := range required {
 		if r == "color" {
 			t.Fatalf("color must not be in the required list: %v", required)

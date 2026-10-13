@@ -76,7 +76,11 @@ func TestConsole_BidiAndZeroWidthControls_AreEscapedEverywhere(t *testing.T) {
 // Instrument control: ordinary non-ASCII text next to the escaped set must not be
 // touched - the escaping is a precise list, not "everything above U+007F".
 func TestConsole_OrdinaryUnicodeTextIsUnchanged(t *testing.T) {
-	const text = "zażółć gęślą jaźń - 日本語 - emoji \U0001F600 - ‐ dash"
+	// Arabic and Hebrew are right-to-left scripts written as plain letters, with
+	// no bidi control characters: a future widening of the escaped set must not
+	// touch them.
+	const text = "zażółć gęślą jaźń - 日本語 - emoji \U0001F600 - ‐ dash - " +
+		"مرحبا بالعالم - שלום עולם"
 	got := captureConsole(t, func() { Info(text) })
 	if !strings.Contains(got, text) {
 		t.Errorf("ordinary Unicode text must pass through unchanged; got %q", got)

@@ -128,6 +128,30 @@ func (h *WSHandler) announceClearHeld(sessionID, transcriptEntryID string) {
 	}, nil)
 }
 
+// releaseClearHeld ends the recorded "held" state of a /clear the server has
+// handed on (the stop settled and the /clear is queued as the next turn). Without
+// it a client that retries the /clear's id after it was applied would be answered
+// "held" again, because nothing else moves a /clear row on. Only a still-held row
+// moves, and only to "working" in the record: a not-performed report that raced
+// ahead stays the terminal "failed", and no frame is published (the clear marker,
+// or the failed frame, is how a live tab learns the outcome).
+func (h *WSHandler) releaseClearHeld(sessionID, transcriptEntryID string) {
+	if h == nil || h.agentLoop == nil {
+		return
+	}
+	clientID, _ := h.clientMessageIDLookup(sessionID, transcriptEntryID)
+	if clientID == "" {
+		slog.Warn("ws: a released /clear could not be found; a retry of it would still read as held",
+			"session_id", sessionID, "entry_id", transcriptEntryID)
+		return
+	}
+	h.heldTickMu.Lock()
+	defer h.heldTickMu.Unlock()
+	if h.acceptedMessageState(sessionID, clientID) == "held" {
+		h.setAcceptedMessageState(sessionID, clientID, "working")
+	}
+}
+
 // clientMessageIDOf returns the client_message_id the archived entry messageID
 // was persisted with, or "" when it had none or cannot be read.
 func (h *WSHandler) clientMessageIDOf(sessionID, messageID string) string {

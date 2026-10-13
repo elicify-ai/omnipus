@@ -34,8 +34,8 @@ const (
 // transient: nothing says otherwise.
 func (e *StreamProviderError) Kind() StreamErrorKind {
 	code := strings.ToLower(strings.TrimSpace(e.Code))
-	if code == "null" {
-		code = "" // a JSON null that reached here as text is an absent code
+	if code == "null" || code == "0" {
+		code = "" // a JSON null that reached here as text, or a numeric 0, is an absent code
 	}
 	msg := strings.ToLower(e.Message)
 	if n, err := strconv.Atoi(code); err == nil {

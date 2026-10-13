@@ -57,6 +57,54 @@ func (al *AgentLoop) notifyClearHeld(msg bus.InboundMessage) {
 	(*hook)(sessionID, entryID)
 }
 
+// ClearReleasedFunc receives the session and the transcript entry id of a /clear
+// the server was holding and has now handed on: the running reply has stopped
+// and the /clear is queued as the next turn. The hold is over; whether the clear
+// then succeeds is reported by its marker row, and a failure by the not-performed
+// report.
+type ClearReleasedFunc func(sessionID, transcriptEntryID string)
+
+// SetClearReleasedHook installs the single receiver (the gateway's WS handler, at
+// construction). Nil removes it.
+func (al *AgentLoop) SetClearReleasedHook(fn ClearReleasedFunc) {
+	if al == nil {
+		return
+	}
+	if fn == nil {
+		al.clearReleasedHook.Store(nil)
+		return
+	}
+	al.clearReleasedHook.Store(&fn)
+}
+
+// notifyClearReleased reports that msg's held /clear is no longer held, so its
+// recorded state does not stay "held" for a client that retries the same id. A
+// message from another channel has no web row and is skipped quietly; a web
+// message that cannot be reported is logged.
+func (al *AgentLoop) notifyClearReleased(msg bus.InboundMessage) {
+	if al == nil {
+		return
+	}
+	if msg.Channel != "" && msg.Channel != "webchat" {
+		return
+	}
+	hook := al.clearReleasedHook.Load()
+	sessionID := strings.TrimSpace(msg.SessionID)
+	entryID := strings.TrimSpace(msg.TranscriptEntryID)
+	if hook == nil || sessionID == "" || entryID == "" {
+		slog.Warn("agent: a released /clear could not be reported to its chat row; a retry of it would still read as held",
+			"session_id", sessionID, "entry_id", entryID, "receiver_installed", hook != nil)
+		return
+	}
+	(*hook)(sessionID, entryID)
+}
+
+// NotifyClearReleasedForTest drives the receiver the way the worker does, for the
+// gateway's wiring test.
+func (al *AgentLoop) NotifyClearReleasedForTest(sessionID, transcriptEntryID string) {
+	al.notifyClearReleased(bus.InboundMessage{SessionID: sessionID, TranscriptEntryID: transcriptEntryID})
+}
+
 // NotifyClearHeldForTest drives the receiver the way the worker does, for the
 // gateway's wiring test.
 func (al *AgentLoop) NotifyClearHeldForTest(sessionID, transcriptEntryID string) {

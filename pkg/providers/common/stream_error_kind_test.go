@@ -10,6 +10,8 @@ func TestStreamProviderError_Kind(t *testing.T) {
 		{"server_error", "Provider disconnected unexpectedly", StreamErrorTransient},
 		{"", "", StreamErrorTransient},
 		{"null", "Provider returned error", StreamErrorTransient}, // R3-SRV-SFH-04: a JSON null that reached Kind as text
+		{"0", "Provider returned error", StreamErrorTransient},    // R4-SRV-SFH-01: a numeric 0 is an absent code, like null
+		{"0", "Insufficient credits", StreamErrorBilling},         // control: a zero code does not hide what the message says
 		{"overloaded_error", "Overloaded", StreamErrorTransient},
 		{"incomplete_stream", "the stream ended before message_stop", StreamErrorTransient},
 		{"503", "unavailable", StreamErrorTransient},

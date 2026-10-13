@@ -351,30 +351,51 @@ func TestLedger_MarkDeliveredFirst_ReportsThePriorCaptureOnceAndNeverMarksOnAFai
 	}
 }
 
-// R3 N1: a request recorded but not woken is marked held after the fact.
+// R3 N1 / R4-SRV-CR-02: a request recorded but not woken is marked held after
+// the fact; the answer says whether the sender may be told "waiting".
 func TestLedger_MarkHeld_SetsHeldOnceAndNeverResurrectsADeliveredRequest(t *testing.T) {
-	l, _ := newLedger(t, "recv")
+	l, dir := newLedger(t, "recv")
 	if err := l.Put(capture("recv")); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.MarkHeld("recv", "q1"); err != nil {
-		t.Fatal(err)
+	lines := func() int {
+		data, err := os.ReadFile(filepath.Join(dir, "recv", ledgerFileName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Count(string(data), "\n")
+	}
+	before := lines()
+	held, err := l.MarkHeld("recv", "q1")
+	if err != nil || !held {
+		t.Fatalf("first MarkHeld = held %v err %v, want held", held, err)
 	}
 	got, ok, err := l.Get("recv", "q1")
 	if err != nil || !ok || !got.Held {
 		t.Fatalf("after MarkHeld: %+v ok=%v err=%v, want Held", got, ok, err)
 	}
-	if _, _, err := l.MarkDeliveredFirst("recv", "q1"); err != nil {
+	if lines() != before+1 {
+		t.Fatalf("the first MarkHeld must append exactly one record: %d -> %d", before, lines())
+	}
+	held, err = l.MarkHeld("recv", "q1")
+	if err != nil || !held {
+		t.Fatalf("repeat MarkHeld = held %v err %v, want still held", held, err)
+	}
+	if lines() != before+1 {
+		t.Fatalf("a repeat MarkHeld must append nothing: %d lines, want %d", lines(), before+1)
+	}
+	if _, _, err = l.MarkDeliveredFirst("recv", "q1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.MarkHeld("recv", "q1"); err != nil {
-		t.Fatal(err)
+	held, err = l.MarkHeld("recv", "q1")
+	if err != nil || held {
+		t.Fatalf("MarkHeld after delivery = held %v err %v, want not held", held, err)
 	}
 	got, _, _ = l.Get("recv", "q1")
 	if !got.Delivered {
 		t.Fatalf("MarkHeld after delivery must not clear Delivered: %+v", got)
 	}
-	if err := l.MarkHeld("recv", "never-captured"); err != nil {
-		t.Fatalf("an unknown request is not an error: %v", err)
+	if held, err := l.MarkHeld("recv", "never-captured"); err != nil || held {
+		t.Fatalf("an unknown request is not an error and not held: held %v err %v", held, err)
 	}
 }
