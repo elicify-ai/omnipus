@@ -1,0 +1,30 @@
+title: RoomMessageRequest
+description: >
+  Body of POST /api/v1/rooms/{id}/messages (spec omnipus-system-agent K26;
+  FR-166, §6.13). `mentions` come from the picker and are authoritative;
+  typed text resolves only by §6.13's exact-name rule. The recorded entry
+  arrives over the WebSocket as room_entry, carrying the same
+  client_message_id.
+type: object
+required:
+  - client_message_id
+  - text
+  - mentions
+additionalProperties: false
+properties:
+  client_message_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  text:
+    type: string
+    minLength: 1
+    maxLength: 5242880
+  mentions:
+    type: array
+    maxItems: 256
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+    description: Agent ids picked in the @-picker, or the reserved value `all`.

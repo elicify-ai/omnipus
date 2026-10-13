@@ -1,0 +1,62 @@
+title: RoomMetaFrame
+description: >
+  Server → client (spec omnipus-system-agent K45). The room's members,
+  mutes, pause state, allocated cost or read-only state changed. THIS FILE
+  EXISTS for the Constraint #8 5-step process and the
+  pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
+  schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
+  Landing 1, WU-15 produces it.
+type: object
+required:
+  - type
+  - room_id
+  - seq
+  - members
+  - muted
+  - paused
+  - generation
+  - allocated_cost_micro_usd
+  - allocated_cost_unpriced
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: room_meta
+  room_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+  members:
+    type: array
+    maxItems: 256
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+  muted:
+    type: array
+    maxItems: 256
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+  paused:
+    type: boolean
+  generation:
+    type: integer
+    format: int64
+    minimum: 0
+  read_only_reason:
+    type: string
+    minLength: 1
+    maxLength: 200
+  allocated_cost_micro_usd:
+    type: integer
+    format: int64
+    minimum: 0
+  allocated_cost_unpriced:
+    type: boolean

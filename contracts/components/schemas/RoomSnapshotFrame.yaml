@@ -1,0 +1,82 @@
+title: RoomSnapshotFrame
+description: >
+  Server → client (spec omnipus-system-agent K45, K26, K27). The answer to
+  attach_room: the room entries after the cursor in order, the members,
+  mutes, member states, pause state, generation and allocated cost.
+  `complete` is false when the server could not serve every entry after the
+  cursor. THIS FILE EXISTS for the Constraint #8 5-step process and the
+  pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
+  schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
+  Landing 1, WU-15 produces it.
+type: object
+required:
+  - type
+  - room_id
+  - seq
+  - entries
+  - members
+  - muted
+  - member_states
+  - paused
+  - generation
+  - allocated_cost_micro_usd
+  - allocated_cost_unpriced
+  - complete
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: room_snapshot
+  room_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  seq:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Room stream position this snapshot is current to.
+  entries:
+    type: array
+    maxItems: 10000
+    items:
+      $ref: './RoomEntry.yaml'
+    description: Entries after the cursor, in seq order. Never null.
+  members:
+    type: array
+    maxItems: 256
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+  muted:
+    type: array
+    maxItems: 256
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+  member_states:
+    type: array
+    maxItems: 10000
+    items:
+      $ref: './RoomDeliveryState.yaml'
+    description: Current delivery states of outstanding requests. Never null.
+  paused:
+    type: boolean
+  generation:
+    type: integer
+    format: int64
+    minimum: 0
+  read_only_reason:
+    type: string
+    minLength: 1
+    maxLength: 200
+  allocated_cost_micro_usd:
+    type: integer
+    format: int64
+    minimum: 0
+  allocated_cost_unpriced:
+    type: boolean
+  complete:
+    type: boolean
