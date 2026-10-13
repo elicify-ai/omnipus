@@ -11,6 +11,7 @@ type (
 	ToolCall               = protocoltypes.ToolCall
 	FunctionCall           = protocoltypes.FunctionCall
 	LLMResponse            = protocoltypes.LLMResponse
+	ResponseDiagnostics    = protocoltypes.ResponseDiagnostics
 	UsageInfo              = protocoltypes.UsageInfo
 	Message                = protocoltypes.Message
 	ToolDefinition         = protocoltypes.ToolDefinition

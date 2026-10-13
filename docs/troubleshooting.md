@@ -118,6 +118,14 @@ A local or self-hosted model's endpoint did not report how much it can read at o
 
 The model cannot call tools, and Omnipus sends its tool list with every request, so the request is rejected outright. Small open models often lack tool support. In the model picker, the **Recommended for chat** mark appears only on models that can call tools. Change the default in **Settings → Providers**, or edit `agents.defaults.default_model` in `config.json`.
 
+### "model … is offered by several providers; choose the provider"
+
+You picked a model in the chat's model picker, which sends only the model name, and more than one connected provider offers that name. Omnipus does not pick an account for this switch, and the reply uses the agent's current model. Choose the model together with its provider in the agent's model setting instead, or remove the provider you do not want to use. Pin agents' models to a provider in general: a model saved without one can start on the default provider when its name is ambiguous.
+
+### "The model returned an empty response"
+
+The model sent back no text and no tool call, even after one automatic retry. Omnipus does not switch to a fallback model for this, because an empty answer usually points to a defect rather than an outage. The gateway log has one warning line starting `LLM returned empty response after retry`. It names the provider and model, the finish reason, token counts, and the shape of what came back: stream event types with counts, output item types, status and incomplete reason. It never includes message content. Include that line when you report the problem.
+
 ### 400 "invalid model ID" or a rejected provider
 
 The `model` value reaches the provider exactly as written; on OpenRouter, IDs carry a vendor prefix (`z-ai/glm-5.2`, not `glm-5.2`). The `provider` value must be an ID the catalog knows, such as `openrouter` or `anthropic`. A working entry:

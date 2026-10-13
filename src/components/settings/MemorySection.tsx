@@ -10,7 +10,7 @@ import { ModelSelector } from '@/components/ui/model-selector'
 import { Switch } from '@/components/ui/switch'
 import { fetchMemorySettings, updateMemorySettings, fetchProviders, getErrorMessage } from '@/lib/api'
 import type { MemorySettings, FallbackModel } from '@/lib/api'
-import { useModelToProvider } from '@/lib/agents/modelToProvider'
+import { useModelToProvider, resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
 import { isProviderUsable } from '@/lib/providerStatus'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
@@ -158,10 +158,20 @@ export function MemorySection(): React.ReactElement {
 
   const [form, setForm] = useState<FormState>(DEFAULT_SETTINGS)
 
+  // H6 R2 (review round 1 — F2): the provider row the recap PRIMARY pick was
+  // made under, kept in UI-only state because `recap_model` is a bare slug
+  // on the wire (no provider sibling — tracking issue #1291). Without it, a
+  // pick under the second provider was immediately replaced by the display
+  // lookup's guess. Reset on hydration (the saved slug carries no provider
+  // record) and on free-text edits; an ambiguous saved value then shows NO
+  // chosen row instead of a first-listed guess.
+  const [recapPickedProvider, setRecapPickedProvider] = useState<string | null>(null)
+
   const { state: saveState, setState: setSaveState, errorMessage, setErrorMessage } = useSaveStatus()
 
   useEffect(() => {
     if (!data) return
+    setRecapPickedProvider(null)
     setForm({
       auto_recap_enabled: data.auto_recap_enabled ?? DEFAULT_SETTINGS.auto_recap_enabled,
       idle_timeout_minutes: data.idle_timeout_minutes ?? DEFAULT_SETTINGS.idle_timeout_minutes,
@@ -210,10 +220,15 @@ export function MemorySection(): React.ReactElement {
   }
 
   // Fallback chain helpers — mirrors AgentProfile's pattern
-  function addFallbackFromSelector(modelSlug: string) {
+  // H6 (provider hotfix 2026-10-13): providerOverride carries the provider
+  // row the user actually picked under (onPairChange fires after onChange
+  // for the same pick) — the first-wins modelToProvider lookup cannot tell
+  // two providers serving the same slug apart. First call seeds via the
+  // lookup; the second patches to the exact pick.
+  function addFallbackFromSelector(modelSlug: string, providerOverride?: string) {
     const trimmed = modelSlug.trim()
     if (!trimmed) return
-    const knownProvider = modelToProvider(trimmed)
+    const knownProvider = providerOverride || modelToProvider(trimmed)
     if (!knownProvider) {
       addToast({
         message: `"${trimmed}" isn't listed by any connected provider — saving anyway, but the fallback may not work.`,
@@ -221,7 +236,13 @@ export function MemorySection(): React.ReactElement {
       })
     }
     setField('recap_fallback_models', (() => {
-      if (form.recap_fallback_models.some((f) => f.model === trimmed)) return form.recap_fallback_models
+      const existing = form.recap_fallback_models.find((f) => f.model === trimmed)
+      if (existing) {
+        if (!providerOverride || existing.provider === providerOverride) return form.recap_fallback_models
+        return form.recap_fallback_models.map((f) =>
+          f.model === trimmed ? { ...f, provider: providerOverride } : f,
+        )
+      }
       return [...form.recap_fallback_models, { model: trimmed, provider: knownProvider || undefined }]
     })())
   }
@@ -403,7 +424,8 @@ export function MemorySection(): React.ReactElement {
             <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Summarization model</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
               Recap runs a background summarization call — a fast, cheap model is recommended.
-              Leave empty to use the default model.
+              Leave empty to use the default model. The provider shown next to the model is
+              display-only for this setting: recap runs are routed by the model name.
             </p>
           </div>
 
@@ -419,8 +441,23 @@ export function MemorySection(): React.ReactElement {
             <ModelSelector
               models={availableModels}
               value={form.recap_model}
-              onChange={(v) => setField('recap_model', v)}
-              onPairChange={({ model }) => setField('recap_model', model)}
+              // H6 R2 (review round 1 — F2): the explicitly picked provider
+              // wins; a saved/free-typed slug resolves a row only when exactly
+              // one provider serves it (recap_model is a bare slug on the
+              // wire — no provider sibling, issue #1291). An ambiguous saved
+              // value shows no chosen row instead of a first-listed guess.
+              valueProvider={recapPickedProvider ?? resolveUniqueModelProvider(usableProviders, form.recap_model)}
+              onChange={(v) => {
+                // A manual (non-grouped) edit has no provider identity —
+                // drop any remembered pick; a grouped pick's onPairChange
+                // re-sets it in the same tick.
+                setRecapPickedProvider(null)
+                setField('recap_model', v)
+              }}
+              onPairChange={({ model, provider }) => {
+                setRecapPickedProvider(provider || null)
+                setField('recap_model', model)
+              }}
               placeholder="Default model"
               providerGroups={providerGroups}
               triggerTestId="recap-model-trigger"
@@ -527,6 +564,9 @@ export function MemorySection(): React.ReactElement {
                 models={availableModels}
                 value=""
                 onChange={(v) => addFallbackFromSelector(v)}
+                // H6: the grouped pick's exact provider overrides the
+                // first-wins lookup — see addFallbackFromSelector.
+                onPairChange={({ model: m, provider: p }) => addFallbackFromSelector(m, p)}
                 placeholder="Add fallback model…"
                 providerGroups={providerGroups}
                 triggerTestId="recap-fallback-add-trigger"

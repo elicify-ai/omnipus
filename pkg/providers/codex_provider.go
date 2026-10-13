@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -123,15 +124,19 @@ func (p *CodexProvider) Chat(
 	defer stream.Close()
 
 	var resp *responses.Response
+	var streamed codexStreamedOutput
 	for stream.Next() {
 		evt := stream.Current()
-		if evt.Type == "response.completed" || evt.Type == "response.failed" ||
-			evt.Type == "response.incomplete" {
+		streamed.countEvent(evt.Type)
+		switch evt.Type {
+		case "response.completed", "response.failed", "response.incomplete":
 			evtResp := evt.Response
 			if evtResp.ID != "" {
 				evtRespCopy := evtResp
 				resp = &evtRespCopy
 			}
+		case "response.output_item.done":
+			streamed.addItem(evt.OutputIndex, evt.Item)
 		}
 	}
 	err := stream.Err()
@@ -177,7 +182,86 @@ func (p *CodexProvider) Chat(
 		return nil, fmt.Errorf("codex API call: stream ended without completed response")
 	}
 
-	return orc.ParseResponseFromStruct(resp)
+	source := streamed.fillEmptyOutput(resp, resolvedModel)
+	parsed, err := orc.ParseResponseFromStruct(resp)
+	if parsed != nil {
+		parsed.Diagnostics = streamed.diagnostics(resp, source)
+	}
+	return parsed, err
+}
+
+// codexStreamedOutput collects the output items as the stream delivers them
+// (provider hotfix H5). CAPTURED 2026-10-13 from the real
+// chatgpt.com/backend-api/codex stream (gpt-6.1-sol): whenever the request
+// carries tools, the backend closes with a `response.completed` whose
+// `output` is EMPTY, and the answer — a message, or a function_call — exists
+// only in the earlier `response.output_item.done` events. Reading only the
+// completed event dropped the whole answer ("The model returned an empty
+// response"). A no-tools request still carries its output in the completed
+// event, which is why a tiny scratch agent kept working.
+type codexStreamedOutput struct {
+	items   map[int64]responses.ResponseOutputItemUnion
+	ordered []int64
+	events  map[string]int
+}
+
+func (s *codexStreamedOutput) countEvent(eventType string) {
+	if s.events == nil {
+		s.events = make(map[string]int)
+	}
+	s.events[eventType]++
+}
+
+// diagnostics is the content-free shape summary the agent loop logs when an
+// answer comes back empty (provider hotfix H5): event types and counts,
+// output item types, where the output came from, status and incomplete
+// reason. No text, no arguments, no identifiers beyond item TYPES.
+func (s *codexStreamedOutput) diagnostics(resp *responses.Response, source string) *ResponseDiagnostics {
+	d := &ResponseDiagnostics{EventCounts: s.events, OutputSource: source}
+	if resp != nil {
+		for _, item := range resp.Output {
+			d.OutputItemTypes = append(d.OutputItemTypes, item.Type)
+		}
+		d.Status = string(resp.Status)
+		d.IncompleteReason = resp.IncompleteDetails.Reason
+	}
+	return d
+}
+
+func (s *codexStreamedOutput) addItem(index int64, item responses.ResponseOutputItemUnion) {
+	if s.items == nil {
+		s.items = make(map[int64]responses.ResponseOutputItemUnion)
+	}
+	if _, seen := s.items[index]; !seen {
+		s.ordered = append(s.ordered, index)
+	}
+	s.items[index] = item
+}
+
+// fillEmptyOutput gives resp the streamed output items when — and only
+// when — the terminal event carried none. A non-empty terminal output stays
+// authoritative, so nothing is ever counted twice. Items are placed in
+// output_index order.
+//
+// It returns where the response's output now comes from: "completed",
+// "output_item.done", or "none".
+func (s *codexStreamedOutput) fillEmptyOutput(resp *responses.Response, model string) string {
+	if resp == nil {
+		return "none"
+	}
+	if len(resp.Output) > 0 {
+		return "completed"
+	}
+	if len(s.items) > 0 {
+		sort.Slice(s.ordered, func(i, j int) bool { return s.ordered[i] < s.ordered[j] })
+		for _, idx := range s.ordered {
+			resp.Output = append(resp.Output, s.items[idx])
+		}
+		logger.DebugCF("provider.codex", "Completed event carried no output; using streamed output items",
+			map[string]any{"resolved_model": model, "items": len(s.items)})
+		return "output_item.done"
+	}
+	return "none"
 }
 
 func (p *CodexProvider) GetDefaultModel() string {

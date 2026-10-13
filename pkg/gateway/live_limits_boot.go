@@ -106,8 +106,9 @@ func primeUnknownWindows(al windowReloader) {
 		if !ok || inst == nil || !inst.WindowUnknown {
 			continue
 		}
-		provider := agentPrimaryProviderID(cfg, ac)
-		model := agentPrimaryModelID(cfg, ac)
+		// H4: resolve a provider-less stored model to the provider it
+		// runs on, so its unknown window is primed like any other.
+		provider, model := agent.RuntimeWindowPair(cfg, agentPrimaryProviderID(cfg, ac), agentPrimaryModelID(cfg, ac))
 		if provider == "" || model == "" {
 			continue
 		}
