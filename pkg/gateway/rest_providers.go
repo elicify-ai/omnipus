@@ -239,7 +239,9 @@ func (a *restAPI) aggregateProviderRows(cfg *config.Config) providerAggregate {
 		// as "connected". Every row with an api_key_ref now re-checks the
 		// store; a missing or unreadable reference is recorded as the row's
 		// cred error — naming the exact ref — and the stale env value is never
-		// promoted to a key.
+		// promoted to a key. An entry that EXISTS but stores an empty value is
+		// "not configured" (disconnected), the pre-#1277 semantics — not an
+		// error state.
 		if _, hasKey := agg.apiKeys[providerName]; !hasKey && m.APIKeyRef != "" {
 			resolved := m.APIKey()
 			if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
@@ -247,9 +249,6 @@ func (a *restAPI) aggregateProviderRows(cfg *config.Config) providerAggregate {
 				agg.credErrors[providerName] = providerCredentialRefError(m.APIKeyRef, err)
 			} else if strings.TrimSpace(v) != "" {
 				resolved = v
-			} else {
-				// Present in the store but empty — as unusable as absent.
-				agg.credErrors[providerName] = providerCredentialRefError(m.APIKeyRef, &credentials.NotFoundError{Name: m.APIKeyRef})
 			}
 			if resolved != "" && agg.credErrors[providerName] == "" {
 				agg.apiKeys[providerName] = resolved
