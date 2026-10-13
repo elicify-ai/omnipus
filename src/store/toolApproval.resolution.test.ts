@@ -1,3 +1,5 @@
+// L1 amendment §1.2 R6 / §1.5: root chat replaces modal workspace scope.
+// All resolution memory, stub, deduplication and workspace metadata assertions retained.
 // Store-level tests for server-confirmed approval resolution and workspace
 // scope (UAT 2026-09-14: a resolved approval's dialog stayed stuck and showed
 // in other workspaces). See src/store/toolApproval.ts's header for the design.
@@ -6,10 +8,10 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import {
   useToolApprovalStore,
-  isApprovalInScope,
   RESOLVED_APPROVAL_MEMORY,
 } from './toolApproval'
 import type { SessionStateFrame, ToolApprovalRequiredFrame } from '@/lib/ws'
+import * as approvalModule from './toolApproval'
 
 function requiredFrame(
   id: string,
@@ -144,13 +146,18 @@ describe('workspace scope', () => {
     expect(useToolApprovalStore.getState().queue[0].workspaceId).toBe('ws-b')
   })
 
+  // Amendment §1.2 R6: "chat whose session id equals root_session_id
+  // (or session_id when root_session_id is omitted)". Workspace metadata is
+  // still preserved above, but no longer grants visibility by itself.
   it.each([
-    { approvalWs: 'ws-a', active: 'ws-a', shown: true, why: 'same workspace' },
-    { approvalWs: 'ws-a', active: 'ws-b', shown: false, why: 'another workspace' },
-    { approvalWs: undefined, active: 'ws-b', shown: true, why: 'approval belongs to no workspace' },
-    { approvalWs: 'ws-a', active: null, shown: true, why: 'no active workspace (all workspaces)' },
-    { approvalWs: undefined, active: null, shown: true, why: 'neither side scoped' },
-  ])('isApprovalInScope: $why → $shown', ({ approvalWs, active, shown }) => {
-    expect(isApprovalInScope({ workspaceId: approvalWs }, active)).toBe(shown)
+    { sessionId: 'acting', rootSessionId: 'main-a', active: 'main-a', shown: true, why: 'owning root, even across workspaces' },
+    { sessionId: 'acting', rootSessionId: 'main-a', active: 'main-b', shown: false, why: 'another chat in the same workspace' },
+    { sessionId: 'acting', rootSessionId: undefined, active: 'acting', shown: true, why: 'omitted root uses acting session' },
+    { sessionId: 'acting', rootSessionId: 'main-a', active: null, shown: false, why: 'no viewed chat never grants global scope' },
+    { sessionId: 'acting', rootSessionId: undefined, active: null, shown: false, why: 'neither side workspace-scoped still needs a chat' },
+  ])('L1 §1.2 R6: owning-chat scope: $why → $shown', ({ sessionId, rootSessionId, active, shown }) => {
+    const api = approvalModule as unknown as { approvalChatId?: (entry: { sessionId: string; rootSessionId?: string }) => string }
+    expect(typeof api.approvalChatId, 'BLOCKED: approvalChatId not implemented — required by amendment R6 / K7').toBe('function')
+    expect(api.approvalChatId!({ sessionId, rootSessionId }) === active).toBe(shown)
   })
 })
