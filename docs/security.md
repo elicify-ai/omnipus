@@ -492,6 +492,17 @@ The application establishes its own protections on every install: its backups an
 
 Message previews are metadata-only: opening a preview issues a permission token that stores no message content. Every time a preview renders — the message view, each inline image — Omnipus fetches that piece fresh from your mail server within that one request, through the same shared connection pool and rate budget as the rest of the panel; nothing is kept after the request, the response is marked no-store, and remote images load only from the addresses that fetch recorded, only when you chose **Load images**. Attachments you open are fetched piece-by-piece rather than as whole messages, previews are capped at 25 MiB (use **Download** for larger files), and every preview control — session limits, logout revocation, identical "not found" answers — is unchanged. Files you explicitly **Save** from mail become ordinary workspace files under the normal workspace rules; the temporary-preview restrictions end at the save.
 
+## What child programs can see
+
+When Omnipus starts another program — the managed browser, a process hook, a git command, a connected (MCP) server, a media transcoder, a model provider's command-line tool, or any command an agent runs — that program does **not** receive Omnipus's environment. It starts from a fixed allowlist instead: the basics a program needs to run (`PATH`, `HOME`, `USER`, terminal type, language and locale settings, temp folder, proxy settings), your `XDG_*` folder settings, and anything you explicitly forward by naming it with an `OMNIPUS_CHILD_` prefix (for example `OMNIPUS_CHILD_MYTOOL_TOKEN`). Everything else — saved provider keys, mailbox passwords, the master key, any unrecognised name — is left out. If a feature needs to give a child one specific extra value, that value is named explicitly in the code that starts the child, never passed wholesale.
+
+Two named exceptions, both Omnipus's own components rather than outside programs:
+
+- **Gateway restart.** When the command line (`omnipus start`) or the desktop launcher starts the gateway in the background, the new gateway receives its own data-directory location and, if you started the current process with them, the master-key or key-file value and the web token — those are its own unlock and login values, and without them a headless restart could not open your saved credentials. No other value is forwarded.
+- **External CLI workers.** The external command-line workers (Claude Code, Codex, opencode runs inside an isolated workspace) also receive the provider login values their CLI needs — for example `ANTHROPIC_API_KEY` or `CODEX_HOME` — because their job is to authenticate to your model provider. This is the documented runner credential path; the general gateway secrets stay excluded there too.
+
+One consequence worth knowing: if you log a CLI provider in through an environment variable (for example `OPENAI_API_KEY` for `codex exec` used as a model provider), that variable no longer reaches the CLI. Use the CLI's own stored login instead (for codex, `codex login`, which saves under your home folder — a location the allowlist passes through).
+
 ## Limits and things to watch
 
 - Security controls reduce risk but do not make every agent action safe. Read approval details before allowing a request.

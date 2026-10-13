@@ -100,21 +100,12 @@ func SpawnBackgroundChild(
 		cmd.Dir = workspaceDir
 	}
 
-	// Merge proxy + npm-cache vars via the shared mergeEnv helper.
-	// mergeEnv appends injected vars after env so they take precedence.
-	merged := mergeEnv(env, limits)
-
-	// PORT must override everything, including any PORT the caller put in env.
-	// Append last so it wins under POSIX first-seen-wins lookup.
-	if port > 0 {
-		merged = append(merged, fmt.Sprintf("PORT=%d", port))
-	}
-
-	// HOST=127.0.0.1 forces dev servers that default to 0.0.0.0 to bind
-	// loopback. The reverse proxy is the only external-access path.
-	merged = append(merged, "HOST=127.0.0.1")
-
-	cmd.Env = merged
+	// Merge proxy + npm-cache vars via the shared mergeEnv helper (whose base
+	// is the scrubbed child allowlist), then the port/host pins. FR-239: the
+	// child environment is exactly that — the allowlist base, the caller's env,
+	// the injected proxy/cache vars, and these two pins, in one unconditional
+	// assignment.
+	cmd.Env = append(mergeEnv(env, limits), bgPortHostAdditions(port)...)
 
 	// Stdio: bind stdin to an empty reader, and route stdout/stderr to a
 	// log file inside the workspace so operators can debug a silently-dying
@@ -233,4 +224,22 @@ func SpawnBackgroundChild(
 	}
 
 	return cmd, nil
+}
+
+// bgPortHostAdditions names the two pins a background dev-server child gets on
+// top of mergeEnv's output, in the order they are appended there:
+//
+//	PORT — only when port > 0, and last-wins, so it overrides any PORT the
+//	       caller put in env (POSIX first-seen-wins lookup).
+//	HOST — 127.0.0.1 unconditionally, so dev servers that default to 0.0.0.0
+//	       bind loopback; the reverse proxy is the only external-access path.
+//
+// It is a function (not an inline append chain) so SpawnBackgroundChild's
+// final child-environment assignment is a single unconditional expression.
+func bgPortHostAdditions(port int32) []string {
+	additions := []string{}
+	if port > 0 {
+		additions = append(additions, fmt.Sprintf("PORT=%d", port))
+	}
+	return append(additions, "HOST=127.0.0.1")
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/chromedp/chromedp"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // ensureStarted retains the legacy background caller policy. It must be called
@@ -173,7 +174,10 @@ func probeChromiumBinaryWithTimeout(
 ) (ok bool, reason string) {
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	err := exec.CommandContext(probeCtx, path, "--version").Run()
+	// FR-239: the version probe child starts from the closed child allowlist.
+	probeCmd := exec.CommandContext(probeCtx, path, "--version")
+	probeCmd.Env = sandbox.ScrubGatewayEnv()
+	err := probeCmd.Run()
 	if err == nil {
 		return true, ""
 	}

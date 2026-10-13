@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // CodexCliProvider implements LLMProvider by wrapping the codex CLI as a subprocess.
@@ -57,6 +59,11 @@ func (p *CodexCliProvider) Chat(
 	args = append(args, "-") // read prompt from stdin
 
 	cmd := exec.CommandContext(ctx, p.command, args...)
+	// FR-239: the CLI child starts from the closed child allowlist. The
+	// CLI's own documented auth lives under HOME (e.g. ~/.codex/auth.json —
+	// see factory_provider.go), which the allowlist passes through; the
+	// gateway environment is never inherited wholesale.
+	cmd.Env = sandbox.ScrubGatewayEnv()
 	cmd.Stdin = bytes.NewReader([]byte(prompt))
 
 	var stdout, stderr bytes.Buffer

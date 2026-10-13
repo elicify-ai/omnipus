@@ -17,6 +17,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 )
@@ -37,8 +38,11 @@ type PipeOptions struct {
 	// deliberately never forces a headless / window-size / display choice.
 	Args []string
 
-	// Env is appended to os.Environ for the child (e.g. DISPLAY=:99,
-	// PULSE_SERVER=...). When empty the child inherits the parent environment.
+	// Env is appended to the child's scrubbed base environment
+	// (sandbox.ScrubGatewayEnv — the closed child allowlist, FR-239) for
+	// site-specific values such as DISPLAY=:99 or PULSE_SERVER=.... The raw
+	// gateway environment is never inherited; anything a child needs beyond
+	// the allowlist must be named here explicitly.
 	Env []string
 
 	// ModifyCmd runs against the *exec.Cmd just before Start, for process
@@ -256,9 +260,11 @@ func (l *launch) start(ctx context.Context) error {
 	l.tempDir = tempDir
 
 	cmd := exec.CommandContext(ctx, l.execPath, args...)
-	if len(l.opts.Env) > 0 {
-		cmd.Env = append(os.Environ(), l.opts.Env...)
-	}
+	// FR-239: the browser child starts from the closed child allowlist plus
+	// the caller's explicit PipeOptions.Env additions — never the raw gateway
+	// environment (the browser renders untrusted content and loads
+	// third-party extensions; it must not see gateway secrets).
+	cmd.Env = append(sandbox.ScrubGatewayEnv(), l.opts.Env...)
 	// Caller hook first (process attrs / capture); then cdppipe asserts
 	// Stderr and the pipe fds so they are always final regardless of what
 	// ModifyCmd did — matching PipeOptions.ModifyCmd's doc ("cdppipe owns

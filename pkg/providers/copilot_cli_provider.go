@@ -13,6 +13,8 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // CopilotCliProvider implements LLMProvider by driving the official GitHub
@@ -148,6 +150,10 @@ func (p *CopilotCliProvider) Chat(
 	}
 
 	cmd := exec.CommandContext(ctx, p.command, args...)
+	// FR-239: the CLI child starts from the closed child allowlist; the CLI's
+	// own documented auth lives under HOME, which the allowlist passes
+	// through. The gateway environment is never inherited wholesale.
+	cmd.Env = sandbox.ScrubGatewayEnv()
 	if p.workspace != "" {
 		cmd.Dir = p.workspace
 	}
