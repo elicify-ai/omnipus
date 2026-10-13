@@ -2,8 +2,7 @@
 // REAL: QueryClient, router, stores, HTTP client, WsConnection/parser/dispatcher.
 // DOUBLES: fetch and the browser WebSocket. No production helper is spied on.
 import type { ComponentType, ReactNode } from 'react'
-import { act } from 'react'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import {
   createMemoryHistory, createRootRoute, createRoute, createRouter,
