@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -153,13 +154,68 @@ func TestClearNotPerformed_IsFramedAsAFailedMessageStatus(t *testing.T) {
 // R2-S2-01: a refused /clear whose row cannot be signalled must never be silent.
 // With the SPA timer gone, "no failed frame" reads as "held", so every web case
 // that cannot publish the frame leaves a Warn naming the session and the entry.
-func captureSlogWarn(t *testing.T) *bytes.Buffer {
+//
+// R3-S5-PTA-05: slog.Default() is process-global, so a goroutine left over from
+// an earlier gateway test can log through this capture while the test reads it.
+// The buffer is therefore mutex-protected on BOTH sides (Write from the
+// handler, String from the test); a bare bytes.Buffer is a data race under -race.
+func captureSlogWarn(t *testing.T) *syncLogBuffer {
 	t.Helper()
-	var buf bytes.Buffer
+	buf := &syncLogBuffer{}
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
-	return &buf
+	return buf
+}
+
+// syncLogBuffer is a bytes.Buffer safe for concurrent writers and readers.
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// The capture must survive a log call racing the read. Under -race a plain
+// bytes.Buffer fails this test; the mutex-protected one does not.
+func TestCaptureSlogWarn_ConcurrentLogAndReadIsRaceFree(t *testing.T) {
+	logs := captureSlogWarn(t)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	logged := make(chan struct{})
+	go func() {
+		defer close(done)
+		first := true
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				slog.Warn("lingering goroutine from an earlier test", "k", "v")
+				if first {
+					first = false
+					close(logged)
+				}
+			}
+		}
+	}()
+	<-logged // the writer is running before the reads start, so they overlap its writes
+	for i := 0; i < 200; i++ {
+		_ = logs.String()
+	}
+	close(stop)
+	<-done
+	assert.Contains(t, logs.String(), "lingering goroutine from an earlier test")
 }
 
 func TestAnnounceClearNotPerformed_UnresolvableRowIsLoggedNotSilent(t *testing.T) {

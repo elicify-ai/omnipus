@@ -231,22 +231,17 @@ func TestHandleCancel_SecondClickOnAlreadyClaimedTurn_SendsNoAckFrame(t *testing
 			"ClaimCancel just lost the race) and must NOT produce another ack "+
 			"frame; doing so would over-signal (saw stages %v)", secondStages)
 
-	// R2-S5-07: the ack filter above made a wrongly-emitted "detached" from the
-	// SECOND click invisible — only graceful/hard were counted, so any other
-	// stage the second click published went unnoticed. The first click's own
-	// cascade legitimately publishes ONE "detached" on the hub and conn2 may or
-	// may not still be subscribed when it lands, so the honest bound is "at
-	// most the first click's one": a second click that emitted its own would
-	// make it two.
-	detachedSeen := 0
-	for _, stage := range secondStages {
-		if stage == "detached" {
-			detachedSeen++
-		}
-	}
-	assert.LessOrEqual(t, detachedSeen, 1,
-		"at most the FIRST click's cascade may be observed here; a second click must not publish a "+
-			"cancel_stage frame of its own (saw stages %v)", secondStages)
+	// R2-S5-07 / R3-S5-PTA-03 / R3-QA-04: the ack filter above made a wrongly
+	// emitted extra stage invisible (only graceful/hard were counted). conn2
+	// is not bound to the session, so it gets exactly one unsequenced copy of
+	// the report the SECOND click's own cascade publishes (ADR-091 I-6: every
+	// Stop reports) and nothing from the first click: measured with the second
+	// click removed, conn2 sees no stage at all. The earlier "at most one,
+	// maybe the first click's" bound could not tell this one report from a
+	// second stray frame (count 1 passed either way). Exactly one `detached`,
+	// and nothing else, is the whole expected output.
+	assert.Equal(t, []string{"detached"}, secondStages,
+		"the second click must publish exactly its own one detached report and no ack or other stage")
 
 	cancelCtx()
 }

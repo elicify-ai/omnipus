@@ -13,6 +13,8 @@
 #   3. a tier whose machine dies mid-run FAILS (tier job exit non-zero, OVERALL: FAIL)
 #   4. a machine we started that now carries ANOTHER dispatcher's marker is not stopped
 #   5. a machine we started that is running a gate (busy) at exit is not stopped
+#   6. the DEFAULT tier map (no CI_CLUSTER_TIERS): the shipped machine ids and gates per tier, a
+#      per-tier id override, and an explicitly EMPTY id skipping its tier while an UNSET one does not
 #
 # Usage: bash deploy/ci-worker/ci-cluster-selfcheck.sh   (exit 0 = all cases behave)
 set -uo pipefail
@@ -39,6 +41,9 @@ echo "$*" >> "$D/calls.log"
 arg() { local want="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$want" ] && { echo "$2"; return; }; shift; done; }
 case "$1 $2" in
   "machine status")
+    # Like the real flyctl (v0.4.104): `machine status <id> --app <name>` and nothing else. An
+    # unknown flag (the 2026-10-11 bug passed --json) is an error with NO state on stdout.
+    if [ "$#" -ne 5 ] || [ "$4" != "--app" ]; then echo "Error: unknown flag in: fly $*" >&2; exit 1; fi
     id="$3"; st=$(cat "$D/state-$id" 2>/dev/null)
     if [ -n "$st" ] && [ "$st" != "unreadable" ]; then printf 'Machine ID: %s\nState: %s\nHostStatus: ok\n' "$id" "$st"; fi
     exit 0 ;;
@@ -96,7 +101,7 @@ TIERS=$'go|mA|gofmt\nxplat|mB|cli-verb-guard'
 # 1. started-on-arrival machine is never touched; stopped-on-arrival one is claimed and stopped
 new_case c1; echo started > "$FAKE_DIR/state-mA"; echo stopped > "$FAKE_DIR/state-mB"
 run_cluster "$TIERS"
-[ "$RC" -eq 0 ] || fail "(1) expected exit 0, got $RC"
+[ "$RC" -eq 0 ] || fail "(1) expected exit 0, got $RC: $(grep -m1 'ERROR' "$OUT")"
 grep -q 'STOP mB' "$FAKE_DIR/stops.log" || fail "(1) the machine this run started (mB) was not stopped"
 grep -q 'STOP mA' "$FAKE_DIR/stops.log" && fail "(1) STOPPED a machine that was already running on arrival (mA)"
 grep -q 'machine start mA' "$FAKE_DIR/calls.log" && fail "(1) tried to start the already-running machine mA"
@@ -135,6 +140,49 @@ run_cluster "$TIERS"
 grep -q 'STOP mB' "$FAKE_DIR/stops.log" && fail "(5) stopped a machine that is running a gate"
 grep -q 'STOP mA' "$FAKE_DIR/stops.log" || fail "(5) control: the idle machine (mA) was not stopped"
 [ "$FAIL" -eq 0 ] && ok "(5) busy machine left running"
+
+# run_default <VAR=value>...: like run_cluster but with CI_CLUSTER_TIERS and the per-tier machine
+# variables UNSET (the default map), then the given assignments applied.
+run_default() {
+  OUT="$TMP/out.txt"
+  env -u CI_CLUSTER_TIERS -u CI_CLUSTER_GO_MACHINE -u CI_CLUSTER_NODE_MACHINE -u CI_CLUSTER_XPLAT_MACHINE "$@" \
+    PATH="$TMP/bin:$PATH" CI_CLUSTER_APP=selfcheck CI_CLUSTER_START_TIMEOUT=20 CI_CLUSTER_LOG_DIR="$FAKE_DIR/logs" \
+    GIT_TERMINAL_PROMPT=0 bash "$CLUSTER" "$FULL" >"$OUT" 2>&1
+  RC=$?
+}
+ran_gate() { grep -q -- "--machine $1 -C /cache/runci.sh $FULL $2\$" "$FAKE_DIR/calls.log"; } # machine gate
+
+# The shipped placement (founder ruling 2026-10-12, deploy/ci-worker/ci-cluster.sh::default_tier_map).
+GO_ID=080d74db170408; NODE_ID=d8d0d90a1e9648; XPLAT_ID=78113d4f329908
+
+# 6a. the default map: three tiers on their shipped machines with their shipped gates
+new_case c6a; for m in $GO_ID $NODE_ID $XPLAT_ID; do echo stopped > "$FAKE_DIR/state-$m"; done
+run_default
+[ "$RC" -eq 0 ] || fail "(6a) default map: expected exit 0, got $RC: $(grep -m1 'ERROR' "$OUT")"
+for g in gofmt go-build go-vet lint go-test go-race; do ran_gate $GO_ID $g || fail "(6a) go tier: gate $g did not run on $GO_ID"; done
+for g in contracts spa; do ran_gate $NODE_ID $g || fail "(6a) node tier: gate $g did not run on $NODE_ID"; done
+for g in embed-build records-no-sqlite cli-verb-guard; do ran_gate $XPLAT_ID $g || fail "(6a) xplat tier: gate $g did not run on $XPLAT_ID"; done
+[ "$(grep -c 'machine start' "$FAKE_DIR/calls.log")" -eq 3 ] || fail "(6a) the default map did not start exactly its three machines"
+[ "$FAIL" -eq 0 ] && ok "(6a) default tier map: shipped ids and gates"
+
+# 6b. an explicitly EMPTY id skips its tier; the other two still run on their defaults
+new_case c6b; for m in $GO_ID $XPLAT_ID; do echo stopped > "$FAKE_DIR/state-$m"; done
+run_default CI_CLUSTER_NODE_MACHINE=
+[ "$RC" -eq 0 ] || fail "(6b) empty node id: expected exit 0, got $RC: $(grep -m1 'ERROR' "$OUT")"
+grep -q -- "$NODE_ID" "$FAKE_DIR/calls.log" && fail "(6b) the node machine was touched although its id was explicitly empty"
+grep -q -- 'contracts' "$FAKE_DIR/calls.log" && fail "(6b) the node tier ran although its id was explicitly empty"
+ran_gate $GO_ID go-race || fail "(6b) control: the go tier did not run on its default"
+ran_gate $XPLAT_ID cli-verb-guard || fail "(6b) control: the xplat tier did not run on its default"
+[ "$FAIL" -eq 0 ] && ok "(6b) explicitly empty id skips only its tier"
+
+# 6c. a per-tier id override replaces only that tier's default
+new_case c6c; for m in mGo $NODE_ID $XPLAT_ID; do echo stopped > "$FAKE_DIR/state-$m"; done
+run_default CI_CLUSTER_GO_MACHINE=mGo
+[ "$RC" -eq 0 ] || fail "(6c) go override: expected exit 0, got $RC: $(grep -m1 'ERROR' "$OUT")"
+ran_gate mGo go-race || fail "(6c) the go tier did not run on the overridden machine"
+grep -q -- "$GO_ID" "$FAKE_DIR/calls.log" && fail "(6c) the go tier's default machine was touched despite an override"
+ran_gate $NODE_ID spa || fail "(6c) control: the node tier did not run on its default"
+[ "$FAIL" -eq 0 ] && ok "(6c) per-tier override"
 
 if [ "$FAIL" -ne 0 ]; then echo "selfcheck: ci-cluster.sh does not behave - see above" >&2; exit 1; fi
 echo "selfcheck: OK (ci-cluster.sh never stops a machine it did not start, refuses unreadable states, fails a tier whose machine dies)"
