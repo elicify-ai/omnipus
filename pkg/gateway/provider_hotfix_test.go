@@ -259,9 +259,9 @@ func TestAgentContextWindow_ProviderlessModelUsesResolvedProvider(t *testing.T) 
 
 	t.Run("an override below the real capability is not clamped to the floor", func(t *testing.T) {
 		override := 500000
-		withAgent := *cfg
 		// Rung 1 reads the override from cfg.Agents.List, so the agent must
 		// be in the config the ladder sees, as it is in production.
+		withAgent := config.Config{Providers: cfg.Providers}
 		withAgent.Agents.List = []config.AgentConfig{{
 			ID: "glm", Model: &config.AgentModelConfig{Primary: "z-ai/glm-5.3"},
 			ContextWindowOverride: &override,
