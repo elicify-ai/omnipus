@@ -15,6 +15,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Amendment §4.2 freezes the existing sender notice (no new copy). Pin the
+// baseline 8754a1a4a text independently, so changing messageNotSavedReply and
+// its classifier together cannot adapt the test's expected value.
+const wu22NotSavedNotice = "Sorry, I couldn't save your message — please try again later."
+
 // WU-22 / #1178 oracles come from L1-AMENDMENTS-20261013.md §4.2.
 // The store, archive, turn stages and event bus are real. Only outgoing
 // streaming and the external provider/tool are fixtures. No SessionWriter fake.
@@ -115,6 +120,7 @@ func wu22BlockModelWrite(t *testing.T, store *session.UnifiedStore, sid string) 
 
 func (h *wu22Harness) assertSaveFailure(t *testing.T, err error) {
 	t.Helper()
+	assert.Equal(t, wu22NotSavedNotice, messageNotSavedReply, "§4.2: retain the existing could-not-save copy")
 	var notSaved *messageNotSavedError
 	assert.ErrorAs(t, err, &notSaved, "§4.2: failed archive write must reach the caller as messageNotSavedError, not success/another error")
 	if err != nil {
