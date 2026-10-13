@@ -89,27 +89,36 @@ const vmHWMPrefix = "VMHWM:"
 // readOwnVmHWM returns this process's own peak resident set, in bytes, from
 // /proc/self/status. It fails (rather than returning 0) on anything it cannot
 // read and parse.
-func readOwnVmHWM() (int64, error) {
+func readOwnVmHWM() (int64, error) { return readOwnStatusBytes("VmHWM") }
+
+// readOwnVmRSS is the process's CURRENT resident set (the peak is VmHWM), read
+// the same strict way. The instrument self-test needs the current figure because
+// a peak only moves by the part of new memory that lands ABOVE the old peak.
+func readOwnVmRSS() (int64, error) { return readOwnStatusBytes("VmRSS") }
+
+// readOwnStatusBytes reads one "<key>:  <n> kB" line of /proc/self/status as
+// bytes. A missing line, a different unit or a non-positive number is an error.
+func readOwnStatusBytes(key string) (int64, error) {
 	raw, err := os.ReadFile("/proc/self/status")
 	if err != nil {
 		return 0, fmt.Errorf("read /proc/self/status: %w", err)
 	}
 	for _, line := range strings.Split(string(raw), "\n") {
-		rest, ok := strings.CutPrefix(line, "VmHWM:")
+		rest, ok := strings.CutPrefix(line, key+":")
 		if !ok {
 			continue
 		}
 		fields := strings.Fields(rest) // "  51234 kB"
 		if len(fields) != 2 || fields[1] != "kB" {
-			return 0, fmt.Errorf("unexpected VmHWM line %q", line)
+			return 0, fmt.Errorf("unexpected %s line %q", key, line)
 		}
 		kb, err := strconv.ParseInt(fields[0], 10, 64)
 		if err != nil || kb <= 0 {
-			return 0, fmt.Errorf("unusable VmHWM value in %q", line)
+			return 0, fmt.Errorf("unusable %s value in %q", key, line)
 		}
 		return kb * 1024, nil
 	}
-	return 0, fmt.Errorf("no VmHWM line in /proc/self/status")
+	return 0, fmt.Errorf("no %s line in /proc/self/status", key)
 }
 
 // childPeak is the one place that decides which figure is the child's peak. On
