@@ -224,6 +224,7 @@ An agent can send a request to another agent without delegating a worker. It cal
 - **The recipient answers with `answer_request`** (or `send_message` with `reply_to` set to the request id). A plain reply in the recipient's own chat does not reach the sender.
 - **A stopped recipient holds it.** The sender is told the request will be delivered when the recipient runs again; nothing is lost.
 - **Policy still applies.** The recipient must be an eligible agent in that workspace, and the recipient's own `send_message` policy decides whether the request is let through (an `ask` policy asks first).
+- **New custom agents can talk to each other by default.** An agent you create starts with `send_message` and `answer_request` allowed, so it can send requests and answer them. To switch that off for one agent, set its `send_message` to `deny`; requests to it are then refused.
 - **Helpers cannot use it.** A worker that another agent delegated to messages only its own conversation, so it cannot send this kind of request.
 
 You can do the same thing yourself by typing `@` and an agent's name at the start of a chat message; see [the chat window](using-omnipus-ui.md).
