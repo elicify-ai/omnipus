@@ -37,7 +37,7 @@ import (
 )
 
 // newMetaReconcileTestAgentLoop builds a minimal real *AgentLoop with one
-// registered agent, so al.GetAgentStore(agentID) returns a real
+// registered agent, so al.GetSessionStore() returns a real
 // *session.UnifiedStore backed by an on-disk temp dir — reconcileUnifiedMetaStatus
 // requires a concrete *AgentLoop (pe.agentLoop is typed *AgentLoop, not an
 // interface), so a bare struct-literal PlanEngine (as most of this package's
@@ -122,7 +122,7 @@ func TestReconcileUnifiedMetaStatus_MissingMetaJSON_StaysDebugAtDefaultLevel(t *
 // benign message, making clear the session was left inconsistent.
 func TestReconcileUnifiedMetaStatus_CorruptMetaJSON_IsWarnAtDefaultLevel(t *testing.T) {
 	al, agentID := newMetaReconcileTestAgentLoop(t)
-	sessStore := al.GetAgentStore(agentID)
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
 		t.Fatal("GetAgentStore returned nil — test harness misconfigured")
 	}

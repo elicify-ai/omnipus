@@ -1289,7 +1289,7 @@ describe('ChannelConfigPanel — client-side save validation', () => {
   })
 })
 
-// Workers (type:'worker') are delegation-only labour agents and can't be a
+// Workers (type:'Subagent') are delegation-only labour agents and can't be a
 // channel routing default (the backend 400s). The routing "Default agent" picker
 // must therefore omit them.
 describe('ChannelConfigPanel — routing picker excludes workers', () => {
@@ -1306,8 +1306,8 @@ describe('ChannelConfigPanel — routing picker excludes workers', () => {
     // routing has workspace_id set → bound flow; agent select is enabled
     vi.mocked(fetchChannelRouting).mockResolvedValue({ workspace_id: 'sales', default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core' },
-      { id: 'builder', name: 'Builder Worker', type: 'worker' },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core' },
+      { figure: 'Omnipus', role: 'general', id: 'builder', name: 'Builder Worker', type: 'Subagent' },
     ] as never)
     vi.mocked(fetchWorkspaces).mockResolvedValue([{ id: 'sales', name: 'Sales' } as Workspace])
     // core_team includes mia and builder — builder is a worker so it should be excluded
@@ -1324,8 +1324,8 @@ describe('ChannelConfigPanel — routing picker excludes workers', () => {
     client.setQueryData(['channel-config', 'telegram'], {})
     client.setQueryData(['channel-routing', 'telegram'], { workspace_id: 'sales' })
     client.setQueryData(['agents'], [
-      { id: 'mia', name: 'Mia', type: 'core' },
-      { id: 'builder', name: 'Builder Worker', type: 'worker' },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core' },
+      { figure: 'Omnipus', role: 'general', id: 'builder', name: 'Builder Worker', type: 'Subagent' },
     ])
     client.setQueryData(['workspaces', { status: 'active' }], [{ id: 'sales', name: 'Sales' }])
     client.setQueryData(['workspaces', 'sales'], { id: 'sales', name: 'Sales', core_team: ['mia', 'builder'] })
@@ -1383,7 +1383,7 @@ describe('ChannelConfigPanel — RoutingDebounce', () => {
     mockUiStore()
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
     vi.mocked(fetchChannelRouting).mockResolvedValue({ workspace_id: 'ws-1', default_agent_id: undefined })
-    vi.mocked(fetchAgents).mockResolvedValue([{ id: 'agent-1', name: 'Agent One', type: 'core' }] as never)
+    vi.mocked(fetchAgents).mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'agent-1', name: 'Agent One', type: 'core' }] as never)
     vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: 'agent-1' } as never)
     vi.mocked(fetchWorkspaces).mockResolvedValue([{ id: 'ws-1', name: 'WS One' } as Workspace])
     vi.mocked(fetchWorkspace).mockResolvedValue({ id: 'ws-1', name: 'WS One', core_team: ['agent-1'] } as Workspace)
@@ -1395,7 +1395,7 @@ describe('ChannelConfigPanel — RoutingDebounce', () => {
     const client = makeQueryClient()
     client.setQueryData(['channel-config', 'telegram'], {})
     client.setQueryData(['channel-routing', 'telegram'], { workspace_id: 'ws-1', default_agent_id: undefined })
-    client.setQueryData(['agents'], [{ id: 'agent-1', name: 'Agent One', type: 'core' }])
+    client.setQueryData(['agents'], [{ figure: 'Omnipus', role: 'general', id: 'agent-1', name: 'Agent One', type: 'core' }])
     client.setQueryData(['workspaces', { status: 'active' }], [{ id: 'ws-1', name: 'WS One' }])
     client.setQueryData(['workspaces', 'ws-1'], { id: 'ws-1', name: 'WS One', core_team: ['agent-1'] })
 
@@ -1470,10 +1470,10 @@ const WS_EMPTY: Workspace = {
   updated_at: '2026-01-01T00:00:00Z',
 } as unknown as Workspace
 
-const AGENT_MIA = { id: 'mia', name: 'Mia', type: 'core', default: true } as unknown as Workspace
-const AGENT_RAY = { id: 'ray', name: 'Ray', type: 'core', default: false } as unknown as Workspace
-const AGENT_JIM = { id: 'jim', name: 'Jim', type: 'core', default: false } as unknown as Workspace
-const AGENT_W1 = { id: 'worker1', name: 'Worker One', type: 'Subagent', default: false } as unknown as Workspace
+const AGENT_MIA = { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: true } as unknown as Workspace
+const AGENT_RAY = { figure: 'Omnipus', role: 'general', id: 'ray', name: 'Ray', type: 'core', default: false } as unknown as Workspace
+const AGENT_JIM = { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim', type: 'core', default: false } as unknown as Workspace
+const AGENT_W1 = { figure: 'Omnipus', role: 'general', id: 'worker1', name: 'Worker One', type: 'Subagent', default: false } as unknown as Workspace
 
 // Helper to render the panel with workspace routing context
 function renderWithWorkspace(opts: {

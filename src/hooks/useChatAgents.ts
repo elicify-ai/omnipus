@@ -1,7 +1,9 @@
-// useChatAgents — shared agent-list query + scoping used by BOTH the
-// AgentPicker dropdown (composer/AgentPicker.tsx) and the `@` mention menu
-// (useSlashMenu.ts's mention mode). Extracted so the two surfaces share ONE
-// `['agents']` react-query cache entry and apply IDENTICAL scoping
+// useChatAgents — shared agent-list query + scoping. The composer agent
+// picker is gone (FR-007); the `@` mention menu is BACK (founder decision
+// 2026-10-11 Q1 B) and consumes this hook again, exactly as it did before the
+// cutover. Production callers: useWorkspaceSetupKickoff and the mention menu
+// (src/hooks/useSlashMenu.ts). The query and the scoping stay in one
+// definition: ONE `['agents']` react-query cache entry and IDENTICAL scoping
 // (ready-to-chat status, worker exclusion, active workspace's core_team,
 // plus the ADR-090 Admin standalone-operator exemption from TEAM scoping)
 // instead of two hand-rolled copies of the same filter drifting apart.
@@ -11,11 +13,10 @@
 // — so React Query dedupes both callers into a single network request
 // instead of issuing it twice per render tree.
 //
-// Deliberately does NOT own picker-only concerns: auto-select-first-agent,
-// the agentSelectorOpen latch reset, and the error/all-draft branch UI all
-// stay in AgentPicker, which is the sole side-effect writer to the session
-// store on mount — a second writer here would race it. It does read the
-// open flag below, only as the moment to refresh team membership.
+// Does not write the session store. The old picker auto-selected the first
+// ready agent on mount; that effect is gone with the picker (the store lane
+// owns what a blank composer does next). This hook still refreshes the team
+// list when agentSelectorOpen flips on, which /agents still sets.
 
 import { useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -36,12 +37,12 @@ import type { Agent, Workspace } from '@/lib/api'
 // once both queries have resolved.
 const EMPTY_AGENTS: Agent[] = []
 const EMPTY_WORKSPACES: Workspace[] = []
-const CHAT_BUILTIN_IDS = new Set(['mia', 'jim', 'ava', 'admin'])
 
-export function isChatEligibleAgent(agent: Agent): boolean {
-  if (agent.type === 'core') return CHAT_BUILTIN_IDS.has(agent.id)
-  return agent.type === 'Main'
-}
+// Moved to src/lib/agentKind.ts (2026-10-11) so the lib-level @-recipient
+// derivation can reuse the ONE predicate without a hooks-module import;
+// re-exported here so this module's existing callers are unchanged.
+import { isChatEligibleAgent } from '@/lib/agentKind'
+export { isChatEligibleAgent }
 
 // ADR-090 FR-001 / §2.2: Admin is a chat-able CORE agent with "no team
 // membership". Team-add surfaces refuse an Admin membership; chat surfaces
@@ -50,7 +51,12 @@ export function isChatEligibleAgent(agent: Agent): boolean {
 // happens to be named "admin" is an ordinary agent and stays team-scoped.
 // Readiness / worker / hidden-role filters still apply — this predicate
 // only exempts Admin from TEAM scoping, never from those.
-function isStandaloneChatOperator(agent: Agent): boolean {
+// Exported for R2-S2-DV-07: the @ mention menu filters THIS exact predicate
+// back out outside the default workspace (the gateway refuses an Admin
+// request from any other — pkg/gateway/main_session.go::mainAgentEligible
+// returns ws.IsDefault) instead of hand-rolling a second `id === 'admin'`
+// check that could drift from this one.
+export function isStandaloneChatOperator(agent: Agent): boolean {
   return agent.type === 'core' && agent.id === 'admin'
 }
 
@@ -59,6 +65,8 @@ export interface UseChatAgentsResult {
   agents: Agent[]
   /** Ready-to-chat (active/idle), non-worker agents, scoped to the active workspace's core_team when one is set. A ready Admin is kept even when the team does not list it (ADR-090 standalone operator) — that is not a workspace membership grant. */
   chatAgents: Agent[]
+  /** True when the ACTIVE workspace is the default workspace (R2-S2-DV-07): the only place the gateway admits an @ request to Admin (mainAgentEligible returns ws.IsDefault), so the @ mention menu offers Admin exactly here and nowhere else. Unknown (workspaces not loaded yet) reads as false — the safe side, and the list lands moments later. */
+  activeWorkspaceIsDefault: boolean
   /** True when the latest fetch of the active workspace's team list failed. The last successfully fetched team stays in `workspaces` (React Query retains previous data on a failed refetch), so `chatAgents` may be scoped by a team that failed to refresh — surfaces of the open picker show a "could not be refreshed" line instead of letting that list read as current. */
   teamRefreshFailed: boolean
   isError: boolean
@@ -88,6 +96,10 @@ export function useChatAgents(): UseChatAgentsResult {
   })
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId)
   const teamIds = activeWorkspace?.core_team
+  // R2-S2-DV-07: the @ mention menu offers Admin only here — the gateway
+  // refuses an Admin request from any other workspace
+  // (pkg/gateway/main_session.go::mainAgentEligible returns ws.IsDefault).
+  const activeWorkspaceIsDefault = activeWorkspace?.is_default === true
 
   // Focus recovery and agent_created both refresh ['agents'], but team
   // membership can change separately. Refresh the workspace query too, even
@@ -147,5 +159,5 @@ export function useChatAgents(): UseChatAgentsResult {
     [agents, teamIds],
   )
 
-  return { agents, chatAgents, teamRefreshFailed, isError, refetch }
+  return { agents, chatAgents, activeWorkspaceIsDefault, teamRefreshFailed, isError, refetch }
 }

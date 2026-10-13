@@ -651,64 +651,6 @@ func TestNextOccurrenceAfter_AgedDtstartIrregular(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ProjectEveryMs (FR-008a)
-// ---------------------------------------------------------------------------
-
-func TestProjectEveryMs(t *testing.T) {
-	const everyMs = 30 * 60 * 1000 // 30 minutes
-	firstMs := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC).UnixMilli()
-
-	t.Run("first entry matches the armed engine state", func(t *testing.T) {
-		to := firstMs + 3*everyMs
-		instants, truncated := ProjectEveryMs(firstMs, everyMs, firstMs, to, 100)
-		if truncated {
-			t.Fatalf("unexpected truncation")
-		}
-		if len(instants) != 3 {
-			t.Fatalf("expected 3 occurrences, got %d: %v", len(instants), instants)
-		}
-		if instants[0] != firstMs {
-			t.Fatalf("first entry must equal firstMs (NextRunAtMS): got %d want %d", instants[0], firstMs)
-		}
-		for k, ms := range instants {
-			want := firstMs + int64(k)*everyMs
-			if ms != want {
-				t.Fatalf("entry %d: want %d got %d", k, want, ms)
-			}
-		}
-	})
-
-	t.Run("forward-only: occurrences before fromMs are omitted", func(t *testing.T) {
-		from := firstMs + everyMs + 1 // just past the 2nd occurrence
-		to := firstMs + 5*everyMs
-		instants, truncated := ProjectEveryMs(firstMs, everyMs, from, to, 100)
-		if truncated {
-			t.Fatalf("unexpected truncation")
-		}
-		if len(instants) == 0 {
-			t.Fatalf("expected at least one occurrence")
-		}
-		if instants[0] < from {
-			t.Fatalf("first returned occurrence %d is before fromMs %d", instants[0], from)
-		}
-		if instants[0] != firstMs+2*everyMs {
-			t.Fatalf("expected the first in-range occurrence to be the 3rd (k=2), got %d", instants[0])
-		}
-	})
-
-	t.Run("cap truncates", func(t *testing.T) {
-		to := firstMs + 100*everyMs
-		instants, truncated := ProjectEveryMs(firstMs, everyMs, firstMs, to, 5)
-		if !truncated {
-			t.Fatalf("expected truncated=true")
-		}
-		if len(instants) != 5 {
-			t.Fatalf("expected exactly cap(5) occurrences, got %d", len(instants))
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
 // IsRegular + arithmetic derivation
 // ---------------------------------------------------------------------------
 

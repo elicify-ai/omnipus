@@ -2,6 +2,8 @@
 
 **Amended 2026-10-06 (founder):** audit the documented chat controls against founder decision, 2026-10-06. Stop click 1 / Esc 1 / `/stop` stops this chat's turn only and opens a 3 s window; A second Stop / Esc / `/stop` within it stops this chat and its whole helper tree. `/cancel` does that immediately. No separate button or offer. `/stop-redirect <instruction>` stops and continues **this chat**, in any root or helper chat. Same on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged. The docs audit must reject a separate control or helper-only redirect instruction.
 
+**Qualification, 2026-10-10 (external-CLI helpers):** the native steering and continuation rules in this document do not describe a helper on an external command-line tool. A live external delegation takes an instruction by interrupting its subprocess and resuming the same retained CLI conversation (a live task run too); with no CLI run in flight the request is refused as `not_steerable`. Its chat's `/stop-redirect` returns `not_steerable` while it is running or stopped, and a finished helper has no turn to replace (Resume guidance is shown). Resume, Respond and a typed message continue the same CLI conversation when it started and the gateway still retains it, run it for the first time if it never started, and otherwise refuse visibly; none of them creates a new worker session. External workers have no `message_parent`, and `delegate redirect` and `clear_goal` are refused. See [Agents guide](../../agents.md)::Workers and delegation.
+
 Status: Draft
 
 - **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D10, AC-13

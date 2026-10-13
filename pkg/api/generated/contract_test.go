@@ -469,18 +469,6 @@ func TestContract_RateLimitFrame_ZeroValue(t *testing.T) {
 		"zero value has empty required fields")
 }
 
-// ── AgentSwitchedFrame ────────────────────────────────────────────────────────
-// Traces to: contracts/asyncapi.yaml components.schemas.AgentSwitchedFrame
-
-func TestContract_AgentSwitchedFrame_Populated(t *testing.T) {
-	mustPassAsyncAPI(t, "AgentSwitchedFrame", FixtureAgentSwitchedFrame_Populated())
-}
-
-func TestContract_AgentSwitchedFrame_ZeroValue(t *testing.T) {
-	mustFailAsyncAPI(t, "AgentSwitchedFrame", FixtureAgentSwitchedFrame_ZeroValue(),
-		"zero value has empty required type and session_id fields")
-}
-
 // ── TaskStatusChangedFrame ────────────────────────────────────────────────────
 // Traces to: contracts/asyncapi.yaml components.schemas.TaskStatusChangedFrame
 
@@ -527,18 +515,6 @@ func TestContract_ReplayWarningFrame_Populated(t *testing.T) {
 func TestContract_ReplayWarningFrame_ZeroValue(t *testing.T) {
 	mustFailAsyncAPI(t, "ReplayWarningFrame", FixtureReplayWarningFrame_ZeroValue(),
 		"zero value has empty required fields")
-}
-
-// ── SessionCloseAckFrame ──────────────────────────────────────────────────────
-// Traces to: contracts/asyncapi.yaml components.schemas.SessionCloseAckFrame
-
-func TestContract_SessionCloseAckFrame_Populated(t *testing.T) {
-	mustPassAsyncAPI(t, "SessionCloseAckFrame", FixtureSessionCloseAckFrame_Populated())
-}
-
-func TestContract_SessionCloseAckFrame_ZeroValue(t *testing.T) {
-	mustFailAsyncAPI(t, "SessionCloseAckFrame", FixtureSessionCloseAckFrame_ZeroValue(),
-		"zero value has empty required type and session_id fields")
 }
 
 // ── DevicePairingRequestFrame ─────────────────────────────────────────────────
@@ -644,7 +620,7 @@ func TestContract_Session_NilPartitionsRejected(t *testing.T) {
 		UpdatedAt:  time.Date(2026, 5, 17, 10, 1, 0, 0, time.UTC),
 		Channel:    "webchat",
 		Partitions: nil, // THE BUG: nil slice → JSON null → schema violation
-		Type:       &sessionType,
+		Type:       sessionType,
 		// Stats left as its zero value — this test asserts the partitions:null
 		// rejection; the Stats shape is irrelevant here (and is exercised by the
 		// dedicated stats tests).
@@ -716,12 +692,10 @@ func TestContract_AllFrames_TypeFieldPresent(t *testing.T) {
 		{"SubagentEndFrame", FixtureSubagentEndFrame_Populated()},
 		{"ReplayMessageFrame", FixtureReplayMessageFrame_Populated()},
 		{"RateLimitFrame", FixtureRateLimitFrame_Populated()},
-		{"AgentSwitchedFrame", FixtureAgentSwitchedFrame_Populated()},
 		{"TaskStatusChangedFrame", FixtureTaskStatusChangedFrame_Populated()},
 		{"SystemOverloadFrame", FixtureSystemOverloadFrame_Populated()},
 		{"CancelStageFrame", FixtureCancelStageFrame_Populated()},
 		{"ReplayWarningFrame", FixtureReplayWarningFrame_Populated()},
-		{"SessionCloseAckFrame", FixtureSessionCloseAckFrame_Populated()},
 		{"DevicePairingRequestFrame", FixtureDevicePairingRequestFrame_Populated()},
 	}
 
@@ -1845,42 +1819,6 @@ func TestContract_StorageStats_Differentiation(t *testing.T) {
 		"StorageStats with data vs empty must produce different JSON")
 	mustPassComponent(t, "StorageStats", f1)
 	mustPassComponent(t, "StorageStats", f2)
-}
-
-// ── SessionCloseFrame ─────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SessionCloseFrame.yaml
-
-func TestContract_SessionCloseFrame_Populated(t *testing.T) {
-	// Both required fields set.
-	// Traces to: SessionCloseFrame.yaml — required: [type, session_id]
-	mustPassAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_Populated())
-}
-
-func TestContract_SessionCloseFrame_ZeroValue(t *testing.T) {
-	// type="" (const: session_close), session_id="" (minLength: 1).
-	// Traces to: SessionCloseFrame.yaml — type has const constraint; session_id has minLength
-	mustFailAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_ZeroValue(),
-		"zero value has empty type (const) and session_id (minLength: 1)")
-}
-
-func TestContract_SessionCloseFrame_Edge(t *testing.T) {
-	// Long session_id (valid per minLength: 1).
-	// Traces to: SessionCloseFrame.yaml
-	mustPassAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_Edge())
-}
-
-func TestContract_SessionCloseFrame_Differentiation(t *testing.T) {
-	// Two SessionCloseFrame fixtures with different session IDs produce different JSON.
-	f1 := FixtureSessionCloseFrame_Populated()
-	f2 := FixtureSessionCloseFrame_Edge()
-	raw1, err := json.Marshal(f1)
-	require.NoError(t, err)
-	raw2, err := json.Marshal(f2)
-	require.NoError(t, err)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"two different SessionCloseFrame fixtures must produce different JSON")
-	mustPassAsyncAPI(t, "SessionCloseFrame", f1)
-	mustPassAsyncAPI(t, "SessionCloseFrame", f2)
 }
 
 // ── AuditLogToggleRequest ─────────────────────────────────────────────────────
@@ -3365,8 +3303,6 @@ func TestContract_TaskTrigger_AllKinds_Validate(t *testing.T) {
 	}{
 		{"manual", "manual", map[string]any{}},
 		{"once", "once", map[string]any{"at_ms": int64(1781000000000)}},
-		{"every", "every", map[string]any{"every_ms": int64(3600000)}},
-		{"recurring_cron_expr", "recurring", map[string]any{"cron_expr": "0 9 * * MON"}},
 		{"recurring_rrule", "recurring", map[string]any{
 			"rrule":      "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10",
 			"dtstart_ms": int64(1784624400000),

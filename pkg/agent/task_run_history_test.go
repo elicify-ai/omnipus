@@ -25,6 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/require"
 )
 
 // drainEventsWithTimeout blocks on sub.C, collecting every event received
@@ -386,7 +387,7 @@ func TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire(t *testing.
 	occMs := int64(1_700_000_000_000)
 	// Simulate a scheduler fire that already opened this occurrence's run a
 	// moment before the user's Run-now click for the exact same occurrence.
-	seeded, created, err := al.taskStore.OpenRun(tk.ID, &occMs, task.RunKindScheduled, "scheduler-session")
+	seeded, created, err := al.taskStore.OpenRun(tk.ID, &occMs, task.RunKindScheduled, "scheduler-session", nil)
 	if err != nil || !created {
 		t.Fatalf("seed OpenRun: created=%v err=%v", created, err)
 	}
@@ -461,6 +462,9 @@ func TestTaskRunHistory_SchedulerFire_RecordsOccurrenceMsAndScheduledKind(t *tes
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	// DEL-18: fresh creation owns the task's paired goal record; without one
+	// the scheduled run has no goal loop and never reaches a terminal status.
+	pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
 	sched.OnTaskUpserted(tk)
 
 	jobs := jobsForTask(sched, tk.ID)
@@ -547,10 +551,10 @@ func TestTaskRunHistory_ExecutionErrorBranch_ClosesRunAsFailed(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindError,
 			Err:  &runner.ErrorEvent{Message: "external CLI crashed for run-history test", Fatal: true},
-		})
+		}))
 		fr.Cancel()
 	}()
 

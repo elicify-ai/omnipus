@@ -28,7 +28,7 @@ import (
 // fake channel is registered under that name.
 func TestProcessTaskDirect_MediaToolDelivery_StampsWorkspaceID(t *testing.T) {
 	al, defaultAgent, webchatChannel, _ := newMediaWorkspaceIDTestLoop(t, "webchat")
-	sessionStore := al.GetAgentStore(defaultAgent.ID)
+	sessionStore := al.GetSessionStore()
 	require.NotNil(t, sessionStore, "test setup: executing agent must have a session store")
 	taskSession, err := sessionStore.NewSession(session.SessionTypeTask, "system", defaultAgent.ID)
 	require.NoError(t, err)
@@ -76,11 +76,11 @@ func TestProcessTaskDirect_ExternalCLIWorker_DispatchesViaExternalCLI(t *testing
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind:   runner.EventKindOutput,
 			Output: &runner.OutputEvent{Text: "external CLI result"},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel() // closes the event channel so the dispatcher/drain loop ends
 	}()
 
@@ -137,8 +137,8 @@ func TestProcessTaskDirect_ExternalCLIWorker_NoSoul_ComposesTaskOnly(t *testing.
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -165,8 +165,13 @@ func TestProcessTaskDirect_ExternalCLIWorker_NoSoul_ComposesTaskOnly(t *testing.
 // TASK path — it derived runCtx via plain context.WithCancel(ctx)
 // (external_dispatch.go) and only forwarded rtCfg.defaultTimeout to the
 // DRIVER as a RunOptions.TimeoutSeconds hint, which only the REAL drivers
-// honor internally (each wraps its own runCtx in context.WithTimeout) — the
-// FakeRunner test double does not. spawnSubTurn's native delegation path
+// honor internally (each wraps its own runCtx in context.WithTimeout).
+// CORRECTION (2026-10-10, item 3): FakeRunner now honours the same
+// ctx-cancel-ends-the-stream contract (pkg/agent/runner/fake.go) as the real
+// drivers. NOTE: on this base the test already passed (~2.6s) with the OLD fake
+// too — the 61s hang this change was briefed to fix is NOT reproducible here, so
+// the change is a contract alignment, not a demonstrated hang fix.
+// spawnSubTurn's native delegation path
 // already had its own Go-level safety-net timeout for exactly this reason
 // (subturn.go ~458-473); processTaskDirectExternalCLI now has the equivalent
 // (loop.go, immediately after `rtCfg := al.getSubTurnConfig()`): a
@@ -284,6 +289,9 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	// DEL-18: fresh creation owns the task's paired goal record; without one the
+	// run starts with no goal loop.
+	pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
@@ -327,17 +335,16 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 			"must be reachable via GetActiveTurnHookForSession while the dispatch is in flight")
 	}
 
-	// Unblock the fake driver so the dispatch actually returns and its
-	// `defer ts.Finish(false)` runs — the line this test exists to prove.
-	fr.InjectEvent(
-		runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "finished after cancel"}},
-	)
-	fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
-	fr.Cancel() // closes the event channel so drainExternalRun's loop actually exits
+	// The cancel already reached the driver: RequestCancel above closes the
+	// fake runner's event channel (FakeRunner.Cancel is idempotent and
+	// InjectEvent does NOT check for it), so injecting here panics with
+	// "send on closed channel". Nothing more is needed to make the dispatch
+	// return and its `defer ts.Finish(false)` run — the line this test exists
+	// to prove — so the unblock step is gone rather than guarded.
 
-	sessStore := al.GetAgentStore("ext-agent")
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
-		t.Fatal("GetAgentStore(\"ext-agent\") returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 
 	deadline := time.Now().Add(asyncTaskPollTimeout)

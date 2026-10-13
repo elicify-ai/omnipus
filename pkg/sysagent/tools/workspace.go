@@ -257,7 +257,7 @@ func NewWorkspaceCreateTool(d *Deps) *WorkspaceCreateTool { return &WorkspaceCre
 func (t *WorkspaceCreateTool) Name() string               { return "create_workspace" }
 func (t *WorkspaceCreateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceCreateTool) Description() string {
-	return "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to create_task_in_workspace when creating tasks for the workspace. Members named in core_team also get the default delegation trust edges between them, so they can delegate to each other immediately. name is capped at 200 characters and description at 2000; exceeding either is rejected.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace)."
+	return "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id as workspace_id to create_task when delivering tasks to the workspace. Members named in core_team also get the default delegation trust edges between them, so they can delegate to each other immediately. name is capped at 200 characters and description at 2000; exceeding either is rejected.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace)."
 }
 
 func (t *WorkspaceCreateTool) Parameters() map[string]any {
@@ -353,10 +353,13 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	if len(w.CoreTeam) > 0 {
 		ceiling := workspaceDelegationDepthCeiling(t.deps)
 		configPresent := configAgentPresenceSet(t.deps)
-		seeded = seedDelegationEdgesForNewMembers(w.CoreTeam, w.CoreTeam, nil, ceiling, configPresent)
+		seeded = seedDelegationEdgesForNewMembers(w.CoreTeam, w.CoreTeam, nil, ceiling, configPresent, selfEdgeExcludedAgentIDs(t.deps))
 	}
 	if delegationPresent {
-		seeded = explicitDelegation
+		// Explicit graph replaces the default seed, but every member of the
+		// fresh team still gets its ordinary self-edge (FR-014/015/016).
+		seeded, _ = withNewMemberSelfEdges(explicitDelegation, w.CoreTeam,
+			workspaceDelegationDepthCeiling(t.deps), configAgentPresenceSet(t.deps), selfEdgeExcludedAgentIDs(t.deps))
 	}
 
 	if err := writeEntity(workspacesDir(t.deps.Home), w.ID, w); err != nil {
@@ -404,7 +407,7 @@ func NewWorkspaceUpdateTool(d *Deps) *WorkspaceUpdateTool { return &WorkspaceUpd
 func (t *WorkspaceUpdateTool) Name() string               { return "update_workspace" }
 func (t *WorkspaceUpdateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceUpdateTool) Description() string {
-	return "Update an existing workspace using the revision returned by get_workspace. Call this to change its name, description, status, pin state, complete core team, or complete delegation graph. Omitted fields are preserved. core_team replaces the entire team. Omitted delegation preserves valid existing edges, removes edges for removed members, and may seed approved edges for newly added built-ins; an explicit delegation array replaces the entire graph, suppresses implicit seeding, and [] clears it. Read the workspace first, include all intended membership and graph effects in the proposal, then submit its id and revision."
+	return "Update an existing workspace using the revision returned by get_workspace. Call this to change its name, description, status, pin state, complete core team, or complete delegation graph. Omitted fields are preserved. core_team replaces the entire team. Omitted delegation preserves valid existing edges, removes edges for removed members, and may seed approved edges for newly added built-ins; an explicit delegation array replaces the graph for continuing members, and [] clears their lines; each member newly added by the same update still receives its self-line unless the operator's seed defaults exclude it. Read the workspace first, include all intended membership and graph effects in the proposal, then submit its id and revision."
 }
 
 func (t *WorkspaceUpdateTool) Parameters() map[string]any {
@@ -483,6 +486,31 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", excludedTeamMemberMessage(excluded),
 				"Remove the excluded role from core_team — ADR-090 bars it from workspace teams"))
 		}
+		// D8 (founder ruling 2026-10-11, gate round 1 S1): the SAME built-in
+		// roster rule the REST PUT enforces, from the SAME pkg/workspace
+		// helper — built-ins cannot leave the default workspace by ANY
+		// writer, because ensureBuiltinRosterPresent re-adds them at the next
+		// boot. The refusal precedes every effect of this call: nothing is
+		// written and no delegation edge is seeded.
+		if w.IsDefault && len(teamDiffAdded(w.CoreTeam, oldTeam)) > 0 && !liveConfigAvailable(t.deps) {
+			// An unreadable roster is not an empty one: fail closed rather than
+			// let a removal through that cannot be checked (S2-18).
+			return tools.ErrorResult(errorJSON("NOT_AVAILABLE",
+				"the live configuration is unavailable, so a team removal from the default workspace cannot be checked",
+				"Retry once the gateway configuration is loaded"))
+		}
+		if err := workspacepkg.RefuseBuiltinRemoval(w.IsDefault, oldTeam, w.CoreTeam, configAgentIDs(t.deps)); err != nil {
+			return tools.ErrorResult(errorJSON(strings.ToUpper(workspacepkg.BuiltinRemovalCode),
+				workspacepkg.BuiltinRemovalMessage,
+				"Built-in roster members rejoin the default workspace at every boot; remove them from other workspaces instead"))
+		}
+		// Removal cleanup (gate round 1 S6): the members this call drops are
+		// garbage-collected out of member_configs — hidden_from_sidebar
+		// included — so re-adding an agent starts visible, exactly as the
+		// REST PUT's GC does.
+		if pruned, removed := workspacepkg.GCMemberConfigs(w.CoreTeam, w.MemberConfigs); len(removed) > 0 {
+			w.MemberConfigs = pruned
+		}
 	}
 	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
 	if delegationErr != nil {
@@ -512,7 +540,17 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 	var delegationSeedNote string
 	var pendingDelegation []workspacepkg.DelegationEdge
 	if delegationPresent {
+		// An explicit complete graph replaces the stored one verbatim, but
+		// every member THIS call introduces still gets its ordinary
+		// self-edge (session-core FR-014/015/016, founder ruling 2026-10-10).
 		pendingDelegation = explicitDelegation
+		if coreTeamChanged {
+			added := teamDiffAdded(oldTeam, w.CoreTeam)
+			var selfSeeded []workspacepkg.DelegationEdge
+			pendingDelegation, selfSeeded = withNewMemberSelfEdges(explicitDelegation, added,
+				workspaceDelegationDepthCeiling(t.deps), configAgentPresenceSet(t.deps), selfEdgeExcludedAgentIDs(t.deps))
+			delegationSeedNote = seededEdgesSummary(selfSeeded, added)
+		}
 	} else if coreTeamChanged {
 		added := teamDiffAdded(oldTeam, w.CoreTeam)
 		if len(added) > 0 {
@@ -527,7 +565,7 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 			}
 			ceiling := workspaceDelegationDepthCeiling(t.deps)
 			configPresent := configAgentPresenceSet(t.deps)
-			seeded := seedDelegationEdgesForNewMembers(w.CoreTeam, added, existing, ceiling, configPresent)
+			seeded := seedDelegationEdgesForNewMembers(w.CoreTeam, added, existing, ceiling, configPresent, selfEdgeExcludedAgentIDs(t.deps))
 			if len(seeded) > 0 {
 				pendingDelegation = append(append([]workspacepkg.DelegationEdge(nil), existing...), seeded...)
 				delegationSeedNote = seededEdgesSummary(seeded, added)
@@ -841,8 +879,9 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 // newTeam with a compiled-in coreagent.SeedDelegationEdges seed, each seeded
 // target becomes a candidate edge, with modes collapsed/deduped via the
 // local edgeModeCategory. Non-self depth is copied from the seed policy;
-// permitted self-edges are pinned by coreagent.SeededEdgeDepth to min(3,
-// ceiling) (ADR-090 FR-006).
+// self-edges (for any agent — the seed gives every agent except the hidden
+// System Agents a self-edge) are pinned by coreagent.SeededEdgeDepth to
+// min(3, ceiling) (ADR-090 FR-006).
 //
 // A candidate edge is included iff ALL of:
 //   - both endpoints are members of newTeam (an edge never reaches outside
@@ -902,6 +941,7 @@ func seedDelegationEdgesForNewMembers(
 	existing []workspacepkg.DelegationEdge,
 	ceiling int,
 	configPresent map[string]bool,
+	excluded map[string]bool,
 ) []workspacepkg.DelegationEdge {
 	if len(added) == 0 || len(newTeam) == 0 {
 		return nil
@@ -920,6 +960,34 @@ func seedDelegationEdgesForNewMembers(
 	}
 
 	var out []workspacepkg.DelegationEdge
+
+	// Ordinary self-rows for every NEWLY introduced member (session-core
+	// C-DELEGATE FR-014/015): the same shared workspace-graph computation the
+	// install seed and create_agent's join use, so an agent added later gets the
+	// identical ordinary {id→id} row. Only members in `added` are introduced —
+	// a continuing member whose self-row an operator removed is never
+	// resurrected (deletion is authoritative), and SelfEdgeSeedRows also skips
+	// any id already self-edged in `existing`.
+	//
+	// `excluded` is the OPERATOR seed data
+	// (config.workspace_seed_defaults.self_edge.exclude_agent_ids, resolved by
+	// the caller via selfEdgeExcludedAgentIDs and passed in as a set so this
+	// package need not import config). The exclusion is DATA, never a Go
+	// identity predicate: an operator adding an ordinary id such as `mia` takes
+	// effect here with no code change, and an explicit empty list excludes
+	// nobody. It is NOT limited to the hidden system agents — the shipped
+	// default merely happens to name them.
+	var introduced []string
+	for _, id := range newTeam {
+		if configPresent[id] && addedSet[id] {
+			introduced = append(introduced, id)
+		}
+	}
+	out = append(out, workspacepkg.SelfEdgeSeedRows(introduced, existing, excluded, ceiling)...)
+	for _, e := range out {
+		present[e.FromAgent+"\x00"+e.ToAgent] = true
+	}
+
 	for _, from := range newTeam {
 		if !configPresent[from] {
 			continue
@@ -939,7 +1007,9 @@ func seedDelegationEdgesForNewMembers(
 			modes = append(modes, wm)
 		}
 		for _, ref := range dp.To {
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == from && !workspacepkg.PermittedSelfDelegationID(from)) {
+			// Self refs are supplied generically above; skip so a policy self ref
+			// does not duplicate the ordinary self-row.
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == from {
 				continue
 			}
 			to := ref.ID
@@ -1006,6 +1076,37 @@ func seededEdgesSummary(seeded []workspacepkg.DelegationEdge, added []string) st
 	return fmt.Sprintf("seeded %d default delegation edge(s) for: %s", len(seeded), strings.Join(names, ", "))
 }
 
+// withNewMemberSelfEdges returns graph with the ordinary self-edge of every id in
+// added appended (and that appended slice on its own), for a call that carries
+// an EXPLICIT complete delegation graph. An explicit graph suppresses default
+// seeding, but session-core FR-014/015/016 (founder ruling 2026-10-10) makes
+// the self-edge unconditional for a member a call introduces, so this runs the
+// one shared workspace.SelfEdgeSeedRows computation over the introduced
+// members that are present in the live config (configPresent) and not on the
+// operator exclusion data (excluded). Members already carrying a self-row in
+// graph are skipped; continuing members are not in added, so a self-line the
+// graph omits for them is never restored. A nil/empty added returns graph as
+// sent.
+func withNewMemberSelfEdges(
+	graph []workspacepkg.DelegationEdge,
+	added []string,
+	ceiling int,
+	configPresent map[string]bool,
+	excluded map[string]bool,
+) (merged, seeded []workspacepkg.DelegationEdge) {
+	var introduced []string
+	for _, id := range added {
+		if configPresent[id] {
+			introduced = append(introduced, id)
+		}
+	}
+	seeded = workspacepkg.SelfEdgeSeedRows(introduced, graph, excluded, ceiling)
+	if len(seeded) == 0 {
+		return graph, nil
+	}
+	return append(append([]workspacepkg.DelegationEdge(nil), graph...), seeded...), seeded
+}
+
 // configAgentPresenceSet returns the set of agent IDs present in the live
 // config's Agents.List, for use as seedDelegationEdgesForNewMembers's
 // configPresent filter. Mirrors the gateway's presence-map pattern: pkg/gateway's
@@ -1036,6 +1137,46 @@ func configAgentPresenceSet(d *Deps) map[string]bool {
 		present[cfg.Agents.List[i].ID] = true
 	}
 	return present
+}
+
+// liveConfigAvailable reports whether the live config can be read at all.
+func liveConfigAvailable(d *Deps) bool {
+	return d != nil && d.GetCfg != nil && d.GetCfg() != nil
+}
+
+// configAgentIDs returns the live config's agent ids — the same data
+// configAgentPresenceSet reads, as a slice — for
+// workspacepkg.DefaultWorkspaceTeamIDs, the shared D8 roster derivation both
+// workspace writers feed RefuseBuiltinRemoval from.
+func configAgentIDs(d *Deps) []string {
+	present := configAgentPresenceSet(d)
+	ids := make([]string, 0, len(present))
+	for id := range present {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// selfEdgeExcludedAgentIDs resolves the operator's self-edge seed exclusion
+// set (config.workspace_seed_defaults.self_edge.exclude_agent_ids) for the
+// sysagent seed writers. It is the ONE resolver the workspace create/update
+// producers and create_agent's membership join read, so every writer honours
+// the same operator data — never a Go identity predicate.
+//
+// A missing/nil live config (deps not wired, or a nil *Config) is treated as
+// "unset", which resolves to the SHIPPED default list (the hidden system agents
+// judge/plansupervisor) rather than an empty set: an empty set would mean
+// "exclude nobody" and seed the very agents the shipped default bars. An
+// explicit operator `[]` is a present-but-empty list and DOES exclude nobody —
+// that distinction lives in config.SelfEdgeExcludeAgentIDSet, which this defers
+// to.
+func selfEdgeExcludedAgentIDs(d *Deps) map[string]bool {
+	if d != nil && d.GetCfg != nil {
+		return d.GetCfg().SelfEdgeExcludeAgentIDSet()
+	}
+	// nil *Config resolves to the shipped default (SelfEdgeExcludeAgentIDSet is
+	// nil-receiver-safe).
+	return (*config.Config)(nil).SelfEdgeExcludeAgentIDSet()
 }
 
 // workspaceDelegationDepthCeilingFallback mirrors the gateway fallback used
@@ -1220,7 +1361,7 @@ func NewWorkspaceListTool(d *Deps) *WorkspaceListTool { return &WorkspaceListToo
 func (t *WorkspaceListTool) Name() string             { return "list_workspaces" }
 func (t *WorkspaceListTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *WorkspaceListTool) Description() string {
-	return "List workspaces with their live task counts. Call this to find workspace ids for create_task_in_workspace, list_tasks_in_workspace, get_workspace, or update_workspace. Ordering is: the default workspace first, then pinned workspaces by pin_order, then the rest newest-first — so the first result is not necessarily the most recently created one. Returns id, name, description, status, pinned, pin_order, is_default, core_team and task_count. Any workspace file that cannot be read is skipped and counted in `skipped`.\nParameters: status (optional: active/archived/all, defaults to active)."
+	return "List workspaces with their live task counts. Call this to find workspace ids to use with create_task, list_tasks (their optional workspace_id), get_workspace, or update_workspace. Ordering is: the default workspace first, then pinned workspaces by pin_order, then the rest newest-first — so the first result is not necessarily the most recently created one. Returns id, name, description, status, pinned, pin_order, is_default, core_team and task_count. Any workspace file that cannot be read is skipped and counted in `skipped`.\nParameters: status (optional: active/archived/all, defaults to active)."
 }
 
 func (t *WorkspaceListTool) Parameters() map[string]any {

@@ -1,0 +1,38 @@
+--- FAIL: TestSessionCoreU5b_InputWithoutLiveNativeConversationMustRefuseVisibly (0.00s)
+    --- FAIL: TestSessionCoreU5b_InputWithoutLiveNativeConversationMustRefuseVisibly/claude (0.00s)
+        sessioncore_u5b_cli_driver_test.go:135: FR-043/BDD-05.6: claude Input() returned nil with no live native conversation; a discarded instruction must be a VISIBLE failure, not a silent no-op
+    --- FAIL: TestSessionCoreU5b_InputWithoutLiveNativeConversationMustRefuseVisibly/codex (0.00s)
+        sessioncore_u5b_cli_driver_test.go:135: FR-043/BDD-05.6: codex Input() returned nil with no live native conversation; a discarded instruction must be a VISIBLE failure, not a silent no-op
+    --- FAIL: TestSessionCoreU5b_InputWithoutLiveNativeConversationMustRefuseVisibly/opencode (0.00s)
+        sessioncore_u5b_cli_driver_test.go:135: FR-043/BDD-05.6: opencode Input() returned nil with no live native conversation; a discarded instruction must be a VISIBLE failure, not a silent no-op
+2026/10/09 08:52:11 WARN runner/claude: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeWithoutCapturedNativeIDMustRefuseVisibl241606289/002/stub-cli version="{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\"}"
+2026/10/09 08:52:11 WARN runner/claude: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeWithoutCapturedNativeIDMustRefuseVisibl241606289/002/stub-cli version="{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ok\"}"
+2026/10/09 08:52:11 WARN runner/codex: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeWithoutCapturedNativeIDMustRefuseVisibl464981633/002/stub-cli version="{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"
+2026/10/09 08:52:11 WARN runner/codex: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeWithoutCapturedNativeIDMustRefuseVisibl464981633/002/stub-cli version="{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}"
+2026/10/09 08:52:12 WARN runner/opencode: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeWithoutCapturedNativeIDMustRefuseVisibl1658286230/002/stub-cli version="{\"type\":\"session.complete\"}"
+2026/10/09 08:52:12 WARN runner/opencode: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeWithoutCapturedNativeIDMustRefuseVisibl1658286230/002/stub-cli version="{\"type\":\"session.complete\"}"
+--- FAIL: TestSessionCoreU5b_ResumeWithoutCapturedNativeIDMustRefuseVisibly (1.66s)
+    --- FAIL: TestSessionCoreU5b_ResumeWithoutCapturedNativeIDMustRefuseVisibly/claude (0.57s)
+        sessioncore_u5b_cli_driver_test.go:174: FR-043/BDD-05.6: claude Resume() with no captured native conversation id returned nil — it silently started a FRESH conversation instead of visibly refusing
+    --- FAIL: TestSessionCoreU5b_ResumeWithoutCapturedNativeIDMustRefuseVisibly/codex (0.55s)
+        sessioncore_u5b_cli_driver_test.go:174: FR-043/BDD-05.6: codex Resume() with no captured native conversation id returned nil — it silently started a FRESH conversation instead of visibly refusing
+    --- FAIL: TestSessionCoreU5b_ResumeWithoutCapturedNativeIDMustRefuseVisibly/opencode (0.54s)
+        sessioncore_u5b_cli_driver_test.go:174: FR-043/BDD-05.6: opencode Resume() with no captured native conversation id returned nil — it silently started a FRESH conversation instead of visibly refusing
+2026/10/09 08:52:13 WARN runner/claude: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeReferencesCapturedNativeConversationID2107070280/002/stub-cli version="{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"native-claude-42\"}"
+2026/10/09 08:52:13 INFO runner/claude: session init run_id=claude-1791510733037186000 session_id=native-claude-42
+2026/10/09 08:52:13 WARN runner/claude: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeReferencesCapturedNativeConversationID2107070280/002/stub-cli version="{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"native-claude-42\"}"
+2026/10/09 08:52:13 INFO runner/claude: session init run_id=run-resume session_id=native-claude-42
+2026/10/09 08:52:13 WARN runner/codex: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeReferencesCapturedNativeConversationID756415824/002/stub-cli version="{\"type\":\"thread.started\",\"thread_id\":\"native-codex-42\"}"
+2026/10/09 08:52:13 WARN runner/codex: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeReferencesCapturedNativeConversationID756415824/002/stub-cli version="{\"type\":\"thread.started\",\"thread_id\":\"native-codex-42\"}"
+2026/10/09 08:52:14 WARN runner/opencode: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeReferencesCapturedNativeConversationID141781967/002/stub-cli version="{\"type\":\"session.start\",\"session_id\":\"native-opencode-42\"}"
+2026/10/09 08:52:14 WARN runner/opencode: unknown CLI version — proceeding with graceful degradation binary=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU5b_ResumeReferencesCapturedNativeConversationID141781967/002/stub-cli version="{\"type\":\"session.start\",\"session_id\":\"native-opencode-42\"}"
+--- FAIL: TestSessionCoreU5b_ResumeReferencesCapturedNativeConversationID (1.58s)
+    --- FAIL: TestSessionCoreU5b_ResumeReferencesCapturedNativeConversationID/claude (0.53s)
+        sessioncore_u5b_cli_driver_test.go:220: FR-043/BDD-05.5: claude resumed argv "-p --output-format stream-json --verbose --no-chrome --dangerously-skip-permissions --max-turns 37" does not carry the captured native conversation id "native-claude-42" — Resume started a fresh conversation instead of resuming it
+    --- FAIL: TestSessionCoreU5b_ResumeReferencesCapturedNativeConversationID/codex (0.54s)
+        sessioncore_u5b_cli_driver_test.go:220: FR-043/BDD-05.5: codex resumed argv "--ask-for-approval never exec --json --sandbox workspace-write --skip-git-repo-check --color never -" does not carry the captured native conversation id "native-codex-42" — Resume started a fresh conversation instead of resuming it
+    --- FAIL: TestSessionCoreU5b_ResumeReferencesCapturedNativeConversationID/opencode (0.51s)
+        sessioncore_u5b_cli_driver_test.go:220: FR-043/BDD-05.5: opencode resumed argv "run --format json --dangerously-skip-permissions --" does not carry the captured native conversation id "native-opencode-42" — Resume started a fresh conversation instead of resuming it
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/agent/runner	4.040s
+FAIL

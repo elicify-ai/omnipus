@@ -72,11 +72,16 @@ func TestRecurringSurvivesOwnerMissingSkip(t *testing.T) {
 	}
 	defer cs.Stop()
 
-	// Owner-less recurring job (no SetDefaultAgentID) — the runner-wired lane
-	// skips it because AgentID == "".
-	job, err := cs.AddJob("orphan", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "x")
+	// DEL-15: AddJobFull refuses an owner-less job, so the defensive
+	// owner-missing guard's only remaining input is a legacy/hand-edited store
+	// record — model it by clearing the owner through UpdateJob.
+	job, err := cs.AddJobFull(JobSpec{Name: "orphan", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "x", AgentID: "u6-test-owner"})
 	if err != nil {
 		t.Fatalf("AddJob: %v", err)
+	}
+	job.AgentID = ""
+	if err := cs.UpdateJob(job); err != nil {
+		t.Fatalf("UpdateJob (clear owner): %v", err)
 	}
 	clk.Advance(2 * time.Minute)
 	reArm(t, cs, job.ID, clk.Now().UnixMilli()-1)

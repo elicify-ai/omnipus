@@ -58,7 +58,7 @@ func (al *AgentLoop) SetSteerAudienceDeps(resolver steer.AudienceResolver, obser
 	}
 	for _, agentID := range reg.ListAgentIDs() {
 		if inst, ok := reg.GetAgent(agentID); ok && inst != nil {
-			al.wireSessionMessagingForAgent(inst)
+			al.wireSessionMessagingForAgent(inst, al.GetConfig())
 		}
 	}
 }
@@ -77,7 +77,7 @@ func (al *AgentLoop) SetSteerSessionLauncher(launcher steer.SessionLauncher) {
 	}
 	for _, agentID := range reg.ListAgentIDs() {
 		if inst, ok := reg.GetAgent(agentID); ok && inst != nil {
-			al.wireSessionMessagingForAgent(inst)
+			al.wireSessionMessagingForAgent(inst, al.GetConfig())
 		}
 	}
 }

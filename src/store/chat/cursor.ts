@@ -7,7 +7,7 @@
 //     handleFrame's per-type switch (slices/frames.ts) — so every frame
 //     type that starts carrying a `seq` (§1.2's full list: token, done,
 //     tool_call_start/result, subagent_start/end, media, error,
-//     agent_switched, rate_limit, cancel_stage, message_status, goal_status,
+//     rate_limit, cancel_stage, message_status, goal_status,
 //     loop_status, goal_outcome, judge_verdict, user_message) is covered by
 //     ONE gate rather than one per case. A frame with no `seq` (every frame
 //     this store handled before Lane A's gateway hub lands, and every frame

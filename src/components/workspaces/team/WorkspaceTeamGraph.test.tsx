@@ -17,6 +17,27 @@ import {
   type TeamEditState,
 } from './teamGraphModel'
 import type { Agent } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
+
+// React Flow only PAINTS edge paths once nodes are measured, which jsdom never
+// does (the ResizeObserver stub in beforeAll is a no-op, so nodes stay
+// `visibility: hidden` with no handle geometry) — a `.react-flow__edge` path
+// element therefore never appears here. The load-bearing assertion is against
+// the ACTUAL `edges` prop React Flow receives, captured by wrapping (not
+// replacing) ReactFlow — the same technique GraphView.test.tsx uses.
+const capturedEdgesCalls = vi.hoisted(
+  () => [] as Array<Array<{ source: string; target: string }>>,
+)
+vi.mock('@xyflow/react', async () => {
+  const actual = await vi.importActual<typeof import('@xyflow/react')>('@xyflow/react')
+  return {
+    ...actual,
+    ReactFlow: (props: React.ComponentProps<typeof actual.ReactFlow>) => {
+      capturedEdgesCalls.push((props.edges ?? []) as Array<{ source: string; target: string }>)
+      return <actual.ReactFlow {...props} />
+    },
+  }
+})
 
 // AgentDelegatePicker itself is unit-tested (candidate filtering, selection,
 // empty state) in AgentDelegatePicker.test.tsx against explicit props. Here
@@ -81,21 +102,19 @@ beforeAll(() => {
 })
 
 function agent(id: string, over: Partial<Agent> = {}): Agent {
-  return {
+  return makeAgent({
     id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
     type: 'Main',
     locked: false,
     status: 'active',
     soul: '',
-    heartbeat: '',
-    instructions: '',
     timeout_seconds: 60,
     max_tool_iterations: 10,
-    heartbeat_enabled: false,
-    heartbeat_interval: 0,
+    figure: 'Omnipus',
+    role: 'general',
     ...over,
-  } as Agent
+  })
 }
 
 const AGENTS: Agent[] = [
@@ -409,5 +428,53 @@ describe('WorkspaceTeamGraph — delegate picker wiring', () => {
     fireEvent.click(screen.getByTestId('mock-delegate-mia'))
     expect(props.onConnect).not.toHaveBeenCalled()
     expect(props.onRejectConnection).toHaveBeenCalledWith('That delegation edge already exists.')
+  })
+})
+
+// ── Seeded self-edge reaches the canvas edge layer (U5a ruling) ──────────────
+//
+// The backend now seeds a self-edge for every non-system agent (founder ruling
+// DESIGN-RULING-delegation-20261009, U5a), and the operator must be able to SEE
+// it on the canvas. validateConnection no longer rejects a self-edge, so it
+// flows through the ordinary edge pipeline. jsdom cannot PAINT the path (see
+// the captured-edges note at the top of this file), so the load-bearing proof
+// is that React Flow RECEIVES the self-edge in its `edges` prop — the layer
+// immediately below its viewport. Removal is proven at the model layer
+// (teamGraphModel.test.ts, removeEdge) — the editor's delete path is identical
+// for a self-edge and any other edge.
+describe('WorkspaceTeamGraph — seeded self-edge reaches React Flow', () => {
+  const SELF_EDGE_STATE: TeamEditState = {
+    members: ['mia', 'jim'],
+    edges: [
+      { from: 'mia', to: 'mia', modes: ['direct'] },
+      { from: 'mia', to: 'jim', modes: ['task'], depth: 2 },
+    ],
+    defaultDepth: 3,
+  }
+
+  it('hands the seeded self-edge (mia -> mia) to React Flow alongside the ordinary edge', () => {
+    capturedEdgesCalls.length = 0
+    const model = buildTeamGraphModel(SELF_EDGE_STATE, AGENTS)
+    render(
+      <WorkspaceTeamGraph
+        nodes={model.nodes}
+        edges={model.edges}
+        workerIds={WORKER_IDS}
+        editState={SELF_EDGE_STATE}
+        defaultDepth={model.defaultDepth}
+        onConnect={vi.fn()}
+        onToggleMode={vi.fn()}
+        onSetDepth={vi.fn()}
+        onDeleteEdge={vi.fn()}
+        onRemoveMember={vi.fn()}
+        onRejectConnection={vi.fn()}
+        onOpenAgent={vi.fn()}
+      />,
+    )
+    const renderedEdges = capturedEdgesCalls.at(-1) ?? []
+    // The self-edge is NOT filtered out anywhere on the way to React Flow.
+    expect(renderedEdges.some((e) => e.source === 'mia' && e.target === 'mia')).toBe(true)
+    // And it did not displace the ordinary edge beside it.
+    expect(renderedEdges).toHaveLength(2)
   })
 })

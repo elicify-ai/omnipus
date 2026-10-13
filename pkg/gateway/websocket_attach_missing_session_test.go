@@ -69,7 +69,14 @@ func seedAttachSF1Session(t *testing.T, store *session.UnifiedStore) (string, se
 		AgentID: "mia", Timestamp: time.Date(2026, time.October, 1, 12, 0, 0, 0, time.UTC),
 	}
 	require.NoError(t, store.AppendTranscriptStrict(meta.ID, entry))
-	return meta.ID, entry
+	// FR-004 / C-ARCHIVE: the writer stamps the chat membership on every
+	// transcript append, so the READ-BACK — not the unstamped struct sent —
+	// is the entry a replay actually returns. Returning the sent struct made
+	// the fixture compare "" against the real "chat".
+	saved, err := store.ReadTranscript(meta.ID)
+	require.NoError(t, err)
+	require.Len(t, saved, 1, "fixture: the seeded entry must read back")
+	return meta.ID, saved[0]
 }
 
 func TestWS_AttachDeletedSession_CorrelatesRefusalWithoutSideEffects(t *testing.T) {

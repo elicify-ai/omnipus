@@ -141,11 +141,11 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 	require.Greater(t, evictedCount, 0, "SC-011: precondition: must have evicted turns")
 
 	// initialArchiveLen = total archive line count at turn start (after eviction,
-	// before any in-turn appends). This mirrors ts.initialArchiveLen in a real turn.
+	// before any in-turn appends). A real turn captures this as ts.initialWindow.Count.
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk)
 	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
 	require.True(t, supportsWindow)
-	snapshot, snapshotErr := store.SnapshotWindow(context.Background(), sk)
+	snapshot, snapshotErr := store.WindowView(context.Background(), sk)
 	require.NoError(t, snapshotErr)
 	start := snapshot.State.Clone()
 
@@ -171,7 +171,6 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 		initialWindow:        &start,
 		sessionKey:           sk,
 		session:              agent.Sessions,
-		initialArchiveLen:    initialArchiveLen,
 		initialHistoryLength: len(windowAfterEvict),
 		cancelFunc:           cancel,
 	}
@@ -188,19 +187,24 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 	require.NoError(t, err, "HardAbort must not error on an evicted session")
 
 	// --- Phase 5: assert archive invariants.
-	// The archive must be back to initialArchiveLen (appended tail removed).
+	// FR-006: the abort is NON-destructive — the appended bytes are RETAINED
+	// (the archive is append-only), and only the MODEL VIEW excludes them.
 	afterAbortArchiveLen := archiveLineCountFromAgent(t, al, sk)
-	assert.Equal(t, initialArchiveLen, afterAbortArchiveLen,
-		"SC-001/SC-010: HardAbort must roll back only the appended tail, not the evicted prefix")
+	assert.Equal(t, initialArchiveLen+len(inTurnMsgs), afterAbortArchiveLen,
+		"FR-006: abort must preserve the appended bytes, never truncate the archive")
 
-	// The in-turn sentinel messages must be gone from the archive.
+	// The in-turn sentinel bytes must STILL be in the archive (byte preservation):
+	// recall/ReadArchive reaches every byte the aborted turn wrote.
 	afterAbortArchive := archiveLinesFromAgent(t, al, sk)
+	sentinelInArchive := false
 	for _, line := range afterAbortArchive {
 		if strings.Contains(line.Content, "ABORT_TEST_SENTINEL") {
-			t.Errorf("HardAbort rollback left an in-turn sentinel in the archive: role=%s content=%q",
-				line.Role, line.Content)
+			sentinelInArchive = true
+			break
 		}
 	}
+	assert.True(t, sentinelInArchive,
+		"FR-006: the aborted span's bytes must be RETAINED in the archive (recall still reaches them)")
 
 	// SC-011: ReadArchive must still return the evicted prefix.
 	if afterAbortArchiveLen < evictedCount {
@@ -217,9 +221,9 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 	assert.True(t, evictedFound,
 		"SC-011: evicted turns must be present in archive after HardAbort (archive prefix intact)")
 
-	// The live window (GetHistory) must NOT contain the aborted turn's messages,
-	// AND must have the same size as the pre-turn window (round-2 fix: Skip must
-	// be restored to the turn-start value, not left at the mid-turn-eviction value).
+	// The live window (GetHistory) is the MODEL VIEW: it must EXCLUDE the
+	// aborted span AND be the same size as at turn start (Skip restored to the
+	// turn-start value, not left at the mid-turn-eviction value).
 	liveWindow := agent.Sessions.GetHistory(sk)
 	assert.Equal(t, len(windowAfterEvict), len(liveWindow),
 		"round-2 fix: live window must be the same size as at turn start (Skip restored to turn-start value)")
@@ -291,11 +295,11 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 	evictedCount := preTrimArchiveLen - len(windowAfterEvict)
 	require.Greater(t, evictedCount, 0, "SC-011 precondition: must have evicted turns")
 
-	// initialArchiveLen is what ts.initialArchiveLen captures at turn start.
+	// initialArchiveLen is what a real turn captures as ts.initialWindow.Count at turn start.
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk)
 	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
 	require.True(t, supportsWindow)
-	snapshot, snapshotErr := store.SnapshotWindow(context.Background(), sk)
+	snapshot, snapshotErr := store.WindowView(context.Background(), sk)
 	require.NoError(t, snapshotErr)
 	start := snapshot.State.Clone()
 
@@ -330,27 +334,31 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 		agent:                agent,
 		initialWindow:        &start,
 		sessionKey:           sk,
-		initialArchiveLen:    initialArchiveLen,
 		initialHistoryLength: len(windowAfterEvict),
 	}
 
-	// restoreSession calls RollbackWindow with the full snapshot, then saves the session.
+	// restoreSession calls RollbackWindow with the full snapshot, then verifies
+	// the model view excludes the aborted span, then saves the session.
 	err := ts.restoreSession(agent)
 	require.NoError(t, err, "restoreSession must not error on an evicted session")
 
 	// --- Phase 5: assert archive invariants.
+	// FR-006: the abort is NON-destructive — the appended bytes are RETAINED.
 	afterRestoreArchiveLen := archiveLineCountFromAgent(t, al, sk)
-	assert.Equal(t, initialArchiveLen, afterRestoreArchiveLen,
-		"SC-001/SC-010: restoreSession must roll back only the appended tail, not the evicted prefix")
+	assert.Equal(t, initialArchiveLen+len(inTurnMsgs), afterRestoreArchiveLen,
+		"FR-006: restoreSession must preserve the appended bytes, never truncate the archive")
 
-	// The in-turn sentinel messages must be gone.
+	// The in-turn sentinel bytes must STILL be in the archive (byte preservation).
 	afterRestoreArchive := archiveLinesFromAgent(t, al, sk)
+	sentinelInArchive := false
 	for _, line := range afterRestoreArchive {
 		if strings.Contains(line.Content, "RESTORE_TEST_SENTINEL") {
-			t.Errorf("restoreSession rollback left an in-turn sentinel in the archive: role=%s content=%q",
-				line.Role, line.Content)
+			sentinelInArchive = true
+			break
 		}
 	}
+	assert.True(t, sentinelInArchive,
+		"FR-006: the aborted span's bytes must be RETAINED in the archive (recall still reaches them)")
 
 	// SC-011: evicted prefix must still be present.
 	if afterRestoreArchiveLen < evictedCount {
@@ -367,9 +375,10 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 	assert.True(t, evictedFound,
 		"SC-011: evicted turns must be present in archive after restoreSession (archive prefix intact)")
 
-	// The live window must not contain the aborted turn's messages AND must have
-	// the same number of messages as before the turn started (round-2 fix: Skip
-	// must be restored to the turn-start value, not left advanced by mid-turn evictions).
+	// The live window (the MODEL VIEW) must exclude the aborted turn's messages
+	// AND must have the same number of messages as before the turn started
+	// (round-2 fix: Skip restored to the turn-start value, not advanced by
+	// mid-turn evictions).
 	liveWindow := agent.Sessions.GetHistory(sk)
 	assert.Equal(t, len(windowAfterEvict), len(liveWindow),
 		"round-2 fix: live window must be the same size as at turn start (Skip restored to turn-start value)")
@@ -519,23 +528,25 @@ func TestAssembleMessages_ReadArchiveError_FallsBackToBreadcrumb(t *testing.T) {
 // Round-2 architect finding — mid-turn eviction + abort blanks live window
 // ============================================================================
 
-// TestRollbackAppended_MidTurnEviction_HardAbort verifies the round-2 fix:
-// when windowTrim advances meta.Skip DURING a turn and the turn is then
-// hard-aborted, RollbackAppended MUST restore Skip to its turn-start value so
-// GetHistory returns the exact pre-turn live window — not a blanked/shrunk one.
+// TestAbortPath_MidTurnEviction_HardAbort verifies the round-2 fix under
+// FR-006: when windowTrim advances meta.Skip DURING a turn and the turn is
+// then hard-aborted, the rollback MUST restore Skip to its turn-start value so
+// GetHistory returns the exact pre-turn live window — while the appended bytes
+// stay in the archive (append-only; the aborted span is excluded from the model
+// view, never deleted).
 //
 // BDD:
 //
 //	Given a session with N seeded messages and Skip=S1 (some turns already evicted),
-//	And a turn begins (capturing initialArchiveLen = Count, initialHistoryLength = Count-S1),
+//	And a turn begins (capturing the turn-start window snapshot),
 //	And mid-turn windowTrim advances Skip from S1 to S2 > S1,
 //	And mid-turn messages are appended (Count grows),
-//	When HardAbort is triggered (RollbackAppended(targetLen, targetSkip=S1)),
-//	Then GetHistory returns exactly Count-S1 messages (the pre-turn live window),
-//	Not an empty/shrunk window caused by Skip being left at S2 > targetLen.
+//	When HardAbort is triggered,
+//	Then GetHistory returns exactly the pre-turn live window messages,
+//	And the mid-turn appended bytes are RETAINED in the archive.
 //
-// Traces to: SC-001, SC-010, round-2 architect finding (RollbackAppended Skip restore).
-func TestRollbackAppended_MidTurnEviction_HardAbort(t *testing.T) {
+// Traces to: FR-006, SC-001, SC-010.
+func TestAbortPath_MidTurnEviction_HardAbort(t *testing.T) {
 	const (
 		cw = 3000
 		mt = 500
@@ -544,7 +555,6 @@ func TestRollbackAppended_MidTurnEviction_HardAbort(t *testing.T) {
 	const sk = "midturn-evict-hardabort"
 
 	// Phase 1: seed 6 turns so the session has a non-empty archive.
-	// Each turn ≈ 2×240 tokens = 480 tokens. 6 turns ≈ 2880 tokens.
 	// We do NOT exceed budget here — we want a baseline with Skip=0.
 	smallContent := strings.Repeat("X", 300) // ~120 tokens each
 	var history []providers.Message
@@ -563,23 +573,24 @@ func TestRollbackAppended_MidTurnEviction_HardAbort(t *testing.T) {
 	require.Equal(t, 12, len(windowBeforeEvict), "baseline: all 12 messages visible")
 
 	// Phase 2: simulate a prior eviction BEFORE the turn starts (Skip advances).
-	// Use TruncateHistory directly to advance Skip without removing bytes.
 	// Keep 8 messages visible → Skip = 12 - 8 = 4.
-	agent.Sessions.TruncateHistory(sk, 8)
+	truncateWindowTo(t, agent.Sessions, sk, 8)
 	windowAfterPreEvict := agent.Sessions.GetHistory(sk)
 	require.Equal(t, 8, len(windowAfterPreEvict),
 		"after pre-evict: 8 messages visible (Skip=4)")
 
 	// Capture turn-start state (mirrors newTurnState).
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk) // = 12 (bytes unchanged)
-	initialHistoryLength := len(windowAfterPreEvict)          // = 8
-	// targetSkip at turn start = initialArchiveLen - initialHistoryLength = 4
-	turnStartSkip := initialArchiveLen - initialHistoryLength
-	require.Equal(t, 4, turnStartSkip, "turn-start Skip must be 4")
+	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
+	require.True(t, supportsWindow)
+	snapshot, snapshotErr := store.WindowView(context.Background(), sk)
+	require.NoError(t, snapshotErr)
+	start := snapshot.State.Clone()
+	require.Equal(t, 4, start.Skip, "turn-start Skip must be 4")
 
 	// Phase 3: simulate mid-turn windowTrim advancing Skip further.
 	// Keep 4 messages → Skip advances to 12 - 4 = 8.
-	agent.Sessions.TruncateHistory(sk, 4)
+	truncateWindowTo(t, agent.Sessions, sk, 4)
 	windowAfterMidEvict := agent.Sessions.GetHistory(sk)
 	require.Equal(t, 4, len(windowAfterMidEvict),
 		"after mid-turn eviction: only 4 messages visible (Skip=8)")
@@ -588,60 +599,73 @@ func TestRollbackAppended_MidTurnEviction_HardAbort(t *testing.T) {
 	midEvictArchiveLen := archiveLineCountFromAgent(t, al, sk)
 	require.Equal(t, 12, midEvictArchiveLen, "mid-turn eviction must not delete archive bytes")
 
-	// Phase 4: append 3 in-turn messages (Count grows to 15, Skip=8, window=7).
+	// Phase 4: append 3 in-turn messages (archive grows to 15).
 	inTurnMsgs := []providers.Message{
 		{Role: "user", Content: "MIDTURN_SENTINEL_USER: will be rolled back"},
-		{Role: "assistant", Content: "MIDTURN_SENTINEL_ASST: will be rolled back"},
+		{
+			Role:    "assistant",
+			Content: "MIDTURN_SENTINEL_ASST: will be rolled back",
+			ToolCalls: []providers.ToolCall{{
+				ID: "tc1", Type: "function",
+				Function: &providers.FunctionCall{Name: "t", Arguments: "{}"},
+			}},
+		},
 		{Role: "tool", Content: "MIDTURN_SENTINEL_TOOL: will be rolled back", ToolCallID: "tc1"},
 	}
 	appendInTurnMessages(al, sk, inTurnMsgs)
 	afterAppendArchiveLen := archiveLineCountFromAgent(t, al, sk)
 	require.Equal(t, 15, afterAppendArchiveLen, "after in-turn appends: 12+3=15 archive lines")
 
-	// Without the fix: RollbackAppended(12, 0) would truncate Count to 12 and
-	// clamp Skip = min(8, 12) = 8 → GetHistory = 12-8 = 4 messages (wrong).
-	// With the fix: RollbackAppended(12, 4) restores Skip=4 → GetHistory = 12-4 = 8.
-	//
-	// Phase 5: trigger RollbackAppended directly (mirrors HardAbort's call).
-	agent.Sessions.RollbackAppended(sk, initialArchiveLen, turnStartSkip, nil)
+	// Phase 5: trigger HardAbort through the real abort path.
+	ctx, cancel := context.WithCancel(context.Background())
+	ts := &turnState{
+		agent:                agent,
+		initialWindow:        &start,
+		sessionKey:           sk,
+		session:              agent.Sessions,
+		initialHistoryLength: len(windowAfterPreEvict),
+		cancelFunc:           cancel,
+	}
+	ts.ctx = ctx
+	al.activeTurnStates.Store(sk, ts)
+	defer al.activeTurnStates.Delete(sk)
 
-	// Phase 6: assert post-rollback invariants.
-	// Archive must be back to 12 lines.
-	afterRollbackArchiveLen := archiveLineCountFromAgent(t, al, sk)
-	assert.Equal(t, initialArchiveLen, afterRollbackArchiveLen,
-		"SC-001: rollback must restore archive to initialArchiveLen=12")
+	require.NoError(t, al.HardAbort(sk), "HardAbort must not error")
 
-	// GetHistory MUST return the 8 messages that were visible at turn start.
+	// Phase 6: assert post-abort invariants.
+	// FR-006: the aborted bytes are retained (append-only archive).
+	assert.Equal(t, initialArchiveLen+len(inTurnMsgs), archiveLineCountFromAgent(t, al, sk),
+		"FR-006: abort must preserve the appended bytes, never truncate the archive")
+
+	archive := archiveLinesFromAgent(t, al, sk)
+	sentinelInArchive := false
+	for _, line := range archive {
+		if strings.Contains(line.Content, "MIDTURN_SENTINEL") {
+			sentinelInArchive = true
+			break
+		}
+	}
+	assert.True(t, sentinelInArchive,
+		"FR-006: the aborted span's bytes must be RETAINED in the archive")
+
+	// GetHistory MUST return the messages that were visible at turn start, with
+	// the aborted span excluded from the model view.
 	liveWindow := agent.Sessions.GetHistory(sk)
-	assert.Equal(t, initialHistoryLength, len(liveWindow),
+	assert.Equal(t, len(windowAfterPreEvict), len(liveWindow),
 		"SC-010/round-2 fix: GetHistory must return the pre-turn live window (8 messages), not a blanked/shrunk window")
-
-	// None of the in-turn sentinels may appear in the live window.
 	for _, m := range liveWindow {
 		if strings.Contains(m.Content, "MIDTURN_SENTINEL") {
 			t.Errorf("rolled-back sentinel found in live window: role=%s content=%q", m.Role, m.Content)
 		}
 	}
-
-	// ReadArchive must still return all 12 pre-turn lines (evicted turns intact).
-	archive := archiveLinesFromAgent(t, al, sk)
-	assert.Equal(t, initialArchiveLen, len(archive),
-		"SC-001: ReadArchive must return all pre-turn archive lines after rollback")
-	for _, line := range archive {
-		if strings.Contains(line.Content, "MIDTURN_SENTINEL") {
-			t.Errorf("rolled-back sentinel found in archive: role=%s content=%q",
-				line.Role, line.Content)
-		}
-	}
 }
 
-// TestRollbackAppended_MidTurnEviction_RestoreSession verifies the same fix
-// for the restoreSession (turn-abort) path. The test is structurally identical
-// to TestRollbackAppended_MidTurnEviction_HardAbort but calls
-// ts.restoreSession(agent) instead of RollbackAppended directly.
+// TestAbortPath_MidTurnEviction_RestoreSession verifies the same FR-006 fix
+// for the restoreSession (turn-abort) path. Structurally identical to
+// TestAbortPath_MidTurnEviction_HardAbort but calls ts.restoreSession(agent).
 //
-// Traces to: SC-001, SC-010, round-2 architect finding, turn.go restoreSession path.
-func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
+// Traces to: FR-006, SC-001, SC-010, turn.go restoreSession path.
+func TestAbortPath_MidTurnEviction_RestoreSession(t *testing.T) {
 	const (
 		cw = 3000
 		mt = 500
@@ -661,52 +685,58 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 	require.NotNil(t, agent)
 
 	// Phase 2: pre-turn eviction → keep 8 visible (Skip=4).
-	agent.Sessions.TruncateHistory(sk, 8)
+	truncateWindowTo(t, agent.Sessions, sk, 8)
 	windowAfterPreEvict := agent.Sessions.GetHistory(sk)
 	require.Equal(t, 8, len(windowAfterPreEvict))
 
 	initialArchiveLen := archiveLineCountFromAgent(t, al, sk) // 12
 	store, supportsWindow := agent.Sessions.(session.ContextWindowStore)
 	require.True(t, supportsWindow)
-	snapshot, snapshotErr := store.SnapshotWindow(context.Background(), sk)
+	snapshot, snapshotErr := store.WindowView(context.Background(), sk)
 	require.NoError(t, snapshotErr)
 	start := snapshot.State.Clone()
+	require.Equal(t, 4, start.Skip, "turn-start Skip derivation: 12 archive lines - 8 visible = 4")
 
-	initialHistoryLength := len(windowAfterPreEvict)          // 8
-	turnStartSkip := initialArchiveLen - initialHistoryLength // 4
+	initialHistoryLength := len(windowAfterPreEvict) // 8
 
 	// Phase 3: mid-turn windowTrim → keep 4 visible (Skip advances to 8).
-	agent.Sessions.TruncateHistory(sk, 4)
+	truncateWindowTo(t, agent.Sessions, sk, 4)
 	require.Equal(t, 4, len(agent.Sessions.GetHistory(sk)),
 		"mid-turn eviction: 4 messages visible")
 
 	// Phase 4: append 3 in-turn messages (archive grows to 15).
 	inTurnMsgs := []providers.Message{
 		{Role: "user", Content: "RS_SENTINEL_USER: will be restored away"},
-		{Role: "assistant", Content: "RS_SENTINEL_ASST: will be restored away"},
+		{
+			Role:    "assistant",
+			Content: "RS_SENTINEL_ASST: will be restored away",
+			ToolCalls: []providers.ToolCall{{
+				ID: "tc2", Type: "function",
+				Function: &providers.FunctionCall{Name: "t", Arguments: "{}"},
+			}},
+		},
 		{Role: "tool", Content: "RS_SENTINEL_TOOL: will be restored away", ToolCallID: "tc2"},
 	}
 	appendInTurnMessages(al, sk, inTurnMsgs)
 	require.Equal(t, 15, archiveLineCountFromAgent(t, al, sk))
 
 	// Phase 5: trigger restoreSession (abortTurn path).
-	// turnState mirrors what newTurnState captures at turn start.
 	ts := &turnState{
 		agent:                agent,
 		initialWindow:        &start,
 		sessionKey:           sk,
-		initialArchiveLen:    initialArchiveLen,
 		initialHistoryLength: initialHistoryLength,
 	}
 	err := ts.restoreSession(agent)
 	require.NoError(t, err, "restoreSession must not error")
 
-	// Phase 6: assert pre-turn live window is fully restored.
-	// Archive back to 12.
-	assert.Equal(t, initialArchiveLen, archiveLineCountFromAgent(t, al, sk),
-		"SC-001: restoreSession must restore archive to 12 lines")
+	// Phase 6: assert the model view is fully restored and the bytes are kept.
+	// FR-006: the appended bytes are preserved (append-only archive).
+	assert.Equal(t, initialArchiveLen+len(inTurnMsgs), archiveLineCountFromAgent(t, al, sk),
+		"FR-006: restoreSession must preserve the appended bytes, never truncate the archive")
 
-	// GetHistory must return the 8 pre-turn messages.
+	// GetHistory must return the 8 pre-turn messages, with the aborted span
+	// excluded from the model view.
 	liveWindow := agent.Sessions.GetHistory(sk)
 	assert.Equal(
 		t,
@@ -714,8 +744,6 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 		len(liveWindow),
 		"SC-010/round-2 fix: restoreSession must restore the pre-turn live window (8 messages), not leave Skip advanced to 8",
 	)
-
-	// No sentinels in the live window or archive.
 	for _, m := range liveWindow {
 		if strings.Contains(m.Content, "RS_SENTINEL") {
 			t.Errorf(
@@ -725,15 +753,14 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 			)
 		}
 	}
+	// The aborted bytes remain in the archive (byte preservation).
+	sentinelInArchive := false
 	for _, line := range archiveLinesFromAgent(t, al, sk) {
 		if strings.Contains(line.Content, "RS_SENTINEL") {
-			t.Errorf("in-turn sentinel found in archive after restoreSession: role=%s content=%q",
-				line.Role, line.Content)
+			sentinelInArchive = true
+			break
 		}
 	}
-
-	// Verify the fixture's pre-turn Skip is 4 (12 archive lines - 8 visible).
-	// restoreSession restores that value from the captured window snapshot.
-	assert.Equal(t, 4, turnStartSkip,
-		"turn-start Skip derivation: initialArchiveLen(12) - initialHistoryLength(8) = 4")
+	assert.True(t, sentinelInArchive,
+		"FR-006: the aborted span's bytes must be RETAINED in the archive (recall still reaches them)")
 }

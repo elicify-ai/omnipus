@@ -1,9 +1,20 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { resolve, dirname } from 'node:path'
+import { readFile, mkdir } from 'node:fs/promises'
+import { compile } from '@tailwindcss/node'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import type { ComponentType } from 'react'
+import { createRequire } from 'node:module'
+import { runInNewContext } from 'node:vm'
+import { build } from 'esbuild'
+import type { AgentIconProps } from '../../src/components/ui/agent-icon'
+import { AgentColor } from '../../src/lib/api/generated/schemas'
 
-type Check = { id: string; kind: string; file?: string; test?: string; story?: string; applicable: boolean }
+type BrowserAssertion = { selector: string; attribute?: string; property?: string; value?: string; text?: string }
+type Check = { id: string; kind: string; file?: string; test?: string; story?: string; applicable: boolean; requiredTargets?: BrowserAssertion[] }
 type Manifest = { component: string; stories: Array<{ file: string; exports: string[] }>; checks: Check[] }
 type StoryIndex = { entries: Record<string, { id: string; importPath: string; exportName: string; type: string }> }
 type AxeViolation = { id: string; nodes: Array<{ target: unknown[]; html: string; failureSummary?: string }> }
@@ -77,6 +88,24 @@ function assertSuccessfulStoryFinished(finished: StoryFinished | undefined, stor
   const cause = describeStoryFailure(finished, errors)
   expect(finished, `${storyId} play/report lifecycle must finish successfully${cause}`).toMatchObject({ storyId, status: 'success' })
   expect(finished?.reporters?.some((report) => report.status === 'failed') ?? false, `${storyId} must not contain a failed Storybook report${cause}`).toBe(false)
+}
+
+// Assert one drawn outcome (attribute / property / text beyond mere visibility)
+// against the rendered page. Shared by the story's own browserAssertions and the
+// manifest check's independently anchored requiredTargets so both use one oracle.
+async function assertDrawnOutcome(page: Page, assertion: BrowserAssertion, origin: string) {
+  expect(assertion.attribute || assertion.property || assertion.text, `${origin} browser assertion requires an attribute, property or text outcome beyond visibility`).toBeTruthy()
+  const target = page.locator(assertion.selector)
+  await expect(target).toBeVisible()
+  if (assertion.attribute) {
+    if (assertion.value === undefined) await expect(target).toHaveAttribute(assertion.attribute)
+    else await expect(target).toHaveAttribute(assertion.attribute, assertion.value)
+  }
+  if (assertion.property) {
+    expect(assertion.value, `${origin} browser property assertion requires an expected value`).toBeDefined()
+    await expect.poll(() => target.evaluate((element, property) => String((element as unknown as Record<string, unknown>)[property]), assertion.property!)).toBe(assertion.value)
+  }
+  if (assertion.text) await expect(target).toContainText(assertion.text)
 }
 
 const manifestDir = resolve('design-system/manifests')
@@ -375,6 +404,131 @@ async function performKeyboardStep(page: Page, step: NonNullable<Metadata['keybo
   }
 }
 
+async function assertPointerCheck(page: Page, testInfo: TestInfo, metadata: Metadata) {
+  const coarse = testInfo.project.name.includes('coarse-pointer')
+  expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), `project must expose a ${coarse ? 'coarse' : 'fine'} pointer`).toBe(coarse)
+  expect(metadata.pointerTargets?.length, 'pointer checks require parameters.designSystem.pointerTargets').toBeGreaterThan(0)
+  const targets = await Promise.all((metadata.pointerTargets ?? []).map(async (selector) => ({
+    box: await page.locator(selector).boundingBox(),
+    borderRadius: await page.locator(selector).evaluate((element) => parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0),
+  })))
+  const minimum = coarse ? 44 : 24
+  const effective = []
+  for (let index = 0; index < targets.length; index += 1) {
+    const { box, borderRadius } = targets[index]
+    expect(box, `pointer target ${metadata.pointerTargets![index]} must render`).not.toBeNull()
+    const center = { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }
+    const width = Math.max(box!.width, minimum)
+    const height = Math.max(box!.height, minimum)
+    const radiusX = width / 2 - 1
+    const radiusY = height / 2 - 1
+    const cornerX = radiusX - (box!.width >= minimum ? Math.min(borderRadius + 1, radiusX - 1) : 0)
+    const cornerY = radiusY - (box!.height >= minimum ? Math.min(borderRadius + 1, radiusY - 1) : 0)
+    for (const point of [
+      center,
+      { x: center.x - radiusX, y: center.y }, { x: center.x + radiusX, y: center.y },
+      { x: center.x, y: center.y - radiusY }, { x: center.x, y: center.y + radiusY },
+      { x: center.x - cornerX, y: center.y - cornerY }, { x: center.x + cornerX, y: center.y - cornerY },
+      { x: center.x - cornerX, y: center.y + cornerY }, { x: center.x + cornerX, y: center.y + cornerY },
+    ]) {
+      expect(await pointerHitsTarget(page, metadata.pointerTargets![index], point.x, point.y, coarse), `${metadata.pointerTargets![index]} must receive a real pointer event at (${point.x}, ${point.y}) across its ${minimum}px effective region`).toBe(true)
+    }
+    effective.push({ x: center.x - width / 2, y: center.y - height / 2, width, height })
+  }
+  for (let left = 0; left < effective.length; left += 1) for (let right = left + 1; right < effective.length; right += 1) {
+    const a = effective[left]; const b = effective[right]
+    expect(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y, 'pointer hit regions must not overlap').toBe(true)
+  }
+}
+
+async function assertReducedMotionCheck(page: Page, metadata: Metadata) {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true)
+  if (metadata.motionSetup) await page.locator(metadata.motionSetup.trigger).press(metadata.motionSetup.key)
+  expect(metadata.motionTargets?.length, 'reduced-motion checks require parameters.designSystem.motionTargets').toBeGreaterThan(0)
+  for (const selector of metadata.motionTargets ?? []) {
+    const timing = await page.locator(selector).evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        animationNames: style.animationName.split(',').map((value) => value.trim()),
+        animationDurations: style.animationDuration.split(',').map((value) => parseFloat(value)),
+        transitionProperties: style.transitionProperty.split(',').map((value) => value.trim()),
+        transitionDurations: style.transitionDuration.split(',').map((value) => parseFloat(value)),
+      }
+    })
+    const animationsInactive = timing.animationNames.every((name, index) => name === 'none' || (timing.animationDurations[index % timing.animationDurations.length] ?? 0) <= 0.01)
+    const transitionsInactive = timing.transitionProperties.every((property, index) => property === 'none' || (timing.transitionDurations[index % timing.transitionDurations.length] ?? 0) <= 0.01)
+    expect({ animationsInactive, transitionsInactive }, `${selector} must expose no active animation or transition under reduced motion`).toEqual({ animationsInactive: true, transitionsInactive: true })
+  }
+}
+
+async function assertForcedColorsCheck(page: Page, testInfo: TestInfo, metadata: Metadata, manifest: Manifest) {
+  expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), `forced colors unsupported in ${testInfo.project.name}; record as a coverage gap`).toBe(true)
+  await assertForcedColorsContract(page, metadata.forcedColors)
+  if (manifest.component === 'ViewSwitch') {
+    const board = page.getByRole('radio', { name: 'Board', exact: true })
+    const list = page.getByRole('radio', { name: 'List', exact: true })
+    const decoration = (target: Locator) => target.evaluate((element) => getComputedStyle(element).textDecorationLine)
+    await expect.poll(() => decoration(board), 'the selected view needs a visible cue beyond label contrast').toBe('underline')
+    await expect.poll(() => decoration(list)).toBe('none')
+    for (const target of [board, list]) {
+      await expect(target, 'each view must keep ButtonText on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:text-\[ButtonText\](?:\s|$)/)
+      await expect(target, 'each view must keep ButtonFace on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:bg-\[ButtonFace\](?:\s|$)/)
+    }
+    // Coarse-pointer projects cannot hover; they still verify both utilities above.
+    if (await page.evaluate(() => matchMedia('(hover: hover)').matches)) {
+      const expectedHoverColors = await page.evaluate(() => {
+        const probe = document.createElement('span')
+        probe.style.color = 'ButtonText'
+        probe.style.backgroundColor = 'ButtonFace'
+        probe.style.forcedColorAdjust = 'none'
+        document.body.append(probe)
+        const style = getComputedStyle(probe)
+        const colors = { color: style.color, background: style.backgroundColor }
+        probe.remove()
+        return colors
+      })
+      for (const target of [board, list]) {
+        await target.hover()
+        await expect.poll(() => target.evaluate((element) => {
+          const style = getComputedStyle(element)
+          return { color: style.color, background: style.backgroundColor }
+        }), 'selected and unselected hovered views must use the ButtonText/ButtonFace pair').toEqual(expectedHoverColors)
+      }
+    }
+    await board.focus()
+    await board.press('ArrowRight')
+    await expect(list).toBeFocused()
+    await expect(list).toHaveAttribute('aria-checked', 'true')
+    await expect(board).toHaveAttribute('aria-checked', 'false')
+    await expect.poll(() => decoration(list), 'the selection cue must follow keyboard selection').toBe('underline')
+    await expect.poll(() => decoration(board)).toBe('none')
+  }
+}
+
+async function assertReflowCheck(page: Page, metadata: Metadata) {
+  await page.setViewportSize({ width: 320, height: 720 })
+  // setViewportSize returns as soon as the browser process has applied the
+  // new size; the renderer processes the resize (fires the window resize
+  // event, re-lays out) a beat later. Portalled Radix floaters reposition
+  // from that resize event via floating-ui's autoUpdate, i.e. one frame
+  // after the resize lands — measured on Linux chromium (Playwright
+  // 1.61.1): the popper wrapper still sits at its 1280px-layout position
+  // (left 514) in the instant after the resize and only repositions to
+  // its 320px-layout spot (left 34) by the next frame (~21ms). Measuring
+  // overflow in that window raced the reposition and made this check
+  // flake red on loaded CI runners (3 red / 2 green on unchanged code)
+  // while the content itself always reflowed correctly. Wait for the
+  // resize-processing frame to finish (resize steps run before rAF
+  // callbacks in a frame) plus one more, so the measurement sees the
+  // settled layout. The assertion below is untouched: content that
+  // genuinely overflows at 320px still fails it.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  }))
+  await assertNoOverflow(page, metadata.reflowExemptions)
+}
+
 test('manifest coverage exists before browser verification can pass', async () => {
   expect(manifests.length, 'design-system/manifests contains no component manifests').toBeGreaterThan(0)
 })
@@ -496,101 +650,11 @@ for (const manifest of manifests) {
           await performKeyboardStep(page, step)
         }
       } else if (check.kind === 'pointer') {
-        const coarse = testInfo.project.name.includes('coarse-pointer')
-        expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), `project must expose a ${coarse ? 'coarse' : 'fine'} pointer`).toBe(coarse)
-        expect(metadata.pointerTargets?.length, 'pointer checks require parameters.designSystem.pointerTargets').toBeGreaterThan(0)
-        const targets = await Promise.all((metadata.pointerTargets ?? []).map(async (selector) => ({
-          box: await page.locator(selector).boundingBox(),
-          borderRadius: await page.locator(selector).evaluate((element) => parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0),
-        })))
-        const minimum = coarse ? 44 : 24
-        const effective = []
-        for (let index = 0; index < targets.length; index += 1) {
-          const { box, borderRadius } = targets[index]
-          expect(box, `pointer target ${metadata.pointerTargets![index]} must render`).not.toBeNull()
-          const center = { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }
-          const width = Math.max(box!.width, minimum)
-          const height = Math.max(box!.height, minimum)
-          const radiusX = width / 2 - 1
-          const radiusY = height / 2 - 1
-          const cornerX = radiusX - (box!.width >= minimum ? Math.min(borderRadius + 1, radiusX - 1) : 0)
-          const cornerY = radiusY - (box!.height >= minimum ? Math.min(borderRadius + 1, radiusY - 1) : 0)
-          for (const point of [
-            center,
-            { x: center.x - radiusX, y: center.y }, { x: center.x + radiusX, y: center.y },
-            { x: center.x, y: center.y - radiusY }, { x: center.x, y: center.y + radiusY },
-            { x: center.x - cornerX, y: center.y - cornerY }, { x: center.x + cornerX, y: center.y - cornerY },
-            { x: center.x - cornerX, y: center.y + cornerY }, { x: center.x + cornerX, y: center.y + cornerY },
-          ]) {
-            expect(await pointerHitsTarget(page, metadata.pointerTargets![index], point.x, point.y, coarse), `${metadata.pointerTargets![index]} must receive a real pointer event at (${point.x}, ${point.y}) across its ${minimum}px effective region`).toBe(true)
-          }
-          effective.push({ x: center.x - width / 2, y: center.y - height / 2, width, height })
-        }
-        for (let left = 0; left < effective.length; left += 1) for (let right = left + 1; right < effective.length; right += 1) {
-          const a = effective[left]; const b = effective[right]
-          expect(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y, 'pointer hit regions must not overlap').toBe(true)
-        }
+        await assertPointerCheck(page, testInfo, metadata)
       } else if (check.kind === 'reduced-motion') {
-        await page.emulateMedia({ reducedMotion: 'reduce' })
-        expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true)
-        if (metadata.motionSetup) await page.locator(metadata.motionSetup.trigger).press(metadata.motionSetup.key)
-        expect(metadata.motionTargets?.length, 'reduced-motion checks require parameters.designSystem.motionTargets').toBeGreaterThan(0)
-        for (const selector of metadata.motionTargets ?? []) {
-          const timing = await page.locator(selector).evaluate((element) => {
-            const style = getComputedStyle(element)
-            return {
-              animationNames: style.animationName.split(',').map((value) => value.trim()),
-              animationDurations: style.animationDuration.split(',').map((value) => parseFloat(value)),
-              transitionProperties: style.transitionProperty.split(',').map((value) => value.trim()),
-              transitionDurations: style.transitionDuration.split(',').map((value) => parseFloat(value)),
-            }
-          })
-          const animationsInactive = timing.animationNames.every((name, index) => name === 'none' || (timing.animationDurations[index % timing.animationDurations.length] ?? 0) <= 0.01)
-          const transitionsInactive = timing.transitionProperties.every((property, index) => property === 'none' || (timing.transitionDurations[index % timing.transitionDurations.length] ?? 0) <= 0.01)
-          expect({ animationsInactive, transitionsInactive }, `${selector} must expose no active animation or transition under reduced motion`).toEqual({ animationsInactive: true, transitionsInactive: true })
-        }
+        await assertReducedMotionCheck(page, metadata)
       } else if (check.kind === 'forced-colors') {
-        expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), `forced colors unsupported in ${testInfo.project.name}; record as a coverage gap`).toBe(true)
-        await assertForcedColorsContract(page, metadata.forcedColors)
-        if (manifest.component === 'ViewSwitch') {
-          const board = page.getByRole('radio', { name: 'Board', exact: true })
-          const list = page.getByRole('radio', { name: 'List', exact: true })
-          const decoration = (target: Locator) => target.evaluate((element) => getComputedStyle(element).textDecorationLine)
-          await expect.poll(() => decoration(board), 'the selected view needs a visible cue beyond label contrast').toBe('underline')
-          await expect.poll(() => decoration(list)).toBe('none')
-          for (const target of [board, list]) {
-            await expect(target, 'each view must keep ButtonText on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:text-\[ButtonText\](?:\s|$)/)
-            await expect(target, 'each view must keep ButtonFace on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:bg-\[ButtonFace\](?:\s|$)/)
-          }
-          // Coarse-pointer projects cannot hover; they still verify both utilities above.
-          if (await page.evaluate(() => matchMedia('(hover: hover)').matches)) {
-            const expectedHoverColors = await page.evaluate(() => {
-              const probe = document.createElement('span')
-              probe.style.color = 'ButtonText'
-              probe.style.backgroundColor = 'ButtonFace'
-              probe.style.forcedColorAdjust = 'none'
-              document.body.append(probe)
-              const style = getComputedStyle(probe)
-              const colors = { color: style.color, background: style.backgroundColor }
-              probe.remove()
-              return colors
-            })
-            for (const target of [board, list]) {
-              await target.hover()
-              await expect.poll(() => target.evaluate((element) => {
-                const style = getComputedStyle(element)
-                return { color: style.color, background: style.backgroundColor }
-              }), 'selected and unselected hovered views must use the ButtonText/ButtonFace pair').toEqual(expectedHoverColors)
-            }
-          }
-          await board.focus()
-          await board.press('ArrowRight')
-          await expect(list).toBeFocused()
-          await expect(list).toHaveAttribute('aria-checked', 'true')
-          await expect(board).toHaveAttribute('aria-checked', 'false')
-          await expect.poll(() => decoration(list), 'the selection cue must follow keyboard selection').toBe('underline')
-          await expect.poll(() => decoration(board)).toBe('none')
-        }
+        await assertForcedColorsCheck(page, testInfo, metadata, manifest)
       } else if (check.kind === 'root-size') {
         for (const [input, expected] of [[10, 12], [12, 12], [14, 14], [20, 20], [22, 20]]) {
           await page.evaluate((size) => { document.documentElement.style.setProperty('--user-font-size', `${size}px`) }, input)
@@ -619,42 +683,19 @@ for (const manifest of manifests) {
         }))
         await assertNoOverflow(page, metadata.reflowExemptions)
       } else if (check.kind === 'reflow') {
-        await page.setViewportSize({ width: 320, height: 720 })
-        // setViewportSize returns as soon as the browser process has applied the
-        // new size; the renderer processes the resize (fires the window resize
-        // event, re-lays out) a beat later. Portalled Radix floaters reposition
-        // from that resize event via floating-ui's autoUpdate, i.e. one frame
-        // after the resize lands — measured on Linux chromium (Playwright
-        // 1.61.1): the popper wrapper still sits at its 1280px-layout position
-        // (left 514) in the instant after the resize and only repositions to
-        // its 320px-layout spot (left 34) by the next frame (~21ms). Measuring
-        // overflow in that window raced the reposition and made this check
-        // flake red on loaded CI runners (3 red / 2 green on unchanged code)
-        // while the content itself always reflowed correctly. Wait for the
-        // resize-processing frame to finish (resize steps run before rAF
-        // callbacks in a frame) plus one more, so the measurement sees the
-        // settled layout. The assertion below is untouched: content that
-        // genuinely overflows at 320px still fails it.
-        await page.evaluate(() => new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-        }))
-        await assertNoOverflow(page, metadata.reflowExemptions)
+        await assertReflowCheck(page, metadata)
       } else {
         expect(metadata.browserAssertions?.length, 'browser checks require parameters.designSystem.browserAssertions').toBeGreaterThan(0)
-        for (const assertion of metadata.browserAssertions ?? []) {
-          expect(assertion.attribute || assertion.property || assertion.text, 'browser assertions require an attribute, property or text outcome beyond visibility').toBeTruthy()
-          const target = page.locator(assertion.selector)
-          await expect(target).toBeVisible()
-          if (assertion.attribute) {
-            if (assertion.value === undefined) await expect(target).toHaveAttribute(assertion.attribute)
-            else await expect(target).toHaveAttribute(assertion.attribute, assertion.value)
-          }
-          if (assertion.property) {
-            expect(assertion.value, 'browser property assertions require an expected value').toBeDefined()
-            await expect.poll(() => target.evaluate((element, property) => String((element as unknown as Record<string, unknown>)[property]), assertion.property!)).toBe(assertion.value)
-          }
-          if (assertion.text) await expect(target).toContainText(assertion.text)
-        }
+        // The opened story's own assertions move with `check.story` (openStory selects
+        // the story from it), so on their own they cannot detect a check pointed at the
+        // wrong story: the wrong story's own valid assertions would satisfy them. The
+        // check's manifest-level `requiredTargets` is an independently anchored drawn
+        // outcome whose source does NOT move with `check.story`, asserted here against
+        // the rendered page. A wrong-story check therefore fails on the drawn attribute
+        // instead of passing on the other story's own equally valid assertions.
+        expect(check.requiredTargets?.length, `${manifest.component}/${check.id} browser check must declare a manifest-level requiredTargets drawn outcome, anchored independently of check.story`).toBeGreaterThan(0)
+        for (const assertion of metadata.browserAssertions ?? []) await assertDrawnOutcome(page, assertion, `${manifest.component}/${check.id} opened story`)
+        for (const assertion of check.requiredTargets ?? []) await assertDrawnOutcome(page, assertion, `${manifest.component}/${check.id} required target`)
         if (manifest.component === 'Button' && check.id === 'button-auxiliary-browser') {
           const nativeMiddleClick = async (selector: string, openTimeoutMs: number) => {
             const link = page.locator(selector)
@@ -715,3 +756,120 @@ for (const manifest of manifests) {
     })
   }
 }
+
+test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both backgrounds', async ({ page }, testInfo) => {
+    // Spec Safeguards / ARCH decision 3.2. Compile the real publication CSS
+    // with the classes selected by real AgentIcon renders. No fake animation
+    // styles, phase data attributes or source-text checks certify a frame.
+    // Bundle only the actual component tree, using the app's existing path
+    // mapping. The browser test runner's own root config has no SPA aliases.
+    const compiled = await build({ entryPoints: [resolve('src/components/ui/agent-icon.tsx')], bundle: true, platform: 'node', format: 'cjs', write: false, tsconfig: resolve('tsconfig.app.json'), external: ['react', 'react/*'] })
+    const componentModule: { exports: { AgentIcon?: ComponentType<AgentIconProps> } } = { exports: {} }
+    runInNewContext(compiled.outputFiles[0].text, { module: componentModule, exports: componentModule.exports, require: createRequire(import.meta.url) })
+    const AgentIcon = componentModule.exports.AgentIcon
+    expect(typeof AgentIcon, 'actual bundled AgentIcon').toBe('function')
+    const markup = (['thinking', 'working', 'waiting'] as const).map((motion) => renderToStaticMarkup(createElement(AgentIcon!, {
+      figure: 'Robot', role: 'security', size: 48, motion, reducedMotion: false, color: AgentColor.options[8], name: 'Mia',
+    }))).join('') + renderToStaticMarkup(createElement(AgentIcon!, {
+      figure: 'Robot', role: 'security', size: 48, motion: 'thinking', color: AgentColor.options[8], name: 'Mia',
+    }))
+    const classes = Array.from(markup.matchAll(/class="([^"]*)"/g)).flatMap((match) => match[1].split(/\s+/))
+    const source = resolve('src/styles/library.css')
+    const css = await compile(await readFile(source, 'utf8'), { base: dirname(source), onDependency() {} })
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+      await page.setContent(`<style>${css.build(classes)}</style>${markup}`)
+      await page.getByTestId('agent-icon').first().waitFor({ state: 'visible' })
+      for (const [index, oracle] of [
+        { duration: 2600, scales: [0.96, 1.01, 0.96], glow: [0.55, 1, 0.55] },
+        { duration: 1600, scales: [0.97, 1.03, 0.97], glow: null },
+        { duration: 3400, scales: null, glow: null },
+      ].entries()) {
+        const mark = page.getByTestId('agent-icon').nth(index)
+        const frames = await mark.evaluate((root) => {
+          const ink = root.querySelector('[data-ink]')!
+          const glow = root.querySelector('[data-glow]')!
+          const inkAnimation = ink.getAnimations()[0]
+          const glowAnimation = glow.getAnimations()[0]
+          if (!inkAnimation?.effect || !glowAnimation?.effect) throw new Error('Published CSS did not animate the rendered mark/glow')
+          const inkFrames = (inkAnimation.effect as KeyframeEffect).getKeyframes()
+          const glowFrames = (glowAnimation.effect as KeyframeEffect).getKeyframes()
+          return {
+            inkDuration: inkAnimation.effect.getTiming().duration,
+            glowDuration: glowAnimation.effect.getTiming().duration,
+            // CSSOM keyframes retain decimal contract values; converting
+            // them through DOMMatrix introduces unrelated Float32 rounding.
+            scales: inkFrames.filter((frame) => frame.transform !== undefined).map((frame) => {
+              const match = /^scale\((\d+(?:\.\d+)?)\)$/.exec(String(frame.transform))
+              if (!match) throw new Error(`Expected a uniform scale keyframe, got ${String(frame.transform)}`)
+              return Number(match[1])
+            }),
+            glowOpacity: glowFrames.filter((frame) => frame.opacity !== undefined).map((frame) => Number(frame.opacity)),
+            sheenDuration: root.querySelector('[data-agent-icon-sheen]')?.getAnimations()[0]?.effect?.getTiming().duration ?? null,
+          }
+        })
+        expect(frames.inkDuration).toBe(oracle.duration)
+        expect(frames.glowDuration).toBe(oracle.duration)
+        if (oracle.scales) expect(frames.scales).toEqual(oracle.scales)
+        else expect(Math.max(...frames.scales)).toBe(1.07) // Waiting specifies the peak, not a frame count.
+        if (oracle.glow) expect(frames.glowOpacity).toEqual(oracle.glow)
+        if (index === 1) expect(frames.sheenDuration).toBe(2400)
+      }
+      const thinking = page.getByTestId('agent-icon').first()
+      // The ink is the SUPPLIED palette hex, opaquely passed through
+      // (AgentIconProps.color: "Palette ink. Fully opaque. Passed through as
+      // currentColor"). The expected fill therefore derives from the SAME
+      // contract enum value the renders above were given — the founder's
+      // 2026-10-11 metallic avatar palette (AVATAR-PALETTE-DECISION;
+      // options[8] is the champagne ink) — by hex arithmetic, never from
+      // observing the component, so a mapping, tinting or swap regression
+      // still fails this exact equality. The >=3:1 contrast assertion below
+      // keeps gating whatever ink the palette carries.
+      const inkHex = AgentColor.options[8]
+      const expectedFill = `rgb(${parseInt(inkHex.slice(1, 3), 16)}, ${parseInt(inkHex.slice(3, 5), 16)}, ${parseInt(inkHex.slice(5, 7), 16)})`
+      for (const background of ['#111113', '#0A0A0B']) {
+        // Pause at the actual glow's dimmest frame, not a guessed delay.
+        const sample = await thinking.evaluate((root, backdrop) => {
+          document.body.style.backgroundColor = backdrop
+          for (const animation of root.getAnimations({ subtree: true })) { animation.pause(); animation.currentTime = 0 }
+          const ink = root.querySelector('[data-ink]')!
+          const svg = ink.querySelector('svg')!
+          const badge = ink.querySelector('[data-role="security"]')!
+          function effectiveOpacity(element: Element) {
+            let value = 1
+            for (let node: Element | null = element; node; node = node.parentElement) value *= Number(getComputedStyle(node).opacity)
+            return value
+          }
+          return {
+            background: getComputedStyle(document.body).backgroundColor,
+            fill: getComputedStyle(svg).fill,
+            inkOpacity: effectiveOpacity(svg), badgeOpacity: effectiveOpacity(badge),
+            dimmestGlow: Number(getComputedStyle(root.querySelector('[data-glow]')!).opacity),
+          }
+        }, background)
+        expect(sample.fill).toBe(expectedFill)
+        expect(sample.inkOpacity).toBe(1)
+        expect(sample.badgeOpacity).toBe(1)
+        expect(sample.dimmestGlow).toBe(0.55)
+        // WCAG sRGB relative luminance; use actual browser fill/background.
+        const luminance = (rgb: string) => {
+          const channels = rgb.match(/\d+(?:\.\d+)?/g)!.slice(0, 3).map(Number).map((channel) => channel / 255)
+          const linear = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+          return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+        }
+        const inkL = luminance(sample.fill)
+        const backgroundL = luminance(sample.background)
+        expect((Math.max(inkL, backgroundL) + 0.05) / (Math.min(inkL, backgroundL) + 0.05), `dimmest ink contrast on ${background}`).toBeGreaterThanOrEqual(3)
+        const directory = testInfo.outputPath('wave1-testpower')
+        await mkdir(directory, { recursive: true })
+        await thinking.screenshot({ path: resolve(directory, `thinking-dimmest-${background.slice(1)}.png`), animations: 'allow' })
+      }
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      const mediaAware = page.getByTestId('agent-icon').nth(3)
+      const reduced = await mediaAware.evaluate((root) => ({
+        inkAnimation: getComputedStyle(root.querySelector('[data-ink]')!).animationName,
+        glowAnimation: getComputedStyle(root.querySelector('[data-glow]')!).animationName,
+        loops: root.getAnimations({ subtree: true }).length,
+        inkOpacity: getComputedStyle(root.querySelector('[data-ink]')!).opacity,
+      }))
+      expect(reduced).toEqual({ inkAnimation: 'none', glowAnimation: 'none', loops: 0, inkOpacity: '1' })
+})

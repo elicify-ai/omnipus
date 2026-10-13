@@ -76,6 +76,10 @@ func TestUpdateConfig_UnicodeFoldBypass_Refused(t *testing.T) {
 		{"gateway.users", `{"gateway":{"u` + longS + `ers":[{"username":"evil","role":"admin"}]}}`},
 		{"providers credential check", `{"provider` + longS + `":[]}`},
 		{"api_key credential check (Kelvin)", `{"api_` + kelvin + `ey":"x"}`},
+		// workspace_seed_defaults is the one blocked path carrying a "k"
+		// (session-core C-DELEGATE, FR-014/015); U+212A folds to "k", so a
+		// Kelvin-spelled key must be refused exactly like the plain spelling.
+		{"workspace_seed_defaults (Kelvin)", `{"wor` + kelvin + `space_seed_defaults":{"self_edge":{"mode":"direct"}}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newMTIAPI(t, "250")

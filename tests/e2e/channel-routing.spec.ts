@@ -67,6 +67,9 @@ const STUB_CHANNELS = [
 // section renders "Couldn't load agent list." instead of the pickers.
 const STUB_REVISION = 'a'.repeat(64)
 const AGENT_REQUIRED = {
+  // W1-5: the generated Agent schema requires both identity fields.
+  figure: 'Omnipus',
+  role: 'general',
   status: 'idle',
   soul: 'stub soul',
   timeout_seconds: 300,

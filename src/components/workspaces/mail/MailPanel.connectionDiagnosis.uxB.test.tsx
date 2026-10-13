@@ -30,7 +30,7 @@ function renderMail() {
 
 describe('F3 — configured mailbox cannot connect', () => {
   beforeEach(() => {
-    fetchAgents.mockReset().mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockReset().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockReset().mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', configured: true, enabled: true, username: 'mia-outage@example.test' },
     ])

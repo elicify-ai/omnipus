@@ -55,6 +55,7 @@ import {
   selectAgent,
   waitForConnected,
 } from './fixtures/selectors';
+import { freshChat } from './fixtures/session-setup';
 import type { DelegationFrame } from './fixtures/delegation-completion';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
@@ -82,15 +83,19 @@ function requireApiKey(): void {
 async function startFreshChat(page: import('@playwright/test').Page): Promise<void> {
   // A stale tool-approval dialog rehydrates on every fresh page load while its
   // ask pends (reconcileWithSessionState, src/store/toolApproval.ts) and its
-  // dialog-overlay intercepts the New Chat click — CI run 36123574726 attempt 1
-  // burned the entire 300s budget in 579 blocked-click retries right here.
-  // Escape maps to Deny while an approval is live, so the dismissal sticks.
+  // dialog-overlay intercepted the banner New Chat click this used to make —
+  // CI run 36123574726 attempt 1 burned the entire 300s budget in 579
+  // blocked-click retries right here. Escape maps to Deny while an approval
+  // is live, so the dismissal sticks. It would equally block freshChat's
+  // sidebar reads below, so this stays first.
   await dismissStaleDialogOverlay(page);
-  const newChat = page.getByRole('banner').getByRole('button', { name: 'New Chat' });
-  if (await newChat.isVisible({ timeout: 5_000 })) {
-    await newChat.click();
-    await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
-  }
+  // Founder decision D7 removed every New-chat UI entry (the banner button
+  // included), so the old isVisible-guarded click could never fire again —
+  // this helper's empty-thread guarantee had silently vanished. freshChat
+  // (public REST create + the SPA's own deep-link route) is the suite's
+  // replacement seam and restores the toHaveCount(0) guarantee unconditionally.
+  await freshChat(page);
+  await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
   // Route to Jim — Mia declines to delegate (see note above).
   await selectAgent(page, /Jim/i);
 }

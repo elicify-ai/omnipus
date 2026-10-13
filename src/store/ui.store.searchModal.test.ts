@@ -1,6 +1,6 @@
 // ui.store.searchModal.test.ts — the search-modal TWO-MODES contract
 // (session-search vs workspace-switch). See SearchModal.tsx/useSlashMenu.ts
-// for the consumers: /resume and the sidebar search icon go through
+// for the consumers: /sessions and the sidebar search icon go through
 // `openSearchModal` (mode stays 'sessions'); /workspace goes through the
 // new `openWorkspaceSwitcher` action (mode becomes 'workspaces').
 
@@ -49,7 +49,7 @@ describe('searchModal UI store — mode', () => {
     expect(useUiStore.getState().searchModalWorkspaceFilter).toBeNull()
   })
 
-  it('closeSearchModal resets mode back to sessions — a prior /workspace open cannot leak into the next /resume or sidebar-icon open', () => {
+  it('closeSearchModal resets mode back to sessions — a prior /workspace open cannot leak into the next /sessions or sidebar-icon open', () => {
     useUiStore.getState().openWorkspaceSwitcher()
     expect(useUiStore.getState().searchModalMode).toBe('workspaces')
 

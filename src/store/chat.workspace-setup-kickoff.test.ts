@@ -557,11 +557,17 @@ describe('chat store — late session_started ack across workspaces', () => {
     })
     expect(mockSend).toHaveBeenCalledTimes(1)
 
+    // The gateway echoes the initiating message's client_message_id on this
+    // ack (pkg/gateway/websocket_first_message.go::acknowledgeNewSession);
+    // DEL-F21/F22 made that echo the only correlated receipt an ordinary
+    // first send gets, so the fixture carries it.
+    const plainSendCid = (mockSend.mock.calls[0][0] as { client_message_id?: string }).client_message_id
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'session_started',
         session_id: 'sess-plain-1',
         agent_id: AGENT_ID,
+        client_message_id: plainSendCid,
       })
     })
 

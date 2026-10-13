@@ -22,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/utils"
+	"github.com/google/uuid"
 )
 
 // gatewayPrincipal returns the WS-authenticated gateway principal that an
@@ -344,22 +345,16 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		return routing.ResolvedRoute{AgentID: pinned, SessionKey: sk}, agent, nil
 	}
 
-	// Explicit agent_id in message metadata takes top priority. The user
+	// Explicit agent_id in message metadata takes top priority: the user
 	// switching the SPA dropdown to a different agent is an authoritative
-	// re-targeting that must win over any prior handoff routing override —
-	// otherwise a Mia → Ray handoff persists silently after the user
-	// explicitly switches back to Jim, and Jim's UI receives Ray's replies.
-	// The override is still consulted below for messages without an
-	// explicit agent_id (e.g. channel inputs that don't track agent state).
+	// re-targeting.
 	if explicitID := inboundMetadata(msg, "agent_id"); explicitID != "" {
 		if agent, ok := registry.GetAgent(explicitID); ok {
 			// A worker is a delegation-only labor tier — never a chat target.
 			// An inbound message that explicitly addresses a worker (e.g. a stale
 			// SPA dropdown value or a crafted channel payload) must NOT let the
 			// worker answer as a live persona. Degrade to the normal routing
-			// cascade, which resolves a chat-target default. Do not delete any
-			// handoff pin here — falling through preserves an existing chat-target
-			// override if one is set.
+			// cascade, which resolves a chat-target default.
 			if agent.IsWorker() {
 				logger.WarnCF(
 					"agent",
@@ -370,23 +365,8 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 						"reason":     "worker is invoked via delegation, not as a chat target",
 					},
 				)
-				// Fall through to the handoff-override / ResolveRoute cascade below.
+				// Fall through to the ResolveRoute cascade below.
 			} else {
-				// Clear stale handoff override only when the explicit target differs from
-				// the current override. If the user selects the same agent that the handoff
-				// already set, clearing the override would incorrectly reset routing state.
-				curStr, curOK := "", false
-				cur, ok := al.sessionActiveAgent.Load(sessionScopeKey(msg))
-				if ok {
-					curStr, curOK = cur.(string)
-					if !curOK {
-						logger.ErrorCF("agent", "sessionActiveAgent: invariant violated — unexpected value type, clearing stale entry",
-							map[string]any{"session_id": msg.SessionID, "got_type": fmt.Sprintf("%T", cur)})
-					}
-				}
-				if !ok || !curOK || curStr != explicitID {
-					al.sessionActiveAgent.Delete(sessionScopeKey(msg))
-				}
 				logger.InfoCF("agent", "Routed to explicit agent (dropdown)", map[string]any{
 					"agent_id":   explicitID,
 					"session_id": msg.SessionID,
@@ -401,53 +381,6 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 				"registered_ids": registry.ListAgentIDs(),
 			})
 			return routing.ResolvedRoute{}, nil, fmt.Errorf("the requested agent is not available")
-		}
-	}
-
-	// Check session/chat-scope handoff override. Only reached when the message
-	// carries no explicit agent_id. sessionScopeKey prevents non-webchat
-	// channels without a SessionID from collapsing into a single global bucket.
-	{
-		scopeKey := sessionScopeKey(msg)
-		if activeAgent, ok := al.sessionActiveAgent.Load(scopeKey); ok {
-			agentID, agentIDOK := activeAgent.(string)
-			if !agentIDOK {
-				logger.ErrorCF("agent", "sessionActiveAgent: invariant violated — unexpected value type, clearing stale entry",
-					map[string]any{"session_id": msg.SessionID, "got_type": fmt.Sprintf("%T", activeAgent)})
-				al.sessionActiveAgent.Delete(scopeKey)
-			}
-			if agentIDOK && agentID != "" {
-				if agent, ok := registry.GetAgent(agentID); ok {
-					// A worker must never be a live chat target. A pin that points at
-					// a worker is stale/illegitimate (handoff now rejects worker
-					// targets, but a pin created before this guard, or via another
-					// path, could still exist). Drop the stale pin and fall through
-					// to the normal ResolveRoute cascade so a chat-target default
-					// answers instead of the worker.
-					if agent.IsWorker() {
-						logger.WarnCF(
-							"agent",
-							"Session handoff pin references a worker (not a chat target); clearing stale pin and falling back to default route",
-							map[string]any{
-								"session_id": msg.SessionID,
-								"agent_id":   agentID,
-								"reason":     "worker is invoked via delegation, not as a chat target",
-							},
-						)
-						al.sessionActiveAgent.Delete(scopeKey)
-					} else {
-						logger.InfoCF("agent", "Session handoff override active", map[string]any{
-							"session_id": msg.SessionID,
-							"agent_id":   agentID,
-						})
-						sk := agentSessionKey(agentID, msg)
-						return routing.ResolvedRoute{AgentID: agentID, SessionKey: sk}, agent, nil
-					}
-				} else {
-					// Agent was deleted after the override was set — clean up and fall through.
-					al.sessionActiveAgent.Delete(scopeKey)
-				}
-			}
 		}
 	}
 
@@ -543,18 +476,6 @@ func resolveScopeKey(route routing.ResolvedRoute, msgSessionKey string) string {
 		return msgSessionKey
 	}
 	return route.SessionKey
-}
-
-// sessionScopeKey returns a stable bucket key for a message.
-// When SessionID is set, returns "session:<sessionID>".
-// When SessionID is empty, returns "chat:<channel>:<chatID>" so that
-// messages from non-webchat channels that haven't been assigned a session yet
-// do not all collapse into a single "session:" bucket.
-func sessionScopeKey(msg bus.InboundMessage) string {
-	if msg.SessionID != "" {
-		return "session:" + msg.SessionID
-	}
-	return "chat:" + msg.Channel + ":" + msg.ChatID
 }
 
 // agentSessionKey builds the per-agent session key combining agentID with the
@@ -702,8 +623,15 @@ func (al *AgentLoop) processSystemMessage(
 	// session's data. Falls back to the unscoped main key only when no
 	// origin session is known (a system message with no AsyncNotifier
 	// origin), matching the pre-fix behavior for that narrower case.
-	sessionKey := routing.BuildAgentMainSessionKey(agent.ID)
-	if transcriptSessionID != "" {
+	//
+	// DEL-10 step 0: a system message with NO origin session no longer borrows an
+	// agent-wide "agent:<id>:main" history bucket (in the one shared store that
+	// name would be a session directory literally called "agent:<id>:main", and
+	// ":" is not a legal Windows file name character). It runs without session
+	// history, under a one-off scope key that is never persisted.
+	noHistory := transcriptSessionID == ""
+	sessionKey := fmt.Sprintf("agent:%s:system:%s", agent.ID, uuid.NewString())
+	if !noHistory {
 		sessionKey = fmt.Sprintf("agent:%s:session:%s", agent.ID, transcriptSessionID)
 	}
 
@@ -733,6 +661,7 @@ func (al *AgentLoop) processSystemMessage(
 		TranscriptSessionID:  transcriptSessionID,
 		TranscriptStore:      transcriptStore,
 		WorkspaceID:          workspaceID,
+		NoHistory:            noHistory,
 	})
 }
 
@@ -1109,7 +1038,9 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	// across re-entries", not just the first dispatch.
 	runCtx, cancel := steeredTurnRunContext(ctx, rec)
 	defer cancel()
-	result, err := al.runTurn(runCtx, ts)
+	// Same body dispatch as the first-run path: an external-CLI target is
+	// driven through the shared runner on a wake too, never the native loop.
+	result, err := al.runSteeredTurnBody(runCtx, rec, ts)
 	ts, result, err = al.drainSteeredTurn(runCtx, rec, ts, result, err)
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
 	rootExecution.recordTurnOutcome(err)

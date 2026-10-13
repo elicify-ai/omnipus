@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -281,9 +282,11 @@ func TestTaskRunDispatchFailure_ReleasesItsSlotAndOwner(t *testing.T) {
 	inProgress := task.StatusInProgress
 	_, err := f.al.taskStore.Update(f.task.ID, task.Patch{Status: &inProgress})
 	require.NoError(t, err)
-	f.te.mu.Lock()
-	f.te.running[f.task.ID] = &taskSlot{}
-	f.te.mu.Unlock()
+	// StartTaskNow now reserves the task's run slot before launching, so the
+	// "executor already holds a run" state is planted between the launch and the
+	// dispatch: the launcher has reserved its slot and stamped the owner, and the
+	// dispatch is then refused.
+	f.te.SetSessionLauncher(&plantRunAfterLaunch{inner: f.te.launcher, te: f.te, taskID: f.task.ID})
 
 	_, err = f.te.StartTaskNow(context.Background(), f.task.ID)
 	require.Error(t, err, "the refused dispatch must be reported to the caller")
@@ -317,7 +320,7 @@ func TestTaskRunDispatchFailure_ReleasesItsSlotAndOwner(t *testing.T) {
 // blockingExternalCLIDriver blocks inside Run until its context is cancelled,
 // like a real external CLI process that only a kill ends.
 type blockingExternalCLIDriver struct {
-	*runner.FakeRunner
+	*runnertest.FakeRunner
 	entered chan struct{}
 	once    sync.Once
 }
@@ -333,7 +336,7 @@ func (d *blockingExternalCLIDriver) Run(ctx context.Context, _ runner.RunOptions
 // loop. Its turn must own the same barrier, or a person's Stop is refused for
 // it exactly as in UAT W-03.
 func TestTaskRunStop_ExternalCLIWorker_LandsStopped(t *testing.T) {
-	driver := &blockingExternalCLIDriver{FakeRunner: runner.NewFakeRunner(), entered: make(chan struct{})}
+	driver := &blockingExternalCLIDriver{FakeRunner: runnertest.NewFakeRunner(), entered: make(chan struct{})}
 	previous := newExternalDriver
 	newExternalDriver = func(string, runner.ConsentHandler) (runner.ExternalAgentRunner, error) { return driver, nil }
 	t.Cleanup(func() { newExternalDriver = previous })
@@ -480,7 +483,7 @@ func TestTaskRunNeverEndsStuckWorking(t *testing.T) {
 // refused with the barrier error.
 func TestBoardTaskRunStop_IsNotRefused(t *testing.T) {
 	f := newTaskStopFixture(t, taskFrontExecute, false, "a board answer that never arrives")
-	meta, err := f.al.GetAgentStore(taskStopWorkerID).NewSession(session.SessionTypeTask, "system", taskStopWorkerID)
+	meta, err := f.al.GetSessionStore().NewSession(session.SessionTypeTask, "system", taskStopWorkerID)
 	require.NoError(t, err)
 	done := make(chan error, 1)
 	f.al.ExecuteBoardTask(taskStopWorkerID, "board-task-1", meta.ID, "do the board work", func(_ string, runErr error) { done <- runErr })
@@ -611,6 +614,10 @@ func TestTaskRunStop_WhileTheJudgeDeliberates(t *testing.T) {
 			criteria := []task.AcceptanceCriterion{proseCriterion("c1", "the work is complete")}
 			_, err := f.al.taskStore.Update(f.task.ID, task.Patch{Criteria: &criteria})
 			require.NoError(t, err)
+			// DEL-18: fresh creation owns the task's paired goal record. Without
+			// one the run has no goal loop, the Judge is never asked to deliberate,
+			// and this test can only time out waiting for it.
+			pairTaskGoalRecordUsingTaskCriteria(t, f.al, f.task.ID)
 
 			if front == taskFrontLauncher {
 				inProgress := task.StatusInProgress
@@ -825,4 +832,26 @@ func TestTaskRunAdmissionRefusals_OtherThanAStopAreNotReportedAsStopped(t *testi
 			require.Empty(t, f.provider.Requests())
 		})
 	}
+}
+
+// plantRunAfterLaunch plants a live run for the task right after the real
+// Launch, so the following Dispatch finds the executor already holding one.
+type plantRunAfterLaunch struct {
+	inner  steer.SessionLauncher
+	te     *TaskExecutor
+	taskID string
+}
+
+func (l *plantRunAfterLaunch) Launch(ctx context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {
+	res, err := l.inner.Launch(ctx, req)
+	if err == nil {
+		l.te.mu.Lock()
+		l.te.running[l.taskID] = &taskSlot{}
+		l.te.mu.Unlock()
+	}
+	return res, err
+}
+
+func (l *plantRunAfterLaunch) Dispatch(ctx context.Context, id string, gen int) (steer.DispatchResult, error) {
+	return l.inner.Dispatch(ctx, id, gen)
 }

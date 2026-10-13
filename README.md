@@ -1,7 +1,5 @@
 <div align="left">
-<img src="docs/marketing/omnipus-hero.png" alt="Omnipus — a team of AI agents you actually own. Five named agents — Mia (Coach & Guide), Ray (Researcher), Jim (General Purpose), Ava (Agent Builder), and Max (Automator) — coordinated around the Omnipus octopus, above a capability strip (research with citations, code, browser automation, long-term memory, build unlimited custom agents) and a privacy strip (your keys, no telemetry, runs on your infrastructure, connect MCP servers and tools)." width="900">
-
-<p>Research. Code. Write. Automate. Browse. Analyze. — five named agents that hand off to each other and remember what you discussed.</p>
+<p>Research. Code. Write. Automate. Browse. Analyze. — named agents that ask each other for help and remember what you discussed.</p>
 
 <p>Or have <b>Ava build entirely new agents</b> for tasks nobody's imagined yet. <b>You run the team. Ava grows the team.</b></p>
 
@@ -42,17 +40,17 @@ People install Omnipus to get things done, not to study the architecture. Out of
 
 ### A team, not a chatbot
 
-Five named agents who hand work to each other in the same conversation — Mia hears your request, picks the right teammate, and passes control over.
+Named colleagues you can ask for help with `@` — each keeps its own chat, and requests between them are delivered, not handed over.
 
 No copy-paste, no re-explaining.
 
-→ [How handoffs work](docs/concepts.md#meet-the-team)
+→ [Meet the agents](docs/concepts.md#the-agents)
 
 ### They delegate and parallelize
 
-Agents can plan work and assign tasks to each other — track it all on the Command Center board — and break a big job into parallel subagents that report back.
+Agents can plan work and assign tasks to each other — follow it all on the workspace Tasks board — and break a big job into parallel subagents that report back.
 
-→ [The Command Center board](docs/using-omnipus-ui.md#command-center)
+→ [The Tasks board](docs/tasks.md)
 
 ### Memory that learns
 
@@ -60,13 +58,13 @@ When a conversation winds down, Omnipus writes a recap *and* records the lessons
 
 The recap carries into your next session automatically, and the lessons are kept for recall, so your team builds on past work instead of starting cold.
 
-→ [Auto-recap at session close](docs/memory.md#what-happens-at-session-close-auto-recap)
+→ [Auto-recap at session close](docs/memory.md#what-happens-when-a-session-ends)
 
 ### Agents that know your preferences
 
 Tell them once in Settings → Profile ("be concise", "I use Python", your timezone) and every agent keeps it in mind.
 
-→ [Tell your agents your preferences](docs/using-omnipus-ui.md#tell-your-agents-your-preferences)
+→ [Tell your agents your preferences](docs/settings.md)
 
 ### Reach them anywhere
 
@@ -78,13 +76,13 @@ Use the web app, the terminal, or wire your agents into Telegram, Discord, Slack
 
 Agents ask permission before running anything sensitive (Allow / Deny / Always), and every action is logged so you can see exactly what happened.
 
-→ [When an agent asks permission](docs/using-omnipus-ui.md#when-an-agent-asks-permission)
+→ [When an agent asks permission](docs/security.md#approve-a-request)
 
 ### Extend it
 
 Install reusable **skills**, connect **MCP** servers, and let Ava build brand-new custom agents for you on demand.
 
-→ [Skills quick start](docs/skills.md#quick-start)
+→ [Skills quick start](docs/skills.md#how-to-add-a-skill-and-grant-it)
 
 ### Your keys, your machine
 
@@ -92,7 +90,7 @@ API keys are encrypted on disk, nothing phones home, and there's no telemetry.
 
 Pick from 35+ AI providers — including fully-local options like Ollama.
 
-→ [LLM providers](docs/providers.md#providers)
+→ [LLM providers](docs/providers-and-models.md)
 
 <details>
 <summary><b>For the technically curious</b> — what's under the hood</summary>
@@ -103,13 +101,11 @@ Pick from 35+ AI providers — including fully-local options like Ollama.
 
 **Encrypted credential vault** — AES-256-GCM; when the key comes from a typed passphrase it is derived with Argon2id. → [Master key and encryption](docs/operations/security-considerations.md#master-key-provisioning)
 
-> Note: the "Credential encryption" link in the First-boot section currently points to a doc that does not exist yet — the target will be re-aimed in a follow-up by another agent.
+**Full audit trail** — every tool call, LLM request, and agent event lands in a replayable on-disk transcript that feeds the UI, subprocess hooks, and a tamper-evident audit log. → [Session transcript](docs/operations/observability.md#session-transcript)
 
-**Full audit trail** — every tool call, LLM request, and agent event lands in a replayable on-disk transcript that feeds the UI, subprocess hooks, and a tamper-evident audit log. → [Session transcript](docs/observability.md#session-transcript)
+**13 in-process chat channels and 35+ LLM providers** — with fallback chains, multi-key rotation, streaming, and vision. → [Connectors](docs/connectors.md) · [Providers](docs/providers-and-models.md)
 
-**13 in-process chat channels and 35+ LLM providers** — with fallback chains, multi-key rotation, streaming, and vision. → [Connectors](docs/connectors.md) · [Providers](docs/providers.md#providers)
-
-**Channel-to-agent routing** — binds inbound messages to specific agents by channel, account, guild, team, or peer. → [Inbound bindings](docs/routing.md#inbound-bindings)
+**Channel-to-agent routing** — binds inbound messages to specific agents by channel, account, guild, team, or peer. → [Inbound bindings](docs/connectors.md#choosing-which-agent-answers)
 
 </details>
 
@@ -117,57 +113,18 @@ Pick from 35+ AI providers — including fully-local options like Ollama.
 
 ## Meet the team
 
-Five named coworkers ship with every install.
+Four named colleagues ship with every install, plus three built-in workers (Planner, Researcher, General Purpose).
 
 Their identity is locked — no silent knock-offs — but you control each one's model and tool policy.
 
 | Agent | Role | Best at |
 |---|---|---|
-| **Mia** | Coach & Guide | Onboarding new users, routing requests to the right teammate by intent — not by name. |
-| **Jim** | General Purpose | Hands-on implementation: writing code, creating files, scoping projects, coordinating across agents. |
-| **Ava** | Agent Builder | Interviews you, then creates a brand-new custom agent — persona, tools, prompt — in seconds. |
-| **Ray** | Researcher | Deep research with citations. Web search, fetch, synthesis. Refuses to bluff when evidence is thin. |
-| **Max** | Automator | Browser automation. Plan-then-execute multi-step flows with approval gates. |
+| **Mia** | Assistant | Your everyday starting point; answers and connects you with the right specialist. |
+| **Jim** | Planner and Orchestrator | Turns a complex goal into tasks, delegates, tracks to completion. |
+| **Ava** | Builder | Interviews you, then creates a custom agent. |
+| **Admin** | Operator | Configures connectors, providers, channels, diagnostics and document dependencies. |
 
 Need more? Ava builds unlimited custom agents, and Omnipus runs them all in the same binary.
-
----
-
-## See it work
-
-Four live screenshots, captured against the running gateway.
-
-### Mia routes by intent
-
-Tell her what you need — "I need an agent to help me build a marketing website" — and she picks the right teammate, says why, and hands off in 12 ms.
-
-The receiving agent picks up in the same transcript. No copy-paste.
-
-<img src="docs/marketing/screenshots/16-handoff-mia-to-jim.png" alt="Mia routes a website-build request to Jim by intent" width="900">
-
-### Ray researches with sources
-
-Web searches fan out, and the results synthesise into a numbered list with citations.
-
-He won't fake an answer.
-
-<img src="docs/marketing/screenshots/14-ray-research-demo.png" alt="Ray researches open-source agent frameworks with citations" width="900">
-
-### Max sees the web
-
-`browser.navigate` → `browser.screenshot`, chained in one turn.
-
-The image streams back through the media pipeline and renders inline.
-
-<img src="docs/marketing/screenshots/13-max-screenshot-demo.png" alt="Max screenshots anthropic.com and describes the page" width="900">
-
-### Ava builds an agent live
-
-Tell her what you need, watch her call `system.agent.create`, and get a summary card.
-
-The new agent shows up in the roster instantly.
-
-<img src="docs/marketing/screenshots/15-ava-build-agent.png" alt="Ava builds Penny the pricing analyst" width="900">
 
 ---
 
@@ -208,7 +165,7 @@ Customise via environment:
 | `OMNIPUS_INSTALL_DIR` | `/usr/local/bin` | Use `$HOME/.local/bin` if you don't have sudo |
 | `OMNIPUS_REPO` | `elicify-ai/omnipus` | Override only for forks |
 
-**Browser tools.** On the first `browser.navigate` / `browser.screenshot` / `web_serve` call, the gateway looks for `google-chrome` / `chromium` / `chromium-browser` on `$PATH`. If one is found it's used as-is; if not, a managed Chromium is downloaded to `$OMNIPUS_HOME/browser/chromium/` (Chrome for Testing, ~150 MB, one-time).
+**Browser tools.** On the first `browser_navigate` / `browser_screenshot` / `serve_web` call, the gateway looks for `google-chrome` / `chromium` / `chromium-browser` on `$PATH`. If one is found it's used as-is; if not, a managed Chromium is downloaded to `$OMNIPUS_HOME/browser/chromium/` (Chrome for Testing, ~150 MB, one-time).
 
 That download needs glibc, so on Alpine hosts install `chromium` via `apk` first — the PATH lookup then resolves and the managed download is skipped.
 
@@ -229,14 +186,16 @@ For both, we recommend the **full (heavy) Docker image**: it bundles browser aut
 ```bash
 docker run -d \
   -p 127.0.0.1:5000:5000 \
-  -p 127.0.0.1:5001:5001 \
+  -e OMNIPUS_GATEWAY_HOST=0.0.0.0 \
   -v "$PWD/data:/root/.omnipus" \
   ghcr.io/elicify-ai/omnipus:latest
 ```
 
-Or with compose: `curl -O https://raw.githubusercontent.com/elicify-ai/omnipus/main/docker/docker-compose.yml && docker compose up`.
+Then open `http://localhost:5000`. The `OMNIPUS_GATEWAY_HOST=0.0.0.0` line is required: without it the gateway listens only on the container's own loopback and the published port reaches nothing.
 
-The published image (`ghcr.io/elicify-ai/omnipus:latest`) is built from [`docker/Dockerfile`](docker/Dockerfile): an Alpine multi-stage build that produces a **~71 MB** runtime image with only `ca-certificates`, `tzdata`, and `curl` on top of the Go binary.
+Or with compose, from a clone of this repository: see the [Docker guide](docs/docker.md#quick-start--docker-compose). Both services in the compose file are profile-gated, so a plain `docker compose up` starts nothing; start the gateway with `--profile gateway` (`docker compose -f docker/docker-compose.yml --profile gateway up -d`).
+
+The published image (`ghcr.io/elicify-ai/omnipus:latest`) is built from [`docker/Dockerfile.goreleaser`](docker/Dockerfile.goreleaser): an Alpine image with only `ca-certificates` and `tzdata` on top of the Go binary.
 
 Same SPA, same channels, same memory + sessions + audit log as the native install.
 
@@ -244,11 +203,11 @@ Same SPA, same channels, same memory + sessions + audit log as the native instal
 
 The minimal image **deliberately excludes Chromium** to keep the artefact small. As a result:
 
-All `browser.*` tools (`navigate`, `screenshot`, `read_content`, `console_logs`, `action`) and the entire `web_serve` preview flow **will not work** out of the box.
+All `browser_*` tools (for example `browser_navigate`, `browser_screenshot`, `browser_click`, `browser_get_text`) and the entire `serve_web` preview flow **will not work** out of the box.
 
 The auto-download fallback in `pkg/tools/browser/manager.go` does fetch a managed Chromium from Chrome for Testing — but that binary is **glibc-linked** while the runtime is **Alpine (musl)**, so `exec` fails with a misleading `no such file or directory`. (The missing piece is the ELF interpreter `/lib64/ld-linux-x86-64.so.2`, not the binary itself.)
 
-The Max agent gracefully falls back to `web_fetch` for read-only tasks and explains the missing capability to the user.
+Agents gracefully fall back to `fetch_url` for read-only tasks and explain the missing capability to the user.
 
 If you need browser tools inside Docker, use the heavy image below.
 
@@ -258,14 +217,13 @@ If you need browser tools inside Docker, use the heavy image below.
 docker build -t omnipus:heavy -f docker/Dockerfile.heavy .
 docker run -d \
   -p 127.0.0.1:5000:5000 \
-  -p 127.0.0.1:5001:5001 \
   -v "$PWD/data:/home/omnipus/.omnipus" \
   omnipus:heavy
 ```
 
-Built from [`docker/Dockerfile.heavy`](docker/Dockerfile.heavy): the same three-stage SPA + Go build as the minimal image, but the runtime stage adds `chromium`, `python3`, `py3-pip`, `uv` / `uvx`, `git`, `jq`, and a global `agent-browser` npm install.
+Built from [`docker/Dockerfile.heavy`](docker/Dockerfile.heavy): it builds the web app and the Go binary itself (three stages in all), and its runtime stage is a Debian base, not Alpine. That stage adds Chrome (the full Chrome for Testing build, downloaded while the image is built), `python3` with `pip`, `uv` / `uvx`, `git`, `jq`, and `curl`.
 
-About **1.08 GB** on disk, in exchange for first-class browser tools and Python MCP server support out of the box.
+The image is much larger than the minimal one, in exchange for first-class browser tools and Python MCP server support out of the box.
 
 Heavy image is not currently published to GHCR — build it yourself per the snippet above. (Tracked: ship it from the same release pipeline.)
 
@@ -282,7 +240,7 @@ Requires Go 1.26+ and Node 24+. `make build` runs `spa-embed` first so `go:embed
 
 ### First boot
 
-Two ports open: **5000** serves the SPA + API, and **5001** serves sandboxed agent preview iframes.
+One port opens: **5000** serves the SPA, the API and agent previews (under `/preview/`). Docker users publish only this port.
 
 The onboarding wizard runs on first visit: Welcome → Provider → API Key → Model → Account → Done.
 
@@ -320,7 +278,7 @@ It applies the same end-state mutations as the SPA wizard — config, credential
 
 New here? Start with:
 
-- [Your first 10 minutes](docs/getting-started.md) — install → first chat → handoff → build an agent
+- [Your first 10 minutes](docs/getting-started.md) — install → first chat → build an agent
 - [How Omnipus works](docs/concepts.md) — agents, sessions, memory, channels, skills (plain English)
 - [Using the web app](docs/using-omnipus-ui.md) · [Using the terminal](docs/using-omnipus-cli.md)
 - [Connectors](docs/connectors.md) — connect Telegram / Discord / Slack / … and choose which agent answers each
@@ -328,8 +286,6 @@ New here? Start with:
 ---
 
 ## Architecture
-
-<img src="docs/marketing/diagrams/architecture.svg" alt="Omnipus architecture: clients on top, gateway with main port 5000 and sandboxed preview port 5001, channel-to-agent routing, agent runtime with hooks/tools/policy/event-bus, four persistence stores (memory, sessions, audit log, credential vault), all wrapped by the Linux kernel sandbox; LLM providers, MCP servers, and ClawHub registry live outside the sandbox and are reached via SSRF-checked outbound HTTP" width="960">
 
 Single Go binary. File-based JSON/JSONL storage at `~/.omnipus/`. No Postgres, no Redis.
 

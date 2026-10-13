@@ -81,6 +81,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "JobStatus [check:job-status-browser] browser",
       "story": "Progressing",
+      "requiredTargets": [{ "selector": "[data-testid=\"job-status\"]", "text": "35%" }],
       "applicable": true
     },
     {

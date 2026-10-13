@@ -1,19 +1,18 @@
 // "@" agent-mention menu — component-level coverage (real DOM, real
-// OmnipusComposer render tree). Complements the hook-level suite in
-// src/hooks/useSlashMenu.test.ts (covering gating, filtering, keyboard nav,
-// selection, and the active-agent flag on the HOOK's own return value — see
-// that file for the current count; not pinned here, K.2 correction,
-// bugfixes3 sign-off) by proving the same behavior actually reaches the
+// OmnipusComposer render tree). Restored (ported from commit 103c5fd0 /
+// release/v0.1.1) by founder decision 2026-10-11 Q1 B, which reverses the
+// FR-007 cutover for addressing only. Complements the hook-level suite in
+// src/hooks/useSlashMenu.test.ts by proving the same behavior reaches the
 // rendered DOM: the "Agents" section header, `agent-mention-item` rows, the
-// highlight class, and the real setActiveSession/composerRuntime side
-// effects wired through OmnipusComposer — mirrors the established pattern in
-// ChatScreen.skills-filter.test.tsx / ChatScreen.partitioned-menu.test.tsx /
-// ChatScreen.agents-command.test.tsx (mock @assistant-ui/react primitives +
-// @tanstack/react-query + importOriginal-spread @/lib/api).
+// highlight marker, and the selection side effects wired through
+// OmnipusComposer.
 //
-// Traces to: commit 103c5fd0 (feat(chat): @ agent-mention menu) —
-// src/hooks/useSlashMenu.ts (isMentionMode/agentItems), ChatScreen.tsx
-// (Agents section header, agent-mention-item rows, active marker).
+// THE ONE BEHAVIOUR CHANGE vs the old menu (FR-029 — no in-chat handover):
+// selecting an agent inserts "@<Agent name> " into the composer and marks
+// that agent as the message's recipient. It must NOT switch the active agent
+// or session. The recipient itself is derived from the leading "@<Name>"
+// prefix at SEND time (src/lib/recipientAddress.ts); the store/wire side is
+// covered by src/store/chat.recipient-send.test.ts.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -22,6 +21,9 @@ import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import { queryClient } from '@/lib/queryClient'
 import { makeAgent } from '@/test/factories'
 
 class ResizeObserverStub {
@@ -92,9 +94,9 @@ vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock
         }),
 }))
 
-// Command/skill fixtures — needed for the "/" regression guard (item 9)
-// proving the two menu modes never mix. Mirrors
-// ChatScreen.partitioned-menu.test.tsx's fixtures.
+// Command/skill fixtures — needed for the "/" regression guard proving the
+// two menu modes never mix. Mirrors ChatScreen.partitioned-menu.test.tsx's
+// fixtures.
 const mockCommands = [
   { name: 'clear',  label: '/clear',  description: 'Start a new conversation', delivery: 'client', available_while_streaming: false },
   { name: 'help',   label: '/help',   description: 'Show available commands',  delivery: 'client', available_while_streaming: false },
@@ -108,12 +110,11 @@ const mockSkills = [
 // "@" mention menu source data — three distinct-prefix scoped agents
 // (Mia/Jim/Ava) plus two agents that must NEVER render as mention rows:
 // a worker (Subagent — isWorker() exclusion) and a draft-status agent (not
-// active/idle — "ready to chat" exclusion). "Max Worker" deliberately also
-// starts with "m" so the "@m" filter test (item 2) doubles as proof that
-// worker exclusion applies BEFORE the prefix filter, not as an accident of
-// the filter itself.
+// active/idle). "Max Worker" deliberately also starts with "m" so the "@m"
+// filter test doubles as proof that worker exclusion applies BEFORE the
+// prefix filter.
 const mockAgents = [
-  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#111111', description: 'Assistant' }),
+  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#6E8BA8', description: 'Assistant' }),
   makeAgent({ id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' }),
   makeAgent({ id: 'ava', name: 'Ava', type: 'Main', status: 'active', description: 'Builder' }),
   makeAgent({ id: 'max', name: 'Max Worker', type: 'Subagent', status: 'active', description: 'Labour agent' }),
@@ -137,7 +138,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       }
       // 'workspaces' (and anything else) — no active workspace is set in
       // these tests, so core_team scoping never engages; that scoping path
-      // is covered separately (AgentPicker.test.tsx / useChatAgents.test.ts).
+      // is covered separately (useChatAgents.test.ts).
       return { data: [], isError: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
@@ -151,11 +152,10 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
-// importOriginal: useSlashMenu calls useChatAgents unconditionally (the "@"
-// mention menu itself), which needs the REAL `isWorker` (this file's worker
-// exclusion assertions depend on it) plus `fetchWorkspaces`/
-// `workspacesQueryKeys` to exist so the module loads — useQuery is fully
-// mocked above and never actually invokes these queryFns.
+// importOriginal: the mention menu calls useChatAgents, which needs the REAL
+// `isWorker` (this file's worker-exclusion assertions depend on it) plus
+// `fetchWorkspaces`/`workspacesQueryKeys` to exist so the module loads —
+// useQuery is fully mocked above and never actually invokes these queryFns.
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
@@ -174,15 +174,12 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-// The mention menu is independent of the picker/model/token sub-components
-// (same rationale as the sibling "/" menu test files) — stub them to null so
-// their own workspaces/providers query plumbing doesn't need mocking here.
-// Stubbing AgentPicker also means its auto-select-first-agent effect never
-// runs, so it can't race this file's own setActiveSession assertions.
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
+// The mention menu is independent of the model/token sub-components (same
+// rationale as the sibling "/" menu test files) — stub them to null so their
+// own workspaces/providers query plumbing doesn't need mocking here.
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
+vi.mock('./composer/AutoApprovePicker', () => ({ AutoApprovePicker: () => null }))
 
 function resetStores() {
   act(() => {
@@ -201,29 +198,24 @@ function resetStores() {
     })
     useSessionStore.setState({
       activeSessionId: 'sess_mention_test',
-      // Deliberately not one of mockAgents' ids — proves no row spuriously
-      // renders the "active" marker in tests that don't explicitly set it
-      // (see item 10, which overrides this to 'jim').
+      // Deliberately not one of mockAgents' ids: no row is the chat's own
+      // agent, so the self-exclusion never hides a fixture row in these
+      // tests (the self-exclusion itself is covered in useSlashMenu.test.ts).
       activeAgentId: 'general-assistant',
       activeAgentType: null,
       attachedSessionType: null,
       attachedTaskTitle: null,
     })
+    useUiStore.setState({ toasts: [] })
   })
 }
 
 beforeEach(resetStores)
 
-// K.4 (bugfixes3 sign-off): two tests below override `useComposerRuntime`'s
-// return value via `.mockReturnValue(...)` (to capture a `mockSetText` spy
-// for their own assertions). `.mockReturnValue` replaces the mock's
-// implementation for the rest of THIS FILE's test run, not just the single
-// test that sets it — vitest does not reset mock state between tests here
-// (no restoreMocks/clearMocks configured in vite.config.ts) — so without
-// this, a later test in this file would silently inherit a stale
-// composerRuntime (and a `mockSetText` spy meant for a different test's
-// assertions) from an earlier one. Restore the base factory's shape after
-// EVERY test (harmless/idempotent for tests that never overrode it).
+// K.4 (bugfixes3 sign-off): tests that override `useComposerRuntime`'s
+// return value via `.mockReturnValue(...)` leak that override for the rest
+// of THIS FILE's run (vite.config.ts sets no resetMocks). Restore the base
+// factory's shape after EVERY test.
 afterEach(async () => {
   const { useComposerRuntime } = await import('@assistant-ui/react')
   ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -244,11 +236,24 @@ describe('"@" agent-mention menu — opens and lists scoped agents', () => {
     expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
     expect(screen.getByText('Agents')).toBeInTheDocument()
     // Exactly the 3 scoped chat agents (mia/jim/ava) — worker (max) and
-    // draft-status (ray) are excluded, proven separately in item 8 below.
+    // draft-status (ray) are excluded, proven separately below.
     expect(screen.getAllByTestId('agent-mention-item')).toHaveLength(3)
     expect(screen.getByText('@Mia')).toBeInTheDocument()
     expect(screen.getByText('@Jim')).toBeInTheDocument()
     expect(screen.getByText('@Ava')).toBeInTheDocument()
+  })
+
+  it('each agent row renders the agent\'s AgentMark (no bare initial dot)', () => {
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('chat-input')
+
+    act(() => { fireEvent.change(input, { target: { value: '@' } }) })
+
+    const miaRow = screen.getByText('@Mia').closest('button')
+    expect(miaRow).not.toBeNull()
+    // AgentMark renders the catalogued AgentIcon; the row carries it in front
+    // of the label. The old menu's initial-dot markup is gone.
+    expect(miaRow!.querySelector('img, svg')).not.toBeNull()
   })
 })
 
@@ -259,9 +264,8 @@ describe('"@" agent-mention menu — filtering', () => {
 
     act(() => { fireEvent.change(input, { target: { value: '@m' } }) })
 
-    // Deferred item 4 (prefix-then-substring matching): "Mia" prefix-matches
-    // "m"; "Jim" now ALSO matches via the substring rank ("jim" contains
-    // "m", just not at the start) — ranked after the prefix match.
+    // Prefix-then-substring ranking: "Mia" prefix-matches "m"; "Jim" also
+    // matches via the substring rank, ranked after the prefix match.
     const rows = screen.getAllByTestId('agent-mention-item')
     expect(rows).toHaveLength(2)
     expect(screen.getByText('@Mia')).toBeInTheDocument()
@@ -270,20 +274,6 @@ describe('"@" agent-mention menu — filtering', () => {
     // Max Worker also starts with "m" but must stay excluded — worker
     // exclusion applies before the prefix/substring filter runs.
     expect(screen.queryByText('Max Worker')).not.toBeInTheDocument()
-  })
-
-  it('"@M" (uppercase) filters identically to "@m"', () => {
-    render(<OmnipusComposer />)
-    const input = screen.getByTestId('chat-input')
-
-    act(() => { fireEvent.change(input, { target: { value: '@M' } }) })
-
-    // Deferred item 4: same prefix+substring result set as "@m" (see the
-    // sibling test above) — "Mia" (prefix) and "Jim" (substring).
-    const rows = screen.getAllByTestId('agent-mention-item')
-    expect(rows).toHaveLength(2)
-    expect(screen.getByText('@Mia')).toBeInTheDocument()
-    expect(screen.getByText('@Jim')).toBeInTheDocument()
   })
 
   it('typing "@zzz" (no match) hides the menu entirely', () => {
@@ -297,33 +287,12 @@ describe('"@" agent-mention menu — filtering', () => {
   })
 })
 
-describe('"@" agent-mention menu — second-character immediacy', () => {
-  it('the row set is already filtered right after the second typed character, no extra keystroke needed', () => {
-    render(<OmnipusComposer />)
-    const input = screen.getByTestId('chat-input')
-
-    // First character: bare "@" — every scoped agent shows.
-    act(() => { fireEvent.change(input, { target: { value: '@' } }) })
-    expect(screen.getAllByTestId('agent-mention-item')).toHaveLength(3)
-
-    // Second character (the first typed after "@") — filtering must be
-    // visible in the SAME synchronous update, not one render/tick later.
-    // Deferred item 4: "@m" now matches both "Mia" (prefix) and "Jim"
-    // (substring — see the "filtering" describe block above).
-    act(() => { fireEvent.change(input, { target: { value: '@m' } }) })
-    const rows = screen.getAllByTestId('agent-mention-item')
-    expect(rows).toHaveLength(2)
-    expect(screen.getByText('@Mia')).toBeInTheDocument()
-    expect(screen.getByText('@Jim')).toBeInTheDocument()
-  })
-})
-
-describe('"@" agent-mention menu — selection (keyboard)', () => {
-  it('Enter on the highlighted row calls setActiveSession (preserving activeSessionId), clears the composer, and closes the menu', async () => {
+describe('"@" agent-mention menu — selection (FR-029: addresses the message, never the chat)', () => {
+  it('Enter on the highlighted row inserts "@<Name> " into the composer and does NOT switch the active agent or session', async () => {
     const mockSetText = vi.fn()
     const { useComposerRuntime } = await import('@assistant-ui/react')
     ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
-      getState: () => ({ text: '' }),
+      getState: () => ({ text: '@m' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
@@ -336,34 +305,24 @@ describe('"@" agent-mention menu — selection (keyboard)', () => {
     // Only "Mia" matches — highlight defaults to index 0.
     act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
 
-    expect(useSessionStore.getState().activeAgentId).toBe('mia')
-    expect(useSessionStore.getState().activeAgentType).toBe('core')
-    // activeSessionId must be PRESERVED (same SC-005 contract as AgentPicker).
+    expect(mockSetText).toHaveBeenCalledWith('@Mia ')
+    // FR-029: the active agent, its type and the session are all untouched.
+    expect(useSessionStore.getState().activeAgentId).toBe('general-assistant')
+    expect(useSessionStore.getState().activeAgentType).toBeNull()
     expect(useSessionStore.getState().activeSessionId).toBe('sess_mention_test')
-    expect(mockSetText).toHaveBeenCalledWith('')
     expect(screen.queryByTestId('slash-menu')).not.toBeInTheDocument()
+    // The composer was NOT cleared by the selection (the runtime now carries
+    // the address prefix; the mock textarea does not re-render runtime text,
+    // so the assertion is on the runtime calls, not the DOM value).
+    expect(mockSetText).toHaveBeenLastCalledWith('@Mia ')
+    expect(mockSetText).not.toHaveBeenCalledWith('')
   })
 
-  it('passes the selected agent\'s type through to setActiveSession, not a hardcoded/null value', async () => {
-    render(<OmnipusComposer />)
-    const input = screen.getByTestId('chat-input')
-
-    // "@a" matches only Ava (type "Main") — proves the type argument tracks
-    // the SELECTED agent, differentiating from the "core" case above.
-    act(() => { fireEvent.change(input, { target: { value: '@a' } }) })
-    act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
-
-    expect(useSessionStore.getState().activeAgentId).toBe('ava')
-    expect(useSessionStore.getState().activeAgentType).toBe('Main')
-  })
-})
-
-describe('"@" agent-mention menu — selection (mouse)', () => {
-  it('mousedown on an agent row selects it the same way Enter does', async () => {
+  it('mousedown on an agent row inserts the same "@<Name> " prefix', async () => {
     const mockSetText = vi.fn()
     const { useComposerRuntime } = await import('@assistant-ui/react')
     ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
-      getState: () => ({ text: '' }),
+      getState: () => ({ text: '@' }),
       setText: mockSetText,
       addAttachment: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
@@ -378,15 +337,26 @@ describe('"@" agent-mention menu — selection (mouse)', () => {
 
     act(() => { fireEvent.mouseDown(jimRow!) })
 
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
-    expect(useSessionStore.getState().activeAgentType).toBe('core')
+    expect(mockSetText).toHaveBeenCalledWith('@Jim ')
+    expect(useSessionStore.getState().activeAgentId).toBe('general-assistant')
     expect(useSessionStore.getState().activeSessionId).toBe('sess_mention_test')
-    expect(mockSetText).toHaveBeenCalledWith('')
     expect(screen.queryByTestId('slash-menu')).not.toBeInTheDocument()
+  })
+
+  it('selection announces the addressing in the sr-only live region', () => {
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('chat-input')
+
+    expect(screen.getByTestId('agent-mention-announcement').textContent).toBe('')
+
+    act(() => { fireEvent.change(input, { target: { value: '@m' } }) })
+    act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
+
+    expect(screen.getByTestId('agent-mention-announcement').textContent).toBe('Message addressed to Mia')
   })
 })
 
-describe('"@" agent-mention menu — keyboard highlight', () => {
+describe('"@" agent-mention menu — keyboard highlight and Escape', () => {
   it('ArrowDown moves the highlight from the first row to the second', () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('chat-input')
@@ -394,9 +364,6 @@ describe('"@" agent-mention menu — keyboard highlight', () => {
     act(() => { fireEvent.change(input, { target: { value: '@' } }) })
     const rowsBefore = screen.getAllByTestId('agent-mention-item')
     expect(rowsBefore).toHaveLength(3)
-    // Default highlight is index 0 (Mia). data-highlighted (Fix 11) is the
-    // semantic marker — prefer it over the presentational Tailwind class
-    // string, which is free to change without this test needing an update.
     expect(rowsBefore[0]).toHaveAttribute('data-highlighted', 'true')
     expect(rowsBefore[1]).not.toHaveAttribute('data-highlighted')
 
@@ -405,6 +372,29 @@ describe('"@" agent-mention menu — keyboard highlight', () => {
     const rowsAfter = screen.getAllByTestId('agent-mention-item')
     expect(rowsAfter[0]).not.toHaveAttribute('data-highlighted')
     expect(rowsAfter[1]).toHaveAttribute('data-highlighted', 'true')
+  })
+
+  it('menu open + streaming: first Escape closes the menu only (no cancel); second Escape cancels', () => {
+    const cancelStream = vi.fn()
+    const realCancelStream = useChatStore.getState().cancelStream
+    act(() => { useChatStore.setState({ isStreaming: true, cancelStream }) })
+
+    try {
+      render(<OmnipusComposer />)
+      const input = screen.getByTestId('chat-input')
+
+      act(() => { fireEvent.change(input, { target: { value: '@' } }) })
+      expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
+
+      act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
+      expect(screen.queryByTestId('slash-menu')).not.toBeInTheDocument()
+      expect(cancelStream).not.toHaveBeenCalled()
+
+      act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
+      expect(cancelStream).toHaveBeenCalledTimes(1)
+    } finally {
+      act(() => { useChatStore.setState({ cancelStream: realCancelStream }) })
+    }
   })
 })
 
@@ -428,12 +418,9 @@ describe('"@" agent-mention menu — scoping exclusions', () => {
 
     act(() => { fireEvent.change(input, { target: { value: '@' } }) })
 
-    // Only the 3 ready-to-chat, non-worker agents render.
     expect(screen.getAllByTestId('agent-mention-item')).toHaveLength(3)
-    // Worker (Subagent) — excluded regardless of matching text.
     expect(screen.queryByText('Max Worker')).not.toBeInTheDocument()
     expect(screen.queryByText('@Max Worker')).not.toBeInTheDocument()
-    // Draft-status (not active/idle) — excluded regardless of matching text.
     expect(screen.queryByText('Ray')).not.toBeInTheDocument()
     expect(screen.queryByText('@Ray')).not.toBeInTheDocument()
   })
@@ -456,97 +443,69 @@ describe('"@" agent-mention menu — regression guard: "/" and "@" never mix', (
   })
 })
 
-describe('"@" agent-mention menu — Escape precedence (Fix 3)', () => {
-  it('menu open + streaming: first Escape closes the menu only (no cancel); second Escape cancels', () => {
-    const cancelStream = vi.fn()
-    const realCancelStream = useChatStore.getState().cancelStream
-    act(() => { useChatStore.setState({ isStreaming: true, cancelStream }) })
-
-    try {
-      render(<OmnipusComposer />)
-      const input = screen.getByTestId('chat-input')
-
-      act(() => { fireEvent.change(input, { target: { value: '@' } }) })
-      expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
-
-      // First Escape: the "@" menu closes, the stream keeps running.
-      act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
-      expect(screen.queryByTestId('slash-menu')).not.toBeInTheDocument()
-      expect(cancelStream).not.toHaveBeenCalled()
-
-      // Second Escape: menu already closed — falls through to the
-      // pre-existing cancel-Escape branch, which calls cancelStream (that
-      // branch is unchanged by Fix 3). bugfixes3 deferred item 5
-      // (useCancelState.ts's global Escape listener now early-returns on
-      // `e.defaultPrevented`) killed the double-dispatch this branch used to
-      // cause — see ChatScreen.partitioned-menu.test.tsx's sibling test for
-      // the full explanation. Pinned to exactly 1 call.
-      act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
-      expect(cancelStream).toHaveBeenCalledTimes(1)
-    } finally {
-      // Restore the real implementation — useChatStore is a shared
-      // singleton across this whole file's test suite.
-      act(() => { useChatStore.setState({ cancelStream: realCancelStream }) })
-    }
-  })
-})
-
-describe('"@" agent-mention menu — active-agent marker', () => {
-  it('marks the currently active agent\'s row with the "active" text, and no other row', () => {
+describe('"@" addressing — blocked send without an existing chat (server rule)', () => {
+  // The server refuses a recipient that arrives without session_id
+  // (pkg/gateway/ws_recipient.go::refuseRecipient — "a request to another
+  // agent needs an existing chat"). The composer therefore blocks the send
+  // VISIBLY and keeps the text, the same way it blocks other sends
+  // (the intercept pattern), instead of letting the server refuse a frame
+  // that would drop both the message and the addressing.
+  it('submitting an @-addressed message in a brand-new chat (no session) preventDefaults, keeps the text, and warns', async () => {
+    // The recipient derivation reads the REAL react-query cache and the REAL
+    // workspaces store (not this file's useQuery mock) — seed both so the
+    // block has a candidate to resolve against.
+    queryClient.setQueryData(['agents'], mockAgents)
     act(() => {
-      useSessionStore.setState({ activeAgentId: 'jim' })
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws_mention_test' })
+      useSessionStore.setState({ activeSessionId: null })
     })
+    const sendSpy = vi.fn().mockReturnValue(true)
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: sendSpy, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as never,
+        isConnected: true,
+      })
+    })
+    const { useComposerRuntime } = await import('@assistant-ui/react')
+    ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
+      getState: () => ({ text: '@Mia review this' }),
+      setText: vi.fn(),
+      addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
+    })
+
     render(<OmnipusComposer />)
     const input = screen.getByTestId('chat-input')
+    act(() => { fireEvent.change(input, { target: { value: '@Mia review this' } }) })
 
-    act(() => { fireEvent.change(input, { target: { value: '@' } }) })
+    const form = screen.getByTestId('composer-form')
+    act(() => { fireEvent.submit(form) })
 
-    const jimRow = screen.getByText('@Jim').closest('button')
-    const miaRow = screen.getByText('@Mia').closest('button')
-    const avaRow = screen.getByText('@Ava').closest('button')
-    expect(jimRow).not.toBeNull()
-    expect(miaRow).not.toBeNull()
-    expect(avaRow).not.toBeNull()
-
-    expect(jimRow!.textContent).toContain('active')
-    expect(miaRow!.textContent).not.toContain('active')
-    expect(avaRow!.textContent).not.toContain('active')
-  })
-})
-
-// Gap 7 (Fix 2, a11y HIGH): the sr-only aria-live announcement region must
-// actually contain the "Now chatting with {name}" text after a real
-// selection reaches the DOM, and must update (not just append/duplicate) on
-// a SECOND, different selection — proving the region tracks the latest
-// selection rather than a stale first value.
-describe('"@" agent-mention menu — sr announcement (Fix 2)', () => {
-  it('after selecting via "@", the announcement region reads "Now chatting with {name}"', () => {
-    render(<OmnipusComposer />)
-    const input = screen.getByTestId('chat-input')
-
-    // Before any selection, the region renders empty (no announcement yet).
-    expect(screen.getByTestId('agent-mention-announcement').textContent).toBe('')
-
-    act(() => { fireEvent.change(input, { target: { value: '@m' } }) })
-    // Only "Mia" matches "@m" (Max/Ray excluded by scoping) — highlight
-    // defaults to index 0.
-    act(() => { fireEvent.keyDown(input, { key: 'Enter' } ) })
-
-    expect(screen.getByTestId('agent-mention-announcement').textContent).toBe('Now chatting with Mia')
+    // Visible block: the composer's warning toast names the situation.
+    const toasts = useUiStore.getState().toasts
+    expect(toasts.some((t) => t.message.includes('@Mia') && t.message.includes('existing'))).toBe(true)
+    // The message was NOT sent and NOT dropped from the composer.
+    expect(sendSpy).not.toHaveBeenCalled()
+    expect(input).toHaveValue('@Mia review this')
   })
 
-  it('selecting a DIFFERENT agent next updates the announcement text (not stuck on the first selection)', () => {
+  it('submitting the same text in an EXISTING chat sends normally (no block)', async () => {
+    const sendSpy = vi.fn().mockReturnValue(true)
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: sendSpy, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as never,
+        isConnected: true,
+      })
+      useSessionStore.setState({ activeSessionId: 'sess_mention_test' })
+    })
+
     render(<OmnipusComposer />)
     const input = screen.getByTestId('chat-input')
+    act(() => { fireEvent.change(input, { target: { value: '@Mia review this' } }) })
 
-    act(() => { fireEvent.change(input, { target: { value: '@m' } }) })
-    act(() => { fireEvent.keyDown(input, { key: 'Enter' } ) })
-    expect(screen.getByTestId('agent-mention-announcement').textContent).toBe('Now chatting with Mia')
+    const form = screen.getByTestId('composer-form')
+    act(() => { fireEvent.submit(form) })
 
-    // Second, different selection — "@j" matches only Jim.
-    act(() => { fireEvent.change(input, { target: { value: '@j' } }) })
-    act(() => { fireEvent.keyDown(input, { key: 'Enter' } ) })
-
-    expect(screen.getByTestId('agent-mention-announcement').textContent).toBe('Now chatting with Jim')
+    expect(useUiStore.getState().toasts).toHaveLength(0)
   })
 })

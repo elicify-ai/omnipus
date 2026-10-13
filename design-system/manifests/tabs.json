@@ -69,6 +69,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Tabs [check:tabs-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"tab-one\"]", "attribute": "aria-selected", "value": "true" }],
       "applicable": true
     },
     {

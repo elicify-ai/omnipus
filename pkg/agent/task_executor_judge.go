@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -61,7 +62,7 @@ func (te *TaskExecutor) supersedeTaskSession(agentID, taskSessionID string) {
 	if taskSessionID == "" {
 		return
 	}
-	if sessStore := te.agentLoop.taskSessionStore(taskSessionID, agentID); sessStore != nil {
+	if sessStore := te.agentLoop.GetSessionStore(); sessStore != nil {
 		statusActive := session.StatusActive
 		if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusActive}); setErr != nil {
 			logger.WarnCF("task_executor",
@@ -136,7 +137,7 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 	// own legacy store drops the verdict (AppendTranscriptStrict refuses a
 	// session it does not hold) — after which GET /tasks/{id}/verdicts has
 	// nothing to read back. See AgentLoop.taskSessionStore.
-	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 	if sessStore == nil {
 		return
 	}
@@ -217,7 +218,7 @@ func (te *TaskExecutor) completeTaskWithResult(
 		status = task.StatusFailed
 		result = "empty_answer: the task produced no result"
 	}
-	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 	now := time.Now().UTC().Format(time.RFC3339)
 	final, uerr := te.store.UpdateIfStatus(t.ID, expected, task.Patch{
 		Status:      &status,
@@ -230,12 +231,17 @@ func (te *TaskExecutor) completeTaskWithResult(
 				"goal-loop: dropping completion outcome — task left its expected status concurrently "+
 					"(Stop landed); the task's own outcome is authoritative",
 				map[string]any{"task_id": t.ID, "expected_status": string(expected), "target_status": string(status)})
-			// M5: close the run here too, with the outcome this function was
-			// asked to write — the Task mirror write was dropped (a concurrent
-			// Stop is authoritative), but run-history has nowhere else to
-			// record this execution's own completion, and there is no reaper
-			// backstop to fall back on if it is left in_progress.
-			te.closeRun(t.ID, run, status, result)
+			// M5 + FR-020/BDD-06.3: the Task mirror write was dropped because a
+			// concurrent Stop (or another writer) ended the task, and THAT
+			// outcome is authoritative. Close the run with it — not with the
+			// late outcome this call was asked to write — and send the one
+			// terminal notice for that authoritative outcome.
+			if cur, getErr := te.store.Get(t.ID); getErr == nil && task.IsTerminal(cur.Status) {
+				te.deliverTaskCompletionUpward(context.Background(), cur, run)
+				te.closeRun(t.ID, run, cur.Status, cur.Result)
+			} else {
+				te.closeRun(t.ID, run, status, result)
+			}
 			return false
 		}
 		// Known, accepted limitation (ADR-043 §3): the task is left stuck at
@@ -266,7 +272,7 @@ func (te *TaskExecutor) completeTaskWithResult(
 	// before making the lifecycle record terminal. Boot recovery can repair a
 	// crash after this point; the reverse order can strand a terminal child
 	// whose result never reached its steering session.
-	te.deliverTaskCompletionUpward(context.Background(), final)
+	te.deliverTaskCompletionUpward(context.Background(), final, run)
 
 	// FR-118/G-13: this is completeTaskWithResult's own terminal write —
 	// mirror it onto the durable lifecycle record (see finalizeTaskLifecycle's
@@ -398,7 +404,9 @@ func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
 // batched behind siblings) + the blocked_by auto-advance (dispatch tasks
 // whose deps are now all done).
 func (te *TaskExecutor) onTaskComplete(t *task.Task) {
-	te.deliverTaskCompletionUpward(context.Background(), t)
+	// A status change made outside a run (update_task) has no run and so no
+	// recipients: nothing is delivered (U6 FR-020).
+	te.deliverTaskCompletionUpward(context.Background(), t, nil)
 	te.onTaskCompleteAfterUpwardDelivery(t)
 }
 
@@ -419,20 +427,47 @@ func (te *TaskExecutor) onTaskCompleteAfterUpwardDelivery(t *task.Task) {
 	te.advanceBlockedTasks(context.Background(), t.ID)
 }
 
-// deliverTaskCompletionUpward routes t's own outcome through the single I-5
-// upward-delivery operation, per child, as each finishes. A `t`
-// whose own session is not steered (an ordinary-root task: human-,
-// schedule- or plan-created) has no steering session to wake, and this is
-// a deliberate no-op for it, not a bug.
-func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task.Task) {
-	if t.SessionID == "" {
+// taskRunNoticeStatus is the status word of a run's terminal notice: done,
+// failed, or stopped (a failed run a person stopped, CancelReason ==
+// stopped_by_user).
+func taskRunNoticeStatus(t *task.Task) string {
+	switch t.Status {
+	case task.StatusDone:
+		return "done"
+	case task.StatusFailed:
+		if t.CancelReason == task.CancelReasonStoppedByUser {
+			return "stopped"
+		}
+		return "failed"
+	}
+	return string(t.Status)
+}
+
+// deliverTaskCompletionUpward sends a run's terminal notice to each of its
+// CAPTURED recipients (session-core U6, FR-020): the authoritative status word
+// and the full stored result under a short engine header
+// `Task run <status>: "<title>" (run <run_id>)`. It reuses the single I-5
+// upward delivery (inbox append, dedupe, wake, stopped-parent retention) with
+// one explicit recipient per call.
+//
+// Each recipient's visibility is checked again at send time (BDD-01.3/06.4): a
+// hidden or removed main is skipped with a log — no wake, no substitute — and
+// the result stays in the task/run view. A nil run (a status change made by
+// update_task, with no run) delivers nothing. Never notified: skipped fires and
+// goal-loop retries, which never reach this function.
+func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task.Task, run *activeRun) {
+	if t == nil || t.SessionID == "" || run == nil || len(run.recipients) == 0 {
 		return
 	}
 	deliverer := te.agentLoop.getUpwardDeliverer()
 	if deliverer == nil {
+		for _, recipient := range run.recipients {
+			te.recordNoticeLoss(t, recipient, "no upward deliverer is wired")
+		}
 		return
 	}
 
+	header := fmt.Sprintf("Task run %s: %q (run %s)", taskRunNoticeStatus(t), t.Title, run.runID)
 	var outcome steer.Outcome
 	var sm generated.SessionMessage
 	now := time.Now().UTC()
@@ -442,10 +477,10 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 			outcome = steer.OutcomeEmptyAnswer
 			if err := sm.FromSessionMessageError(generated.SessionMessageError{
 				MessageId: t.ID, SessionId: t.SessionID, CreatedAt: now, Depth: 1,
-				SenderIdentity: t.AgentID, Fatal: true, Text: "empty_answer: the task produced no result",
+				SenderIdentity: t.AgentID, Fatal: true,
+				Text: header + "\n\nempty_answer: the task produced no result",
 			}); err != nil {
-				logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode empty-answer error failed",
-					map[string]any{"task_id": t.ID, "error": err.Error()})
+				te.recordNoticeLossAll(t, run, "the notice could not be encoded: "+err.Error())
 				return
 			}
 		} else {
@@ -453,50 +488,94 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 			if err := sm.FromSessionMessageHandback(generated.SessionMessageHandback{
 				MessageId: t.ID, SessionId: t.SessionID, CreatedAt: now, Depth: 1,
 				SenderIdentity: t.AgentID, Mode: generated.SessionMessageHandbackModeFinal,
-				ResultSoFar: t.Result, Artifacts: []string{}, OpenQuestions: []string{},
+				ResultSoFar: header + "\n\n" + t.Result, Artifacts: []string{}, OpenQuestions: []string{},
 			}); err != nil {
-				logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode handback failed",
-					map[string]any{"task_id": t.ID, "error": err.Error()})
+				te.recordNoticeLossAll(t, run, "the notice could not be encoded: "+err.Error())
 				return
 			}
 		}
 	case task.StatusFailed:
-		text := "failed: " + t.Result
 		outcome = steer.OutcomeFailed
 		if strings.HasPrefix(t.Result, "empty_answer:") {
 			outcome = steer.OutcomeEmptyAnswer
-			text = t.Result
 		}
 		if err := sm.FromSessionMessageError(generated.SessionMessageError{
 			MessageId: t.ID, SessionId: t.SessionID, CreatedAt: now, Depth: 1,
-			SenderIdentity: t.AgentID, Fatal: true, Text: text,
+			SenderIdentity: t.AgentID, Fatal: true, Text: header + "\n\n" + t.Result,
 		}); err != nil {
-			logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode failed-error failed",
-				map[string]any{"task_id": t.ID, "error": err.Error()})
+			te.recordNoticeLossAll(t, run, "the notice could not be encoded: "+err.Error())
 			return
 		}
 	default:
-		// Not a terminal outcome this operation covers (e.g. cancelled —
-		// routed through the D8 cascade instead).
+		// Not a terminal outcome this operation covers.
 		return
 	}
 
-	event := steer.UpwardEvent{ChildSessionID: t.SessionID, Outcome: outcome, Message: sm}
-	delivery, err := deliverer.Deliver(ctx, event)
-	if err != nil {
-		logger.WarnCF("task_executor", "deliverTaskCompletionUpward: Deliver failed",
-			map[string]any{"task_id": t.ID, "session_id": t.SessionID, "error": err.Error()})
-		return
+	for _, recipient := range run.recipients {
+		visible, lost := te.recipientStillVisible(t, recipient)
+		if lost != nil {
+			te.recordNoticeLoss(t, recipient, lost.Error())
+		}
+		if !visible {
+			continue
+		}
+		event := steer.UpwardEvent{ChildSessionID: t.SessionID, Outcome: outcome, Message: sm, RecipientSessionID: recipient}
+		delivery, err := deliverer.Deliver(ctx, event)
+		if err != nil {
+			te.recordNoticeLoss(t, recipient, "delivery failed: "+err.Error())
+			continue
+		}
+		generation := 0
+		if rec, lerr := te.agentLoop.GetSessionLifecycleStore().Load(t.SessionID); lerr == nil && rec != nil {
+			generation = rec.Generation
+		}
+		reportUndeliveredWake("steer: task completion", event, recipient, generation, delivery)
 	}
-	// [ADR-091 fix lane RX-OUTCOME, HIGH] Every outcome that reaches this
-	// point is TERMINAL (the switch above returns for anything else), so a
-	// stored_not_woken here means the task is finished and gone and its
-	// steering session was never told. The parent/generation pair is read
-	// from the child's own lifecycle record rather than the task, because
-	// the task record carries neither — a best-effort read on the
-	// diagnostic path only, never on the success path.
-	parentSessionID, generation := steerDeliveryEdge(te.agentLoop.GetSessionLifecycleStore(), t.SessionID)
-	reportUndeliveredWake("steer: task completion", event, parentSessionID, generation, delivery)
+}
+
+// recipientStillVisible re-checks, at send time, that a captured recipient is
+// still an eligible visible main (BDD-01.3/06.4). A recipient that is no longer
+// eligible is skipped and logged (by design: no wake, no substitute). A
+// recipient whose eligibility cannot be DETERMINED is skipped too, but the
+// returned error says the notice was lost, so the caller records it.
+func (te *TaskExecutor) recipientStillVisible(t *task.Task, recipient string) (visible bool, lost error) {
+	workspaceID, agentID, ok := session.SplitMainSessionID(recipient)
+	if !ok || te.mainResolver == nil {
+		return false, errors.New("the recipient is not a resolvable main")
+	}
+	id, eligible, err := te.mainResolver.EligibleMain(workspaceID, agentID)
+	if err != nil {
+		return false, fmt.Errorf("the recipient's main could not be resolved: %w", err)
+	}
+	if !eligible || id != recipient {
+		logger.InfoCF("task_executor", "run notice skipped: the recipient is hidden or removed",
+			map[string]any{"task_id": t.ID, "recipient": recipient})
+		return false, nil
+	}
+	return true, nil
+}
+
+// taskNoticeLosses counts completion notices to a task's starter that were owed
+// but could not be delivered.
+var taskNoticeLosses atomic.Int64
+
+// recordNoticeLossAll records the loss of the notice for every captured
+// recipient of run.
+func (te *TaskExecutor) recordNoticeLossAll(t *task.Task, run *activeRun, reason string) {
+	for _, recipient := range run.recipients {
+		te.recordNoticeLoss(t, recipient, reason)
+	}
+}
+
+// recordNoticeLoss makes a lost completion notice VISIBLE instead of log-only:
+// it counts it, logs it at error level and writes a system line into the task's
+// own transcript, so the loss is recorded on the task and not only in a log.
+func (te *TaskExecutor) recordNoticeLoss(t *task.Task, recipient, reason string) {
+	taskNoticeLosses.Add(1)
+	logger.ErrorCF("task_executor", "task completion notice could not be delivered",
+		map[string]any{"task_id": t.ID, "session_id": t.SessionID, "recipient": recipient, "reason": reason})
+	te.appendRunSystemTranscript(t, t.SessionID, te.agentLoop.GetSessionStore(),
+		fmt.Sprintf("The completion notice for %s could not be delivered: %s.", recipient, reason))
 }
 
 // readyBlockedCandidates returns the IDs of all `next` tasks that list

@@ -39,12 +39,14 @@
 // that same panel scrolled to the background-commands section, or to the
 // retained failed command when none are still running.
 
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { ArrowsClockwise, CaretRight } from '@phosphor-icons/react'
 import { ActivityAvatar } from './ActivityAvatar'
 import { ActivityPanel } from './ActivityPanel'
 import { Button } from '@/components/ui/button'
 import { useRunningActivity } from '@/hooks/useRunningActivity'
+import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 import type { ActivityItem } from '@/hooks/useRunningActivity'
 import { statusDot } from '@/lib/toolStatusConfig'
 
@@ -137,9 +139,21 @@ export function ActivityBar() {
   // subagent_state(queued), so runningChildren stays 0 until Dispatch
   // (steer_launcher.go::publishSteeredLaunch). Bash never enters that count.
   const { runningChildren, runningChildItems, running, recentlyFinished } = useRunningActivity()
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const activityPanelRequest = useUiStore((s) => s.activityPanelRequest)
   const [panelOpen, setPanelOpen] = useState(false)
   const [heldByPanel, setHeldByPanel] = useState<PillKind | null>(null)
   const [scrollRequest, setScrollRequest] = useState<{ section: 'commands'; nonce: number } | null>(null)
+
+  // Sessions Open: the request is stored before this chat is active. Open the
+  // panel only once this bar's session is that id, then clear it. Holding the
+  // agents pill keeps an idle panel mounted (the bar otherwise renders nothing).
+  useEffect(() => {
+    if (!activeSessionId || activityPanelRequest !== activeSessionId) return
+    setHeldByPanel((current) => current ?? 'agents')
+    setPanelOpen(true)
+    useUiStore.getState().consumeActivityPanelRequest(activeSessionId)
+  }, [activeSessionId, activityPanelRequest])
 
   const agentOpen = running.some((item) => item.kind === 'agent') ||
     recentlyFinished.some((item) => item.kind === 'agent' && item.lifecycleState === 'stopped')

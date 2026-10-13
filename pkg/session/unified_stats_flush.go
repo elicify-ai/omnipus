@@ -21,7 +21,7 @@
 // counter bump becomes an in-memory-only mutation of the cached meta
 // (FR-061), marked dirty, and a periodic flusher persists dirty sessions'
 // stats.json on a bounded interval (FR-063). Every OTHER write in this
-// store — SetMeta's identity/goal/loop groups, SwitchAgent,
+// store — SetMeta's identity/goal/loop groups,
 // CreateSessionWithID, AppendTranscriptStrict — is untouched and stays
 // synchronous (FR-065): only the transcript-append counter path is
 // throttled.

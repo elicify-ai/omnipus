@@ -484,7 +484,7 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		logsafeWarn("rest: skill install failed", "slug", slug, "version", version, "error", err)
-		jsonErr(w, http.StatusBadGateway, fmt.Sprintf("could not stage skill: %v", err))
+		jsonServerFailure(w, http.StatusBadGateway, "could not stage skill", err)
 		return
 	}
 
@@ -609,7 +609,7 @@ func (a *restAPI) deleteSkill(w http.ResponseWriter, r *http.Request, name strin
 			return
 		}
 		logsafeError("rest: delete skill", "name", name, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not remove skill: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not remove skill", err)
 		return
 	}
 	jsonOK(w, map[string]any{"status": "removed", "name": name, "revision": revision,

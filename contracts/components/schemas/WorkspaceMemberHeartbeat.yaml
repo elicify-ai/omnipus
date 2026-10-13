@@ -19,12 +19,3 @@ properties:
       re-enter this per workspace — existing agent-level HEARTBEAT.md bodies
       are NOT migrated (F-07).
     example: "Every 30 minutes, check the project board for new high-priority tasks."
-  session_id:
-    type: string
-    readOnly: true
-    description: >
-      Eager standing session id created when the heartbeat is enabled (FR-010).
-      Stamped with workspace_id + agent + type="heartbeat". Stored here so the
-      cron job can continue the pre-created session rather than starting a fresh one.
-      Set server-side at enable time; read-only from the client's perspective.
-    example: "550e8400-e29b-41d4-a716-446655440000"

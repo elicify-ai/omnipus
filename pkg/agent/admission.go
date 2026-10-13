@@ -535,6 +535,9 @@ func (al *AgentLoop) drainSteerQueue(claim executionClaim) {
 func (al *AgentLoop) promoteSteeredExecution(next steerQueueEntry) {
 	al.goSteeredTurn(func() {
 		if _, err := al.dispatchSteeredSessionReserved(context.Background(), next.sessionID, next.generation, next.runID, next.bootSeq); err != nil {
+			// NEW-6: the promoted admission never reached a turn body, so no
+			// disposal will retire an external revival's hold bound to it.
+			al.retireExternalReservations(next.sessionID, next.executionClaim())
 			if classifyDrainDispatchError(err) {
 				logger.InfoCF("agent", "steer: drain queue: promoted session was no longer dispatchable (legitimate)",
 					map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})

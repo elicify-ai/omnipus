@@ -167,6 +167,7 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { chatInput, assistantMessages, selectAgent } from './fixtures/selectors';
+import { freshChat } from './fixtures/session-setup';
 import { completedDelegation, type DelegationFrame } from './fixtures/delegation-completion';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
@@ -223,11 +224,13 @@ function requireApiKey(): void {
 // mirrors subagent.spec.ts's startFreshChat; Mia's guide persona refuses to
 // delegate, see that file's own comment).
 async function startFreshChat(page: import('@playwright/test').Page): Promise<void> {
-  const newChat = page.getByRole('banner').getByRole('button', { name: 'New Chat' });
-  if (await newChat.isVisible({ timeout: 5_000 })) {
-    await newChat.click();
-    await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
-  }
+  // The banner "New Chat" button this guarded click targeted is REMOVED
+  // (founder decision D7 — no New-chat UI entry anywhere), so the
+  // isVisible guard had stopped firing and this helper had silently lost
+  // its empty-thread guarantee. freshChat (public REST create + the SPA's
+  // own deep-link route) restores it unconditionally.
+  await freshChat(page);
+  await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
   await selectAgent(page, process.env.E2E_DELEGATION_AGENT_NAME || /Jim/i);
 }
 

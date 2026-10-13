@@ -43,7 +43,7 @@ function renderDraft() {
 
 describe('MailPanel — stale draft recovery errors', () => {
   beforeEach(() => {
-    fetchAgents.mockReset().mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockReset().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockReset().mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@test.local' },
     ])

@@ -8,6 +8,7 @@ import { isGoalRunning } from '@/lib/goalActivity'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 // Runtime (value) schema from the self-contained ws-schemas.ts, not
 // schemas.ts — the latter also carries the REST Zodios `makeApi([...])`
 // call, which references every REST schema and defeats tree-shaking
@@ -18,6 +19,9 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
+import { isClearCommandText, isClearContextMarker } from '@/lib/clearMarker'
+import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddressResendBlockMessage, recipientAddressUnresolvedBlockMessage, resolveAddressedAgent, retryAgentsRoster } from '../recipientSend'
+import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
 import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
@@ -41,7 +45,11 @@ function beginSend(content: string, opts?: { clientMessageId?: string; queuedAt?
  * that MessageStatusFrame will later echo back (#823 state A). `mediaRefs`
  * (review finding 17) is stored alongside the display-only `media` so a
  * later `resendMessage` call can resend the SAME attachments — `media`
- * alone carries no wire-usable ref, see ChatMessage.mediaRefs' doc comment. */
+ * alone carries no wire-usable ref, see ChatMessage.mediaRefs' doc comment.
+ * Founder ruling 2026-10-11: a /clear shows as QUEUED from the moment it is
+ * sent — idle or mid-turn — and stays queued until the server's clear lands
+ * and the fresh view replaces the screen (or the "/clear was not performed"
+ * reply resolves the row); it never wears the transient "sending" look. */
 function buildQueuedUserMessage(
   sessionId: string,
   content: string,
@@ -50,6 +58,7 @@ function buildQueuedUserMessage(
   attachments: MediaAttachment[] = [],
   mediaRefs: string[] = [],
 ): ChatMessage {
+  const isClear = isClearCommandText(content)
   return {
     id: clientMessageId,
     session_id: sessionId,
@@ -57,7 +66,7 @@ function buildQueuedUserMessage(
     content,
     timestamp: queuedAt,
     status: 'done',
-    deliveryStatus: 'sending',
+    deliveryStatus: isClear ? 'queued' : 'sending',
     ...(attachments.length > 0 ? { media: attachments } : {}),
     ...(mediaRefs.length > 0 ? { mediaRefs } : {}),
   }
@@ -71,6 +80,63 @@ function markUserMessageFailed(draft: { messagesById: Record<string, { status?: 
     um.status = 'error'
     um.deliveryStatus = 'failed'
   }
+}
+
+/** A mid-turn steering send that never reached the gateway: the in-flight
+ * turn is unaffected — only THIS message failed. Mark just the user bubble
+ * as 'error' (Retry affordance) and leave `isStreaming` alone; there is no
+ * assistant placeholder to roll back because a mid-turn steering send never
+ * creates one. ADR-070 §2.1 deliberately does NOT close the pre-steer bubble
+ * here: the backend never received this steer, so it keeps writing into the
+ * SAME original segment exactly as before — closing the bubble would be
+ * actively wrong, not just unnecessary (a real, previously-uncaught gap:
+ * closing it unconditionally alongside the append broke the assertion that
+ * branch's own pre-existing test pins).
+ * Extracted out of sendMessage (pure relocation, 2026-10-10, same move
+ * performResendMessage made) so sendMessage stays within its grandfathered
+ * function-size budget; the behavior is byte-identical. */
+function handleFailedSteerSend(
+  withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void,
+  sessionId: string,
+  userMsgId: string,
+): void {
+  withBucket(sessionId, (b) => produce(b, (draft) => {
+    markUserMessageFailed(draft, userMsgId)
+  }) as Partial<SessionChatState>)
+  useConnectionStore.getState().setConnectionError(
+    'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
+  )
+}
+
+/** FR-030/031 (U10b): a /clear just went out on the wire — record the
+ * transcript re-read the command owes the view (the server's marker entry is
+ * never pushed live). One shared arm for EVERY path that can put a /clear on
+ * the wire: the normal sendMessage branches and the Retry/resend path. A
+ * send that failed never reaches here, so a failed send arms nothing.
+ * Founder ruling 2026-10-11: the arm also snapshots the marker ids the
+ * session's view already carries — the server keeps no link between a /clear
+ * row and the marker it produced, so the acceptance keys on a marker the
+ * view did not already have (clear-refetch.ts::projectionCarriesFreshMarker). */
+function armClearRefreshForSend(sessionId: string, clientMessageId: string, get: StoreApi<ChatStore>['getState']): void {
+  const bucket = get().sessionsById[sessionId]
+  const knownMarkerIds = bucket
+    ? bucket.messageOrder.filter((id) => isClearContextMarker(bucket.messagesById[id] ?? {}))
+    : []
+  armClearRefresh(sessionId, clientMessageId, bucket?.activeTurnId ?? null, knownMarkerIds)
+}
+
+/** The @-recipient on an outbound frame (founder decision 2026-10-11 Q1 B —
+ * the restored @ agent menu addresses the MESSAGE; FR-029, no in-chat
+ * handover). Derived AT SEND TIME from the leading "@<Agent name>" prefix of
+ * the content, so it is not sticky: an edited prefix sends no recipient and
+ * the @-text travels verbatim either way. Attaching it is legal ONLY next to
+ * a session_id (contracts/asyncapi.yaml MessageFrame.recipient — the server
+ * refuses the pair alone), so every caller attaches it only in the
+ * session-carrying payloads; the composer's own visible block
+ * (ChatScreen's recipientAddressBlocked) is what stops an @-addressed
+ * submit in a brand-new chat long before this line. */
+function outgoingRecipient(content: string): { workspace_id: string; agent_id: string } | null {
+  return resolveAddressedAgent(content)?.recipient ?? null
 }
 
 /** Review finding 17: resends messageId IN PLACE — same id, original
@@ -107,6 +173,7 @@ function performResendMessage(
     }
   }
   if (!sid || !existing || existing.role !== 'user') return
+  if (blockSendForWorkspaceEntry('resend')) return
 
   const ordinary = getPendingFirstSend(state)
   if (ordinary && (existing.clientMessageId ?? existing.id) === ordinary.clientMessageId) {
@@ -117,6 +184,42 @@ function performResendMessage(
   const content = existing.content
   const mediaRefs = existing.mediaRefs ?? []
   const targetSid = sid
+
+  // C8 (R3 delta re-review): never drop the @ silently on a resend. A
+  // '__pending' target has no session for the recipient pair to ride on (the
+  // recipient-only-with-session_id wire rule), and an agents cache that has
+  // never resolved cannot check the address at all — the old code sent both
+  // unaddressed, a silent drop. Both refuse VISIBLY, the same way the
+  // composer blocks an @-send in a brand-new chat, and the row stays in its
+  // failed state (before the 'sending' reset below) so Retry remains. A
+  // roster that FAILED outright (S3-08) says so and offers a Retry of the
+  // load, instead of the loading copy's "try again in a moment".
+  const addressCheck = checkAddressedAgent(content)
+  if (addressCheck.kind === 'unresolvable') {
+    useUiStore.getState().addToast({
+      message: recipientAddressUnresolvedBlockMessage(addressCheck.nameGuess),
+      variant: 'warning',
+    })
+    logDiagnostic('chatRecipientResendBlockedAgentsUnavailable', { nameGuess: addressCheck.nameGuess })
+    return
+  }
+  if (addressCheck.kind === 'failed') {
+    useUiStore.getState().addToast({
+      message: recipientAddressFailedBlockMessage(addressCheck.nameGuess),
+      variant: 'warning',
+      action: { label: 'Retry', onClick: retryAgentsRoster },
+    })
+    logDiagnostic('chatRecipientResendBlockedAgentsErrored', { nameGuess: addressCheck.nameGuess })
+    return
+  }
+  if (targetSid === '__pending' && addressCheck.kind === 'addressed') {
+    useUiStore.getState().addToast({
+      message: recipientAddressResendBlockMessage(addressCheck.addressed.agentName),
+      variant: 'warning',
+    })
+    logDiagnostic('chatRecipientResendBlockedNoSession', { agentName: addressCheck.addressed.agentName })
+    return
+  }
 
   // Reset the SAME message in place first — 'sending' — never a second
   // bubble, unlike the pre-fix `sendMessage(content)` call this replaces.
@@ -148,6 +251,14 @@ function performResendMessage(
     client_message_id: messageId,
     agent_id: useSessionStore.getState().activeAgentId ?? undefined,
     ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
+    // Recipient re-derived from the kept content at resend time. A '__pending'
+    // target has no session for the pair to ride on, so the recipient is
+    // omitted there (the recipient-only-with-session_id wire rule) — a corner
+    // the retained-first-send retry path (`retryFirstSend`) normally owns.
+    ...(targetSid !== '__pending' ? (() => {
+      const recipient = outgoingRecipient(content)
+      return recipient ? { recipient } : {}
+    })() : {}),
   }
   get()._validateOutboundFrame(payload, targetSid)
   const sent = connection.send(payload)
@@ -158,7 +269,12 @@ function performResendMessage(
     useConnectionStore.getState().setConnectionError(
       'Message could not be resent — connection dropped. Your message was kept; press Retry to resend.'
     )
+    return
   }
+  // FR-030/031 (U10b): a Retry that puts a /clear back on the wire arms the
+  // same transcript re-read the original send would have (review round 1,
+  // F3) — the retry IS the send, so the refresh belongs to it.
+  if (isClearCommandText(content)) armClearRefreshForSend(targetSid, messageId, get)
 }
 
 type OutboundLifecycleSlice = Pick<ChatStore,
@@ -304,6 +420,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
     },
 
     sendMessage: (content, opts) => {
+      if (blockSendForWorkspaceEntry('send')) return
       const mediaRefs = opts?.mediaRefs ?? []
       const attachments = opts?.attachments ?? []
       const { clientMessageId, queuedAt, queuedMessage } = beginSend(content, opts)
@@ -462,6 +579,13 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             agent_id: activeAgentId ?? undefined,
             ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
             ...metadataFrame,
+            // @-addressed steer (founder 2026-10-11 Q1 B): legal here — a
+            // steer always carries a real session_id ('__pending' steers are
+            // enqueued above, never put on the wire).
+            ...(() => {
+              const recipient = outgoingRecipient(content)
+              return recipient ? { recipient } : {}
+            })(),
           }
           get()._validateOutboundFrame(steerPayload, activeSessionId)
           const steerSent = connection.send(steerPayload)
@@ -479,14 +603,15 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             // just unnecessary (a real, previously-uncaught gap: closing it
             // unconditionally alongside the append broke the assertion this
             // branch's own pre-existing test pins).
-            withBucket(activeSessionId, (b) => produce(b, (draft) => {
-              markUserMessageFailed(draft, userMsg.id)
-            }) as Partial<SessionChatState>)
-            useConnectionStore.getState().setConnectionError(
-              'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
-            )
+            handleFailedSteerSend(withBucket, activeSessionId, userMsg.id)
             return
           }
+
+          // FR-030/031 (U10b): an outgoing /clear arms the transcript
+          // re-read the command owes the view (the server's marker entry is
+          // never pushed live), bound to THIS send so another turn's done
+          // cannot consume it.
+          if (isClearCommandText(content)) armClearRefreshForSend(activeSessionId, clientMessageId, get)
 
           // ADR-070 §2.1: only NOW, once the steer has genuinely reached the
           // gateway, close the assistant bubble that was open at send-time —
@@ -602,6 +727,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
+          // @-addressed ordinary send (founder 2026-10-11 Q1 B): the pair
+          // rides WITH this session_id, never alone.
+          ...(() => {
+            const recipient = outgoingRecipient(content)
+            return recipient ? { recipient } : {}
+          })(),
         }
         get()._validateOutboundFrame(payload, activeSessionId)
         const sent = connection.send(payload)
@@ -637,6 +768,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           // The attempted turn is over (it never started) — free the next
           // drained message to send, if any.
           maybeDrainNext()
+        } else {
+          // FR-030/031 (U10b): an outgoing /clear arms the transcript
+          // re-read the command owes the view (the server's marker entry is
+          // never pushed live), bound to THIS send so another turn's done
+          // cannot consume it.
+          if (isClearCommandText(content)) armClearRefreshForSend(activeSessionId, clientMessageId, get)
         }
       } else {
         // Kickoff hardening: a workspace-setup kickoff already owns

@@ -1,5 +1,12 @@
 # ADR-092 — Shell permission modes: Ask / Auto / God Mode; drop the block list; one rule format
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of D1 Delegation source, with D10 preserved.** MAIN task children inherit the main chat's approval state, not the starting extra chat's modifier, within the target's own constraints; the accepted loosening risk is disclosed. Native helpers retain one popup/approval ID; external post-hoc consent remains an explicit separate boundary. Unattended human-approval refusal is unchanged; two tool-policy layers remain.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 > Numbering: this ADR was drafted as ADR-091 and renumbered to ADR-092 on 2026-09-23 (ADR-091 is "A sub-agent is a session steered by another session"). Commits pushed before the rename still say ADR-091.
 
 - **Status:** Proposed (founder-approved decisions incl. UI, 2026-09-23; revised 2026-09-23 after a two-pass spec grill returned BLOCK — see Revision note)

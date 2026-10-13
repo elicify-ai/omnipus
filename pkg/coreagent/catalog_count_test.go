@@ -160,7 +160,19 @@ import (
 // layer was added. Registered at every Hard-Constraint-6 touch point in
 // the same commit (seed.go, defaults.go, ADR-090 inventory, Auto classes,
 // EmailToolset).
-const catalogSizeToday = 114
+//
+// Bumped 114 -> 109: -4 for U9/DEL-23 (the four *_in_workspace sysagent task
+// tools, deleted in aedb007a4 without moving this pin) and -1 for
+// "switch_agent" (session-core DEL-07, U8: the agent-switch tool is gone; peer
+// messaging and session navigation replace it).
+//
+// Bumped 109 -> 110 adding "answer_request" (founder, 2026-10-11, hands-on
+// test Gap 5: "a reply should be a TOOL"): the explicit tool for answering a
+// request a peer or connector sent. A plain conversational reply reaches
+// nobody, so answering needed its own unambiguous call; it fronts the same
+// reply admission as send_message reply_to. POST-MERGE addition, same rule as
+// grep; ceiling "allow" (defaults.go), granted to every conversational role.
+const catalogSizeToday = 110
 
 // currentKnowledgeToolNames is every knowledge_* tool presently in the
 // catalog: ADR-068 D15.3's original six (the replacement for ADR-067's
@@ -371,7 +383,7 @@ func TestCatalog_MergeArithmetic(t *testing.T) {
 		// alongside (the two knowledge names) their own implementation.
 		// Bump this alongside catalogSizeToday, in the same commit,
 		// whenever a tool is added post-merge.
-		postMergeAdditions = 13 // +3 goal-flow; +2 ADR-090 readback; +1 environment_setup; +1 create_email_draft (email-mail-view spec §2.7 point 6); +3 mail attachment tools (ADR-20261001 F3, w4 spec US-3, founder Q4=A)
+		postMergeAdditions = 9 // +1 answer_request (founder Gap 5, 2026-10-11); +3 goal-flow; +2 ADR-090 readback; +1 environment_setup; +1 create_email_draft (email-mail-view spec §2.7 point 6); +3 mail attachment tools (ADR-20261001 F3, w4 spec US-3, founder Q4=A); -4 four *_in_workspace task tools (U9/DEL-23); -1 switch_agent (U8/DEL-07)
 	)
 	// Checked against the FROZEN adr068OriginalSixKnowledgeToolNames, not
 	// currentKnowledgeToolNames — this arithmetic is a fact about what the

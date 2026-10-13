@@ -12,10 +12,11 @@ import (
 // An exact recorded limit takes precedence over any subsequent settings change.
 func retainedSourceRunes(msgs []providers.Message, i, line int, state memory.ProjectionState, pc projectionContext) (int, error) {
 	m := msgs[i]
-	if line < 0 || line >= len(pc.archive) || pc.archive[line].Role != "tool" || pc.archive[line].ToolCallID != m.ToolCallID {
+	src, ok := pc.archive.message(line)
+	if line < 0 || !ok || src.Role != "tool" || src.ToolCallID != m.ToolCallID {
 		return 0, fmt.Errorf("context projection: invalid archive identity for %q", m.ToolCallID)
 	}
-	n := utf8.RuneCountInString(pc.archive[line].Content)
+	n := utf8.RuneCountInString(src.Content)
 	key := memory.ProjectionKey{ToolCallID: m.ToolCallID, ArchiveLine: line}
 	if k, exact := pc.sourceRunes[key]; exact {
 		if k < 0 || k > n {
@@ -37,7 +38,7 @@ func retainedSourceRunes(msgs []providers.Message, i, line int, state memory.Pro
 	if n <= capChars {
 		return n, nil
 	}
-	mark, err := buildRecallMark("capped", tool, m.ToolCallID, line, pc.archive[line].Content, turnNumberForArchiveLine(pc.archive, line))
+	mark, err := buildRecallMark("capped", tool, m.ToolCallID, line, src.Content, turnNumberForArchiveLine(pc.archive, line))
 	if err != nil {
 		return 0, err
 	}

@@ -58,6 +58,12 @@ type LaunchRequest struct {
 	// after Task. Both empty means no snapshot.
 	ContextReferences []string
 	ContextNotes      string
+	// Initiator, when non-nil, is the already-authorized agent initiator of a
+	// task run (run_task, execute_plan); Launch copies it onto the child's
+	// LifecycleRecord.InitiatedBy and caps the child's budget by its
+	// Authorization.RemainingDepth. Nil means a person or the scheduler
+	// started the run.
+	Initiator *session.InitiatedBy
 }
 
 // LaunchResult is SessionLauncher.Launch's output (I-2).
@@ -65,6 +71,12 @@ type LaunchResult struct {
 	SessionID string
 	// Generation is 1 at launch.
 	Generation int
+	// Is3P is the runtime classification Launch PERSISTED on the child's
+	// lifecycle record (true: external CLI, false: native). Callers that report
+	// the child's runtime (delegate's is_3p) project this value; they never
+	// re-resolve it, because a later executor change would make a second read
+	// describe a different runtime from the child that was actually created.
+	Is3P bool
 }
 
 // DispatchState is DispatchResult.State's enum (I-2) — the authoritative
@@ -171,6 +183,14 @@ type UpwardEvent struct {
 	// never re-wakes it. Never set it on a message the parent must ACT on —
 	// questions, blockers and errors keep their wakes.
 	SuppressWake bool
+
+	// RecipientSessionID, when set, addresses the report to that session's inbox
+	// instead of the child's own steering edge (session-core U6, FR-020: a task
+	// run notifies each captured recipient). The child needs no steering edge for
+	// this; a recipient that is not the child's real parent receives the inbox
+	// entry and the wake only — never the side-panel subagent frames. Empty keeps
+	// every existing producer unchanged.
+	RecipientSessionID string
 }
 
 // DeliveryOutcome is Delivery.Outcome's enum (I-5).

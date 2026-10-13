@@ -173,7 +173,7 @@ describe('MailPanel — attachment download error surfacing (silent-failure fix)
     fetchAppState.mockResolvedValue({ dev_mode_bypass: false })
     fetchNotifications.mockResolvedValue({ notifications: [], unread_count: 0 })
     fetchTasks.mockResolvedValue([])
-    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])

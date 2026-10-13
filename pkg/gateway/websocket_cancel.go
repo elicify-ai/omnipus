@@ -228,62 +228,6 @@ func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, session
 	}
 }
 
-// u11CollectDescendantSessionIDs walks the durable lifecycle store's
-// SteeringSessionID edges (pkg/session/lifecycle.go, FR-019/FR-020;
-// LifecycleStore.List(LifecycleFilter{SteeringSessionID: id}) returns X's
-// DIRECT children only, index-backed per BDD-19) to collect EVERY descendant
-// of rootID, however many delegation levels deep. Returns only descendants —
-// rootID itself is never included; the caller prepends it.
-//
-// ADR-057 FR-032/W10c: cancelAllPendingForSessions matches a pending
-// approval by EXACT equality on the registry entry's own acting session id
-// (FR-080 — a delegated child's entry carries the CHILD's own id, never the
-// chat's), so a chat-level Stop that passed only the chat/root id would
-// cancel nothing inside any live child (BDD-33). The DURABLE lifecycle store
-// is reachable read-only through h.agentLoop's already-exported
-// GetSessionLifecycleStore() (pkg/agent/session_messaging_wire.go), and
-// every delegation — live or not — has a LifecycleRecord (User Story 4), so
-// this walk is authoritative independent of what is still running.
-//
-// [FIX-5, Defect 4, 2026-08-03] HOISTED: this used to be a byte-identical
-// duplicate of pkg/agent/cancel.go's collectDescendantSessionIDs, kept
-// separate only because a parallel-implementation ownership rule (then:
-// "neither of which this unit may edit") forbade this unit from touching
-// pkg/agent. That rule has expired — this is now a thin signature-compat
-// shim over the ONE hoisted implementation, agent.CollectDescendantSessionIDs
-// (pkg/agent/cancel.go), which also gained a real error return (Defect 2:
-// a lifecycleStore.List failure partway through the walk used to be
-// swallowed as "this node has no children" — silently truncating the
-// returned set with no signal). This shim is kept, rather than deleted and
-// inlined at every call site, because pkg/gateway/rest.go's deleteSession
-// handler and pkg/gateway/websocket_adr057_test.go's U11 unit tests call it
-// directly by this exact name/signature and are outside this fix's file
-// ownership — changing its signature would require edits there too. A
-// caller that CAN use the richer (typed-error) signature directly — see
-// buildCancelHooks's CancelPendingApprovals closure below — calls
-// agent.CollectDescendantSessionIDs itself instead of this shim, so it can
-// react to a partial-walk failure with a more specific diagnostic than the
-// generic one logged here.
-//
-// Guards against a corrupted or cyclic SteeringSessionID chain with a visited
-// set rather than trusting the configured delegation-depth cap to bound
-// recursion — this walk must terminate
-// even over on-disk state that predates or violates that cap. A nil store
-// (no delegation lifecycle store wired — most webchat-only installs never
-// mint one) yields an empty slice, so the caller degrades to exactly
-// cancelAllPendingForSession's documented single-id behavior. A walk error
-// is logged at WARN (never returned — see the shim rationale above) so this
-// call's INCOMPLETE-cascade case is never silent, even though it cannot be
-// propagated through this signature.
-func u11CollectDescendantSessionIDs(ls *session.LifecycleStore, rootID string) []string {
-	descendants, err := agent.CollectDescendantSessionIDs(ls, rootID)
-	if err != nil {
-		slog.Warn("ws: descendant walk: could not list children — the walk is INCOMPLETE; any descendant beyond the failure point is unreachable to this caller",
-			"session_id", rootID, "error", err)
-	}
-	return descendants
-}
-
 // buildCancelHooks constructs the transport-specific agent.CancelHooks for a
 // web-SPA-originated cancel. wc is the live connection to notify via
 // cancel_stage frames — nil when there is no live connection to notify.
@@ -312,9 +256,11 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 				return
 			}
 			// ADR-057 FR-032/W10c: cancel over the DESCENDANT SET, not the
-			// single chat/root id — see u11CollectDescendantSessionIDs' doc
-			// comment for why a single id would silently cancel nothing
-			// inside a live delegated child (BDD-33). The old single-id
+			// single chat/root id. Pending approvals match by EXACT equality on
+			// the acting session id (FR-080), so a chat-level Stop that passed
+			// only the root id would cancel nothing inside a live delegated
+			// child (BDD-33); the durable lifecycle store's edges make the walk
+			// authoritative whether or not the child is still running. The old single-id
 			// cancelAllPendingForSession still compiles and remains correct
 			// for a session with no descendants (its own doc comment says
 			// so); this call site is the one FR-032 requires use the plural
@@ -324,8 +270,7 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 				lifecycleStore = h.agentLoop.GetSessionLifecycleStore()
 			}
 			// [FIX-5, Defect 2, 2026-08-03] Calls agent.CollectDescendantSessionIDs
-			// directly (not the u11CollectDescendantSessionIDs shim above) so this
-			// call site can react to a partial-walk failure with the specific,
+			// directly so this call site can react to a partial-walk failure with the specific,
 			// user-visible consequence it has here: a lifecycleStore.List error
 			// partway through the walk used to be swallowed as "no more
 			// children" and the dropped descendant's pending RequestApproval was
@@ -392,7 +337,7 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 			if err != nil && wc != nil {
 				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 					Type: string(generated.WsFrameTypeError), SessionId: &sid,
-					Message: fmt.Sprintf("Stop for session %s could not finish; required storage or notice publication failed. Retry after storage is repaired.", sid),
+					Message: "Stop could not finish; required storage or notice publication failed. Retry after storage is repaired.",
 				})
 			}
 		},
@@ -431,8 +376,8 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 // handleCancelFrame is the frame dispatcher's entry point for a `cancel`
 // frame: parse, validate session_id, resolve the session/tree scope, and
 // route to handleCancelWithScope. Kept out of dispatchFrame's own body —
-// same reasoning as stringPtrOrEmpty and handleSessionCloseFrame /
-// handleSessionModeUpdateFrame elsewhere in that switch — so dispatchFrame's
+// same reasoning as stringPtrOrEmpty and handleSessionModeUpdateFrame
+// elsewhere in that switch — so dispatchFrame's
 // grandfathered gocyclo budget (scripts/budgets/gocyclo.txt) doesn't grow;
 // the session-vs-tree scope check (stopAll) was the one that pushed it over.
 func (wh *wsHandlerReadLoop) handleCancelFrame(data []byte) wsHandlerReadLoopFlow {
@@ -488,7 +433,7 @@ func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll 
 			"session_id", sessionID, "error", err)
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "cancel failed: " + err.Error(),
+			Message: "cancel failed: the Stop request could not be completed. Details are in the server log.",
 		})
 		return
 	}

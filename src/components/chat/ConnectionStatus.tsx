@@ -7,6 +7,7 @@ import {
   Clock,
   CloudSlash,
   PauseCircle,
+  Prohibit,
   WifiSlash,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
@@ -16,9 +17,9 @@ import { useChatStore } from '@/store/chat'
 import type { FirstSendStatus } from '@/store/chat/types'
 import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
+import type { UserDeliveryState } from '@/lib/userDeliveryState'
 import { dismissRestartNotice, useRestartInterrupted, useRestartNoticeDismissal } from './useRestartInterrupted'
 
-export type UserDeliveryState = 'queued' | 'sending' | 'received' | 'working' | 'failed'
 
 const FIRST_SEND_COPY: Record<FirstSendStatus, { label: string; action?: 'Retry' | 'Generate again' }> = {
   sending: { label: 'Sending…' },
@@ -155,6 +156,74 @@ function StatusActionButton({
   )
 }
 
+/**
+ * The quiet icon-chip copy for every non-failed, non-first-send delivery
+ * state. Extracted so the /clear-specific variant (delta re-review C1)
+ * reads as a table instead of a ternary chain:
+ *   - 'discarded' for a /clear — "Not applied": the generic wording says the
+ *     text was never read, which is false for a held-then-discarded command.
+ * (Ruling S3-02 deleted the 'not-performed' and 'unconfirmed' variants: a
+ * refused /clear is the wire's message_status failed — the failed chip in
+ * UserMessageDeliveryStatus covers it — and a /clear the server holds
+ * (message_status held) shows the held copy, with no deadline.) Both are passive (no action button): the honest repair
+ * for a /clear is to send /clear again, which the tooltip says.
+ */
+function deliveryStateCopy(
+  state: UserDeliveryState,
+  agentName: string,
+  isClearCommand: boolean,
+): { label: string; tooltip: string; icon: React.ReactNode } {
+  if (state === 'queued') {
+    return {
+      label: 'Not sent yet, will be sent automatically',
+      tooltip: "Not sent yet — it will be sent automatically as soon as you're back online.",
+      icon: <Clock size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'held' && isClearCommand) {
+    // The server holds this /clear while it stops the agent's running reply so
+    // the clear can apply (message_status held) - the only state in which a
+    // /clear shows a pending look at all.
+    return {
+      label: 'Not sent yet, will be sent automatically',
+      tooltip: `Stopping ${agentName}'s current reply first. Your /clear is applied as soon as it has stopped. Nothing has been cleared yet.`,
+      icon: <Clock size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'held') {
+    return {
+      label: `Waiting \u2014 delivered when ${agentName} runs again`,
+      tooltip: `${agentName} is stopped. Your message is saved and will be delivered when ${agentName} runs again.`,
+      icon: <Clock size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'received') {
+    return {
+      label: 'Received',
+      tooltip: `Received by Omnipus. ${agentName} will pick it up after finishing the current step.`,
+      icon: <Check size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'discarded') {
+    return isClearCommand
+      ? {
+          label: 'Not applied',
+          tooltip: 'You stopped the turn, so this /clear was discarded — nothing was cleared. Send /clear again if you still want a fresh start.',
+          icon: <Prohibit size={14} aria-hidden="true" />,
+        }
+      : {
+          label: 'Not delivered',
+          tooltip: `Not delivered. You stopped ${agentName} before it read this message, so it was discarded.`,
+          icon: <Prohibit size={14} aria-hidden="true" />,
+        }
+  }
+  return {
+    label: `${agentName} is working on it`,
+    tooltip: `${agentName} is working on this.`,
+    icon: <Checks size={14} aria-hidden="true" />,
+  }
+}
+
 export function UserMessageDeliveryStatus({
   state,
   agentName,
@@ -162,6 +231,7 @@ export function UserMessageDeliveryStatus({
   onRetry,
   firstSendStatus,
   onGenerateAgain,
+  isClearCommand = false,
 }: {
   state: UserDeliveryState
   agentName: string
@@ -169,6 +239,10 @@ export function UserMessageDeliveryStatus({
   onRetry?: () => void
   firstSendStatus?: FirstSendStatus
   onGenerateAgain?: () => void
+  /** The message is a /clear command — only the 'discarded' copy changes for
+   * it (delta re-review C1): the generic "not delivered" wording says the
+   * text was never read, which is false for a held-then-discarded /clear. */
+  isClearCommand?: boolean
 }) {
   const connected = useConnectionStore((s) => s.isConnected)
   const busy = useChatStore((s) => s.isStreaming || s.isReplaying)
@@ -223,23 +297,11 @@ export function UserMessageDeliveryStatus({
     )
   }
 
-  const copy = state === 'queued'
-    ? {
-        label: 'Not sent yet, will be sent automatically',
-        tooltip: "Not sent yet — it will be sent automatically as soon as you're back online.",
-        icon: <Clock size={14} aria-hidden="true" />,
-      }
-    : state === 'received'
-      ? {
-          label: 'Received',
-          tooltip: `Received by Omnipus. ${agentName} will pick it up after finishing the current step.`,
-          icon: <Check size={14} aria-hidden="true" />,
-        }
-      : {
-          label: `${agentName} is working on it`,
-          tooltip: `${agentName} is working on this.`,
-          icon: <Checks size={14} aria-hidden="true" />,
-        }
+  // A /clear in flight on a connected chat (queued, not held) shows no chip:
+  // "not sent yet" would be false, and only a held /clear has anything to say.
+  if (state === 'queued' && isClearCommand && connected) return null
+
+  const copy = deliveryStateCopy(state, agentName, isClearCommand)
 
   return (
     <div role="status" aria-live="polite" data-testid="user-message-delivery-status" className="flex min-h-8 items-center justify-end">

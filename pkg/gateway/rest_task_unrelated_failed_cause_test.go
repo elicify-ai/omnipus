@@ -141,9 +141,9 @@ func (f *restUnrelatedFailedCauseFault) snapshot() []task.Task {
 // TestHandleTaskPatch_SessionBindingFailureRemainsFailed (that fixture's
 // store only ever reaches Failed with the SAME cause the executor returns —
 // the real executor's failTaskBeforeDispatch always persists exactly the
-// error it also returns) and TestHandleTaskPatch_RunTask_DispatchCapReturns409
-// (its fresh status never reaches Failed at all — the dispatch-cap guard
-// trips before any store write). Only a differing stored cause exercises the
+// error it also returns) and the plan-gate 409 cases (their fresh status never
+// reaches Failed at all — the guard trips before any store write). Only a
+// differing stored cause exercises the
 // equality itself. This fixture reuses the SAME gatewayTaskAtomicWriter seam
 // installRESTBindingWriteFault already established (no new mock shape),
 // substituting only the Failed write's committed bytes.
@@ -181,11 +181,14 @@ func TestHandleTaskPatch_DispatchFailure_UnrelatedStoredFailure_StillReverts(t *
 	if err := json.Unmarshal(response.Body.Bytes(), &rejected); err != nil {
 		t.Fatalf("decode real PATCH error response: %v; body=%s", err, response.Body.String())
 	}
-	// The visible error must be THIS dispatch attempt's own cause — the
-	// binding-write failure the handler actually observed — not the
-	// unrelated cause substituted on disk.
-	if !strings.Contains(rejected.Error, fault.bindingCause.Error()) {
-		t.Errorf("PATCH error = %q, want this dispatch attempt's own binding-write cause %q", rejected.Error, fault.bindingCause.Error())
+	// Leak round 6 (T1-4): the visible error is now FIXED text — neither this
+	// dispatch attempt's own raw binding-write cause nor the unrelated cause
+	// substituted on disk may surface.
+	if !strings.Contains(rejected.Error, "the task could not be started. Check the agent and try again; details are in the server log.") {
+		t.Errorf("PATCH error = %q, want the fixed start-failure text", rejected.Error)
+	}
+	if strings.Contains(rejected.Error, fault.bindingCause.Error()) {
+		t.Errorf("PATCH error = %q, must not surface this dispatch attempt's raw binding-write cause %q", rejected.Error, fault.bindingCause.Error())
 	}
 	if strings.Contains(rejected.Error, fault.unrelatedCause) {
 		t.Errorf("PATCH error = %q, must not surface the unrelated stored cause %q", rejected.Error, fault.unrelatedCause)

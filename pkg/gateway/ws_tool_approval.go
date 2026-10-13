@@ -322,6 +322,11 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 		}
 	}
 
+	// U11 (FR-047): a main attach carries the saved attention order the client
+	// may later echo back to acknowledge. 0 when the main has no outcome yet;
+	// omitted for a non-main, the connection-open emit, and an unreadable mark.
+	frame.AttentionBound = h.attentionBoundFor(sessionID)
+
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal session_state", "error", err)

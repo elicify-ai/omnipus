@@ -643,7 +643,7 @@ func TestRetryOnStreamingReset_RecallSpanDropAloneStillRetries(t *testing.T) {
 		{Role: "user", Content: "earlier question"},
 		{Role: "assistant", Content: "earlier answer"},
 	}
-	agentInst.Sessions.SetHistory(sessionKey, priorTurn)
+	seedWindowHistory(agentInst.Sessions, sessionKey, priorTurn)
 	require.NoError(t, agentInst.Sessions.Save(sessionKey))
 
 	ctx := context.Background()

@@ -89,6 +89,17 @@ var (
 		substr("use of closed network connection"),
 		substr("server closed idle connection"),
 		substr("read: connection timed out"),
+		// Transport failures with no HTTP status (founder preview 2026-10-12): the
+		// HTTP/2 connection died under the request, DNS or the route to the
+		// provider was down. Transient: a retry is the right first move.
+		substr("http2: client connection lost"),
+		substr("no such host"),
+		substr("connection refused"),
+		substr("network is unreachable"),
+		substr("streaming read error:"),
+		substr("dial tcp"),
+		substr("i/o timeout"),
+		substr("tls handshake"),
 	}
 
 	// C-5 billing vocabulary (dataset D2) — exactly these four phrases.
@@ -228,6 +239,30 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// inline retry (the only reason it retries inline) applies, exactly like
 	// a connection drop. Checked before substring matching because the
 	// sentinel's wording need not contain any classifier keyword.
+	// A provider that ended its response with an error after the 200 was
+	// committed (OpenRouter's mid-stream error chunk, issue #1278) failed
+	// transiently: nothing it streamed is an answer, and no tool ran. Same
+	// class as a dropped connection, so the same inline retry applies.
+	var spe *common.StreamProviderError
+	if errors.As(err, &spe) {
+		reason := FailoverReason("")
+		switch spe.Kind() {
+		case common.StreamErrorTransient:
+			reason = FailoverTimeout
+		case common.StreamErrorRateLimit:
+			reason = FailoverRateLimit
+		case common.StreamErrorBilling:
+			reason = FailoverBilling
+		case common.StreamErrorAuth:
+			reason = FailoverAuth
+		case common.StreamErrorInvalidRequest, common.StreamErrorContentPolicy:
+			reason = FailoverFormat
+		}
+		if reason == "" {
+			return nil // a code nothing knows: not retried blindly
+		}
+		return &FailoverError{Reason: reason, Provider: provider, Model: model, Wrapped: err}
+	}
 	if errors.Is(err, common.ErrStreamStalled) {
 		return &FailoverError{
 			Reason:   FailoverTimeout,
@@ -457,4 +492,15 @@ func parseDigits(s string) int {
 		}
 	}
 	return n
+}
+
+// IsTransportFailure reports whether err reads as a transport failure between
+// us and the provider (a dropped or unreachable connection): the ONE vocabulary
+// the classifier's retry decision, the agent loop's inline retry and the
+// translator's wording all share (connectionDropPatterns).
+func IsTransportFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	return matchesAny(strings.ToLower(err.Error()), connectionDropPatterns)
 }

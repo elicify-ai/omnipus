@@ -33,13 +33,12 @@ properties:
   text:
     type: string
     minLength: 1
-    maxLength: 16384
     description: >
-      The answer. For a `decision_request`, names the chosen option
-      verbatim.
+      The answer to the child's question.
+      The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
     example: "Yes, overwrite it — the backup is stale."
   correlation_id:
     type: string
     minLength: 1
-    description: The `correlation_id` of the question/decision_request being answered.
+    description: The `correlation_id` of the question being answered.
     example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"

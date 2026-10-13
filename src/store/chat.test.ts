@@ -7,7 +7,7 @@ import { useSessionStore } from './session'
 import { useWhatsAppPairingStore } from './whatsappPairing'
 import { useWorkspacesStore } from './workspacesStore'
 import type { WhatsAppPairingFrame } from '@/lib/api/generated/asyncapi-types'
-import type { WsConnection, WsReceiveFrame } from '@/lib/ws'
+import type { WsConnection, ServerFrame } from '@/lib/ws'
 
 // test_chat_store (test #22)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: User sends message and receives streaming response
@@ -657,8 +657,8 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
     })
     act(() => {
       // Untagged token+done, mirroring the UAT report's literal claim.
-      useChatStore.getState().handleFrame({ type: 'token', content: 'Error processing message: turn canceled' } as unknown as WsReceiveFrame)
-      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 1, cost: 0, duration_ms: 5 } } as unknown as WsReceiveFrame)
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Error processing message: turn canceled' } as unknown as ServerFrame)
+      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 1, cost: 0, duration_ms: 5 } } as unknown as ServerFrame)
     })
 
     const state = useChatStore.getState()
@@ -1937,7 +1937,7 @@ describe('ChatStore — subagent_message/subagent_state missing session_id are d
         sender_identity: 'agent-child',
         untrusted_origin: false,
         created_at: '2026-01-01T00:00:00.000Z',
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
     expect(errorSpy.mock.calls.some((args) => typeof args[0] === 'string' && args[0].includes('session_id'))).toBe(true)
     const msg = useChatStore.getState().messages.find((m) => (m.spans?.length ?? 0) > 0)
@@ -1963,7 +1963,7 @@ describe('ChatStore — subagent_message/subagent_state missing session_id are d
         span_id: 'span-drop-state',
         state: 'needs_input',
         created_at: '2026-01-01T00:00:00.000Z',
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
     expect(errorSpy.mock.calls.some((args) => typeof args[0] === 'string' && args[0].includes('session_id'))).toBe(true)
     const msg = useChatStore.getState().messages.find((m) => (m.spans?.length ?? 0) > 0)

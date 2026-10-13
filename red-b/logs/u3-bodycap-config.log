@@ -1,0 +1,11 @@
+--- FAIL: TestSessionCoreU3_OrdinaryBodyCapDefaultIs65536Bytes (0.00s)
+    sessioncore_u3_bounds_test.go:31: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-b-20261009/pkg/config/sessioncore_u3_bounds_test.go:31
+        	Error:      	Not equal: 
+        	            	expected: 65536
+        	            	actual  : 16384
+        	Test:       	TestSessionCoreU3_OrdinaryBodyCapDefaultIs65536Bytes
+        	Messages:   	C-LIMIT: the ordinary steer/body default must be 65,536 UTF-8 bytes (FR-010)
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/config	0.674s
+FAIL

@@ -2,14 +2,17 @@
 
 import type { ZodType } from 'zod'
 import { z } from 'zod'
+import type { QueryClient } from '@tanstack/react-query'
 import {
   Agent as AgentSchema,
+  AgentActivityRun as AgentActivityRunSchema,
   AgentSession as AgentSessionSchema,
   ConfigurationMutationState as ConfigurationMutationStateSchema,
   // Spec-4 — external-CLI runner connection test (contract-first #8):
   RunnerTestResponse as RunnerTestResponseSchema,
 } from '@/lib/api/generated/schemas'
 import type {
+  AgentActivityRun,
   AgentSession,
   // Wire types migrated from hand-written interfaces to generated types:
   Agent,
@@ -20,6 +23,10 @@ import type {
 } from '@/lib/api/generated/openapi-types'
 import { request } from './http'
 import { requestConfiguration } from './configuration'
+// invalidateAfterAgentCreate invalidates the workspaces LIST keys next to
+// ['agents'] — sibling module, no cycle (workspaces.ts imports neither
+// agents.ts nor this module's barrel).
+import { workspacesQueryKeys } from './workspaces'
 
 // ── Agents ────────────────────────────────────────────────────────────────────
 
@@ -39,13 +46,12 @@ export type AgentKind = NonNullable<Agent['type']>
 // out of those selection sites. Accepts a loose shape so it works on partial
 // agent objects too.
 //
-// W2 (agent-form-requirements): recognise both Subagent and subagent_3p (the new
-// wire enum values for the user-creatable worker types). The legacy "worker"
-// value is the build-time/seed config constant and is NOT emitted by the
-// gateway; it is left here as a defensive fallback so callers don't break on
-// stale payloads.
+// W2 (agent-form-requirements): recognise both Subagent and subagent_3p (the
+// wire enum values for the user-creatable worker types). Classification is
+// type-based only — the legacy "worker" build-time/seed constant is not a
+// recognised kind (DEL-F03).
 export function isWorker(a: { type?: string | null }): boolean {
-  return a.type === 'Subagent' || a.type === 'subagent_3p' || a.type === 'worker'
+  return a.type === 'Subagent' || a.type === 'subagent_3p'
 }
 
 // AssigneeTeamScope — F2: an explicit choice, not an absent optional. The
@@ -115,8 +121,41 @@ export function fetchAgent(id: string): Promise<Agent> {
   return request<Agent>(`/agents/${encodeURIComponent(id)}`, undefined, AgentSchema as ZodType<Agent>)
 }
 
+/** Open task and scheduler runs an agent should see in Activity (FR-033). */
+export function fetchAgentActivityRuns(agentId: string): Promise<AgentActivityRun[]> {
+  return request<AgentActivityRun[]>(
+    `/agents/${encodeURIComponent(agentId)}/activity-runs`,
+    undefined,
+    z.array(AgentActivityRunSchema) as ZodType<AgentActivityRun[]>,
+  )
+}
+
 export function createAgent(data: AgentCreateRequest): Promise<Agent> {
   return requestConfiguration<Agent>('/agents', { method: 'POST', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
+}
+
+// Post-create freshness, ONE shared helper for every agent-create entry point
+// (founder bug 2026-10-11): the sidebar roster is membership-driven
+// (workspaceRoster.ts::memberRoster reads the workspace's core_team +
+// member_configs), so invalidating only ['agents'] left a newly created
+// Main agent's sidebar row waiting for the 30 s workspaces poll. Both the
+// create dialog (CreateAgentModal.tsx onSuccess) and the WS 'agent_created'
+// frame (frames.ts) call this — nobody re-copies the key set.
+//
+// The list keys are spelled per status on purpose: workspacesQueryKeys.list()
+// with NO params produces ['workspaces', undefined], which matches ZERO
+// registered queries under TanStack's partial matching — every real list
+// query is registered as {status:'active'} / {status:'archived'} (the same
+// no-op-invalidate pitfall documented in WorkspaceTeamTab.tsx and
+// WorkspaceSettingsTab.tsx; see also useWorkspaceSetupKickoff.ts).
+//
+// Callers own the client (useQueryClient() in components, the singleton in
+// the WS frame path); fire-and-forget, returns void.
+export function invalidateAfterAgentCreate(client: QueryClient): void {
+  void client.invalidateQueries({ queryKey: ['agents'] })
+  for (const status of ['active', 'archived'] as const) {
+    void client.invalidateQueries({ queryKey: workspacesQueryKeys.list({ status }) })
+  }
 }
 
 export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent> {

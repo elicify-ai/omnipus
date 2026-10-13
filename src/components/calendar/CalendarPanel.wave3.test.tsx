@@ -84,7 +84,6 @@ vi.mock('@/components/calendar/FullCalendarView', () => ({
       return () => {
         if (props.calendarRef) (props.calendarRef as { current: unknown }).current = null
       }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
     return <div data-testid="fcv-stub" data-initial-view={props.initialView ?? 'dayGridMonth'} />
   },

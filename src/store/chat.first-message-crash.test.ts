@@ -115,7 +115,7 @@ describe('#1090 — an ordinary unconfirmed first message after a crash', () => 
     ).not.toBeNull()
   })
 
-  it('T4: /new and its first send do not inherit the failed chat\'s stale pending message', () => {
+  it('T4: confirmed + New chat and its first send do not inherit the failed chat\'s stale pending message', () => {
     const oldContent = 'T4 old unconfirmed message belongs only to the failed chat'
     const oldId = '1090-t4-old'
     const newContent = 'T4 fresh first message belongs only to the new chat'
@@ -128,11 +128,11 @@ describe('#1090 — an ordinary unconfirmed first message after a crash', () => 
       .toEqual([{ id: oldId, content: oldContent }])
     reconnect1090Sender(sender)
 
-    // useSlashMenu::runClientCommand dispatches /new to startNewSession.
-    // Checking only its immediately-empty foreground would miss the bug:
-    // the next send used to append to the stale __pending bucket.
-    act(() => useSessionStore.getState().startNewSession())
-    expect(foreground1090Users(), 'T4 /new must start with an empty foreground').toEqual([])
+    // Wave-2 FR-005: + New chat requires confirmation before abandoning an
+    // unconfirmed first send. Typed /new is server-owned, not this action.
+    // Keep T4's original guard: the next send must not reuse the stale bucket.
+    act(() => useSessionStore.getState().startNewSession({ choice: 'confirm', clientMessageId: oldId }))
+    expect(foreground1090Users(), 'T4 confirmed + New chat must start with an empty foreground').toEqual([])
     act(() => useChatStore.getState().sendMessage(newContent, { clientMessageId: newId }))
     expect(sender.send).toHaveBeenCalledTimes(2)
     expect(sender.send).toHaveBeenNthCalledWith(2, expect.objectContaining({
@@ -140,7 +140,7 @@ describe('#1090 — an ordinary unconfirmed first message after a crash', () => 
     }))
 
     expect.soft(foreground1090Users(),
-      'T4: /new reused the stale pending bucket and leaked the old user message',
+      'T4: confirmed + New chat reused the stale pending bucket and leaked the old user message',
     ).toEqual([{ id: newId, content: newContent }])
     const activeId = useSessionStore.getState().activeSessionId
     const activeBucket = activeId ? useChatStore.getState().sessionsById[activeId] : undefined

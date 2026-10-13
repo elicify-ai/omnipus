@@ -66,10 +66,8 @@ func addModelTokens(dst *session.ModelTokens, src session.ModelTokens) {
 // The ?period query parameter accepts "day", "week", "month" (default), or
 // "all". Unrecognized values are rejected with 400.
 //
-// Token attribution: tokens are charged to sm.ActiveAgentID (the most-recent
-// agent active in the session). For sessions that pre-date the multi-agent
-// model, PostLoad backfills ActiveAgentID from the legacy single AgentID.
-// Attributing to each sm.AgentIDs entry would double-count on handoffs.
+// Token attribution: tokens are charged to the session's owner, sm.AgentID.
+// Attributing to each sm.AgentIDs entry would double-count a joined session.
 //
 // subagent_3p (external CLI workers) are excluded — they run on a separate
 // engine and their tokens are not tracked through Omnipus's provider layer.
@@ -135,10 +133,7 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 	agentModelMap := make(map[string]map[string]session.ModelTokens)
 	for _, sm := range allSessions {
 		sm.PostLoad()
-		agentID := sm.ActiveAgentID
-		if agentID == "" && len(sm.AgentIDs) > 0 {
-			agentID = sm.AgentIDs[0]
-		}
+		agentID := sm.AgentID
 		if agentID == "" {
 			continue
 		}

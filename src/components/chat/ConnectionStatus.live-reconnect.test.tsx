@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { parseFrameSafe, type WsReceiveFrame } from '@/lib/ws'
+import { parseFrameSafe, type ServerFrame } from '@/lib/ws'
 import type { ClientFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { useChatStore } from '@/store/chat'
@@ -36,7 +36,7 @@ class Socket {
   constructor() { sockets.push(this) }
   open() { this.onopen?.() }
   drop(code: number) { this.readyState = Socket.CLOSED; this.onclose?.({ code, reason: '' }) }
-  frame(frame: WsReceiveFrame) {
+  frame(frame: ServerFrame) {
     expect(this.onmessage, 'fixture socket has the real onmessage handler').toBeTypeOf('function')
     expect(parseFrameSafe(JSON.stringify(frame)), 'fixture frame satisfies the generated contract').toMatchObject({ type: frame.type })
     this.onmessage!({ data: JSON.stringify(frame) })

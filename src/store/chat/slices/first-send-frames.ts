@@ -186,18 +186,13 @@ export function handleFirstSendFrame(context: FirstSendFrameContext): boolean {
   if (frame.type === 'session_started') {
     const clientId = frame.client_message_id
     if (!clientId) {
-      // Bind/migrate through the normal reducer, but retain the exact request
-      // and client ID until a correlated receipt proves this entry was saved.
-      if (pending && !pending.sessionId) {
-        const status = pending.status === 'sending' || pending.status === 'retrying' ? 'unconfirmed' : pending.status
-        context.withBucket('__pending', (bucket) => produce(bucket, (draft) => {
-          for (const message of Object.values(draft.messagesById)) message.session_id = frame.session_id
-          const user = findFirstSendMessage(draft, pending.clientMessageId)
-          if (user) user.firstSendStatus = status
-        }))
-        context.set({ pendingFirstSend: { ...pending, sessionId: frame.session_id, status } })
-      }
-      return false
+      // DEL-F21/F22: a `session_started` without `client_message_id` is not a
+      // correlated receipt, so it must NOT bind/save an ordinary pending first
+      // send. Consume the frame (nothing is established) instead of letting the
+      // legacy ack tail migrate the pending bucket/agent/mode. With no unbound
+      // pending first send, fall through so a workspace-setup kickoff and any
+      // other ordinary no-session turn keep their existing path.
+      return pending !== null && !pending.sessionId
     }
     if (!pending || pending.clientMessageId !== clientId) {
       const abandoned = get().abandonedFirstSendIds.includes(clientId)

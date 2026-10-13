@@ -78,9 +78,15 @@ func (a *restAPI) getConfig(w http.ResponseWriter) {
 //     agent's stored tool policy have run on THIS install (e.g. the Worker
 //     goal_claim update, coreagent.ToolPolicyUpdateWorkerGoalClaimAllow) —
 //     the same kind of boot-seed bookkeeping.
+//   - workspace_seed_defaults: the config-file-only workspace delegation seed
+//     block (session-core C-DELEGATE, FR-014/015). No gateway/UI exposure is
+//     commissioned for it; it stays on disk and is edited by hand, so it must
+//     never cross the wire. The matching generic-write refusal lives in
+//     blockedPaths (config.WorkspaceSeedDefaults).
 var wireExcludedConfigFields = []string{
 	"seeded_skill_grants",
 	"seeded_tool_policy_updates",
+	"workspace_seed_defaults",
 }
 
 // sanitizeConfigForWire strips every wireExcludedConfigFields key from a
@@ -686,7 +692,7 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		if fpErr != nil {
 			// The on-disk config no longer decodes into config.Config;
 			// no baseline to compare against — refuse rather than guess.
-			return &requestRefusalError{msg: "config.json agents section does not decode: " + fpErr.Error()}
+			return fmt.Errorf("stored agents section does not decode: %w", fpErr)
 		}
 		for k, v := range updates {
 			var parsed any
@@ -719,7 +725,7 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("rest: save config", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 
@@ -753,7 +759,7 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Error("rest: save config for token rotation", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 	// Persistence succeeded. Reload so the in-memory config picks up the new token.
@@ -767,7 +773,7 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 	// until some unrelated reload happened to run.
 	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("config reload after token rotation failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("token saved but reload failed: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "token saved but reload failed", err)
 		return
 	}
 	jsonOK(w, gen.RotateTokenResponse{Token: newToken})

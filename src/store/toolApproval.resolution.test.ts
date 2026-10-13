@@ -9,12 +9,12 @@ import {
   isApprovalInScope,
   RESOLVED_APPROVAL_MEMORY,
 } from './toolApproval'
-import type { WsSessionStateFrame, WsToolApprovalRequiredFrame } from '@/lib/ws'
+import type { SessionStateFrame, ToolApprovalRequiredFrame } from '@/lib/ws'
 
 function requiredFrame(
   id: string,
-  extra: Partial<WsToolApprovalRequiredFrame> = {},
-): WsToolApprovalRequiredFrame {
+  extra: Partial<ToolApprovalRequiredFrame> = {},
+): ToolApprovalRequiredFrame {
   return {
     type: 'tool_approval_required',
     approval_id: id,
@@ -31,7 +31,7 @@ function requiredFrame(
 
 function snapshot(
   entries: Array<{ id: string; workspace_id?: string }>,
-): WsSessionStateFrame {
+): SessionStateFrame {
   return {
     type: 'session_state',
     user_id: 'user-1',

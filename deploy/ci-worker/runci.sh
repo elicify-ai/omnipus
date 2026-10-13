@@ -31,6 +31,10 @@ REPO_DIR=/cache/omnipus   # on the persistent volume → clone survives stop/sta
 # older ones allow an A/B comparison). ci-cluster.sh's collection phase copies
 # this file off BEFORE stopping the machine; the `RUNLOG:` line below is what
 # it parses to find the exact path on the machine.
+# RUNCI_AS_CI=1 marks the re-exec'd non-root child (see "Run the test gates as a
+# non-root user" below): the root parent already tee'd the run, took the lock and
+# synced the checkout, and its stdout/stderr and lock descriptor are inherited.
+if [ -z "${RUNCI_AS_CI:-}" ]; then
 RUNLOG_DIR=/cache/logs
 mkdir -p "$RUNLOG_DIR" || { echo "cannot create $RUNLOG_DIR — no persistent run log possible"; exit 2; }
 safe_ref="$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._-' '-')"
@@ -42,6 +46,7 @@ RUNLOG="$RUNLOG_DIR/${GATE}@${safe_ref}-$(date -u +%Y%m%dT%H%M%SZ).log"
 ( cd "$RUNLOG_DIR" && ls -t "${GATE}@"*.log 2>/dev/null | tail -n +3 | xargs -r rm -f -- ) || true
 exec > >(tee -a "$RUNLOG") 2>&1
 echo "RUNLOG: $RUNLOG"
+fi
 
 # --- whole-run mutex ------------------------------------------------------
 # This worker is SHARED: every operator/session drives the same machine, and a
@@ -62,6 +67,7 @@ echo "RUNLOG: $RUNLOG"
 # per-run path scoping (tests/e2e/setup.ts hardcodes /tmp/omnipus-ci).
 # FD 9 is held for the lifetime of this process; the lock releases on exit.
 _LOCKFILE=/tmp/runci.lock
+if [ -z "${RUNCI_AS_CI:-}" ]; then
 exec 9>"$_LOCKFILE" || { echo "cannot open $_LOCKFILE"; exit 2; }
 if ! flock -n 9; then
   echo "another runci.sh is already running on this worker (lock: $_LOCKFILE):"
@@ -75,6 +81,7 @@ if ! flock -n 9; then
   fi
 fi
 echo "worker lock acquired (pid $$)"
+fi
 TAGS="goolm,stdjson"
 export PATH=/usr/local/go/bin:/cache/go/bin:$PATH
 export HOME="${HOME:-/root}"   # non-login SSH shell has no HOME; gen-contracts.sh uses set -u
@@ -103,6 +110,15 @@ log() { printf '\n\033[1;36m=== %s ===\033[0m\n' "$*"; }
 rc=0; step() { local name="$1"; shift; log "$name"; "$@"; local e=$?; printf '\033[1m%s -> exit %d\033[0m\n' "$name" "$e"; [ $e -ne 0 ] && rc=1; return 0; }
 
 # --- sync repo ---
+# The checkout is owned by the non-root `ci` user after a run (ci_prepare), so root's
+# own git must be told that is fine - otherwise the next run's fetch dies with
+# "detected dubious ownership". Idempotent.
+if [ -z "${RUNCI_AS_CI:-}" ] && ! git config --global --get-all safe.directory 2>/dev/null | grep -qx '\*'; then
+  git config --global --add safe.directory '*'
+fi
+if [ -n "${RUNCI_AS_CI:-}" ]; then
+  cd "$REPO_DIR" || exit 2     # the root parent already fetched and checked out
+else
 if [ ! -d "$REPO_DIR/.git" ]; then
   log "clone"; git clone "${GIT_REMOTE:?GIT_REMOTE not set}" "$REPO_DIR" || exit 2
 fi
@@ -118,7 +134,92 @@ TARGET="$(git rev-parse --verify --quiet "origin/$REF^{commit}" || git rev-parse
 [ -z "$TARGET" ] && { echo "cannot resolve ref $REF"; exit 2; }
 git checkout -f "$TARGET" || exit 2
 git reset --hard "$TARGET" --quiet || true
+# `checkout -f` + `reset --hard` leave UNTRACKED files behind, and this checkout
+# is persistent: files an older revision's tests wrote into the tree (the gateway
+# entities/agents/*.lock) survive for ever, and the package TestMain guard
+# ("a test wrote into the package directory") then blames the CURRENT run for
+# them. `git clean -fdx` makes every run start from exactly the committed tree.
+# Excluded because they are expensive and safe to keep: node_modules (npm ci's
+# output; runci still checks it against package-lock.json). The Go/npm/Playwright
+# caches live outside the tree (/cache/go-build, /cache/go, /cache/npm).
+git clean -fdxq -e node_modules || echo "WARNING: git clean failed - stale untracked files may remain in the checkout"
 echo "HEAD: $(git rev-parse --short HEAD) $(git log -1 --format='%s')"
+fi
+
+# --- worker hygiene (root, once per run, before any gate) ----------------------------------
+
+# Disk pressure: the Go build cache grows until /cache is full, and a full /cache
+# fails gates with "no space left on device", which reads as a code failure and is
+# not one (2026-10-11: a go-build died on a 100% full /cache holding a 12.6 GB
+# build cache). At or above 85% the cache is cleared (it is only a cache; the next
+# build is slower, never wrong) and the run says so.
+disk_pressure_check() {
+  local pct
+  pct="$(df --output=pcent /cache 2>/dev/null | tail -1 | tr -dc '0-9')"
+  [ -n "$pct" ] || { echo "disk check: cannot read /cache usage"; return 0; }
+  if [ "$pct" -ge 85 ]; then
+    echo "DISK PRESSURE: /cache is at ${pct}% (threshold 85%) - clearing the Go build cache and test temp residue"
+    GOCACHE=/cache/go-build go clean -cache 2>&1 | tail -3
+    rm -rf /cache/tmp/Test* 2>/dev/null
+    echo "disk pressure: /cache is now at $(df --output=pcent /cache | tail -1 | tr -dc '0-9')%"
+  else
+    echo "disk check: /cache at ${pct}% (threshold 85%)"
+  fi
+}
+
+# The document-runtime probe (pkg/documentruntime.ProbeArgv) runs `python -m ...`;
+# the Debian image ships neither, so pkg/agent TestNewAgentInstanceWiresDocumentRuntime...
+# got "command exited with code 127" instead of the structured incomplete-dependency
+# report it asserts. GitHub's runners have `python`. Installed here (idempotent, root,
+# survives for the machine's lifetime) and in the Dockerfile for new images.
+ensure_python() {
+  if command -v python >/dev/null 2>&1; then return 0; fi
+  echo "python not found on the worker - installing python3 + python-is-python3 (the document-runtime probe needs 'python')"
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python-is-python3 >/dev/null 2>&1 \
+    || echo "WARNING: could not install python; document-runtime tests will see exit 127 (environment, not code)"
+}
+
+# --- Run the test gates as a non-root user --------------------------------------------------
+#
+# The Fly machine's SSH shell is root, and many tests induce a failure with file
+# permissions (a read-only dir, an unreadable file); root bypasses every one of them,
+# so they cannot pass: 44 entries of the 2026-10-11 full run were exactly that
+# ("BLOCKED: runner bypasses write permissions", "tests must not run as root"). GitHub
+# CI runs as a normal user, so this worker measured something GitHub does not. Every
+# gate except e2e/all (Xvfb, browsers, ports) is therefore re-exec'd as the `ci`
+# user after the root-only work above (lock, log tee, checkout, hygiene): the child
+# inherits stdout and the held lock descriptor, skips those steps (RUNCI_AS_CI=1),
+# and runs the SAME gate code. Files it creates are owned by ci, so nothing root-owned
+# is left behind in the caches or the checkout for the next run to trip over.
+CI_USER=ci
+ci_prepare() {
+  id -u "$CI_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$CI_USER" || return 1
+  mkdir -p /cache/tmp /cache/go /cache/go-build /cache/npm
+  local d
+  for d in "$REPO_DIR" /cache/go /cache/go-build /cache/npm /cache/tmp; do
+    # Incremental: only entries not already ci's (the first run after the change
+    # pays once; later runs touch only what root created in between).
+    find "$d" ! -user "$CI_USER" -exec chown -h "$CI_USER:$CI_USER" {} + 2>/dev/null || true
+  done
+  printf '[safe]\n\tdirectory = *\n' > "/home/$CI_USER/.gitconfig"
+  chown "$CI_USER:$CI_USER" "/home/$CI_USER/.gitconfig"
+}
+
+if [ -z "${RUNCI_AS_CI:-}" ]; then
+  disk_pressure_check
+  ensure_python
+  case "$GATE" in
+    e2e|all) echo "gate $GATE stays root (browsers, Xvfb, shard ports); the Go/node test gates run as '$CI_USER'" ;;
+    *)
+      if [ "$(id -u)" = 0 ]; then
+        ci_prepare || { echo "cannot prepare the non-root test user '$CI_USER'"; exit 2; }
+        echo "re-exec as non-root user '$CI_USER' (uid $(id -u "$CI_USER"))"
+        exec runuser -u "$CI_USER" -- env RUNCI_AS_CI=1 HOME="/home/$CI_USER" "PATH=$PATH" bash "$0" "$REF" "$GATE"
+      fi
+      ;;
+  esac
+fi
 
 # Go's //go:embed all:spa needs pkg/gateway/spa/ non-empty. For compile/unit gates a stub is enough
 # (the real SPA is only needed to produce a servable binary → the embed-build gate).

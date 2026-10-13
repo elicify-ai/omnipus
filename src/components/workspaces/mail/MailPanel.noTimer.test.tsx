@@ -71,7 +71,7 @@ describe('MailPanel has no repeating timer (C6: US-1 AS-7, MC-W3-10, scenario 1.
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
     for (const fn of [fetchAgents, fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchMailMessage, fetchMailSummary]) fn.mockReset()
-    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])

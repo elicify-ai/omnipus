@@ -31,8 +31,8 @@ import (
 func TestRegistry_AllSysagentToolsCategory(t *testing.T) {
 	all := AllTools(nil)
 
-	if len(all) != 35 {
-		t.Errorf("expected exactly 35 system tools, got %d", len(all))
+	if len(all) != 31 {
+		t.Errorf("expected exactly 31 system tools, got %d", len(all))
 	}
 
 	for _, tool := range all {
@@ -128,8 +128,8 @@ func TestRegistry_AllSysagentToolsCategory_CentralRegistry(t *testing.T) {
 	reg := BuildRegistry(nil)
 	allTools := reg.GetAll()
 
-	if len(allTools) != 35 {
-		t.Errorf("central BuiltinRegistry has %d tools; want == 35 (FR-001)", len(allTools))
+	if len(allTools) != 31 {
+		t.Errorf("central BuiltinRegistry has %d tools; want == 31 (FR-001; the four *_in_workspace tools retired by DEL-23)", len(allTools))
 	}
 
 	for _, tool := range allTools {

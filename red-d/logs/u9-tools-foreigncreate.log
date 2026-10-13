@@ -1,0 +1,6 @@
+2026/10/09 08:55:43 WARN task tools: no assignee-readiness checker installed — an assignment to an agent that cannot finish the task is not refused at write time; the task run's pre-run check still ends it tool=create_task
+--- FAIL: TestSessionCoreU9_ForeignCreateLandsInboxInTargetWorkspace (0.21s)
+    sessioncore_u9_canonical_workspace_test.go:132: FR-048: foreign create must resolve to the explicit workspace "01JXU9FOREIGNWORKSPACE000001", got "01JXU9OWNWORKSPACE00000001"
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/tools	5.200s
+FAIL

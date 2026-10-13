@@ -29,10 +29,9 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	cfg := DefaultConfig()
 
 	destructive := map[string]bool{
-		"delete_workspace":         true,
-		"delete_task":              true,
-		"delete_task_in_workspace": true,
-		"remove_mcp_server":        true,
+		"delete_workspace":  true,
+		"delete_task":       true,
+		"remove_mcp_server": true,
 		// remove_skill and delete_agent are ADR-090 proposal-confirmed writes,
 		// so their fresh ceiling is allow rather than a second Ask gate.
 	}

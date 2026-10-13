@@ -35,7 +35,7 @@
  * passes and a rewrite that drops the unattended-turns half still fails.
  */
 
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 
 import { restoreAdminSession } from './fixtures/admin-api';
 
@@ -465,15 +465,30 @@ test('shell: the workspace tabs the plan drives all render', async ({ page }) =>
   // navigation that lands DURING the initial load is dropped.
   await ensureSession(page, `${BASE_URL}/#/workspaces/${wsId}/chat`);
 
-  for (const [tab, marker] of [
-    ['chat', /Message|Welcome to omnipus/i],
-    ['board', /Team Task Backlog|No tasks yet/i],
-    ['calendar', /No scheduled items|Today/i],
-    ['team', /Team & delegation/i],
-    ['settings', /Workspace settings/i],
-  ] as const) {
+  // Per-tab locator factories rather than bare text regexes: the chat tab's
+  // marker is a ROLE, not a string. FR-008 (founder amendment 2026-10-11)
+  // renamed the chat header to "<Agent> - Main Session"
+  // (src/lib/nav/sessionDisplayTitle.ts::sessionDisplayTitle) and the welcome
+  // heading splits "Welcome to" across the wordmark element, so the old
+  // /Main chat|Message|Welcome to omnipus/ text probe matched nothing and the
+  // tab read as "not rendered" while it was up. The composer — explicit
+  // role="combobox", aria-label="Message input" (ChatScreen.tsx
+  // OmnipusComposer; the same accessible name fixtures/selectors.ts's
+  // chatInput contract relies on) — renders ONLY inside a mounted ChatScreen:
+  // the tab's loading state replaces the screen outright, and a history-fetch
+  // failure renders "Could not load messages." instead of the whole thread +
+  // composer subtree. So visibility still proves exactly the old intent: the
+  // chat tab rendered real chat UI. It cannot match an error page.
+  const tabMarkers: Array<[string, () => Locator]> = [
+    ['chat', () => page.getByRole('combobox', { name: 'Message input' })],
+    ['board', () => page.getByText(/Team Task Backlog|No tasks yet/i)],
+    ['calendar', () => page.getByText(/No scheduled items|Today/i)],
+    ['team', () => page.getByText(/Team & delegation/i)],
+    ['settings', () => page.getByText(/Workspace settings/i)],
+  ];
+  for (const [tab, marker] of tabMarkers) {
     await page.goto(`${BASE_URL}/#/workspaces/${wsId}/${tab}`);
-    await expect(page.getByText(marker).first(), `workspace ${tab} tab did not render`).toBeVisible({
+    await expect(marker().first(), `workspace ${tab} tab did not render`).toBeVisible({
       timeout: 20_000,
     });
   }

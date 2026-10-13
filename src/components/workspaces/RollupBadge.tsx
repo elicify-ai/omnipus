@@ -11,7 +11,7 @@
  */
 
 import { motion } from 'framer-motion'
-import { getIconComponent } from '@/lib/agentIcons'
+import { AgentMark } from '@/components/agents/AgentMark'
 import type { Agent, Task } from '@/lib/api'
 
 /** A single item from Task['rollup'] */
@@ -45,7 +45,7 @@ function rollupStatusColorVar(status: RollupItem['status']): string {
   }
 }
 
-type RollupAgent = Pick<Agent, 'id'> & Partial<Pick<Agent, 'name' | 'color' | 'icon'>>
+type RollupAgent = Pick<Agent, 'id'> & Partial<Pick<Agent, 'name' | 'color' | 'figure' | 'role'>>
 
 interface RollupBadgeProps {
   rollup: RollupItem[]
@@ -58,11 +58,11 @@ function agentById(agents: RollupAgent[], agentId: string): RollupAgent | undefi
   return agents.find((a) => a.id === agentId)
 }
 
-/** Single avatar chip for one rollup item */
+/** Single avatar chip for one rollup item: the agent's own mark inside a
+ *  status ring. The ring and tint carry the item's status; the mark carries
+ *  who the agent is — the same AgentMark every surface draws. */
 function RollupAvatar({ item, agent }: { item: RollupItem; agent: RollupAgent | undefined }) {
   const isLive = item.status === 'in_progress'
-  const color = agent?.color ?? rollupStatusColorVar(item.status)
-  const Icon = getIconComponent(agent?.icon)
 
   return (
     <motion.span
@@ -74,35 +74,17 @@ function RollupAvatar({ item, agent }: { item: RollupItem; agent: RollupAgent | 
           ? { duration: 1.6, repeat: Infinity, ease: 'easeInOut' }
           : { duration: 0 }
       }
-      className="inline-flex items-center justify-center rounded-full border"
+      className="inline-flex h-[var(--space-4)] w-[var(--space-4)] items-center justify-center rounded-full border"
       style={{
-        width: 18,
-        height: 18,
-        // `color-mix` (not a `${color}NN` hex-alpha-suffix concat — see the
-        // design-system skill's "Alpha on a brand color" rule): `color` may
-        // be an arbitrary agent hex OR one of `rollupStatusColorVar`'s
-        // `var(--status-*)` token references, and only `color-mix` composes
-        // correctly with a CSS custom-property value (a suffixed `var(...)NN`
-        // string is invalid CSS and silently drops the declaration).
-        // 13.3% mix == a 0x22 (34/255) hex alpha, this pill's tint level.
-        backgroundColor: `color-mix(in srgb, ${color} 13.3%, transparent)`,
-        // Always the pure status accent (ignores `agent?.color` — unlike
-        // `color` above) so every chip's border reads the item's status
-        // family even when the agent has its own custom colour. Called
-        // inline rather than bound to a separately-named local: a local
-        // whose name reads as both "status" and "colour" (e.g. `statusColor`)
-        // is exactly the shape `scripts/design-system-locks/status.mjs`
-        // treats as a status-governed colour binding it must statically
-        // prove — and a same-file, non-imported helper call is outside what
-        // it can resolve, so it fails closed as
-        // `design-system/status-unsupported` (never baselinable). Inlined
-        // here it is just an ordinary runtime read, exactly like `color`'s
-        // own `rollupStatusColorVar` fallback above and the `<Icon>`/label
-        // colour reads below.
+        // `color-mix` over the status token (never a hex-alpha concat — see
+        // the design-system skill's "Alpha on a brand color" rule). The status
+        // helper is called inline, not bound to a status-named local, which
+        // scripts/design-system-locks/status.mjs could not statically prove.
+        backgroundColor: `color-mix(in srgb, ${rollupStatusColorVar(item.status)} 13.3%, transparent)`,
         borderColor: rollupStatusColorVar(item.status),
       }}
     >
-      <Icon size={10} weight="bold" style={{ color }} />
+      <AgentMark agent={agent} name={agent?.name ?? item.agent_id} size={18} />
     </motion.span>
   )
 }

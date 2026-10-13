@@ -90,6 +90,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "DateTimePicker [check:date-time-picker-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[aria-label=\"Trigger at\"]", "attribute": "type", "value": "button" }],
       "applicable": true
     },
     {

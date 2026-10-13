@@ -127,7 +127,7 @@ function renderMail(
 
 describe('Mail fullscreen carries context into Mail content (R10/R11)', () => {
   beforeEach(() => {
-    fetchAgents.mockReset().mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockReset().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockReset().mockResolvedValue([
       {
         agent_id: 'mia',

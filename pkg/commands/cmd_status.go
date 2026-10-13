@@ -35,7 +35,7 @@ func statusHandler() Handler {
 		// Channel info (mirrors /show channel sub-handler)
 		parts = append(parts, fmt.Sprintf("Channel: %s", req.Channel))
 
-		// Agents (mirrors /show agents sub-handler / agentsHandler)
+		// Agents summary
 		if rt != nil && rt.ListAgentIDs != nil {
 			ids := rt.ListAgentIDs()
 			if len(ids) > 0 {

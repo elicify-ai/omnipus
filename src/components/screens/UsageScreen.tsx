@@ -8,8 +8,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
-import { fetchTokenStats, fetchSessions, tokenStatsQueryKeys, type TokenStatsPeriod, type Session } from '@/lib/api'
+import { ErrorState } from '@/components/ui/error-state'
+import { fetchTokenStats, fetchSessions, fetchAgents, tokenStatsQueryKeys, type TokenStatsPeriod, type Session } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
+import { sessionDisplayTitle } from '@/lib/nav/sessionDisplayTitle'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 
 export { formatTokens }
@@ -209,7 +211,7 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
                     tabIndex={0}
                     className="truncate min-w-0 hover:text-[var(--color-accent)] transition-colors"
                   >
-                    {row.title || 'Untitled'}
+                    {row.title}
                   </Link>
                   {row.type === 'verifier' && (
                     <Badge
@@ -294,7 +296,30 @@ export function UsageScreen() {
     staleTime: 30_000,
   })
 
-  const isLoading = statsLoading || sessionsLoading
+  // The agents roster — SAME ['agents'] query key the Sessions and Search
+  // modal uses — backs the main-session display title (founder feedback
+  // 2026-10-11, point 4): a main ALWAYS reads "<Agent> - Main Session",
+  // derived from the agent's CURRENT name (stored title ignored — steer
+  // 2026-10-12), so a rename flows through this shared cache without a
+  // reload. While the roster is loading the screen keeps its skeleton
+  // (agentsLoading joins isLoading below — no fabricated title is painted
+  // mid-load); a FAILED roster falls back to the AGENT ID — the server's own
+  // empty-name fallback (pkg/gateway/session_title.go::withDisplayTitle) —
+  // never "Unknown agent", and never "Untitled" on a main
+  // (S4-04/S2-05, 2026-10-12). R2-S4-03: that id fallback is not silent —
+  // when the roster FAILED outright (no retained data, the same condition
+  // the search modal's banner uses) the by-session tab shows the same honest
+  // "unavailable" note, so "jim - Main Session" never reads as a real name.
+  const {
+    data: agentsData,
+    isPending: agentsLoading,
+    isError: agentsError,
+    refetch: refetchAgents,
+  } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+  const agents = agentsData ?? []
+  const agentNamesUnavailable = agentsError && agentsData === undefined
+
+  const isLoading = statsLoading || sessionsLoading || agentsLoading
 
   // Derive totals.
   // tokens_cache_read and tokens_cache_write are a SUBSET of tokens_total
@@ -333,12 +358,20 @@ export function UsageScreen() {
   const modelMax = modelItems[0]?.tokens ?? 0
 
   // By-session items — use sessions list (includes verifier sessions, see
-  // the fetchSessions call above) with total_tokens.
+  // the fetchSessions call above) with total_tokens. Title resolves through
+  // sessionDisplayTitle (founder feedback 2026-10-11, point 4; steer
+  // 2026-10-12): a MAIN always derives "<Agent> - Main Session" from the
+  // agent's CURRENT display name — recomputed every render off the live
+  // agents query, never cached, its stored title ignored — so a rename
+  // updates the row. When the roster cannot name the agent, the AGENT ID
+  // stands in (the server's own fallback); null is impossible here (the wire
+  // requires agent_id) but the honest 'Untitled' is kept if it ever were.
+  // Non-main sessions keep "Untitled".
   const sessionRows: SessionRow[] = sessions
     .filter((s) => s.total_tokens != null && s.total_tokens > 0)
     .map((s) => ({
       id: s.id,
-      title: s.title || 'Untitled',
+      title: sessionDisplayTitle(s, agents.find((a) => a.id === s.agent_id)?.name, 'Untitled', s.agent_id) ?? 'Untitled',
       tokens: s.total_tokens ?? 0,
       type: s.type,
     }))
@@ -506,7 +539,22 @@ export function UsageScreen() {
                     </Button>
                   </div>
                 ) : (
-                  <SessionsTable rows={sessionRows} />
+                  <>
+                    {/* R2-S4-03: the id fallback in the rows below is never
+                        silent — the same honest note the search modal shows
+                        when the roster fails (catalogued ErrorState, its
+                        Retry re-runs the roster fetch). Not rendered while
+                        the roster is merely loading: the skeleton owns that
+                        window. */}
+                    {agentNamesUnavailable && (
+                      <ErrorState
+                        message="Agent names could not be loaded — sessions show their agent id."
+                        onRetry={() => void refetchAgents()}
+                        className="mb-[var(--space-3)]"
+                      />
+                    )}
+                    <SessionsTable rows={sessionRows} />
+                  </>
                 )}
               </TabsContent>
             </Tabs>

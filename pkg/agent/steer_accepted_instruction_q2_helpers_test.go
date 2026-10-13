@@ -35,7 +35,6 @@ func newQ2ConsumerFixture(t *testing.T) q2ConsumerFixture {
 	t.Helper()
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	al, _ := newSteerAL(t)
-	al.SetSteeringMode(SteeringAll)
 	parentID := newTestSteeringSession(t, al, "ws-q2-consumer")
 	child, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: parentID, TargetAgentID: testDefaultAgentID,
@@ -129,6 +128,12 @@ func q2ConsumerReadDurable(t *testing.T, store *session.UnifiedStore, sessionID 
 		if uerr := json.Unmarshal(line, &entry); uerr != nil {
 			t.Fatalf("physical transcript line %d is malformed; cannot trust filtered counts: %v", index+1, uerr)
 		}
+		// The one archive holds chat, model and effect records (DEL-12); the
+		// chat projection ReadTranscript returns is the chat records only, so
+		// filter the physical read the same way before comparing.
+		if entry.ViewMembership != session.ViewMembershipChat {
+			continue
+		}
 		physical = append(physical, entry)
 	}
 	reopened, err := session.NewUnifiedStore(store.BaseDir())
@@ -175,11 +180,19 @@ func q2ConsumerRequireTail(t *testing.T, fixture q2ConsumerFixture, want []sessi
 }
 
 func q2ConsumerInstruction(messageID, text string) session.TranscriptEntry {
-	return session.TranscriptEntry{ID: "instruction-" + messageID, Role: "user", Content: text, AgentID: testDefaultAgentID}
+	// ViewMembership is stamped by the WRITER, not by this fixture, and the
+	// writer here is the TRANSCRIPT path: AppendTranscriptOnce ->
+	// appendTranscriptLocked stamps ViewMembershipChat on every transcript-only
+	// write (pkg/session/transcript_indexed.go: "a transcript append is a CHAT
+	// record, fixed by the writer API"). The earlier expectation of
+	// ViewMembershipBoth came from the model-append path, which this fixture
+	// never takes — it made the whole-struct comparison against the durable tail
+	// a guaranteed mismatch.
+	return session.TranscriptEntry{ID: "instruction-" + messageID, Role: "user", Content: text, AgentID: testDefaultAgentID, ViewMembership: session.ViewMembershipChat}
 }
 
 func q2ConsumerMarker(messageID string) session.TranscriptEntry {
-	return session.TranscriptEntry{ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system", Content: "consumed " + messageID, AgentID: testDefaultAgentID}
+	return session.TranscriptEntry{ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system", Content: "consumed " + messageID, AgentID: testDefaultAgentID, ViewMembership: session.ViewMembershipChat}
 }
 
 func q2ConsumerRequireQueued(t *testing.T, al *AgentLoop, scope string, want []steeringQueueItem) {

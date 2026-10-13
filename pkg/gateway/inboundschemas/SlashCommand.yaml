@@ -52,7 +52,8 @@ properties:
       - agent
     description: >
       How the web client dispatches the command. "client" = the SPA handles it
-      locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" =
-      the SPA inserts it as text and forwards it via the message frame (e.g.
-      /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+      locally (e.g. /model, /skills) and does NOT send it to the agent. "agent" =
+      the SPA inserts it as text and forwards it via the message frame, where the
+      server executes it (e.g. /status, /channels). Only meaningful for web-surfaced
+      commands; defaults to "agent".
     example: "client"

@@ -21,8 +21,7 @@
 //   isApprovalInScope decides whether it is shown for the active workspace.
 
 import { create } from 'zustand'
-import type { WsToolApprovalRequiredFrame, WsSessionStateFrame } from '@/lib/ws'
-import type { CommandSegmentInfo } from '@/lib/api/generated/asyncapi-types'
+import type { ToolApprovalRequiredFrame, SessionStateFrame, CommandSegmentInfo } from '@/lib/api/generated/asyncapi-types'
 
 export interface PendingToolApproval {
   approvalId: string
@@ -81,7 +80,7 @@ interface ToolApprovalStore {
   resolvedIds: string[]
 
   /** Add an approval from a WS tool_approval_required frame. */
-  enqueue: (frame: WsToolApprovalRequiredFrame) => void
+  enqueue: (frame: ToolApprovalRequiredFrame) => void
 
   /**
    * Remove an approval from THIS tab only. Does not claim the server resolved
@@ -105,7 +104,7 @@ interface ToolApprovalStore {
    * (see this method's own comment for the full reconnect-gap rationale).
    * Ids in resolvedIds are ignored even if the snapshot still lists them.
    */
-  reconcileWithSessionState: (frame: WsSessionStateFrame) => void
+  reconcileWithSessionState: (frame: SessionStateFrame) => void
 }
 
 export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({

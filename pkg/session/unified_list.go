@@ -19,6 +19,50 @@ func (us *UnifiedStore) ListSessions() ([]*UnifiedMeta, error) {
 	return us.listSessionsFiltered(nil)
 }
 
+// UnreadableSessionIDs returns the ids of session directories on disk whose
+// meta.json exists but cannot be read or parsed (a directory with no meta.json
+// is not a session and is not listed). ListSessions logs and SKIPS such a
+// directory, so a caller that must account for every session on disk (delete-all)
+// needs this to report what it could not see. Directories already loaded into the
+// cache are readable by construction. A missing base directory is the empty state.
+func (us *UnifiedStore) UnreadableSessionIDs() ([]string, error) {
+	entries, err := os.ReadDir(us.baseDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unified_store: list unreadable sessions: read base dir %q: %w", us.baseDir, err)
+	}
+	var bad []string
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == ".context" {
+			continue
+		}
+		name := entry.Name()
+		if validateSessionID(name) != nil {
+			continue
+		}
+		us.cacheMu.RLock()
+		_, cached := us.metaCache[name]
+		us.cacheMu.RUnlock()
+		if cached {
+			continue
+		}
+		h := us.lockSession(name)
+		_, readErr := us.readMetaLocked(name)
+		h.Unlock()
+		if errors.Is(readErr, os.ErrNotExist) {
+			// No meta.json at all: never a session (boot skips it as safe to
+			// delete), so it is not an unreadable chat delete-all must keep.
+			continue
+		}
+		if readErr != nil {
+			bad = append(bad, name)
+		}
+	}
+	return bad, nil
+}
+
 // ListSessionsFiltered performs the EXACT SAME reconcile + FR-097a prune
 // pass as ListSessions, but clones only the metas for which pred returns
 // true (14-reviewer fix-wave finding #3, MEDIUM perf).
@@ -363,8 +407,6 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	delete(us.dirtyStats, sessionID) // step 5: drop the dirty-set entry too
 	us.cacheMu.Unlock()
 	us.u4IndexEvict(sessionID) // FR-097: drop sessionID from the parent index either as a parent or as a child
-	contextFile := filepath.Join(us.baseDir, ".context", sessionID+".jsonl")
-	os.Remove(contextFile) // best-effort, ignore error if file does not exist
 
 	// Cascade-delete uploads that were associated with this session.
 	// Uploads are always home-rooted at <homePath>/uploads/<sessionID> regardless
@@ -375,100 +417,6 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 			"session_id", sessionID, "uploads_dir", uploadsDir, "error", rmErr)
 	}
 	return nil
-}
-
-// removeAllFn is a package-level test seam for ClearAll's per-session-directory
-// removal call. It defaults to os.RemoveAll; tests override it to force a
-// deterministic removal failure without depending on OS permission enforcement
-// (which root bypasses via CAP_DAC_OVERRIDE, making a chmod-based
-// failure-injection test a no-op in CI, which runs as root). Scoped narrowly
-// to ClearAll's one call site — not a general refactor of the package's other
-// os.RemoveAll/os.ReadDir calls.
-var removeAllFn = os.RemoveAll
-
-// ClearAll removes every session directory from the store.
-// Returns the number of sessions removed and, if one or more session
-// directories could not be removed, a non-nil aggregate error (via
-// errors.Join) describing every such failure. A per-entry removal failure
-// does not abort the operation — it is logged via slog.Warn and the loop
-// continues to the next entry — but the failure is still surfaced to the
-// caller so a "clear all sessions" request cannot silently under-deliver on
-// this privacy-sensitive, destructive action.
-// Locking (FR-050(a) exception): ClearAll takes ALL 64 session shards, in
-// strictly ascending index order, via lockAllSessionShards — never
-// lockSession, which would deadlock (sync.Mutex is not reentrant and every
-// shard is already held by this goroutine). metaCache/cacheLoadFailures/the
-// parent index are still touched only under cacheMu, exactly as everywhere
-// else — holding every session shard does not exempt this method from that
-// rule, it only means no OTHER goroutine can be mid-mutation on any session
-// while this runs.
-func (us *UnifiedStore) ClearAll() (int, error) {
-	unlock := us.lockAllSessionShards()
-	defer unlock()
-
-	entries, err := os.ReadDir(us.baseDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("unified_store: clear all: read dir: %w", err)
-	}
-
-	uploadsRoot := us.uploadsRoot()
-	removed := 0
-	var errs []error
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == ".context" {
-			continue
-		}
-		dir := filepath.Join(us.baseDir, entry.Name())
-		if err := removeAllFn(dir); err != nil {
-			slog.Warn("unified_store: clear all: remove session dir", "dir", dir, "error", err)
-			errs = append(errs, fmt.Errorf("unified_store: clear all: remove session dir %q: %w", entry.Name(), err))
-			continue
-		}
-		us.cacheMu.Lock()
-		delete(us.metaCache, entry.Name())
-		delete(us.dirtyStats, entry.Name())
-		us.cacheMu.Unlock()
-		us.u4IndexEvict(entry.Name()) // FR-097
-		contextFile := filepath.Join(us.baseDir, ".context", entry.Name()+".jsonl")
-		os.Remove(contextFile) // best-effort, ignore error if file does not exist
-		// Cascade-delete uploads for this session.
-		uploadsDir := filepath.Join(uploadsRoot, entry.Name())
-		if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			slog.Warn("unified_store: clear all: cascade-delete uploads failed",
-				"session_id", entry.Name(), "error", rmErr)
-		}
-		removed++
-	}
-
-	// Evict any remaining cache entry whose on-disk directory is already gone.
-	// The per-dir loop above only deletes cache entries for directories THIS
-	// call physically removed; when several stores share one baseDir (e.g.
-	// multiple agents configured with the same workspace), whichever store's
-	// ClearAll runs first removes the shared directories, and the others then
-	// find nothing to remove and never evict their now-stale cache entries —
-	// leaving ListSessions to resurrect sessions that are gone from disk.
-	// Entries whose directory survived (a failed removal above) are kept, since
-	// those sessions genuinely still exist.
-	us.cacheMu.RLock()
-	remaining := make([]string, 0, len(us.metaCache))
-	for id := range us.metaCache {
-		remaining = append(remaining, id)
-	}
-	us.cacheMu.RUnlock()
-	for _, id := range remaining {
-		if _, statErr := os.Stat(filepath.Join(us.baseDir, id)); errors.Is(statErr, os.ErrNotExist) {
-			us.cacheMu.Lock()
-			delete(us.metaCache, id)
-			delete(us.dirtyStats, id)
-			us.cacheMu.Unlock()
-			us.u4IndexEvict(id) // FR-097
-		}
-	}
-
-	return removed, errors.Join(errs...)
 }
 
 // --- ADR-057 FR-097: in-memory session parent index (surface) ---

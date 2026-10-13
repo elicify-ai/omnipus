@@ -43,7 +43,7 @@ async function openMessage(body = 'Notes from Alice') {
 describe('Received preview subject above its metadata (F7)', () => {
   beforeEach(() => {
     sessionStorage.clear()
-    fetchAgents.mockReset().mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockReset().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockReset().mockResolvedValue([{ agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' }])
     fetchMailFolders.mockReset().mockResolvedValue({ folders: [
       { slug: 'inbox', display_name: 'Inbox', total: 1, unread_count: 0 },

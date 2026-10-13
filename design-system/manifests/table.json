@@ -64,6 +64,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Table [check:table-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"table\"]", "attribute": "aria-label", "value": "Agents" }],
       "applicable": true
     },
     {

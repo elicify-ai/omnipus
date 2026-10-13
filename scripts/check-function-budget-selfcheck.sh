@@ -32,6 +32,11 @@
 #   k. a 241-line .mjs function OUTSIDE scripts/ and tests/ (docs/) -> out
 #      of scope entirely: exit 0, no WARN/FAIL, proving the scope decision
 #      (not docs/, not spikes/) is enforced, not accidental
+#   l. a 317-line anonymous `test.describe` callback in a .spec.ts under
+#      tests/e2e -> must FAIL (a real e2e describe of this size once slipped
+#      past a tests/-is-JS-only scanner)
+#   m. a 241-line unlisted .ts function under tests/                -> must
+#      FAIL, the same proof for the plain TypeScript extension
 #
 # Exit: 0 all cases behave, 1 one or more misbehaved, 2 the harness itself
 # could not run (missing gate script).
@@ -189,6 +194,30 @@ fresh_tree
 gen_mjs_func "$TMP/tree/docs/fixture_k.mjs" "outOfScopeMjs" 241
 if expect "(k) scripts/tests-outside .mjs function is out of scope" 0; then
   grep -qE '^(WARN|FAIL)' "$TMP/out" && { echo "selfcheck FAIL: (k) unexpected WARN/FAIL line for out-of-scope docs/*.mjs" >&2; FAIL=1; }
+fi
+
+# gen_describe <out> <total-lines>: a Playwright-style .spec.ts whose one
+# anonymous describe callback spans exactly <total-lines> lines.
+gen_describe() {
+  local out="$1" body=$(( $2 - 2 )) i=0
+  printf "import { test } from '@playwright/test';\ntest.describe('big suite', () => {\n" > "$out"
+  while [ "$i" -lt "$((body - 1))" ]; do printf '  const v%d = %d;\n' "$i" "$i" >> "$out"; i=$((i + 1)); done
+  echo "});" >> "$out"
+}
+
+# (l) a 317-line anonymous test.describe callback under tests/e2e must FAIL.
+fresh_tree
+mkdir -p "$TMP/tree/tests/e2e"
+gen_describe "$TMP/tree/tests/e2e/fixture_l.spec.ts" 317
+if expect "(l) 317-line unlisted tests/e2e test.describe callback" 1; then
+  grep -q "not grandfathered" "$TMP/out" || { echo "selfcheck FAIL: (l) missing 'not grandfathered' FAIL line" >&2; FAIL=1; }
+fi
+
+# (m) a 241-line unlisted .ts function under tests/ must FAIL.
+fresh_tree
+gen_mjs_func "$TMP/tree/tests/fixture_m.ts" "overLimitTs" 241
+if expect "(m) 241-line unlisted tests/*.ts function" 1; then
+  grep -q "not grandfathered" "$TMP/out" || { echo "selfcheck FAIL: (m) missing 'not grandfathered' FAIL line" >&2; FAIL=1; }
 fi
 
 if [ "$FAIL" -ne 0 ]; then

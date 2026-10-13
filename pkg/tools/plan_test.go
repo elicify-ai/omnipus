@@ -28,6 +28,16 @@ func newPlanAndTaskStores(t *testing.T) (*plan.Store, *task.Store) {
 // allowOwner is a PlanCreateTool owner validator stub that always allows.
 func allowOwner(string) error { return nil }
 
+// allowPlanExecution installs an allowing delegation authorizer and an
+// identified initiator, so execute_plan can pass the delegation gate. The
+// policy always applies to an agent-initiated plan run and fails closed when
+// the authorizer is unwired (founder ruling 2026-10-10), so every test that
+// expects a plan to be approved must install this.
+func allowPlanExecution(tool *PlanExecuteTool) {
+	tool.SetExecutionAuthorizer(func(context.Context, string, string) *DelegationDenial { return nil })
+	tool.SetInitiatorFn(func(context.Context) *task.Initiator { return &task.Initiator{AgentID: "caller-agent"} })
+}
+
 // --- create_plan ---
 
 // TestPlanCreateTool_Happy proves create_plan persists a draft plan carrying
@@ -392,6 +402,7 @@ func TestPlanExecuteTool_Happy(t *testing.T) {
 	p := seedPlanWithMembers(t, planStore, taskStore, "ws-1", 2, nil)
 
 	tool := NewPlanExecuteTool(planStore, taskStore)
+	allowPlanExecution(tool)
 	res := tool.Execute(context.Background(), map[string]any{"plan_id": p.ID})
 	if res.IsError {
 		t.Fatalf("execute_plan: %s", res.ForLLM)
@@ -621,6 +632,7 @@ func TestPlanExecuteTool_AllowsMissingDoD_HumanAuthored(t *testing.T) {
 
 	tool := NewPlanExecuteTool(planStore, taskStore)
 	tool.SetIsAgentIDChecker(func(id string) bool { return id == "jim" }) // "alice" is not an agent
+	allowPlanExecution(tool)
 	res := tool.Execute(context.Background(), map[string]any{"plan_id": p.ID})
 	if res.IsError {
 		t.Fatalf("expected a human-authored plan with zero DoD to be approved: %s", res.ForLLM)

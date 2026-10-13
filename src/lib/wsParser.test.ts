@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { WsConnection, type WsReceiveFrame } from './ws'
+import { WsConnection, type ServerFrame } from './ws'
 
 // test_websocket_message_parser (test #1)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: User sends message and receives streaming response
@@ -73,9 +73,11 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function createConnectedWs(onFrame: (frame: WsReceiveFrame) => void) {
+function createConnectedWs(onFrame: (frame: ServerFrame) => void) {
   const conn = new WsConnection({
-    onFrame,
+    onFrames: (frames) => {
+      for (const frame of frames) onFrame(frame)
+    },
     onConnected: vi.fn(),
     onDisconnected: vi.fn(),
     onError: vi.fn(),
@@ -192,7 +194,9 @@ describe('WsConnection — frame parsing (edge cases)', () => {
     const onFrame = vi.fn()
     const onError = vi.fn()
     const conn = new WsConnection({
-      onFrame,
+      onFrames: (frames) => {
+        for (const frame of frames) onFrame(frame)
+      },
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
       onError,
@@ -215,7 +219,7 @@ describe('WsConnection — reconnect behavior', () => {
     // Note: vi.useFakeTimers() is already active from beforeEach.
     const onDisconnected = vi.fn()
     const conn = new WsConnection({
-      onFrame: vi.fn(),
+      onFrames: vi.fn(),
       onConnected: vi.fn(),
       onDisconnected,
       onError: vi.fn(),
@@ -234,7 +238,7 @@ describe('WsConnection — reconnect behavior', () => {
   it('does NOT reconnect after intentional disconnect', () => {
     // Note: vi.useFakeTimers() is already active from beforeEach.
     const conn = new WsConnection({
-      onFrame: vi.fn(),
+      onFrames: vi.fn(),
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
       onError: vi.fn(),

@@ -41,14 +41,34 @@ Nothing else may hold two session shards at once.
   discipline, not the type system. Regression:
   `TestCreateSessionWithID_NeverHoldsTwoSessionShards`.
 
-## Durability — Save is a no-op; the sweep is the sole deleter
+## Durability — Save is a no-op; the addressed archive is append-only
 
-`jsonl_backend.go::Save` returns nil unconditionally: the wrapped
-`memory.JSONLStore` fsyncs every write, and evicted (skipped) lines MUST
-stay on disk for recall. The retention sweep is the only legitimate
-deleter of transcript content; goal retention runs as a separate pass
-AFTER the shard hold is released (a swappable hook, so pkg/session never
-imports pkg/goal — that would be an import cycle).
+`archive_backend.go::archiveBackend.Save` and `unified_write.go::UnifiedStore.Save`
+return nil unconditionally: every append already fsyncs, and evicted (skipped)
+lines MUST stay on disk for recall.
+
+- `archive_day_store.go::ArchiveDayStore.Append` validates the envelope, refuses
+  one over `memory.EncodedLineBound` (8 MB) before writing anything, then
+  appends under a per-store mutex with `O_APPEND`, newline framing and
+  `f.Sync()`. A failed write or fsync truncates back to the pre-append size so
+  unpublished bytes never linger; a torn final line gets a newline first.
+  `NewArchiveDayStore` refuses an empty session id, `.`, `..` or any id holding a
+  path separator.
+- Backend state (`backend_meta.json`: cursor, anchor, retracted spans, projection)
+  is written to a temp file and renamed by `archiveBackend.saveMetaLocked`; it is
+  NOT fsynced.
+- The ordinal index (`ordinal_index.go`) fsyncs its row log; its offsets table is
+  derived and rebuilt from the rows when it disagrees.
+- `archive_scan.go::ArchiveDayStore.ScanAll` skips a corrupt line without
+  consuming an ordinal, so ordinals never shift under damage.
+- Rollback never shrinks the archive: `archiveBackend.RollbackWindow` records the
+  aborted span as retained-but-excluded (types: `pkg/memory`).
+- The retention sweep (`retention_sweep.go::RetentionSweep`) removes aged-out
+  session directories; goal retention runs as a separate pass AFTER the shard
+  hold is released (a swappable hook, so pkg/session never imports pkg/goal —
+  that would be an import cycle). `archive_expiry.go::ArchiveDayStore.SweepExpired`
+  (rolled-partition expiry and window repair) has no non-test caller at this tip;
+  do not assume it runs.
 
 ## Two id namespaces, compile-enforced
 
@@ -56,7 +76,19 @@ imports pkg/goal — that would be an import cycle).
 the ROOT's SessionID and must never resolve store-backed state for anyone
 but the root (this confusion was bugs #576/#577). `CreateSessionWithID`
 refuses a colliding caller-supplied id loudly (FR-096). Scheduled-session
-ids are reserved conventions (`sched-main-<owner>`), not ULIDs.
+ids are ULIDs (`NewScheduledSession`).
+
+A MAIN session's id is COMPUTED, never minted or stored:
+`main_session.go::MainSessionID` joins the pair as
+`main-session-<workspace>+<agent>` — the `+` cannot occur in either validated
+component, so two distinct pairs can never collide on one id. Each component
+keeps its own 128-byte bound; the computed id is capped at 255 UTF-8 bytes
+(the directory-name limit) and above it the store REFUSES with a visible
+error, storing nothing — no hash, truncation or replacement id.
+`unified.go::GetOrCreateMainSession` is the only creator, and it treats a
+read error on that id as the BDD-01.4 refusal, NOT as a cache miss: only a
+genuinely absent record creates. A stored record whose owner, workspace or
+type does not match the pair is refused untouched, never adopted or repaired.
 
 ## A meta.json that fails to parse stays invisible
 

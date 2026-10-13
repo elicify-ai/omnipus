@@ -752,7 +752,7 @@ func TestGoalLoop_TaskRunTurn_IsLeftToTheTaskExecutor(t *testing.T) {
 		t.Fatalf("createTaskSessionSync: %v", err)
 	}
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
-	store := al.GetAgentStore(tk.AgentID)
+	store := al.GetSessionStore()
 
 	if mustActiveGoalForSession(t, sid) == nil {
 		t.Fatal("test setup: the task-owned goal must already be bound ACTIVE to this session")

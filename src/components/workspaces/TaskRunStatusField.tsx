@@ -103,7 +103,7 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
   const badgeStatus = run ? run.status : task.status
   const lastUpdatedIso = run ? (run.ended_at ?? run.started_at) : task.updated_at
 
-  // A repeating series (every/recurring) is never truly "done" — a per-run
+  // A repeating series (recurring) is never truly "done" — a per-run
   // terminal status just marks the last occurrence; the series re-arms and can
   // be re-run on demand. This mirrors the server's validateTransition carve-out
   // (pkg/task/store.go), which allows done→in_progress for repeating tasks so
@@ -111,7 +111,7 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
   // ("Done is final") would hide Run now on exactly the recurring tasks the
   // calendar edit slide-over exists to manage. This TASK-LEVEL gate only
   // applies to the fallback (no occurrence context) path below.
-  const isRepeating = task.trigger?.type === 'every' || task.trigger?.type === 'recurring'
+  const isRepeating = task.trigger?.type === 'recurring'
   // Already running, or a transition into in_progress is disallowed (done is
   // terminal for a one-shot task; blocked clears automatically) — otherwise
   // mirrors canDropTransition, the same guard TaskDetailPanel's Board DnD and

@@ -21,9 +21,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // startTime records when the gateway process started, used by GET /api/v1/about.
@@ -47,7 +49,7 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		slog.Error("rest: open audit log", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read audit log: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read audit log", err)
 		return
 	}
 	defer f.Close()
@@ -66,7 +68,7 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := scanner.Err(); err != nil {
 		slog.Error("rest: scan audit log", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read audit log: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read audit log", err)
 		return
 	}
 
@@ -146,7 +148,7 @@ func (a *restAPI) listCredentials(w http.ResponseWriter) {
 	keys, err := store.List()
 	if err != nil {
 		slog.Error("rest: list credentials", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list credentials: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not list credentials", err)
 		return
 	}
 	if keys == nil {
@@ -192,7 +194,7 @@ func (a *restAPI) setCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := store.Set(req.Key, req.Value); err != nil {
 		slog.Error("rest: set credential", "key", req.Key, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save credential: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save credential", err)
 		return
 	}
 	// Trigger reload AND WAIT for it (triggerReloadAndWaitOutcome, not a bare
@@ -268,7 +270,7 @@ func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key s
 			return
 		}
 		slog.Error("rest: delete credential", "key", key, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete credential: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not delete credential", err)
 		return
 	}
 	// Trigger reload AND WAIT for it — same reasoning as setCredential above.
@@ -331,7 +333,7 @@ func (a *restAPI) rotateCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := store.RotateWithPassphrase(req.NewPassphrase); err != nil {
 		slog.Error("rest: rotate credentials", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("rotation failed: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "rotation failed", err)
 		return
 	}
 	slog.Info("rest: credential vault rotated")
@@ -356,7 +358,7 @@ func (a *restAPI) HandleCreateBackup(w http.ResponseWriter, r *http.Request) {
 	backupsDir := filepath.Join(a.homePath, "backups")
 	if err := os.MkdirAll(backupsDir, 0o700); err != nil {
 		slog.Error("rest: create backups dir", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create backups directory: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not create backups directory", err)
 		return
 	}
 	timestamp := time.Now().UTC().Format("20060102T150405Z")
@@ -365,13 +367,13 @@ func (a *restAPI) HandleCreateBackup(w http.ResponseWriter, r *http.Request) {
 
 	if err := createTarGz(a.homePath, destPath); err != nil {
 		slog.Error("rest: create backup", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create backup: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not create backup", err)
 		return
 	}
 	info, err := os.Stat(destPath)
 	if err != nil {
 		slog.Error("rest: stat backup file", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not stat backup: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not stat backup", err)
 		return
 	}
 	jsonOK(w, gen.BackupCreateResponse{
@@ -496,7 +498,7 @@ func (a *restAPI) HandleListBackups(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("rest: list backups", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list backups: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not list backups", err)
 		return
 	}
 	type backupEntry struct { // not-wire-format: response-only local type used in jsonOK; oapi-codegen inlines the shape; no gen.BackupEntry Go type exists
@@ -574,12 +576,12 @@ func (a *restAPI) HandleRestore(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("backup %q not found", req.Filename))
 			return
 		}
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not access backup: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not access backup", err)
 		return
 	}
 	if err := extractTarGz(backupPath, a.homePath); err != nil {
 		slog.Error("rest: restore backup", "filename", req.Filename, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not restore backup: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not restore backup", err)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "restored", "filename": req.Filename})
@@ -678,35 +680,158 @@ func extractTarGz(archivePath, destDir string) error {
 	return nil
 }
 
+// clearSessionsWarning is the fixed per-agent warning for a clear that failed
+// partway: the cause (paths, OS error) is in the error log, never here.
+func clearSessionsWarning(agentID string) string {
+	return fmt.Sprintf("agent %q: sessions could not be fully cleared; see the server log", agentID)
+}
+
 // HandleClearSessions handles DELETE /api/v1/sessions/all.
-// HandleClearSessions removes all session directories from all agent stores.
+//
+// Founder ruling (S2 #6): "a main chat can only be deleted when the main agent
+// is deleted" - so this NEVER deletes a main; its history is kept, and so are the
+// helper sessions that belong to a main. Every other chat is deleted one by one
+// through the same path a single delete uses: the session's tree is Stopped first
+// (a chat that will not stop is kept and reported, nothing half-deleted), then
+// removed together with its helper descendants' uploads, retained external-CLI
+// drivers and in-memory media refs. The response counts what was removed and
+// reports, by fixed text, every chat that was kept or could not even be read.
 func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	totalRemoved := 0
-	var warnings []string
-	for _, id := range a.agentLoop.GetRegistry().ListAgentIDs() {
-		store := a.agentLoop.GetAgentStore(id)
-		if store == nil {
+	store := a.agentLoop.GetSessionStore()
+	if store == nil {
+		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
+		return
+	}
+	metas, err := store.ListSessions()
+	if err != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not list sessions", err)
+		return
+	}
+	// A chat whose metadata cannot be read is invisible to ListSessions; it is
+	// neither deleted nor counted as kept unless asked for here.
+	unreadable, err := store.UnreadableSessionIDs()
+	if err != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not list sessions", err)
+		return
+	}
+	keptWithMain, err := a.sessionsBelongingToMains(metas)
+	if err != nil {
+		// Fail closed (S2-02): with an incomplete helper walk some chats that
+		// belong to a main cannot be told apart from ordinary ones, so nothing
+		// is deleted and the person is not told "cleared".
+		jsonServerFailure(w, http.StatusInternalServerError, "could not determine which chats belong to a main chat; nothing was deleted. Check the server log for the damaged session record, repair or remove it, then retry", err)
+		return
+	}
+	removed, kept, mains := 0, len(unreadable), 0
+	for _, id := range unreadable {
+		slog.Warn("rest: clear sessions: a chat's metadata is unreadable; it is kept", "session_id", id)
+	}
+	for _, m := range metas {
+		if m == nil {
 			continue
 		}
-		n, err := store.ClearAll()
-		if err != nil {
-			slog.Error("rest: clear sessions for agent", "agent_id", id, "error", err)
-			warnings = append(warnings, fmt.Sprintf("agent %q: %v", id, err))
+		// A main is never deleted here, and neither is a helper session that
+		// belongs to one: it is part of that main's history.
+		if m.Type == session.SessionTypeMain {
+			mains++
+			continue
 		}
-		totalRemoved += n
+		if _, isMainsHelper := keptWithMain[m.ID]; isMainsHelper {
+			continue
+		}
+		if summary := a.stopBeforeDelete(r, m.ID); summary != "" {
+			slog.Warn("rest: clear sessions: Stop incomplete; this chat is kept",
+				"session_id", m.ID, "summary", summary)
+			kept++
+			continue
+		}
+		if err := a.removeStoppedSession(store, m.ID); err != nil {
+			slog.Error("rest: clear sessions: could not delete a chat; it is kept",
+				"session_id", m.ID, "error", err)
+			kept++
+			continue
+		}
+		removed++
 	}
 	resp := gen.ClearAllSessionsResponse{
 		Status: gen.ClearAllSessionsResponseStatusCleared,
-		Count:  totalRemoved,
+		Count:  removed,
+	}
+	var warnings []string
+	if kept > 0 {
+		warnings = append(warnings, clearSessionsKeptWarning(kept))
+	}
+	if mains > 0 {
+		warnings = append(warnings, clearSessionsMainsWarning(mains))
 	}
 	if len(warnings) > 0 {
 		resp.Warnings = &warnings
 	}
 	jsonOK(w, resp)
+}
+
+// sessionsBelongingToMains returns the ids of every listed session that is a
+// helper of a main chat: a descendant by the durable lifecycle edge, or by the
+// session's own parent link. They are kept with their main. A descendant walk
+// that could not be completed is returned as an error (never just logged): the
+// caller must not delete anything on a truncated view.
+func (a *restAPI) sessionsBelongingToMains(metas []*session.UnifiedMeta) (map[string]struct{}, error) {
+	byID := make(map[string]*session.UnifiedMeta, len(metas))
+	for _, m := range metas {
+		if m != nil {
+			byID[m.ID] = m
+		}
+	}
+	out := make(map[string]struct{})
+	var walkErrs []error
+	for _, m := range metas {
+		if m == nil || m.Type != session.SessionTypeMain {
+			continue
+		}
+		ids, walkErr := agent.CollectDescendantSessionIDs(a.agentLoop.GetSessionLifecycleStore(), m.ID)
+		if walkErr != nil {
+			walkErrs = append(walkErrs, walkErr)
+		}
+		for _, id := range ids {
+			out[id] = struct{}{}
+		}
+	}
+	for _, m := range metas {
+		if m == nil || m.Type == session.SessionTypeMain {
+			continue
+		}
+		seen := map[string]bool{m.ID: true}
+		for cur := m; cur != nil && cur.ParentSessionID != ""; {
+			parent := byID[cur.ParentSessionID]
+			if parent == nil || seen[parent.ID] {
+				break
+			}
+			if parent.Type == session.SessionTypeMain {
+				out[m.ID] = struct{}{}
+				break
+			}
+			seen[parent.ID] = true
+			cur = parent
+		}
+	}
+	return out, errors.Join(walkErrs...)
+}
+
+// clearSessionsKeptWarning is the fixed warning for chats delete-all could not
+// remove (a Stop that did not complete, a storage failure, or metadata that could
+// not be read). It names no session id, path or cause; those are in the server log.
+func clearSessionsKeptWarning(n int) string {
+	return fmt.Sprintf("%d chat(s) could not be deleted and were kept (a running turn did not stop, storage failed, or the chat could not be read); see the server log", n)
+}
+
+// clearSessionsMainsWarning is the fixed notice that main chats are never
+// deleted by delete-all: a main goes only with its agent.
+func clearSessionsMainsWarning(n int) string {
+	return fmt.Sprintf("%d main chat(s) were kept: a main chat is deleted only together with its agent", n)
 }
 
 // HandleAbout handles GET /api/v1/about.

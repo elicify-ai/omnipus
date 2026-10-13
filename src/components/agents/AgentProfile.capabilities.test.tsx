@@ -61,6 +61,8 @@ const lockedAgent: Agent = {
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,
   memory_enabled: true,
+  figure: 'Omnipus',
+  role: 'general',
   editable_fields: [],
 }
 

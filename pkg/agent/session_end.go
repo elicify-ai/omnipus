@@ -201,6 +201,15 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// Cancel any outstanding idle ticker for this session.
 	al.cancelIdleTicker(sessionID)
 
+	// FR-036/DEL-08: default-on recap fires only on actual-idle inactivity and
+	// the bootstrap pass. The retired explicit/lazy/session-close triggers (and
+	// any unknown string) must NOT recap — the claim above is still recorded so
+	// the never-recap triggers stay idempotent, but no recap goroutine runs.
+	if !recapTriggerEligible(trigger) {
+		al.auditRecap(sessionID, "", trigger, "skipped_trigger_not_recap_eligible")
+		return
+	}
+
 	// Track the recap goroutine so Close() can drain it before shutdown — its
 	// LAST_SESSION.md / retro writes must not outlive the gateway (#265). Gate
 	// the Add under recapMu against Close()'s drain: once shutdown has begun we
@@ -702,12 +711,18 @@ func (rr *agentLoopRunRecap) persistResponse() {
 		"agent_id", rr.agentInst.ID,
 		"workspace", rr.agentInst.Home,
 	)
-	if err := memory.WriteLastSession(parsed.Recap); err != nil {
+	if err := memory.WriteLastSession(formatLastSession(parsed.Recap, parsed.WorthRemembering)); err != nil {
+		// The recap and its worth_remembering facts did not land. File no retro:
+		// it is the marker agentSessionHasRetro reads, so filing it would block
+		// every later recap of this session. The audit outcome names the failed
+		// step only; the error text carries filesystem paths and stays in the log.
 		slog.Warn("session_end: failed to write LAST_SESSION.md",
 			"session_id", rr.sessionID,
 			"agent_id", rr.agentInst.ID,
 			"error", err,
 		)
+		rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "write_failed:last_session")
+		return
 	}
 
 	retro := Retro{
@@ -719,11 +734,16 @@ func (rr *agentLoopRunRecap) persistResponse() {
 		NeedsImprovement: parsed.NeedsImprovement,
 	}
 	if err := memory.AppendRetro(rr.sessionID, retro); err != nil {
+		// last-session.md already holds the recap. No retro was filed, so the
+		// session still counts as not recapped and a later pass retries it (and
+		// rewrites last-session.md). The audit names the failed step only.
 		slog.Warn("session_end: failed to append retro",
 			"session_id", rr.sessionID,
 			"agent_id", rr.agentInst.ID,
 			"error", err,
 		)
+		rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "write_failed:retro")
+		return
 	}
 
 	rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "success")
@@ -742,6 +762,25 @@ func (rr *agentLoopRunRecap) persistResponse() {
 // ErrFallbackRecapSkipped is returned by the heuristic fallback when there is
 // no agent or memory store to write to: nothing was recorded.
 var ErrFallbackRecapSkipped = errors.New("session_end: fallback recap skipped")
+
+// formatLastSession returns the text persisted to last-session.md on the
+// success path: the free-text recap, then the model's worth_remembering items.
+// The items are persisted because the model may state a user-given fact (a
+// codename, a number) there and leave it out of the free-text recap; persisting
+// only the recap would drop the fact before the next session sees it. Blank
+// items are dropped; with no items the recap is returned exactly as given.
+func formatLastSession(recap string, worthRemembering []string) string {
+	var items []string
+	for _, it := range worthRemembering {
+		if it = strings.TrimSpace(it); it != "" {
+			items = append(items, "- "+it)
+		}
+	}
+	if len(items) == 0 {
+		return recap
+	}
+	return recap + "\n\nWorth remembering:\n" + strings.Join(items, "\n")
+}
 
 // writeHeuristicFallbackRetro writes a fallback retro entry when recap fails
 // without the transcript pre-read available. Prefer the _WithCount variant
@@ -899,11 +938,8 @@ func (al *AgentLoop) AgentForSession(sessionID string) (*AgentInstance, error) {
 		return nil, fmt.Errorf("meta_not_found: %w", err)
 	}
 
-	// Prefer ActiveAgentID (v2 multi-agent) over AgentID (legacy).
-	agentID := meta.ActiveAgentID
-	if agentID == "" {
-		agentID = meta.AgentID
-	}
+	// The session's agent is its immutable owner.
+	agentID := meta.AgentID
 	if agentID == "" {
 		return nil, fmt.Errorf("agent_not_found: session %s has no agent_id in meta", sessionID)
 	}

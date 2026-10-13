@@ -91,7 +91,7 @@ describe('MailPanel — ListSkeleton uses the catalogued Skeleton, not animate-p
     fetchMailFolders.mockReset()
     fetchMailMessages.mockReset()
     fetchMailSummary.mockReset()
-    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])

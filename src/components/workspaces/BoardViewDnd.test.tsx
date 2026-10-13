@@ -430,7 +430,7 @@ describe('BoardView — move decision', () => {
   // canDropTransition — mirrors handleDragEnd's real
   // `canDropTransition(dragged.status, targetStatus, isRecurringTrigger(dragged.trigger))`
   // call (BoardView.tsx), not just the guard function in isolation above.
-  it('a FAILED task with an `every`/`recurring` trigger is rejected on drop to in_progress; a plain FAILED task is not', () => {
+  it('a FAILED task with a `recurring` trigger is rejected on drop to in_progress; a plain FAILED task is not', () => {
     const onTaskMove = vi.fn()
     const onMoveRejected = vi.fn()
 
@@ -444,22 +444,17 @@ describe('BoardView — move decision', () => {
       onTaskMove(to)
     }
 
-    const failedRepeating = baseTask({ status: 'failed', trigger: { type: 'every', config: { every_ms: 3_600_000 } } })
-    decide(failedRepeating, 'in_progress')
-    expect(onMoveRejected).toHaveBeenCalledTimes(1)
-    expect(onMoveRejected.mock.calls[0][0]).toMatch(/repeating|run now/i)
-    expect(onTaskMove).not.toHaveBeenCalled()
-
     const failedRrule = baseTask({ status: 'failed', trigger: { type: 'recurring', config: { rrule: 'FREQ=DAILY' } } })
     decide(failedRrule, 'in_progress')
-    expect(onMoveRejected).toHaveBeenCalledTimes(2)
+    expect(onMoveRejected).toHaveBeenCalledTimes(1)
+    expect(onMoveRejected.mock.calls[0][0]).toMatch(/repeating|run now/i)
     expect(onTaskMove).not.toHaveBeenCalled()
 
     // A plain (non-repeating) failed task must still transition normally.
     const failedOnce = baseTask({ status: 'failed', trigger: undefined })
     decide(failedOnce, 'in_progress')
     expect(onTaskMove).toHaveBeenCalledWith('in_progress')
-    expect(onMoveRejected).toHaveBeenCalledTimes(2) // unchanged
+    expect(onMoveRejected).toHaveBeenCalledTimes(1) // unchanged
   })
 })
 

@@ -77,7 +77,7 @@ afterEach(() => {
 
 function makeCallbacks() {
   return {
-    onFrame: vi.fn(),
+    onFrames: vi.fn(),
     onConnected: vi.fn(),
     onDisconnected: vi.fn(),
     onError: vi.fn(),
@@ -120,7 +120,7 @@ describe('WsConnection — quiet close handling for a recoverable abnormal close
     vi.useFakeTimers()
     let gaveUp = false
     const cbs = {
-      onFrame: vi.fn(),
+      onFrames: vi.fn(),
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
       onError: vi.fn(),

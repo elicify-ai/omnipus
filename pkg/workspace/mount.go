@@ -498,8 +498,8 @@ func CheckMountTarget(rawHostPath, omnipusHome string) (resolved string, warning
 	var reasons []string
 	if isWithinOrEqualPath(resolvedHome, resolved) {
 		reasons = append(reasons, fmt.Sprintf(
-			"contains this Omnipus installation's own data directory (%s) — the installation's own secrets remain protected independently of this mount (its secret set is subtracted from every write grant regardless of where the grant came from), but every OTHER file under %s becomes writable by any agent on this workspace",
-			resolvedHome, resolved,
+			"contains this Omnipus installation's own data directory — the installation's own secrets remain protected independently of this mount (its secret set is subtracted from every write grant regardless of where the grant came from), but every OTHER file under %s becomes writable by any agent on this workspace",
+			resolved,
 		))
 	} else if isBroadMountTarget(resolved) {
 		reasons = append(reasons, fmt.Sprintf(

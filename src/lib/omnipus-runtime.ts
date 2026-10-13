@@ -239,6 +239,17 @@ export function convertMessage(
     role: msg.role,
     content: buildContentParts(msg, toolCalls, toolCallOrder, textAtToolCallStart, isLastAssistant, toolCallOwnerMessageId),
     ...(msg.role === "assistant" ? { status: buildMessageStatus(msg) } : {}),
+    // FR-039: carry the producing message's goal association onto the
+    // AssistantUI ThreadMessage (`metadata.custom` is AssistantUI's sanctioned
+    // carrier for app-specific per-message data) so the LIVE
+    // InlineThinkingIndicator — which reads the AssistantUI message, not the
+    // store's ChatMessage — can join on the exact keyed criteria
+    // (`isGoalRecordEmpty(message.metadata.custom.goalId)`) instead of the
+    // session's latest-goal scalar. Omitted when the message has no goal
+    // association (unknown → neutral).
+    ...(msg.role === "assistant" && msg.goalId
+      ? { metadata: { custom: { goalId: msg.goalId } } }
+      : {}),
   };
 }
 

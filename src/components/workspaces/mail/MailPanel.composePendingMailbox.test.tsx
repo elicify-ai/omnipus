@@ -39,7 +39,7 @@ function renderMail(mailboxId: string) {
 
 beforeEach(() => {
   sessionStorage.clear()
-  fetchAgents.mockReset().mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+  fetchAgents.mockReset().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
   fetchMailboxes.mockReset()
   fetchMailFolders.mockReset().mockResolvedValue({ folders: [] })
   fetchMailMessages.mockReset().mockResolvedValue({ messages: [], truncated: false, next_before_uid: null })

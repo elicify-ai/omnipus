@@ -35,6 +35,11 @@ func TestRunTaskTool_SessionBindingFailureRemainsFailed(t *testing.T) {
 			tool := tools.NewTaskRunTool(f.store)
 			// Exactly the production wiring; this is not a dispatcher double.
 			tool.SetStartTaskNow(f.executor.StartTaskNow)
+			// The delegation policy always applies to an agent-initiated run and
+			// fails closed when unwired (founder ruling 2026-10-10). This test's
+			// concern is the session-binding failure, not the policy gate, so
+			// install an allowing checker.
+			tool.SetDelegationDenyChecker(func(context.Context, string, string) *tools.DelegationDenial { return nil })
 			before, err := task.New(f.store.Dir()).Get(f.taskID)
 			if err != nil {
 				t.Fatalf("read caller precondition: %v", err)

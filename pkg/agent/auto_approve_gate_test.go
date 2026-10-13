@@ -39,7 +39,7 @@ var goldenAutoAskList = []string{
 	"set_config", "run_doctor", "configure_provider", "test_provider",
 	"enable_channel", "disable_channel", "configure_channel", "test_channel",
 	"add_mcp_server", "remove_mcp_server", "create_agent", "update_agent", "delete_agent",
-	"update_workspace", "delete_workspace", "delete_task_in_workspace",
+	"update_workspace", "delete_workspace",
 	"create_skill", "edit_skill", "remove_skill",
 }
 
@@ -63,7 +63,7 @@ func runStubTurn(t *testing.T, autoApprove bool, names []string) (*autoRecording
 // T3: every ASKS tool on Ask with Auto on (kernel sandbox enforcing) still
 // prompts, exactly once, and runs only after that approval.
 func TestAutoApprove_T3_AskListToolsStillPrompt(t *testing.T) {
-	require.Len(t, goldenAutoAskList, 28, "the founder file lists 28 catalog asks")
+	require.Len(t, goldenAutoAskList, 27, "the founder file lists 28 catalog asks minus the DEL-23 retired delete_task_in_workspace")
 	withKernelSandbox(t)
 	approver, stubs, _ := runStubTurn(t, true, goldenAutoAskList)
 	assert.Len(t, approver.requests(), len(goldenAutoAskList))

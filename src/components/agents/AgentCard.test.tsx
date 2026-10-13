@@ -28,6 +28,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     memory_enabled: true,
     ...overrides,
     revision: overrides.revision ?? '0'.repeat(64),
+    figure: overrides.figure ?? 'Omnipus',
+    role: overrides.role ?? 'general',
   }
 }
 
@@ -56,13 +58,6 @@ describe('AgentCard — rendering (test #12)', () => {
       />
     )
     expect(screen.getAllByText(/^core$/i).length).toBeGreaterThan(0)
-  })
-
-  it('renders without crashing when icon is unrecognized', () => {
-    // Dataset: Agent Card Rendering row 3 — unrecognized icon → fallback initial letter
-    expect(() =>
-      render(<AgentCard agent={makeAgent({ icon: 'unknown-icon-xyz', type: 'Main' })} />)
-    ).not.toThrow()
   })
 
   it('renders without crashing when color is undefined', () => {

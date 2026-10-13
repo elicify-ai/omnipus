@@ -98,7 +98,8 @@
 //     exec-only flow.
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { CheckCircle, XCircle, ProhibitInset, Shield, Lock, WarningCircle } from '@phosphor-icons/react'
+import { ArrowSquareOut, CheckCircle, XCircle, ProhibitInset, Shield, Lock, WarningCircle } from '@phosphor-icons/react'
+import { useRouter } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
@@ -116,6 +117,7 @@ import type { Agent } from '@/lib/api'
 import type { ToolApprovalActionRequest } from '@/lib/api/generated/openapi-types'
 import type { CommandSegmentInfo } from '@/lib/api/generated/asyncapi-types'
 import { useUiStore } from '@/store/ui'
+import { useSessionStore } from '@/store/session'
 import { forceLogout } from '@/lib/authLogout'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { queryClient } from '@/lib/queryClient'
@@ -245,6 +247,8 @@ function ToolApprovalCard({
   const dequeue = useToolApprovalStore((s) => s.dequeue)
   const markResolved = useToolApprovalStore((s) => s.markResolved)
   const addToast = useUiStore((s) => s.addToast)
+  const router = useRouter({ warn: false })
+  const viewedSessionId = useSessionStore((s) => s.activeSessionId)
   const [submitting, setSubmitting] = useState(false)
   const { remainingMs, progressPct } = useCountdown(expiresAt)
   // Default-focus target: the Deny button (the safe default). Focusing Deny
@@ -544,6 +548,32 @@ function ToolApprovalCard({
             </span>
           )}
         </DialogHeader>
+
+        {/* FR-034: a helper or run asked, not the chat in front of the user.
+            Names where it is acting and opens that run's own session. */}
+        {!isReconnectStub && sessionId && sessionId !== viewedSessionId && (
+          <div className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] border-b border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+            <span className="flex-1 min-w-0 truncate">Asked from a helper or run in another session.</span>
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              data-testid="approval-open-run"
+              data-session-id={sessionId}
+              className="h-auto shrink-0 gap-[var(--space-1)] px-0 py-0 text-[length:var(--type-utility-xs-size)]"
+              onClick={() => {
+                if (!router) {
+                  addToast({ message: "Can't open that run from here.", variant: 'warning' })
+                  return
+                }
+                void router.navigate({ to: '/sessions/$sessionId', params: { sessionId } })
+              }}
+            >
+              <ArrowSquareOut size={11} aria-hidden="true" />
+              Open run
+            </Button>
+          </div>
+        )}
 
         {/* Tool info — reconnect-stub notice, a 'replace'-mode readable summary
             (e.g. request_mount), or the generic Tool line + optional

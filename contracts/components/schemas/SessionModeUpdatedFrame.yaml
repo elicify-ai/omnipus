@@ -8,8 +8,7 @@ description: >
   ErrorFrame instead. Session-scoped (registered in
   SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089)
   — a chat-lifecycle/settings frame, not turn output, so
-  producing_session_id is absent (FR-013), matching SessionCloseAckFrame's
-  own precedent. Documentation copy — the canonical, code-generating
+  producing_session_id is absent (FR-013). Documentation copy — the canonical, code-generating
   definition is the inline schema of the same name in asyncapi.yaml.
 type: object
 required:

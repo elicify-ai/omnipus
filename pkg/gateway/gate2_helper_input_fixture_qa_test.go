@@ -101,7 +101,6 @@ func newQA2HelperInputFixture(t *testing.T) *qa2HelperInputFixture {
 	al.SetBootEpochStore(boot)
 	classifier := agent.NewSteerRecordClassifier(lifecycle, al.GetSessionStore())
 	al.SetSteerAudienceDeps(agent.NewSteerAudienceResolver(classifier), steer.NopBoundaryObserver{}, agent.NewSteerUpwardDeliverer())
-	al.SetSteeringMode(agent.SteeringAll)
 	parent, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "mia")
 	if err != nil {
 		t.Fatal(err)

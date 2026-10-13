@@ -279,6 +279,16 @@ func parseResponse(apiResp *responses.Response) (*protocoltypes.LLMResponse, err
 		}
 	}
 
+	// A response the API marked failed (the `response.failed` stream event) is
+	// not an answer, whatever partial output it carries (issue #1278 sweep).
+	if apiResp.Status == "failed" {
+		return nil, &common.StreamProviderError{
+			Code:    string(apiResp.Error.Code),
+			Message: apiResp.Error.Message,
+			Usage:   usage,
+		}
+	}
+
 	for _, item := range apiResp.Output {
 		switch item.Type {
 		case "message":

@@ -846,7 +846,7 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 		return nil
 	}); err != nil {
 		slog.Error("rest: save config for provider update", "error", err)
-		jsonErr(p.w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(p.w, http.StatusInternalServerError, "could not save config", err)
 		return false
 	}
 	// ADR-067 FR-021 (T067-11): a PUT that CHANGED the key invalidates

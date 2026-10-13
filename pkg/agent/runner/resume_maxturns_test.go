@@ -53,23 +53,35 @@ func TestResume_ReusesPriorRunTurnCap(t *testing.T) {
 		t.Skip("stub uses a POSIX shell script")
 	}
 	cases := []struct {
-		name     string
-		binVar   *string
-		doneLine string
-		newD     func() ExternalAgentRunner
-		argsCap  bool // the driver passes the cap on the child's command line
+		name       string
+		binVar     *string
+		doneLine   string
+		nativeLine string // NDJSON line announcing the native conversation id (FR-043)
+		newD       func() ExternalAgentRunner
+		argsCap    bool // the driver passes the cap on the child's command line
 	}{
+		// The nativeLine is required since FR-043: Resume refuses visibly when no
+		// native conversation id was captured, so each stub must announce one for
+		// the resumed run to reach the turn-cap-reuse path this test proves.
 		{"claude", &claudeBinName, `{"type":"result","subtype":"success","result":"ok"}`,
+			`{"type":"system","subtype":"init","session_id":"s1"}`,
 			func() ExternalAgentRunner { return NewClaudeDriver(nil) }, true},
 		{"codex", &codexBinName, `{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`,
+			`{"type":"thread.started","thread_id":"t1"}`,
 			func() ExternalAgentRunner { return NewCodexDriver(nil) }, false},
-		{"opencode", &opencodeBinName, `{"type":"session.complete","session_id":"s1"}`,
+		// opencode's completion event already carries its session_id, so no
+		// separate native line is needed.
+		{"opencode", &opencodeBinName, `{"type":"session.complete","session_id":"s1"}`, ``,
 			func() ExternalAgentRunner { return NewOpencodeDriver(nil) }, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			argsLog := filepath.Join(t.TempDir(), "args.log")
-			stub := writeStubScript(t, "#!/bin/sh\necho \"$*\" >> '"+argsLog+"'\nprintf '%s\\n' '"+tc.doneLine+"'\nexit 0\n")
+			native := ""
+			if tc.nativeLine != "" {
+				native = "printf '%s\\n' '" + tc.nativeLine + "'\n"
+			}
+			stub := writeStubScript(t, "#!/bin/sh\necho \"$*\" >> '"+argsLog+"'\n"+native+"printf '%s\\n' '"+tc.doneLine+"'\nexit 0\n")
 			orig := *tc.binVar
 			*tc.binVar = stub
 			t.Cleanup(func() { *tc.binVar = orig })

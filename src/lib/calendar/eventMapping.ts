@@ -147,12 +147,9 @@ function makeEvent(
  * interval (day > hour > min > sec); falls back to a rounded second count for
  * a non-whole-unit or sub-minute interval — never throws.
  *
- * The sub-minute "sec" branch is NOT dead code: `DayBucket.interval_ms` is
- * populated for both `rrule` triggers (60s validation floor, so this branch
- * is unreachable for them) AND legacy `every`-type triggers, which validate
- * at a 1000ms floor (`TriggerEvery` in `pkg/task/store.go`) — a legacy
- * `every_ms: 5000` task legitimately hits this branch and renders "every 5
- * sec".
+ * The sub-minute "sec" branch is a defensive fallback only: `DayBucket.interval_ms`
+ * comes from `rrule` triggers (60s validation floor), so real data never reaches
+ * it since the `every` trigger was removed (C-TIMING / DEL-19).
  */
 export function formatIntervalLabel(intervalMs: number): string {
   const SEC = 1000

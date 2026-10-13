@@ -61,7 +61,7 @@ func TestConsumeTaskAttempt_SupersededSessionStaysActive(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	sessStore := al.GetAgentStore("native-agent")
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
 		t.Fatal("native-agent session store not available")
 	}

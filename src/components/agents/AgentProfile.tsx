@@ -11,7 +11,6 @@ import {
   Warning,
   Lock,
   WarningCircle,
-  Trash,
   Brain,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
@@ -37,10 +36,12 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from '@/components/ui/accordion'
-import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { DeleteAgentControl } from './DeleteAgentControl'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ExecutorSelector } from './ExecutorSelector'
-import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
+import { AgentLookPicker, BehaviorFields, UploadMdButton } from './AgentFormFields'
+import { AgentIcon } from '@/components/ui/agent-icon'
+import { AgentColor } from '@/lib/api/generated/schemas'
 import { CliPathValidationHint } from './CliPathValidationHint'
 import { CommandPreview } from './CommandPreview'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -49,7 +50,6 @@ import {
   fetchWorkspace,
   updateAgent,
   updateWorkspace,
-  deleteAgent,
   fetchProviders,
   fetchActivity,
   fetchSkills,
@@ -66,14 +66,11 @@ import {
   type WorkspaceMemberConfig,
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
-import { ConfigurationSaveError } from '@/lib/api/configuration'
 import { isProviderUsable } from '@/lib/providerStatus'
 import { formatTokens } from '@/lib/formatTokens'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
-import type { FallbackModel } from '@/lib/api/generated/openapi-types'
-import { type IconName, getIconComponent } from '@/lib/agentIcons'
-import { avatarColorName } from '@/lib/constants'
+import type { AgentColor as AgentColorValue, AgentFigure, AgentRole, FallbackModel } from '@/lib/api/generated/openapi-types'
 import { agentKindFlags } from '@/lib/agentKind'
 import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { useCliDetect } from '@/hooks/useCliDetect'
@@ -129,6 +126,29 @@ function formatWindowTokens(n: number): string {
   return windowFormatter.format(n)
 }
 
+// Tailwind `sm` is 40rem. The profile mounts the desktop tabs and the phone
+// accordion together and hides one with CSS. jsdom does not apply that CSS, so
+// both copies stay in the accessibility tree unless the hidden layout is
+// marked. When matchMedia is missing (unit tests), treat the viewport as
+// desktop — the same default the tabs use.
+const SM_AND_UP = '(min-width: 40rem)'
+
+function useSmAndUp(): boolean {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+    return window.matchMedia(SM_AND_UP).matches
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const media = window.matchMedia(SM_AND_UP)
+    const apply = () => setMatches(media.matches)
+    apply()
+    media.addEventListener('change', apply)
+    return () => media.removeEventListener('change', apply)
+  }, [])
+  return matches
+}
+
 export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const editAgentId = useUiStore((s) => s.editAgentId)
   const closeEditAgentSlideOver = useUiStore((s) => s.closeEditAgentSlideOver)
@@ -139,6 +159,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const editAgentWorkspaceId = useUiStore((s) => s.editAgentWorkspaceId)
   const agentId = agentIdProp ?? editAgentId
   const isOpen = agentId !== null
+  const smAndUp = useSmAndUp()
 
   const queryClient = useQueryClient()
 
@@ -340,7 +361,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // via default provider (back-compat with pre-O3 agents).
   const [primaryProvider, setPrimaryProvider] = useState('')
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
-  const [selectedIcon, setSelectedIcon] = useState<IconName>('Robot')
+  const [selectedFigure, setSelectedFigure] = useState<AgentFigure>('Omnipus')
+  const [selectedRole, setSelectedRole] = useState<AgentRole>('general')
   // W6-B4 / G3: `default` flag mirrors Agent.default on the wire. At most one
   // agent is default across the roster; the backend enforces that on PUT.
   // The toggle in the Identity strip is the only way to flip it from the
@@ -383,10 +405,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // zero-clobber P0.
   const [contextWindowOverride, setContextWindowOverride] = useState<number | null | undefined>(undefined)
   const [contextWindowOverrideDraft, setContextWindowOverrideDraft] = useState('')
-  // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete agent.
-  // Opens an AlertDialog; the confirm mutation invalidates the list and
-  // closes the slide-over. Locked agents do not render the trigger.
-  const [deleteOpen, setDeleteOpen] = useState(false)
   const [toolsCfg, setToolsCfg] = useState<AgentToolsCfg>({
     builtin: { policies: {} },
   })
@@ -577,7 +595,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // O3 two-field: hydrate the explicit provider routing key.
     setPrimaryProvider(agent.provider ?? '')
     setSelectedColor(agent.color)
-    setSelectedIcon((agent.icon as IconName) ?? 'Robot')
+    setSelectedFigure(agent.figure ?? 'Omnipus')
+    setSelectedRole(agent.role ?? 'general')
     // W6-B4 / G3: hydrate the `default` flag from the agent response. The
     // wire field is a plain boolean; absent = false. The Identity strip
     // shows the current state of this flag and lets the user flip it.
@@ -662,8 +681,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // backend. Build a restricted payload for that tier.
     const isSubagent3p = agent?.type === 'subagent_3p'
     const identity = isSubagent3p
-      ? { name, description, color: selectedColor, icon: selectedIcon }
-      : { name, description, color: selectedColor, icon: selectedIcon, default: isDefault }
+      ? { name, description, color: selectedColor, figure: selectedFigure, role: selectedRole }
+      : { name, description, color: selectedColor, figure: selectedFigure, role: selectedRole, default: isDefault }
     if (isSubagent3p) {
       // #904 D14 supersedes agent-types-field-matrix.md Decisions #1: the
       // own tool-iteration limit is the CLI's turn cap, sent only when the
@@ -751,7 +770,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       executor,
     }
   }, [
-    agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
+    agent?.type, name, description, model, primaryProvider, selectedColor, selectedFigure, selectedRole, isDefault, fallbackModels,
     temperature, maxTokens, soul, memoryEnabled, voice,
     maxToolIterationsEdit, contextWindowOverride,
     agentSkills, executor,
@@ -1178,55 +1197,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // UploadButton moved to the shared UploadMdButton in AgentFormFields.tsx
   // (create/edit parity, P3 2026-07-03) — one implementation for both dialogs.
 
-  // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation: the mutation invalidates
-  // the list cache on success, surfaces the API error inline on failure,
-  // and closes the slide-over only on success (so a network blip keeps
-  // the operator on the same page). The button itself is hidden for
-  // locked agents (see SheetFooter below).
-  const deleteAgentMutation = useMutation({
-    mutationFn: (id: string) => {
-      if (!agent?.revision) throw new Error('Agent has no reviewed revision. Reload before deleting.')
-      return deleteAgent(id, agent.revision)
-    },
-    onSuccess: () => {
-      // Drop the deleted agent from the list cache immediately so no
-      // per-id GET refetch fires for a resource that no longer exists.
-      queryClient.setQueryData(['agents'], (prev: unknown) => {
-        if (!Array.isArray(prev)) return prev
-        return prev.filter((a) => (a as { id?: string }).id !== agentId)
-      })
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
-      setDeleteOpen(false)
-      closeEditAgentSlideOver()
-      addToast({ message: 'Agent deleted', variant: 'success' })
-    },
-    onError: (err: unknown) => {
-      if (err instanceof ConfigurationSaveError && err.state.persistence_status === 'complete') {
-        // Persistence is authoritative for what the next read will return.
-        // Discard the stale deleted resource even though live activation
-        // failed, then force both views to reconcile with stored state.
-        queryClient.setQueryData(['agents'], (prev: unknown) => {
-          if (!Array.isArray(prev)) return prev
-          return prev.filter((a) => (a as { id?: string }).id !== agentId)
-        })
-        queryClient.invalidateQueries({ queryKey: ['agents'] })
-        queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
-        setDeleteOpen(false)
-        closeEditAgentSlideOver()
-        addToast({ message: `Delete incomplete: ${err.message}`, variant: 'error' })
-        return
-      }
-      const msg = isApiError(err)
-        ? err.userMessage
-        : err instanceof Error
-          ? err.message
-          : 'Delete failed'
-      addToast({ message: `Delete failed: ${msg}`, variant: 'error' })
-      setDeleteOpen(false)
-    },
-  })
-
   // FR-016 / A2/F-09: Heartbeat tab saves to the WORKSPACE — a separate mutation
   // from the agent autosave. The tab opts out of the agent autosave flow entirely.
   // fix-1 (DATA-LOSS guard): hard-block the mutation if the workspace failed to
@@ -1441,49 +1411,24 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 </div>
               )}
-              {/* Operator decision 2026-07-03: color/icon become visible
-                  READ-ONLY for locked core agents (previously hidden
-                  entirely) — a static swatch/icon+label, not the
-                  interactive picker (which has no readOnly mode). */}
-              <div className="space-y-[var(--space-1)]">
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar color</p>
-                {!isFieldEditable('color') ? (
-                  <div className="flex items-center gap-[var(--space-2)]" data-testid="avatar-color-readonly">
-                    <span
-                      className="w-7 h-7 rounded-full shrink-0 border border-[var(--color-border)]"
-                      style={{ backgroundColor: selectedColor || 'var(--color-surface-3)' }}
-                      aria-hidden="true"
-                    />
-                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
-                      {avatarColorName(selectedColor)}
-                    </span>
-                  </div>
-                ) : (
-                  <AvatarColorPicker
-                    value={selectedColor ?? ''}
-                    onChange={(color) => { markDirty(); setSelectedColor(color) }}
-                    testIdPrefix="avatar-color"
-                  />
-                )}
-              </div>
-              <div className="space-y-[var(--space-1)]">
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar icon</p>
-                {!isFieldEditable('icon') ? (
-                  <div className="flex items-center gap-[var(--space-2)]" data-testid="avatar-icon-readonly">
-                    {(() => {
-                      const ReadOnlyIcon = getIconComponent(selectedIcon)
-                      return <ReadOnlyIcon size={18} className="text-[var(--color-secondary)]" aria-hidden="true" />
-                    })()}
-                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{selectedIcon}</span>
-                  </div>
-                ) : (
-                  <IconPicker
-                    value={selectedIcon}
-                    onChange={(icon) => { markDirty(); setSelectedIcon(icon) }}
-                    triggerTestId="avatar-icon-trigger"
-                  />
-                )}
-              </div>
+              {/* W1-6 / FR-020: the look (role badge, figure, colour) stays
+                  visible for built-ins, locked per field by the server's field
+                  descriptors. The same AgentLookPicker as the create wizard;
+                  like the header mark, it previews the SAVED name (a draft
+                  rename is not previewed before its autosave completes). */}
+              <AgentLookPicker
+                name={agent.name}
+                figure={selectedFigure}
+                role={selectedRole}
+                color={selectedColor}
+                figureLocked={!isFieldEditable('figure')}
+                roleLocked={!isFieldEditable('role')}
+                colorLocked={!isFieldEditable('color')}
+                onFigureChange={(figure) => { markDirty(); setSelectedFigure(figure) }}
+                onRoleChange={(role) => { markDirty(); setSelectedRole(role) }}
+                onColorChange={(color) => { markDirty(); setSelectedColor(color) }}
+                testIdPrefix="avatar"
+              />
             </div>
           </section>
 
@@ -2447,13 +2392,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       onOpenAutoFocus={handleOpenAutoFocus}
       contentRef={sheetContentRef}
     >
-      {/* Title row locked to 44px chrome; badges/description sit below so the
-          open panel aligns with the workspace top bar (flat shell chrome). */}
+      {/* Compact live identity header; badges and description remain below. */}
       <SheetHeader className="px-[var(--space-4)] sm:px-[var(--space-5)] pr-[var(--space-7)]">
         <div className="flex items-center gap-[var(--space-2)] min-w-0">
-          <AvatarHeader
-            color={selectedColor}
-            className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 [&>svg]:!w-3.5 [&>svg]:!h-3.5"
+          <AgentIcon figure={selectedFigure} role={selectedRole} size={26}
+            color={(selectedColor ?? AgentColor.options[9]) as AgentColorValue}
+            name={agent.name}
           />
           <h1 className="font-headline text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] truncate">
             {agent.name}
@@ -2561,7 +2505,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </div>
         </div>
       )}
-            <Tabs defaultValue="basics" className="hidden sm:block w-full">
+            <Tabs defaultValue="basics" className="hidden sm:block w-full" aria-hidden={smAndUp ? undefined : true}>
         {/* Tab order (item 4 reorg): Basics, Personality, Tools (or Runtime
             for external), Skills, Heartbeat, Advanced. Heartbeat moves from
             visually-first to between Skills and Advanced; defaultValue
@@ -2648,7 +2592,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             for native workers; subagent_3p's editor is in Runtime. */}
         <TabsContent value="advanced" className="space-y-[var(--space-4)]">{advancedPanel}</TabsContent>
       </Tabs>
-      <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden">
+      <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden" aria-hidden={smAndUp ? true : undefined}>
         <AccordionItem value="basics">
           <AccordionTrigger data-testid="accordion-basics" className="font-headline">Basics</AccordionTrigger>
           <AccordionContent>{basicsPanel}</AccordionContent>
@@ -2710,36 +2654,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             Changes save automatically and apply everywhere this agent is used.
           </p>
         </div>
-        {!isLocked && (
-          <Button
-            variant="destructive"
-            data-testid="delete-agent-button"
-            onClick={() => setDeleteOpen(true)}
-            className="ml-auto"
-          >
-            <Trash size={13} className="mr-[var(--space-1)]" />
-            Delete agent
-          </Button>
+        {!isLocked && agentId && (
+          <DeleteAgentControl
+            agentId={agentId}
+            agentName={formData.name || agent.name}
+            revision={agent.revision}
+          />
         )}
       </div>
-
-      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog (catalogued
-          `ConfirmDialog`) so the destructive-confirm flow is identical
-          across the app. The confirm fires the deleteAgentMutation; on
-          success the slide-over closes and the agent is removed from the
-          list cache. */}
-      <ConfirmDialog
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        title={`Delete ${formData.name || agent.name}?`}
-        description="This cannot be undone."
-        confirmLabel={deleteAgentMutation.isPending ? 'Deleting…' : 'Delete'}
-        destructive
-        pending={deleteAgentMutation.isPending}
-        onConfirm={() => {
-          if (agentId) deleteAgentMutation.mutate(agentId)
-        }}
-      />
 
     </ProfileSheet>
   )

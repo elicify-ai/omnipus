@@ -4,11 +4,15 @@ import { create } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
+import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
+import { recipientAddressHoldsQueue, setRosterReleaseDrain } from './recipientSend'
+import { registerWorkspaceEntryQueueResume } from '@/store/session/workspaceEntryFlow'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
-import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
+import { endTurnState, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
 import { EMPTY_BUCKET, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from './runtime-state'
 import { applyMessageArray, emptySessionState, omitKeys } from './session'
+import { flushHeldClearProjection, retryClearTranscriptRead } from './clear-refetch'
 import type { ChatMessage, ChatStore, OutboundQueueItem, RateLimitEventData, SessionChatState } from './types'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
@@ -163,7 +167,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
       return { sessionsById, ...bucketToForeground(activeBucket) }
     })
   }
-
   /**
    * Remove a bucket entirely (unlike `withBucket`, which can only
    * patch/create). Used for FULL teardown of the `'__pending'` bucket —
@@ -277,6 +280,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
   function maybeDrainNext(): void {
     const { pendingDrainQueue, isStreaming } = get()
     if (pendingDrainQueue.length === 0 || isStreaming || firstSendBlocksQueue(get())) return
+    // Gate BEFORE the pop: sendMessage may refuse an unresolved destination.
+    if (blockSendForWorkspaceEntry('drain')) return
+    // @-recipient hold (founder 2026-10-11 Q1 B) — also BEFORE the pop: a
+    // queued @-addressed message must not drain into an unaddressed first
+    // send (recipient is valid only together with session_id, and dropping
+    // the addressing silently is forbidden). The hold releases as soon as a
+    // session exists, and the message then drains WITH its recipient.
+    if (recipientAddressHoldsQueue(typeof pendingDrainQueue[0] === 'string' ? pendingDrainQueue[0] : pendingDrainQueue[0]?.content)) return
     const [next, ...rest] = pendingDrainQueue
     set({ pendingDrainQueue: rest })
     drainQueuedMessage(get, next)
@@ -386,6 +397,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const MIN_REPLAY_DISPLAY_MS = 750
       if (elapsed >= MIN_REPLAY_DISPLAY_MS) {
         withBucket(sid, () => ({ isReplaying: false }))
+        // D1: replay→idle — apply any transcript projection the /clear
+        // re-read held back during replay (no new network read).
+        flushHeldClearProjection(sid, withBucket)
       } else {
         // Cancel any previous pending timer before scheduling a new one so a
         // burst of `done` frames doesn't queue multiple stale clears.
@@ -395,6 +409,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
         replayingClearTimers[sid] = setTimeout(() => {
           delete replayingClearTimers[sid]
           withBucket(sid, () => ({ isReplaying: false }))
+          // D1: the deferred display window just made the bucket idle.
+          flushHeldClearProjection(sid, withBucket)
         }, MIN_REPLAY_DISPLAY_MS - elapsed)
       }
     },
@@ -412,6 +428,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
         messagesById: msgById,
         messageOrder: msgOrder,
       }))
+    },
+
+    // D5 (FR-030/031 clear refresh): the history-Retry recovery control.
+    // Repeats the rejecting read AND the merge application for the retained
+    // /clear operation — never a /clear resend. No-op when no clear
+    // operation owes a refresh.
+    retryClearTranscript: (sessionId) => {
+      retryClearTranscriptRead(sessionId, withBucket)
     },
 
     // ADR-049 D2/D4/SD-C10 (verdict-card fix): originally, the WS
@@ -552,8 +576,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           return {
             ...applyMessageArray(msgs, b),
             isStreaming: false,
-            activeTurnId: null,
-            activeTurnAgentId: null,
+            activeTurnId: null, activeTurnAgentId: null, idleArmedToolCalls: undefined,
           }
         }
         // FR-21 / T21–T26: set isStreaming:false AND status:'interrupted' on the message.
@@ -590,8 +613,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // this is one of them. Leaving activeTurnId set here would let a
           // later, unrelated done for this session misread it as "replay
           // still awaiting catch-up" and open a stray empty placeholder.
-          draft.activeTurnId = null
-          draft.activeTurnAgentId = null
+          endTurnState(draft)
         }) as Partial<SessionChatState>
       })
       // An explicit `sessionId` (e.g. the browser panel's pinned session)
@@ -778,6 +800,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
     ...createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, deleteBucket, resolveKickoffAttempt, abandonPendingKickoffInternal, syncForeground, armRateLimitClear, maybeDrainNext, runtime: chatRuntime }),
   }
 })
+
+// Same cycle-break registration as session/chat foreground callbacks. Entry
+// and New chat resume only AFTER their coherent destination is committed.
+registerWorkspaceEntryQueueResume(() => useChatStore.getState().drainOutboundQueue())
+// R2-S3-02: the team list loading releases an @-message held on it.
+setRosterReleaseDrain(() => useChatStore.getState().drainOutboundQueue())
 
 // Expose syncForeground so setActiveSession can call it after switching sessions.
 // Avoiding a direct import of the session store here to keep the cycle-break intact.

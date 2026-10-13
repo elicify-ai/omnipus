@@ -40,7 +40,7 @@ async function run(root, evidenceFiles) {
 }
 
 test('requires exact file, exact test, every browser project, and no failed retry', async () => {
-  const root = await setup([{ id: 'button-browser', kind: 'browser', applicable: true, file: 'tests/design-system/browser.spec.ts', test: 'Button browser', story: 'Primary' }])
+  const root = await setup([{ id: 'button-browser', kind: 'browser', applicable: true, file: 'tests/design-system/browser.spec.ts', test: 'Button browser', story: 'Primary', requiredTargets: [{ selector: 'body', attribute: 'role' }] }])
   const evidence = join(root, 'playwright.json')
   await writeFile(evidence, JSON.stringify(playwrightSpec({ file: 'tests/wrong.spec.ts' })))
   assert.match((await run(root, [evidence])).errors.join('\n'), /no exact executed evidence/)
@@ -157,7 +157,7 @@ test('rejects an interaction claim backed only by a render-only story', async ()
 // The checked-in manifest schema is the oracle; passing evidence must never
 // excuse absent ownership, unknown fields or duplicate public export names.
 test('rejects every missing required manifest field despite passing execution evidence', async () => {
-  const root = await setup([{ id: 'button-browser', kind: 'browser', applicable: true, file: 'tests/design-system/browser.spec.ts', test: 'Button browser', story: 'Primary' }])
+  const root = await setup([{ id: 'button-browser', kind: 'browser', applicable: true, file: 'tests/design-system/browser.spec.ts', test: 'Button browser', story: 'Primary', requiredTargets: [{ selector: 'body', attribute: 'role' }] }])
   const file = join(root, 'design-system/manifests/button.json')
   const original = JSON.parse(await readFile(file, 'utf8'))
   const evidence = join(root, 'playwright.json')
@@ -173,7 +173,7 @@ test('rejects every missing required manifest field despite passing execution ev
 })
 
 test('rejects unknown properties, duplicate arrays and malformed nested schema shapes', async () => {
-  const root = await setup([{ id: 'button-browser', kind: 'browser', applicable: true, file: 'tests/design-system/browser.spec.ts', test: 'Button browser', story: 'Primary' }])
+  const root = await setup([{ id: 'button-browser', kind: 'browser', applicable: true, file: 'tests/design-system/browser.spec.ts', test: 'Button browser', story: 'Primary', requiredTargets: [{ selector: 'body', attribute: 'role' }] }])
   const file = join(root, 'design-system/manifests/button.json')
   const original = JSON.parse(await readFile(file, 'utf8'))
   const evidence = join(root, 'playwright.json')

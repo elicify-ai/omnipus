@@ -14,11 +14,10 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -54,7 +53,7 @@ func TestVerifierSessionType_RealAdjudicationStampsVerifierType(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 
-	judgeStore := al.GetAgentStore(string(coreagent.IDJudge))
+	judgeStore := al.GetSessionStore()
 	if judgeStore == nil {
 		t.Fatal("judge session store not available")
 	}
@@ -94,7 +93,7 @@ func TestVerifierSessionType_ChatIDIsAPreCreatedSessionNotAnAdHocString(t *testi
 
 	chatID := al.newVerifierSessionChatID("agent:judge:verify:test-key", "task:t-precreate")
 
-	judgeStore := al.GetAgentStore(string(coreagent.IDJudge))
+	judgeStore := al.GetSessionStore()
 	if judgeStore == nil {
 		t.Fatal("judge session store not available")
 	}
@@ -110,35 +109,47 @@ func TestVerifierSessionType_ChatIDIsAPreCreatedSessionNotAnAdHocString(t *testi
 	}
 }
 
-// TestVerifierSessionType_FallsBackWhenJudgeNotRegistered proves
-// newVerifierSessionChatID degrades gracefully — never blocks adjudication
-// — when the Judge's session store cannot be resolved (the Judge is not
-// registered at all, e.g. a raw pkg/agent harness that never ran
-// coreagent.SeedConfig): it returns the ORIGINAL Wave-1 ad hoc
-// "verify:"+sessionKey construction verbatim, unstamped, rather than
-// erroring or panicking. Uses a minimal config with NO agents at all
-// (mirrors cancel_test.go's newCancelTestAgentLoop harness shape) so
-// al.GetAgentStore(string(coreagent.IDJudge)) genuinely returns nil.
-func TestVerifierSessionType_FallsBackWhenJudgeNotRegistered(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}},
-			// Deliberately no List entries — no Judge, no worker, nothing.
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
-	t.Cleanup(func() { al.Close() })
+// Every directory in the session store is a session with a meta.json. A real
+// adjudication used to leave an extra "agent:judge:verify:<uuid>" directory
+// (window files only, no meta.json) because the verifier's model-window key was
+// an ad hoc string, not the verifier session's own id; at the next boot the
+// store reported it unreadable (founder's gateway, 2026-10-11).
+func TestVerifierAdjudication_LeavesNoDirectoryWithoutAMeta(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{
+			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"ok"}]}`,
+		}, nil
+	}}
 
-	if store := al.GetAgentStore(string(coreagent.IDJudge)); store != nil {
-		t.Fatal("test premise broken: the Judge must NOT be registered in this harness")
+	result := al.JudgeCriteria(context.Background(), JudgeCriteriaInput{
+		Scope:           task.VerdictScopeTask,
+		TaskID:          "t-no-orphan",
+		AssigneeAgentID: "native-agent",
+		Criteria:        []task.AcceptanceCriterion{proseCriterion("c1", "x")},
+		Attempt:         1,
+		ClaimText:       "done",
+	})
+	if result.Unavailable || !result.Verdict.Met {
+		t.Fatalf("unexpected result: %+v", result)
 	}
 
-	sessKey := "agent:judge:verify:fallback-key"
-	got := al.newVerifierSessionChatID(sessKey, "task:t-fallback")
-	if want := "verify:" + sessKey; got != want {
-		t.Errorf("newVerifierSessionChatID with no Judge registered = %q, want the ad hoc fallback %q", got, want)
+	base := al.GetSessionStore().BaseDir()
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDirs := 0
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == ".context" {
+			continue
+		}
+		sessionDirs++
+		if _, statErr := os.Stat(filepath.Join(base, e.Name(), "meta.json")); statErr != nil {
+			t.Errorf("session directory %q has no meta.json (%v): its files were written for a window key that is not a session", e.Name(), statErr)
+		}
+	}
+	if sessionDirs == 0 {
+		t.Fatal("instrument check: the adjudication left no session directory at all")
 	}
 }

@@ -66,8 +66,7 @@ func avaSeedCustomAgent(t *testing.T, ctx context.Context, deps *systools.Deps) 
 		"description": "Summarizes field reports",
 		"soul":        "You summarize field reports for the team.",
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	require.False(t, result.IsError, result.ForLLM)
 	id, _ := parseSuccess(t, result.ForLLM)["id"].(string)
@@ -111,8 +110,7 @@ func avaAgentCreatePersists(t *testing.T, ctx context.Context, deps *systools.De
 		"description": "Summarizes field reports",
 		"soul":        soul,
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	require.False(t, result.IsError, result.ForLLM)
 	body := parseSuccess(t, result.ForLLM)
@@ -125,8 +123,7 @@ func avaAgentCreatePersists(t *testing.T, ctx context.Context, deps *systools.De
 	require.NoError(t, err, "create must persist the entity record")
 	require.Equal(t, "Field Analyst", persisted.Name)
 	require.Equal(t, "Summarizes field reports", persisted.Description)
-	require.Equal(t, "#22C55E", persisted.Color)
-	require.Equal(t, "robot", persisted.Icon)
+	require.Equal(t, "#6E8BA8", persisted.Color)
 	require.NotNil(t, persisted.Model)
 	require.Equal(t, "test/model", persisted.Model.Primary)
 
@@ -164,7 +161,7 @@ func avaAgentUpdatePersists(t *testing.T, ctx context.Context, deps *systools.De
 	require.NotNil(t, persisted.Model)
 	require.Equal(t, "openrouter/z-ai/glm-5.3-flash", persisted.Model.Primary)
 	require.Equal(t, "Field Analyst", persisted.Name, "omitted field must be preserved")
-	require.Equal(t, "#22C55E", persisted.Color, "omitted field must be preserved")
+	require.Equal(t, "#6E8BA8", persisted.Color, "omitted field must be preserved")
 
 	after := currentAgentRevision(t, deps, id)
 	require.NotEqual(t, before, after, "a persisted update must advance the revision")

@@ -4,7 +4,6 @@ package session
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,31 +222,6 @@ func TestDeleteSession_EvictsFromCache(t *testing.T) {
 	assert.Nil(t, findMeta(metas, meta.ID), "ListSessions must exclude a deleted session")
 }
 
-// TestClearAll_ClearsCache verifies ClearAll empties metaCache along with disk.
-//
-// Traces to: pkg/session/unified.go ClearAll.
-func TestClearAll_ClearsCache(t *testing.T) {
-	store := newTestStore(t)
-
-	for i := 0; i < 3; i++ {
-		_, err := store.NewSession(SessionTypeChat, "", "agent-1")
-		require.NoError(t, err)
-	}
-
-	removed, err := store.ClearAll()
-	require.NoError(t, err)
-	assert.Equal(t, 3, removed)
-
-	metas, err := store.ListSessions()
-	require.NoError(t, err)
-	assert.Empty(t, metas)
-
-	store.cacheMu.RLock()
-	cacheLen := len(store.metaCache)
-	store.cacheMu.RUnlock()
-	assert.Zero(t, cacheLen, "ClearAll must empty metaCache, not just disk")
-}
-
 // TestListSessions_ReconcilesOutOfBandSessionDir is the regression test for
 // the cache-only-blindness bug: ListSessions previously iterated ONLY
 // metaCache and never consulted disk, so a session directory written
@@ -272,26 +246,25 @@ func TestListSessions_ReconcilesOutOfBandSessionDir(t *testing.T) {
 	require.NoError(t, err)
 
 	// Session 2: written DIRECTLY to disk, bypassing the store entirely.
-	// writeUnifiedMetaDirect is the same package-level helper migrateLegacy
-	// uses to write a session's meta.json before any UnifiedStore instance
-	// exists for it — an accurate stand-in for a genuinely out-of-band writer.
+	// convWriteIdentityFile is CONV's current-format publisher — the same
+	// package-level shape a real out-of-band writer (a conversion, another
+	// process, a restore) produces before any UnifiedStore instance exists for
+	// it — an accurate stand-in for a genuinely out-of-band writer.
 	outOfBandID := "out-of-band-session"
 	outOfBandDir := filepath.Join(store.baseDir, outOfBandID)
 	require.NoError(t, os.MkdirAll(outOfBandDir, 0o700))
 	now := time.Now().UTC()
-	outOfBandMeta := &UnifiedMeta{
-		SessionMeta: SessionMeta{
-			ID:        outOfBandID,
-			Status:    StatusActive,
-			CreatedAt: now.Add(-time.Hour),
-			// Deliberately newer than the cached session so descending sort
-			// order proves this entry was actually merged in, not just
-			// coincidentally present.
-			UpdatedAt: now.Add(time.Hour),
-		},
-		Type: SessionTypeChat,
-	}
-	require.NoError(t, writeUnifiedMetaDirect(outOfBandDir, outOfBandMeta))
+	require.NoError(t, convWriteIdentityFile(outOfBandDir, u5IdentityFile{
+		ID:        outOfBandID,
+		Status:    StatusActive,
+		CreatedAt: now.Add(-time.Hour),
+		// Deliberately newer than the cached session so descending sort
+		// order proves this entry was actually merged in, not just
+		// coincidentally present.
+		UpdatedAt:  now.Add(time.Hour),
+		Partitions: []string{},
+		Type:       SessionTypeChat,
+	}))
 
 	// Precondition: the out-of-band session must NOT already be cached — it
 	// was never written through this store instance.
@@ -347,14 +320,13 @@ func TestListSessions_SkipsMalformedOutOfBandSessionDir(t *testing.T) {
 	goodID := "out-of-band-good"
 	goodDir := filepath.Join(store.baseDir, goodID)
 	require.NoError(t, os.MkdirAll(goodDir, 0o700))
-	require.NoError(t, writeUnifiedMetaDirect(goodDir, &UnifiedMeta{
-		SessionMeta: SessionMeta{
-			ID:        goodID,
-			Status:    StatusActive,
-			CreatedAt: time.Now().UTC(),
-			UpdatedAt: time.Now().UTC(),
-		},
-		Type: SessionTypeChat,
+	require.NoError(t, convWriteIdentityFile(goodDir, u5IdentityFile{
+		ID:         goodID,
+		Status:     StatusActive,
+		CreatedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+		Partitions: []string{},
+		Type:       SessionTypeChat,
 	}))
 
 	badID := "out-of-band-bad"
@@ -779,34 +751,6 @@ func TestListSessionsFiltered_ClonesOnlyMatches(t *testing.T) {
 	assert.ElementsMatch(t, matchIDs, gotIDs, "ListSessionsFiltered must return exactly the sessions matching the predicate")
 }
 
-// TestClearAll_AcquiresAllShardsInIndexOrder proves the REAL ClearAll call
-// (not a hand-rolled simulation) goes through lockAllSessionShards, by
-// asserting the recorded order matches the strict-ascending-index shape
-// while ClearAll runs against a real store with real sessions.
-func TestClearAll_AcquiresAllShardsInIndexOrder(t *testing.T) {
-	store := newTestStoreForLockTests(t)
-	for i := 0; i < 3; i++ {
-		_, err := store.NewSession(SessionTypeChat, "", "agent-1")
-		require.NoError(t, err)
-	}
-
-	events, restore := installLockRecorder(t)
-	t.Cleanup(restore)
-
-	_, err := store.ClearAll()
-	require.NoError(t, err)
-
-	recorded := *events
-	require.GreaterOrEqual(t, len(recorded), 128, "ClearAll must acquire+release all 64 shards")
-	// The first 64 events (the lockAllSessionShards acquire loop, which runs
-	// before ClearAll does any per-session work) must be a strictly
-	// ascending 0..63 acquire sequence.
-	for i := 0; i < 64; i++ {
-		require.Truef(t, recorded[i].acquire, "event %d must be an acquire", i)
-		require.Equalf(t, uint32(i), recorded[i].shard, "acquire %d must be shard %d", i, i)
-	}
-}
-
 // TestDeleteSession_Success creates a session, verifies the directory exists,
 // deletes it, and asserts the directory is gone.
 //
@@ -1054,324 +998,28 @@ func TestDeleteSession_CascadeDeletesUploads_PerAgentStore(t *testing.T) {
 	assert.True(t, errors.Is(wrongStatErr, os.ErrNotExist), "<home>/agents/<id>/uploads/<sessionID> must not be touched — wrong path for uploads")
 }
 
-// TestClearAll_RemovesSessionsContextAndUploads verifies the core destructive
-// contract: every top-level session directory (plus its fake message file),
-// its matching .context/<id>.jsonl file, and its matching uploads/<id>/
-// directory are all removed, and the returned count equals the number of
-// session directories removed.
-//
-// BDD: Given 3 session directories — one with a fake message file plus a
-// matching .context/<id>.jsonl entry, another with a matching uploads/<id>/
-// directory — When ClearAll is called, Then all 3 session directories, the
-// matching context file, and the matching uploads directory are removed, and
-// ClearAll returns (3, nil).
-//
-// Traces to: pkg/session/unified.go ClearAll (lines 835-869)
-func TestClearAll_RemovesSessionsContextAndUploads(t *testing.T) {
-	store, home := newTestStoreWithHome(t)
+// The `.context/<id>.jsonl` half of the old ClearAll test (and its own
+// TestClearAll_PreservesContextDirItself) is deleted with the `.context`
+// model-content backend (session-core DEL-10/DEL-12): normal construction
+// neither creates nor reads `.context`, so there is no per-session context
+// file to remove and no `.context` directory to preserve.
 
-	meta1, err := store.NewSession(SessionTypeChat, "", "agent-a")
+// S1-04: a directory with no meta.json is not a session (boot skips it as safe to
+// delete), so delete-all must not report it as an unreadable chat it had to
+// keep; a directory whose meta.json exists but is corrupt still is one.
+func TestUnreadableSessionIDs_OrphanDirectoryIsNotAChat_CorruptMetaIs(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "orphan_no_meta"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "orphan_no_meta", "transcript.jsonl"), []byte("{}\n"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "corrupt_meta"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "corrupt_meta", "meta.json"), []byte("{not json"), 0o600))
+
+	store, err := NewUnifiedStore(dir)
 	require.NoError(t, err)
-	meta2, err := store.NewSession(SessionTypeChat, "", "agent-a")
+	t.Cleanup(func() { _ = store.Close() })
+
+	bad, err := store.UnreadableSessionIDs()
 	require.NoError(t, err)
-	meta3, err := store.NewSession(SessionTypeChat, "", "agent-a")
-	require.NoError(t, err)
-	allMetas := []*UnifiedMeta{meta1, meta2, meta3}
-
-	// Fake message files inside each session directory (beyond meta.json).
-	for _, m := range allMetas {
-		dir := filepath.Join(store.BaseDir(), m.ID)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "transcript.jsonl"),
-			[]byte(`{"role":"user","content":"hi"}`+"\n"), 0o600))
-	}
-
-	// meta1 gets a matching .context/<id>.jsonl file via the SessionStore
-	// interface (AddMessage writes through to the JSONL backend).
-	store.AddMessage(meta1.ID, "user", "hello from context store")
-	contextFile := filepath.Join(store.BaseDir(), ".context", meta1.ID+".jsonl")
-	_, statErr := os.Stat(contextFile)
-	require.NoError(t, statErr, "precondition: context file for meta1 must exist")
-
-	// meta2 gets a matching uploads/<id>/ directory.
-	uploadsDir := filepath.Join(home, "uploads", meta2.ID)
-	require.NoError(t, os.MkdirAll(uploadsDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(uploadsDir, "photo.png"), []byte("fake-bytes"), 0o600))
-
-	// Preconditions: all 3 session dirs exist.
-	for _, m := range allMetas {
-		_, precondStatErr := os.Stat(filepath.Join(store.BaseDir(), m.ID))
-		require.NoError(t, precondStatErr, "precondition: session dir for %s must exist", m.ID)
-	}
-
-	// When
-	removed, err := store.ClearAll()
-
-	// Then
-	require.NoError(t, err, "ClearAll must not return an error in the happy path")
-	assert.Equal(t, 3, removed, "ClearAll must report exactly 3 removed sessions")
-
-	for _, m := range allMetas {
-		_, statErr = os.Stat(filepath.Join(store.BaseDir(), m.ID))
-		assert.True(t, errors.Is(statErr, os.ErrNotExist), "session dir for %s must be removed", m.ID)
-	}
-
-	_, statErr = os.Stat(contextFile)
-	assert.True(t, errors.Is(statErr, os.ErrNotExist), "meta1's .context/<id>.jsonl must be removed")
-
-	_, statErr = os.Stat(uploadsDir)
-	assert.True(t, errors.Is(statErr, os.ErrNotExist), "meta2's uploads/<id>/ dir must be removed")
-}
-
-// TestClearAll_PreservesContextDirItself verifies the exact skip condition in
-// ClearAll's loop (`!entry.IsDir() || entry.Name() == ".context"`): the
-// .context directory ITSELF must survive ClearAll even though every session's
-// individual .context/<id>.jsonl file underneath it is removed, and any
-// unrelated file left inside .context (not matching a removed session ID)
-// must be left untouched.
-//
-// BDD: Given a store whose .context directory contains both a file matching
-// a live session ID and an unrelated stray file, When ClearAll is called,
-// Then the .context directory still exists, the matching file is gone, and
-// the stray unrelated file is untouched.
-//
-// Traces to: pkg/session/unified.go ClearAll — `entry.Name() == ".context"`
-// skip condition (line ~850)
-func TestClearAll_PreservesContextDirItself(t *testing.T) {
-	store, _ := newTestStoreWithHome(t)
-
-	meta1, err := store.NewSession(SessionTypeChat, "", "agent-a")
-	require.NoError(t, err)
-
-	store.AddMessage(meta1.ID, "user", "hi")
-	contextDir := filepath.Join(store.BaseDir(), ".context")
-
-	// An unrelated stray file inside .context that does not match any
-	// session ID being removed.
-	strayFile := filepath.Join(contextDir, "unrelated-leftover.jsonl")
-	require.NoError(t, os.WriteFile(strayFile, []byte(`{"stray":"data"}`+"\n"), 0o600))
-
-	// Precondition: .context exists as a directory.
-	info, statErr := os.Stat(contextDir)
-	require.NoError(t, statErr, "precondition: .context dir must exist")
-	require.True(t, info.IsDir(), "precondition: .context must be a directory")
-
-	removed, err := store.ClearAll()
-	require.NoError(t, err)
-	assert.Equal(t, 1, removed)
-
-	// .context directory itself must still exist.
-	info, statErr = os.Stat(contextDir)
-	require.NoError(t, statErr, ".context directory must survive ClearAll")
-	assert.True(t, info.IsDir(), ".context must still be a directory after ClearAll")
-
-	// The matching context file for the removed session must be gone.
-	matchingFile := filepath.Join(contextDir, meta1.ID+".jsonl")
-	_, statErr = os.Stat(matchingFile)
-	assert.True(t, errors.Is(statErr, os.ErrNotExist), "matching context file for removed session must be gone")
-
-	// The unrelated stray file must be untouched.
-	strayData, readErr := os.ReadFile(strayFile)
-	require.NoError(t, readErr, "unrelated stray file inside .context must not be removed")
-	assert.Equal(t, `{"stray":"data"}`+"\n", string(strayData),
-		"unrelated stray file content must be untouched by ClearAll")
-}
-
-// TestClearAll_EmptyOrAlreadyClearedStore_NoOp verifies ClearAll is a safe
-// no-op — returning (0, nil), never an error — both on a brand-new store that
-// never had any sessions, and on a store that has already been cleared once.
-//
-// BDD: Given a store with no session directories (fresh, or already cleared),
-// When ClearAll is called, Then it returns (0, nil).
-//
-// Traces to: pkg/session/unified.go ClearAll (lines 835-869)
-func TestClearAll_EmptyOrAlreadyClearedStore_NoOp(t *testing.T) {
-	t.Run("fresh store with no sessions", func(t *testing.T) {
-		store, _ := newTestStoreWithHome(t)
-
-		removed, err := store.ClearAll()
-		require.NoError(t, err, "ClearAll on an empty store must not error")
-		assert.Equal(t, 0, removed, "ClearAll on an empty store must report 0 removed")
-	})
-
-	t.Run("already-cleared store returns zero on second call", func(t *testing.T) {
-		store, _ := newTestStoreWithHome(t)
-
-		_, err := store.NewSession(SessionTypeChat, "", "agent-a")
-		require.NoError(t, err)
-		_, err = store.NewSession(SessionTypeChat, "", "agent-a")
-		require.NoError(t, err)
-
-		firstRemoved, err := store.ClearAll()
-		require.NoError(t, err)
-		require.Equal(t, 2, firstRemoved, "precondition: first ClearAll must remove the 2 seeded sessions")
-
-		secondRemoved, err := store.ClearAll()
-		require.NoError(t, err, "calling ClearAll again on an already-cleared store must not error")
-		assert.Equal(t, 0, secondRemoved, "calling ClearAll again must report 0 removed, not re-count or fail")
-	})
-}
-
-// TestClearAll_BaseDirMissing_ReturnsZeroNoError exercises the
-// os.IsNotExist(err) branch: if the store's base directory has been removed
-// out from under it (e.g., manual cleanup, or a prior ClearAll-adjacent
-// operation), ClearAll must treat "nothing to clear" as success, not an error.
-//
-// BDD: Given the store's base directory does not exist on disk,
-// When ClearAll is called,
-// Then it returns (0, nil) rather than propagating the ReadDir error.
-//
-// Traces to: pkg/session/unified.go ClearAll — `os.IsNotExist(err)` branch
-// (lines ~840-843)
-func TestClearAll_BaseDirMissing_ReturnsZeroNoError(t *testing.T) {
-	store, _ := newTestStoreWithHome(t)
-
-	require.NoError(t, os.RemoveAll(store.BaseDir()), "test setup: remove the base dir entirely")
-
-	removed, err := store.ClearAll()
-	require.NoError(t, err, "ClearAll must not error when the base directory does not exist")
-	assert.Equal(t, 0, removed)
-}
-
-// TestClearAll_ContinuesPastRemovalFailure documents ClearAll's behavior when
-// one session directory's os.RemoveAll fails: per the code in
-// pkg/session/unified.go's ClearAll, the error is logged via slog.Warn and the
-// loop `continue`s to the next entry — it does NOT abort the whole operation,
-// and the failed entry is NOT counted in the returned removed total. The
-// per-entry failure IS surfaced to the caller: ClearAll aggregates every
-// per-entry error (via errors.Join) and returns it alongside the partial
-// removed count, so a "clear all sessions" request cannot silently
-// under-deliver on this privacy-sensitive, destructive action.
-//
-// The real removal failure is forced by chmod'ing one session directory to
-// 0500 (r-x, no write) so the OS refuses to unlink meta.json/transcript.jsonl
-// inside it — a genuine os.RemoveAll error, not a simulated one.
-//
-// BDD: Given 3 session directories where one cannot be removed due to
-// filesystem permissions, When ClearAll is called, Then the two removable
-// directories are removed and counted, the unremovable directory is left
-// fully intact, and ClearAll returns a non-nil aggregate error describing the
-// failure alongside the correct partial count.
-//
-// Traces to: pkg/session/unified.go ClearAll, the
-// `if err := os.RemoveAll(dir); err != nil { slog.Warn(...); continue }` path
-// and its final `return removed, errors.Join(errs...)`.
-func TestClearAll_ContinuesPastRemovalFailure(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip(
-			"test forces a real os.RemoveAll failure via directory permissions (chmod 0500) — root bypasses Unix permission checks (CAP_DAC_OVERRIDE), so this doesn't reproduce a failure when the test process runs as root (e.g. inside a CI container)",
-		)
-	}
-
-	store, _ := newTestStoreWithHome(t)
-
-	metaBad, err := store.NewSession(SessionTypeChat, "", "agent-a")
-	require.NoError(t, err)
-	metaGood1, err := store.NewSession(SessionTypeChat, "", "agent-a")
-	require.NoError(t, err)
-	metaGood2, err := store.NewSession(SessionTypeChat, "", "agent-a")
-	require.NoError(t, err)
-
-	badDir := filepath.Join(store.BaseDir(), metaBad.ID)
-
-	// Remove write permission on the bad session's directory so the OS refuses
-	// to unlink its contents (meta.json etc.) — a real os.RemoveAll failure.
-	require.NoError(t, os.Chmod(badDir, 0o500))
-	// Restore permissions before t.TempDir()'s own cleanup runs (t.Cleanup
-	// callbacks run LIFO; this is registered after newTestStoreWithHome's
-	// internal t.TempDir(), so it runs first).
-	t.Cleanup(func() { _ = os.Chmod(badDir, 0o700) })
-
-	removed, err := store.ClearAll()
-
-	// Current behavior: the per-entry RemoveAll failure is logged via
-	// slog.Warn AND surfaced as a non-nil aggregate error from ClearAll.
-	require.Error(t, err,
-		"ClearAll must surface a non-nil aggregate error when at least one session dir failed to remove")
-	assert.Contains(t, err.Error(), metaBad.ID,
-		"the aggregate error should mention the session whose removal failed")
-	assert.Equal(t, 2, removed,
-		"only the 2 removable session dirs must be counted; the dir whose RemoveAll failed must not be")
-
-	// The bad directory must still exist, fully intact (RemoveAll could not
-	// remove any of its children, so nothing partial happened to it either).
-	_, statErr := os.Stat(badDir)
-	assert.NoError(t, statErr, "the session dir whose RemoveAll failed must still exist on disk")
-	_, statErr = os.Stat(filepath.Join(badDir, "meta.json"))
-	assert.NoError(t, statErr, "meta.json inside the unremovable dir must still be present")
-
-	// The two good directories must be gone.
-	for _, m := range []*UnifiedMeta{metaGood1, metaGood2} {
-		_, statErr := os.Stat(filepath.Join(store.BaseDir(), m.ID))
-		assert.True(t, errors.Is(statErr, os.ErrNotExist), "removable session dir for %s must be gone", m.ID)
-	}
-}
-
-// TestClearAll_ContinuesPastRemovalFailure_InjectedError asserts the exact
-// same aggregate-error behavior as TestClearAll_ContinuesPastRemovalFailure
-// above, but via the removeAllFn package-level test seam instead of chmod'ing
-// a directory to 0500. The chmod-based test is skipped when the test process
-// runs as root (CAP_DAC_OVERRIDE bypasses the permission check) — which is
-// exactly how CI runs it — so that test provides zero coverage of this
-// behavior in CI. This test forces a deterministic os.RemoveAll-shaped error
-// for one specific session directory regardless of privilege level, so it
-// runs identically under root or non-root and actually exercises the
-// aggregation path in CI.
-//
-// BDD: Given 3 session directories where removeAllFn is stubbed to fail for
-// exactly one of them, When ClearAll is called, Then the two unaffected
-// directories are removed and counted, and ClearAll returns a non-nil
-// aggregate error mentioning the failed session's ID alongside the correct
-// partial count.
-//
-// Traces to: pkg/session/unified.go ClearAll's
-// `if err := removeAllFn(dir); err != nil { slog.Warn(...); continue }` path
-// and its final `return removed, errors.Join(errs...)`.
-func TestClearAll_ContinuesPastRemovalFailure_InjectedError(t *testing.T) {
-	store, _ := newTestStoreWithHome(t)
-
-	metaBad, err := store.NewSession(SessionTypeChat, "", "agent-a")
-	require.NoError(t, err)
-	metaGood1, err := store.NewSession(SessionTypeChat, "", "agent-a")
-	require.NoError(t, err)
-	metaGood2, err := store.NewSession(SessionTypeChat, "", "agent-a")
-	require.NoError(t, err)
-
-	badDir := filepath.Join(store.BaseDir(), metaBad.ID)
-	injectedErr := fmt.Errorf("injected removeAllFn failure for %s", metaBad.ID)
-
-	// Override the package-level seam for the duration of this test, save/
-	// restore via t.Cleanup so other tests are unaffected.
-	origRemoveAllFn := removeAllFn
-	t.Cleanup(func() { removeAllFn = origRemoveAllFn })
-	removeAllFn = func(path string) error {
-		if path == badDir {
-			return injectedErr
-		}
-		return origRemoveAllFn(path)
-	}
-
-	removed, err := store.ClearAll()
-
-	require.Error(t, err,
-		"ClearAll must surface a non-nil aggregate error when removeAllFn failed for one session dir")
-	assert.Contains(t, err.Error(), metaBad.ID,
-		"the aggregate error should mention the session whose removal failed")
-	assert.Contains(t, err.Error(), injectedErr.Error(),
-		"the aggregate error should wrap the injected removeAllFn error")
-	assert.Equal(t, 2, removed,
-		"only the 2 unaffected session dirs must be counted; the one whose removeAllFn failed must not be")
-
-	// The bad directory was never actually touched by the real os.RemoveAll
-	// (the stub short-circuited it), so it must still exist, fully intact.
-	_, statErr := os.Stat(badDir)
-	assert.NoError(t, statErr, "the session dir whose removeAllFn failed must still exist on disk")
-	_, statErr = os.Stat(filepath.Join(badDir, "meta.json"))
-	assert.NoError(t, statErr, "meta.json inside the unremoved dir must still be present")
-
-	// The two unaffected directories must be gone (removed via the real
-	// os.RemoveAll passthrough in the stub).
-	for _, m := range []*UnifiedMeta{metaGood1, metaGood2} {
-		_, statErr := os.Stat(filepath.Join(store.BaseDir(), m.ID))
-		assert.True(t, errors.Is(statErr, os.ErrNotExist), "unaffected session dir for %s must be gone", m.ID)
-	}
+	assert.Equal(t, []string{"corrupt_meta"}, bad,
+		"only the directory whose meta.json is corrupt is an unreadable chat; the orphan directory is not a session")
 }

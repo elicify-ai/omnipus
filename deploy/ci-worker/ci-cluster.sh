@@ -75,14 +75,16 @@ PROBE_INTERVAL=5
 
 # CI_CLUSTER_TIERS overrides the whole map. One tier per line:
 #   <name>|<machine-id>|<gate> <gate> ...
-# The default map takes machine ids from per-tier env vars because ids are NOT
-# known when this script is written — the harness provisions the machines and
-# injects their ids. An empty machine id means "tier not provisioned" → skipped.
+# The default map takes machine ids from per-tier env vars; the defaults are the
+# CURRENT placement (founder ruling 2026-10-12): `go` on the one PERFORMANCE machine, `node`
+# and `xplat` on SHARED machines (the full e2e gate also belongs on the performance machine,
+# after the go tier, never in parallel). Override any id with the env var; an explicitly EMPTY
+# id (CI_CLUSTER_NODE_MACHINE=) means "tier not provisioned" and the tier is skipped.
 default_tier_map() {
   printf '%s\n' \
-    "go|${CI_CLUSTER_GO_MACHINE:-}|gofmt go-build go-vet lint go-test go-race" \
-    "node|${CI_CLUSTER_NODE_MACHINE:-}|contracts spa" \
-    "xplat|${CI_CLUSTER_XPLAT_MACHINE:-}|embed-build records-no-sqlite cli-verb-guard"
+    "go|${CI_CLUSTER_GO_MACHINE-080d74db170408}|gofmt go-build go-vet lint go-test go-race" \
+    "node|${CI_CLUSTER_NODE_MACHINE-d8d0d90a1e9648}|contracts spa" \
+    "xplat|${CI_CLUSTER_XPLAT_MACHINE-78113d4f329908}|embed-build records-no-sqlite cli-verb-guard"
 }
 
 # --- run state -----------------------------------------------------------------------------
@@ -113,9 +115,9 @@ Usage: deploy/ci-worker/ci-cluster.sh <git-ref> [tier ...]
 
 Env:
   CI_CLUSTER_APP            Fly app name (default ci-omnipus-1)
-  CI_CLUSTER_GO_MACHINE     machine id of the `go` tier   (default map)
-  CI_CLUSTER_NODE_MACHINE   machine id of the `node` tier (default map)
-  CI_CLUSTER_XPLAT_MACHINE  machine id of the `xplat` tier (default map)
+  CI_CLUSTER_GO_MACHINE     machine id of the `go` tier   (default 080d74db170408, the performance machine)
+  CI_CLUSTER_NODE_MACHINE   machine id of the `node` tier (default d8d0d90a1e9648, shared)
+  CI_CLUSTER_XPLAT_MACHINE  machine id of the `xplat` tier (default 78113d4f329908, shared)
   CI_CLUSTER_TIERS          full map override, one "<name>|<machine-id>|<gates>" per line
   CI_CLUSTER_START_TIMEOUT  seconds to wait for a started machine to become reachable
   CI_CLUSTER_LOG_DIR        where per-gate logs go (default a fresh dir under /tmp)
@@ -205,39 +207,71 @@ verify_md5_on_machine() { # $1 tier $2 machine-id $3 expected-md5
   info "[$tier] runci.sh md5 ok on machine $id ($want)"
 }
 
-# Start the machine if it is stopped; record ownership. Machines already running
-# are used but never stopped by this run — another session may own them. If the
-# state cannot be determined, attempt a start and let the reachability probe
-# arbitrate: a start that fails but leaves the machine reachable means it was
-# already up (not ours); anything else dies in pre-flight.
+# The machine's state as `fly machine status` prints it ("State: started"). NOT
+# `--json`: flyctl v0.4.104's `fly machine status` has no such flag, so the old
+# `--json | sed` form always read an empty state, and every machine fell into the
+# "unknown" arm below, which started it (a no-op on a running machine), recorded
+# it as OURS, and stopped it at exit - including machines another session was
+# using (2026-10-11: a go-build killed mid-run). Prints nothing if the state
+# cannot be read.
+machine_state() { # $1 machine-id
+  fly machine status "$1" --app "$APP" 2>/dev/null \
+    | tr -d '\r' | sed -n 's/^State:[[:space:]]*\([a-z]*\).*/\1/p' | head -1
+}
+
+# Ownership token of THIS dispatcher run, written to /tmp/ci-owner on every
+# machine this run started. /tmp is destroyed when the machine stops, so a stale
+# marker can never outlive its machine. At stop time a machine whose marker names
+# a DIFFERENT dispatcher is left alone.
+OWNER_TOKEN="ci-cluster:$$:$(hostname -s 2>/dev/null || echo host):$(date +%s)"
+
+write_owner_marker() { # $1 machine-id
+  fly ssh console --app "$APP" --machine "$1" -C "sh -c 'echo $OWNER_TOKEN > /tmp/ci-owner'" >/dev/null 2>&1 \
+    || warn "could not write the owner marker on machine $1 (it will still be stopped at exit unless a foreign marker or a running gate is found)"
+}
+
+# True when the machine carries a readable owner marker that is NOT ours. An
+# unreadable machine (unreachable) or a missing marker is not foreign.
+marker_is_foreign() { # $1 machine-id
+  local got
+  got=$(fly ssh console --app "$APP" --machine "$1" -C 'cat /tmp/ci-owner' 2>/dev/null | tr -d '\r' | sed -n '/^ci-cluster:/p' | head -1)
+  [ -n "$got" ] && [ "$got" != "$OWNER_TOKEN" ]
+}
+
+# True when a runci.sh gate is currently executing on the machine: something
+# (another dispatcher, a manual run) is using it, so stopping would kill that run.
+machine_is_busy() { # $1 machine-id
+  fly ssh console --app "$APP" --machine "$1" -C "pgrep -f '/cache/[r]unci.sh'" >/dev/null 2>&1
+}
+
+# Start the machine only if it is STOPPED, and record ownership of exactly those.
+# A machine that is already started (or starting) belongs to whoever started it:
+# it is used but never claimed, never stopped. A state that cannot be read is a
+# pre-flight refusal - never claimed, never touched: guessing wrongly in either
+# direction either kills someone's run or leaves a machine billing.
 preflight_machine() { # $1 tier $2 machine-id $3 expected-md5
-  local tier="$1" id="$2" want="$3" state
-  state=$(fly machine status "$id" --app "$APP" --json 2>/dev/null \
-          | tr -d '\r' | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' | head -1)
+  local tier="$1" id="$2" want="$3" state claimed=""
+  state=$(machine_state "$id")
   case "$state" in
     started)
-      info "[$tier] machine $id already started — using it, will NOT stop it (not owned by this run)"
+      info "[$tier] machine $id already started - using it, will NOT stop it (not owned by this run)"
+      ;;
+    starting)
+      info "[$tier] machine $id is starting (someone else started it) - waiting for it, will NOT stop it"
       ;;
     stopped)
       info "[$tier] starting machine $id"
       fly machine start "$id" --app "$APP" \
         || die "[$tier] fly machine start $id failed (state was 'stopped')"
-      STARTED_IDS+=("$id")
-      ;;
-    starting)
-      info "[$tier] machine $id is starting — waiting for it"
+      STARTED_IDS+=("$id"); claimed=1
       ;;
     *)
-      warn "[$tier] machine $id state unknown ('${state:-no status answer}') — attempting start"
-      if fly machine start "$id" --app "$APP"; then
-        STARTED_IDS+=("$id")
-      else
-        warn "[$tier] start of $id refused — if it answers the probe it was already up (not owned)"
-      fi
+      die "[$tier] cannot read the state of machine $id ('${state:-no answer}') - refusing to touch a machine whose ownership is unknown (check: fly machine status $id --app $APP)"
       ;;
   esac
   probe_until_reachable "$tier" "$id" \
-    || die "[$tier] machine $id not SSH-reachable within ${START_TIMEOUT}s — run 'fly machine status $id --app $APP' to inspect"
+    || die "[$tier] machine $id not SSH-reachable within ${START_TIMEOUT}s - run 'fly machine status $id --app $APP' to inspect"
+  [ -n "$claimed" ] && write_owner_marker "$id"
   verify_md5_on_machine "$tier" "$id" "$want"
 }
 
@@ -250,14 +284,26 @@ preflight_machine() { # $1 tier $2 machine-id $3 expected-md5
 # All gates in a tier run even after one fails (runci.sh `all` behaves the same);
 # the verdict comes from each log, never from the SSH wrapper's exit code.
 dispatch_tier() { # $1 tier $2 machine-id $3 gates(space-separated)
-  local tier="$1" id="$2" gates="$3" gate log
+  local tier="$1" id="$2" gates="$3" gate log rc tier_rc=0
   for gate in $gates; do
     log="$LOG_DIR/$tier-$gate.log"
-    printf '[%s] dispatching gate %-18s → machine %s\n' "$tier" "$gate" "$id"
+    printf '[%s] dispatching gate %-18s -> machine %s\n' "$tier" "$gate" "$id"
     fly ssh console --app "$APP" --machine "$id" -C "/cache/runci.sh $REF $gate" >"$log" 2>&1
+    rc=$?
     printf '[%s] gate %s finished on machine %s (log: %s)\n' "$tier" "$gate" "$id" "$log"
+    # A gate with no RESULT line did not complete: the machine was stopped under
+    # it, or the SSH session dropped. That is a FAILED tier, never "exited 0",
+    # and the next gates would only fail on the same dead machine - stop here.
+    if ! grep -qE '^(ALL GATES GREEN|GATE FAILURE\(S\))' "$log" 2>/dev/null \
+       && ! grep -q 'unknown gate' "$log" 2>/dev/null; then
+      printf '[%s] ERROR: gate %s on machine %s produced no RESULT line (ssh exit %s) - the machine was stopped or the session dropped; the tier FAILS\n' \
+        "$tier" "$gate" "$id" "$rc" >&2
+      tier_rc=1
+      break
+    fi
   done
   printf '[%s] tier complete: %s\n' "$tier" "$gates"
+  return "$tier_rc"
 }
 
 # --- verdict collection --------------------------------------------------------------------
@@ -407,6 +453,14 @@ stop_started_machines() {
       esac
     else
       info "stopping machine $id (started by this run; nothing was dispatched on it)"
+    fi
+    if marker_is_foreign "$id"; then
+      warn "machine $id carries another dispatcher's owner marker - NOT stopping it"
+      continue
+    fi
+    if machine_is_busy "$id"; then
+      warn "machine $id is running a gate (a runci.sh is active on it) - NOT stopping it; stop it by hand when idle: fly machine stop $id --app $APP"
+      continue
     fi
     if ! fly machine stop "$id" --app "$APP"; then
       warn "could not stop machine $id — STOP IT MANUALLY, it is billing:"

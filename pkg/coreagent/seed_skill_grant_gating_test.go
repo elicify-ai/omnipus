@@ -43,7 +43,7 @@ func TestSeedConfig_FreshInstallSeedsCoreGrants(t *testing.T) {
 	// pkg/coreagent/skill_allowlist_seed_test.go's FR-9.4 comment, which
 	// predates D5.1 but seeds the identical mapping).
 	want := map[string][]string{
-		"mia":   {"interview", "handoff", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
+		"mia":   {"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
 		"jim":   {"interview", "orchestrate", "plan", "define-goal"},
 		"ava":   {"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team"},
 		"admin": {"interview", "mcp-install", "provider-setup", "channel-setup", "doctor"},
@@ -100,7 +100,7 @@ func TestSeedConfig_TwiceWithEmptiedListStaysEmpty(t *testing.T) {
 // "(regression) — Gating didn't disable tamper protection") — the D5.1 fix
 // gates ONLY the skill-grant seed behind isFreshInstall. It must not have
 // accidentally weakened the pre-existing, always-on re-enforcement of a core
-// agent's non-skill identity fields (name, description, color, icon, locked),
+// agent's non-skill identity fields (name, description, color, locked),
 // which SeedConfig performs on every boot regardless of freshness.
 func TestSeedConfig_StillReEnforcesIdentityFields(t *testing.T) {
 	cfg := &config.Config{}
@@ -125,7 +125,6 @@ func TestSeedConfig_StillReEnforcesIdentityFields(t *testing.T) {
 	cfg.Agents.List[miaIdx].Name = "Tampered Name"
 	cfg.Agents.List[miaIdx].Description = "tampered description"
 	cfg.Agents.List[miaIdx].Color = "#000000"
-	cfg.Agents.List[miaIdx].Icon = "bug"
 	cfg.Agents.List[miaIdx].Locked = false
 
 	// Second boot: agents already exist, so this is NOT a fresh install — the
@@ -143,6 +142,5 @@ func TestSeedConfig_StillReEnforcesIdentityFields(t *testing.T) {
 	assert.Equal(t, canonical.Name, miaAfter.Name, "name must be re-enforced on every boot, fresh install or not")
 	assert.Equal(t, canonical.Description, miaAfter.Description, "description must be re-enforced on every boot, fresh install or not")
 	assert.Equal(t, canonical.Color, miaAfter.Color, "color must be re-enforced on every boot, fresh install or not")
-	assert.Equal(t, canonical.Icon, miaAfter.Icon, "icon must be re-enforced on every boot, fresh install or not")
 	assert.True(t, miaAfter.Locked, "locked must be re-enforced on every boot, fresh install or not")
 }

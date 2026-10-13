@@ -8,6 +8,8 @@ export type { StatusPresentation } from './design-system/status'
 export { cn } from './lib/utils'
 
 export { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from './components/ui/accordion'
+export { AgentIcon } from './components/ui/agent-icon'
+export type { AgentIconProps } from './components/ui/agent-icon'
 export { Avatar, AvatarImage, AvatarFallback } from './components/ui/avatar'
 export { Badge, badgeVariants } from './components/ui/badge'
 export type { BadgeProps } from './components/ui/badge'

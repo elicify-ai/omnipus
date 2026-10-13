@@ -177,7 +177,7 @@ func TestTaskRun_AssigneeCannotFinish_EndsFailedBeforeFirstTurn(t *testing.T) {
 			}
 
 			rec := waitForGoalState(t, tk.ID, generated.GoalStateExhausted)
-			store := al.GetAgentStore(tk.AgentID)
+			store := al.GetSessionStore()
 			waitForGoalOutcomeEntry(t, store, final.SessionID)
 			e := requireOneGoalOutcome(t, store, final.SessionID, rec.GoalID)
 			if !strings.Contains(e.Content, final.Result) {

@@ -5,9 +5,9 @@ package commands
 // Definitions are stateless — runtime dependencies are provided
 // via the Runtime parameter passed to handlers at execution time.
 //
-// Canonical (visible) commands: clear, help, model, cancel, stop,
-// stop-redirect, agents, tasks, skills, channels, status, config, remember,
-// recall, retrospective, goal, loop.
+// Canonical commands: help, model, clear, cancel, stop, stop-redirect, tasks,
+// skills, channels, status, config, remember, recall, retrospective, goal,
+// loop.
 //
 // The three memory commands (remember, recall, retrospective) are
 // agent-delivery and Handler-less by design (see pkg/commands/cmd_memory.go):
@@ -17,22 +17,22 @@ package commands
 // agent-delivery/Handler-nil shape via pkg/agent/loop.go's
 // applyGoalCommandPrompt/applyLoopCommandPrompt rewrite hooks.
 //
-// Deprecated/hidden commands (kept for one-release back-compat): start, show,
-// list, switch, check. These execute when invoked but are excluded from /help,
-// channel menus, and GET /api/v1/commands.
-//
-// Removed (D1): /skill and /use are hard-removed; they are not hidden aliases.
-// Typing /skill or /use now passes through as a normal chat message per D4.
+// Removed everywhere, no alias (FR-031; U10a, 2026-10-09): /skill and /use
+// (D1); /new — founder ruling 2026-10-09: starting an extra chat is the SPA's
+// local "New chat" action, so the server must not expose /new (which cleared
+// server history); /agents and its
+// old selector/list action; and the deprecated /start, /show, /list, /switch,
+// /check. Typing any of them is ordinary text and passes through to the agent
+// (the executor returns Passthrough for an unregistered name).
 func BuiltinDefinitions() []Definition {
 	return []Definition{
 		// Canonical commands — visible on their respective surfaces.
-		clearCommand(),
 		helpCommand(),
 		modelCommand(),
+		clearCommand(),
 		cancelCommand(),
 		stopCommand(),
 		stopRedirectCommand(),
-		agentsCommand(),
 		tasksCommand(),
 		skillsCommand(),
 		channelsCommand(),
@@ -43,12 +43,5 @@ func BuiltinDefinitions() []Definition {
 		retrospectiveCommand(),
 		goalCommand(),
 		loopCommand(),
-
-		// Deprecated commands — hidden but still execute (one-release back-compat).
-		startCommand(),
-		showCommand(),
-		listCommand(),
-		switchCommand(),
-		checkCommand(),
 	}
 }

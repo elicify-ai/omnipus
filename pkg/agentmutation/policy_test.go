@@ -50,12 +50,12 @@ func externalAgent(cli string) config.AgentConfig {
 
 func TestValidateFieldsReportsEveryOffendingFieldInRequestOrder(t *testing.T) {
 	agent := config.AgentConfig{ID: "mia", Type: config.AgentTypeCore, Locked: true}
-	err := ValidateFields(agent, []string{"model", "name", "skills", "soul", "icon"})
+	err := ValidateFields(agent, []string{"model", "name", "skills", "soul"})
 	var fe *FieldError
 	if !errors.As(err, &fe) {
 		t.Fatalf("error=%v want FieldError", err)
 	}
-	want := []string{"name", "soul", "icon"}
+	want := []string{"name", "soul"}
 	if len(fe.Fields) != len(want) {
 		t.Fatalf("fields=%v want=%v", fe.Fields, want)
 	}

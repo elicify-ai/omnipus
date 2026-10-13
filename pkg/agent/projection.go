@@ -26,7 +26,7 @@ import (
 // evicted ones, which the window slice cannot see).
 type projectionContext struct {
 	policy      resultCapPolicy
-	archive     []memory.ArchivedMessage
+	archive     windowArchive
 	sourceRunes map[memory.ProjectionKey]int
 }
 

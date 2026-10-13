@@ -1,10 +1,10 @@
 import { Circle, Star } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { IconRenderer } from '@/components/shared/IconRenderer'
+import { AgentMark } from './AgentMark'
 import type { Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
-import { cn, initialOf } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 
 interface AgentCardProps {
   agent: Agent
@@ -60,20 +60,8 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
         aria-label={`View agent ${agent.name}`}
       >
         <div className="flex items-start gap-[var(--space-2-5)]">
-          {/* Avatar — decorative next to the visible name below */}
-          <div
-            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-[length:var(--type-body-compact-size)] font-bold"
-            style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
-            aria-hidden="true"
-          >
-            {agent.icon ? (
-              <IconRenderer icon={agent.icon} size={18} className="text-[var(--color-secondary)]" />
-            ) : (
-              <span className="text-[var(--color-secondary)]">
-                {initialOf(agent.name)}
-              </span>
-            )}
-          </div>
+          {/* Avatar — the agent's own mark, decorative next to the visible name below */}
+          <AgentMark agent={agent} size={40} />
 
           {/* Info */}
           <div className="flex-1 min-w-0">

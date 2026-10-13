@@ -1262,7 +1262,10 @@ func (a *restAPI) handlePlanApprove(w http.ResponseWriter, id string) {
 	}
 
 	approved := plan.StateApproved
-	updated, uerr := a.planStore.Update(id, plan.Patch{State: &approved})
+	// A person approving the plan takes over its authority: clear any agent
+	// initiator in the same write (members then dispatch as a person's start).
+	var personApproval *task.Initiator
+	updated, uerr := a.planStore.Update(id, plan.Patch{State: &approved, InitiatedBy: &personApproval})
 	if uerr != nil {
 		if isPlanValidationErr(uerr) {
 			writeJSON(w, http.StatusBadRequest, gen.PlanApproveError{Error: ptr(uerr.Error())})
@@ -1352,7 +1355,7 @@ func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id stri
 		// instead of assuming a fully clean stop.
 		logsafeError("rest: plan stop: partial fan-out failure", "id", id, "error", serr)
 		a.auditPlan("plan.stop", id)
-		jsonErr(w, http.StatusInternalServerError, serr.Error())
+		jsonServerFailure(w, http.StatusInternalServerError, "the plan was stopped but some member tasks could not be updated; re-check their state", serr)
 		return
 	}
 	a.auditPlan("plan.stop", id)

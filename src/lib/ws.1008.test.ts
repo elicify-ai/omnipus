@@ -93,7 +93,7 @@ afterEach(() => {
 
 function makeCallbacks() {
   return {
-    onFrame: vi.fn(),
+    onFrames: vi.fn(),
     onConnected: vi.fn(),
     onDisconnected: vi.fn(),
     onError: vi.fn(),

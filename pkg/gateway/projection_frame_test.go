@@ -87,16 +87,19 @@ func TestGateway_ProjectionFrameAndContentState(t *testing.T) {
 		store := api.agentLoop.GetSessionStore()
 		require.NotNil(t, store)
 
-		require.NoError(t, store.AppendTranscript(sessionID, session.TranscriptEntry{
+		addr, err := store.AppendTranscriptAddressed(sessionID, session.TranscriptEntry{
 			ID: "tc-entry", Type: session.EntryTypeToolCall, AgentID: "mia",
 			ToolCalls: []session.ToolCall{
 				{ID: "call-1", Tool: "bash", Status: "success", Result: map[string]any{"text": strings.Repeat("full ", 10)}},
 				{ID: "call-2", Tool: "bash", Status: "success", Result: map[string]any{"text": "kept"}},
 			},
-		}))
-		// What the D5 pass does (pkg/agent/empty_in_place.go → UnifiedStore).
-		_, err := store.UpdateToolCallProjections(sessionID, []session.ToolCallProjectionUpdate{
-			{ToolCallID: "call-1", ContentState: "emptied", Result: map[string]any{"text": "[mark]"}},
+		})
+		require.NoError(t, err)
+		// What the D5 pass does (window_projection_effects.go → UnifiedStore):
+		// an appended projection effect addressed by archive identity
+		// (effects design D5).
+		_, err = store.ProjectToolCalls(sessionID, []session.ToolCallProjectionEdit{
+			{Target: addr, ToolCallID: "call-1", ContentState: "emptied", Text: "[mark]"},
 		})
 		require.NoError(t, err)
 

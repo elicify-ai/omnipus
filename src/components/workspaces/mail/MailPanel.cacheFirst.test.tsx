@@ -146,7 +146,7 @@ describe('MailPanel cache-first display (C1: scenarios 1.1, 1.7, 1.3, 1.4; US-2 
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
     for (const fn of [fetchAgents, fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchMailMessage, fetchMailSummary, markMailSeen, mintMailHtmlPreviewToken]) fn.mockReset()
-    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])

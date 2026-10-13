@@ -66,9 +66,7 @@ export {
  * Handoff contract for the slide-over:
  *   - Load: `parseRruleString(trigger.config.rrule, trigger.config.dtstart_ms)`
  *     → `RecurrenceEditorState | null`. Wrap in `{kind:'rrule', state}` for
- *     `value`, or `{kind:'none'}` when there's no stored rule (or it's a
- *     legacy cron_expr/every_ms trigger — US-5 offers a FRESH picker, so pass
- *     `{kind:'none'}` there too, never a translated rule).
+ *     `value`, or `{kind:'none'}` when there's no stored rule.
  *   - Save: when `value.kind === 'none'`, create a `once` trigger instead
  *     (this component never emits an RRULE for "Does not repeat" — FR-005).
  *     When `value.kind === 'rrule'`, call

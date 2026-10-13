@@ -32,7 +32,7 @@ import { MailPanel } from './MailPanel'
 
 describe('Mail panel endless loading', () => {
   beforeEach(() => {
-    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])

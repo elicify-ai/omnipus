@@ -49,8 +49,8 @@ const (
 	DefaultChildSendMaxDepth      = 5              // session_messaging.child_send_depth
 	DefaultInboxUnackedMax        = 200            // session_messaging.inbox_unacked_max
 	DefaultInboxPerTypeCeiling    = 20             // session_messaging.inbox_per_type_ceiling (D15)
-	DefaultSteerRatePerMinute     = 6              // session_messaging.steer_rate
-	DefaultSteerBodyBytes         = 16 * 1024      // session_messaging.steer_body
+	DefaultSteerRatePerMinute     = 60             // session_messaging.steer_rate (C-LIMIT: 60/min/sender+target)
+	DefaultSteerBodyBytes         = 65536          // session_messaging.steer_body (C-LIMIT: 65,536 UTF-8 bytes/item)
 	DefaultNeedsInputTTL          = 24 * time.Hour // session_messaging.needs_input_ttl (INV-5/G-6)
 	DefaultNeedsInputEscalationT1 = 12 * time.Hour // half-TTL escalation point (T1, G-6)
 
@@ -85,6 +85,10 @@ var (
 	ErrInboxRateLimited     = errors.New("session: inbox: child send rate exceeded")
 	ErrInboxPerChildCeiling = errors.New("session: inbox: per-child unacked question+blocker ceiling reached — await answers")
 	ErrInboxSessionFull     = errors.New("session: inbox: session unacked-message cap reached")
+	// ErrInboxUnsequencedEntry is the DEL-14 hard read error for an inbox line
+	// that parses but carries no sequence number (an unsupported pre-current
+	// format). It is not a cap refusal and is never reported as not_delivered.
+	ErrInboxUnsequencedEntry = errors.New("session: inbox: entry has no sequence number (unsupported pre-current format)")
 )
 
 // InboxEntryKind discriminates a persisted inbox JSONL line.
@@ -121,11 +125,9 @@ type InboxEntry struct {
 	// every compaction rewrite (see compactLocked), and never depends on the
 	// entry's current position in the file.
 	//
-	// Zero means "predates this field" (real Seq values always start at 1) —
-	// readEntries backfills a zero Seq to the entry's 1-based position
-	// (backfillSeq), which is value-identical to the OLD position-based
-	// cursor scheme for any file that has never been compacted, and becomes
-	// permanent the first time compaction persists it.
+	// Zero means "predates this field" (real Seq values always start at 1).
+	// There is no migration (DEL-14, greenfield): readEntries refuses such a
+	// line with ErrInboxUnsequencedEntry instead of assigning an implied Seq.
 	Seq       int64                     `json:"seq,omitempty"`
 	Message   *generated.SessionMessage `json:"message,omitempty"`
 	AckedIDs  []string                  `json:"acked_message_ids,omitempty"`
@@ -196,8 +198,7 @@ func peekEnvelope(msg generated.SessionMessage) (envelopePeek, []byte, error) {
 
 // questionOrBlockerKind reports whether kind counts toward the D15 per-child
 // unacked ceiling ("20 open question+blocker per child" — literal per the
-// ADR/spec wording; decision_request is deliberately NOT counted here,
-// matching the spec's literal "question+blocker" phrasing).
+// ADR/spec wording).
 func questionOrBlockerKind(kind string) bool {
 	return kind == "question" || kind == "blocker"
 }
@@ -205,9 +206,16 @@ func questionOrBlockerKind(kind string) bool {
 // SessionMessageDeliveryClass is the single delivery classifier used by
 // initial upward delivery, inbox admission, and boot recovery.
 type SessionMessageDeliveryClass struct {
-	Kind         string
-	Fatal        bool
+	Kind  string
+	Fatal bool
+	// WakeEligible: an accepted report of this kind wakes an idle non-stopped
+	// parent, joins a live parent's safe boundary, or is retained for a stopped
+	// parent (FR-012). Every accepted helper report kind is eligible.
 	WakeEligible bool
+	// CapExempt is the PRESERVED rate/unacked-cap exemption (ADR-091 FR-B-010,
+	// I-5), deliberately separate from WakeEligible: widening which kinds wake a
+	// parent must never widen which kinds bypass the caps (FR-012).
+	CapExempt bool
 }
 
 // ClassifySessionMessage derives delivery behavior from the actual generated
@@ -225,8 +233,14 @@ func classifyEnvelope(peek envelopePeek) SessionMessageDeliveryClass {
 	switch peek.Kind {
 	case "handback", "question", "blocker", "goal_status":
 		class.WakeEligible = true
+		class.CapExempt = true
 	case "error":
 		class.WakeEligible = peek.Fatal || isSteeringLifecycleNoticeText(peek.Text)
+		class.CapExempt = class.WakeEligible
+	case "progress", "checkpoint", "artifact":
+		// FR-012: accepted report kinds wake too, but they stay subject to the
+		// rate and unacked caps (CapExempt stays false).
+		class.WakeEligible = true
 	}
 	return class
 }
@@ -462,37 +476,24 @@ func (s *MessageInboxStore) readEntries(ownerKey string) ([]InboxEntry, error) {
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
 			continue // skip a torn/corrupt line, mirroring lifecycle.go's tail()
 		}
+		if e.Seq == 0 {
+			// DEL-14: a parseable line with no sequence number can only come
+			// from a pre-current file or a hand edit. Refuse it visibly; never
+			// assign an implied sequence (the Drain cursor would mis-address it).
+			return nil, fmt.Errorf("%w: %q", ErrInboxUnsequencedEntry, ownerKey)
+		}
 		entries = append(entries, e)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("session: inbox: scan %q: %w", ownerKey, err)
 	}
-	backfillSeq(entries)
 	return entries, nil
 }
 
-// backfillSeq assigns an implied Seq (== 1-based append-order position) to
-// any entry that predates the Seq field (Seq == 0 on disk — a real,
-// persisted Seq is never 0). The backfilled value is exactly what the OLD
-// position-based Drain cursor implicitly assumed, so this is a
-// value-preserving upgrade for a file that has never been compacted, not a
-// behavior change. compactLocked persists whatever Seq value is in memory
-// at rewrite time, so a legacy entry's backfilled value becomes durable —
-// and immune to any FUTURE position shift — the first time compaction
-// touches its file. Mutates entries in place.
-func backfillSeq(entries []InboxEntry) {
-	for i := range entries {
-		if entries[i].Seq == 0 {
-			entries[i].Seq = int64(i + 1)
-		}
-	}
-}
-
 // nextSeqAfter returns the next Seq value to assign given the CURRENT
-// (already Seq-backfilled) entries for an owner key. Entries are always in
+// entries for an owner key. Entries are always in
 // ascending Seq order — real persisted Seq values are assigned only via this
-// function (strictly increasing) and backfilled ones exactly match file
-// order — so the last entry always carries the highest Seq; this is O(1),
+// function (strictly increasing) so the last entry always carries the highest Seq; this is O(1),
 // never a scan.
 func nextSeqAfter(entries []InboxEntry) int64 {
 	if len(entries) == 0 {
@@ -564,9 +565,9 @@ func (s *MessageInboxStore) rateAllow(ownerKey, childSessionID string) bool {
 // (pkg/tools/message_parent.go, or steer.UpwardDeliverer for a turn-outcome
 // event) turns it into a tool error / a real error, never a silent drop.
 //
-// ADR-091 FR-B-010 (I-5): a wake-eligible kind — handback, question,
-// blocker, a FATAL error, or goal_status (classifyEnvelope's
-// WakeEligible verdict, this file) — is always admitted: it bypasses the
+// ADR-091 FR-B-010 (I-5): a cap-exempt kind — handback, question,
+// blocker, a FATAL error or lifecycle notice, or goal_status (classifyEnvelope's
+// CapExempt verdict, this file) — is always admitted: it bypasses the
 // unacked-cap and rate checks (but never the D15 per-type ceiling, which
 // still bounds every kind).
 func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage) (*AppendResult, error) {
@@ -659,11 +660,11 @@ func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage
 		}
 	}
 
-	// A wake-eligible kind bypasses the unacked-cap and rate checks
-	// entirely — it never even consults them, so it also never consumes a
-	// rate-window slot that would otherwise count against an unrelated
-	// later message.
-	if !classifyEnvelope(peek).WakeEligible {
+	// A cap-exempt kind (the preserved FR-B-010 set — NOT every wake-eligible
+	// kind, FR-012) bypasses the unacked-cap and rate checks entirely — it
+	// never even consults them, so it also never consumes a rate-window slot
+	// that would otherwise count against an unrelated later message.
+	if !classifyEnvelope(peek).CapExempt {
 		unackedMax := s.InboxUnackedMax
 		if unackedMax <= 0 {
 			unackedMax = DefaultInboxUnackedMax
@@ -848,7 +849,7 @@ func (s *MessageInboxStore) ackDetailed(ownerKey string, messageIDs []string) (*
 // Seq is written to disk EXACTLY as it appears in the entries argument —
 // never renumbered — so a Drain cursor issued before this compaction stays
 // valid against the rewritten file. Callers MUST pass entries fresh from
-// readEntries (Seq-backfilled), never a hand-built slice.
+// readEntries, never a hand-built slice.
 //
 // Caller must hold ownerKey's striped lock. acked is the caller's own
 // foldAcked(entries) — passed in rather than recomputed, since every caller
@@ -990,7 +991,7 @@ func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, 
 	// after one runs. Seq is immune to both: it is assigned once at write
 	// time, carried forward verbatim through compaction (see
 	// InboxEntry.Seq's doc comment and compactLocked), and entries are
-	// always in ascending Seq order (backfillSeq/nextSeqAfter), so "resume
+	// always in ascending Seq order (nextSeqAfter), so "resume
 	// after Seq X" is well-defined regardless of what compaction has done to
 	// the entries BEFORE X. candidateSeq[i] records the Seq that produced
 	// candidates[i], letting the truncation cursor resume scanning
@@ -1297,4 +1298,27 @@ func (s *MessageInboxStore) Peek(ownerKey, childSessionID string) (*PeekSnapshot
 		}
 	}
 	return snap, nil
+}
+
+// ParentNotNotifiedMarker is the fixed phrase publishUpward adds to a cap
+// refusal when the not_delivered record could not be written (FR-013): the
+// child's refusal text then also tells the child the parent could not be told.
+const ParentNotNotifiedMarker = "parent not notified"
+
+// InboxRefusalReason maps an Append error to the not_delivered reason, and
+// reports false for every error that is not one of the four cap refusals
+// (a malformed message, depth, empty owner, I/O or the unsequenced-entry error
+// is an error, not a cap refusal, and is never recorded as not_delivered).
+func InboxRefusalReason(err error) (generated.DelegateNotDeliveredSummaryLastReason, bool) {
+	switch {
+	case errors.Is(err, ErrInboxRateLimited):
+		return generated.DelegateNotDeliveredSummaryLastReasonRateLimited, true
+	case errors.Is(err, ErrInboxBodyTooLarge):
+		return generated.DelegateNotDeliveredSummaryLastReasonBodyTooLarge, true
+	case errors.Is(err, ErrInboxPerChildCeiling):
+		return generated.DelegateNotDeliveredSummaryLastReasonQuestionBlockerCeiling, true
+	case errors.Is(err, ErrInboxSessionFull):
+		return generated.DelegateNotDeliveredSummaryLastReasonUnackedCap, true
+	}
+	return "", false
 }

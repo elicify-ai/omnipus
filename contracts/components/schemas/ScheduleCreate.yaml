@@ -22,13 +22,16 @@ properties:
   message:
     type: string
     minLength: 1
-  session_mode:
-    type: string
-    enum:
-      - isolated
-      - continue
-      - main
-    description: Default isolated.
+  run_isolated:
+    type: boolean
+    default: false
+    description: >
+      Optional. True forces every run of this work into a fresh independent
+      chat, for either role (session-core FR-017). Default false: a task whose
+      assignee owns an eligible main runs as a fresh child of that main; a
+      worker runs isolated once or continues its own chat when recurring. There
+      is no other session-mode choice.
+    example: false
   timeout_seconds:
     type: integer
     minimum: 0

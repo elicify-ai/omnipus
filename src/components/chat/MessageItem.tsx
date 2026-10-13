@@ -1,20 +1,20 @@
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { User, Robot } from '@phosphor-icons/react'
-import { useQuery } from '@tanstack/react-query'
+import { User } from '@phosphor-icons/react'
 import { ToolCallBadge } from './ToolCallBadge'
 import { ModelFooter } from './ModelFooter'
-import { IconRenderer } from '@/components/shared/IconRenderer'
+import { AgentMark } from '@/components/agents/AgentMark'
 import type { ChatMessage, PositionedToolCall } from '@/store/chat'
 import { useChatStore } from '@/store/chat'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { fetchAgents } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { splitMessageParts } from '@/lib/messageParts'
 import { formatErrorDetail } from '@/lib/llm-error'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
+import { AgentReplyLabel, ParticipantMessageRow, usePairedReplyToIds, useParticipantLabelParts } from './ParticipantLabels'
+import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content.
 // Keeps a runaway provider error payload from blowing out the chat scroll.
@@ -107,23 +107,16 @@ function formatTimestamp(ts: string): string {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-// Avatar background/text color: accent-tinted for the user, the agent's own
-// color when known, else a neutral surface fallback.
-function avatarStyle(isUser: boolean, agentColor: string | undefined): React.CSSProperties {
-  if (isUser) {
-    return {
-      backgroundColor: 'color-mix(in srgb, var(--color-accent) 20%, transparent)',
-      color: 'var(--color-accent)',
-    }
-  }
-  if (agentColor) {
-    return { backgroundColor: agentColor, color: 'var(--color-secondary)' }
-  }
-  return { backgroundColor: 'var(--color-surface-3)', color: 'var(--color-secondary)' }
+// The user's avatar: accent-tinted circle. Agents draw their own AgentMark.
+const USER_AVATAR_STYLE: React.CSSProperties = {
+  backgroundColor: 'color-mix(in srgb, var(--color-accent) 20%, transparent)',
+  color: 'var(--color-accent)',
 }
 
 export function MessageItem({ message }: MessageItemProps) {
-  const { toolCalls } = useChatStore()
+  // The whole-store subscription is pre-existing (the component re-renders on
+  // every store change regardless); messages feeds the reply-chip pairing set.
+  const { toolCalls, messages } = useChatStore()
   // ADR-051 — read once unconditionally at the top (Rules of Hooks: this
   // component takes no other conditionally-skipped hooks below). The
   // disclosure is mounted ONLY when verbose is on AND the message carries
@@ -132,15 +125,23 @@ export function MessageItem({ message }: MessageItemProps) {
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
 
-  // Look up agent for assistant messages that carry an agentId.
-  // Uses the cached ['agents'] query (prefetched by AppShell) — no extra network request.
-  const { data: agents = [] } = useQuery({
-    queryKey: ['agents'],
-    queryFn: fetchAgents,
-    staleTime: 30_000,
-  })
+  // Look up agent for assistant messages that carry an agentId, plus the
+  // label parts the U8 reply header resolves against. Same cached ['agents']
+  // query (prefetched by AppShell) — no extra network request.
+  const { agents, workspaces: labelWorkspaces, currentWorkspaceId } = useParticipantLabelParts()
   const agent = message.agentId ? agents.find((a) => a.id === message.agentId) : null
   const agentName = agent?.name ?? (message.agentId ? message.agentId : null)
+  // U8/F15/F17 — the same helpers the virtualized rows use, so live and
+  // history render identically for the same message id.
+  const replyHeader = isUser || isSystem ? null : replyHeaderParts(message, agents, currentWorkspaceId, labelWorkspaces)
+  const pairedReplyToIds = usePairedReplyToIds(messages)
+
+  // U8/F15/F17 — a user entry carrying a server-stamped participant is a
+  // LEFT-side message from another participant (F17), rendered by the same
+  // row component every list path routes through.
+  if (isUser && message.participant) {
+    return <ParticipantMessageRow message={message} />
+  }
 
   if (isSystem) {
     // Goal outcome line (founder decision 2026-09-14) — always shown.
@@ -169,7 +170,10 @@ export function MessageItem({ message }: MessageItemProps) {
   // store — PositionedToolCall in src/store/chat.ts) to rebuild the true
   // order; calls with no offset (legacy bakes / reconnect edge) fall back
   // to the old "after all text" placement.
-  const positionedToolCalls = (message.tool_calls ?? []) as PositionedToolCall[]
+  const positionedToolCalls = ((message.tool_calls ?? []) as PositionedToolCall[])
+    // F17 (1): same reply-pairing filter the historical rows apply — a
+    // send_message chip whose reply_to a reply bubble answers is hidden.
+    .filter((tc) => !isSendChipHiddenByReply(tc.tool, tc.params, pairedReplyToIds))
   const messageParts = splitMessageParts(message.content ?? '', positionedToolCalls)
   // Live cursor for streaming: a message being actively streamed with no
   // text yet shows the "Thinking…" indicator instead of an (empty) bubble.
@@ -189,33 +193,26 @@ export function MessageItem({ message }: MessageItemProps) {
       data-message-id={message.id}
       className={cn('group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]', isUser ? 'flex-row-reverse' : undefined)}
     >
-      {/* Avatar — O11 icon attribution: for assistant messages, use the
-          agent's own icon + color when known, rather than a generic Robot.
-          This fixes the "icon misattribution" finding where every assistant
-          message showed the same Robot regardless of which agent spoke. */}
-      <div
-        className={cn('shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[length:var(--type-utility-xs-size)]')}
-        style={avatarStyle(isUser, agent?.color)}
-      >
-        {isUser ? (
+      {/* Avatar — O11 attribution: an assistant message shows the speaking
+          agent's own mark (figure, role badge, colour), never a generic one. */}
+      {isUser ? (
+        <div
+          className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[length:var(--type-utility-xs-size)]"
+          style={USER_AVATAR_STYLE}
+        >
           <User size={14} weight="bold" />
-        ) : agent?.icon ? (
-          <IconRenderer icon={agent.icon} size={13} />
-        ) : (
-          <Robot size={14} weight="bold" />
-        )}
-      </div>
+        </div>
+      ) : (
+        <AgentMark agent={agent ?? undefined} name={agentName ?? undefined} size={26} />
+      )}
 
       {/* Content */}
       <div className={cn('flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0', isUser ? 'items-end' : undefined)}>
-        {/* Agent label — shown above assistant messages when the agent is known */}
-        {!isUser && agentName && (
-          <span
-            data-testid="agent-label"
-            className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] px-[var(--space-1)] capitalize"
-          >
-            {agentName}
-          </span>
+        {/* Agent label — founder UI feedback 2026-10-11: the small agent mark
+            beside the name (or the U8 reply header), the same AgentReplyLabel
+            the ChatScreen rows use — no status word, no second label style. */}
+        {!isUser && (replyHeader || agentName) && (
+          <AgentReplyLabel agent={agent ?? undefined} name={agentName ?? ''} header={replyHeader} />
         )}
         {/* Streaming-with-no-text-yet indicator. Independent of the
             interleaved parts below (splitMessageParts never emits an empty

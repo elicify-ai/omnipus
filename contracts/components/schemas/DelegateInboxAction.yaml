@@ -3,7 +3,7 @@ title: DelegateInboxAction
 description: >
   `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the
   child->parent typed inbox (progress/checkpoint/artifact/blocker/
-  question/decision_request/error/handback), durable and keyed to the
+  question/error/handback), durable and keyed to the
   parent's chat/plan id (D16).
 required:
   - action

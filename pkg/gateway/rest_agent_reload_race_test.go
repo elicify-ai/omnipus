@@ -31,6 +31,7 @@ package gateway
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,11 +56,23 @@ import (
 // it is not, and must not become, a time.Sleep in the production fix itself.
 func wireAsyncReload(t *testing.T, api *restAPI, reloadDelay time.Duration) {
 	t.Helper()
+	var done sync.WaitGroup
+	t.Cleanup(done.Wait)
 	api.agentLoop.SetReloadFunc(func() error {
+		api.agentLoop.MarkReloadPending()
+		done.Add(1)
 		go func() {
+			defer done.Done()
 			time.Sleep(reloadDelay)
 			newCfg, err := config.LoadConfig(api.configPath())
 			if err != nil {
+				api.agentLoop.ClearReloadPending()
+				return
+			}
+			// Production's reload repopulates cfg.Agents.List from the agent
+			// store (config.LoadConfig strips it); without this the swap drops
+			// every agent and the response's tool view 404s.
+			if rosterErr := populateAgentsListFromEntityStoreStrict(newCfg, api.homePath); rosterErr != nil {
 				api.agentLoop.ClearReloadPending()
 				return
 			}

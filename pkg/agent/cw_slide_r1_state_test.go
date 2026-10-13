@@ -33,9 +33,9 @@ func TestCWSlideR1_MetadataWriteFailureCannotInstallOrSendCandidate(t *testing.T
 	meta, archive := h.meta(t), h.archive(t)
 	r, p := cwR1OpenAI(t, 0)
 	// Restore before cleanup removes the temporary directory, including on Fatal.
-	t.Cleanup(func() { require.NoError(t, os.Chmod(h.dir, 0o700), "restore fixture permissions") })
-	require.NoError(t, os.Chmod(h.dir, 0o500))
-	probe := fileutil.WriteFileAtomic(filepath.Join(h.dir, "must-not-write.json"), []byte("{}"), 0o600)
+	t.Cleanup(func() { require.NoError(t, os.Chmod(h.sessionDir(), 0o700), "restore fixture permissions") })
+	require.NoError(t, os.Chmod(h.sessionDir(), 0o500))
+	probe := fileutil.WriteFileAtomic(filepath.Join(h.sessionDir(), "must-not-write.json"), []byte("{}"), 0o600)
 	if !errors.Is(probe, os.ErrPermission) {
 		t.Fatalf("BLOCKED: real metadata-write permission instrument did not fail with permission error (got %v) — required for MAJ-CW-005 storage-error proof", probe)
 	}
@@ -109,9 +109,18 @@ func TestCWSlideR1_AbortRestoresActualStartingSnapshot(t *testing.T) {
 			}
 			require.Equal(t, 2, advances, "fixture made multiple actual post-snapshot Skip advances")
 			require.NoError(t, ts.restoreSession(h.agent), "real abort restore returns visibly on storage failure")
-			require.Equal(t, startMeta, h.meta(t), "abort restores actual Skip/count/anchor and ALL exact projection fields; snapshot never refreshed")
+			// FR-006 / DEL-12: the abort is NON-destructive. Skip, the anchor and
+			// every exact projection field are restored; the archive KEEPS every
+			// byte (count re-syncs to the physical length) and the aborted span is
+			// recorded as a retained-but-excluded effect, asserted below.
+			restoredMeta := h.meta(t)
+			require.Equal(t, startMeta["skip"], restoredMeta["skip"], "abort restores Skip")
+			require.Equal(t, startMeta["anchor_archive_line"], restoredMeta["anchor_archive_line"], "abort restores the anchor")
+			require.Equal(t, startMeta["projection"], restoredMeta["projection"], "abort restores ALL exact projection fields; snapshot never refreshed")
 			require.Equal(t, startSkip, cwR1Skip(t, h), "anchored slice length is NOT the Skip oracle")
-			require.Equal(t, startArchive, h.archive(t), "undo only appends from this turn, never pre-turn archive evidence")
+			retained := h.archive(t)
+			require.GreaterOrEqual(t, len(retained), len(startArchive), "FR-006: abort never drops retained archive bytes")
+			require.Equal(t, startArchive, retained[:len(startArchive)], "undo never rewrites pre-turn archive evidence")
 			restored := h.al.assembleMessages(context.Background(), h.turn(initial.userMessage), h.agent.Sessions.GetHistory(h.key), "", nil, nil)
 			h.agent.ContextWindow = 80_000 // Start projection is exact, not re-derived from the current admission clamp.
 			startRequest := h.al.assembleMessages(context.Background(), initial, startWindow, "", nil, nil)

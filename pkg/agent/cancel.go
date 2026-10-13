@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/google/uuid"
 )
 
 // cancelHardAbortDelay is PHASE B's escalation delay: how long after a
@@ -240,13 +241,16 @@ type CancelHooks struct {
 
 // agentLoopRequestCancel carries the shared state of RequestCancel across its stages.
 type agentLoopRequestCancel struct {
-	al                       *AgentLoop
-	ctx                      context.Context
-	scope                    CancelScope
-	canceller                CancelCanceller
-	hooks                    CancelHooks
-	at                       time.Time
-	auditLogger              *audit.Logger
+	al          *AgentLoop
+	ctx         context.Context
+	scope       CancelScope
+	canceller   CancelCanceller
+	hooks       CancelHooks
+	at          time.Time
+	auditLogger *audit.Logger
+	// audited is set once this request wrote its turn.cancel.attempt row, so the
+	// deferred fallback in RequestCancel writes one only when no path did.
+	audited                  bool
 	hint                     string
 	sessionID                string
 	backgroundSessionsKilled int64
@@ -279,7 +283,7 @@ type agentLoopRequestCancel struct {
 //   - approval auto-deny (via hooks.CancelPendingApprovals)
 //   - cancel_stage frame emission (via hooks.SendStageFrame)
 //   - session status → interrupted (via hooks.SetSessionInterrupted)
-//   - transcript MarkLastEntryTruncated + turn_canceled entry on Finish
+//   - turn_canceled entry on Finish (its assistant entry is already written with the truncation flag, in one write)
 //   - turn_canceled audit on Finish
 //   - 3s timer → hard abort (InterruptSessionHard(sessionID, ScopeSubtree, hint))
 //   - 3s after the hard abort → detached / MarkAbandoned + turn_cancel_stuck audit
@@ -296,6 +300,14 @@ func (al *AgentLoop) RequestCancel(
 	hooks CancelHooks,
 ) (CancelOutcome, error) {
 	rc := &agentLoopRequestCancel{al: al, ctx: ctx, scope: scope, canceller: canceller, hooks: hooks}
+	// Every Stop attempt on a resolved session is audited exactly once: a
+	// request that returns early (superseded generation, an unreadable record,
+	// an error) still happened.
+	defer func() {
+		if !rc.audited && rc.sessionID != "" {
+			rc.auditAttempt(false, false)
+		}
+	}()
 
 	if r0, r1, stop := rc.validateAndResolve(); stop {
 		return r0, r1
@@ -304,6 +316,11 @@ func (al *AgentLoop) RequestCancel(
 	rc.cancelBackgroundWork()
 
 	if r0, r1, stop := rc.prepareSelectedStopDisposition(); stop {
+		if r1 == nil && !r0.SkippedNewerGeneration {
+			// A queued or idle session settled its Stop without a live turn
+			// to claim: the request still happened.
+			rc.auditAttempt(r0.Fired, false)
+		}
 		return r0, r1
 	}
 	if r0, r1, stop := rc.claimOrArm(); stop {
@@ -522,13 +539,7 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	}
 
 	// --- Audit: attempt (always, even for duplicate, no-turn, or armed-latch cancels) ---
-	audit.Emit(rc.ctx, rc.auditLogger, audit.EventTurnCancelAttempt, audit.SeverityInfo, map[string]any{
-		"session_id":        rc.sessionID,
-		"canceller_user":    rc.canceller.UserID,
-		"canceller_channel": rc.canceller.Channel,
-		"was_fired":         wasFired,
-		"armed":             armed,
-	})
+	rc.auditAttempt(wasFired, armed)
 
 	if !wasFired {
 		killedCount := int(atomic.LoadInt64(&rc.backgroundSessionsKilled))
@@ -570,7 +581,7 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 	// which wakes the agent goroutine. That goroutine may call Finish() before we
 	// reach SetOnCancelFinish below. If that happens, Finish() sees cancelFired==true
 	// but onCancelFinish==nil and returns without invoking the callback — the
-	// transcript entry, audit event, and MarkLastEntryTruncated are permanently lost.
+	// transcript entry, audit event and truncation flag are permanently lost.
 	//
 	// Fix: collect the descendants list now (same predicate as Interrupt),
 	// build the callback closure with the pre-computed list, register it via
@@ -659,15 +670,14 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 		// independent PHASE A and therefore its OWN accurate
 		// turn_canceled audit event, computed at THE MOMENT it was caught —
 		// not by mutating this single event after the fact.
-		// Mark the last transcript entry as truncated.
 		if rc.store != nil {
-			if err := rc.store.MarkLastEntryTruncated(rc.sessionID, rc.turnID, "cancelled"); err != nil {
-				slog.Warn("agent: RequestCancel: MarkLastEntryTruncated failed",
-					"session_id", rc.sessionID, "turn_id", rc.turnID, "error", err)
-			}
-			// Append a turn_canceled entry to the transcript.
+			// Append a turn_canceled entry to the transcript. It is also what
+			// marks the turn's last assistant entry truncated: the transcript
+			// reader derives that from this record (session.deriveCancelTruncation),
+			// so no earlier line is rewritten. It must stay appended AFTER that
+			// assistant entry.
 			appendErr := rc.store.AppendTranscript(rc.sessionID, session.TranscriptEntry{
-				ID:                   rc.sessionID + "_canceled",
+				ID:                   canceledEntryID(rc.sessionID, rc.turnID),
 				Type:                 session.EntryTypeTurnCancelled,
 				TurnID:               rc.turnID,
 				CancelledByUser:      rc.canceller.UserID,
@@ -986,18 +996,10 @@ func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
 // returns every reachable descendant's own session id (rootSessionID itself
 // is never included).
 //
-// [FIX-5, Defect 4, 2026-08-03] Exported and HOISTED: this used to be
-// duplicated byte-for-byte as pkg/gateway/websocket.go's unexported
-// u11CollectDescendantSessionIDs, kept as a separate copy only because a
-// parallel-implementation ownership rule forbade that unit from editing
-// pkg/agent (or this unit from editing pkg/gateway). That rule has expired.
-// websocket.go's buildCancelHooks now calls this function directly;
-// u11CollectDescendantSessionIDs itself survives only as a signature-compat
-// shim (its exact pre-existing name/signature is called directly by
-// pkg/gateway/rest.go's deleteSession handler and by
-// pkg/gateway/websocket_adr057_test.go's U11 unit tests — both outside this
-// fix's file ownership, so the shim is kept rather than requiring edits
-// there).
+// The ONE implementation: the gateway's cancel/approval cascade
+// (buildCancelHooks) and its session-delete handler both call it directly, and
+// it returns the walk error so a partial walk is never mistaken for "no more
+// children".
 //
 // This is the same primitive the cancel/approval-cascade paths in both
 // packages share, because a background bash/exec session (FR-027, see
@@ -1354,4 +1356,35 @@ func (al *AgentLoop) RequestCancelByChannelChat(ctx context.Context, channelName
 		return false, false, fmt.Errorf("RequestCancelByChannelChat: channel and chatID must not be empty")
 	}
 	return al.requestCommandStopByChannelChat(ctx, channelName, chatID, userID, "tree")
+}
+
+// canceledEntryID is the transcript id of one turn_canceled record. Every cancel
+// in a session needs its own id: a shared "<session>_canceled" would let any
+// id-deduplicating writer drop all but the first. The turn id makes it unique per
+// canceled turn; a cancel with no turn id gets a random suffix.
+func canceledEntryID(sessionID, turnID string) string {
+	if turnID == "" {
+		turnID = uuid.NewString()
+	}
+	return sessionID + "_canceled_" + turnID
+}
+
+// auditCancelAttempt writes the turn.cancel.attempt audit row: one per Stop
+// request, whatever the session's state (running, queued, idle, already
+// stopped, completed).
+func auditCancelAttempt(ctx context.Context, logger *audit.Logger, sessionID string, canceller CancelCanceller, wasFired, armed bool) {
+	audit.Emit(ctx, logger, audit.EventTurnCancelAttempt, audit.SeverityInfo, map[string]any{
+		"session_id":        sessionID,
+		"canceller_user":    canceller.UserID,
+		"canceller_channel": canceller.Channel,
+		"was_fired":         wasFired,
+		"armed":             armed,
+	})
+}
+
+// auditAttempt writes this request's turn.cancel.attempt row and records that it
+// did.
+func (rc *agentLoopRequestCancel) auditAttempt(wasFired, armed bool) {
+	auditCancelAttempt(rc.ctx, rc.auditLogger, rc.sessionID, rc.canceller, wasFired, armed)
+	rc.audited = true
 }

@@ -1,6 +1,6 @@
 # Omnipus documentation
 
-Omnipus is a team of AI agents you run yourself, on your own machine. You choose the model and keep the keys; four agents ship with it — Mia, Jim, Ava and Ray.
+Omnipus is a team of AI agents you run yourself, on your own machine. You choose the model and keep the keys; four agents ship with it — Mia, Jim, Ava and Admin.
 
 ## Start here
 

@@ -110,7 +110,14 @@ func newSysagentFastUpsertDeps(
 		return al.ReloadProviderAndConfig(context.Background(), provider, &newCfg)
 	}
 	return &systools.Deps{
-		Home:   home,
+		Home: home,
+		// The production wiring: the loop's one live session store.
+		DeleteSessionStore: func() systools.AgentSessionStore {
+			if s := al.GetSessionStore(); s != nil {
+				return s
+			}
+			return nil
+		},
 		GetCfg: al.GetConfig,
 		MutateConfig: func(fn func(*config.Config) error) error {
 			return fn(al.GetConfig())
@@ -205,8 +212,7 @@ func TestAgentCreate_DoesNotTriggerFullReload(t *testing.T) {
 		"description": "proves create_agent publishes via the fast path, not a full reload",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if result.IsError {
 		t.Fatalf("create_agent failed: %s", result.ForLLM)
@@ -261,8 +267,7 @@ func TestAgentUpdate_DoesNotTriggerFullReload(t *testing.T) {
 		"description": "created so update_agent has a target",
 		"soul":        "original soul",
 		"model":       "test-model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if createResult.IsError {
 		t.Fatalf("create_agent (setup) failed: %s", createResult.ForLLM)
@@ -337,8 +342,7 @@ func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
 		"description": "created so delete_agent has a target",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if createResult.IsError {
 		t.Fatalf("create_agent (setup) failed: %s", createResult.ForLLM)
@@ -353,8 +357,7 @@ func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
 		"description": "stays in the roster after the other agent is deleted",
 		"soul":        "You persist.",
 		"model":       "test-model",
-		"color":       "#3366FF",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if keeperResult.IsError {
 		t.Fatalf("create_agent (keeper) failed: %s", keeperResult.ForLLM)

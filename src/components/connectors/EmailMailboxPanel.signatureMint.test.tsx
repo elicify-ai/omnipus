@@ -81,7 +81,7 @@ function renderPanel() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
-  client.setQueryData(['agents'], [{ id: 'mia', name: 'Mia', type: 'core', locked: true }])
+  client.setQueryData(['agents'], [{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true }])
   client.setQueryData(['workspaces'], [{ id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 }])
   return render(
     <QueryClientProvider client={client}>

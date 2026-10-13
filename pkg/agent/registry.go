@@ -25,6 +25,11 @@ type AgentRegistry struct {
 	mu                   sync.RWMutex
 	defaultAgentOverride string // from config.Agents.Defaults.DefaultAgentID
 
+	// initErr is set when the registry could not be built whole: the shared
+	// session store did not open, or an agent could not be constructed. A caller
+	// that would put this registry in service must check InitErr first.
+	initErr error
+
 	// degraded/degradedReason back MarkDefaultAgentDegraded/DefaultAgentDegraded
 	// (ADR-054 R3): set when the configured default agent's entity record
 	// exists but failed to load. Never gates GetDefaultAgent's own fallback
@@ -57,6 +62,10 @@ func (r *AgentRegistry) SetDefaultAgentOverride(agentID string) {
 	r.defaultAgentOverride = agentID
 }
 
+// InitErr reports why the registry is not whole (nil when it is): the shared
+// session store did not open, or an agent could not be constructed.
+func (r *AgentRegistry) InitErr() error { return r.initErr }
+
 // NewAgentRegistry creates a registry from config, instantiating all agents.
 func NewAgentRegistry(
 	cfg *config.Config,
@@ -66,6 +75,18 @@ func NewAgentRegistry(
 		agents:   make(map[string]*AgentInstance),
 		resolver: routing.NewRouteResolver(cfg),
 		provider: provider,
+	}
+
+	// Every agent shares the ONE session store. The loop opens it at boot, before
+	// the registry exists; a registry built without one (a reload, a test) gets
+	// the same instance. If it cannot be opened there is no store for any agent,
+	// so none is registered - the failure is logged here and boot refuses it
+	// earlier in the real path.
+	if _, storeErr := openSharedSessionStore(sessionsHomeFor(cfg)); storeErr != nil {
+		logger.ErrorCF("agent", "No agent registered: the shared session store could not be opened",
+			map[string]any{"error": storeErr.Error()})
+		registry.initErr = storeErr
+		return registry
 	}
 
 	// Register agents from config (core agents seeded by coreagent.SeedConfig are
@@ -85,25 +106,11 @@ func NewAgentRegistry(
 	for i := range cfg.Agents.List {
 		ac := &cfg.Agents.List[i]
 		id := routing.NormalizeAgentID(ac.ID)
-		// ADR-071 §5.1.3 part 3: a PRE-EXISTING agent already id'd literally
-		// "default" at boot/reload gets a WARN, not a hard abort — the create
-		// (id: always a fresh uuid) and update (id: immutable via PUT)
-		// boundary rejections in pkg/gateway/rest.go only stop this going
-		// forward; a hand-edited config.json is the one path that still
-		// reaches here. The agent stays fully reachable by every OTHER
-		// route (routing bindings, the UI agent picker, delegate, direct
-		// agent_id addressing) — only switch_agent's literal target:"default"
-		// path is shadowed, since that sentinel always wins over an
-		// id-matched lookup, matched case-insensitively (strings.EqualFold,
-		// same as this check). id is already lowercased by
-		// NormalizeAgentID, matching switch_agent's case-insensitive
-		// collision rule.
-		if id == tools.SwitchAgentDefaultTarget {
-			logger.WarnCF("agent",
-				"agent id is literally \"default\" — unreachable via switch_agent's target:\"default\" literal path (that sentinel always resolves to the CONFIGURED default agent instead); rename this agent",
-				map[string]any{"agent_id": id, "name": ac.Name})
-		}
 		instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
+		if instance.initErr != nil {
+			registry.initErr = errors.Join(registry.initErr, fmt.Errorf("agent %q: %w", id, instance.initErr))
+			continue
+		}
 		// Upgrade agent type for runtime-seeded core agents whose config may not
 		// have Type field set (e.g., agents seeded before the Type field was introduced).
 		if instance.AgentType == "custom" && coreagent.IsCoreAgent(id) {
@@ -181,8 +188,7 @@ func (r *AgentRegistry) ForEachTool(name string, fn func(tools.Tool)) {
 }
 
 // GetAgentName returns the display name for agentID and true if the agent
-// exists in the registry. It satisfies the tools.AgentRegistryReader interface
-// used by HandoffTool to avoid an import cycle.
+// exists in the registry.
 func (r *AgentRegistry) GetAgentName(agentID string) (string, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -195,21 +201,6 @@ func (r *AgentRegistry) GetAgentName(agentID string) (string, bool) {
 		name = agentID
 	}
 	return name, true
-}
-
-// IsWorker reports whether the agent identified by agentID is a sub-agent worker
-// (the delegation-only labor tier). Returns false when the agent does not exist,
-// so callers that have already validated existence get a definitive worker/not-worker
-// answer. Satisfies the tools.AgentRegistryReader interface used by HandoffTool to
-// reject worker handoff targets without an import cycle.
-func (r *AgentRegistry) IsWorker(agentID string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	agent, ok := r.agents[agentID]
-	if !ok {
-		return false
-	}
-	return agent.IsWorker()
 }
 
 // IsExternalCLI reports whether agentID resolves to a subagent_3p (external
@@ -728,6 +719,9 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 
 		// Same constructor NewAgentRegistry itself uses per agent.
 		instance := NewAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider)
+		if instance.initErr != nil {
+			return nil, fmt.Errorf("upsert agent fast: agent %q: %w", id, instance.initErr)
+		}
 		if instance.AgentType == "custom" && coreagent.IsCoreAgent(id) {
 			instance.SetAgentType("core")
 		}
@@ -741,48 +735,7 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 		}
 		newRegistry.EvaluateDefaultAgentHealth(cfg.Agents.Defaults.DefaultAgentID, cfg.SkippedAgentIDs)
 
-		// Re-run the SAME wiring ReloadProviderAndConfig runs against a
-		// freshly-built registry, against this one instead. registerSharedTools
-		// et al. iterate registry.ListAgentIDs()/GetAgent() themselves, so this
-		// re-touches the other N-1 agents' tool registrations too (idempotent —
-		// same config, same singleton deps, so "cheap" per the issue's own
-		// design note) while giving the one new/updated instance full parity.
-		registerSharedTools(al, cfg, al.bus, newRegistry, provider)
-		if al.tier13Deps != nil {
-			al.wireTier13DepsLocked(newRegistry, *al.tier13Deps, cfg)
-		}
-		al.wireExecToolDepsOn(newRegistry, cfg)
-		if al.sysagentDeps != nil {
-			al.wireSysagentDepsLocked(newRegistry, al.sysagentDeps)
-		}
-		if al.auditLogger != nil {
-			al.wireMemoryAuditLoggerOn(newRegistry, al.auditLogger)
-		}
-		if al.memoryRateLimiter != nil {
-			al.wireMemoryRateLimiterOn(newRegistry, al.memoryRateLimiter)
-		}
-		wireDelegationInjectors(al, newRegistry)
-		wireWorkingDirInjectors(al, newRegistry)
-		// ADR-072 R1 fix regression (live UAT, 2026-09-02): wireProjectShelfResolvers
-		// was only ever called once, from NewAgentLoop at boot — unlike its
-		// siblings above, it was never re-applied here, so a mounted project's
-		// skills silently stopped resolving for every agent after the FIRST
-		// config reload of the process (onboarding itself triggers one, so this
-		// hit nearly every real install). Mirror the siblings' re-wiring.
-		wireProjectShelfResolvers(al, newRegistry)
-		// MediaStore is deliberately left nil by registerSharedTools' send_file
-		// wiring (see its own doc comment) because it may not exist yet on the
-		// very first wiring pass inside NewAgentLoop; every real reload
-		// re-applies it afterward via SetMediaStore. Mirror that here so every
-		// agent touched by the re-wiring above doesn't transiently lose media
-		// capability relative to a full reload's end state.
-		if ms := al.GetMediaStore(); ms != nil {
-			for _, aid := range newRegistry.ListAgentIDs() {
-				if inst, ok := newRegistry.GetAgent(aid); ok {
-					inst.Tools.SetMediaStore(ms)
-				}
-			}
-		}
+		al.rewireFastUpsertRegistry(newRegistry, cfg, provider)
 
 		al.mu.Lock()
 		if al.registry != oldRegistry || al.configGen.Load() != oldGen {
@@ -874,6 +827,56 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 		"upsert agent fast: gave up after %d attempts racing concurrent registry publishers",
 		maxFastUpsertAttempts,
 	)
+}
+
+// rewireFastUpsertRegistry re-runs, against the registry UpsertAgentFast just
+// built, the same wiring pass a full ReloadProviderAndConfig runs against a
+// freshly built one. It is the body UpsertAgentFast used to inline (extracted
+// only to keep that function under its complexity pin); behaviour and call
+// order are unchanged.
+func (al *AgentLoop) rewireFastUpsertRegistry(newRegistry *AgentRegistry, cfg *config.Config, provider providers.LLMProvider) {
+	// Re-run the SAME wiring ReloadProviderAndConfig runs against a
+	// freshly-built registry, against this one instead. registerSharedTools
+	// et al. iterate registry.ListAgentIDs()/GetAgent() themselves, so this
+	// re-touches the other N-1 agents' tool registrations too (idempotent —
+	// same config, same singleton deps, so "cheap" per the issue's own
+	// design note) while giving the one new/updated instance full parity.
+	registerSharedTools(al, cfg, al.bus, newRegistry, provider)
+	if al.tier13Deps != nil {
+		al.wireTier13DepsLocked(newRegistry, *al.tier13Deps, cfg)
+	}
+	al.wireExecToolDepsOn(newRegistry, cfg)
+	if al.sysagentDeps != nil {
+		al.wireSysagentDepsLocked(newRegistry, al.sysagentDeps)
+	}
+	if al.auditLogger != nil {
+		al.wireMemoryAuditLoggerOn(newRegistry, al.auditLogger)
+	}
+	if al.memoryRateLimiter != nil {
+		al.wireMemoryRateLimiterOn(newRegistry, al.memoryRateLimiter)
+	}
+	wireDelegationInjectors(al, newRegistry)
+	wireWorkingDirInjectors(al, newRegistry)
+	// ADR-072 R1 fix regression (live UAT, 2026-09-02): wireProjectShelfResolvers
+	// was only ever called once, from NewAgentLoop at boot — unlike its
+	// siblings above, it was never re-applied here, so a mounted project's
+	// skills silently stopped resolving for every agent after the FIRST
+	// config reload of the process (onboarding itself triggers one, so this
+	// hit nearly every real install). Mirror the siblings' re-wiring.
+	wireProjectShelfResolvers(al, newRegistry)
+	// MediaStore is deliberately left nil by registerSharedTools' send_file
+	// wiring (see its own doc comment) because it may not exist yet on the
+	// very first wiring pass inside NewAgentLoop; every real reload
+	// re-applies it afterward via SetMediaStore. Mirror that here so every
+	// agent touched by the re-wiring above doesn't transiently lose media
+	// capability relative to a full reload's end state.
+	if ms := al.GetMediaStore(); ms != nil {
+		for _, aid := range newRegistry.ListAgentIDs() {
+			if inst, ok := newRegistry.GetAgent(aid); ok {
+				inst.Tools.SetMediaStore(ms)
+			}
+		}
+	}
 }
 
 // RemoveAgent deletes a single agent instance from the registry (post

@@ -28,6 +28,16 @@ func seedStandaloneTask(t *testing.T, store *task.Store, status task.Status, age
 	return tk
 }
 
+// allowAllDelegation installs a delegation pre-check that permits every
+// caller->assignee pair, so a test can reach the dispatch stage without
+// exercising the policy gate. run_task fails closed when no checker is
+// installed (founder ruling 2026-10-10: the delegation policy always applies
+// to an agent-initiated run), so every test that expects to dispatch — or that
+// tests a stage AFTER the gate — must install this.
+func allowAllDelegation(tool *TaskRunTool) {
+	tool.SetDelegationDenyChecker(func(context.Context, string, string) *DelegationDenial { return nil })
+}
+
 // TestRunTask_RejectsInPlanTask proves an in-plan task is rejected AT THE
 // TOOL BOUNDARY without ever calling the dispatcher (ADR-052 FR-019 G4/A3,
 // spec Test 15).
@@ -79,6 +89,7 @@ func TestRunTask_StandaloneDispatch(t *testing.T) {
 
 	var dispatchedTaskID string
 	tool := NewTaskRunTool(store)
+	allowAllDelegation(tool)
 	tool.SetStartTaskNow(func(_ context.Context, taskID string) (string, error) {
 		dispatchedTaskID = taskID
 		return "sess-42", nil
@@ -122,6 +133,7 @@ func TestRunTask_UnwiredDispatcher_FailsClosed(t *testing.T) {
 	tk := seedStandaloneTask(t, store, task.StatusNext, "worker")
 
 	tool := NewTaskRunTool(store) // SetStartTaskNow never called
+	allowAllDelegation(tool)      // isolate the dispatcher gate: reach it, don't stop at the policy gate
 
 	res := tool.Execute(context.Background(), map[string]any{"task_id": tk.ID})
 	if !res.IsError {
@@ -134,6 +146,44 @@ func TestRunTask_UnwiredDispatcher_FailsClosed(t *testing.T) {
 	}
 	if got.Status != task.StatusNext {
 		t.Errorf("status = %q, want unchanged next", got.Status)
+	}
+}
+
+// TestRunTask_UnwiredDelegationChecker_FailsClosed proves run_task refuses an
+// agent-initiated start when no delegation-policy pre-check is installed: the
+// policy always applies (founder ruling 2026-10-10), so a missing checker is a
+// configuration error, never a silent launch. The task is left byte-identical —
+// the refusal happens before any status write.
+func TestRunTask_UnwiredDelegationChecker_FailsClosed(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedStandaloneTask(t, store, task.StatusNext, "worker")
+
+	dispatchCalled := false
+	tool := NewTaskRunTool(store)
+	// SetDelegationDenyChecker never called — the policy gate is unwired.
+	tool.SetStartTaskNow(func(context.Context, string) (string, error) {
+		dispatchCalled = true
+		return "sess", nil
+	})
+
+	res := tool.Execute(context.Background(), map[string]any{"task_id": tk.ID})
+	if !res.IsError {
+		t.Fatal("expected fail-closed rejection when the delegation checker is unwired")
+	}
+	if dispatchCalled {
+		t.Fatal("run_task must not dispatch when the delegation policy gate is unwired")
+	}
+	if !strings.Contains(res.ForLLM, "delegation is not configured") {
+		t.Errorf("rejection must name the missing policy gate, got: %s", res.ForLLM)
+	}
+
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.Status != task.StatusNext {
+		t.Errorf("status = %q, want unchanged next (refused before any write)", got.Status)
 	}
 }
 
@@ -196,6 +246,7 @@ func TestRunTask_RejectsFailedTask_ReRunnable(t *testing.T) {
 	tk := seedStandaloneTask(t, store, task.StatusFailed, "worker")
 
 	tool := NewTaskRunTool(store)
+	allowAllDelegation(tool)
 	tool.SetStartTaskNow(func(context.Context, string) (string, error) { return "sess", nil })
 
 	res := tool.Execute(context.Background(), map[string]any{"task_id": tk.ID})
@@ -227,6 +278,7 @@ func TestRunTask_DispatchFailure_Reverts(t *testing.T) {
 	tk := seedStandaloneTask(t, store, task.StatusNext, "worker")
 
 	tool := NewTaskRunTool(store)
+	allowAllDelegation(tool)
 	tool.SetStartTaskNow(func(context.Context, string) (string, error) {
 		return "", errors.New("dispatch cap reached")
 	})
@@ -279,6 +331,7 @@ func TestRunTask_DispatchFailure_UnrelatedStoredFailure_StillReverts(t *testing.
 	dispatchErr := errors.New("dispatch cap reached")
 
 	tool := NewTaskRunTool(store)
+	allowAllDelegation(tool)
 	tool.SetStartTaskNow(func(context.Context, string) (string, error) {
 		// Simulate an out-of-band writer that already recorded the task
 		// Failed for a DIFFERENT reason before this dispatch attempt's own
@@ -328,6 +381,7 @@ func TestRunTask_AlreadyInProgress_Idempotent(t *testing.T) {
 
 	calls := 0
 	tool := NewTaskRunTool(store)
+	allowAllDelegation(tool)
 	tool.SetStartTaskNow(func(context.Context, string) (string, error) {
 		calls++
 		return "sess-existing", nil

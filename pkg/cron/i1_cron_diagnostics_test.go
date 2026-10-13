@@ -62,7 +62,7 @@ func TestI1CronSkipWarnCarriesJobID(t *testing.T) {
 			cs := NewCronService(filepath.Join(t.TempDir(), "jobs.json"))
 			runner := &recordingRunner{}
 			cs.SetRunner(runner)
-			owner, message := "", "cron job skipped: no owning agent"
+			owner, message := "mia", "cron job skipped: no owning agent"
 			if reason == "overlap" {
 				owner, message = "mia", "cron job skipped: previous run still in progress"
 			}
@@ -70,6 +70,13 @@ func TestI1CronSkipWarnCarriesJobID(t *testing.T) {
 			job, err := cs.AddJobFull(JobSpec{Name: "diagnostic-skip", AgentID: owner,
 				Schedule: CronSchedule{Kind: "every", EveryMS: &interval}})
 			require.NoError(t, err)
+			if reason == "owner-missing" {
+				// DEL-15 refuses an owner-less job at AddJobFull, so the guard's
+				// only remaining input is a legacy/hand-edited store record —
+				// model it by clearing the owner through UpdateJob.
+				job.AgentID = ""
+				require.NoError(t, cs.UpdateJob(job))
+			}
 			if reason == "overlap" {
 				cs.mu.Lock()
 				cs.store.Jobs[0].State.Running = true

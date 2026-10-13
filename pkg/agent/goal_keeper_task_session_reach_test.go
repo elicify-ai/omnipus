@@ -11,7 +11,7 @@
 //
 //   - A real task run mints its session through
 //     `pkg/agent/task_executor.go::createTaskSessionSync`, which calls
-//     `al.GetAgentStore(t.AgentID)` — the PER-AGENT UnifiedStore rooted at
+//     `al.GetSessionStore()` — the PER-AGENT UnifiedStore rooted at
 //     `<agent home>/sessions`.
 //   - `pkg/agent/goal_triggers.go::goalQuietWindowSettle` resolves every
 //     active goal record's `ActiveSessionID` through `al.GetSessionStore()`
@@ -49,7 +49,7 @@
 //
 // The opposite fix — minting the task session in the SHARED store — was
 // examined and rejected: five production readers resolve a TASK session
-// exclusively through al.GetAgentStore(agentID) (behavior_scan.go's
+// exclusively through al.GetSessionStore() (behavior_scan.go's
 // runBehaviorScan, judge_evidence_tiers.go's resolveBehaviorScanEntries,
 // pkg/gateway/rest_tasks.go's task-verdicts handler, boot_sweep.go's
 // reconcileUnifiedMetaStatus, plus task_executor.go's own ten call sites), so
@@ -134,7 +134,7 @@ func TestKeeperReachesSessionMintedByARealTaskRun(t *testing.T) {
 			"must be able to read that session's meta to evaluate the goal at all.\n"+
 			"  session id                            : %s\n"+
 			"  readable from al.GetSessionStore()    : %s\n"+
-			"  readable from al.GetAgentStore(agent) : %s\n"+
+			"  readable from al.GetSessionStore() : %s\n"+
 			"  dispatched contents                   : %q\n"+
 			"FIX: resolve each record's store with al.ResolveSessionStore(rec.ActiveSessionID) inside\n"+
 			"goalQuietWindowSettle, and pass it to maybeSettleGoalIdle — see this file's header.",
@@ -182,7 +182,7 @@ func TestKeeperReachesSessionMintedByARealTaskRun(t *testing.T) {
 // instead of leaving a reader to guess.
 func agentStoreReach(t *testing.T, al *AgentLoop, agentID, sid string) string {
 	t.Helper()
-	store := al.GetAgentStore(agentID)
+	store := al.GetSessionStore()
 	if store == nil {
 		return "no per-agent store"
 	}

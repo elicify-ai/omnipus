@@ -137,7 +137,7 @@ const (
 	EventTurnCancelled = "turn.cancelled"
 
 	// EventTurnCancelStuck — WARN. The turn goroutine did not exit within
-	// 5 seconds after the hard-abort signal was sent. The turn has been
+	// 3 seconds after the hard-abort signal was sent. The turn has been
 	// detached (abandoned=true) and the gateway will stop waiting for it
 	// (FR-19, FR-20, FR-21).
 	EventTurnCancelStuck = "turn.cancel.stuck"

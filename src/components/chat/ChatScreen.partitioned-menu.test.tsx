@@ -128,11 +128,9 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 // Composer Redesign (variant A1): the partitioned slash menu is independent of
 // the picker/model/token sub-components — stub them to null so their
 // workspaces/providers query plumbing doesn't need mocking here.
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -191,8 +189,14 @@ describe('Partitioned slash menu — section headers', () => {
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
-    // Commands section
+    // Founder X3: every command returned by the server is listed, including
+    // /clear. Exact option order also guards against unrelated/invented rows.
     expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
+      '/sessions', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
+      '/code-review', '/data-analysis', '/web-research',
+    ])
+    expect(screen.getByText('/help')).toBeInTheDocument()
     expect(screen.getByText('/cancel')).toBeInTheDocument()
     // Skills section
     expect(screen.getByText('/web-research')).toBeInTheDocument()
@@ -253,7 +257,7 @@ describe('Partitioned slash menu — filtering', () => {
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
     // Menu is visible
-    expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.getByText('/help')).toBeInTheDocument()
 
     // Escape closes it
     act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })

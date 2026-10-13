@@ -14,7 +14,8 @@ func initializeOrdinaryRootRecord(rec *session.LifecycleRecord, meta *session.Un
 	rec.State = session.LifecycleRunning
 	rec.OwnerScopeKind = session.OwnerScopeHuman
 	rec.WorkspaceID = meta.WorkspaceID
-	rec.AgentID = meta.ActiveAgentID
+	// The immutable owner (DEL-11); never the retired active_agent_id.
+	rec.AgentID = meta.AgentID
 	rec.Origin = &session.Origin{Kind: session.OriginKind(meta.Type)}
 }
 

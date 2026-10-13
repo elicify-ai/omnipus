@@ -295,7 +295,7 @@ export function SessionExpandToggle({
       aria-expanded={expanded}
       aria-label={expanded ? collapseLabel : expandLabel}
       title={error ? 'Could not load — click to retry' : expanded ? collapseLabel : expandLabel}
-      className="h-auto w-auto flex shrink-0 items-center justify-center rounded p-[var(--space-1)] -m-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+      className="h-auto w-auto flex shrink-0 items-center justify-center rounded p-[var(--space-1)] -m-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors pointer-coarse:m-0 pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
     >
       {loading ? (
         <CircleNotch size={11} className="animate-spin" />

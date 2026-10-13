@@ -75,7 +75,7 @@ import (
 // helper exists: the previous arrange called
 // `al.GetSessionStore().NewSession(...)` under a comment claiming it "mints
 // the session a TASK RUN would mint". It did not. A real task session is
-// minted in the PER-AGENT store (`al.GetAgentStore(t.AgentID)`, rooted at
+// minted in the PER-AGENT store (`al.GetSessionStore()`, rooted at
 // `<agent home>/sessions`); the shared store is a different directory. Since
 // `goal_triggers.go::goalQuietWindowSettle` resolves every active goal
 // record's session through `al.GetSessionStore()` and skips any record whose
@@ -142,7 +142,7 @@ func mintTaskRunGoal(
 	if sid == "" {
 		t.Fatal("mintTaskRunGoal: createTaskSessionSync minted no session — the task run would have no session at all")
 	}
-	store := al.GetAgentStore(agentID)
+	store := al.GetSessionStore()
 	if store == nil {
 		t.Fatalf("mintTaskRunGoal: no session store owns agent %q's sessions", agentID)
 	}

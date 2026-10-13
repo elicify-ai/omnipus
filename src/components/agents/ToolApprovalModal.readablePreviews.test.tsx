@@ -30,6 +30,7 @@ import { act } from 'react'
 import { queryClient } from '@/lib/queryClient'
 import { workspacesQueryKeys } from '@/lib/api'
 import type { Agent, Session, Workspace } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
@@ -53,7 +54,7 @@ vi.mock('@/lib/authLogout', () => ({
 import * as api from '@/lib/api'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { ToolApprovalModal } from './ToolApprovalModal'
-import type { WsSessionStateFrame } from '@/lib/ws'
+import type { SessionStateFrame } from '@/lib/ws'
 
 beforeEach(() => {
   act(() => {
@@ -87,7 +88,7 @@ const MOUNT_APPROVAL = {
 }
 
 function seedAgent() {
-  queryClient.setQueryData<Agent[]>(['agents'], [{ id: 'agent-jim', name: 'Jim' }] as unknown as Agent[])
+  queryClient.setQueryData<Agent[]>(['agents'], [makeAgent({ id: 'agent-jim', name: 'Jim' })])
 }
 
 function seedWorkspace() {
@@ -374,7 +375,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
       useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
     })
 
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [
@@ -423,7 +424,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
       })
     })
 
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [
@@ -466,7 +467,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
       useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
     })
 
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [

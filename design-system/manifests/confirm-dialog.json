@@ -70,7 +70,8 @@
       "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "ConfirmDialog [check:confirm-dialog-browser] browser",
-      "story": "ConfirmationContract"
+      "story": "ConfirmationContract",
+      "requiredTargets": [{ "selector": "[role=alertdialog]", "attribute": "role", "value": "alertdialog" }]
     },
     {
       "id": "confirm-dialog-pointer",

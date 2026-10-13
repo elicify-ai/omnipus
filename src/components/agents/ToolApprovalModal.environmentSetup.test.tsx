@@ -141,7 +141,7 @@ const POLL_APPROVAL: FixtureApproval = {
 }
 
 function seedAgent() {
-  queryClient.setQueryData<Agent[]>(['agents'], [{ id: 'agent-jim', name: 'Jim' }] as unknown as Agent[])
+  queryClient.setQueryData<Agent[]>(['agents'], [{ figure: 'Omnipus', role: 'general', id: 'agent-jim', name: 'Jim' }] as unknown as Agent[])
 }
 
 function seedWorkspace() {

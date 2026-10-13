@@ -6,11 +6,13 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // One rule for an invalid performance.max_delegation_depth, at every consumer:
@@ -62,11 +64,15 @@ func TestStartingRemainingDepth_InvalidLimitIsZeroBudget(t *testing.T) {
 	l := NewSteerLauncher(al)
 	rec := &session.LifecycleRecord{}
 
-	if got := l.startingRemainingDepth(rec, "worker", 0); got <= 0 {
+	if got, err := l.startingRemainingDepth(context.Background(), rec, "worker", 0, steer.OriginKindTask); err != nil {
+		t.Fatalf("control: valid default limit must resolve, got error: %v", err)
+	} else if got <= 0 {
 		t.Fatalf("control: valid default limit must leave a positive budget, got %d", got)
 	}
 	al.GetConfig().Performance.MaxDelegationDepth = -1
-	if got := l.startingRemainingDepth(rec, "worker", 0); got != 0 {
+	if got, err := l.startingRemainingDepth(context.Background(), rec, "worker", 0, steer.OriginKindTask); err != nil {
+		t.Fatalf("invalid limit must resolve to a zero budget, got error: %v", err)
+	} else if got != 0 {
 		t.Fatalf("invalid limit must leave no budget, got %d", got)
 	}
 }

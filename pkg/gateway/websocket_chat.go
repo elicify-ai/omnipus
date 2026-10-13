@@ -11,10 +11,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/validation"
@@ -95,15 +98,21 @@ type wsHandlerHandleChatMessage struct {
 	// modifier unset). Meaningless — and never read — once frameSessionID is
 	// non-empty: an existing session's mode changes exclusively via
 	// session_mode_update.
-	autoApprove         *bool
-	wc                  *wsConn
-	targetAgentID       string
-	sessionID           string
-	store               *session.UnifiedStore
-	kickoffInstruction  string
-	acceptedMedia       []string
-	msg                 bus.InboundMessage
-	transcriptPersisted bool
+	autoApprove *bool
+	// recipient, when non-nil, makes this message a request to that peer pair
+	// (MessageFrame.recipient, session-core C-ADDRESS) rather than a turn for
+	// the owning chat's agent.
+	recipient *addressing.Pair
+	// recipientAskApproved: the receiver's Ask was approved at the preflight.
+	recipientAskApproved bool
+	wc                   *wsConn
+	targetAgentID        string
+	sessionID            string
+	store                *session.UnifiedStore
+	kickoffInstruction   string
+	acceptedMedia        []string
+	msg                  bus.InboundMessage
+	transcriptPersisted  bool
 	// transcriptEntryID is the id of the user entry persistUserMessage wrote
 	// successfully; empty for a kickoff (system-role pill) or no write.
 	transcriptEntryID string
@@ -233,16 +242,56 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	autoApprove *bool,
 	wc *wsConn,
 ) {
+	h.handleChatMessageToRecipient(ctx, chatID, frameSessionID, content, agentID, mediaRefs, modelName, workspaceID, setupKickoff, clientMessageID, autoApprove, nil, wc)
+}
+
+// handleChatMessageToRecipient is the intake behind
+// handleChatMessageWithClientID. recipient is MessageFrame.recipient: non-nil
+// makes the message a request to that peer pair (session-core C-ADDRESS)
+// instead of a turn for the owning chat's agent; nil is the ordinary path.
+func (h *WSHandler) handleChatMessageToRecipient(
+	ctx context.Context,
+	chatID string,
+	frameSessionID string,
+	content string,
+	agentID string,
+	mediaRefs []string,
+	modelName string,
+	workspaceID string,
+	setupKickoff bool,
+	clientMessageID string,
+	autoApprove *bool,
+	recipient *addressing.Pair,
+	wc *wsConn,
+) {
 	// Schema validation is optional, but the client-id bound is not. Reject
 	// before resolution, persistence, or the deferred status/cache cleanup.
 	if utf8.RuneCountInString(clientMessageID) > maxClientMessageIDChars {
+		const tooLong = "client_message_id must be at most 128 characters"
+		if recipient != nil {
+			// An @-recipient send names its chat; the invalid id cannot be echoed
+			// or ticked, so only the chat is tagged.
+			h.sendRecipientRefusal(wc, frameSessionID, "", tooLong)
+			return
+		}
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: "client_message_id must be at most 128 characters",
+			Message: tooLong,
 		})
 		return
 	}
-	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, wc: wc}
+	recipientAskApproved := false
+	if recipient != nil {
+		// A refused @recipient admits nothing — not even the user message — so
+		// the whole admission rule runs before any persistence.
+		msg, approved := h.refuseRecipient(ctx, frameSessionID, setupKickoff, *recipient)
+		recipientAskApproved = approved
+		if msg != "" {
+			h.sendRecipientRefusal(wc, frameSessionID, clientMessageID, msg)
+			return
+		}
+	}
+	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, recipient: recipient, recipientAskApproved: recipientAskApproved, wc: wc}
 	hcm.firstMessage = frameSessionID == "" && !setupKickoff &&
 		(clientMessageID != "" || agent.UserMessageChars(content) <= h.agentLoop.UserMessageBound())
 	defer func() {
@@ -251,6 +300,14 @@ func (h *WSHandler) handleChatMessageWithClientID(
 			hcm.sendMessageStatus("failed")
 		}
 	}()
+
+	if hcm.recipient != nil {
+		// The request goes to the recipient's main; the owner's own turn is not
+		// started. The user's message is saved in the owning chat INSIDE the
+		// admission, after the final receiver authorization (U8 r4 F12).
+		hcm.admitRecipientRequest()
+		return
+	}
 
 	if hcm.prepareMessage() {
 		return
@@ -742,9 +799,6 @@ func (hcm *wsHandlerHandleChatMessage) resolveSessionStore() bool {
 		}
 	} else {
 		hcm.store = hcm.h.agentLoop.GetSessionStore()
-		if hcm.store == nil {
-			hcm.store = hcm.h.agentLoop.GetAgentStore(hcm.targetAgentID)
-		}
 	}
 
 	if hcm.firstMessage && hcm.store == nil {
@@ -916,6 +970,15 @@ func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 // Kickoffs and legacy no-ID oversized refusals keep their acknowledgement path.
 // Returns true when the message was rejected.
 func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
+	// Navigation FR-038: Admin has no standalone, workspace-less session; a first
+	// message to Admin is accepted only inside the default workspace.
+	home := hcm.h.home
+	if home == "" {
+		home = config.OmnipusHomeDir()
+	}
+	if hcm.refuseAdminChat(home, hcm.targetAgentID, hcm.workspaceID, "") {
+		return true
+	}
 	// No session_id in frame: mint a new session so all subsequent frames have one.
 	meta, err := hcm.store.NewSession(session.SessionTypeChat, "webchat", hcm.targetAgentID)
 	if err != nil {
@@ -932,7 +995,7 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 		}
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: fmt.Sprintf("could not create session: %v", err),
+			Message: "could not create session: session storage failed. Check disk space and permissions, then retry. Details are in the server log.",
 		})
 		return true
 	}
@@ -943,12 +1006,7 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 		// as a session title — use a fixed, human-readable one instead.
 		title = "Workspace setup"
 	} else {
-		titleRunes := []rune(hcm.content)
-		if len(titleRunes) > 60 {
-			title = string(titleRunes[:57]) + "..."
-		} else {
-			title = hcm.content
-		}
+		title = session.TitleFromFirstMessage(hcm.content)
 	}
 	// Stamp the session owner from the authenticated WebSocket user (SEC-2/#406).
 	// wc.userID is set at auth time (FR-073); empty on dev-mode bypass.
@@ -996,6 +1054,11 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 // active workspace, and binds the connection to the session for live
 // delivery. Returns true when the message was rejected.
 func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
+	// Final-gate M4: a stale tab must not keep chatting in a main the pair is no
+	// longer entitled to.
+	if !hcm.h.mainSessionAllowed(hcm.wc, hcm.sessionID) {
+		return true
+	}
 	// This branch — an existing, client-supplied session_id — is
 	// reachable only by a NORMAL (non-kickoff) message: the mint-only
 	// guard near the top of this function already rejected any
@@ -1034,6 +1097,17 @@ func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
 	// existing binding (e.g. a non-workspace-aware channel message
 	// resuming a workspace-bound session), it just leaves it as-is.
 	if hcm.workspaceID != "" && existingMeta != nil && existingMeta.WorkspaceID != hcm.workspaceID {
+		// Navigation FR-038: an Admin chat lives in the default workspace only; a
+		// frame naming another workspace must not re-bind it there.
+		if sessionIsAdminChat(existingMeta) {
+			home := hcm.h.home
+			if home == "" {
+				home = config.OmnipusHomeDir()
+			}
+			if hcm.refuseAdminChat(home, string(coreagent.IDAdmin), hcm.workspaceID, hcm.sessionID) {
+				return true
+			}
+		}
 		wsCopy := hcm.workspaceID
 		if err := hcm.store.SetMeta(hcm.sessionID, session.MetaPatch{WorkspaceID: &wsCopy}); err != nil {
 			logsafeWarn("ws: could not bind workspace to session", "session_id", hcm.sessionID, "error", err)
@@ -1178,7 +1252,8 @@ func (hcm *wsHandlerHandleChatMessage) acceptPersistedUserMessage(entry session.
 // a message that is not an ID-bearing first send (ADR-20260928 D1.4: a failed
 // append is visible for EVERY message, and never continues the turn). Same
 // discipline as sendFirstMessageError: no filesystem details, and an unsaved
-// or uncertain append never names the session, so nothing looks acknowledged.
+// or uncertain append of a NEW chat's first message never names the session,
+// so nothing looks acknowledged; a message of an existing chat names it (C2).
 // The sender's deferred message_status "failed" tick still fires on top of
 // this frame through the ordinary rejection path.
 func (hcm *wsHandlerHandleChatMessage) sendAppendFailureError(err error) {
@@ -1193,6 +1268,14 @@ func (hcm *wsHandlerHandleChatMessage) sendAppendFailureError(err error) {
 	if hcm.clientMessageID != "" {
 		cid := hcm.clientMessageID
 		frame.ClientMessageId = &cid
+		// Contract C2: a refusal about ONE message of an existing chat names
+		// that chat (the one the sender addressed) beside the message id, so
+		// the SPA files it there and does not end the chat's running turn. A
+		// send that names no chat (a new chat) has none to name.
+		if hcm.frameSessionID != "" {
+			sid := hcm.frameSessionID
+			frame.SessionId = &sid
+		}
 	}
 	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), frame)
 }
@@ -1475,4 +1558,30 @@ func (hcm *wsHandlerHandleChatMessage) addressesExistingHelperOf(workerID string
 		return false
 	}
 	return rec.SteeredBy != nil && rec.AgentID == workerID
+}
+
+// sessionIsAdminChat reports whether meta is a chat owned by the Admin agent.
+func sessionIsAdminChat(meta *session.UnifiedMeta) bool {
+	return meta != nil && len(meta.AgentIDs) > 0 && meta.AgentIDs[0] == string(coreagent.IDAdmin)
+}
+
+// refuseAdminChat applies adminChatRefusal at a WebSocket door: it sends the
+// client ONE error frame and returns true when the Admin chat must not proceed,
+// the refusal text for a user-facing no, the fixed server-failure text for a
+// storage fault. sessionID names the session the frame concerns ("" when none yet).
+func (hcm *wsHandlerHandleChatMessage) refuseAdminChat(home, agentID, workspaceID, sessionID string) bool {
+	msg, fault := adminChatRefusal(home, agentID, workspaceID)
+	if fault != nil {
+		msg = serverFailureText("could not check where Admin's chat may live", fault)
+	}
+	if msg == "" {
+		return false
+	}
+	frame := generated.ErrorFrame{Type: string(generated.WsFrameTypeError), Message: msg}
+	if sessionID != "" {
+		sid := sessionID
+		frame.SessionId = &sid
+	}
+	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), frame)
+	return true
 }

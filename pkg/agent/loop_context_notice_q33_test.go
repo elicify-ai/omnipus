@@ -72,7 +72,7 @@ func TestContextOverflowRetryDoesNotPublishNormalChatNotice_Q33(t *testing.T) {
 	}
 	seed := append(seedExchange(seedMark1, "alpha lore "), seedExchange(seedMark2, "beta lore ")...)
 	seed = append(seed, providers.Message{Role: "user", Content: "Continue the task"})
-	defaultAgent.Sessions.SetHistory(sessionKey, seed)
+	seedWindowHistory(defaultAgent.Sessions, sessionKey, seed)
 
 	var retryMu sync.Mutex
 	var retries []Event

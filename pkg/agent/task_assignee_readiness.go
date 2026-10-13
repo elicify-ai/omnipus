@@ -200,7 +200,7 @@ func (te *TaskExecutor) endTaskAssigneeCannotFinish(t *task.Task, taskSessionID,
 	logger.WarnCF("task_executor",
 		"task run: the assigned agent cannot finish this task as configured — failing it before its first turn, no attempt used",
 		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "reason": reason})
-	te.appendRunErrorTranscript(t, taskSessionID, te.agentLoop.GetAgentStore(t.AgentID), reason)
+	te.appendRunErrorTranscript(t, taskSessionID, te.agentLoop.GetSessionStore(), reason)
 	te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "operator_action_required", nil)
 	te.endTaskWithoutAttempt(t, taskSessionID, reason, run)
 }

@@ -139,14 +139,13 @@ func (t *RememberTool) Category() ToolCategory { return CategoryMemory }
 func (t *RememberTool) Description() string {
 	return "Save something worth keeping for later: a decision, a useful fact or reference, or a " +
 		"lesson learned. Use this whenever you learn something you — or a teammate agent — will " +
-		"likely need again in a future conversation. By DEFAULT the memory is SHARED with your " +
-		"workspace team, so every agent working in this workspace can recall it — but ONLY when this " +
-		"turn is actually running inside a workspace; outside a workspace there is no team room to " +
-		"share into and the note is saved privately no matter what room you ask for. Set room='private' " +
-		"for notes meant just for you. The result text always states which room the note actually " +
-		"landed in, so check it rather than assuming 'shared' succeeded. category must be one of: " +
-		"'key_decision' (a decision that was made), 'reference' (useful reference information), or " +
-		"'lesson_learned' (something to do differently next time)."
+		"likely need again in a future conversation. You MUST choose room on every call — there is " +
+		"no default: room='shared' lets every agent in your workspace team recall the note, " +
+		"room='private' keeps it for you alone. 'shared' only works when this turn is running " +
+		"inside a workspace; outside one there is no team room, so the note is saved privately " +
+		"and the result text says so. category must be one of: 'key_decision' (a decision that " +
+		"was made), 'reference' (useful reference information), or 'lesson_learned' (something to " +
+		"do differently next time)."
 }
 
 func (t *RememberTool) Parameters() map[string]any {
@@ -165,14 +164,12 @@ func (t *RememberTool) Parameters() map[string]any {
 			"room": map[string]any{
 				"type": "string",
 				"enum": []string{"private", "shared"},
-				"description": "Who can see this memory: 'shared' = your whole workspace team (the " +
-					"default — use it whenever a teammate agent might need this), 'private' = only you. " +
-					"Leave unset to use the default (shared) — but sharing only happens when this turn " +
-					"is inside a workspace; with no workspace on the turn, 'shared' silently falls back " +
-					"to a private note (the result text will say so).",
+				"description": "REQUIRED, no default. Who can see this memory: 'shared' = your whole " +
+					"workspace team (use it when a teammate agent might need this), 'private' = only " +
+					"you. 'shared' outside a workspace is saved privately (the result text says so).",
 			},
 		},
-		"required": []string{"content", "category"},
+		"required": []string{"content", "category", "room"},
 	}
 }
 
@@ -196,6 +193,15 @@ func (t *RememberTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("remember: content exceeds 4096 characters; shorten the entry and try again")
 	}
 
+	// Founder ruling (Gap 10): room is REQUIRED with no default, so the agent
+	// always knows where a note lands. Refused before the rate limiter so a
+	// refused call spends no write budget.
+	if roomParam != "private" && roomParam != "shared" {
+		t.logAudit(agentID, sessionID, "error_invalid", category, content)
+		return ErrorResult("remember: room is required — choose room='shared' (your whole workspace " +
+			"team can recall it) or room='private' (only you), then call remember again")
+	}
+
 	// #155 item 6: rate-limit memory writes.
 	if decision := t.checkRateLimit(ctx, agentID); !decision.Allowed {
 		t.logRateLimited(agentID, sessionID, callerIdentity(ctx), category, content, decision)
@@ -208,7 +214,7 @@ func (t *RememberTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		// Wire the workspace ID for this turn so the store can resolve the shared room.
 		rw.SetWorkspaceID(workspaceID)
 
-		// Resolve the scope: explicit param > default (shared if workspace, else private).
+		// room is validated above; resolveRoomScope returns it unchanged.
 		scope := resolveRoomScope(roomParam, workspaceID)
 		if err := rw.AppendLongTermToRoom(content, category, scope); err != nil {
 			t.logAudit(agentID, sessionID, "error_io", category, content)
@@ -539,8 +545,8 @@ func (t *RetrospectiveTool) Description() string {
 	return "At the end of a productive session, record what went well and what to improve next " +
 		"time — but only after the user has reviewed and confirmed the recap and the two lists below. " +
 		"The retrospective is saved to memory and can be found later with recall_memory. " +
-		"Retrospectives are ALWAYS private, unlike remember (which defaults to shared with your " +
-		"workspace team) — there is no room parameter here and no way to share a retrospective with " +
+		"Retrospectives are ALWAYS private, unlike remember (where you choose private or shared " +
+		"for your workspace team) — there is no room parameter here and no way to share a retrospective with " +
 		"teammates. Writes here share the SAME rate-limit bucket as the remember tool: heavy use of " +
 		"one reduces the budget left for the other."
 }

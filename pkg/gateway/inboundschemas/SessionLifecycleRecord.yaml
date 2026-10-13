@@ -162,7 +162,7 @@ properties:
       correlation_id:
         type: string
         minLength: 1
-        description: The open question/decision_request this session is parked on.
+        description: The open question this session is parked on.
         example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"
       ttl_deadline:
         type: string
@@ -209,6 +209,7 @@ properties:
           - task
           - chat
           - channel
+          - main
           - scheduled
           - heartbeat
           - verifier
@@ -216,7 +217,7 @@ properties:
           - human
         description: >
           The launch path that created this session. Root kinds
-          (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived
+          (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived
           kinds (delegate/task) — the kind's own definition.
         example: "delegate"
       call_id:

@@ -174,7 +174,6 @@ func launchWorkingChild(t *testing.T, h *stopAllHarness, parent testutil.TreeNod
 		Label:             "ADR-091 fixture " + name,
 		Task:              "Build fixture node " + name,
 		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "adr091-call-" + name},
-		ToolExclusions:    []string{"switch_agent"},
 	})
 	if err != nil {
 		t.Fatalf("launch working child %s under %s: %v", name, parent.Name, err)
@@ -213,7 +212,6 @@ func persistRecordOnlyChild(t *testing.T, h *stopAllHarness, parent testutil.Tre
 			RootSessionID:     h.tree.Root.SessionID,
 			ReportingTarget:   session.ReportingTarget{SessionID: parent.SessionID, Channel: "webchat", ChatID: parent.SessionID},
 			Authorization:     session.Authorization{Mode: session.AuthorizationModeDirect, RemainingDepth: 0},
-			ToolExclusions:    []string{"switch_agent"},
 		},
 		OwnerScopeKind: session.OwnerScopeParentSession,
 		OwnerScopeID:   parent.SessionID,

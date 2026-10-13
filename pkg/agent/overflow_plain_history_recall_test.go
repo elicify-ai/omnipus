@@ -33,7 +33,7 @@ func TestContextOverflowPlain_RecallFirstDropsSpanOnRejectedReassembly(t *testin
 		turns = append(turns, plainHistoryExchange(i))
 	}
 	al, agent := recallInjectionFixture(t, p, 100000, 1000, turns)
-	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-2)
+	truncateWindowTo(t, agent.Sessions, recallInjectionSessionKey, len(turns)*2-2)
 	// Create real transcript identity before task execution. The old fixture
 	// passes the nonexistent literal chat-recall-3 and fails strict append.
 	store := al.GetSessionStore()

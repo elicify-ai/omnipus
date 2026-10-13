@@ -27,7 +27,6 @@ func gate1CommittedFinishing(t *testing.T) gate1FinishingFixture {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	al, _ := newSteerAL(t)
 	wireSteerCompletionDeps(t, al)
-	al.SetSteeringMode(SteeringAll)
 	parent := newTestSteeringSession(t, al, "ws-gate1-finishing")
 	publication := installGoalCommitGate(t, al)
 	child, p := r1AdmitChild(t, al, parent, "gate1-real-finishing",

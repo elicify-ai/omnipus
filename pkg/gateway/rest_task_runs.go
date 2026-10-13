@@ -192,6 +192,10 @@ func toWireTaskRun(r task.TaskRun) (gen.TaskRun, bool) {
 	if r.OccurrenceMs != nil {
 		out.OccurrenceMs = ptr(*r.OccurrenceMs)
 	}
+	if len(r.RecipientSessionIDs) > 0 {
+		recipients := append([]string(nil), r.RecipientSessionIDs...)
+		out.RecipientSessionIds = &recipients
+	}
 	if r.Result != "" {
 		out.Result = ptr(r.Result)
 	}

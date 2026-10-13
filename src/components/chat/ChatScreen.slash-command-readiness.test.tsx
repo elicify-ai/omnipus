@@ -135,8 +135,6 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -178,7 +176,7 @@ async function mockRuntimeWithText(text: string) {
 }
 
 describe('slash command typed before the command list resolves', () => {
-  it('"/new" is never dispatched as a chat message, and runs as the client command once the list lands', async () => {
+  it('"/new" typed while the list loads is refused at once and never sent, before or after the list lands (WC-1)', async () => {
     const { setText, send } = await mockRuntimeWithText('/new')
 
     const { rerender } = render(<OmnipusComposer />)
@@ -190,10 +188,9 @@ describe('slash command typed before the command list resolves', () => {
     let dispatched = true
     act(() => { dispatched = fireEvent.submit(form) })
 
-    // fireEvent returns false when the handler called preventDefault(), i.e.
-    // assistant-ui never got to call composer.send() — "/new" did NOT go out
-    // as a chat message. This is the exact assertion that fails without the
-    // readiness gate.
+    // WC-1 (founder, 2026-10-09): /new is retired. It is refused visibly at
+    // once — not held for the list, not sent as a chat message. fireEvent
+    // returns false because the handler called preventDefault().
     expect(dispatched).toBe(false)
     expect(send).not.toHaveBeenCalled()
     // The session is still the one we started on — nothing has run yet.
@@ -203,11 +200,10 @@ describe('slash command typed before the command list resolves', () => {
     commandsStillLoading = false
     act(() => { rerender(<OmnipusComposer />) })
 
-    // "/new" now does what the user asked: starts a new conversation
-    // (startNewSession clears activeSessionId) and clears the composer...
-    expect(useSessionStore.getState().activeSessionId).toBeNull()
+    // The list landing changes nothing: the refused /new is never sent later,
+    // the composer was cleared by the refusal, and no chat was started.
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_readiness_test')
     expect(setText).toHaveBeenCalledWith('')
-    // ...and it was never sent to the backend at any point.
     expect(send).not.toHaveBeenCalled()
   })
 
@@ -248,7 +244,7 @@ describe('slash command typed before the command list resolves', () => {
     expect(send).not.toHaveBeenCalled()
   })
 
-  it('once the list has loaded, "/new" is handled synchronously (no hold at all)', async () => {
+  it('once the list has loaded, "/new" is still refused and never sent (WC-1)', async () => {
     commandsStillLoading = false
     const { setText, send } = await mockRuntimeWithText('/new')
 
@@ -260,8 +256,10 @@ describe('slash command typed before the command list resolves', () => {
     let dispatched = true
     act(() => { dispatched = fireEvent.submit(form) })
 
+    // WC-1: intercepted and refused visibly — the submit is preventDefault'd,
+    // the composer is cleared, nothing is sent, and no chat is started.
     expect(dispatched).toBe(false)
-    expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_readiness_test')
     expect(setText).toHaveBeenCalledWith('')
     expect(send).not.toHaveBeenCalled()
   })

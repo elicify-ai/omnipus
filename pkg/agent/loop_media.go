@@ -36,46 +36,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
-// resolveMediaRefs resolves media:// refs in messages.
-// Images are base64-encoded into the Media array for multimodal LLMs.
-// PDFs are routed to the Media array as data:application/pdf;base64,… for
-// PDF-capable models (native document blocks); for other models the text is
-// extracted and injected into Content.
-// Other document types (docx, txt, etc.) have their text extracted and injected
-// into Content as a clearly delimited block. Binary files that cannot be
-// extracted produce a descriptive notice in Content instead.
-//
-// Non-media:// strings are passed through unchanged (they may be pre-resolved
-// data URLs or external URLs already handled by the caller).
-// Refs that cannot be resolved produce a visible "[attachment unavailable: …]"
-// marker in Content.
-//
-// When a non-nil offload sink is supplied, attachments that no provider path
-// can present (e.g. AVIF/HEIC with no decoder) are offloaded at step 5: copied
-// into the workspace work/ dir under a safe-derived name and surfaced to the
-// model as a filesystem path + format-aware guidance line (FR-020/020a/021).
-// A nil sink disables offload — the chain degrades to the step-7 honest marker.
-//
-// A non-nil capability catalog applies the step-1 gate (FR-010): if the model
-// lacks the image modality, native image send (step 2) is skipped and the file
-// routes directly to step 5 offload. A nil catalog is optimistic (FR-026) — the
-// gate always passes and a wrong guess costs one outcome-based step-4 retry.
-//
-// A non-nil refcounter tracks manifest refcounts for workspace library refs
-// (FR-007a): each workspace ref processed here increments the manifest
-// refcount (per-session deduped); the matching decrement fires at session
-// cleanup. A nil refcounter disables tracking (legacy/no-workspace turns).
-//
-// Returns a new slice; original messages are not mutated.
-func resolveMediaRefs(
-	messages []providers.Message,
-	store media.MediaStore,
-	maxSize int,
-	model string,
-) []providers.Message {
-	return resolveMediaRefsWithOffload(messages, store, maxSize, "", model, nil, nil, nil, "")
-}
-
 // resolveMediaRefsWithOffload is the full presentation path: the legacy
 // resolveMediaRefs behavior plus step-1 capability gate (catalog),
 // step-5 offload (sink, FR-020/020a/021/022) and manifest refcount

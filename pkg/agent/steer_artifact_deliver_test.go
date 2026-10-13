@@ -143,7 +143,7 @@ func TestMessageParentArtifact_DeliversThroughRealDeliverer(t *testing.T) {
 
 // TestDeliver_ArtifactStoredNotWoken: artifact, like checkpoint, is not
 // wake-eligible (session.classifyEnvelope) — stored, parent not woken.
-func TestDeliver_ArtifactStoredNotWoken(t *testing.T) {
+func TestDeliver_ArtifactWakesIdleParent(t *testing.T) {
 	_, lifecycle, _, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
@@ -154,8 +154,10 @@ func TestDeliver_ArtifactStoredNotWoken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
-	if delivery.Outcome != steer.DeliveryStoredNotWoken {
-		t.Fatalf("Delivery.Outcome = %q, want stored_not_woken", delivery.Outcome)
+	// FR-012: an artifact (checkpoint kind) is wake-eligible too, so an idle
+	// non-stopped parent is woken, not left at stored_not_woken.
+	if delivery.Outcome != steer.DeliveryWoke {
+		t.Fatalf("Delivery.Outcome = %q, want woke (FR-012: artifact wakes an idle non-stopped parent)", delivery.Outcome)
 	}
 }
 

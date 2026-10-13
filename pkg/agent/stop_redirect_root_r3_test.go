@@ -10,6 +10,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,12 +112,14 @@ func TestStopRedirectRoot_R2_NoticeQuotesInstruction_RouteError(t *testing.T) {
 	}
 }
 
-// R3: only a web chat's redirected message is saved by the redirect itself; a
-// channel chat's turn records its own user message. So a transcript that cannot
-// be written is NOT a redirect failure for a channel chat: the instruction still
-// reaches the model exactly once, no "not applied" notice is sent, and the reply
-// goes to the chat's real channel and chat id.
-func TestStopRedirectRoot_R3_ChannelChatTranscriptWriteFailureDoesNotDropTheInstruction(t *testing.T) {
+// R3 (retired, founder ruling 2026-10-11): when a message cannot be saved, the
+// turn is refused AND the sender gets a short fixed reply on its own channel:
+// "Sorry, I couldn't save your message - please try again later." The reply
+// carries no internal detail (the cause goes to the log only). The model is
+// never called, and nothing is silently dropped. This replaces the earlier R3
+// rule that let a channel chat's instruction through when its transcript could
+// not be written.
+func TestStopRedirectRoot_R3_ChannelChatMessageNotSavedRefusesTurnWithFixedReply(t *testing.T) {
 	al, sessionID, provider := r2ChannelChat(t, "summary reply")
 	path := filepath.Join(al.GetSessionStore().BaseDir(), sessionID, "transcript.jsonl")
 	if err := os.RemoveAll(path); err != nil {
@@ -132,24 +136,39 @@ func TestStopRedirectRoot_R3_ChannelChatTranscriptWriteFailureDoesNotDropTheInst
 		t.Fatalf("SETUP: message routed to %s/%s, want the chat's real telegram/%s", msg.Channel, msg.ChatID, r2Chat)
 	}
 	go al.continueOrdinaryAfterStop(context.Background(), msg, time.Minute)
-	r1AwaitProvider(t, provider, 0)
-	requests := provider.Requests()
-	if got := stopRedirectUserCopies(requests[0], r2Instruction); got != 1 {
-		t.Errorf("model input carries the instruction %d times, want exactly 1", got)
-	}
-	provider.open(0)
-	var notice *bus.OutboundMessage
-	out := r2AwaitOutbound(t, al, "the continued turn's reply", func(o bus.OutboundMessage) bool {
-		if r2NoticeFor(sessionID)(o) {
-			notice = &o
-			return true
-		}
-		return o.Content == "summary reply"
+	out := r2AwaitOutbound(t, al, "the fixed not-saved reply", func(o bus.OutboundMessage) bool {
+		return o.ChatID == r2Chat
 	})
-	if notice != nil {
-		t.Fatalf("a not-applied notice was sent for a channel chat whose instruction was applied: %q", notice.Content)
+	if out.Content != messageNotSavedReply {
+		t.Errorf("reply = %q, want exactly %q", out.Content, messageNotSavedReply)
 	}
 	if out.Channel != "telegram" || out.ChatID != r2Chat {
 		t.Errorf("reply routed to %s/%s, want the chat's real telegram/%s", out.Channel, out.ChatID, r2Chat)
+	}
+	if n := len(provider.Requests()); n != 0 {
+		t.Errorf("provider calls = %d, want 0: a message that cannot be saved must refuse the turn", n)
+	}
+}
+
+// The webchat sender sees the same fixed text as a turn.error frame message, not
+// a silent drop, and never the store's internal error.
+func TestTranslateTurnError_MessageNotSavedIsTheFixedReply(t *testing.T) {
+	if messageNotSavedReply != "Sorry, I couldn't save your message \u2014 please try again later." {
+		t.Errorf("the fixed reply text drifted from the founder ruling: %q", messageNotSavedReply)
+	}
+	cause := errors.New("open /secret/path/transcript.jsonl: permission denied")
+	err := &messageNotSavedError{cause: cause}
+	if got := userVisibleTurnError(err); got != messageNotSavedReply {
+		t.Errorf("userVisibleTurnError = %q, want %q", got, messageNotSavedReply)
+	}
+	wrapped := fmt.Errorf("turn: %w", err)
+	if got := TranslateTurnError(wrapped).Message; got != messageNotSavedReply {
+		t.Errorf("TranslateTurnError message = %q, want %q", got, messageNotSavedReply)
+	}
+	if strings.Contains(TranslateTurnError(wrapped).Message, "secret") {
+		t.Error("the sender-facing text leaks the store error")
+	}
+	if !errors.Is(err, cause) {
+		t.Error("the cause must stay reachable for the log")
 	}
 }

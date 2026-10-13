@@ -19,9 +19,9 @@ the script or test for each.
   own header states the contract: "No cron string is ever rendered anywhere in
   this UI". Cron survives under the hood only (engine, API, heartbeats).
 - Spec: `docs/internal/specs/calendar-recurrence-redesign-spec.md`.
-- Legacy tasks still carry `cron_expr`/`every_ms` internally (see
-  `CalendarEventSlideOver`'s trigger classification) — the ban is on rendering
-  and authoring cron strings, not on the legacy fields existing.
+- The slide-over has no legacy-trigger surface and no session-mode chooser; its
+  one run-mode control is the "Run isolated" checkbox (`run_isolated`,
+  session-core FR-017).
 
 ## Tests
 

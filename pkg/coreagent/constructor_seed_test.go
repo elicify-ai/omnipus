@@ -212,15 +212,16 @@ func TestJimSeed_DenyDefaultWithExplicitAllows(t *testing.T) {
 // BDD: Given coreAgentSeed(IDJim) is called,
 //
 //	When the policies map is inspected for delete/remove operations,
-//	Then delete_task, delete_task_in_workspace, delete_workspace, remove_mcp_server
+//	Then delete_task, delete_workspace, remove_mcp_server
 //	are all "ask" (standing rule: delete/remove operations require confirmation).
+//	(delete_task_in_workspace was retired by DEL-23 and carries no policy entry.)
 //
 // Traces to: Jim least-privilege redesign — delete/remove standing rule.
 func TestJimSeed_ConsentGatedDeleteTools(t *testing.T) {
 	policies := coreAgentSeed(IDJim)
 
 	for _, toolName := range []string{
-		"delete_task", "delete_task_in_workspace",
+		"delete_task",
 		"delete_workspace", "remove_mcp_server",
 	} {
 		p, ok := policies[toolName]

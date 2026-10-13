@@ -58,6 +58,23 @@ func (s *services) markReloadDegraded(err error) {
 	s.reloadError = err
 }
 
+// reloadDegradedReasonText is the fixed /health reason for a failed config
+// reload. /health is served without a session, so the underlying error (a
+// config file path, an OS error, a rejected rule) goes to the log only.
+const reloadDegradedReasonText = "config reload failed: the configuration could not be read or was rejected. " +
+	"Fix the configuration file; details are in the server log."
+
+// reloadDegradedStatus is the reload half of the /health degraded check.
+func (s *services) reloadDegradedStatus() (bool, string) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	if !s.reloadDegraded {
+		return false, ""
+	}
+	slog.Error("health: config reload is degraded", "error", s.reloadError)
+	return true, reloadDegradedReasonText
+}
+
 // servicesSnapshot captures all fields that restartServices and executeReload
 // mutate, so they can be atomically restored on reload failure.
 type servicesSnapshot struct {

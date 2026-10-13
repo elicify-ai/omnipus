@@ -562,3 +562,59 @@ func TestClassifyError_ToolArgumentsErrorNeverClassifiedByFragmentContent(t *tes
 			"a refused tool call must never be classified as a retriable/failoverable provider fault", result)
 	}
 }
+
+// Issue #1278 follow-up: transport failures with no HTTP status that the
+// founder's preview logged as "unclassified error from openrouter" and that
+// therefore never retried: they are transient transport faults like a dropped
+// connection.
+func TestClassifyError_TransportFailuresAreTimeoutClass(t *testing.T) {
+	for _, msg := range []string{
+		`failed to send request: Post "https://openrouter.ai/api/v1/chat/completions": http2: client connection lost`,
+		`failed to send request: Post "https://openrouter.ai/api/v1/chat/completions": dial tcp: lookup openrouter.ai: no such host`,
+		`dial tcp 104.18.2.115:443: connect: connection refused`,
+		`dial tcp: network is unreachable`,
+	} {
+		fe := ClassifyError(errors.New(msg), "openrouter", "deepseek/deepseek-v4.1-flash")
+		if fe == nil || fe.Reason != FailoverTimeout {
+			t.Errorf("%q classified as %+v, want FailoverTimeout", msg, fe)
+		}
+	}
+}
+
+func TestClassifyError_MidStreamProviderErrorIsTimeoutClass(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", &common.StreamProviderError{Code: "server_error", Message: "Provider disconnected unexpectedly"})
+	fe := ClassifyError(err, "openrouter", "m")
+	if fe == nil || fe.Reason != FailoverTimeout {
+		t.Errorf("classified as %+v, want FailoverTimeout", fe)
+	}
+}
+
+// R2-S1-03: a mid-stream provider error is classified by its OWN code. Billing
+// and auth failures are not transient (a retry is billed and fails the same
+// way); only server-side/upstream/overloaded errors retry inline.
+func TestClassifyError_MidStreamErrorFollowsItsCode(t *testing.T) {
+	for _, tc := range []struct {
+		code, msg string
+		want      FailoverReason
+	}{
+		{"server_error", "Provider disconnected unexpectedly", FailoverTimeout},
+		{"overloaded_error", "Overloaded", FailoverTimeout},
+		{"402", "Insufficient credits", FailoverBilling},
+		{"insufficient_quota", "quota", FailoverBilling},
+		{"401", "invalid key", FailoverAuth},
+		{"authentication_error", "invalid x-api-key", FailoverAuth},
+		{"429", "slow down", FailoverRateLimit},
+		{"invalid_request_error", "bad field", FailoverFormat},
+	} {
+		err := fmt.Errorf("wrapped: %w", &common.StreamProviderError{Code: tc.code, Message: tc.msg})
+		fe := ClassifyError(err, "openrouter", "m")
+		if fe == nil || fe.Reason != tc.want {
+			t.Errorf("code %q classified as %+v, want %s", tc.code, fe, tc.want)
+		}
+	}
+	// A code nothing knows is not retried blindly.
+	err := &common.StreamProviderError{Code: "some_new_code", Message: "odd"}
+	if fe := ClassifyError(err, "openrouter", "m"); fe != nil && fe.Reason == FailoverTimeout {
+		t.Errorf("an unknown mid-stream code was retried as a timeout: %+v", fe)
+	}
+}

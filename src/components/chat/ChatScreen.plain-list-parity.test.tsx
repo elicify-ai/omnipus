@@ -89,12 +89,10 @@ vi.mock('./tools/GenericToolCall', () => ({
 vi.mock('./markdown-text', () => ({
   MarkdownText: () => React.createElement('div', {}),
 }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 // Composer Redesign (variant A1): this file targets VirtualAssistantMessageRow
 // (the PlainMessageList fallback), not the composer's picker/model/token
 // sub-components — stub them to null so their workspaces/providers query
 // plumbing doesn't need mocking here.
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('@/lib/memory-observer', () => ({

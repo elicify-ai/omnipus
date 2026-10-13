@@ -223,7 +223,6 @@ func TestEmbeddedDefaultsHaveProperDisplayNames(t *testing.T) {
 		"elicify-pdf":      "PDF",
 		"elicify-pptx":     "PPTX",
 		"elicify-xlsx":     "XLSX",
-		"handoff":          "Handoff",
 		"inbox-triage":     "Inbox Triage",
 		"interview":        "Interview",
 		"mcp-install":      "MCP Install",

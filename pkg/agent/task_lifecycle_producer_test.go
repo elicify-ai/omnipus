@@ -111,6 +111,7 @@ func TestExecuteTask_LifecycleRecord_HappyPathReachesCompleted(t *testing.T) {
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
@@ -179,8 +180,19 @@ func TestExecuteTask_LifecycleRecord_HappyPathReachesCompleted(t *testing.T) {
 //     user-visible half of the gap the parent brief called out explicitly.
 func TestBootSweep_ReconcilesCrashedTaskDispatchSession(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	// S1 M9 (978c232bc) deleted the launcher-less task start path, so
+	// StartTaskNow REFUSES without a launcher ("no session launcher is
+	// installed") and this fixture never reached the crash-sweep it is about.
+	// Install the same start path production wires at boot.
+	installTestSessionLauncher(t, al)
 
 	ls := session.NewLifecycleStore(filepath.Join(t.TempDir(), "session_lifecycle"))
+	// The launcher mints the run's lifecycle record through the LOOP's
+	// session-messaging store, while the executor reads its own. Point both at
+	// the SAME store, or the record the launch wrote is invisible to the
+	// baseline read below and to the sweep this test drives.
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(t.TempDir(), "session_messages")), ls)
 	al.taskExecutor.SetLifecycleStore(ls)
 
 	started := make(chan struct{})
@@ -222,9 +234,9 @@ func TestBootSweep_ReconcilesCrashedTaskDispatchSession(t *testing.T) {
 		t.Errorf("pre-sweep lifecycle state = %q, want running", preRec.State)
 	}
 
-	sessStore := al.GetAgentStore("native-agent")
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	preMeta, err := sessStore.GetMeta(sessionID)
 	if err != nil {

@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // fakeExecutor implements scheduledExecutor for the runner tests.
@@ -315,18 +316,81 @@ func TestRunner_DisabledOwner_NoFallback(t *testing.T) {
 	assert.Empty(t, exec.calls, "disabled owner must not run, and must not fall back")
 }
 
-// TestRunner_SessionMode_Main uses the reserved per-owner session id.
+// TestRunner_SessionMode_Main resolves the pair's COMPUTED main session.
+//
+// session-core U1 / DEL-01 replaced the reserved per-owner `sched-main-<owner>`
+// id with the computed `main-session-<workspace>+<agent>`: the workspace is
+// what makes the pair well defined, so the job must carry one (a heartbeat job
+// carries it in its name by construction).
 func TestRunner_SessionMode_Main(t *testing.T) {
 	cfg := baseConfig()
 	r := newRunnerOnly(t, cfg, map[string]bool{"mia": true})
 
 	job := &cron.CronJob{
-		ID: "j5", AgentID: "mia", SessionMode: cron.SessionModeMain,
-		Payload: cron.CronPayload{Message: "remind"},
+		ID: "j5", Name: heartbeatJobName("ws1", "mia"), AgentID: "mia",
+		SessionMode: cron.SessionModeMain,
+		Payload:     cron.CronPayload{Kind: heartbeatJobKind, Message: "remind"},
 	}
 	sid, err := r.RunScheduled(context.Background(), job)
 	require.NoError(t, err)
-	assert.Equal(t, "sched-main-mia", sid)
+	assert.Equal(t, "main-session-ws1+mia", sid, "main mode resolves the computed main, not the retired per-owner id")
+	assert.NotEqual(t, "sched-main-mia", sid)
+}
+
+// TestRunner_SessionMode_MainWithoutWorkspaceRefuses pins the refusal: a
+// main-mode job that carries no workspace has no pair, so it must fail
+// visibly rather than fabricate a workspace or fall back to a second naming
+// scheme.
+// TestRunner_SessionMode_MainWithoutWorkspaceRefuses: a main-mode job with no
+// workspace must refuse — UNLESS a default workspace exists to derive the main
+// from (FR-017, the sibling test below). The refusal therefore depends on the
+// process-wide OMNIPUS_HOME, so this test isolates its own home FIRST: without
+// it, any earlier test that left a default workspace in the shared home turns
+// the refusal into a success and the test passes only inside its group.
+func TestRunner_SessionMode_MainWithoutWorkspaceRefuses(t *testing.T) {
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	// Instrument check: the isolated home must carry NO default workspace, or
+	// the refusal below would be the wrong path (a leaked default from another
+	// test would let the job derive a main and succeed).
+	_, derr := workspace.ResolveDefaultID(config.OmnipusHomeDir())
+	require.Error(t, derr, "instrument: this test's home must have no default workspace")
+	cfg := baseConfig()
+	r := newRunnerOnly(t, cfg, map[string]bool{"mia": true})
+
+	job := &cron.CronJob{
+		ID: "j5b", Name: "plain", AgentID: "mia", SessionMode: cron.SessionModeMain,
+		Payload: cron.CronPayload{Message: "remind"},
+	}
+	sid, err := r.RunScheduled(context.Background(), job)
+	assert.Error(t, err, "a main-mode job with no workspace must refuse visibly")
+	assert.Empty(t, sid)
+}
+
+// TestRunner_SessionMode_MainDerivesTheDefaultWorkspaceMain is the positive
+// sibling of the refusal above (FR-017): the SAME job shape, with a default
+// workspace seeded in this test's OWN home, must run in that workspace's
+// computed main — the pair's main-session-<workspace>+<agent> id.
+func TestRunner_SessionMode_MainDerivesTheDefaultWorkspaceMain(t *testing.T) {
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	cfg := baseConfig()
+	// The owner must be a TEAM MEMBER of the default workspace, or the derived
+	// main resolves to nobody and the run is refused ("the owner no longer has a
+	// main in this workspace"). Membership first, then the delegation graph the
+	// graph seeder needs.
+	ensureTestWorkspaceMembership(t, cfg)
+	seedDefaultDelegationGraph(t, testHarnessAgentIDs(cfg))
+	r, exec, _, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+
+	job := &cron.CronJob{
+		ID: "j5c", Name: "derived main", AgentID: "mia", SessionMode: cron.SessionModeMain,
+		Payload: cron.CronPayload{Message: "remind"},
+	}
+	sid, err := r.RunScheduled(context.Background(), job)
+	require.NoError(t, err, "a derived-MAIN schedule must resolve the default workspace's main (FR-017)")
+	want, err := session.MainSessionID(testHarnessWorkspaceMembershipID, "mia")
+	require.NoError(t, err, "fixture: the harness workspace id must form a valid main id")
+	assert.Equal(t, want, sid, "the run must land in the pair's computed main, not a second naming scheme")
+	require.Len(t, exec.calls, 1, "the resolved main must actually run the job")
 }
 
 // TestRunner_Failure_NotifiesAndAlerts asserts a failed run creates a

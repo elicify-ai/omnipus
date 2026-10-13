@@ -57,6 +57,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Separator [check:separator-browser] browser",
       "story": "Horizontal",
+      "requiredTargets": [{ "selector": "[data-testid=\"separator\"]", "attribute": "data-orientation", "value": "horizontal" }],
       "applicable": true
     },
     {

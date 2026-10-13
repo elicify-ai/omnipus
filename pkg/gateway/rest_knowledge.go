@@ -456,7 +456,7 @@ func (a *restAPI) handleKnowledgeInfo(w http.ResponseWriter, r *http.Request, wo
 			jsonOK(w, info)
 		default:
 			setKnowledgeDetectionError(&info, gen.KnowledgeBaseInfoDetectionErrorCodeRootUnreadable,
-				fmt.Sprintf("cannot read %s: %v", rootPath, statErr))
+				knowledgeUnreadableText(rootPath, "read", statErr))
 			jsonOK(w, info)
 		}
 		return
@@ -470,7 +470,7 @@ func (a *restAPI) handleKnowledgeInfo(w http.ResponseWriter, r *http.Request, wo
 	det, detErr := knowledge.Detect(abs)
 	if detErr != nil {
 		setKnowledgeDetectionError(&info, gen.KnowledgeBaseInfoDetectionErrorCodeRootUnreadable,
-			fmt.Sprintf("cannot read %s: %v", rootPath, detErr))
+			knowledgeUnreadableText(rootPath, "read", detErr))
 		jsonOK(w, info)
 		return
 	}
@@ -493,7 +493,7 @@ func (a *restAPI) handleKnowledgeInfo(w http.ResponseWriter, r *http.Request, wo
 	realRoot, realErr := knowledge.ResolveCollectionRoot(abs)
 	if realErr != nil {
 		setKnowledgeDetectionError(&info, gen.KnowledgeBaseInfoDetectionErrorCodeRootUnreadable,
-			fmt.Sprintf("cannot resolve %s: %v", rootPath, realErr))
+			knowledgeUnreadableText(rootPath, "resolve", realErr))
 		jsonOK(w, info)
 		return
 	}
@@ -537,7 +537,7 @@ func (a *restAPI) handleKnowledgeInfo(w http.ResponseWriter, r *http.Request, wo
 		// Nothing to add; the SPA falls back to the folder's own name.
 	default:
 		setKnowledgeDetectionError(&info, gen.KnowledgeBaseInfoDetectionErrorCodeMarkerUnreadable,
-			fmt.Sprintf("cannot read the marker in %s: %v", rootPath, markerErr))
+			knowledgeUnreadableText(rootPath, "read the marker in", markerErr))
 	}
 
 	jsonOK(w, info)
@@ -546,6 +546,14 @@ func (a *restAPI) handleKnowledgeInfo(w http.ResponseWriter, r *http.Request, wo
 // setKnowledgeDetectionError attaches the typed detection failure. It never
 // touches is_knowledge_base: E-9 requires the field to carry the last known
 // answer rather than being silently downgraded to "ordinary folder".
+// knowledgeUnreadableText is the fixed detection-diagnostic text for a folder
+// the server could not read or resolve. The folder name is the caller's own
+// request value; the cause (absolute paths, OS errors) goes to the log only.
+func knowledgeUnreadableText(rootPath, verb string, cause error) string {
+	slog.Error("rest: knowledge detection could not "+verb+" the folder", "root_path", rootPath, "error", cause)
+	return fmt.Sprintf("cannot %s %s: the folder could not be accessed. Check its permissions; details are in the server log.", verb, rootPath)
+}
+
 func setKnowledgeDetectionError(info *gen.KnowledgeBaseInfo, code gen.KnowledgeBaseInfoDetectionErrorCode, msg string) {
 	info.DetectionError = &struct {
 		Code    gen.KnowledgeBaseInfoDetectionErrorCode `json:"code"`

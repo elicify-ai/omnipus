@@ -89,7 +89,6 @@ function baseParams(overrides: Partial<Parameters<typeof useSlashMenu>[0]> = {})
     inputEnabled: true,
     composerRuntime: makeComposerRuntime(),
     appendMessage: vi.fn(),
-    startNewSession: vi.fn(),
     activateStop: vi.fn(),
     cancelIfStreaming: vi.fn(),
     sendRedirectFrame: vi.fn(),

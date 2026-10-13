@@ -1,0 +1,27 @@
+type: string
+nullable: false
+description: >
+  Identity colour. Uppercase canonical hex. The ten values are the whole
+  set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris,
+  Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne,
+  Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver
+  are not in it; note that Champagne and Antique brass sit near the gold accent,
+  by founder choice. Letter-case of a listed hex is normalized to this form on
+  write. Any other value, including a colour of the removed previous palette, is
+  invalid: rejected on write, and a stored value outside the ten is returned as
+  the default (Pewter) on read (no stored file is rewritten).
+  JSON null is not an identity value. On PUT, omission retains the stored value;
+  an explicit null or any other invalid supplied value rejects the whole update
+  with HTTP 400 before any write.
+enum:
+  - '#6E8BA8'
+  - '#7A8C9E'
+  - '#4F8A80'
+  - '#5E6973'
+  - '#7B7290'
+  - '#B76E79'
+  - '#A97142'
+  - '#9C8A5B'
+  - '#CDBA96'
+  - '#8E9196'
+example: '#6E8BA8'

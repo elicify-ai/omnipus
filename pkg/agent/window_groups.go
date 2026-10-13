@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // windowStep owns ids only inside one assistant message, never session-wide.
@@ -92,7 +92,7 @@ func sameArchiveIdentity(a, b providers.Message) bool {
 
 // Align in archive order. Explicit indices include the anchor before the suffix;
 // tool ids are compared only at the next owned slot, never searched globally.
-func mapWindowMessages(snap memory.WindowSnapshot, msgs []providers.Message, recallAt, recallLen int) []int {
+func mapWindowMessages(snap session.WindowView, msgs []providers.Message, recallAt, recallLen int) []int {
 	history, sourceLines := recoveryWindowHistory(snap)
 	lines := make([]int, len(msgs))
 	next := 0

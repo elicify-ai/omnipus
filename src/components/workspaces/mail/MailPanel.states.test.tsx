@@ -93,7 +93,7 @@ describe('Mail panel states (US-3, US-6; refresh cadence per Q-C, superseding D2
     fetchMailMessage.mockReset()
     fetchMailSummary.mockReset()
     markMailSeen.mockReset()
-    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])

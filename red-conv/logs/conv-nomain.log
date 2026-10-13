@@ -1,0 +1,4 @@
+=== RUN   TestSessionCoreConv_ConversionMintsNoMainAndPromotesNoHeartbeat
+--- PASS: TestSessionCoreConv_ConversionMintsNoMainAndPromotesNoHeartbeat (0.01s)
+PASS
+ok  	github.com/elicify-ai/omnipus/pkg/session	1.750s

@@ -3,7 +3,7 @@ import { act } from 'react'
 import { useChatStore, getMessages } from './chat'
 import { useSessionStore } from './session'
 import { queryClient } from '@/lib/queryClient'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { ServerFrame } from '@/lib/ws'
 
 // chat.multisession.test.ts — per-session sharding unit tests.
 //
@@ -433,7 +433,7 @@ describe('chat.multisession — (k) untagged session-scoped frame is dropped, en
 
     act(() => {
       // This frame is session-scoped but missing session_id — must be dropped.
-      useChatStore.getState().handleFrame({ type: 'token', content: 'should be dropped' } as unknown as WsReceiveFrame)
+      useChatStore.getState().handleFrame({ type: 'token', content: 'should be dropped' } as unknown as ServerFrame)
     })
 
     // BDD: Then console.error was called
@@ -473,7 +473,7 @@ describe('chat.multisession — (k) untagged session-scoped frame is dropped, en
     const errorSpy = vi.spyOn(console, 'error')
 
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'token', content: 'should also be dropped' } as unknown as WsReceiveFrame)
+      useChatStore.getState().handleFrame({ type: 'token', content: 'should also be dropped' } as unknown as ServerFrame)
     })
 
     const errorCalls = errorSpy.mock.calls

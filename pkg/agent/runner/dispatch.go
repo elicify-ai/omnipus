@@ -77,15 +77,21 @@ func DenyByDefault(requestID string) PermissionDecision {
 //   - Kind="remote-a2a"              → "", ErrRemoteA2AReserved
 //   - any other unknown kind          → "", error
 //
-// external-cli is ACTIVE in v0.1.0: the dispatch sites (pkg/agent/subturn.go for
-// agent-to-agent delegation, pkg/agent/loop.go's processTaskDirectExternalCLI for
-// task-mode dispatch) run the external CLI directly in the delegate agent's own
-// persistent workspace directory (ADR-032 removed the earlier git-worktree
-// isolation — the operator decision remains that Omnipus adds no new kernel
-// confiner of its own). The CLI's permission prompts are routed to the Omnipus
-// consent layer best-effort post-hoc — see consent.go's POST-HOC CONSENT note,
-// including its 2026-07-05 (issue #488) amendment on which CLI, if any, still
-// enforces a real sandbox of its own (only codex does).
+// external-cli is ACTIVE in v0.1.0: the dispatch sites run the external CLI
+// directly in the delegate agent's own persistent workspace directory
+// (ADR-032 removed the earlier git-worktree isolation — the operator decision
+// remains that Omnipus adds no new kernel confiner of its own). The two sites
+// are pkg/agent/steer_turn_body.go::runSteeredTurnBody for agent-to-agent
+// delegation (a steered/delegated session, from every entry path:
+// steer_launcher.go::runDispatchedSteeredTurn, loop_inbound.go::
+// processSteeredSystemWake, steer_turn_drain.go::continueSteeredTurn) and
+// pkg/agent/task_executor_run.go::processTaskDirectExternalCLI for task-mode
+// dispatch; both call this function and then runExternalCLISubTurn
+// (pkg/agent/external_dispatch.go). This doc used to name pkg/agent/subturn.go,
+// which ADR-091 deleted. The CLI's permission prompts are routed to the
+// Omnipus consent layer best-effort post-hoc — see consent.go's POST-HOC
+// CONSENT note, including its 2026-07-05 (issue #488) amendment on which CLI,
+// if any, still enforces a real sandbox of its own (only codex does).
 //
 // This function is the single dispatch gate. All sub-agent dispatch sites MUST
 // call it before choosing an execution path.

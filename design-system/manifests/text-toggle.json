@@ -79,6 +79,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "TextToggle [check:text-toggle-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"text-toggle\"]", "attribute": "aria-pressed", "value": "false" }, { "selector": "[data-testid=\"text-toggle\"]", "text": "Auto" }],
       "applicable": true
     },
     {

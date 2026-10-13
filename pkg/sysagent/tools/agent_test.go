@@ -24,6 +24,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -65,6 +66,7 @@ func newTestDeps(t *testing.T) (*systools.Deps, *config.Config) {
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:        nil,
 	}
+	installLiveSessionStore(t, deps, home)
 	return deps, cfg
 }
 
@@ -143,14 +145,39 @@ func newTestDepsWithHome(t *testing.T) (*systools.Deps, string) {
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:        nil,
 	}
+	installLiveSessionStore(t, deps, home)
 	return deps, home
 }
 
-// TestAgentCreate_WithColorAndIcon verifies that create persists color and icon
+// installLiveSessionStore gives deps the loop's ONE live session store the
+// agent-delete cascade runs on (DEL-10, architect final-gate item 1: the cascade
+// never opens a store of its own). Tests create their sessions through it
+// (liveSessionStore).
+func installLiveSessionStore(t *testing.T, deps *systools.Deps, home string) {
+	t.Helper()
+	live, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatalf("test setup: open the live session store: %v", err)
+	}
+	t.Cleanup(func() { _ = live.Close() })
+	deps.DeleteSessionStore = func() systools.AgentSessionStore { return live }
+}
+
+// liveSessionStore returns the live shared session store newTestDepsWithHome
+// installed in deps.
+func liveSessionStore(deps *systools.Deps) *session.UnifiedStore {
+	store, ok := deps.DeleteSessionStore().(*session.UnifiedStore)
+	if !ok {
+		panic("liveSessionStore: DeleteSessionStore is not a *session.UnifiedStore")
+	}
+	return store
+}
+
+// TestAgentCreate_WithColor verifies that create persists color
 // into the AgentConfig in-memory and returns them in the response.
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.create
-func TestAgentCreate_WithColorAndIcon(t *testing.T) {
+func TestAgentCreate_WithColor(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
@@ -159,8 +186,7 @@ func TestAgentCreate_WithColorAndIcon(t *testing.T) {
 		"description": "A research assistant",
 		"soul":        "You are a research bot.",
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 
 	if result.IsError {
@@ -177,11 +203,8 @@ func TestAgentCreate_WithColorAndIcon(t *testing.T) {
 	if agent.ID != "research-bot" {
 		t.Errorf("ID = %q, want %q", agent.ID, "research-bot")
 	}
-	if agent.Color != "#22C55E" {
-		t.Errorf("Color = %q, want %q", agent.Color, "#22C55E")
-	}
-	if agent.Icon != "robot" {
-		t.Errorf("Icon = %q, want %q", agent.Icon, "robot")
+	if agent.Color != "#6E8BA8" {
+		t.Errorf("Color = %q, want %q", agent.Color, "#6E8BA8")
 	}
 }
 
@@ -229,7 +252,7 @@ func TestAgentDelete_RequiresConfirm(t *testing.T) {
 }
 
 // TestAgentUpdate_PartialFields verifies that updating only `name` does not
-// clobber color and icon already set on the agent.
+// clobber color already set on the agent.
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.update
 func TestAgentUpdate_PartialFields(t *testing.T) {
@@ -241,7 +264,6 @@ func TestAgentUpdate_PartialFields(t *testing.T) {
 		ID:    "my-agent",
 		Name:  "Old Name",
 		Color: "#FF0000",
-		Icon:  "star",
 	}); err != nil {
 		t.Fatalf("test setup: create agent entity record: %v", err)
 	}
@@ -264,16 +286,13 @@ func TestAgentUpdate_PartialFields(t *testing.T) {
 	if agent.Name != "New Name" {
 		t.Errorf("Name = %q, want %q", agent.Name, "New Name")
 	}
-	// Color and Icon must be unchanged.
+	// Color must be unchanged.
 	if agent.Color != "#FF0000" {
 		t.Errorf("Color changed to %q; expected %q", agent.Color, "#FF0000")
 	}
-	if agent.Icon != "star" {
-		t.Errorf("Icon changed to %q; expected %q", agent.Icon, "star")
-	}
 }
 
-// TestAgentCreate_PersistsToDisk verifies that create writes color and icon to
+// TestAgentCreate_PersistsToDisk verifies that create writes color to
 // disk. Catches JSON-tag typos and pointer-marshaling regressions.
 //
 // ADR-054: agents are per-entity records under entities/agents/<id>.json now,
@@ -291,8 +310,7 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 		"description": "A disk bot",
 		"soul":        "You are a disk bot.",
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if result.IsError {
 		t.Fatalf("create failed: %s", result.ForLLM)
@@ -307,11 +325,8 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 	if unmarshalErr := json.Unmarshal(data, &entry); unmarshalErr != nil {
 		t.Fatalf("unmarshal agent entity record: %v", unmarshalErr)
 	}
-	if entry["color"] != "#22C55E" {
-		t.Errorf("disk color = %v, want #22C55E", entry["color"])
-	}
-	if entry["icon"] != "robot" {
-		t.Errorf("disk icon = %v, want robot", entry["icon"])
+	if entry["color"] != "#6E8BA8" {
+		t.Errorf("disk color = %v, want #6E8BA8", entry["color"])
 	}
 
 	// config.json itself must carry no agents.list content.
@@ -388,7 +403,7 @@ func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 // TestAgentCreate_RejectsInvalidColor verifies that invalid hex colors are rejected.
 func TestAgentCreate_RejectsInvalidColor(t *testing.T) {
 	deps, _ := newTestDeps(t)
-	for _, bad := range []string{"red", "#GGGGGG", "#12345", "22C55E", "#22C55E00"} {
+	for _, bad := range []string{"red", "#GGGGGG", "#12345", "22C55E", "#6E8BA800"} {
 		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 			"name":        "Bot",
 			"description": "A test bot",
@@ -403,28 +418,6 @@ func TestAgentCreate_RejectsInvalidColor(t *testing.T) {
 		errBlock, _ := m["error"].(map[string]any)
 		if errBlock["code"] != "INVALID_COLOR" {
 			t.Errorf("color=%q: code = %v, want INVALID_COLOR", bad, errBlock["code"])
-		}
-	}
-}
-
-// TestAgentCreate_RejectsInvalidIcon verifies that invalid icon names are rejected.
-func TestAgentCreate_RejectsInvalidIcon(t *testing.T) {
-	deps, _ := newTestDeps(t)
-	for _, bad := range []string{"my icon", "icon!", "icon/sub", "icon..bad"} {
-		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
-			"name":        "Bot",
-			"description": "A test bot",
-			"soul":        "You are a test bot.",
-			"model":       "test/model",
-			"icon":        bad,
-		})
-		if !result.IsError {
-			t.Errorf("create with icon=%q should fail, got success", bad)
-		}
-		m := parseError(t, result.ForLLM)
-		errBlock, _ := m["error"].(map[string]any)
-		if errBlock["code"] != "INVALID_ICON" {
-			t.Errorf("icon=%q: code = %v, want INVALID_ICON", bad, errBlock["code"])
 		}
 	}
 }
@@ -507,8 +500,7 @@ func TestWithConfig_SerializesReaderWriter(t *testing.T) {
 						"description": "A test bot",
 						"soul":        "You are a test bot.",
 						"model":       "test/model",
-						"color":       "#22C55E",
-						"icon":        "robot",
+						"color":       "#6E8BA8",
 					})
 				}
 			}
@@ -686,8 +678,7 @@ func TestConcurrentRESTAndSysagentConfigWrite(t *testing.T) {
 					"description": "test",
 					"soul":        "test",
 					"model":       "test/model",
-					"color":       "#22C55E",
-					"icon":        "robot",
+					"color":       "#6E8BA8",
 				},
 			)
 		}
@@ -717,8 +708,7 @@ func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
 		"soul":        soulContent,
 		"heartbeat":   heartbeatContent,
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if result.IsError {
 		t.Fatalf("create failed: %s", result.ForLLM)
@@ -935,8 +925,7 @@ func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
 		"description": "A research assistant",
 		"soul":        "You are a research bot.",
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 		// Deliberately no bash policy override — proving the DEFAULT seed,
 		// not a caller-supplied one.
 	})
@@ -1058,8 +1047,7 @@ func TestCreateAgent_NoGlobalAutoAdd_JoinsContextWorkspace(t *testing.T) {
 			"description": "Created in a workspace context",
 			"soul":        "You help.",
 			"model":       "test/model",
-			"color":       "#22C55E",
-			"icon":        "robot",
+			"color":       "#6E8BA8",
 		})
 		if result.IsError {
 			t.Fatalf("create failed: %s", result.ForLLM)
@@ -1096,8 +1084,7 @@ func TestCreateAgent_NoGlobalAutoAdd_JoinsContextWorkspace(t *testing.T) {
 			"description": "Created with no workspace context",
 			"soul":        "You help.",
 			"model":       "test/model",
-			"color":       "#22C55E",
-			"icon":        "robot",
+			"color":       "#6E8BA8",
 		})
 		if result.IsError {
 			t.Fatalf("create failed: %s", result.ForLLM)
@@ -1196,6 +1183,13 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 		},
 		SaveConfigLocked: func(*config.Config) error { return nil },
 		ReloadFunc:       reloadFunc,
+		// The production wiring: the loop's one live session store (DEL-10).
+		DeleteSessionStore: func() systools.AgentSessionStore {
+			if s := al.GetSessionStore(); s != nil {
+				return s
+			}
+			return nil
+		},
 	}
 
 	createResult := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
@@ -1203,8 +1197,7 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 		"description": "proves delete_agent hot-reloads without a restart",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if createResult.IsError {
 		t.Fatalf("create_agent failed: %s", createResult.ForLLM)
@@ -1227,8 +1220,7 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 		"description": "stays in the roster after the other agent is deleted",
 		"soul":        "You persist.",
 		"model":       "test-model",
-		"color":       "#3366FF",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if keeperResult.IsError {
 		t.Fatalf("create_agent (keeper) failed: %s", keeperResult.ForLLM)

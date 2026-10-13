@@ -161,7 +161,6 @@ func (tree *Tree) createChild(parent TreeNode, level, depth int) TreeNode {
 			Label:             label,
 			Task:              "Build fixture node " + name,
 			Origin:            origin,
-			ToolExclusions:    []string{"switch_agent"},
 		})
 		if err != nil {
 			tree.t.Fatalf("DelegationTree: launch %s: %v", name, err)
@@ -205,7 +204,6 @@ func (tree *Tree) createChildDirect(parent TreeNode, name, agentID, label string
 			Authorization: session.Authorization{
 				Mode: session.AuthorizationModeDirect, RemainingDepth: remainingDepth,
 			},
-			ToolExclusions: []string{"switch_agent"},
 		},
 		OwnerScopeKind: session.OwnerScopeParentSession,
 		OwnerScopeID:   parent.SessionID, WorkspaceID: node.WorkspaceID,

@@ -48,7 +48,6 @@ package agent
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -237,31 +236,6 @@ func recordTaskGoalVerdict(taskID string, verdict *task.JudgeVerdict, reason str
 			"goal: could not record this round's verdict on the paired goal record",
 			map[string]any{"task_id": taskID, "goal_id": g.GoalID, "error": uerr.Error()})
 	}
-}
-
-// mintLegacyTaskGoal creates the defining-phase goal record a legacy task
-// (created before D-C, GOAL-FR-023) never got, so its run can activate a goal
-// and its worker can claim through goal_claim. Criteria come from the task
-// record (possibly none — the Judge then uses the soft-tier criterion), the
-// Definition of Done is the built-in floor every compiled goal carries
-// (ADR-080 D-DOD layer 3), and the try limit is the live Settings value.
-func (te *TaskExecutor) mintLegacyTaskGoal(t *task.Task) (*goal.Goal, error) {
-	prompt := strings.TrimSpace(t.Prompt)
-	if prompt == "" {
-		prompt = strings.TrimSpace(t.Title)
-	}
-	if prompt == "" {
-		prompt = "task " + t.ID
-	}
-	g, err := goal.New(generated.GoalOwnerKindTask, t.ID, generated.GoalSourceTaskExplicit,
-		prompt, "", t.Criteria, newFloorDoD(), goalTryLimit(te.agentLoop), time.Now().UTC())
-	if err != nil {
-		return nil, fmt.Errorf("build goal record: %w", err)
-	}
-	if err := resolveGoalRecordStore().Create(g); err != nil {
-		return nil, fmt.Errorf("persist goal record: %w", err)
-	}
-	return g, nil
 }
 
 // terminateTaskGoalRecord is this package's entry point to the ONE shared

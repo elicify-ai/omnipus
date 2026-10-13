@@ -34,7 +34,7 @@ import (
 // and/or the steer-wake metadata key
 // (loop_inbound.go::processSystemMessage's own dispatch key) and is excluded.
 func reviveInboundIsHumanTurn(msg bus.InboundMessage) bool {
-	if msg.Channel == "system" {
+	if msg.Channel == "system" || msg.Metadata[ownerWakeMetadataKey] != "" {
 		return false
 	}
 	return msg.Metadata["steer_message_id"] == ""
@@ -170,9 +170,24 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 		ctx, entry = ordinaryExecutionContext(ctx)
 	}
 	preparation, prepErr := al.prepareOrdinaryExecution(ctx, msg, opts)
+	if errors.Is(prepErr, errOwnerWakeRetained) {
+		// F8: the chat was stopped; the answer stays in its transcript and the
+		// owner is not run. Nothing is reported - a Stop is not a failure.
+		// A re-published held request is dropped again: let the next admitted
+		// turn re-publish it.
+		if msg.TranscriptEntryID != "" {
+			al.heldRepublished.Delete(msg.TranscriptEntryID)
+		}
+		logger.InfoCF("agent", "owner wake dropped: the conversation is stopped; the answer is retained in its transcript",
+			map[string]any{"session_id": msg.SessionID})
+		return "", agent, nil
+	}
 	if prepErr != nil {
 		return "", agent, prepErr
 	}
+	// The turn is admitted: a request this inbound carries is now given to the
+	// model (idempotent with the session worker's own mark).
+	al.markRequestDelivered(msg.SessionID, msg.TranscriptEntryID)
 	d := preparation.execution
 	entry.disposition = d
 	opts.executionDisposition = d

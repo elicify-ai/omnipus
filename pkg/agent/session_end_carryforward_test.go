@@ -1,3 +1,13 @@
+// session_end_carryforward_test.go — carry-forward fallback coverage for the
+// session-end recap pipeline.
+//
+// session-core U12 port: TestRunRecap_AllCandidatesFail_CarriesRecentContextForward
+// originally drove the recap via CloseSession(sid, "explicit"). FR-036 / DEL-08
+// retired the explicit trigger (recap now fires only for idle/bootstrap/joined),
+// so it is ported to the still-valid "idle" trigger with every assertion
+// unchanged — spec "Regression protection": port safety assertions to the
+// canonical replacement, never weaken them.
+
 package agent
 
 import (
@@ -151,7 +161,7 @@ func TestRunRecap_AllCandidatesFail_CarriesRecentContextForward(t *testing.T) {
 		t.Fatalf("AppendTranscript: %v", appendErr)
 	}
 
-	al.CloseSession(meta.ID, "explicit")
+	al.CloseSession(meta.ID, "idle")
 
 	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
 	deadline := time.Now().Add(5 * time.Second)

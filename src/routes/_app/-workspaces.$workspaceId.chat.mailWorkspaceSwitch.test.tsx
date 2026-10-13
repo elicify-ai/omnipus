@@ -29,7 +29,7 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   validateToken: vi.fn(async () => ({})),
   fetchNotifications: vi.fn(async () => ({ notifications: [], unread_count: 0 })),
   fetchTasks: vi.fn(async () => []),
-  fetchAgents: vi.fn(async () => [{ id: 'mia', name: 'Mia' }]),
+  fetchAgents: vi.fn(async () => [{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }]),
   fetchVersion: vi.fn(async () => ({ version: 'test', build_sha: 'test' })),
   fetchWorkspaces: vi.fn(async () => [
     { id: 'ws-a', name: 'Workspace A', status: 'active', is_default: true },

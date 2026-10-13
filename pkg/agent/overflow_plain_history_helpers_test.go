@@ -110,7 +110,7 @@ func plainHistoryExchange(n int) []providers.Message {
 
 func seedPlainHistory(t *testing.T, agent *AgentInstance, key string, history []providers.Message) {
 	t.Helper()
-	agent.Sessions.SetHistory(key, history)
+	seedWindowHistory(agent.Sessions, key, history)
 	require.NoError(t, agent.Sessions.Save(key))
 	active := agent.Sessions.GetHistory(key)
 	if len(history) == 0 {

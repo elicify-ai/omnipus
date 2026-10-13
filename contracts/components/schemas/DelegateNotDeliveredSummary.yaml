@@ -1,0 +1,36 @@
+type: object
+title: DelegateNotDeliveredSummary
+description: >
+  Reports from this helper that were refused at an inbox cap and NOT saved
+  (FR-013, #1211). Counts and the last refusal only; refused content is never kept.
+required:
+  - count
+  - last_reason
+  - last_kind
+  - last_at
+additionalProperties: false
+properties:
+  count:
+    type: integer
+    format: int64
+    minimum: 1
+    description: Cumulative number of refused reports for this child session; never reset.
+    example: 3
+  last_reason:
+    type: string
+    enum:
+      - rate_limited
+      - body_too_large
+      - question_blocker_ceiling
+      - unacked_cap
+    description: Why the most recent report was refused.
+    example: rate_limited
+  last_kind:
+    type: string
+    minLength: 1
+    description: SessionMessage kind of the last refused report.
+    example: progress
+  last_at:
+    type: string
+    format: date-time
+    description: When the last refusal happened.

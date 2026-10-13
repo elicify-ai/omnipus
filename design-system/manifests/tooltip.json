@@ -67,7 +67,8 @@
       "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Tooltip [check:tooltip-browser] browser",
-      "story": "Default"
+      "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"tooltip-trigger\"]", "attribute": "aria-describedby" }]
     },
     {
       "id": "tooltip-pointer",

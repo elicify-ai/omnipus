@@ -17,11 +17,17 @@ import { useWorkspacesStore } from './workspacesStore'
 // were derived from that ruling and ConnectionStatus.tsx::FIRST_SEND_COPY first.
 // Real: chat/session actions, frame handler and user-message status/action row.
 // Replaced process edges: socket sender and clock; no reducer/action mocks.
-// Cases: two pending refusals, one late abandoned refusal, one established-chat
-// generic-error control. Original whitespace, ordered media and false Auto survive.
-// No bounded numeric input. Known gaps: backend persistence/dedupe and live browser
-// acceptance are other lanes. CHECK probes (deferred): remove pending interception,
-// forget abandoned IDs, or swallow unrelated errors. No GREEN/mutation proof here.
+// Cases: two pending refusals, one late abandoned refusal, one UNTAGGED
+// established-chat generic-error control. Original whitespace, ordered media
+// and false Auto survive. No bounded numeric input. Known gaps: backend
+// persistence/dedupe and live browser acceptance are other lanes; the TAGGED
+// message-scoped refusal (C2) is asserted in chat.recipient-send.test.ts,
+// describe "C2 — a message-scoped refusal routes to its own chat and never
+// ends a live turn", cases a/b/c — referenced, not duplicated. CHECK probes:
+// remove pending interception, forget abandoned IDs, or swallow unrelated
+// errors. RED-era pack: no mutation proof in-file; the 2026-10-11 C2 control
+// re-author is red pre-edit → green post-edit → three mutation probes,
+// receipts nav-c2test-* (held by the dispatcher, not in-tree).
 
 const ORIGINAL_ID = '1090-red6-original-client'
 const ORIGINAL_TEXT = 'Keep this exact first message\nand its trailing spaces.  '
@@ -178,11 +184,13 @@ describe('#1090 C3 — generic correlated first-message refusals', () => {
       .toStrictEqual([{ id: ORIGINAL_ID, clientMessageId: ORIGINAL_ID, content: ORIGINAL_TEXT }])
   })
 
-  it('a late abandoned first-send refusal after /new leaves the new bucket, status and turn unchanged', () => {
+  it('a late abandoned first-send refusal after confirmed + New chat leaves the new bucket, status and turn unchanged', () => {
     const sender = beginSameIdRetry()
-    act(() => useSessionStore.getState().startNewSession())
-    expect(useChatStore.getState().pendingFirstSend, 'fixture: /new really abandons the old request').toBeNull()
-    expect(useChatStore.getState().sessionsById.__pending, 'fixture: /new clears the old shared bucket').toBeUndefined()
+    // Wave-2 FR-005: this is the accepted + New chat confirmation, not typed
+    // /new (now server-owned). Keep C3's full stale-refusal isolation assertions.
+    act(() => useSessionStore.getState().startNewSession({ choice: 'confirm', clientMessageId: ORIGINAL_ID }))
+    expect(useChatStore.getState().pendingFirstSend, 'fixture: confirmed + New chat really abandons the old request').toBeNull()
+    expect(useChatStore.getState().sessionsById.__pending, 'fixture: confirmed + New chat clears the old shared bucket').toBeUndefined()
     act(() => useChatStore.getState().sendMessage(NEW_TEXT, { clientMessageId: NEW_ID }))
     expect(users(), 'fixture: only the new message occupies the new chat')
       .toStrictEqual([{ id: NEW_ID, clientMessageId: NEW_ID, content: NEW_TEXT }])
@@ -215,7 +223,19 @@ describe('#1090 C3 — generic correlated first-message refusals', () => {
       .toStrictEqual(sentBefore)
   })
 
-  it('control: an unrelated established-chat error still reaches the generic reducer unchanged', () => {
+  // C2 contract (record: docs/internal/architecture/ADR-20261012-session-core-delta-amendments-c2-r1-2.md, decided 2026-10-11; R3-CONSOLIDATED
+  // row C2): an error frame carrying session_id AND client_message_id with no
+  // first_message_error is a MESSAGE-SCOPED refusal — it renders a notice in
+  // its chat and must NOT end the turn; that complement is asserted in
+  // chat.recipient-send.test.ts, describe "C2 — a message-scoped refusal
+  // routes to its own chat and never ends a live turn" (cases a/b/c), so it is
+  // not duplicated here. This control pins the other half of the same
+  // contract sentence — "an error with no client_message_id keeps today's
+  // behaviour in full": an UNTAGGED established-chat error still ends its own
+  // turn through the generic reducer. (The pre-C2 control carried both tags,
+  // so it pinned the behaviour C2 deliberately reverses — observed red in
+  // that shape on 41e384a5d, receipt nav-c2test-baseline-red.)
+  it('control: an UNTAGGED established-chat error still ends its own turn through the generic reducer', () => {
     const sender = connectSender()
     act(() => {
       useSessionStore.getState().setActiveSession(ESTABLISHED_SESSION, 'mia')
@@ -234,9 +254,11 @@ describe('#1090 C3 — generic correlated first-message refusals', () => {
     const assistantIds = getMessages(before).filter((message) => message.role === 'assistant').map(({ id }) => id)
     expect(assistantIds, 'control fixture: the generic reducer has exactly one real assistant placeholder to close').toHaveLength(1)
     const sentBefore = structuredClone(sender.send.mock.calls.map(([outbound]) => outbound))
+    // Exact generic shape: NO session_id, NO client_message_id, no
+    // first_message_error — none of the C2 message-scoped tags, so the C2
+    // early rule in frames.ts (case 'error') must not claim this frame.
     const frame: ErrorFrame = {
       type: 'error', message: 'Could not check this chat',
-      session_id: ESTABLISHED_SESSION, client_message_id: ESTABLISHED_ID,
     }
 
     act(() => useChatStore.getState().handleFrame(frame))

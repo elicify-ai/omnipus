@@ -15,33 +15,61 @@ const MaxHeartbeatBodyBytes = 16384
 // reconciler creates a job keyed `heartbeat:<ws>:<agent>` that fires the
 // agent in this workspace at the configured cadence using Body as the prompt.
 //
-// SessionID is set eagerly by the workspace handler when the heartbeat is
-// enabled (FR-010): a standing session is created and its id stored here so
-// the cron job can continue it (via JobSpec.SessionID) rather than minting a
-// fresh session each run.
+// It carries NO session address (session-core U1, DEL-01): a heartbeat runs in
+// the member's main session, which is COMPUTED from the (workspace, agent)
+// pair (pkg/session/main_session.go::MainSessionID) rather than stored beside
+// the configuration. The retired SessionID field was the eager standing
+// session's address; with the heartbeat-only session gone, configuration and
+// identity no longer need to be kept in sync by hand, and no disable path has
+// a session to release.
 type MemberHeartbeat struct {
 	Enabled         bool   `json:"enabled,omitempty"`
 	IntervalMinutes int    `json:"interval_minutes,omitempty"`
 	Body            string `json:"body,omitempty"`
-	SessionID       string `json:"session_id,omitempty"` // eager standing session id
 }
 
 // MemberConfig is the per-member configuration stored on a Workspace record
-// (keyed by agent ID in MemberConfigs). Currently carries only heartbeat
-// settings; the struct is extensible for future per-member concerns.
+// (keyed by agent ID in MemberConfigs). Carries the heartbeat settings and the
+// display-only sidebar flag.
+//
+// Merge semantics (ADR-hide-from-sidebar addendum 2026-10-11, founder ruling
+// "hiding is only hiding"): an incoming member_config REPLACES the stored one
+// — an omitted heartbeat clears it, with the disable transition — except
+// exactly two display-flag rules MergeMemberConfig enforces:
+//   - hidden_from_sidebar absent => the stored flag is preserved (a
+//     heartbeat save never un-hides);
+//   - a pure hide/show entry (flag present, heartbeat absent) preserves the
+//     stored heartbeat, so hide/show never changes any other setting.
+//
+// An entry with neither field ({}) keeps the ordinary replace behaviour: the
+// stored heartbeat is cleared, the flag still preserved by the first rule. A
+// heartbeat the body DOES carry is replaced wholesale, never merged
+// field-by-field.
 type MemberConfig struct {
 	Heartbeat *MemberHeartbeat `json:"heartbeat,omitempty"`
+
+	// HiddenFromSidebar is DISPLAY-ONLY (D5): when true the sidebar omits the
+	// member's row in this workspace, but the member stays a full team member
+	// — messageable, delegable, @-addressable; main and work untouched. It
+	// rides the member entry, so removing the member garbage-collects the
+	// flag with the entry and re-adding the agent starts visible. omitempty
+	// so records that never hid anyone serialize exactly as before.
+	HiddenFromSidebar bool `json:"hidden_from_sidebar,omitempty"`
 }
 
 // ValidateMemberConfigs checks a proposed member_configs map against the
 // workspace's current CoreTeam and the isWorker predicate.
 //
-// Validation rules (FR-003/004/005/005b/025):
+// Validation rules (FR-003/004/005/005b/025, plus the sidebar flag from
+// ADR-hide-from-sidebar):
 //   - Every key must be present in coreTeam (unknown-member reject).
+//   - A worker agent (isWorker returns true) must not have a heartbeat.
+//   - A worker agent must not be hidden from the sidebar: sidebar rows exist
+//     only for main-eligible colleagues, so the flag would be inert there —
+//     mirroring the worker-heartbeat rule keeps the API honest.
 //   - When a heartbeat is enabled, IntervalMinutes must be ≥ 5.
 //   - Body length must not exceed MaxHeartbeatBodyBytes.
 //   - Enabled=true requires a non-empty Body.
-//   - A worker agent (isWorker returns true) must not have a heartbeat.
 //
 // Returns the first validation error encountered, or nil if all entries are
 // valid. Callers (gateway handler) map these to HTTP 422 responses.
@@ -54,6 +82,9 @@ func ValidateMemberConfigs(coreTeam []string, mc map[string]MemberConfig, isWork
 	for agentID, cfg := range mc {
 		if !teamSet[agentID] {
 			return fmt.Errorf("member_configs: agent %q is not in core_team (unknown member)", agentID)
+		}
+		if cfg.HiddenFromSidebar && isWorker != nil && isWorker(agentID) {
+			return fmt.Errorf("member_configs: agent %q is a worker and cannot be hidden from the sidebar", agentID)
 		}
 		hb := cfg.Heartbeat
 		if hb == nil {
@@ -109,4 +140,37 @@ func GCMemberConfigs(coreTeam []string, mc map[string]MemberConfig) (map[string]
 		}
 	}
 	return pruned, removed
+}
+
+// IncomingMemberConfig is one member_configs request entry: the converted
+// config plus which fields the request actually carried. The wire fields are
+// tri-state (absent / false / true) but storage is a plain bool, so presence is
+// carried beside the value.
+type IncomingMemberConfig struct {
+	Config           MemberConfig
+	HiddenPresent    bool
+	HeartbeatPresent bool
+}
+
+// PureHideShow reports whether the entry carries ONLY the display flag
+// (hidden_from_sidebar present, heartbeat absent).
+func (in IncomingMemberConfig) PureHideShow() bool { return in.HiddenPresent && !in.HeartbeatPresent }
+
+// MergeMemberConfig applies the stored-vs-incoming rule for one member (see the
+// MemberConfig doc for the ruling): the incoming entry replaces the stored one
+// except (1) an absent hidden_from_sidebar keeps the stored flag, and (2) a
+// pure hide/show entry keeps the stored heartbeat. With no stored entry there is
+// nothing to preserve and the incoming config is taken as is.
+func MergeMemberConfig(stored MemberConfig, storedExists bool, in IncomingMemberConfig) MemberConfig {
+	merged := in.Config
+	if !storedExists {
+		return merged
+	}
+	if !in.HiddenPresent {
+		merged.HiddenFromSidebar = stored.HiddenFromSidebar
+	}
+	if in.PureHideShow() {
+		merged.Heartbeat = stored.Heartbeat
+	}
+	return merged
 }

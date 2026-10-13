@@ -28,10 +28,8 @@ type automationsResp struct {
 
 func TestAutomations_CronTrigger_HumanizedAndActionShown(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
-	job, err := cs.AddJob(
-		"weekly",
-		cron.CronSchedule{Kind: "cron", Expr: "0 9 * * 1"}, // every Monday 09:00
-		"summarize the week")
+	job, err := cs.AddJobFull(cron.JobSpec{Name: "weekly", Schedule: cron.CronSchedule{Kind: "cron", Expr: "0 9 * * 1"}, Message: // every Monday 09:00
+	"summarize the week", AgentID:                                                                                                "u6-test-owner"})
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))
@@ -53,10 +51,8 @@ func TestAutomations_CronTrigger_HumanizedAndActionShown(t *testing.T) {
 
 func TestAutomations_EveryTrigger_RunsOwningAgent(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
-	job, err := cs.AddJob(
-		"frequent",
-		cron.CronSchedule{Kind: "every", EveryMS: i64p(5 * 60 * 1000)}, // 5m
-		"ping")
+	job, err := cs.AddJobFull(cron.JobSpec{Name: "frequent", Schedule: cron.CronSchedule{Kind: "every", EveryMS: i64p(5 * 60 * 1000)}, Message: // 5m
+	"ping", AgentID:                                                                                                                            "u6-test-owner"})
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))
@@ -80,10 +76,7 @@ func TestAutomations_EveryTrigger_RunsOwningAgent(t *testing.T) {
 func TestAutomations_AtTrigger_OneShot(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 	atMS := int64(1735689600000) // 2025-01-01 00:00 UTC
-	job, err := cs.AddJob(
-		"once",
-		cron.CronSchedule{Kind: "at", AtMS: &atMS},
-		"go")
+	job, err := cs.AddJobFull(cron.JobSpec{Name: "once", Schedule: cron.CronSchedule{Kind: "at", AtMS: &atMS}, Message: "go", AgentID: "u6-test-owner"})
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))
@@ -107,12 +100,12 @@ func TestAutomations_AtTrigger_OneShot(t *testing.T) {
 // HandleAutomations / handleListSchedules).
 func TestAutomations_ReturnsAllSchedulesRegardlessOfAgentOwner(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
-	j1, err := cs.AddJob("a", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "x")
+	j1, err := cs.AddJobFull(cron.JobSpec{Name: "a", Schedule: cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, Message: "x", AgentID: "u6-test-owner"})
 	require.NoError(t, err)
 	j1.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(j1))
 
-	j2, err := cs.AddJob("b", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "y")
+	j2, err := cs.AddJobFull(cron.JobSpec{Name: "b", Schedule: cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, Message: "y", AgentID: "u6-test-owner"})
 	require.NoError(t, err)
 	j2.AgentID = "max"
 	require.NoError(t, cs.UpdateJob(j2))

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,11 +108,37 @@ func TestUserMessageAppendFailure_NonFirstStopsTurnAndReportsVisibleError(t *tes
 	require.Len(t, msgBus.InboundChan(), 0,
 		"the failed append must not admit a turn — the previous warn-and-continue is gone")
 
-	_, statErr := os.Stat(filepath.Join(store.BaseDir(), sessionID, "provenance.jsonl"))
-	require.ErrorIs(t, statErr, os.ErrNotExist,
+	// ADR-20260928 D1.4 is the ruling that retired the sidecar ("No separate
+	// best-effort provenance sidecar": the trusted source is a PRIVATE member
+	// of the message's own transcript line, and the message id is the line's
+	// own id — see this file's readProvenanceRecordsForTest). An
+	// os.Stat(.../provenance.jsonl) check is therefore STALE: that file is
+	// never written by any code path any more, so it could not fail for the
+	// reason it named. The claim is checked through the transcript instead.
+	//
+	// Read the session directory the way the store does: the broken
+	// transcript.jsonl is a DIRECTORY here and is skipped, so anything left is
+	// real provenance — and there must be none.
+	require.Empty(t, readProvenanceRecordsForTest(t, store, sessionID),
 		"a failed transcript append must not write provenance")
+
+	// This session's transcript is the deliberately broken directory, so a
+	// lookup must SURFACE the read failure. Answering "no provenance" for a
+	// transcript that could not be read would be the same swallowed-error bug
+	// in a new place.
 	_, found, lookupErr := store.LookupMessageProvenance(sessionID, "no-such-server-message-id")
-	require.NoError(t, lookupErr)
+	require.Error(t, lookupErr,
+		"an unreadable transcript is a read failure, not an empty provenance answer")
+	assert.False(t, found)
+	assert.Contains(t, lookupErr.Error(), "lookup provenance",
+		"the failure must be attributed to the provenance lookup")
+
+	// And on an INTACT session the same lookup answers honestly: not found,
+	// no error — the failed append wrote nothing anywhere.
+	untouched, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err, "fixture: a second, intact session")
+	_, found, lookupErr = store.LookupMessageProvenance(untouched.ID, "no-such-server-message-id")
+	require.NoError(t, lookupErr, "an intact transcript must be readable")
 	assert.False(t, found, "no provenance exists after a failed append")
 }
 
@@ -214,21 +241,49 @@ func TestAgentToolTranscriptWrite_MintsNoProvenance(t *testing.T) {
 	assert.Equal(t, userEntryID, records[0]["message_id"], "the single record keys the user's server message id")
 }
 
-// readProvenanceRecordsForTest reads the session's raw provenance record file
-// so a test can count what the store actually wrote.
+// readProvenanceRecordsForTest reads the session's transcript lines and
+// reconstructs each inline provenance record — the same shape
+// session.UnifiedStore.LookupMessageProvenance returns — so a test can count
+// what the store actually wrote.
+//
+// The separate provenance.jsonl is RETIRED (ADR-20260928 D1.4 / session-core
+// Decision A): the trusted source is a PRIVATE member of the message's own
+// transcript line (ArchiveRecord.Source), and the message id is the line's own
+// id. Only chat-membership lines carrying a source count, exactly as
+// message_provenance.go::LookupMessageProvenance filters.
 func readProvenanceRecordsForTest(t *testing.T, store *session.UnifiedStore, sessionID string) []map[string]any {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(store.BaseDir(), sessionID, "provenance.jsonl"))
-	require.NoError(t, err, "the provenance record file must exist after an authenticated append")
-	decoder := json.NewDecoder(bytes.NewReader(raw))
+	dir := filepath.Join(store.BaseDir(), sessionID)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err, "the session directory must exist after an authenticated append")
 	records := []map[string]any{}
-	for {
-		var record map[string]any
-		if decodeErr := decoder.Decode(&record); decodeErr != nil {
-			require.ErrorIs(t, decodeErr, io.EOF, "provenance records must be complete JSONL")
-			break
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
 		}
-		records = append(records, record)
+		raw, readErr := os.ReadFile(filepath.Join(dir, e.Name()))
+		require.NoError(t, readErr)
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var rec map[string]any
+			if json.Unmarshal([]byte(line), &rec) != nil {
+				continue
+			}
+			source, ok := rec["source"].(map[string]any)
+			if !ok || rec["view_membership"] != "chat" {
+				continue
+			}
+			records = append(records, map[string]any{
+				"message_id": rec["id"],
+				"session_id": sessionID,
+				"content":    rec["content"],
+				"principal":  source["principal"],
+				"ordinal":    float64(len(records) + 1),
+			})
+		}
 	}
 	return records
 }

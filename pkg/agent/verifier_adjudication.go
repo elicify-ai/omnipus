@@ -421,25 +421,15 @@ func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID st
 // empty and the goal Judge fail-closed every criterion with "no evidence"
 // against a session whose transcript plainly held the reply — observed live
 // on the first end-to-end /goal UAT. The shared store is now consulted
-// first; the legacy per-agent store remains as a fallback for old installs
-// whose sessions still live there.
+// only: DEL-10 (a398d3fed) deleted the per-agent stores, so there is no
+// legacy fallback to consult.
 func (al *AgentLoop) goalSessionWindowText(goalSessionID, agentID string) string {
 	if goalSessionID == "" || agentID == "" {
 		logger.WarnCF("agent", "verifier: goal window feed skipped — empty session or agent id",
 			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
 		return ""
 	}
-	if shared := al.GetSessionStore(); shared != nil {
-		if text := al.sessionWindowText(shared, goalSessionID, al.effectiveVerifierWindowTokens(), nil); text != "" {
-			return text
-		}
-		logger.WarnCF("agent", "verifier: goal window empty from the SHARED store — falling back to the legacy per-agent store",
-			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
-	} else {
-		logger.WarnCF("agent", "verifier: no shared session store — goal window falling back to the legacy per-agent store",
-			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
-	}
-	store := al.GetAgentStore(agentID)
+	store := al.GetSessionStore()
 	if store == nil {
 		return ""
 	}
@@ -474,17 +464,11 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 	if t == nil || t.SessionID == "" {
 		return "" // task has no session yet — not an error, just nothing to feed
 	}
-	// Shared store first (see goalSessionWindowText's STORE RESOLUTION note —
-	// same 2026-09-06 UAT defect class; task sessions are written to the
-	// shared store too), legacy per-agent store as the old-install fallback.
-	if shared := al.GetSessionStore(); shared != nil {
-		if text := al.sessionWindowText(shared, t.SessionID, al.effectiveVerifierWindowTokens(), map[string]any{"task_id": taskID}); text != "" {
-			return text
-		}
-	}
-	store := al.GetAgentStore(assigneeAgentID)
+	// The shared store only (see goalSessionWindowText's STORE RESOLUTION note;
+	// task sessions are written to the shared store too).
+	store := al.GetSessionStore()
 	if store == nil {
-		logger.WarnCF("agent", "verifier: no session store for assignee agent (task window feed)",
+		logger.WarnCF("agent", "verifier: no session store (task window feed)",
 			map[string]any{"task_id": taskID, "agent_id": assigneeAgentID})
 		return ""
 	}
@@ -722,9 +706,6 @@ func (al *AgentLoop) allSessionsForDescendantWalk(assigneeAgentID string) []*ses
 		}
 	}
 	add(al.GetSessionStore(), "shared")
-	if assigneeAgentID != "" {
-		add(al.GetAgentStore(assigneeAgentID), "per-agent")
-	}
 	return all
 }
 
@@ -803,7 +784,7 @@ func (al *AgentLoop) scopeWithDescendants(assigneeAgentID string, rootIDs []stri
 func (al *AgentLoop) newVerifierSessionChatID(sessionKey, unitID string) string {
 	fallback := "verify:" + sessionKey
 
-	sessStore := al.GetAgentStore(string(coreagent.IDJudge))
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
 		return fallback
 	}
@@ -1510,6 +1491,7 @@ agentLoopRunVerifierAdjudicationLoop1:
 			// ts.transcriptSessionID, the value Stop/`/goal clear`'s
 			// RequestCancelForSession actually matches turns on.
 			vs.va.chatID = vs.va.al.newVerifierSessionChatID(vs.va.sessionKey, vs.va.unitID)
+			vs.va.sessionKey = verifierWindowKey(vs.va.sessionKey, vs.va.chatID)
 			if regErr := vs.registry.Register(vs.va.unitID, vs.va.chatID); regErr != nil {
 				// CAS guard (corr-MAJOR-3, G-1): lost the race between the
 				// Lookup pre-check above and this atomic Register — another
@@ -2049,7 +2031,7 @@ func (al *AgentLoop) dispatchVerifierTurn(
 		DefaultResponse:        defaultResponse,
 		SendResponse:           false,
 		TranscriptSessionID:    chatID,
-		TranscriptStore:        al.GetAgentStore(judgeInst.ID),
+		TranscriptStore:        al.GetSessionStore(),
 		OriginKind:             session.OriginKindVerifier,
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
@@ -2068,17 +2050,6 @@ func (al *AgentLoop) dispatchVerifierTurn(
 	ts := newTurnState(judgeInst, opts, al.newTurnEventScope(judgeInst.ID, sessionKey))
 	if delegationDepth > 0 {
 		ts.depth = delegationDepth
-	}
-	if opts.TranscriptSessionID != "" {
-		resolverKey := "session:" + opts.TranscriptSessionID
-		ts.activeAgentResolver = func() string {
-			if v, ok := al.sessionActiveAgent.Load(resolverKey); ok {
-				if id, ok := v.(string); ok && id != "" {
-					return id
-				}
-			}
-			return ""
-		}
 	}
 
 	// JUDGE-FR-051/FR-052: the caps come from the OPERATOR's JudgeConfig via
@@ -2446,4 +2417,19 @@ func verdictFromJudgeResponse(criterionID string, pc judgeCriterionResponse) tas
 	}
 	v.Provenance = deriveVerdictProvenance(v.EvidenceSource)
 	return v
+}
+
+// verifierWindowKey is the model-window key a verifier turn runs under. The
+// window store derives its directory from the key (owningSessionID), so a key
+// that is not "agent:<id>:session:<session id>" makes the store create a
+// directory named after the key itself - one with window files and no
+// meta.json, which the next boot reports as an unreadable session. Once the
+// verifier's own session exists the window belongs in THAT session's directory.
+// When the session could not be created (chatID is the ad hoc fallback) the
+// original key stays, as before.
+func verifierWindowKey(adHocKey, chatID string) string {
+	if chatID == "" || chatID == "verify:"+adHocKey {
+		return adHocKey
+	}
+	return fmt.Sprintf("agent:%s:session:%s", string(coreagent.IDJudge), chatID)
 }

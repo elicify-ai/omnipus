@@ -51,7 +51,7 @@ vi.mock('@/lib/authLogout', () => ({
 import * as api from '@/lib/api'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { ToolApprovalModal } from './ToolApprovalModal'
-import type { WsSessionStateFrame } from '@/lib/ws'
+import type { SessionStateFrame } from '@/lib/ws'
 
 // Capture the mock addToast for assertion
 let capturedAddToast: ReturnType<typeof vi.fn>
@@ -589,7 +589,7 @@ describe('ToolApprovalModal — session_state reset handler (FR-052, FR-073, FR-
       })
     })
 
-    const sessionStateFrame: WsSessionStateFrame = {
+    const sessionStateFrame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [

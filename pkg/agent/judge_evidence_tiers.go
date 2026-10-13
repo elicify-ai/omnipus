@@ -248,7 +248,7 @@ func applyBehaviorContradictionVeto(
 // resolveBehaviorScanEntries mirrors behavior_scan.go::runBehaviorScan's own
 // session resolution EXACTLY (task scope -> the task's own session via the
 // task store; goal scope -> in.GoalSessionID; read via
-// al.GetAgentStore(in.AssigneeAgentID) — deliberately NOT the shared-store-
+// al.GetSessionStore() — deliberately NOT the shared-store-
 // first fallback the window-text feeds use, so FR-108's veto scans the
 // IDENTICAL entries rung 2's own count already scanned) so
 // applyBehaviorContradictionVeto sees the same tool-call log
@@ -277,7 +277,7 @@ func (al *AgentLoop) resolveBehaviorScanEntries(in JudgeCriteriaInput) []session
 	if sessionID == "" || in.AssigneeAgentID == "" {
 		return nil
 	}
-	store := al.GetAgentStore(in.AssigneeAgentID)
+	store := al.GetSessionStore()
 	if store == nil {
 		return nil
 	}

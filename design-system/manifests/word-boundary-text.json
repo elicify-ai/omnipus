@@ -6,7 +6,7 @@
   {"id":"word-boundary-text-interaction","kind":"interaction","applicable":false,"reason":"Static text has no activation or state-changing user interaction; owner hover/focus is verified separately."},
   {"id":"word-boundary-text-axe","kind":"axe","file":"tests/design-system/browser.spec.ts","test":"WordBoundaryText [check:word-boundary-text-axe] axe","story":"Default","applicable":true},
   {"id":"word-boundary-text-keyboard","kind":"keyboard","applicable":false,"reason":"Static text creates no focus target or keyboard action."},
-  {"id":"word-boundary-text-browser","kind":"browser","file":"tests/design-system/browser.spec.ts","test":"WordBoundaryText [check:word-boundary-text-browser] browser","story":"Default","applicable":true},
+  {"id":"word-boundary-text-browser","kind":"browser","file":"tests/design-system/browser.spec.ts","test":"WordBoundaryText [check:word-boundary-text-browser] browser","story":"Default", "requiredTargets": [{ "selector": "[data-testid=\"word-sample\"]", "text": "Post-publish verification interruption end-state" }],"applicable":true},
   {"id":"word-boundary-text-pointer","kind":"pointer","applicable":false,"reason":"Static text has no pointer hit target or action."},
   {"id":"word-boundary-text-motion","kind":"reduced-motion","applicable":false,"reason":"The text atom has no animation or transition."},
   {"id":"word-boundary-text-forced-colors","kind":"forced-colors","file":"tests/design-system/browser.spec.ts","test":"WordBoundaryText [check:word-boundary-text-forced-colors] forced-colors","story":"Default","applicable":true},

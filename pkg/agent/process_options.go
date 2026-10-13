@@ -30,8 +30,14 @@ type processOptions struct {
 	// sessions are attributable. Empty for channel-originated turns (the platform
 	// sender in Sender.Username is not a gateway principal and is never read here)
 	// and unauthenticated env-token / dev-bypass paths — never guessed.
-	UserID                  string              // Authenticated gateway principal (FR-017)
-	UserMessage             string              // User message content (may include prefix)
+	UserID      string // Authenticated gateway principal (FR-017)
+	UserMessage string // User message content (may include prefix)
+	// InputAlreadyArchived marks UserMessage as an instruction re-read from this
+	// session's archive by reconstructSteeredTurn (a launch or revive
+	// instruction). When it is also the newest line of the model window, the turn
+	// keeps using the text (routing, goal claim, external CLI) but neither adds it
+	// to the window a second time nor archives it again (turnState.userInputInWindow).
+	InputAlreadyArchived    bool
 	ForcedSkills            []string            // Skills explicitly requested for this message
 	Media                   []string            // media:// refs from inbound message
 	InitialSteeringMessages []providers.Message // Steering messages from refactor/agent
@@ -41,13 +47,21 @@ type processOptions struct {
 	// providers.Message: that struct is the literal LLM provider request
 	// wire shape, never a receipt-bookkeeping carrier.
 	InitialSteeringCorrelationIDs []string
-	DefaultResponse               string                // Response when LLM returns empty
-	SendResponse                  bool                  // Whether to send response via bus
-	SuppressToolFeedback          bool                  // Whether to suppress inline tool call and result feedback
-	NoHistory                     bool                  // If true, don't load session history (for heartbeat)
-	SkipInitialSteeringPoll       bool                  // If true, skip the steering poll at loop start (used by Continue)
-	TranscriptSessionID           string                // Session ID for transcript tool call recording (empty = disabled)
-	TranscriptStore               *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
+	DefaultResponse               string // Response when LLM returns empty
+	SendResponse                  bool   // Whether to send response via bus
+	SuppressToolFeedback          bool   // Whether to suppress inline tool call and result feedback
+	NoHistory                     bool   // If true, don't load session history (for heartbeat)
+	SkipInitialSteeringPoll       bool   // If true, skip the steering poll at loop start (used by Continue)
+	// ExternalCLIResume marks a turn that must deliver its steering instruction
+	// to an EXISTING native CLI conversation by resume rather than starting a
+	// fresh external-CLI run (FR-043). Set ONLY by the post-turn steering drain
+	// (steer_turn_drain.go::continueSteeredTurn), i.e. exactly when a queued
+	// follow-up instruction is delivered to a session whose external-CLI turn
+	// already ran; every other turn leaves it false (a first dispatch, a task
+	// run, a wake), so an ordinary external-CLI run is unchanged.
+	ExternalCLIResume   bool
+	TranscriptSessionID string                // Session ID for transcript tool call recording (empty = disabled)
+	TranscriptStore     *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
 	// OriginKind identifies the durable execution origin when this turn does
 	// not have a lifecycle record to supply it. The zero value is an ordinary
 	// interactive turn. Publication policy resolves the record first.

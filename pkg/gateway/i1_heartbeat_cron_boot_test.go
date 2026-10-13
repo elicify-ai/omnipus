@@ -61,7 +61,7 @@ func TestI1HeartbeatPhysicalBootRealCron(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { al.Close(); msgBus.Close(); gatewaySteerCancellers.Delete(al) })
 	al.SetSessionMessagingStores(session.NewMessageInboxStore(filepath.Join(home, "session_messages")), ls)
-	meta, err := al.GetSessionStore().NewHeartbeatSession(testHarnessWorkspaceMembershipID, "mia")
+	meta, err := al.GetSessionStore().GetOrCreateMainSession(testHarnessWorkspaceMembershipID, "mia")
 	require.NoError(t, err)
 	provider.root = meta.ID
 	priorBoot := session.NewBootEpochStore(home)
@@ -74,11 +74,11 @@ func TestI1HeartbeatPhysicalBootRealCron(t *testing.T) {
 		ExecutionID: &session.ExecutionIdentity{RunID: "i1-killed-heartbeat", BootSeq: oldEpoch}}))
 	ws, err := readWorkspaceFile(home, testHarnessWorkspaceMembershipID)
 	require.NoError(t, err)
-	ws.MemberConfigs = buildMemberConfigs("mia", true, 5, "Continue the normal heartbeat.", meta.ID)
+	ws.MemberConfigs = buildMemberConfigs("mia", true, 5, "Continue the normal heartbeat.")
 	require.NoError(t, writeWorkspaceFile(home, ws))
 	interval, last := int64(300000), time.Now().Add(-10*time.Minute).UnixMilli()
 	job := cron.CronJob{ID: "i1-crash-heartbeat-job", Name: heartbeatJobName(ws.ID, "mia"), Enabled: true,
-		AgentID: "mia", SessionMode: cron.SessionModeContinue, SessionID: meta.ID,
+		AgentID: "mia", SessionMode: cron.SessionModeMain,
 		Schedule: cron.CronSchedule{Kind: "every", EveryMS: &interval},
 		Payload:  cron.CronPayload{Kind: heartbeatJobKind, Message: "Continue the normal heartbeat."},
 		State: cron.CronJobState{Running: true, LastRunAtMS: &last, LastStatus: "ok",

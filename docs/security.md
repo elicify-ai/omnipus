@@ -57,6 +57,8 @@ That is a summary. The full list of tools that still ask, one row per tool, is u
 
 The chat switch is the one place that can turn Auto-approve **on** when the global default has it off, because you are present in that conversation. When the chat's agent hands work to another agent (a delegate), the delegate follows the chat's switch exactly as the agent you are talking to does: if Auto-approve is on for the chat, the delegate's Ask tools run under it too.
 
+**Exception: external command-line workers.** A worker that runs on Claude Code, Codex or OpenCode does not use Omnipus's tool approval dialog at all. Omnipus automatically approves the permission requests the external tool reports, so turning Auto-approve off is not a way to make an external worker ask you before each action. Omnipus Allow/Ask/Deny rules govern Omnipus tools only and do not reach inside the external tool. Treat delegating to an external command-line worker as its own trust decision.
+
 ### Auto-approve and the kernel sandbox (changed 2026-09-24)
 
 **Auto-approve no longer needs a kernel sandbox to work.** A kernel sandbox is protection enforced by the operating system itself: Landlock on Linux, Seatbelt on macOS, with the Process Sandbox set to **Enforce**. Until 2026-09-24, Auto-approve had no effect at all without one — every Ask tool prompted, the same as if Auto-approve were off, and there was no Auto-approve on Windows at all, because Windows has no kernel sandbox in Omnipus. That turned out to make Auto-approve effectively useless on Windows and on any machine where the sandbox failed to start or was deliberately left in Permissive or Off mode, so it was changed.
@@ -104,7 +106,7 @@ The first time you turn God Mode on through this screen, on an installation that
 | Area | Under God Mode |
 |---|---|
 | Tool policies | Every tool's global (installation-wide) policy is treated as Allow — no prompt from that policy, for any tool. |
-| Shell approval | No approval dialog before a shell command runs, ever. |
+| Shell approval | God Mode removes the global shell approval requirement. A per-agent Ask can still require approval, and a per-agent Deny still blocks the tool. Operator deny rules and the surviving outside-workspace write guard also remain in force. |
 | Kernel filesystem confinement | Off for the shell's own commands: they can reach any file your account can, not just the workspace. |
 | Kernel network-port controls | Off for the shell's own commands: they can bind or connect to any port, not just an allowed list. |
 | Outbound network filtering | The shell's commands are not filtered against the address block list that otherwise stops them reaching your internal network or cloud-metadata services. |
@@ -173,7 +175,7 @@ For reading, this now matches the shell. Under Auto-approve, the shell command `
 | Widening file access | `request_mount` |
 | Installing and publishing | `install_skill`, `environment_setup`, `serve_web` |
 | Email | `send_email`, `reply` |
-| Deleting | `delete_task`, `delete_task_in_workspace`, `delete_workspace`, `delete_agent` |
+| Deleting | `delete_task`, `delete_workspace`, `delete_agent` |
 | Browser scripts and uploads | `browser_evaluate`, `browser_upload_file` |
 | Settings and diagnostics | `set_config`, `run_doctor` |
 | Providers | `configure_provider`, `test_provider` |
@@ -234,9 +236,9 @@ Not run: this is a headless scheduled run with no operator available to approve 
 
 A shell command that would need a prompt (for example one that needs the network) is refused the same way; its error ends with `auto-denied: no operator attached to this headless/scheduled run to approve it`.
 
-For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. If an unattended agent must use a tool that still asks, set that tool to Allow for that agent. See [tools](tools.md).
+For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. An unattended call must either clear Auto-approve or have an effective Allow policy. Setting one agent to Allow cannot override a global Ask or Deny. If a required tool still resolves to Ask, review both policy layers. Changing the global ceiling affects every agent; use per-agent restrictions to retain tighter access elsewhere. Do not assume that having the chat open makes an automatically dispatched run attended. See [tools](tools.md).
 
-**What counts as unattended (founder decision, 2026-09-24).** This is not only the Schedules feature. It is every run nobody sent live:
+**What counts as unattended (founder decision, 2026-09-24).** This is not only scheduled work. It is every run nobody sent live:
 
 - a task fired by its own Calendar trigger on a workspace Board (once, recurring, or an RRULE occurrence);
 - a queued task the task drain picks up on its own polling cycle;
@@ -244,7 +246,7 @@ For example, with Auto-approve on, an unattended agent can write its report into
 - a plan's own member-task dispatch, driven by the plan engine's promotion loop;
 - a plan's automatic wake of its owner or supervisor agent, reacting to a plan-state change;
 - a parent task's automatic follow-up turn, fired once every child task reaches a terminal state;
-- the Schedules feature and per-agent heartbeats, both running on the cron engine.
+- a per-agent heartbeat, which runs on the cron engine.
 
 None of these ever shows a live approval card, even to an operator who happens to have that agent's chat window open at that moment — "someone was online" does not make a run attended. Only a turn a person actually started stays attended: a chat message, or clicking **Run now** on a task (`POST /api/v1/tasks/{id}/runs`, and the Board's "Start Task"/"Create & Run now" actions) while watching for the result. A task dispatched through the `run_task` or `execute_plan` agent tools inherits whichever of these two states the *calling* turn was already in — a chat-started delegation to `run_task` stays attended, one fired from inside an already-unattended run stays unattended.
 
@@ -329,7 +331,7 @@ and
 { "action": "deny", "binary": "rm", "arg_prefix": "-rf" }
 ```
 
-A command like `rm -rf /tmp/build` matches both rules — the narrower `/tmp`-scoped allow rule and the broader deny rule. The deny rule wins and the command is refused, even though the allow rule looks more specific to this exact case. Writing a narrower allow rule is never a way to carve an exception past a broader deny rule; if you want that exception, the deny rule itself has to be narrowed instead.
+With `allow` for `binary: "rm", arg_prefix: "-rf /tmp"` and `deny` for `binary: "rm", arg_prefix: "-rf"`, `rm -rf /tmp` matches both rules and Deny wins. `rm -rf /tmp/build` does not match the narrower allow: `/tmp` and `/tmp/build` are different argument words. `arg_prefix` is not a directory-tree matcher. Writing a narrower allow rule is never a way to carve an exception past a broader deny rule; if you want that exception, the deny rule itself has to be narrowed instead.
 
 ### Chained commands
 

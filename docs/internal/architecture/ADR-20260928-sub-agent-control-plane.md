@@ -1,5 +1,12 @@
 # ADR-20260928 — The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of D-G deferrals and session-end vocabulary.** One-format storage/intake and visible limits are now in scope, with 64 KiB ordinary text, 60/min per sender+target, 200 items and one 1 MiB aggregate setting AND existing model fit. Report delivery stays unchanged; visible rejected-arrival/retry information is required (#1211). Waiting-input restart reconstruction/live descendant-stop retry stay deferred. Idle episode recap is not deletion or permanent unreachability.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 ## Amended 2026-10-06 — founder decision
 
 This is the existing ADR imported from commit `cd20cf8b3`, at its original repository path; the frozen investigation copy remains read-only. This dated amendment records the founder's 2026-10-05/06 decisions, not a new design, a new grill round, or a claim that implementation has passed its gates. Where an older clause, acceptance oracle, or review disposition below conflicts, the current rules in this amendment and the explicitly amended sections win. Historical source observations stay tied to their original revisions.
@@ -483,6 +490,8 @@ A dev install replaying old frames that still carry `steering_receipt` must drop
 ### D9 — Chat Stop, second Stop / Esc or `/cancel`, and redirect
 
 **Amended 2026-10-06 (founder):** the controls below are the same on **web, CLI and channels**, in **root and helper chats**. This replaces the extra control and helper-only redirect design. Authority: founder decision, 2026-10-06.
+
+**Qualification, 2026-10-10 (external-CLI helpers):** the native steering and continuation rules in this document do not describe a helper on an external command-line tool. A live external delegation takes an instruction by interrupting its subprocess and resuming the same retained CLI conversation (a live task run too); with no CLI run in flight the request is refused as `not_steerable`. Its chat's `/stop-redirect` returns `not_steerable` while it is running or stopped, and a finished helper has no turn to replace (Resume guidance is shown). Resume, Respond and a typed message continue the same CLI conversation when it started and the gateway still retains it, run it for the first time if it never started, and otherwise refuse visibly; none of them creates a new worker session. External workers have no `message_parent`, and `delegate redirect` and `clear_goal` are refused. See [Agents guide](../../agents.md)::Workers and delegation.
 
 | Input | Effect in this chat |
 |---|---|

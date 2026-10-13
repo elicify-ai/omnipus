@@ -190,7 +190,7 @@ func TestChokePoint_EncodedLineBound(t *testing.T) {
 			t.Skip("8 MB injection-scan under the race detector blows pkg/agent's 900s package budget")
 		}
 		al, ts, store := newChokePointTurn(t, 400_000)
-		seedAssistantCall(t, store, ts.sessionKey, "call_big", "bash", 1)
+		seedAssistantCall(t, ts, store, "call_big", "bash", 1)
 		admitted := al.admitToolResult(ts, toolResultAdmission{
 			Tool: "bash", ToolCallID: "call_big", Content: content, ParallelN: 1,
 		})
@@ -216,7 +216,7 @@ func TestChokePoint_FilterThenCap_AtRealCuts(t *testing.T) {
 	al, ts, store := newChokePointTurn(t, 400_000)
 	al.GetConfig().Tools.FilterSensitiveData = true // "Given the sensitive-data filter is on" (US-3.AC10)
 	al.GetConfig().RegisterSensitiveValues([]string{secret})
-	seedAssistantCall(t, store, ts.sessionKey, "call_s", "read_file", 1)
+	seedAssistantCall(t, ts, store, "call_s", "read_file", 1)
 
 	policy := capPolicyFor(al.GetConfig().Context, agentContextBudget(ts.agent))
 	capChars := policy.effectiveCap(surfaceBuiltinSuccess, 1)
@@ -257,10 +257,9 @@ func TestChokePoint_FilterThenCap_AtRealCuts(t *testing.T) {
 
 // chokePointAllowedFiles are the only non-test files in pkg/agent permitted
 // to construct a role:"tool" providers.Message directly: the choke point
-// itself and the exempt orphan-repair placeholder (bounded by construction).
+// itself.
 var chokePointAllowedFiles = map[string]bool{
 	"tool_result_admit.go": true, // the choke point
-	"repair.go":            true, // exempt: orphan-repair placeholder, bounded by construction
 }
 
 // attachHydrateExemptFunc is the name of the one function in
@@ -728,7 +727,7 @@ func fileCallsFunction(t *testing.T, path, funcName string) bool {
 // call's actual use), not the spelling of one particular way to violate it.
 // The name is kept (rather than renamed to e.g. …ProducerListStructural)
 // because production comments in this package cite it by name
-// (tool_result_admit.go, repair.go, recall_injection.go) and the ADR-066
+// (tool_result_admit.go, recall_injection.go) and the ADR-066
 // spec docs this task is not scoped to edit cite it too; only this
 // function's OWN doc comment needed to stop claiming "grep".
 func TestChokePoint_ProducerListByGrep(t *testing.T) {
@@ -775,13 +774,17 @@ func TestChokePoint_ProducerListByGrep(t *testing.T) {
 	calls := directCalls + indirectCalls
 	assert.GreaterOrEqual(t, calls, 10, "loop.go: success path + seven denied sites + skipped site + the T066-15 argument-refusal site (FR-016) = at least 10 choke-point calls (direct admitToolResult, or via the admitAndCheckpoint wrapper)")
 
-	for _, fname := range []string{"attach_hydrate.go", "recall_conversation.go"} {
+	// The producer list is the set of production files that build a role:"tool"
+	// payload through the choke point's cap. session-core U2 (DEL-12 /
+	// ARCHITECT-ANSWER-CUTOVER-SLICE4.md Q4) deleted attach_hydrate.go with the
+	// hydration surface, so its entry is removed; recall_conversation.go remains
+	// the live producer that must actually CALL projectToolResult. Adding a NEW
+	// producer file here is the intended response to a new call site — an
+	// unlisted producer is caught by scanChokePointBypasses above.
+	for _, fname := range []string{"recall_conversation.go"} {
 		assert.True(t, fileCallsFunction(t, fname, "projectToolResult"),
 			"%s must actually CALL the choke point's cap (projectToolResult), not merely mention it", fname)
 	}
-	repairSrc, err := os.ReadFile("repair.go")
-	require.NoError(t, err)
-	assert.Contains(t, strings.ToLower(string(repairSrc)), "exempt from the choke point", "repair.go must annotate its exemption")
 }
 
 // TestChokePoint_ProducerListByGrep_CatchesTwoPreviouslyInvisibleForms pins
@@ -923,7 +926,7 @@ func directLiteralAssign(m *providers.Message) {
 // and the projection re-derives the capped form byte-identical on reload.
 func TestChokePoint_IncidentResult_FullInArchiveCappedOnReload(t *testing.T) {
 	al, ts, store := newChokePointTurn(t, 400_000)
-	seedAssistantCall(t, store, ts.sessionKey, "call_inc", "mcp_gmail_search_email", 1)
+	seedAssistantCall(t, ts, store, "call_inc", "mcp_gmail_search_email", 1)
 	content := strings.Repeat("incident ", 130_947) // 1,178,523 chars
 	content = content[:1_178_522]
 
@@ -951,7 +954,7 @@ func TestChokePoint_IncidentResult_FullInArchiveCappedOnReload(t *testing.T) {
 	skip := len(archive) - len(history)
 	projected := projectMessages(history, func(i int) int { return skip + i }, pm.Entries, projectionContext{
 		policy:  capPolicyFor(al.GetConfig().Context, agentContextBudget(ts.agent)),
-		archive: archive,
+		archive: denseArchive(archive),
 	})
 	assert.Equal(t, admitted.Message.Content, projected[2].Content, "reload renders the capped form byte-identical (B-12)")
 	assert.Equal(t, content, history[2].Content, "projection never mutates its input")
@@ -961,7 +964,7 @@ func TestChokePoint_IncidentResult_FullInArchiveCappedOnReload(t *testing.T) {
 // one WARN and tool_result_large_total increments.
 func TestChokePoint_WarnThresholdObserveOnly(t *testing.T) {
 	al, ts, store := newChokePointTurn(t, 400_000)
-	seedAssistantCall(t, store, ts.sessionKey, "call_w", "read_file", 1)
+	seedAssistantCall(t, ts, store, "call_w", "read_file", 1)
 	before := ToolResultLargeTotal()
 	content := strings.Repeat("w", 25_001)
 	admitted := al.admitToolResult(ts, toolResultAdmission{Tool: "read_file", ToolCallID: "call_w", Content: content, ParallelN: 1})
@@ -972,7 +975,7 @@ func TestChokePoint_WarnThresholdObserveOnly(t *testing.T) {
 	assert.Empty(t, pm.Entries, "no projection state for an unmodified result")
 
 	// Exactly at the threshold: no increment.
-	seedAssistantCall(t, store, ts.sessionKey, "call_w2", "read_file", 1)
+	seedAssistantCall(t, ts, store, "call_w2", "read_file", 1)
 	al.admitToolResult(ts, toolResultAdmission{Tool: "read_file", ToolCallID: "call_w2", Content: strings.Repeat("w", 25_000), ParallelN: 1})
 	assert.Equal(t, before+1, ToolResultLargeTotal())
 }
@@ -981,12 +984,12 @@ func TestChokePoint_WarnThresholdObserveOnly(t *testing.T) {
 // next result.
 func TestChokePoint_LiveSettingsPerCall(t *testing.T) {
 	al, ts, store := newChokePointTurn(t, 400_000)
-	seedAssistantCall(t, store, ts.sessionKey, "c1", "read_file", 1)
+	seedAssistantCall(t, ts, store, "c1", "read_file", 1)
 	first := al.admitToolResult(ts, toolResultAdmission{Tool: "read_file", ToolCallID: "c1", Content: strings.Repeat("a", 30_000), ParallelN: 1})
 	assert.False(t, first.Capped)
 
 	al.GetConfig().Context.BuiltinSuccessCap = 20_000
-	seedAssistantCall(t, store, ts.sessionKey, "c2", "read_file", 1)
+	seedAssistantCall(t, ts, store, "c2", "read_file", 1)
 	second := al.admitToolResult(ts, toolResultAdmission{Tool: "read_file", ToolCallID: "c2", Content: strings.Repeat("a", 30_000), ParallelN: 1})
 	assert.True(t, second.Capped, "the lowered cap applies to the next result")
 	assert.LessOrEqual(t, runes(second.Message.Content), 20_000)
@@ -1041,8 +1044,9 @@ func newChokePointTurn(t *testing.T, window int) (*AgentLoop, *turnState, sessio
 // seedAssistantCall writes the user + assistant(tool call) lines a tool
 // result always follows, so the archive has the owning call for the mark
 // and the projection lookup.
-func seedAssistantCall(t *testing.T, store session.SessionStore, key, callID, tool string, n int) {
+func seedAssistantCall(t *testing.T, ts *turnState, store session.SessionStore, callID, tool string, n int) {
 	t.Helper()
+	key := ts.sessionKey
 	store.AddMessage(key, "user", "go")
 	calls := make([]providers.ToolCall, 0, n)
 	for i := 0; i < n; i++ {
@@ -1052,7 +1056,10 @@ func seedAssistantCall(t *testing.T, store session.SessionStore, key, callID, to
 		}
 		calls = append(calls, providers.ToolCall{ID: id, Type: "function", Name: tool, Function: &providers.FunctionCall{Name: tool, Arguments: "{}"}})
 	}
-	store.AddFullMessage(key, providers.Message{Role: "assistant", ToolCalls: calls})
+	// The assistant occurrence that issued these calls must be known to the turn
+	// (effects design step 2): the checked append returns exactly its address.
+	_, err := ts.appendWindowMessage(providers.Message{Role: "assistant", ToolCalls: calls}, windowProducerAssistant)
+	require.NoError(t, err, "seed the assistant call through the turn's own window seam")
 }
 
 // TestChokePoint_MediaOverflowIsBounded pins the Media half of FR-012.
@@ -1124,7 +1131,7 @@ func TestChokePoint_FailureSurfaceCapSurvivesReload(t *testing.T) {
 		tool   = "mcp_github_search"
 		callID = "call_fail"
 	)
-	seedAssistantCall(t, store, ts.sessionKey, callID, tool, 1)
+	seedAssistantCall(t, ts, store, callID, tool, 1)
 
 	// A 200,000-char error payload: over both the failure cap (10,000) and
 	// the MCP success cap (62,500), so the two cuts are distinguishable.
@@ -1154,7 +1161,7 @@ func TestChokePoint_FailureSurfaceCapSurvivesReload(t *testing.T) {
 	lineOf := archiveLineResolver(archive, reloadMsgs)
 	projected := projectMessages(reloadMsgs, lineOf, set, projectionContext{
 		policy:  capPolicyFor(config.DefaultContextSettings(), agentContextBudget(ts.agent)),
-		archive: archive,
+		archive: denseArchive(archive),
 	})
 
 	assert.Equal(t, liveBytes, projected[admitted.ArchiveLine].Content,

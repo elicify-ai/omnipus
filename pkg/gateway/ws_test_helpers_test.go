@@ -18,7 +18,7 @@ type wsClientFrameTestHelper struct {
 	Type      string   `json:"type"`
 	Token     string   `json:"token,omitempty"`      // auth frame
 	Content   string   `json:"content,omitempty"`    // message frame
-	SessionID string   `json:"session_id,omitempty"` // message/cancel/attach_session/session_close
+	SessionID string   `json:"session_id,omitempty"` // message/cancel/attach_session
 	AgentID   string   `json:"agent_id,omitempty"`   // message frame (route to specific agent)
 	Media     []string `json:"media,omitempty"`      // message frame (media:// attachment refs)
 	ID        string   `json:"id,omitempty"`         // device_pairing_response

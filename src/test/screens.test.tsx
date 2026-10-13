@@ -221,7 +221,7 @@ describe('Chat screen — empty state', () => {
 
   it('renders prompt to select an agent (no active agent in empty state)', () => {
     // Note: Spec says "Your agents are standing by" but implementation intentionally shows
-    // "Select an agent in the session bar to get started." — more instructional for first-run UX.
+    // "Select an agent in the sidebar list to get started." — the agent list is in the sidebar.
     render(<ChatScreen />, { wrapper })
     expect(screen.getByText(/Select an agent/i)).toBeTruthy()
   })

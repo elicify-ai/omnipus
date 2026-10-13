@@ -152,7 +152,13 @@ func selfHealWriteHook(reg *configSelfWriteRegistry) config.SelfHealWriteHook {
 }
 
 type services struct {
-	CronService *cron.CronService
+	// ensureWorkspaceMains provisions a workspace team's mains (final-gate H2);
+	// set at boot once the REST API exists, read when the system tools are wired.
+	ensureWorkspaceMains func(workspaceID string) error
+	// stopSessionForDelete stops one session's tree before the delete_agent cascade
+	// deletes it; non-empty means it did not stop.
+	stopSessionForDelete func(sessionID string) string
+	CronService          *cron.CronService
 	// LiveLimits is ADR-066 rung 4; retained so shutdown can Close it (abort
 	// in-flight fetches, forbid cache writes) — see agent.LiveLimits.Close.
 	LiveLimits *agent.LiveLimits
@@ -1351,6 +1357,18 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		},
 		CredStore:  rc.credStore,
 		ReloadFunc: rc.reloadTrigger,
+		// EnsureWorkspaceMains (final-gate H2): create_agent's team join gives the
+		// new member its main chat through the workspace-save path.
+		EnsureWorkspaceMains: rc.runningServices.ensureWorkspaceMains,
+		// DEL-10: the delete_agent cascade uses the loop's one live store and stops
+		// each session first.
+		DeleteSessionStore: func() systools.AgentSessionStore {
+			if s := rc.agentLoop.GetSessionStore(); s != nil {
+				return s
+			}
+			return nil
+		},
+		StopSessionForDelete: rc.runningServices.stopSessionForDelete,
 		// WaitForReloadFunc: AgentDeleteTool's synchronous reload wait (see
 		// systools.Deps.WaitForReloadFunc's doc comment for the delete_agent →
 		// list_agents ghost-listing race this closes). Built on the same
@@ -1431,30 +1449,11 @@ func (rc *runContextWithOptions) wireSystemTools() {
 				rc.runningServices.restAPIRef.emitAgentCreated(agentID)
 			}
 		},
-		SkillsLoader:    rc.sysSkillsLoader,
-		RegistryManager: rc.sysRegistryManager,
-		SkillInstaller:  rc.sysSkillInstaller,
-		SkillWriter:     rc.sysSkillWriter,
-		// §4 behavioral-parity gap: the cross-workspace task tools
-		// (create/update/delete_task_in_workspace) must enforce the SAME FR-6.2
-		// delegation policy the same-workspace create_task/update_task tools
-		// enforce. The resolver loads the calling agent's config from the live
-		// config and builds the task-mode gate dynamically (the sysagent tools are
-		// registered once on a central registry, so a per-agent checker can't be
-		// bound at construction). MUST be wired in production — leaving it nil
-		// fails OPEN.
-		DelegationDeny: rc.agentLoop.NewSysagentDelegationDeny(),
-		// D2 rule 5 (FR-017/052, review r1 major M5): create_task_in_workspace
-		// parity with the plain create_task tool's own bash-policy checker —
-		// MUST be wired in production, leaving it nil fails CLOSED (unlike
-		// DelegationDeny above) per systools.Deps.ResolveBashPolicy's doc
-		// comment.
-		ResolveBashPolicy: rc.agentLoop.NewSysagentBashPolicyResolver(),
+		SkillsLoader:      rc.sysSkillsLoader,
+		RegistryManager:   rc.sysRegistryManager,
+		SkillInstaller:    rc.sysSkillInstaller,
+		SkillWriter:       rc.sysSkillWriter,
 		ResolveToolPolicy: rc.agentLoop.ResolveRegisteredToolPolicy,
-		// Founder decision 2026-09-15: create/update_task_in_workspace refuse an
-		// assignee that cannot finish the task — the same answer as the plain
-		// task tools and the task run's pre-run check.
-		AssigneeCannotFinish: rc.agentLoop.TaskAssigneeCannotFinish,
 		// ADR-057 U9 changed ListAllSessions' signature to
 		// (limit, offset int, parentSessionID string, flat bool), so it can no
 		// longer be assigned here as a bare method value — this field's type
@@ -1633,10 +1632,8 @@ func (rc *runContextWithOptions) configureHealthAndWatcher() {
 		if rc.agentLoopDead.Load() {
 			return true, "agent loop exited unexpectedly — gateway requires restart"
 		}
-		rc.runningServices.reloadMu.Lock()
-		defer rc.runningServices.reloadMu.Unlock()
-		if rc.runningServices.reloadDegraded {
-			return true, fmt.Sprintf("config reload failed: %v", rc.runningServices.reloadError)
+		if degraded, reason := rc.runningServices.reloadDegradedStatus(); degraded {
+			return true, reason
 		}
 		// ADR-054 §0 R3: the configured default agent naming an entity record
 		// that failed to load is a degraded state, not a silent fallback —

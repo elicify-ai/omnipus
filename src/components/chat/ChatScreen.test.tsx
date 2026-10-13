@@ -12,6 +12,7 @@ import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { useComposerRuntime } from '@assistant-ui/react'
 
 // ResizeObserver is required by cmdk (used inside the ModelSelector popover);
 // jsdom does not implement it. Polyfill with a noop for the tests that open
@@ -35,6 +36,8 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 import { OmnipusComposer, ChatScreen } from './ChatScreen'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
+
+const mockComposerSend = vi.fn()
 
 import { MockButton } from '@/test/assistantUiMock'
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
@@ -72,6 +75,7 @@ vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock
           setText: vi.fn(),
           addAttachment: vi.fn(),
           subscribe: vi.fn(() => vi.fn()),
+          send: mockComposerSend,
         })),
   useMessage: () => ({
           id: 'msg_1',
@@ -158,7 +162,6 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 // Composer Redesign (variant A1): AgentPicker/ModelPicker/TokenCounter are
 // self-contained sub-components rendered inside OmnipusComposer's context row
 // (src/components/chat/composer/*). None of the tests in this file assert on
@@ -166,7 +169,6 @@ vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null })
 // to mock the workspaces/providers query plumbing (fetchWorkspaces,
 // workspacesQueryKeys, isWorker) those sub-components own. Their own behavior
 // is covered by composer/AgentPicker.test.tsx (+ .agent-selector-open.test.tsx).
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -195,7 +197,18 @@ function resetStores() {
   })
 }
 
-beforeEach(resetStores)
+beforeEach(() => {
+  resetStores()
+  mockComposerSend.mockReset()
+  // Per-case runtime overrides must not leak into later menu/skill cases.
+  vi.mocked(useComposerRuntime).mockImplementation(() => ({
+    getState: () => ({ text: '' }),
+    setText: vi.fn(),
+    addAttachment: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
+    send: mockComposerSend,
+  }) as unknown as ReturnType<typeof useComposerRuntime>)
+})
 
 // ── T15 / US-4: slash menu driven by fetchCommands ────────────────────────────
 
@@ -246,7 +259,7 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
     expect(screen.queryByText('/agents')).not.toBeInTheDocument()
   })
 
-  it('US-4/AC-1: non-streaming shows all 5 API commands including /cancel', async () => {
+  it('non-streaming lists every server command, including /clear, without inventing /new', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: false })
     })
@@ -262,43 +275,56 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
       fireEvent.keyDown(input, { key: 'ArrowDown' })
     })
 
-    // All 5 API commands must appear (in the Commands section)
+    // Founder X3: /clear is in this server fixture; /new is omitted. Neither
+    // client-side hiding nor invented alias rows may change that table.
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
+      '/sessions', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
+      '/code-review', '/data-analysis', '/web-research',
+    ])
     expect(screen.getByText('/cancel')).toBeInTheDocument()
     expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.queryByText('/new')).not.toBeInTheDocument()
     expect(screen.getByText('/help')).toBeInTheDocument()
     expect(screen.getByText('/model')).toBeInTheDocument()
     expect(screen.getByText('/agents')).toBeInTheDocument()
   })
 
-  it('US-4/AC-2: delivery:client /clear runs its client handler and does NOT send a message', async () => {
-    // /clear must clear messages locally and NOT send "/clear" to the backend.
+  it('selecting the listed server /clear sends it unchanged and does not clear the chat', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: false, messages: [{ id: 'msg1', role: 'user', content: 'hi', timestamp: '', status: 'done' }] })
       useSessionStore.setState({ activeAgentId: 'general-assistant', activeSessionId: 'sess_1' })
     })
+    let composerText = '/clear'
+    const sentTexts: string[] = []
+    mockComposerSend.mockImplementation(() => { sentTexts.push(composerText) })
+    vi.mocked(useComposerRuntime).mockReturnValue({
+      getState: () => ({ text: composerText }),
+      setText: vi.fn((text: string) => { composerText = text }),
+      addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
+    } as unknown as ReturnType<typeof useComposerRuntime>)
 
     render(<OmnipusComposer />)
 
     const input = screen.getByTestId('composer-input')
 
-    // Type "/clear" to filter the menu to /clear.
     act(() => {
       fireEvent.change(input, { target: { value: '/clear' } })
     })
-    act(() => {
-      fireEvent.keyDown(input, { key: 'ArrowDown' })
-    })
-
-    // "/clear" must appear in the menu.
     expect(screen.getByText('/clear')).toBeInTheDocument()
-
-    // Press Enter to execute the command.
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual(['/clear'])
     act(() => {
       fireEvent.keyDown(input, { key: 'Enter' })
     })
 
-    // After executing /clear, messages should be cleared.
-    expect(useChatStore.getState().messages).toHaveLength(0)
+    // The selected palette closes, but the existing conversation is intact.
+    expect(screen.queryByText('/clear')).not.toBeInTheDocument()
+    expect(mockComposerSend).toHaveBeenCalledTimes(1)
+    expect(sentTexts).toEqual(['/clear'])
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_1')
+    expect(useChatStore.getState().messages).toHaveLength(1)
+    expect(useChatStore.getState().messages[0]).toEqual({ id: 'msg1', role: 'user', content: 'hi', timestamp: '', status: 'done' })
   })
 
   it('US-4/AC-3: delivery:client /agents opens the agent selector (client command dispatch)', async () => {
@@ -313,6 +339,7 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
       setText: mockSetText,
       addAttachment: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
     })
 
     render(<OmnipusComposer />)
@@ -576,6 +603,7 @@ describe('Partitioned slash menu — Skills section', () => {
       setText: mockSetText,
       addAttachment: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
     })
 
     render(<OmnipusComposer />)
@@ -612,6 +640,7 @@ describe('Partitioned slash menu — Skills section', () => {
       setText: mockSetText,
       addAttachment: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
     })
 
     render(<OmnipusComposer />)
@@ -634,7 +663,7 @@ describe('Partitioned slash menu — Skills section', () => {
     expect(mockSetText).toHaveBeenCalledWith('/code-review ')
   })
 
-  it('typing "/cl" shows /clear command but NOT unrelated skills', async () => {
+  it('typing "/cl" lists the server /clear row only, without unrelated skills', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: false })
     })
@@ -649,8 +678,9 @@ describe('Partitioned slash menu — Skills section', () => {
       fireEvent.keyDown(input, { key: 'ArrowDown' })
     })
 
-    // /clear must appear in Commands section
+    // X3: this fixture returns a canonical /clear row (not just an alias).
     expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual(['/clear'])
     // Skills that don't start with "cl" must NOT appear
     expect(screen.queryByText('/web-research')).not.toBeInTheDocument()
     expect(screen.queryByText('/data-analysis')).not.toBeInTheDocument()

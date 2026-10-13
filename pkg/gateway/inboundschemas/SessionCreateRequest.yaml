@@ -15,8 +15,9 @@ properties:
       - task
       - channel
     # Intentionally narrower than Session.type: "scheduled" is server-minted by a
-    # fired schedule (NewScheduledSession), never client-created via POST /sessions.
-    description: Session type. Defaults to "chat" when omitted.
+    # fired schedule (NewScheduledSession), and "main" is server-created only.
+    # Neither is client-created via POST /sessions.
+    description: Session type. Defaults to "chat" when omitted. "main" is absent.
     example: "chat"
   workspace_id:
     type: string

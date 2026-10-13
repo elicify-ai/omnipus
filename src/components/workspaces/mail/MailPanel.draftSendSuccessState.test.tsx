@@ -59,7 +59,7 @@ describe('MailPanel — draft send success state', () => {
   it('shows sent without querying the removed draft or showing 404 and Retry', async () => {
     sessionStorage.clear()
     useUiStore.setState({ toasts: [] })
-    fetchAgents.mockReset().mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockReset().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockReset().mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])

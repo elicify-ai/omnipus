@@ -17,7 +17,10 @@ import { useSessionStore } from '@/store/session'
 import { makeAgent } from '@/test/factories'
 
 const mockCommands = [
-  { name: 'new', label: '/new', description: 'Start a new conversation', delivery: 'client', available_while_streaming: false, aliases: ['clear'] },
+  // Canonical server table (WC-1, U10a/U10b): /new is retired and absent;
+  // /clear is the server-owned replacement (DeliveryAgent — the SPA sends
+  // the label and the server executes it).
+  { name: 'clear', label: '/clear', description: "Clear this chat's context; the transcript is kept", delivery: 'agent', available_while_streaming: false },
   { name: 'help', label: '/help', description: 'Show available commands', delivery: 'client', available_while_streaming: false },
   { name: 'model', label: '/model', description: 'Change the chat model', delivery: 'client', available_while_streaming: false },
   { name: 'agents', label: '/agents', description: 'Open agent selector', delivery: 'client', available_while_streaming: false },
@@ -38,7 +41,7 @@ const mockSkills = [
 // files should mean the same thing everywhere, so "max" is a worker in both
 // files, never a chat-eligible agent in either.
 const mockAgents: Agent[] = [
-  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#111111', description: 'Assistant' }),
+  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#6E8BA8', description: 'Assistant' }),
   makeAgent({ id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' }),
   makeAgent({ id: 'mars', name: 'Mars', type: 'Main', status: 'active', description: 'Ops lead' }),
   makeAgent({ id: 'max', name: 'Max Worker', type: 'Subagent', status: 'active', description: 'Labour agent' }),
@@ -139,7 +142,6 @@ function baseParams(overrides: Partial<Parameters<typeof useSlashMenu>[0]> = {})
     inputEnabled: true,
     composerRuntime: makeComposerRuntime(),
     appendMessage: vi.fn(),
-    startNewSession: vi.fn(),
     cancelIfStreaming: vi.fn(),
     sendRedirectFrame: vi.fn(),
     activateStop: vi.fn(),
@@ -191,6 +193,7 @@ afterEach(() => {
   // matches useCancelState.test.ts's convention so a thrown assertion can't
   // leak fake timers into a later test.
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 describe('useSlashMenu — gating', () => {
@@ -223,12 +226,17 @@ describe('useSlashMenu — gating', () => {
     // filter, so rankByFilter's early-return still preserves this
     // (pre-sorted) order rather than re-ranking by prefix/substring.
     // Session-search enhancement: "/workspace" is a second synthetic
-    // client-only entry, inserted immediately after "/resume" in
+    // client-only entry, inserted immediately after "/sessions" in
     // useSlashMenu's allCommands (both web-client-only synthetic commands
     // sit together ahead of every backend-served command).
+    // The server's table is listed verbatim. /clear is the server-owned
+    // replacement row; /new is retired (WC-1) and is never listed — not by
+    // the server, and never invented by the SPA.
     expect(result.current.slashItems.map((i) => i.key)).toEqual([
-      '/resume', '/workspace', '/new', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'code-review', 'web-research',
+      '/sessions', '/workspace', '/clear', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'code-review', 'web-research',
     ])
+    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/resume')
+    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/new')
   })
 })
 
@@ -238,8 +246,8 @@ describe('useSlashMenu — streaming filter', () => {
     act(() => result.current.onInputChange('/'))
     const commandKeys = result.current.slashItems.filter((i) => i.section === 'commands').map((i) => i.key)
     // "/workspace" is declared with available_while_streaming: true (same as
-    // "/resume" and "/cancel") — session search must stay reachable mid-turn.
-    expect(commandKeys).toEqual(['/resume', '/workspace', '/cancel'])
+    // "/sessions" and "/cancel") — session search must stay reachable mid-turn.
+    expect(commandKeys).toEqual(['/sessions', '/workspace', '/cancel'])
     const skillKeys = result.current.slashItems.filter((i) => i.section === 'skills').map((i) => i.key)
     // Deferred item 3: alphabetical by name (see comment on the "gating" test above).
     expect(skillKeys).toEqual(['code-review', 'web-research'])
@@ -306,8 +314,8 @@ describe('useSlashMenu — skills cap + hidden count (deferred item 3)', () => {
 describe('useSlashMenu — prefix filtering', () => {
   it('filters commands and skills by the text after "/"', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('/ne'))
-    expect(result.current.slashItems.map((i) => i.key)).toEqual(['/new'])
+    act(() => result.current.onInputChange('/hel'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['/help'])
   })
 
   it('shows no items for an unmatched prefix (Issue 3 — menu just disappears)', () => {
@@ -317,12 +325,16 @@ describe('useSlashMenu — prefix filtering', () => {
     expect(result.current.shouldShowSlash).toBe(false)
   })
 
-  it('does not surface the "clear" alias as its own palette entry — prefix filtering matches canonical names only', () => {
-    // /new's hidden alias is "clear" (pkg/commands/cmd_clear.go). The
-    // palette list must never grow a separate "/clear" entry — only the
-    // canonical "/new" label is filterable/visible.
+  it('lists the server /clear command and never invents a /new row', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('/cl'))
+    act(() => result.current.onInputChange('/clear'))
+    expect(result.current.slashItems.map((i) => i.key)).toContain('/clear')
+    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/new')
+    act(() => result.current.onInputChange('/new'))
+    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/new')
+    // The retired /new has no server row and no alias left. No command or
+    // skill matches /new in this fixture, so even an unrelated /help row is
+    // a defect.
     expect(result.current.slashItems).toHaveLength(0)
   })
 })
@@ -361,18 +373,21 @@ describe('useSlashMenu — keyboard navigation', () => {
   // "/" or "@". Applies identically to "/" and "@" mode; exercised here via
   // "/" (the two modes share this exact handleKeyDown code path).
   it('Shift+Enter does NOT select from the menu — falls through so the caller can insert a newline', () => {
-    const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession })))
+    const appendMessage = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ appendMessage })))
     act(() => result.current.onInputChange('/'))
-    // Move highlight off "/resume" (index 0, whose onSelect touches the
-    // global ui store) past "/workspace" (index 1, session-search
-    // enhancement's second synthetic client-only entry — also touches the
-    // global ui store) onto "/new" (index 2, whose onSelect calls the
-    // locally-mocked startNewSession) so this test's assertions stay
-    // self-contained.
-    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-    expect(result.current.slashItems[result.current.slashHighlight].key).toBe('/new')
+    // Highlight /help by its command label, not a fixed ArrowDown count.
+    // /help's handler appends a local message and does not touch the ui store
+    // the way /resume and /workspace do. The server command table (founder X3)
+    // decides list order — /clear sits ahead of /help — so two ArrowDown presses
+    // are not an oracle for "/help".
+    const helpIndex = result.current.slashItems.findIndex((i) => i.key === '/help')
+    expect(helpIndex, 'fixture lists /help').toBeGreaterThanOrEqual(0)
+    for (let step = 0; step < helpIndex; step++) {
+      act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    }
+    expect(result.current.slashHighlight).toBe(helpIndex)
+    expect(result.current.slashItems[result.current.slashHighlight].key).toBe('/help')
 
     const shiftEnter = { key: 'Enter', shiftKey: true, preventDefault: vi.fn() } as unknown as React.KeyboardEvent
     act(() => result.current.handleKeyDown(shiftEnter))
@@ -381,7 +396,7 @@ describe('useSlashMenu — keyboard navigation', () => {
     // still open, and no command handler ran.
     expect(shiftEnter.preventDefault).not.toHaveBeenCalled()
     expect(result.current.slashOpen).toBe(true)
-    expect(startNewSession).not.toHaveBeenCalled()
+    expect(appendMessage).not.toHaveBeenCalled()
 
     // Plain Enter (no Shift) on the SAME highlighted row still selects
     // normally, proving the guard is Shift-specific, not a general Enter
@@ -389,7 +404,7 @@ describe('useSlashMenu — keyboard navigation', () => {
     const plainEnter = { key: 'Enter', shiftKey: false, preventDefault: vi.fn() } as unknown as React.KeyboardEvent
     act(() => result.current.handleKeyDown(plainEnter))
     expect(plainEnter.preventDefault).toHaveBeenCalled()
-    expect(startNewSession).toHaveBeenCalledTimes(1)
+    expect(appendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('is a no-op when the menu should not be showing', () => {
@@ -402,13 +417,25 @@ describe('useSlashMenu — keyboard navigation', () => {
 })
 
 describe('useSlashMenu — client command dispatch', () => {
-  it('/new calls startNewSession', () => {
-    const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession })))
+  it('lists /clear, and selecting it sends the server command without starting a session', () => {
+    let text = ''
+    const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+    const composerRuntime = {
+      getState: () => ({ text }),
+      setText: vi.fn((value: string) => { text = value }),
+      addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
+      send: vi.fn(),
+    } as unknown as ComposerRuntime
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
     act(() => result.current.onInputChange('/'))
-    const item = result.current.slashItems.find((i) => i.key === '/new')!
-    act(() => item.onSelect())
-    expect(startNewSession).toHaveBeenCalledTimes(1)
+    const item = result.current.slashItems.find((i) => i.key === '/clear')
+    expect(item, 'the server returned /clear').toBeDefined()
+    expect(result.current.slashItems.find((i) => i.key === '/new')).toBeUndefined()
+    act(() => item!.onSelect())
+    expect(startNewSession).not.toHaveBeenCalled()
+    expect(composerRuntime.send).toHaveBeenCalledTimes(1)
+    expect(text.trim()).toBe('/clear')
   })
 
   it('/help appends a system message built from the command list', () => {
@@ -420,7 +447,14 @@ describe('useSlashMenu — client command dispatch', () => {
     expect(appendMessage).toHaveBeenCalledTimes(1)
     const msg = appendMessage.mock.calls[0][0]
     expect(msg.role).toBe('system')
-    expect(msg.content).toContain('/new')
+    expect(msg.content).toContain('/help')
+    expect(msg.content).toContain('/clear')
+    // FR-007: /help prints the renamed command and must not keep /resume as an alias.
+    expect(msg.content).toContain('/sessions')
+    expect(msg.content).not.toContain('/resume')
+    // WC-1: the retired /new is gone from the table, so /help cannot list it.
+    expect(msg.content).not.toContain('/new')
+    expect(msg.content).not.toContain('switch agents')
   })
 
   it('/model opens the model selector via the ui store', () => {
@@ -448,15 +482,47 @@ describe('useSlashMenu — client command dispatch', () => {
     expect(cancelIfStreaming).toHaveBeenCalledTimes(1)
   })
 
-  // Session-search TWO MODES: /resume and /workspace open the SAME
+  // Session-search TWO MODES: /sessions and /workspace open the SAME
   // SearchModal instance (searchModalOpen) but in DIFFERENT modes —
-  // /resume must leave the panel in its original 'sessions' behavior
+  // /sessions must leave the panel in its original 'sessions' behavior
   // (unchanged per spec); /workspace must switch it into 'workspaces' mode
   // (openWorkspaceSwitcher, ui store) rather than reusing openSearchModal.
-  it('/resume opens the search modal in sessions mode (unchanged)', () => {
+  it.each(['ready', 'error', 'loading'] as const)('does not resolve typed /resume to Sessions when commands are %s', (state) => {
+    // FR-007 / ARCH decision 5: no retired alias. The existing loading
+    // readiness gate holds *unknown* slash text, then sends it normally;
+    // that temporary hold must never become a Sessions dispatch.
+    commandsQueryIsError = state === 'error'
+    commandsQueryIsLoading = state === 'loading'
+    const composerRuntime = makeComposerRuntime('/resume')
+    const params = baseParams({ composerRuntime })
+    const { result, rerender } = renderHook(() => useSlashMenu(params))
+    act(() => result.current.onInputChange('/resume'))
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+    expect(intercepted).toBe(state === 'loading')
+    expect(useUiStore.getState().searchModalOpen).toBe(false)
+    expect(composerRuntime.setText).not.toHaveBeenCalled()
+    expect(params.appendMessage).not.toHaveBeenCalled()
+    expect(result.current.slashItems.map((item) => item.key)).not.toContain('/resume')
+    if (state === 'loading') {
+      expect(composerRuntime.send).not.toHaveBeenCalled()
+      commandsQueryIsLoading = false
+      rerender()
+      expect(composerRuntime.send).toHaveBeenCalledTimes(1)
+      expect(composerRuntime.getState().text).toBe('/resume')
+      expect(composerRuntime.setText).not.toHaveBeenCalled()
+      expect(useUiStore.getState().searchModalOpen).toBe(false)
+      act(() => { intercepted = result.current.interceptClientCommand() })
+      expect(intercepted).toBe(false)
+    } else {
+      expect(composerRuntime.send).not.toHaveBeenCalled()
+    }
+  })
+
+  it('/sessions opens the search modal in sessions mode (unchanged)', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('/'))
-    const item = result.current.slashItems.find((i) => i.key === '/resume')!
+    const item = result.current.slashItems.find((i) => i.key === '/sessions')!
     act(() => item.onSelect())
     expect(useUiStore.getState().searchModalOpen).toBe(true)
     expect(useUiStore.getState().searchModalMode).toBe('sessions')
@@ -678,62 +744,24 @@ describe('useSlashMenu — agent-delivery command argument_hint ghost text (SD-C
 })
 
 describe('useSlashMenu — interceptClientCommand (send-path)', () => {
-  it('intercepts an exact client-delivery command (canonical "/new") and runs it locally', () => {
-    const composerRuntime = makeComposerRuntime('/new')
-    const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+  // (The retired /new is covered by useSlashMenu.clear.test.ts: it IS taken
+  // responsibility for — refused visibly, never sent. /clear in both cases
+  // passes through to the wire.)
+  it.each(['/clear', '/Clear'])(
+    'does not intercept %s or start a session',
+    (typed) => {
+      const composerRuntime = makeComposerRuntime(typed)
+      const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+      const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
 
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
+      let intercepted = false
+      act(() => { intercepted = result.current.interceptClientCommand() })
 
-    expect(intercepted).toBe(true)
-    expect(composerRuntime.setText).toHaveBeenCalledWith('')
-    expect(startNewSession).toHaveBeenCalledTimes(1)
-  })
-
-  it('intercepts the legacy "/clear" alias and runs the same client command as "/new"', () => {
-    // Backend renamed /clear -> /new with Aliases: ["clear"] (pkg/commands/cmd_clear.go).
-    // Typing the old alias must still resolve — not fall through to the LLM as chat text.
-    const composerRuntime = makeComposerRuntime('/clear')
-    const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
-
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
-
-    expect(intercepted).toBe(true)
-    expect(composerRuntime.setText).toHaveBeenCalledWith('')
-    expect(startNewSession).toHaveBeenCalledTimes(1)
-  })
-
-  // LOW S7/C3: "/Clear" or "/NEW" + Enter was silently sent to the LLM as
-  // chat text — the palette filter itself is case-insensitive (menuFilter
-  // lowercases), but interceptClientCommand's label/alias comparison wasn't.
-  it('intercepts an uppercase "/CLEAR" alias case-insensitively', () => {
-    const composerRuntime = makeComposerRuntime('/CLEAR')
-    const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
-
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
-
-    expect(intercepted).toBe(true)
-    expect(composerRuntime.setText).toHaveBeenCalledWith('')
-    expect(startNewSession).toHaveBeenCalledTimes(1)
-  })
-
-  it('intercepts a mixed-case "/New" canonical label case-insensitively', () => {
-    const composerRuntime = makeComposerRuntime('/New')
-    const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
-
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
-
-    expect(intercepted).toBe(true)
-    expect(composerRuntime.setText).toHaveBeenCalledWith('')
-    expect(startNewSession).toHaveBeenCalledTimes(1)
-  })
+      expect(intercepted).toBe(false)
+      expect(composerRuntime.setText).not.toHaveBeenCalled()
+      expect(startNewSession).not.toHaveBeenCalled()
+    },
+  )
 
   it('does not intercept an unknown slash token — caller must dispatch it as a normal message', () => {
     const composerRuntime = makeComposerRuntime('/zzz hi')
@@ -782,57 +810,41 @@ describe('useSlashMenu — interceptClientCommand (send-path)', () => {
 // The outcome these tests lock: a "/"-prefixed submit in that window is NEVER
 // dispatched as chat, and nothing the user typed is dropped either.
 describe('useSlashMenu — interceptClientCommand readiness gate (commands still loading)', () => {
-  it('a "/new" typed before the command list resolves is never dispatched, then runs as the client command it always was', () => {
-    commandsQueryIsLoading = true
-    const composerRuntime = makeComposerRuntime('/new')
-    const startNewSession = vi.fn()
-    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+  // (A held /new is refused outright by the WC-1 retirement guard — see
+  // useSlashMenu.clear.test.ts. /clear is delivered once the list lands.)
+  it.each(['/clear'])(
+    'a held %s is delivered as an ordinary message once the list lands, and never starts a session',
+    (typed) => {
+      commandsQueryIsLoading = true
+      const composerRuntime = makeComposerRuntime(typed)
+      const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+      const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
 
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
+      let intercepted = false
+      act(() => { intercepted = result.current.interceptClientCommand() })
 
-    // Held: the caller preventDefaults, so nothing reaches the backend...
-    expect(intercepted).toBe(true)
-    expect(composerRuntime.send).not.toHaveBeenCalled()
-    // ...and nothing has run yet either — the answer isn't knowable yet.
-    expect(startNewSession).not.toHaveBeenCalled()
+      // Held while the list is in flight — nothing is dispatched yet.
+      expect(intercepted).toBe(true)
+      expect(composerRuntime.send).not.toHaveBeenCalled()
+      expect(startNewSession).not.toHaveBeenCalled()
 
-    // The list lands.
-    commandsQueryIsLoading = false
-    act(() => { rerender() })
+      commandsQueryIsLoading = false
+      act(() => { rerender() })
 
-    // "/new" runs locally, exactly as it would have a moment later.
-    expect(startNewSession).toHaveBeenCalledTimes(1)
-    expect(composerRuntime.setText).toHaveBeenCalledWith('')
-    // And it was never sent to the backend at any point.
-    expect(composerRuntime.send).not.toHaveBeenCalled()
-  })
-
-  it('the legacy "/clear" alias is held and resolved the same way (aliases only exist on the fetched list)', () => {
-    commandsQueryIsLoading = true
-    const composerRuntime = makeComposerRuntime('/clear')
-    const startNewSession = vi.fn()
-    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
-
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
-    expect(intercepted).toBe(true)
-    expect(composerRuntime.send).not.toHaveBeenCalled()
-
-    commandsQueryIsLoading = false
-    act(() => { rerender() })
-
-    expect(startNewSession).toHaveBeenCalledTimes(1)
-    expect(composerRuntime.send).not.toHaveBeenCalled()
-  })
+      // /clear is not a client command. The held text is sent.
+      expect(startNewSession).not.toHaveBeenCalled()
+      expect(composerRuntime.send).toHaveBeenCalledTimes(1)
+      expect(composerRuntime.setText).not.toHaveBeenCalledWith('')
+    },
+  )
 
   it('a held submit that turns out NOT to be a client command is delivered, not dropped', () => {
     // The gate must not eat legitimate input: "/handoff …" is an
     // agent-delivery command and belongs on the wire.
     commandsQueryIsLoading = true
     const composerRuntime = makeComposerRuntime('/handoff do the thing')
-    const startNewSession = vi.fn()
-    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+    const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
 
     act(() => { result.current.interceptClientCommand() })
     expect(composerRuntime.send).not.toHaveBeenCalled()
@@ -870,9 +882,9 @@ describe('useSlashMenu — interceptClientCommand readiness gate (commands still
     expect(composerRuntime.send).not.toHaveBeenCalled()
   })
 
-  it('a client command that IS already resolvable (the synthetic "/resume") runs immediately, without waiting for the fetch', () => {
+  it('a client command that IS already resolvable (the synthetic "/sessions") runs immediately, without waiting for the fetch', () => {
     commandsQueryIsLoading = true
-    const composerRuntime = makeComposerRuntime('/resume')
+    const composerRuntime = makeComposerRuntime('/sessions')
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
 
     let intercepted = false
@@ -886,8 +898,8 @@ describe('useSlashMenu — interceptClientCommand readiness gate (commands still
   it('nothing is flushed when no submit was held (a plain list load must not send the composer on its own)', () => {
     commandsQueryIsLoading = true
     const composerRuntime = makeComposerRuntime('/new')
-    const startNewSession = vi.fn()
-    const { rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+    const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+    const { rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
 
     commandsQueryIsLoading = false
     act(() => { rerender() })
@@ -934,24 +946,24 @@ describe('useSlashMenu — onInputBlur (delayed close)', () => {
 
   it('a mousedown-select within the delay window completes before the stale blur timer fires, and does not get undone by it', () => {
     vi.useFakeTimers()
-    const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession })))
+    const appendMessage = vi.fn()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ appendMessage })))
     act(() => result.current.onInputChange('/'))
 
     act(() => result.current.onInputBlur())
     // Item's mousedown handler fires mid-delay (e.g. 50ms in) and wins the race.
     act(() => { vi.advanceTimersByTime(50) })
-    const item = result.current.slashItems.find((i) => i.key === '/new')!
+    const item = result.current.slashItems.find((i) => i.key === '/help')!
     act(() => item.onSelect())
 
-    expect(startNewSession).toHaveBeenCalledTimes(1)
+    expect(appendMessage).toHaveBeenCalledTimes(1)
     expect(result.current.slashOpen).toBe(false)
 
     // The original blur timer (now stale) still fires at the 150ms mark —
     // it must be a harmless no-op, not resurrect/alter menu state.
     act(() => { vi.advanceTimersByTime(100) })
     expect(result.current.slashOpen).toBe(false)
-    expect(startNewSession).toHaveBeenCalledTimes(1)
+    expect(appendMessage).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -989,7 +1001,7 @@ describe('useSlashMenu — #472 stale blur-close timer race (trace-evidenced)', 
     // Refocus and type a fresh command WELL inside the 150ms window —
     // mirrors `input.click(); input.pressSequentially('/new')`.
     act(() => { vi.advanceTimersByTime(100) })
-    act(() => result.current.onInputChange('/new'))
+    act(() => result.current.onInputChange('/help'))
     expect(result.current.slashOpen).toBe(true)
 
     // Advance PAST the ORIGINAL blur's 150ms mark (50 more ms = T+150 from
@@ -999,7 +1011,7 @@ describe('useSlashMenu — #472 stale blur-close timer race (trace-evidenced)', 
     act(() => { vi.advanceTimersByTime(50) })
 
     expect(result.current.slashOpen).toBe(true)
-    expect(result.current.slashItems.map((i) => i.key)).toContain('/new')
+    expect(result.current.slashItems.map((i) => i.key)).toContain('/help')
   })
 
   it('keyboard navigation after refocus (no retyping) also cancels the pending blur-close timer', () => {
@@ -1058,17 +1070,16 @@ describe('useSlashMenu — #472 stale blur-close timer race (trace-evidenced)', 
   })
 
   it('control: an explicit selection still closes the menu immediately', () => {
-    const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession })))
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('/'))
-    const item = result.current.slashItems.find((i) => i.key === '/new')!
+    const item = result.current.slashItems.find((i) => i.key === '/help')!
     act(() => item.onSelect())
     expect(result.current.slashOpen).toBe(false)
   })
 
   it('control: an explicit Escape still closes the menu immediately', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('/new'))
+    act(() => result.current.onInputChange('/help'))
     act(() => result.current.handleKeyDown({ key: 'Escape', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
     expect(result.current.slashOpen).toBe(false)
   })
@@ -1083,7 +1094,7 @@ describe('useSlashMenu — #472 stale blur-close timer race (trace-evidenced)', 
 describe('useSlashMenu — #472 investigation: ruled-out suspects', () => {
   it('activeAgentId resolving (e.g. an auto-select settle after mount) does not touch an open "/" menu', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('/new'))
+    act(() => result.current.onInputChange('/help'))
     expect(result.current.slashOpen).toBe(true)
 
     // Simulate the auto-select-first-ready-agent settle (AgentPicker-style)
@@ -1092,7 +1103,7 @@ describe('useSlashMenu — #472 investigation: ruled-out suspects', () => {
     act(() => { useSessionStore.setState({ activeAgentId: 'mia' }) })
 
     expect(result.current.slashOpen).toBe(true)
-    expect(result.current.slashItems.map((i) => i.key)).toContain('/new')
+    expect(result.current.slashItems.map((i) => i.key)).toContain('/help')
   })
 
   it('the commandsFirstLoadPending transition (list finishing its first load) does not touch an open "/" menu when nothing was deferred', () => {
@@ -1116,13 +1127,16 @@ describe('useSlashMenu — onHoverItem', () => {
     act(() => result.current.onInputChange('/'))
     expect(result.current.slashHighlight).toBe(0)
 
-    // Index 5 in the unified list is "/agents" (resume, workspace, new, help,
-    // model, agents, ...) — shifted by one from "/workspace" (session-search
-    // enhancement's second synthetic client-only entry, inserted right after
-    // "/resume").
-    act(() => result.current.onHoverItem(5))
-    expect(result.current.slashHighlight).toBe(5)
-    expect(result.current.slashItems[5].key).toBe('/agents')
+    // Hover the /agents row by command label. A hard-coded index is not the
+    // oracle: the server command table (founder X3) inserts /new, so the old
+    // index 4 is /model. The assertions stay on the named row: highlight
+    // equals the index that was hovered, that row is /agents, and Enter
+    // selects it (agent selector opens).
+    const agentsIndex = result.current.slashItems.findIndex((i) => i.key === '/agents')
+    expect(agentsIndex, 'fixture lists /agents').toBeGreaterThanOrEqual(0)
+    act(() => result.current.onHoverItem(agentsIndex))
+    expect(result.current.slashHighlight).toBe(agentsIndex)
+    expect(result.current.slashItems[result.current.slashHighlight].key).toBe('/agents')
 
     // Prove the hover-set index is the SAME one keyboard selection acts on —
     // not just a display-only value that Enter ignores.
@@ -1206,7 +1220,7 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
 
   it('keeps the menu open (shouldShowSlash=true) even when the error leaves zero matching items', () => {
     // With the commands query errored, allCommands is just the two synthetic
-    // client-only entries ("/resume", "/workspace") — a prefix that matches
+    // client-only entries ("/sessions", "/workspace") — a prefix that matches
     // neither of those nor any skill leaves slashItems empty. shouldShowSlash
     // must still be true so the caller's "Commands unavailable" row has
     // somewhere to render.
@@ -1224,7 +1238,7 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
   })
 
   // Documented per the task, not a new behavior: with the commands list
-  // unavailable, only the two synthetic client-only commands ("/resume",
+  // unavailable, only the two synthetic client-only commands ("/sessions",
   // "/workspace") still resolve locally. Any other slash text — even the
   // name of a real backend command — can no longer be matched, so
   // interceptClientCommand correctly returns false and the caller's normal
@@ -1239,19 +1253,19 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
     expect(intercepted).toBe(false)
   })
 
-  it('the synthetic client-only "/resume" command still intercepts even when the backend commands query errors', () => {
+  it('the synthetic client-only "/sessions" command still intercepts even when the backend commands query errors', () => {
     commandsQueryIsError = true
-    const composerRuntime = makeComposerRuntime('/resume')
+    const composerRuntime = makeComposerRuntime('/sessions')
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
     let intercepted = false
     act(() => { intercepted = result.current.interceptClientCommand() })
     expect(intercepted).toBe(true)
     expect(useUiStore.getState().searchModalOpen).toBe(true)
-    // Two-modes contract: /resume must land in 'sessions' mode, unchanged.
+    // Two-modes contract: /sessions must land in 'sessions' mode, unchanged.
     expect(useUiStore.getState().searchModalMode).toBe('sessions')
   })
 
-  // Mirrors the "/resume" case directly above: "/workspace" (session-search
+  // Mirrors the "/sessions" case directly above: "/workspace" (session-search
   // enhancement) is the second synthetic client-only command and must
   // survive the same backend-outage degradation, opening the SAME search
   // modal instance but in its 'workspaces' mode (no workspace preselected).
@@ -1305,7 +1319,165 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
 // window, which is not a confirmed failure and was never a deliberate
 // degradation — it is the actual bug.
 
-describe('useSlashMenu — "@" agent-mention menu', () => {
+// bugfixes3 fix round — 14-reviewer sign-off punch list (items A/B/C/D).
+describe('useSlashMenu — composerRuntime subscription resync (Fix A, bugfixes3 sign-off)', () => {
+  // Verified against node_modules/@assistant-ui/react/dist/utils/
+  // createActionButton.js + primitives/composer/ComposerSend.js:
+  // ComposerPrimitive.Send is a plain `type="button"` whose onClick calls
+  // `composer.send()` directly — it does NOT go through
+  // ComposerPrimitive.Root's onSubmit (`form.requestSubmit()`), so the
+  // Fix-4 mirror resync living in ChatScreen.tsx's onSubmit never runs for
+  // a click-Send. This composerRuntime exposes a capturable/invocable
+  // `subscribe` callback so the test can simulate the runtime clearing its
+  // own text out-of-band, exactly the way a click-Send does.
+  function makeSubscribableComposerRuntime(initialText = '') {
+    let currentText = initialText
+    let notify: (() => void) | undefined
+    const runtime = {
+      getState: () => ({ text: currentText }),
+      setText: vi.fn((t: string) => { currentText = t }),
+      addAttachment: vi.fn(),
+      subscribe: vi.fn((cb: () => void) => {
+        notify = cb
+        return vi.fn()
+      }),
+    } as unknown as ComposerRuntime & { setText: ReturnType<typeof vi.fn>; subscribe: ReturnType<typeof vi.fn> }
+    return {
+      runtime,
+      setExternalText: (t: string) => { currentText = t },
+      notifySubscribers: () => notify?.(),
+    }
+  }
+
+  it('a runtime-driven text clear that bypasses onChange (e.g. mouse-click Send) still resyncs the mirror, so a stale slash mirror cannot reopen the menu', () => {
+    const { runtime, setExternalText, notifySubscribers } = makeSubscribableComposerRuntime()
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime: runtime })))
+
+    setExternalText('/help')
+    act(() => result.current.onInputChange('/help'))
+    expect(result.current.slashOpen).toBe(true)
+    expect(result.current.isMentionMode).toBe(false)
+
+    // A leading "@" opens the agent-mention menu again (founder decision
+    // 2026-10-11 Q1 B, reversing the FR-007 cutover for addressing). "@x"
+    // matches no agent name, so the menu has zero rows and stays visually
+    // shut — but the mode itself is on.
+    setExternalText('@x')
+    act(() => result.current.onInputChange('@x'))
+    expect(result.current.isMentionMode).toBe(true)
+    expect(result.current.shouldShowSlash).toBe(false)
+
+    setExternalText('')
+    act(() => { notifySubscribers() })
+
+    expect(result.current.inputValue).toBe('')
+    expect(result.current.slashOpen).toBe(false)
+
+    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashOpen).toBe(false)
+    expect(result.current.shouldShowSlash).toBe(false)
+    expect(result.current.slashItems).toHaveLength(0)
+  })
+
+  it('subscribes to the composerRuntime on mount and unsubscribes on unmount', () => {
+    const composerRuntime = makeComposerRuntime()
+    const subscribeMock = composerRuntime.subscribe as unknown as ReturnType<typeof vi.fn>
+    const { unmount } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+    expect(subscribeMock).toHaveBeenCalledTimes(1)
+    const unsubscribe = subscribeMock.mock.results[0]!.value
+    unmount()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useSlashMenu — IME composition guard (Fix C, bugfixes3 sign-off)', () => {
+  it('Enter during an IME composition does not select from the menu or wipe the draft', () => {
+    const appendMessage = vi.fn()
+    const composerRuntime = makeComposerRuntime('/help')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, appendMessage })))
+    act(() => result.current.onInputChange('/help'))
+
+    const imeEnter = { key: 'Enter', preventDefault: vi.fn(), nativeEvent: { isComposing: true } } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(imeEnter))
+
+    // Nothing was selected — preventDefault was not called, the menu is
+    // still open, and /help did not run.
+    expect(imeEnter.preventDefault).not.toHaveBeenCalled()
+    expect(result.current.slashOpen).toBe(true)
+    expect(appendMessage).not.toHaveBeenCalled()
+
+    // A plain (non-composing) Enter on the SAME highlighted row still
+    // selects normally — proves the guard is IME-specific, not a general
+    // Enter regression.
+    const plainEnter = { key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(plainEnter))
+    expect(plainEnter.preventDefault).toHaveBeenCalled()
+    expect(appendMessage).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useSlashMenu — empty-items keyboard handling (Fix D, bugfixes3 sign-off)', () => {
+  it('commandsError + "/nomatch" + Enter: does not block submit; ArrowDown leaves the highlight at 0 (no NaN)', () => {
+    commandsQueryIsError = true
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/nomatch'))
+    expect(result.current.slashItems).toHaveLength(0)
+    expect(result.current.shouldShowSlash).toBe(true)
+
+    const enterEvent = { key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(enterEvent))
+    // Enter falls through to the caller's normal submit path — not swallowed.
+    expect(enterEvent.preventDefault).not.toHaveBeenCalled()
+
+    const downEvent = { key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
+    act(() => result.current.handleKeyDown(downEvent))
+    expect(result.current.slashHighlight).toBe(0)
+    expect(downEvent.preventDefault).not.toHaveBeenCalled()
+
+    // Escape still closes the (contentless) menu.
+    act(() => result.current.handleKeyDown({ key: 'Escape', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    expect(result.current.slashOpen).toBe(false)
+  })
+})
+
+// Deferred item 4: prefix-then-substring matching, consistently across all
+// three sections. Before this, matching was prefix-only everywhere
+// (commands: label prefix; skills: id/name prefix; agents: name prefix) —
+// e.g. "@assist" could not find an agent named "Code Assistant" because
+// "assist" is not a PREFIX of "code assistant", only a substring of it.
+describe('useSlashMenu — prefix-then-substring matching (deferred item 4)', () => {
+  it('"/ancel" finds "/cancel" via the substring rank for commands (not just a label prefix)', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/ancel'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['/cancel'])
+  })
+
+  it('"/eview" finds "code-review" via the substring rank for skills (not just an id/name prefix)', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/eview'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['code-review'])
+  })
+
+  it('commands: prefix matching still works unchanged through the same rankByFilter path substring matching now shares', () => {
+    // Sanity check that routing commands through the shared rankByFilter
+    // helper (used for the prefix-vs-substring ranking proven above via
+    // agents) didn't regress plain prefix matching for commands.
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('/ag'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['/agents'])
+  })
+})
+
+// ── "@" agent-mention menu — restored (founder decision 2026-10-11 Q1 B) ────
+//
+// The old agent-mention menu (commit 103c5fd0, release/v0.1.1) is ported back
+// onto the current composer with ONE behaviour change: selecting an agent no
+// longer switches the active agent or chat (FR-029 — no in-chat handover).
+// It inserts "@<Agent name> " into the composer and marks that agent as the
+// message's recipient, derived from the leading "@<Name>" prefix at SEND time
+// (src/lib/recipientAddress.ts; the wire side is covered by
+// src/store/chat.recipient-send.test.ts).
+describe('useSlashMenu — "@" agent-mention menu (restored, founder decision 2026-10-11 Q1 B)', () => {
   it('shows nothing for "@" mid-text — only a leading "@" triggers (same rule as "/")', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('hello @x'))
@@ -1319,10 +1491,11 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     act(() => result.current.onInputChange('@'))
     expect(result.current.isMentionMode).toBe(true)
     expect(result.current.shouldShowSlash).toBe(true)
-    // Deferred item 3: alphabetical by name — "Jim" < "Mars" < "Mia" —
-    // rather than API/array order (mockAgents declares mia, jim, mars).
+    // Alphabetical by name — "Jim" < "Mars" < "Mia" — rather than API/array
+    // order (mockAgents declares mia, jim, mars).
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim', 'mars', 'mia'])
     expect(result.current.slashItems.every((i) => i.section === 'agents')).toBe(true)
+    expect(result.current.slashItems.map((i) => i.label)).toEqual(['@Jim', '@Mars', '@Mia'])
   })
 
   it('the SECOND typed character (the first after "@") already filters the list', () => {
@@ -1330,10 +1503,9 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     act(() => result.current.onInputChange('@'))
     expect(result.current.slashItems).toHaveLength(3)
     act(() => result.current.onInputChange('@m'))
-    // Deferred item 4: "Mars"/"Mia" prefix-match "m" (alphabetical within
-    // the prefix rank: "Mars" < "Mia"); "Jim" now ALSO matches via the
-    // substring rank ("jim" contains "m", just not at the start), ranked
-    // after both prefix matches.
+    // Prefix-then-substring ranking: "Mars"/"Mia" prefix-match "m"
+    // (alphabetical within the prefix rank: "Mars" < "Mia"); "Jim" also
+    // matches via the substring rank ("jim" contains "m"), ranked after both.
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['mars', 'mia', 'jim'])
   })
 
@@ -1343,13 +1515,6 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['mars', 'mia', 'jim'])
   })
 
-  // Fix 7 (bugfixes3 review): inverted from "matches by agent id prefix
-  // too" — user-created agent ids are UUIDs/arbitrary strings unrelated to
-  // the visible label, so an id-prefix clause surfaced agents into "@a"
-  // whose id happened to start with "a" but whose NAME had nothing to do
-  // with what was typed. Filtering is NAME-prefix only now. A fixture whose
-  // id and name diverge proves both directions: the divergent id must NOT
-  // leak a match, and the real name must still match normally.
   it('matches by agent NAME (prefix or substring) only — a divergent id does not leak a match', () => {
     mentionAgentsOverride = [
       ...mockAgents,
@@ -1357,22 +1522,34 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     ]
     const { result } = renderHook(() => useSlashMenu(baseParams()))
 
-    // Matches by NAME prefix ("Marcus" starts with "marc").
     act(() => result.current.onInputChange('@marc'))
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['ops-7'])
 
     // Does NOT match by the divergent ID prefix ("ops-7" starts with "op",
-    // but the name "Marcus" does not) — even under substring matching:
-    // "marcus" does not contain "op" either.
+    // but the name "Marcus" does not) — even under substring matching.
     act(() => result.current.onInputChange('@op'))
     expect(result.current.slashItems).toHaveLength(0)
 
-    // Deferred item 4: extends (does not weaken) the above — "arc" is a
-    // SUBSTRING of "Marcus" (not a prefix: "marcus" does not start with
-    // "arc"), so it must now ALSO find Marcus via the substring-match rank,
-    // while the divergent id is still never consulted.
+    // Substring rank still finds "Marcus" for "@arc", the divergent id never
+    // consulted.
     act(() => result.current.onInputChange('@arc'))
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['ops-7'])
+  })
+
+  it('EXCLUDES the agent that owns the current chat — addressing yourself is meaningless', () => {
+    act(() => {
+      useSessionStore.setState({ activeAgentId: 'mars' })
+    })
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim', 'mia'])
+  })
+
+  it('excludes worker agents regardless of a matching name (the "max" fixture is a Subagent)', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    act(() => result.current.onInputChange('@max'))
+    expect(result.current.slashItems).toHaveLength(0)
+    expect(result.current.shouldShowSlash).toBe(false)
   })
 
   it('hides the menu entirely when no agent matches the filter', () => {
@@ -1421,26 +1598,28 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     expect(result.current.slashOpen).toBe(false)
   })
 
-  it('Enter on the highlighted row selects that agent: sets it active (preserving activeSessionId), clears the composer, closes the menu', () => {
+  it('Enter on the highlighted row inserts "@<Name> " into the composer and does NOT change the active agent or session', () => {
     act(() => {
-      useSessionStore.setState({ activeAgentId: 'jim', activeSessionId: 'sess_123' })
+      useSessionStore.setState({ activeAgentId: 'jim', activeSessionId: 'sess_123', activeAgentType: 'core' })
     })
     const composerRuntime = makeComposerRuntime('@m')
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
     act(() => result.current.onInputChange('@m'))
-    // Deferred item 3: '@m' matches ['mars', 'mia'] in alphabetical order —
-    // highlight 0 -> 'mars' (was 'mia' under the old array-order matching).
+    // '@m' matches ['mars', 'mia'] in alphabetical order — highlight 0 is 'mars'.
     act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
 
-    expect(useSessionStore.getState().activeAgentId).toBe('mars')
-    // activeSessionId must be PRESERVED, not detached (same SC-005 contract as AgentPicker).
+    // The ONE behaviour change vs the old menu: no agent switch, no chat
+    // switch (FR-029). The selection only writes "@<Name> " into the composer
+    // (the recipient is derived from this prefix at send time).
+    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    expect(useSessionStore.getState().activeAgentType).toBe('core')
     expect(useSessionStore.getState().activeSessionId).toBe('sess_123')
-    expect(composerRuntime.setText).toHaveBeenLastCalledWith('')
-    expect(result.current.inputValue).toBe('')
+    expect(composerRuntime.setText).toHaveBeenLastCalledWith('@Mars ')
+    expect(result.current.inputValue).toBe('@Mars ')
     expect(result.current.slashOpen).toBe(false)
   })
 
-  it('clicking (onSelect) a row does the same as Enter — verifies the mouse path independent of keyboard nav', () => {
+  it('clicking (onSelect) a row inserts the same "@<Name> " prefix — the mouse path matches Enter', () => {
     act(() => {
       useSessionStore.setState({ activeAgentId: null, activeSessionId: 'sess_click' })
     })
@@ -1450,39 +1629,29 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     const item = result.current.slashItems.find((i) => i.key === 'jim')!
     act(() => item.onSelect())
 
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    expect(useSessionStore.getState().activeAgentId).toBeNull()
     expect(useSessionStore.getState().activeSessionId).toBe('sess_click')
-    expect(composerRuntime.setText).toHaveBeenLastCalledWith('')
+    expect(composerRuntime.setText).toHaveBeenLastCalledWith('@Jim ')
+    expect(result.current.inputValue).toBe('@Jim ')
     expect(result.current.slashOpen).toBe(false)
   })
 
-  it('passes the agent type through to setActiveSession (not hardcoded/null)', () => {
-    const composerRuntime = makeComposerRuntime()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
-    act(() => result.current.onInputChange('@ma'))
-    const item = result.current.slashItems.find((i) => i.key === 'mars')!
-    act(() => item.onSelect())
-    expect(useSessionStore.getState().activeAgentType).toBe('Main')
-  })
-
-  it('marks the currently active agent row with isActiveAgent, and no other row', () => {
-    act(() => {
-      useSessionStore.setState({ activeAgentId: 'jim' })
-    })
-    const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('@'))
-    const flags = result.current.slashItems.map((i) => [i.key, i.isActiveAgent])
-    // Deferred item 3: alphabetical order — jim, mars, mia.
-    expect(flags).toEqual([['jim', true], ['mars', false], ['mia', false]])
-  })
-
-  it('agent rows carry color/icon/description through for the render layer', () => {
+  it('selection carries the agent row data the render layer needs (label, description, whole agent for AgentMark)', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('@mia'))
     const item = result.current.slashItems[0]
     expect(item.label).toBe('@Mia')
     expect(item.description).toBe('Assistant')
-    expect(item.agentColor).toBe('#111111')
+    expect(item.agent?.id).toBe('mia')
+    expect(item.agent?.name).toBe('Mia')
+  })
+
+  it('selection sets the sr-only announcement ("Message addressed to <Name>")', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams()))
+    expect(result.current.mentionAnnouncement).toBeNull()
+    act(() => result.current.onInputChange('@j'))
+    act(() => result.current.slashItems[0].onSelect())
+    expect(result.current.mentionAnnouncement).toBe('Jim')
   })
 
   it('"/" and "@" triggers never mix — "/" still shows commands+skills, unaffected by agent data', () => {
@@ -1492,10 +1661,6 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     expect(result.current.slashItems.every((i) => i.section === 'commands' || i.section === 'skills')).toBe(true)
   })
 
-  // Gap 1 (test-quality review): keep a handle on the keydown event object
-  // in the Enter-select path and assert preventDefault was called — guards
-  // the select+send double-fire (a textarea's native Enter-submits-a-form
-  // behavior must never fire alongside the menu's own selection).
   it('Enter-select calls preventDefault on the keydown event (guards the select+send double-fire)', () => {
     const composerRuntime = makeComposerRuntime('@m')
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
@@ -1506,23 +1671,16 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
 
     expect(enterEvent.preventDefault).toHaveBeenCalledTimes(1)
     // Prove the selection itself actually ran too — preventDefault firing
-    // in isolation (with no real selection) would be a hollow assertion.
-    // Deferred item 3: '@m' matches ['mars', 'mia'] alphabetically — highlight
-    // 0 is 'mars'.
-    expect(useSessionStore.getState().activeAgentId).toBe('mars')
+    // in isolation would be a hollow assertion.
+    expect(result.current.inputValue).toBe('@Mars ')
   })
 
-  // Gap 2: highlight resets to 0 whenever the visible list narrows, so a
-  // stale out-of-range highlight index can never make Enter select nothing
-  // (a no-op) or the wrong row.
   it('highlight resets to 0 when narrowing the filter shrinks the list (guards the out-of-range no-op)', () => {
     const composerRuntime = makeComposerRuntime('@j')
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
     act(() => result.current.onInputChange('@'))
     act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
     act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-    // Deferred item 3: bare "@" order is alphabetical (jim, mars, mia) — the
-    // third row is now "mia", not "mars".
     expect(result.current.slashHighlight).toBe(2)
     expect(result.current.slashItems[2].key).toBe('mia')
 
@@ -1530,15 +1688,10 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim'])
     expect(result.current.slashHighlight).toBe(0)
 
-    // Enter on the reset highlight selects the one remaining match, "jim" —
-    // not a no-op and not the stale "mars" position.
     act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    expect(result.current.inputValue).toBe('@Jim ')
   })
 
-  // Gap 3: pins the reopen-on-next-keystroke design — Escape only closes
-  // slashOpen, it does not clear inputValue, so the very next keystroke
-  // (which re-runs onInputChange's startsWith("@") check) reopens the menu.
   it('Escape closes the menu, then typing the next character reopens it', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('@'))
@@ -1549,59 +1702,28 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
 
     act(() => result.current.onInputChange('@m'))
     expect(result.current.slashOpen).toBe(true)
-    // Deferred items 3/4: alphabetical within the prefix rank, plus "jim"
-    // now matching via the substring rank (see the sibling test above).
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['mars', 'mia', 'jim'])
   })
 
-  // Gap 4: streaming interaction — the mention menu has NO
-  // available_while_streaming-style filtering (unlike the "/" commands
-  // section); this is intentional mid-stream parity with AgentPicker, which
-  // is never disabled while streaming either. Selecting an agent mid-stream
-  // still just switches the active agent — it never sends anything.
-  describe('streaming interaction', () => {
-    it('while streaming, "@" still lists every scoped agent — no filtering applied', () => {
-      const { result } = renderHook(() => useSlashMenu(baseParams({ isStreaming: true })))
-      act(() => result.current.onInputChange('@'))
-      // Deferred item 3: alphabetical order — jim, mars, mia.
-      expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim', 'mars', 'mia'])
-      expect(result.current.slashItems.every((i) => i.section === 'agents')).toBe(true)
-    })
-
-    it('while streaming, Enter-select still calls setActiveSession, and never touches appendMessage/startNewSession (no send)', () => {
-      const composerRuntime = makeComposerRuntime('@m')
-      const appendMessage = vi.fn()
-      const startNewSession = vi.fn()
-      const { result } = renderHook(() =>
-        useSlashMenu(baseParams({ isStreaming: true, composerRuntime, appendMessage, startNewSession })),
-      )
-      act(() => result.current.onInputChange('@m'))
-      act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-
-      // Deferred item 3: '@m' matches ['mars', 'mia'] alphabetically — highlight 0 is 'mars'.
-      expect(useSessionStore.getState().activeAgentId).toBe('mars')
-      expect(composerRuntime.setText).toHaveBeenLastCalledWith('')
-      // No message-producing side effect fired — selection is a pure
-      // agent-switch, not a send.
-      expect(appendMessage).not.toHaveBeenCalled()
-      expect(startNewSession).not.toHaveBeenCalled()
-    })
+  it('while streaming, "@" still lists every scoped agent — no available_while_streaming filtering', () => {
+    const { result } = renderHook(() => useSlashMenu(baseParams({ isStreaming: true })))
+    act(() => result.current.onInputChange('@'))
+    expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim', 'mars', 'mia'])
+    expect(result.current.slashItems.every((i) => i.section === 'agents')).toBe(true)
   })
 
-  // Gap 5: the mention list caps at 8 rows (matches the skills section's own
-  // cap), and the cap is re-applied AFTER filtering — narrowing the query
-  // can surface a match that was pushed past the cap in the unfiltered
-  // (bare "@") view.
-  // Deferred items 3/4 (formerly "Fix 6" — cap-only, array order): the
-  // mention list still caps at 8 rows, but WHICH 8 survive is now
-  // deterministic — agents are sorted alphabetically by name BEFORE the cap
-  // (useSlashMenu.ts's `sortedAgents`) — and the overflow is exposed via
-  // `agentsHiddenCount` instead of silently vanishing.
-  describe('mention-list cap + hidden count (deferred items 3/4)', () => {
-    // Agent01..Agent10 (zero-padded so lexicographic order matches numeric
-    // order) — a clean fixture for testing the alphabetical-then-cap
-    // behavior without needing a name like "Zed" to reason about sort
-    // position.
+  it('interceptClientCommand returns false for an "@"-prefixed message — never intercepted as a command', () => {
+    const composerRuntime = makeComposerRuntime('@mia')
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
+
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+
+    expect(intercepted).toBe(false)
+    expect(composerRuntime.setText).not.toHaveBeenCalled()
+  })
+
+  describe('mention-list cap + hidden count', () => {
     function tenAgentsFixture() {
       return Array.from({ length: 10 }, (_, i) =>
         makeAgent({ id: `ag${String(i + 1).padStart(2, '0')}`, name: `Agent${String(i + 1).padStart(2, '0')}`, type: 'Main', status: 'active' }))
@@ -1613,11 +1735,9 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
 
       act(() => result.current.onInputChange('@'))
       expect(result.current.slashItems).toHaveLength(8)
-      // Alphabetical order (Agent01..Agent08) — not array/API order.
       expect(result.current.slashItems.map((i) => i.key)).toEqual([
         'ag01', 'ag02', 'ag03', 'ag04', 'ag05', 'ag06', 'ag07', 'ag08',
       ])
-      // Agent09/Agent10 are the two matches pushed past the cap.
       expect(result.current.agentsHiddenCount).toBe(2)
     })
 
@@ -1625,346 +1745,28 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
       mentionAgentsOverride = tenAgentsFixture()
       const { result } = renderHook(() => useSlashMenu(baseParams()))
 
-      // "agent0" prefix-matches Agent01..Agent09 (9 of the 10) — Agent10 is
-      // excluded: "agent10" starts with "agent1", not "agent0", and does not
-      // contain "agent0" as a substring either.
       act(() => result.current.onInputChange('@agent0'))
       expect(result.current.slashItems).toHaveLength(8)
       expect(result.current.slashItems.map((i) => i.key)).not.toContain('ag10')
       expect(result.current.agentsHiddenCount).toBe(1)
     })
 
-    it('narrowing further to ≤8 matches drops agentsHiddenCount back to 0 (the footer disappears)', () => {
+    it('narrowing further to ≤8 matches drops agentsHiddenCount back to 0', () => {
       mentionAgentsOverride = tenAgentsFixture()
       const { result } = renderHook(() => useSlashMenu(baseParams()))
 
-      // "agent1" prefix-matches only Agent10 — none of Agent01..Agent09
-      // start with or contain "agent1" (they all have "agent0" at that
-      // position).
       act(() => result.current.onInputChange('@agent1'))
       expect(result.current.slashItems.map((i) => i.key)).toEqual(['ag10'])
       expect(result.current.agentsHiddenCount).toBe(0)
     })
-
-    it('cap-hidden agents never appear in slashItems — ArrowDown wrap-around only cycles the 8 visible rows, never reaching a hidden one', () => {
-      mentionAgentsOverride = tenAgentsFixture()
-      const { result } = renderHook(() => useSlashMenu(baseParams()))
-      act(() => result.current.onInputChange('@'))
-      expect(result.current.slashItems).toHaveLength(8)
-
-      // Cycle ArrowDown exactly 8 times — wraps back to index 0 (modulo 8,
-      // not modulo 10), so the highlight can never land on the two
-      // cap-hidden agents (Agent09/Agent10), which don't exist in
-      // slashItems at all.
-      for (let i = 0; i < 8; i++) {
-        act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-      }
-      expect(result.current.slashHighlight).toBe(0)
-      expect(result.current.slashItems[result.current.slashHighlight].key).toBe('ag01')
-    })
   })
 
-  // Gap 6 (Fix 4 regression): the composer's onSubmit resyncs the text
-  // mirror via `slashMenu.onInputChange('')` immediately after a real send
-  // — see useSlashMenu.ts's file header and ChatScreen.tsx's
-  // ComposerPrimitive.Root onSubmit doc comment. Before that fix, a stale
-  // "@..." mirror survived a send and a subsequent ArrowDown reopened the
-  // full agent menu with nothing visible in the (now-empty) textarea.
-  it('Fix 4 regression: after the submit path resyncs the mirror (onInputChange("")), ArrowDown does not reopen the stale "@" menu', () => {
-    const { result } = renderHook(() => useSlashMenu(baseParams()))
-    // Simulate typing an "@"-prefixed message...
-    act(() => result.current.onInputChange('@x'))
-    expect(result.current.slashOpen).toBe(true)
-    // ...then simulate the composer's onSubmit resync that runs immediately
-    // after a successful send.
-    act(() => result.current.onInputChange(''))
-    expect(result.current.slashOpen).toBe(false)
-    expect(result.current.isMentionMode).toBe(false)
-
-    // The textarea is now visually empty. Before Fix 4 this ArrowDown would
-    // read the stale "@x" mirror and reopen the agent menu.
-    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-    expect(result.current.slashOpen).toBe(false)
-    expect(result.current.shouldShowSlash).toBe(false)
-    expect(result.current.slashItems).toHaveLength(0)
-  })
-
-  // Gap 8: backspacing away a narrowing filter must re-show every agent
-  // that was hidden by the filter, not just stop shrinking.
   it('backspacing from a narrowed filter back to bare "@" re-shows the full agent list', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('@mi'))
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['mia'])
 
     act(() => result.current.onInputChange('@'))
-    // Deferred item 3: alphabetical order — jim, mars, mia.
     expect(result.current.slashItems.map((i) => i.key)).toEqual(['jim', 'mars', 'mia'])
-  })
-
-  // Gap 9: effectiveActiveAgentId's fallback chain — `activeAgentId ||
-  // chatAgents[0]?.id` — must mark exactly the right row (or none) in both
-  // directions of the fallback.
-  describe('effectiveActiveAgentId fallback', () => {
-    it('activeAgentId null: the FIRST chat agent (in useChatAgents\' own order) is marked active (fallback to chatAgents[0])', () => {
-      act(() => { useSessionStore.setState({ activeAgentId: null }) })
-      const { result } = renderHook(() => useSlashMenu(baseParams()))
-      act(() => result.current.onInputChange('@'))
-      const flags = result.current.slashItems.map((i) => [i.key, i.isActiveAgent])
-      // Deferred item 3 sorts the RENDERED rows alphabetically (jim, mars,
-      // mia) but deliberately does NOT change effectiveActiveAgentId's
-      // fallback source — it still reads `chatAgents[0]` (useChatAgents'
-      // own, unsorted order — "mia" first in this fixture), matching
-      // AgentPicker.tsx's own identical `effectiveAgentId = activeAgentId ||
-      // chatAgents[0]?.id` fallback (composer/AgentPicker.tsx) and its
-      // auto-select-first-ready-agent effect, which also keys off
-      // `chatAgents[0]` unsorted. Diverging this hook's fallback from
-      // AgentPicker's would mark the WRONG row "active" here relative to
-      // whichever agent AgentPicker itself just auto-selected.
-      expect(flags).toEqual([['jim', false], ['mars', false], ['mia', true]])
-    })
-
-    it('activeAgentId set to an id NOT present in chatAgents: no row is marked active', () => {
-      act(() => { useSessionStore.setState({ activeAgentId: 'nonexistent-agent' }) })
-      const { result } = renderHook(() => useSlashMenu(baseParams()))
-      act(() => result.current.onInputChange('@'))
-      const flags = result.current.slashItems.map((i) => [i.key, i.isActiveAgent])
-      expect(flags).toEqual([['jim', false], ['mars', false], ['mia', false]])
-    })
-  })
-
-  // Gap 10: interception is exclusively a "/" concern — an "@"-prefixed
-  // message (menu closed or not) must always fall through to the normal
-  // send path, never get swallowed as if it were a client command.
-  it('interceptClientCommand returns false for an "@"-prefixed message — never intercepted', () => {
-    const composerRuntime = makeComposerRuntime('@mia')
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
-
-    let intercepted = false
-    act(() => { intercepted = result.current.interceptClientCommand() })
-
-    expect(intercepted).toBe(false)
-    expect(composerRuntime.setText).not.toHaveBeenCalled()
-  })
-})
-
-// bugfixes3 fix round — 14-reviewer sign-off punch list (items A/B/C/D).
-describe('useSlashMenu — composerRuntime subscription resync (Fix A, bugfixes3 sign-off)', () => {
-  // Verified against node_modules/@assistant-ui/react/dist/utils/
-  // createActionButton.js + primitives/composer/ComposerSend.js:
-  // ComposerPrimitive.Send is a plain `type="button"` whose onClick calls
-  // `composer.send()` directly — it does NOT go through
-  // ComposerPrimitive.Root's onSubmit (`form.requestSubmit()`), so the
-  // Fix-4 mirror resync living in ChatScreen.tsx's onSubmit never runs for
-  // a click-Send. This composerRuntime exposes a capturable/invocable
-  // `subscribe` callback so the test can simulate the runtime clearing its
-  // own text out-of-band, exactly the way a click-Send does.
-  function makeSubscribableComposerRuntime(initialText = '') {
-    let currentText = initialText
-    let notify: (() => void) | undefined
-    const runtime = {
-      getState: () => ({ text: currentText }),
-      setText: vi.fn((t: string) => { currentText = t }),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn((cb: () => void) => {
-        notify = cb
-        return vi.fn()
-      }),
-    } as unknown as ComposerRuntime & { setText: ReturnType<typeof vi.fn>; subscribe: ReturnType<typeof vi.fn> }
-    return {
-      runtime,
-      setExternalText: (t: string) => { currentText = t },
-      notifySubscribers: () => notify?.(),
-    }
-  }
-
-  it('a runtime-driven text clear that bypasses onChange (e.g. mouse-click Send) still resyncs the mirror, so a stale "@" mirror cannot reopen the menu', () => {
-    const { runtime, setExternalText, notifySubscribers } = makeSubscribableComposerRuntime()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime: runtime })))
-
-    // Simulate typing "@x" through the normal onChange path — a real
-    // keystroke updates both this hook's mirror AND the runtime's own text
-    // (see AssistantUI's ComposerInput.js onChange, which calls BOTH the
-    // caller's onChange and `aui.composer().setText(...)`).
-    setExternalText('@x')
-    act(() => result.current.onInputChange('@x'))
-    expect(result.current.slashOpen).toBe(true)
-    expect(result.current.isMentionMode).toBe(true)
-
-    // Simulate the runtime clearing its own text (click-Send) and notifying
-    // subscribers — WITHOUT ever going through onInputChange or onSubmit.
-    setExternalText('')
-    act(() => { notifySubscribers() })
-
-    expect(result.current.inputValue).toBe('')
-    expect(result.current.slashOpen).toBe(false)
-    expect(result.current.isMentionMode).toBe(false)
-
-    // The textarea is now visually empty. Before Fix A, this ArrowDown
-    // would still read the stale "@x" mirror and reopen the full agent menu.
-    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-    expect(result.current.slashOpen).toBe(false)
-    expect(result.current.shouldShowSlash).toBe(false)
-    expect(result.current.slashItems).toHaveLength(0)
-  })
-
-  it('subscribes to the composerRuntime on mount and unsubscribes on unmount', () => {
-    const composerRuntime = makeComposerRuntime()
-    const subscribeMock = composerRuntime.subscribe as unknown as ReturnType<typeof vi.fn>
-    const { unmount } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
-    expect(subscribeMock).toHaveBeenCalledTimes(1)
-    const unsubscribe = subscribeMock.mock.results[0]!.value
-    unmount()
-    expect(unsubscribe).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('useSlashMenu — mentionAnnouncement reconciliation (Fix B, bugfixes3 sign-off)', () => {
-  it('clears mentionAnnouncement when activeAgentId changes via a path OTHER than "@" (e.g. AgentPicker)', () => {
-    // "@mi" isolates a single match ("mia") — deferred item 3/4 made "@m"
-    // match both "mars" and "mia" (alphabetically, "mars" first), so a
-    // narrower filter keeps this test's single-match intent unambiguous.
-    const composerRuntime = makeComposerRuntime('@mi')
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
-    act(() => result.current.onInputChange('@mi'))
-    act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-    expect(result.current.mentionAnnouncement).toBe('Mia')
-
-    // Simulate an external switch — e.g. AgentPicker's handleAgentSelect —
-    // writing directly to the session store, NOT through selectMentionAgent.
-    act(() => { useSessionStore.setState({ activeAgentId: 'jim' }) })
-
-    expect(result.current.mentionAnnouncement).toBeNull()
-  })
-
-  it('re-announces the SAME agent selected via "@" a second time, after an intervening external switch (A -> picker -> A)', () => {
-    const composerRuntime = makeComposerRuntime('@mi')
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
-
-    // First "@" selection of Mia.
-    act(() => result.current.onInputChange('@mi'))
-    act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-    expect(result.current.mentionAnnouncement).toBe('Mia')
-
-    // Switch to Jim via a DIFFERENT surface (AgentPicker), not through "@".
-    act(() => { useSessionStore.setState({ activeAgentId: 'jim' }) })
-    expect(result.current.mentionAnnouncement).toBeNull()
-
-    // Re-select Mia via "@" again. Before Fix B this was silent: mentionAnnouncement
-    // still held 'Mia' from the first selection, so setMentionAnnouncement('Mia')
-    // was a same-value no-op (no transition, no re-announce). It must now be
-    // a real `null -> 'Mia'` transition.
-    act(() => result.current.onInputChange('@mi'))
-    act(() => result.current.handleKeyDown({ key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-    expect(result.current.mentionAnnouncement).toBe('Mia')
-  })
-})
-
-describe('useSlashMenu — IME composition guard (Fix C, bugfixes3 sign-off)', () => {
-  it('Enter during an IME composition does not select from the menu or wipe the draft', () => {
-    // "@mi" isolates a single match ("mia") — see the reconciliation
-    // describe block above for why "@m" alone is now ambiguous.
-    const composerRuntime = makeComposerRuntime('@mi')
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
-    act(() => result.current.onInputChange('@mi'))
-
-    const imeEnter = { key: 'Enter', preventDefault: vi.fn(), nativeEvent: { isComposing: true } } as unknown as React.KeyboardEvent
-    act(() => result.current.handleKeyDown(imeEnter))
-
-    // Nothing was selected — preventDefault was not called, the menu is
-    // still open, and no agent switch happened.
-    expect(imeEnter.preventDefault).not.toHaveBeenCalled()
-    expect(result.current.slashOpen).toBe(true)
-    expect(useSessionStore.getState().activeAgentId).toBeNull()
-
-    // A plain (non-composing) Enter on the SAME highlighted row still
-    // selects normally — proves the guard is IME-specific, not a general
-    // Enter regression.
-    const plainEnter = { key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
-    act(() => result.current.handleKeyDown(plainEnter))
-    expect(plainEnter.preventDefault).toHaveBeenCalled()
-    expect(useSessionStore.getState().activeAgentId).toBe('mia')
-  })
-})
-
-describe('useSlashMenu — empty-items keyboard handling (Fix D, bugfixes3 sign-off)', () => {
-  it('commandsError + "/nomatch" + Enter: does not block submit; ArrowDown leaves the highlight at 0 (no NaN)', () => {
-    commandsQueryIsError = true
-    const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('/nomatch'))
-    expect(result.current.slashItems).toHaveLength(0)
-    expect(result.current.shouldShowSlash).toBe(true)
-
-    const enterEvent = { key: 'Enter', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
-    act(() => result.current.handleKeyDown(enterEvent))
-    // Enter falls through to the caller's normal submit path — not swallowed.
-    expect(enterEvent.preventDefault).not.toHaveBeenCalled()
-
-    const downEvent = { key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent
-    act(() => result.current.handleKeyDown(downEvent))
-    expect(result.current.slashHighlight).toBe(0)
-    expect(downEvent.preventDefault).not.toHaveBeenCalled()
-
-    // Escape still closes the (contentless) menu.
-    act(() => result.current.handleKeyDown({ key: 'Escape', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-    expect(result.current.slashOpen).toBe(false)
-  })
-})
-
-// Deferred item 4: prefix-then-substring matching, consistently across all
-// three sections. Before this, matching was prefix-only everywhere
-// (commands: label prefix; skills: id/name prefix; agents: name prefix) —
-// e.g. "@assist" could not find an agent named "Code Assistant" because
-// "assist" is not a PREFIX of "code assistant", only a substring of it.
-describe('useSlashMenu — prefix-then-substring matching (deferred item 4)', () => {
-  it('"@code" ranks the prefix match ("Code Assistant") above the substring-only match ("Assist Code")', () => {
-    mentionAgentsOverride = [
-      makeAgent({ id: 'assist-code', name: 'Assist Code', type: 'Main', status: 'active' }),
-      makeAgent({ id: 'code-asst', name: 'Code Assistant', type: 'Main', status: 'active' }),
-    ]
-    const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('@code'))
-
-    // "Code Assistant" starts with "code" (prefix rank); "Assist Code"
-    // contains "code" but doesn't start with it (substring rank). Without
-    // rank-first ordering, plain alphabetical sort would put "Assist Code"
-    // FIRST ("Assist" < "Code") — this proves rank wins over alphabetical.
-    expect(result.current.slashItems.map((i) => i.key)).toEqual(['code-asst', 'assist-code'])
-  })
-
-  it('"@assist" finds "Code Assistant" via the substring rank (not just the literal prefix match "Assist Code")', () => {
-    mentionAgentsOverride = [
-      makeAgent({ id: 'assist-code', name: 'Assist Code', type: 'Main', status: 'active' }),
-      makeAgent({ id: 'code-asst', name: 'Code Assistant', type: 'Main', status: 'active' }),
-    ]
-    const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('@assist'))
-
-    // "Assist Code" starts with "assist" (prefix rank, ranked first);
-    // "Code Assistant" contains "assist" further in ("Code ASSISTant" —
-    // substring rank, ranked second) — this is the exact "@assist finds
-    // Code Assistant" case: prefix-only matching would have missed it
-    // entirely (slashItems would have been just ['assist-code']).
-    expect(result.current.slashItems.map((i) => i.key)).toEqual(['assist-code', 'code-asst'])
-  })
-
-  it('"/ancel" finds "/cancel" via the substring rank for commands (not just a label prefix)', () => {
-    const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('/ancel'))
-    expect(result.current.slashItems.map((i) => i.key)).toEqual(['/cancel'])
-  })
-
-  it('"/eview" finds "code-review" via the substring rank for skills (not just an id/name prefix)', () => {
-    const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('/eview'))
-    expect(result.current.slashItems.map((i) => i.key)).toEqual(['code-review'])
-  })
-
-  it('commands: prefix matching still works unchanged through the same rankByFilter path substring matching now shares', () => {
-    // Sanity check that routing commands through the shared rankByFilter
-    // helper (used for the prefix-vs-substring ranking proven above via
-    // agents) didn't regress plain prefix matching for commands.
-    const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('/ag'))
-    expect(result.current.slashItems.map((i) => i.key)).toEqual(['/agents'])
   })
 })

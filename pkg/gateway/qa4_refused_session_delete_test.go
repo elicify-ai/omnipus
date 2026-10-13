@@ -68,7 +68,26 @@ func qa4SeedOriginalEntries(t *testing.T, store *session.UnifiedStore, id string
 	for _, entry := range entries {
 		require.NoError(t, store.AppendTranscript(id, entry))
 	}
-	return entries
+	// FR-004 / C-ARCHIVE: an append-only transcript entry is a CHAT record, so
+	// the archive WRITER stamps ViewMembership "chat" on an unset membership —
+	// it refuses a caller-supplied "both" outright. The exact durable value is
+	// therefore what ReadTranscript returns, not the unstamped struct handed
+	// in; compare the before/after whole-struct checks against that read-back.
+	readBack, err := store.ReadTranscript(id)
+	require.NoError(t, err)
+	byID := make(map[string]session.TranscriptEntry, len(readBack))
+	for _, e := range readBack {
+		byID[e.ID] = e
+	}
+	out := make([]session.TranscriptEntry, 0, len(entries))
+	for _, entry := range entries {
+		got, ok := byID[entry.ID]
+		require.True(t, ok, "SETUP: seeded entry %s must be durable", entry.ID)
+		require.Equal(t, session.ViewMembershipChat, got.ViewMembership,
+			"SETUP: the archive writer stamps a chat transcript entry as ViewMembershipChat")
+		out = append(out, got)
+	}
+	return out
 }
 
 func qa4NewRefusedDeleteFixture(t *testing.T) *qa4DeleteFixture {
@@ -190,7 +209,14 @@ func TestQA4Delete_RequiredStopRefusalPreservesOriginalTranscriptsAndUploads(t *
 			var envelope generated.ErrorResponse
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 			assert.NotEmpty(t, envelope.Error, "refused DELETE must send a visible error to the caller")
-			assert.Contains(t, envelope.Error, failedID, "visible failure must identify the still-live session")
+			// Leak round 7, F4: a delete refused because Stop could not account for
+			// every session lists COUNTS, never session ids — pinned by
+			// rest_leak_r7_test.go::TestR7_F4_DeleteRefusalDoesNotPrintSessionIDs.
+			// This supersedes the pre-r7 wording that named the still-live session.
+			assert.Contains(t, envelope.Error, "1 session(s) still running",
+				"the refusal must report the still-live count, not the id")
+			assert.NotContains(t, envelope.Error, failedID,
+				"a refused DELETE must not print the still-live session id (leak r7 F4)")
 			assert.Contains(t, envelope.Error, "still running", "refused DELETE must explain that Stop did not complete")
 			assert.NoError(t, failedCtx.Err(), "DELETE must have encountered an actual still-running refused execution")
 			failedRec, err := ls.Load(failedID)

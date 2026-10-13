@@ -193,7 +193,7 @@ const claimBareMarker = "bare_marker"
 // blocked claim.
 func (te *TaskExecutor) resolveRunClaim(t *task.Task, taskSessionID, resp string, state *taskRunState) (runClaim, error) {
 	if !te.dispatchesExternalCLI(t.AgentID) {
-		store := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
+		store := te.agentLoop.GetSessionStore()
 		if store == nil || taskSessionID == "" {
 			return runClaim{}, nil
 		}
@@ -249,7 +249,7 @@ func (te *TaskExecutor) finishRunTurn(
 	run *activeRun,
 	state *taskRunState,
 ) (step runStep, nextPrompt, redispatchTaskID string) {
-	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 
 	var goalReadErr *goalRecordReadError
 	if errors.As(turnErr, &goalReadErr) {
@@ -359,6 +359,7 @@ func (te *TaskExecutor) finishRunTurn(
 					map[string]any{"task_id": t.ID, "error": setErr.Error()})
 			}
 		}
+		te.deliverTaskCompletionUpward(context.Background(), current, run)
 		te.finalizeTaskLifecycle(taskSessionID, current.Status)
 		te.closeRun(t.ID, run, current.Status, current.Result)
 		te.notifySourceChannel(current)
@@ -455,7 +456,7 @@ func (te *TaskExecutor) adjudicateRunClaim(
 	run *activeRun,
 	state *taskRunState,
 ) (runStep, string, string) {
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 	if strings.TrimSpace(evidence) == "" {
 		steer := "A completion claim needs your own one-line statement of what you verified. Verify the work, then claim again with that line."
 		return te.continueAfterInnerTry(ctx, t, taskSessionID, "a completion claim with no evidence", steer, sessStore, run, state)
@@ -715,9 +716,27 @@ func (te *TaskExecutor) consumeTaskAttempt(
 	maxAttempts := te.resolveTaskMaxAttempts(t)
 	hardCeiling := taskAttemptHardCeiling(maxAttempts)
 
+	// The failed run's authority must outlive it: whichever route picks the
+	// retry up (the immediate redispatch, the queue after a capacity refusal,
+	// an intercepted path) resolves it from the task. If it cannot be read,
+	// the retry is refused visibly; an unknown authority is never a person's.
+	carried, authErr := te.retryAuthority(t, taskSessionID)
+	if authErr != nil {
+		logger.ErrorCF("task_executor", "goal: could not determine the failed run's authority; not retrying",
+			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": authErr.Error()})
+		failReason := fmt.Sprintf("the task was not retried: the failed run's delegation authority could not be read: %v", authErr)
+		te.failTask(t.ID, failReason)
+		te.closeRun(t.ID, run, task.StatusFailed, failReason)
+		return ""
+	}
+
 	newAttempt := t.AttemptCount + 1
 	nextStatus := task.StatusNext
-	updated, uerr := te.store.UpdateIfStatus(t.ID, task.StatusInProgress, task.Patch{AttemptCount: &newAttempt, Status: &nextStatus})
+	patch := task.Patch{AttemptCount: &newAttempt, Status: &nextStatus}
+	if carried != nil {
+		patch.Initiator = &carried
+	}
+	updated, uerr := te.store.UpdateIfStatus(t.ID, task.StatusInProgress, patch)
 	if uerr != nil {
 		if errors.Is(uerr, task.ErrStatusConflict) {
 			logger.WarnCF("task_executor",
@@ -740,7 +759,7 @@ func (te *TaskExecutor) consumeTaskAttempt(
 			logger.WarnCF("task_executor", "goal: could not persist why the previous run failed",
 				map[string]any{"task_id": updated.ID, "error": serr.Error()})
 		}
-		te.appendRunSystemTranscript(updated, taskSessionID, te.agentLoop.taskSessionStore(taskSessionID, updated.AgentID), restartNote)
+		te.appendRunSystemTranscript(updated, taskSessionID, te.agentLoop.GetSessionStore(), restartNote)
 		te.supersedeTaskSession(updated.AgentID, taskSessionID)
 		logger.InfoCF("task_executor", "goal: run failed — restarting the task in a fresh run",
 			map[string]any{"task_id": updated.ID, "attempt": newAttempt, "max_attempts": maxAttempts, "reason": reason})
@@ -1057,4 +1076,37 @@ func (te *TaskExecutor) taskVerdictStillApplicable(taskID string) bool {
 		return false
 	}
 	return current.Status == task.StatusInProgress
+}
+
+// retryAuthority reads the failed run's lifecycle record and returns the
+// initiator its retry must run under: the agent that started the run, its chain
+// depth, and the run's EFFECTIVE onward budget (the minimum of every carrier it
+// had, OnwardBudget). It returns (nil, nil) only when the record was read and
+// no agent started the run, or when no lifecycle store is wired at all. ANY
+// read failure (including a missing record) is an error: the caller refuses the
+// retry rather than treating unknown authority as a person's start.
+func (te *TaskExecutor) retryAuthority(t *task.Task, sessionID string) (*task.Initiator, error) {
+	ls := te.getLifecycleStore()
+	if ls == nil {
+		return nil, nil //nolint:nilnil // No lifecycle store wired means no recorded initiator, not an error.
+	}
+	if sessionID == "" {
+		return nil, fmt.Errorf("the failed run has no session to read its authority from")
+	}
+	rec, err := ls.Load(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load lifecycle record %q: %w", sessionID, err)
+	}
+	if rec.InitiatedBy == nil {
+		return nil, nil //nolint:nilnil // The record was read and no agent started the run, not an error.
+	}
+	effective, _ := rec.OnwardBudget()
+	inherited := effective + 1 // authorizeInitiatedRun spends one hop of what it is given
+	return &task.Initiator{
+		AgentID:   rec.InitiatedBy.AgentID,
+		SessionID: rec.InitiatedBy.SessionID,
+		Depth:     rec.InitiatedBy.Depth - 1,
+		Inherited: &inherited,
+		Direct:    true,
+	}, nil
 }

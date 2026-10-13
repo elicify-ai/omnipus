@@ -37,8 +37,10 @@ import (
 //  1. A real AgentLoop with AutoRecapEnabled=true is configured with a scripted
 //     provider that returns a valid recap JSON.
 //  2. A session is created, given a transcript entry, and then closed via
-//     CloseSession("explicit") — this triggers runRecap which calls the scripted
-//     provider and writes LAST_SESSION.md to the agent's private room.
+//     CloseSession("idle") — session-core U12: FR-036 / DEL-08 retired the
+//     explicit trigger, so the recap is driven through the still-valid "idle"
+//     trigger; this triggers runRecap which calls the scripted provider and
+//     writes LAST_SESSION.md to the agent's private room.
 //  3. A NEW session is "started" for the SAME agent by calling BuildSystemPrompt
 //     on the agent's ContextBuilder (which reads last-session.md via
 //     GetMemoryContext at context.go:330).  The test asserts the recap text from
@@ -103,7 +105,7 @@ func TestIntegration_RecapThenInject(t *testing.T) {
 		t.Fatalf("recapIT: AppendTranscript: %v", err)
 	}
 
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	// Wait for LAST_SESSION.md to appear (recap goroutine writes it).
 	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
@@ -419,6 +421,7 @@ func TestIntegration_RememberRecallRoundTrip(t *testing.T) {
 	res1 := remember.Execute(ctxPrivate, map[string]any{
 		"content":  "the deployment key is rotated every 90 days",
 		"category": "key_decision",
+		"room":     "private",
 	})
 	if res1 == nil || res1.IsError {
 		t.Fatalf("recallIT: first remember failed: %+v", res1)
@@ -427,6 +430,7 @@ func TestIntegration_RememberRecallRoundTrip(t *testing.T) {
 	res2 := remember.Execute(ctxPrivate, map[string]any{
 		"content":  "chaos monkey load test revealed a 3s P99 spike",
 		"category": "lesson_learned",
+		"room":     "private",
 	})
 	if res2 == nil || res2.IsError {
 		t.Fatalf("recallIT: second remember failed: %+v", res2)
@@ -476,6 +480,7 @@ func TestIntegration_RememberRecallRoundTrip(t *testing.T) {
 	resShared := remember.Execute(ctxShared, map[string]any{
 		"content":  "shared workspace metric: 99th percentile latency 50ms",
 		"category": "reference",
+		"room":     "shared",
 	})
 	if resShared == nil || resShared.IsError {
 		t.Fatalf("recallIT: shared room remember failed: %+v", resShared)

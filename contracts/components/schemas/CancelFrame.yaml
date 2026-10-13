@@ -15,7 +15,7 @@ properties:
   session_id:
     type: string
     minLength: 1
-    maxLength: 128
+    maxLength: 255
     description: Session whose in-progress turn should be cancelled.
   scope:
     type: string

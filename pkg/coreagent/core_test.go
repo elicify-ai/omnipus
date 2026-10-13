@@ -99,12 +99,12 @@ func TestCoreAgentIDs(t *testing.T) {
 }
 
 // TestCoreAgentMetadata verifies each agent has a non-empty subtitle, description,
-// color, and icon — the fields needed for the UI roster card.
+// and color — the fields needed for the UI roster card.
 //
 // Traces to: wave5b-system-agent-spec.md — FR-012 (UI metadata fields)
 // BDD: "Given a core agent, When its fields are read,
 //
-//	Then Subtitle, Description, Color, and Icon are all non-empty"
+//	Then Subtitle, Description, and Color are all non-empty"
 func TestCoreAgentMetadata(t *testing.T) {
 	// Traces to: wave5b-system-agent-spec.md line 664
 	for _, agent := range coreagent.All() {
@@ -116,8 +116,6 @@ func TestCoreAgentMetadata(t *testing.T) {
 				"core agent %s must have a non-empty Description", agent.ID)
 			assert.NotEmpty(t, agent.Color,
 				"core agent %s must have a non-empty Color (hex code for avatar)", agent.ID)
-			assert.NotEmpty(t, agent.Icon,
-				"core agent %s must have a non-empty Icon (Phosphor icon name)", agent.ID)
 		})
 	}
 }

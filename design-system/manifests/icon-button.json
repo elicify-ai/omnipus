@@ -84,6 +84,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "IconButton [check:icon-button-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"icon-button\"]", "attribute": "aria-label", "value": "Close" }],
       "applicable": true
     },
     {

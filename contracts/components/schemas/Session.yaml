@@ -6,6 +6,7 @@ description: >
 additionalProperties: false
 required:
   - id
+  - type
   - agent_id
   - title
   - status
@@ -17,7 +18,10 @@ required:
 properties:
   id:
     type: string
-    description: Unique session identifier (UUID).
+    description: >
+      Unique session identifier. A main session's id is the server-computed
+      main session id (format decided later). Other sessions keep their
+      existing ids.
     example: "550e8400-e29b-41d4-a716-446655440000"
   type:
     type: string
@@ -26,37 +30,47 @@ properties:
       - task
       - channel
       - scheduled
-      - heartbeat
+      - main
       - verifier
       - delegate
     description: >
-      Session classification. Legacy sessions without a type field are treated as "chat"
-      by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a
-      session created by a fired schedule / heartbeat run (issue #264, FR-005); it must
-      be accepted here or GET /api/v1/sessions fails SPA schema validation once any
-      scheduled/heartbeat session exists. "heartbeat" tags the eager standing session
-      created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron
-      job continues this session rather than starting a fresh one. "verifier" (ADR-052
-      FR-036) tags a session created for a verifier-role adjudication (the Judge, or a
-      future custom verifier) — persisted with normal 90-day retention but hidden by
-      default from GET /api/v1/sessions (see `include_verifier`); Sidebar and
-      SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is
-      visible there), and the ActivityPanel / verdict drill-down surface it on demand.
-      "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when
-      minted by a delegation — it always carries a non-empty `parent_session_id`.
-      Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally
-      absent from SessionCreateRequest.yaml's narrower create-time enum (a client
-      cannot POST /sessions directly into this type).
+      Session classification. Required on a stored session; a missing type is
+      invalid and is not defaulted to "chat". "main" is the one standing
+      session for an eligible (workspace, agent) pair, and for Admin in the
+      default workspace. Its id is the server-computed main session id
+      (format decided later). Server-created only: "main" is absent from
+      SessionCreateRequest's
+      create-time enum, so a client cannot POST /sessions into this type.
+      "scheduled" tags a session created by a fired schedule run (issue #264,
+      FR-005). "verifier" (ADR-052 FR-036) tags a session created for a
+      verifier-role adjudication (the Judge, or a future custom verifier) —
+      persisted with normal 90-day retention but hidden by default from
+      GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal
+      always exclude it, UsageScreen includes it (verifier LLM spend is
+      visible there), and the ActivityPanel / verdict drill-down surface it
+      on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child
+      session gains when minted by a delegation — it always carries a
+      non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it
+      is server-minted only and absent from the client-create enum.
     example: "chat"
   protected:
     type: boolean
     description: >
-      Computed field: true while the heartbeat member whose session_id matches this
-      session's id has heartbeat.enabled = true in its workspace member_configs.
-      NOT a stored flag — derived server-side from member_configs on each GET /sessions
-      response. When true, the SPA pins the session to the top of the Session panel and
-      hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021,
-      FR-028, A2/G-01)
+      Computed, not stored. True for a main session whether or not that
+      member's heartbeat is enabled. When true, the SPA pins the session to
+      the top of the Session panel and hides the delete (trash) button;
+      DELETE /sessions/{id} returns 409.
+    example: false
+  needs_attention:
+    type: boolean
+    readOnly: true
+    description: >
+      Present as true or false on a valid main, including the default-workspace
+      Admin main. Omitted on every other session, and on a main whose
+      attention sources could not be read. An omitted value means unknown (the
+      client shows unknown, never false). True for a pending structured question, a pending tool approval
+      on the main or one of its helpers, or a finished or failed goal outcome
+      not yet seen; never for a goal the user stopped.
     example: false
   agent_id:
     type: string
@@ -104,8 +118,17 @@ properties:
       session a gateway restart cut off — the boot sweep) maps to
       `interrupted`, not `failed` (founder ruling 2026-10-06: a session does
       not fail because of a restart; this adds a sixth value to F0929-2's
-      five). A genuinely failed record still maps to `failed`. A stopped
-      helper has `status: active`, `lifecycle_state: stopped`.
+      five). The canonical current-boot lifecycle projection is restart-aware:
+      a prior-boot root with raw `queued` or `running` state can display
+      `interrupted` without a recovery write; this suppresses `execution`.
+      Interrupted describes the session's current interruption, not permanent
+      history: once the session is re-adopted or explicitly resumed with a fresh
+      current-boot execution identity, its current record determines the display.
+      A resumed `running` record projects to `working` and publishes
+      `execution: running`, rather than retaining a stale Interrupted display.
+      Gateway availability alone does not mean an old execution has resumed.
+      A genuinely failed record still maps to `failed`. A stopped helper has
+      `status: active`, `lifecycle_state: stopped`.
     example: "working"
   stop_note:
     $ref: './StopNote.yaml'
@@ -114,6 +137,31 @@ properties:
       current generation last landed `stopped`) — the durable, lasting
       reason for the stop (who/when/why). Absent for every other
       `lifecycle_state`, and for a session with no lifecycle record.
+  execution:
+    type: string
+    enum:
+      - queued
+      - running
+    description: >-
+      Projected queued/running classification for the session's current lifecycle
+      display. Present only when the same loaded lifecycle record, evaluated through
+      the canonical current-boot lifecycle projection, produces `lifecycle_state:
+      working`: `queued` for a queued record and `running` for a running record.
+      Omitted for any other projected display state, including Interrupted after a
+      prior-boot root execution, and when no usable lifecycle record is available.
+      Not a raw lifecycle-state export. The Sessions Running filter matches
+      `running`; queued does not match. A nonmatching parent may still be included
+      as hierarchy context.
+    example: running
+  background_command_count:
+    type: integer
+    minimum: 0
+    description: >
+      How many background shell commands this session itself owns right now.
+      Omitted when the process table is not available (unknown, not zero).
+      Zero means the table was checked and this session owns none.
+      Not a roll-up of child sessions.
+    example: 2
   created_at:
     type: string
     format: date-time
@@ -174,10 +222,6 @@ properties:
     example:
       - "jim"
       - "ava"
-  active_agent_id:
-    type: string
-    description: The agent ID currently handling this session (multi-agent sessions only).
-    example: "jim"
   compaction_summaries:
     type: object
     description: Per-agent compaction summaries (multi-agent sessions only).

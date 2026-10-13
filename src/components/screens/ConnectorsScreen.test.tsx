@@ -557,8 +557,8 @@ describe('ConnectorsScreen — create channel via Sheet, never a modal Dialog (U
     mockFetchWorkspaces.mockResolvedValue([{ id: 'ws1', name: 'Sales' }])
     mockFetchWorkspace.mockResolvedValue({ id: 'ws1', name: 'Sales', core_team: ['mia'] })
     mockFetchAgents.mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', locked: true },
-      { id: 'worker-1', name: 'Worker', type: 'Subagent' },
+      { id: 'mia', name: 'Mia', type: 'core', locked: true, figure: 'Omnipus', role: 'general' },
+      { id: 'worker-1', name: 'Worker', type: 'Subagent', figure: 'Omnipus', role: 'general' },
     ])
   })
 

@@ -43,7 +43,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 			// — a truncated turn that produced literally no content. No
 			// retry, no fallback substitution, no markTurnFailed; finalContent
 			// stays "" and the write choke points below persist a zero-content
-			// entry for MarkLastEntryTruncated to find.
+			// entry for the former post-hoc truncation rewrite to find.
 		} else if rz.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() >= rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations && rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations > 0 {
 			// Genuine failure: tool-iteration ceiling hit without a final response.
 			// markTurnFailed so DoneStats.TurnFailed=true reaches the done frame.
@@ -109,7 +109,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		// When the turn was truncated, stamp Truncated/TruncationReason in
 		// the SAME write as the content — see
 		// appendAssistantTranscriptTruncated's doc comment for why this
-		// replaces the former append-then-MarkLastEntryTruncated two-step
+		// replaces the former append-then-the former post-hoc truncation rewrite two-step
 		// (for the streaming case, finalizeStreamer's own deferred call
 		// does the single-write equivalent after wsStreamer.Finalize
 		// persists its entry).
@@ -120,6 +120,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		}
 	}
 
+	rz.rc.rx.rr.rq.ri.rf.rt.ts.autoTitleAfterFirstReply(rz.rc.rx.finalContent)
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseCompleted)
 	return turnResult{
 		finalContent: rz.rc.rx.finalContent,
@@ -173,13 +174,13 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = withTurnState(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts)
 	// SEC-15: Inject agent ID so audit entries carry the agent identity.
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithAgentID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.agent.ID)
-	// Inject session key so switch_agent can address the session.
+	// Inject the session key so tools can address the session.
 	if rc.rx.rr.rq.ri.rf.rt.ts.sessionKey == "" {
-		logger.WarnCF("agent", "runTurn: sessionKey is empty — switch_agent tool will not work",
+		logger.WarnCF("agent", "runTurn: sessionKey is empty — session-addressed tools will not work",
 			map[string]any{"agent_id": rc.rx.rr.rq.ri.rf.rt.ts.agentID, "chat_id": rc.rx.rr.rq.ri.rf.rt.ts.chatID})
 	}
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithSessionKey(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.sessionKey)
-	// Inject the actual session ID (directory name) for the switch_agent tool.
+	// Inject the actual session ID (directory name) for session-addressed tools.
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTranscriptSessionID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID)
@@ -717,13 +718,13 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 	}
 
 	// Save user message to session
-	if !rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && (strings.TrimSpace(rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage) != "" || len(rp.rc.rx.rr.rq.ri.rf.rt.ts.media) > 0) {
+	if !rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && !rp.rc.rx.rr.rq.ri.rf.rt.ts.userInputInWindow && (strings.TrimSpace(rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage) != "" || len(rp.rc.rx.rr.rq.ri.rf.rt.ts.media) > 0) {
 		rootMsg := providers.Message{
 			Role:    "user",
 			Content: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,
 			Media:   append([]string(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.media...),
 		}
-		if err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(rootMsg); err != nil {
+		if _, err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(rootMsg, rp.rc.rx.rr.rq.ri.rf.rt.al.inputProducer(rp.rc.rx.rr.rq.ri.rf.rt.ts)); err != nil {
 			rt := rp.rc.rx.rr.rq.ri.rf.rt
 			var status TurnEndStatus
 			rp.rc.ret0, status, rp.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
@@ -918,17 +919,15 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 	return agentLoopRunTurnRequestNext
 }
 
-// prepareCallMessages repairs history and injects the current ephemeral instruction messages.
+// prepareCallMessages refuses a malformed tool-call history and injects the
+// current ephemeral instruction messages. The window-group check is the only
+// tool-structure gate: a bad history is refused here, never repaired.
 func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 	repairedHistory := rq.ri.messages
 	if err := validateWindowGroups(repairedHistory); err != nil {
 		rq.ri.rf.rt.ts.setContextWindowError(err)
 		rq.ri.rf.callMessages = repairedHistory
 		return
-	}
-	if rq.ri.rf.rt.ts.opts.TranscriptStore != nil && rq.ri.rf.rt.ts.opts.TranscriptSessionID != "" && rq.ri.rf.rt.ts.agent != nil && rq.ri.rf.rt.ts.agent.Tools != nil {
-		repaired, _ := repairHistory(rq.ri.rf.rt.turnCtx, rq.ri.messages, rq.ri.rf.rt.ts.opts.TranscriptStore, rq.ri.rf.rt.ts.opts.TranscriptSessionID, rq.ri.rf.rt.ts.agent.Tools, rq.ri.rf.rt.ts.agent.ID, rq.ri.rf.rt.ts.agent.LoadToolPolicy())
-		repairedHistory = repaired
 	}
 
 	rq.ri.rf.callMessages = repairedHistory
@@ -1270,7 +1269,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		for i, pm := range ri.pendingMessages {
 			// Persist original compact media refs before using the resolved
 			// provider-only message. Failed admission cannot emit an applied receipt.
-			if err := ri.rf.rt.ts.appendWindowMessage(pm); err != nil {
+			if _, err := ri.rf.rt.ts.appendWindowMessage(pm, ri.rf.rt.al.inputProducer(ri.rf.rt.ts)); err != nil {
 				var status TurnEndStatus
 				ri.ret0, status, ri.ret1 = ri.rf.rt.al.contextWindowTurnExit(ri.rf.rt.ts, ri.rf.rt.iteration, ri.rf.rt.llmModel, err)
 				ri.turnStatus = status

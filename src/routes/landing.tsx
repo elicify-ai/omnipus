@@ -10,7 +10,7 @@ import {
 } from '@phosphor-icons/react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Wordmark } from '@/components/shared/Wordmark'
-import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
+import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
 
 const FEATURES = [
   {

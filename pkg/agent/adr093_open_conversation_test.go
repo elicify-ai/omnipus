@@ -157,8 +157,10 @@ func adr093WaitForEntered(t *testing.T, pp *parkedProvider, timeout time.Duratio
 func TestAdr093BootSweep_StandingRootsExempt(t *testing.T) {
 	h := newBootSweepHarness(t)
 
-	// Five standing roots across every exempt origin kind (ADR-093 D3).
+	// Six standing roots across every exempt origin kind (ADR-093 D3),
+	// including a main session (session-core FR-002/C-MAIN).
 	standingIDs := []string{
+		"adr093-root-main",
 		"adr093-root-chat",
 		"adr093-root-channel",
 		"adr093-root-heartbeat",
@@ -166,6 +168,7 @@ func TestAdr093BootSweep_StandingRootsExempt(t *testing.T) {
 		"adr093-root-nokind",
 	}
 	standingOrigins := map[string]*session.Origin{
+		"adr093-root-main":      {Kind: session.OriginKindMain},
 		"adr093-root-chat":      {Kind: session.OriginKindChat},
 		"adr093-root-channel":   {Kind: session.OriginKindChannel},
 		"adr093-root-heartbeat": {Kind: session.OriginKindHeartbeat},
@@ -194,7 +197,7 @@ func TestAdr093BootSweep_StandingRootsExempt(t *testing.T) {
 	res := h.pe.runBootSweep(context.Background())
 	assertBootSweepRecordUntouched(t, h.ls, child.SessionID, childBefore)
 	if res.Scanned != len(standingIDs)+2 {
-		t.Errorf("Scanned = %d, want %d (five roots, steered child and ordinary task root)", res.Scanned, len(standingIDs)+2)
+		t.Errorf("Scanned = %d, want %d (six roots, steered child and ordinary task root)", res.Scanned, len(standingIDs)+2)
 	}
 
 	gotSwept := append([]string{}, res.SweptToFailed...)
@@ -213,6 +216,9 @@ func TestAdr093BootSweep_StandingRootsExempt(t *testing.T) {
 		rec := adr093LoadStore(t, h.ls, id)
 		if rec.State != session.LifecycleRunning {
 			t.Fatalf("standing root %s was swept to %q/%q — ADR-093 D3 / F890-2: the restart sweep never makes a standing conversation unusable", id, rec.State, rec.FailedReason)
+		}
+		if rec.Generation != 1 {
+			t.Fatalf("standing root %s generation = %d after the restart sweep, want 1 (unchanged)", id, rec.Generation)
 		}
 	}
 	for _, id := range wantSwept {
@@ -545,37 +551,6 @@ func TestAdr093TaskFromStoppedCreator_RunsAsOrdinaryRoot(t *testing.T) {
 	got := adr093Load(t, al, creatorID)
 	if got.Generation != 1 || got.State != session.LifecycleRunning || got.Stop == nil || got.Stop.Generation != 1 {
 		t.Fatalf("creator chat after task launch = gen %d state %q Stop %+v, want gen 1 running with the human Stop intact (ADR-093 D6: the task never touches the chat)", got.Generation, got.State, got.Stop)
-	}
-}
-
-// TestAdr093TaskFromLiveCreator_SteeredUnchanged pins the behavior D6
-// deliberately keeps: a task created from a LIVE creator chat (record
-// running, no Stop) is still a STEERED launch — the child carries the
-// steering edge and the task origin. Characterization pin from the ADR's
-// "unchanged" list, not a RED test.
-func TestAdr093TaskFromLiveCreator_SteeredUnchanged(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	t.Cleanup(cleanup)
-	creatorID := newTestSteeringSession(t, al, adr093Workspace)
-
-	adr093Persist(t, al, adr093Record(creatorID, 1, session.LifecycleRunning))
-
-	te := adr093TaskExecutor(t, al)
-	tk := adr093CreatorTask("Live creator task", creatorID)
-	if err := te.store.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-
-	childID, err := te.startTaskNowViaLauncher(context.Background(), tk)
-	if err != nil {
-		t.Fatalf("startTaskNowViaLauncher from a live creator chat: %v", err)
-	}
-	rec := adr093Load(t, al, childID)
-	if rec.SteeredBy == nil || rec.SteeredBy.SteeringSessionID != creatorID {
-		t.Fatalf("task session %s steered_by = %+v, want steered by the live creator %s (ADR-093 D6: the live-creator path is unchanged)", childID, rec.SteeredBy, creatorID)
-	}
-	if rec.Origin == nil || rec.Origin.Kind != session.OriginKindTask || rec.Origin.TaskID != tk.ID {
-		t.Fatalf("task session %s origin = %+v, want task origin with task id %s", childID, rec.Origin, tk.ID)
 	}
 }
 

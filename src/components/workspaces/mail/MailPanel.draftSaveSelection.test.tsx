@@ -89,7 +89,7 @@ function editBody() {
 describe('MailPanel — saving a replacement draft (US-7)', () => {
   beforeEach(() => {
     useUiStore.setState({ toasts: [] })
-    fetchAgents.mockReset().mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockReset().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockReset().mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])

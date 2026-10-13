@@ -475,6 +475,28 @@ type PlanExecuteTool struct {
 	// decides first. Unwired fails closed to strict — see
 	// plan.AuthoredByAgent.
 	isAgentID func(id string) bool
+	// authorizeExecution is the delegation-policy pre-check for an AGENT
+	// executing a plan (founder ruling 2026-10-10: the policy always applies):
+	// the calling agent needs a caller->assignee edge for every member's
+	// assignee, itself included (no self-exemption). FAIL CLOSED when unwired.
+	// The same decision is re-run per member when it is dispatched.
+	authorizeExecution func(ctx context.Context, assigneeAgentID, workspaceID string) *DelegationDenial
+	// initiatorFn names the calling agent (taken from the tool's wiring, never
+	// read back from ctx) and its turn depth; it is stored on the plan so each
+	// member is authorized against it at dispatch.
+	initiatorFn func(ctx context.Context) *task.Initiator
+}
+
+// SetExecutionAuthorizer installs the per-assignee delegation pre-check.
+func (t *PlanExecuteTool) SetExecutionAuthorizer(
+	fn func(ctx context.Context, assigneeAgentID, workspaceID string) *DelegationDenial,
+) {
+	t.authorizeExecution = fn
+}
+
+// SetInitiatorFn installs the producer of the calling agent's task.Initiator.
+func (t *PlanExecuteTool) SetInitiatorFn(fn func(ctx context.Context) *task.Initiator) {
+	t.initiatorFn = fn
 }
 
 // NewPlanExecuteTool constructs a PlanExecuteTool. Either store may be nil
@@ -525,7 +547,7 @@ func (t *PlanExecuteTool) Parameters() map[string]any {
 	}
 }
 
-func (t *PlanExecuteTool) Execute(_ context.Context, args map[string]any) *ToolResult {
+func (t *PlanExecuteTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	if t.planStore == nil {
 		return ErrorResult("execute_plan failed: plan store is not available")
 	}
@@ -625,11 +647,61 @@ func (t *PlanExecuteTool) Execute(_ context.Context, args map[string]any) *ToolR
 		return ErrorResult(string(encoded))
 	}
 
+	// Delegation policy (founder ruling 2026-10-10): running a plan starts every
+	// member's assignee, so the calling agent needs a caller->assignee edge for
+	// each distinct assignee. Checked BEFORE the approval write so a refused
+	// call leaves the plan a draft; every denied assignee is listed. Each
+	// member is checked again, against the live graph, when it is dispatched.
+	if t.authorizeExecution == nil || t.initiatorFn == nil {
+		slog.Error("execute_plan: no delegation authorizer installed — denying by default", "plan_id", planID)
+		return DelegationDeniedResult("execute_plan", &DelegationDenial{
+			Reason: "delegation is not configured for this agent (no policy gate installed) — denying by default",
+			Policy: DenyTrustSet,
+		})
+	}
+	initiator := t.initiatorFn(ctx)
+	if initiator == nil || initiator.AgentID == "" {
+		return DelegationDeniedResult("execute_plan", &DelegationDenial{
+			Reason: "a plan can be executed by an agent only as an identified agent", Policy: DenyTrustSet,
+		})
+	}
+	var denials []string
+	var firstDenial *DelegationDenial
+	checked := map[string]bool{}
+	for _, mt := range members {
+		assignee := strings.TrimSpace(mt.AgentID)
+		if assignee == "" {
+			continue
+		}
+		ws := mt.WorkspaceID
+		if ws == "" {
+			ws = p.WorkspaceID
+		}
+		key := assignee + "\x00" + ws
+		if checked[key] {
+			continue
+		}
+		checked[key] = true
+		if d := t.authorizeExecution(ctx, assignee, ws); d != nil {
+			if firstDenial == nil {
+				firstDenial = d
+			}
+			denials = append(denials, fmt.Sprintf("%s: %s", assignee, d.Reason))
+		}
+	}
+	if firstDenial != nil {
+		return DelegationDeniedResult("execute_plan", &DelegationDenial{
+			Reason: "the plan was not started; denied assignees — " + strings.Join(denials, "; "),
+			Policy: firstDenial.Policy, TargetAgentID: firstDenial.TargetAgentID,
+		})
+	}
+
 	// Single gated transition: draft -> approved (the SAME transition
-	// handlePlanApprove performs). The engine (out of this package's scope)
-	// promotes approved -> running asynchronously under the global cap.
+	// handlePlanApprove performs), recording the initiating agent in the same
+	// write. The engine (out of this package's scope) promotes approved ->
+	// running asynchronously under the global cap.
 	approved := plan.StateApproved
-	updated, uerr := t.planStore.Update(planID, plan.Patch{State: &approved})
+	updated, uerr := t.planStore.Update(planID, plan.Patch{State: &approved, InitiatedBy: &initiator})
 	if uerr != nil {
 		return ErrorResult(fmt.Sprintf("execute_plan failed: could not approve plan: %v", uerr))
 	}

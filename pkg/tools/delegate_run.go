@@ -242,10 +242,10 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 	if dt.t.launcher == nil {
 		return ErrorResult("delegate: no session launcher configured")
 	}
+	// The target is always explicit (validated by validateRequest), so there is
+	// no caller-substitution fallback here: an empty dt.agentID cannot reach this
+	// method. A caller that means to delegate to itself passes its own id.
 	targetAgentID := strings.TrimSpace(dt.agentID)
-	if targetAgentID == "" {
-		targetAgentID = strings.TrimSpace(ToolAgentID(dt.ctx))
-	}
 	launch, err := dt.t.launcher.Launch(dt.ctx, steer.LaunchRequest{
 		SteeringSessionID: strings.TrimSpace(ToolTranscriptSessionID(dt.ctx)),
 		TargetAgentID:     targetAgentID,
@@ -259,7 +259,6 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		Limits: steer.Limits{
 			TimeoutSeconds: int(dt.timeout / time.Second),
 		},
-		ToolExclusions:    []string{string(ExcludedSwitchAgent)},
 		RequestedSkill:    strings.TrimSpace(dt.requestedSkill),
 		ContextReferences: dt.snapshotReferences(),
 		ContextNotes:      dt.snapshotNotes(),
@@ -295,11 +294,10 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		Generation: dispatch.Generation,
 		SessionId:  launch.SessionID,
 		State:      state,
-	}
-	if dt.t.getAgentRegistry != nil {
-		if registry := dt.t.getAgentRegistry(); registry != nil {
-			response.Is3p = registry.IsExternalCLI(targetAgentID)
-		}
+		// The classification Launch persisted for THIS child — never a fresh
+		// registry read, which a supported executor update could have changed
+		// since Launch stamped the record.
+		Is3p: launch.Is3P,
 	}
 	if dispatch.State == steer.DispatchQueued {
 		position := dispatch.QueuePosition
@@ -363,25 +361,25 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 
 	dt.label, _ = dt.args["label"].(string)
 
-	// agent_id is OPTIONAL (omit it to run a generic subagent under the
-	// caller's own agent), but when the caller DOES supply the key, it must
-	// not be blank — an empty string used to be silently accepted and
-	// treated identically to "omitted", spawning a generic/default subagent
-	// instead of the (presumably named) target the caller intended. Mirrors
-	// the "task is required and must be a non-empty string" / shell.go's
-	// "command is required and must be a non-empty string" validation style,
-	// adapted for an optional field: only PRESENT-but-blank is rejected.
-
-	if rawAgentID, present := dt.args["agent_id"]; present && rawAgentID != nil {
-		s, ok := rawAgentID.(string)
-		if !ok {
-			return ErrorResult("agent_id must be a string"), true
-		}
-		if strings.TrimSpace(s) == "" {
-			return ErrorResult("agent_id must be a non-empty string when provided; omit it to run a generic subagent"), true
-		}
-		dt.agentID = s
+	// agent_id is REQUIRED: delegation always names an explicit target (settled
+	// design). There is no default target and no implicit caller substitution —
+	// a caller delegating to itself passes its OWN id explicitly. An absent,
+	// null, non-string or blank agent_id is refused here, before any
+	// authorization, so the retired untargeted/"generic subagent" path can never
+	// be reached. Mirrors the "task is required and must be a non-empty string"
+	// validation style.
+	rawAgentID, present := dt.args["agent_id"]
+	if !present || rawAgentID == nil {
+		return ErrorResult("agent_id is required and must be a non-empty string"), true
 	}
+	s, ok := rawAgentID.(string)
+	if !ok {
+		return ErrorResult("agent_id must be a string"), true
+	}
+	if strings.TrimSpace(s) == "" {
+		return ErrorResult("agent_id is required and must be a non-empty string"), true
+	}
+	dt.agentID = s
 
 	for _, removed := range []string{"async", "allow_blocking_question"} {
 		if _, present := dt.args[removed]; present {
@@ -523,47 +521,6 @@ func resolveDelegateTimeoutSeconds(args map[string]any) (time.Duration, error) {
 		)
 	}
 	return time.Duration(v) * time.Second, nil
-}
-
-// transitionLifecycle is a small helper that atomically transitions
-// sessionID's durable record to the given terminal/non-terminal state +
-// optional failedReason, preserving every other field. Errors are logged,
-// not propagated — a durable-record write failure must never fail (or mask
-// the outcome of) the underlying delegation itself.
-//
-// NOTE ON LOCKING (Correctness-MAJOR-3, honesty template): this delegates
-// to session.TransitionSession (the single dual-store mediator, Defect #28).
-// The UnifiedStore half is t.unified, installed by SetUnifiedStore from the
-// same shared store SteerLauncher.Launch mints every child's meta.json into
-// (issue #947: passing nil here left sessions/<id>/meta.json at status=active
-// after the lifecycle record had gone terminal). A nil t.unified — an unwired
-// tool, or a harness that never constructed the shared store — keeps the
-// mediator's "no chat-transcript meta" skip; it must not be the production
-// shape. The mediator's atomic LifecycleStore.Mutate (the RMW primitive that holds the
-// per-session striped lock across tail→fn→write) replaces the hand-rolled
-// Mutate call this helper used to make directly. The prior Load+Persist pair
-// was a non-atomic RMW: two concurrent transitions on the same session_id
-// (the cancel-vs-complete race, S4 INV-3) raced — the loser either overwrote
-// the winner's terminal record or was rejected by the immutable-terminal
-// guard non-atomically. Under the mediator's Mutate the two serialize: the
-// first writer lands its terminal state, the second sees that terminal tail
-// under the lock and persistLocked rejects its same-generation write with
-// ErrLifecycleTerminalImmutable (logged here, harmless — the record is already
-// terminally correct). Callers MUST NOT already hold Lock(sessionID):
-// sync.Mutex is not reentrant, and Mutate takes the lock ONCE internally.
-//
-// Used only by the failed-launch paths. It never lands a stop: only the owning execution lands
-// `stopped` (ADR-20260928 D2), so no StopNote is passed here.
-func (t *DelegateTool) transitionLifecycle(sessionID string, state session.LifecycleState, failedReason string) {
-	if t.lifecycle == nil || sessionID == "" {
-		return
-	}
-	// t.lifecycle (MessageParentLifecycleStore) satisfies
-	// session.LifecycleMutator, so no type assertion is needed.
-	// t.unified may be nil; TransitionSession then skips the mirror.
-	if err := session.TransitionSession(t.lifecycle, t.unified, sessionID, state, failedReason, nil); err != nil {
-		slog.Warn("delegate: transitionLifecycle: dual-store transition failed", "session_id", sessionID, "state", state, "error", err)
-	}
 }
 
 // killChildBackgroundShells kills sessionID's own background bash/exec

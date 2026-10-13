@@ -78,15 +78,31 @@ func categoryToMemoryType(cat MemoryCategory) memrooms.MemoryType {
 }
 
 // RecapTrigger is the closed set of triggers recorded on a Retro.
+//
+// FR-036/DEL-08: the explicit and lazy session-close recap triggers are
+// deleted — default-on recap fires only on actual idle inactivity and the
+// bootstrap pass. Joined stays: RetrospectiveTool.Execute records an
+// agent-authored retrospective under it.
 type RecapTrigger string
 
 const (
-	TriggerExplicit  RecapTrigger = "explicit"
-	TriggerLazy      RecapTrigger = "lazy"
 	TriggerIdle      RecapTrigger = "idle"
 	TriggerBootstrap RecapTrigger = "bootstrap"
 	TriggerJoined    RecapTrigger = "joined"
 )
+
+// recapTriggerEligible reports whether a CloseSession trigger may run the
+// default-on recap pipeline (FR-036/DEL-08). Only actual-idle and the boot
+// bootstrap pass recap; the retired explicit/lazy/session-close triggers and
+// any unknown string do not.
+func recapTriggerEligible(trigger string) bool {
+	switch RecapTrigger(trigger) {
+	case TriggerIdle, TriggerBootstrap, TriggerJoined:
+		return true
+	default:
+		return false
+	}
+}
 
 // LongTermEntry is the common result type for memory reads (tools interface).
 type LongTermEntry struct {

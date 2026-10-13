@@ -68,6 +68,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     memory_enabled: true,
     ...overrides,
     revision: overrides.revision ?? '0'.repeat(64),
+    figure: overrides.figure ?? 'Omnipus',
+    role: overrides.role ?? 'general',
   }
 }
 

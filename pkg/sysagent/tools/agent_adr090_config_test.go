@@ -51,8 +51,7 @@ func createNativeArgs(name string) map[string]any {
 		"description": "native custom agent",
 		"soul":        "You help.",
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	}
 }
 

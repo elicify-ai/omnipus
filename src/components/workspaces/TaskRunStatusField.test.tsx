@@ -163,11 +163,6 @@ describe('TaskRunStatusField — "Run now"', () => {
     expect(await screen.findByRole('button', { name: /run now/i })).toBeInTheDocument()
   })
 
-  it('shows "Run now" for a done EVERY task', async () => {
-    renderField(makeTask({ status: 'done', trigger: { type: 'every', config: { every_ms: 3_600_000 } } }))
-    expect(await screen.findByRole('button', { name: /run now/i })).toBeInTheDocument()
-  })
-
   it('hides "Run now" for a blocked task', async () => {
     renderField(makeTask({ status: 'blocked' }))
     await screen.findByTestId('task-run-status-badge')

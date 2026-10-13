@@ -51,7 +51,7 @@ func ParseUsagePeriod(raw string) (UsagePeriod, bool) {
 type UsageDimension string
 
 const (
-	// UsageDimensionAgent groups by the session's ActiveAgentID.
+	// UsageDimensionAgent groups by the session's owner (agent_id).
 	UsageDimensionAgent UsageDimension = "agent"
 	// UsageDimensionModel groups by model name (iterates sm.Stats.ByModel).
 	UsageDimensionModel UsageDimension = "model"
@@ -116,7 +116,7 @@ type UsageOptions struct {
 	// Dimension controls the grouping of Buckets.  Defaults to UsageDimensionAgent.
 	Dimension UsageDimension
 	// AgentID, when non-empty, restricts the report to sessions whose
-	// ActiveAgentID matches this value.
+	// the session owner matches this value.
 	AgentID string
 	// SessionID, when non-empty, restricts the report to the single session
 	// with this ID.
@@ -124,7 +124,7 @@ type UsageOptions struct {
 	// NameResolver maps an agentID to a human-readable display name.
 	// Nil-safe — the aggregator skips the call when nil.
 	NameResolver func(agentID string) string
-	// Exclude, when non-nil, is called once per session's ActiveAgentID.
+	// Exclude, when non-nil, is called once per session's owner (agent_id).
 	// Sessions whose agent returns true are skipped entirely (used to exclude
 	// subagent_3p workers that run on a separate engine).
 	Exclude func(agentID string) bool
@@ -198,14 +198,13 @@ func resolveLabel(agentID string, opts UsageOptions) string {
 //
 // The function is pure (no I/O, no goroutines, no side effects). Callers are
 // responsible for:
-//   - Calling sm.PostLoad() before passing metas (backfills ActiveAgentID from
-//     legacy AgentID; readUnifiedMeta already does this, so ListSessions output
-//     is safe to pass directly).
+//   - Calling sm.PostLoad() before passing metas (backfills AgentIDs from the
+//     owner; readUnifiedMeta already does this, so ListSessions output is safe
+//     to pass directly).
 //   - Passing time.Now().UTC() as opts.Now.
 //
-// Token attribution: tokens are charged to sm.ActiveAgentID (fallback
-// sm.AgentIDs[0]).  Using every entry in AgentIDs would double-count on
-// agent handoffs — the existing HandleTokenStats logic is preserved exactly.
+// Token attribution: tokens are charged to the session's owner, sm.AgentID.
+// Using every entry in AgentIDs would double-count a joined session.
 func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 	if opts.Period == "" {
 		opts.Period = UsagePeriodMonth
@@ -274,10 +273,7 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 		sm.PostLoad()
 
 		// Resolve the agent responsible for this session.
-		agentID := sm.ActiveAgentID
-		if agentID == "" && len(sm.AgentIDs) > 0 {
-			agentID = sm.AgentIDs[0]
-		}
+		agentID := sm.AgentID
 		// Skip sessions with no owning agent.
 		if agentID == "" {
 			continue

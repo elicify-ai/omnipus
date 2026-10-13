@@ -73,6 +73,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Progress [check:progress-browser] browser",
       "story": "Determinate",
+      "requiredTargets": [{ "selector": "[data-testid=\"progress\"]", "attribute": "aria-valuenow", "value": "40" }],
       "applicable": true
     },
     {

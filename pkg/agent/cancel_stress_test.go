@@ -187,6 +187,21 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 		}()
 	}
 
+	// Determinism (pre-existing flake): start the cancellers only AFTER the
+	// first external driver exists, so the cancel cascade has a real target
+	// instead of racing a not-yet-registered child. Whether the cancellers ever
+	// landed used to depend on output throughput / synchronous INFO logging in
+	// InterruptSessionHard; waiting for the first driver removes that timing
+	// dependency without weakening the assertion (every driver must still end
+	// canceled).
+	driverDeadline := time.Now().Add(30 * time.Second)
+	for len(reg.snapshot()) == 0 {
+		if time.Now().After(driverDeadline) {
+			t.Fatal("no external driver was created before the cancel deadline — the spawn path never reached the driver")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
 	// Canceller goroutines: repeatedly fire the REAL graceful + hard cascade
 	// for every session until every spawn goroutine has finished (or the
 	// watchdog below trips). Repetition is deliberate: a single

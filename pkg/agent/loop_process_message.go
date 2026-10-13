@@ -3,11 +3,13 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
@@ -33,7 +35,7 @@ func (pm *agentLoopProcessMessage) prepareInbound() {
 	)
 
 	var hadAudio bool
-	pm.msg, hadAudio = pm.al.transcribeAudioInMessage(pm.ctx, pm.msg)
+	pm.msg, hadAudio = pm.al.transcribeAudioInMessageUnlessDone(pm.ctx, pm.msg)
 
 	// For audio messages the placeholder was deferred by the channel.
 	// Now that transcription (and optional feedback) is done, send it.
@@ -142,4 +144,16 @@ func (pm *agentLoopProcessMessage) prepareTurn() {
 	// browser_deferral.go for the hook's registration and the fail-closed
 	// contract on OperatorPrompt itself.
 	invokeBrowserWheelReleaseHookIfOperatorPrompt(pm.ctx, pm.msg, pm.transcriptSessionID)
+}
+
+// transcribeAudioInMessageUnlessDone is the turn's transcription step. A message
+// bound-connector admission already transcribed (and sized the result of) is not
+// transcribed again - that would bill the provider twice, echo the feedback twice
+// and let the text drift from what intake persisted. It still reports hadAudio so
+// the deferred placeholder is sent.
+func (al *AgentLoop) transcribeAudioInMessageUnlessDone(ctx context.Context, msg bus.InboundMessage) (bus.InboundMessage, bool) {
+	if msg.Metadata[metadataKeyAudioTranscribed] != "" {
+		return msg, true
+	}
+	return al.transcribeAudioInMessage(ctx, msg)
 }

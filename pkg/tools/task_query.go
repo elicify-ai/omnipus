@@ -49,6 +49,14 @@ func (t *TaskListTool) Parameters() map[string]any {
 				"enum":        []string{"inbox", "next", "in_progress", "blocked", "done", "failed"},
 				"description": "Filter by status (optional)",
 			},
+			"workspace_id": map[string]any{
+				"type": "string",
+				"description": "Workspace to list (C-TASK-TOOLS/FR-046). Optional: omit to use your own " +
+					"current workspace. An empty id is refused. Reading a workspace OTHER than your own " +
+					"is a FOREIGN read: results are narrowed to the read-only status/identity of the " +
+					"tasks you created or are assigned there (FR-049) — no task content, result or plan " +
+					"is disclosed. Read-only; this never mutates or executes anything.",
+			},
 		},
 		"required": []string{"role"},
 	}
@@ -116,10 +124,15 @@ type taskListRow struct {
 type taskListResponse struct {
 	Tasks           []taskListRow `json:"tasks"`
 	WorkspaceScoped bool          `json:"workspace_scoped"`
-	Matched         int           `json:"matched"`
-	Returned        int           `json:"returned"`
-	Truncated       bool          `json:"truncated,omitempty"`
-	Note            string        `json:"note,omitempty"`
+	// ForeignScope says the rows are a read-only STATUS projection of a
+	// workspace other than the caller's own (FR-049) — identity/status/target
+	// only, no content/result/plan. It is reported so a narrowed list is never
+	// mistaken for the full row shape.
+	ForeignScope bool   `json:"foreign_scope,omitempty"`
+	Matched      int    `json:"matched"`
+	Returned     int    `json:"returned"`
+	Truncated    bool   `json:"truncated,omitempty"`
+	Note         string `json:"note,omitempty"`
 }
 
 func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -154,7 +167,27 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// fail-closed posture above: the list widens to every workspace FOR THIS
 	// PRINCIPAL ONLY, and says so through workspace_scoped rather than
 	// presenting a cross-workspace list as a scoped one.
-	workspaceID := strings.TrimSpace(ToolWorkspaceID(ctx))
+	ownWorkspaceID := strings.TrimSpace(ToolWorkspaceID(ctx))
+	workspaceID := ownWorkspaceID
+
+	// C-TASK-TOOLS optional workspace_id (FR-046/FR-049): an EXPLICIT workspace
+	// overrides the turn's own; absent keeps it (absent=own). An explicit
+	// empty/non-string id is refused with no fallback — silently falling back
+	// to the caller's own workspace would let an explicit foreign read appear
+	// to have succeeded while returning the wrong board.
+	if raw, present := args["workspace_id"]; present && raw != nil {
+		s, ok := raw.(string)
+		if !ok || strings.TrimSpace(s) == "" {
+			return ErrorResult("list_tasks: workspace_id must be a non-empty workspace id")
+		}
+		workspaceID = strings.TrimSpace(s)
+	}
+
+	// A read of a workspace OTHER than the caller's own is a FOREIGN read:
+	// FR-049 permits only the read-only status/identity of the tasks the caller
+	// created or is assigned there, so the projection below is narrowed to
+	// exactly that (no prompt/result/plan/description/priority/...).
+	foreignScope := workspaceID != "" && workspaceID != ownWorkspaceID
 
 	filter := task.Filter{Status: task.Status(status), WorkspaceID: workspaceID}
 	switch role {
@@ -194,12 +227,17 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	rows := make([]taskListRow, 0, len(tasks))
 	for i := range tasks {
-		rows = append(rows, projectTaskListRow(&tasks[i]))
+		if foreignScope {
+			rows = append(rows, foreignTaskStatusRow(&tasks[i]))
+		} else {
+			rows = append(rows, projectTaskListRow(&tasks[i]))
+		}
 	}
 
 	resp := taskListResponse{
 		Tasks:           rows,
 		WorkspaceScoped: workspaceID != "",
+		ForeignScope:    foreignScope,
 		Matched:         matched,
 		Returned:        len(rows),
 	}
@@ -215,6 +253,22 @@ func (t *TaskListTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("list_tasks: marshal: %v", err))
 	}
 	return NewToolResult(string(data))
+}
+
+// foreignTaskStatusRow is the FR-049 projection: a read of a workspace other
+// than the caller's own discloses only the task's read-only identity/status
+// and its resolved destination pair (workspace_id/agent_id) — never the
+// prompt, result, description, plan or any other content, and never a private
+// creator field. Kept beside projectTaskListRow so a field added to the full
+// projection is a deliberate decision here too, never a silent disclosure.
+func foreignTaskStatusRow(tk *task.Task) taskListRow {
+	return taskListRow{
+		ID:          tk.ID,
+		Title:       tk.Title,
+		Status:      string(tk.Status),
+		WorkspaceID: tk.WorkspaceID,
+		AgentID:     tk.AgentID,
+	}
 }
 
 func projectTaskListRow(tk *task.Task) taskListRow {

@@ -1,5 +1,12 @@
 # ADR-054: Entity / config separation — per-entity files for agents
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of D6 rule 5 agent deletion.** Actual deletion uses one accurate owned-session/memory cascade; guest answers in other agents' histories remain labelled deleted agent. UI double confirmation only; agent/API retain existing single approval. Team removal hides/retains, admits no new work and lets authorized runs settle without waking the hidden main; re-add unhides. Partial cleanup is not silent success.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 > **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
 
 - **Status:** **Accepted (v3)** — after two adversarial reviews (v1: REVISE/4

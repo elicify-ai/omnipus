@@ -20,14 +20,14 @@
 // This test (TestDelegateCannotSpawnGrandchild) asserts the contract, now
 // expressed against the single merged tool (formerly TestSubagentCannotSpawnGrandchild,
 // which registered SpawnTool + SubagentTool separately):
-//   - A sub-turn's tool registry CAN be constructed via CloneExcept(ExcludedDelegate, ExcludedSwitchAgent).
-//   - When both names are passed, "delegate" and "switch_agent" are absent from the registry.
+//   - A sub-turn's tool registry CAN be constructed via CloneExcept(ExcludedDelegate, ExcludedTool("send_file")).
+//   - When both names are passed, "delegate" and "send_file" are absent from the registry.
 //   - Any LLM tool call for either of those against such a registry receives an unknown-tool error.
 //   - No grandchild subagent_start frame is emitted.
 //
 // FR-H-006 REVERSAL (live UAT, 2026-07-12): pkg/agent/subturn.go's spawnSubTurn —
 // the actual production call site — no longer passes ExcludedDelegate to
-// CloneExcept (it now excludes ONLY switch_agent), because the blanket "one
+// CloneExcept (it no longer excludes "delegate"), because the blanket "one
 // level only" registry-level block silently defeated the per-edge depth-cap +
 // trust-graph delegation system that already exists and is meant to be the
 // real gate for multi-hop chains (see pkg/agent/subturn_delegate_nesting_test.go
@@ -44,15 +44,9 @@
 // FR-H-007, US-3, BDD Scenario 9 & 10 (production wiring for "delegate"
 // superseded by the 2026-07-12 reversal above).
 //
-// ADR-071 D4 fix (this file was a LIVE VACUOUS ASSERTION, pre-existing and
-// independent of the rename): the switch_agent-side assertion below used to
-// check childRegistry.Get("hand_off") without ever registering &HandoffTool{}
-// in parentRegistry — so childRegistry.Get returned false regardless of
-// whether CloneExcept worked, and the struct never appearing in this file
-// meant a compiler-guided rename would never even visit it. &SwitchAgentTool{}
-// is now registered on parentRegistry before cloning, with an explicit
-// pre-condition assertion, so the exclusion assertion has something real to
-// be false about.
+// session-core U8 (DEL-07): the switch_agent tool was deleted; the second
+// excluded tool in these CloneExcept cases is now send_file, a stand-in that
+// keeps the two-name exclusion primitive exercised with a real pre-condition.
 
 package tools
 
@@ -69,7 +63,7 @@ import (
 // their tool registry.
 //
 // The child sub-turn's registry is constructed via CloneExcept(ExcludedDelegate,
-// ExcludedSwitchAgent) in pkg/agent/subturn.go::spawnSubTurn. With both absent
+// ExcludedTool("send_file")) in pkg/agent/subturn.go::spawnSubTurn. With both absent
 // from the registry, any LLM tool call for either is dispatched to
 // ExecuteWithContext which returns an unknown-tool error — no new sub-turn is
 // created, no subagent_start frame is emitted.
@@ -81,25 +75,25 @@ func TestDelegateCannotSpawnGrandchild(t *testing.T) {
 	// post-clone "excluded" assertions below have something real to be
 	// false about (see the ADR-071 D4 fix note above the file header).
 	parentRegistry := NewToolRegistry()
-	delegateTool := &DelegateTool{}       // no spawner — only used for registration
-	switchAgentTool := &SwitchAgentTool{} // no deps wired — only used for registration
+	delegateTool := &DelegateTool{} // no spawner — only used for registration
+	sendFileTool := &SendFileTool{} // no deps wired — only used for registration
 	parentRegistry.Register(delegateTool)
-	parentRegistry.Register(switchAgentTool)
+	parentRegistry.Register(sendFileTool)
 
 	// Verify the delegation tool IS in the parent registry.
 	parent, ok := parentRegistry.Get("delegate")
 	require.True(t, ok, "delegate must be present in the parent registry before CloneExcept")
 	require.NotNil(t, parent)
 
-	// Verify switch_agent IS in the parent registry — the pre-condition a
+	// Verify send_file IS in the parent registry — the pre-condition a
 	// vacuous version of this test previously skipped.
-	parentSwitchAgent, okSwitchAgent := parentRegistry.Get("switch_agent")
-	require.True(t, okSwitchAgent, "switch_agent must be present in the parent registry before CloneExcept")
-	require.NotNil(t, parentSwitchAgent)
+	parentSendFile, okSendFile := parentRegistry.Get("send_file")
+	require.True(t, okSendFile, "send_file must be present in the parent registry before CloneExcept")
+	require.NotNil(t, parentSendFile)
 
 	// Construct the child registry as spawnSubTurn does (FR-H-006).
-	// Both delegation-adjacent tools are excluded: delegate, switch_agent.
-	childRegistry := parentRegistry.CloneExcept(ExcludedDelegate, ExcludedSwitchAgent)
+	// Both delegation-adjacent tools are excluded: delegate, send_file.
+	childRegistry := parentRegistry.CloneExcept(ExcludedDelegate, ExcludedTool("send_file"))
 
 	// BDD: Then "delegate" is absent from the child registry.
 	childDelegate, childHasDelegate := childRegistry.Get("delegate")
@@ -108,12 +102,12 @@ func TestDelegateCannotSpawnGrandchild(t *testing.T) {
 	assert.Nil(t, childDelegate,
 		"delegate tool must be nil in the child registry")
 
-	// BDD: And "switch_agent" is absent from the child registry.
-	childSwitchAgent, childHasSwitchAgent := childRegistry.Get("switch_agent")
-	assert.False(t, childHasSwitchAgent,
-		"switch_agent must NOT be in the child registry — one level only (Plan 3 §1 reversal)")
-	assert.Nil(t, childSwitchAgent,
-		"switch_agent tool must be nil in the child registry")
+	// BDD: And "send_file" is absent from the child registry.
+	childSendFile, childHasSendFile := childRegistry.Get("send_file")
+	assert.False(t, childHasSendFile,
+		"send_file must NOT be in the child registry — one level only (Plan 3 §1 reversal)")
+	assert.Nil(t, childSendFile,
+		"send_file tool must be nil in the child registry")
 
 	// BDD: When the child registry tries to execute "delegate", it returns an unknown-tool error.
 	result := childRegistry.ExecuteWithContext(

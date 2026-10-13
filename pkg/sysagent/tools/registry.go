@@ -32,11 +32,11 @@ func AllTools(d *Deps) []tools.Tool {
 		NewWorkspaceListTool(d),
 		NewWorkspaceGetTool(d),
 
-		// Task management (4)
-		NewTaskCreateTool(d),
-		NewTaskUpdateTool(d),
-		NewTaskDeleteTool(d),
-		NewTaskListTool(d),
+		// Task management: the four *_in_workspace tools are RETIRED (DEL-23).
+		// They were duplicate implementations of the canonical task family —
+		// create_task / update_task / list_tasks / delete_task in pkg/tools,
+		// which now carry the optional workspace_id. There is no task section
+		// here any more: one family, one implementation.
 
 		// Channel management (5)
 		NewChannelEnableTool(d),
@@ -74,7 +74,7 @@ func AllTools(d *Deps) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 35 system tools.
+// BuildRegistry creates a ToolRegistry containing all 31 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()

@@ -208,26 +208,6 @@ func streamReplay(
 			if err2 := emitFrame(sr.msgFrame); err2 != nil {
 				return framesEmitted, err2
 			}
-
-			// Bug 2 fix: for handoff and return_to_default system entries, emit
-			// a typed agent_switched frame so the SPA can render the agent
-			// transition visually rather than treating it as plain chat text.
-			// HandoffTool writes AgentID = target; ReturnToDefaultTool writes
-			// AgentID = returning agent (not target), so we only emit the switch
-			// frame for entries whose content starts with "Handoff:" and where
-			// the entry carries the target agent ID.
-			if entry.Type == session.EntryTypeSystem && entry.AgentID != "" &&
-				strings.HasPrefix(entry.Content, "Handoff:") {
-				switchF := generated.AgentSwitchedFrame{
-					Type:      string(generated.WsFrameTypeAgentSwitched),
-					SessionId: sr.sessionID,
-				}
-				agentIDCopy := entry.AgentID
-				switchF.AgentId = &agentIDCopy
-				if err2 := emitFrame(switchF); err2 != nil {
-					return framesEmitted, err2
-				}
-			}
 		}
 
 		// FR-I-001: emit tool_call_start + tool_call_result for each ToolCall.
@@ -956,6 +936,14 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		agentIDCopy := entry.AgentID
 		sr.msgFrame.AgentId = &agentIDCopy
 	}
+	// FR-027: a guest reply names the admitted request it answers, the same
+	// value the live frames carry.
+	if entry.ReplyToMessageID != "" {
+		replyCopy := entry.ReplyToMessageID
+		sr.msgFrame.ReplyToMessageId = &replyCopy
+	}
+	sr.msgFrame.Participant = entry.Participant
+	sr.msgFrame.ReplyToParticipant = entry.ReplyToParticipant
 	// #823 catch-up redesign (BE-DESIGN.md §4.2/§6.3): the persisted entry
 	// id is the same id the live frames used (user_message.id; an assistant
 	// round's token/done message_id), so a client can merge a replayed
@@ -972,6 +960,20 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		cidCopy := entry.ClientMessageID
 		sr.msgFrame.ClientMessageId = &cidCopy
 	}
+	// session-core FR-024: a user input Stop discarded before delivery keeps
+	// its archived bytes; the replayed frame carries the read-only label.
+	if d := entry.InputDisposition; d != nil {
+		// The generated frame's input_disposition is an anonymous struct, so it
+		// is filled through its own JSON tags (message_id, client_message_id,
+		// state, reason) instead of a hand-written parallel struct.
+		raw, mErr := json.Marshal(d)
+		if mErr == nil {
+			mErr = json.Unmarshal(raw, &sr.msgFrame.InputDisposition)
+		}
+		if mErr != nil {
+			logsafeError("replay: could not project input_disposition", "session_id", sr.sessionID, "entry_id", entry.ID, "error", mErr)
+		}
+	}
 	// Wave 3 fix 5c/1: surface TranscriptEntry.TurnID — stamped on
 	// every real assistant entry at its three production write sites:
 	// pkg/agent/turn.go's appendIntermediateAssistantTranscript and
@@ -984,6 +986,15 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 	if entry.TurnID != "" {
 		turnIDCopy := entry.TurnID
 		sr.msgFrame.TurnId = &turnIDCopy
+	}
+	// session-core FR-039 / C-GOAL: surface the producing turn's goal id on the
+	// replayed entry — the SAME association the live frames and the REST
+	// history carry — so the SPA joins the bubble to its own exact keyed goal
+	// criteria after reload instead of the latest-goal scalar. Empty for
+	// entries written under no proven goal (unknown association).
+	if entry.GoalID != "" {
+		goalIDCopy := entry.GoalID
+		sr.msgFrame.GoalId = &goalIDCopy
 	}
 	// Phase 1B (FR-013/FR-014): surface per-turn model. Populated from
 	// TranscriptEntry.Model on every assistant message written via

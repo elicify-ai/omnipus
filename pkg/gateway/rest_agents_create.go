@@ -6,9 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
@@ -16,7 +14,6 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/google/uuid"
 )
 
@@ -239,8 +236,11 @@ type restAPICreateAgentPrepareAgent struct {
 	description    *string
 	model          *string
 	provider       *string
-	color          *string
-	icon           *string
+	color          *gen.AgentColor
+	figure         *gen.AgentFigure
+	role           *gen.AgentRole
+	resolvedFigure string
+	resolvedRole   string
 	skills         *[]string
 	fallbackModels *[]gen.FallbackModel
 	modelParamsIn  *agentModelParamsInput
@@ -270,11 +270,6 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 		jsonErr(pap.cra.w, http.StatusUnprocessableEntity, "name is required")
 		return true
 	}
-	if strings.EqualFold(pap.name, tools.SwitchAgentDefaultTarget) {
-		jsonErr(pap.cra.w, http.StatusBadRequest,
-			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", pap.name, tools.SwitchAgentDefaultTarget))
-		return true
-	}
 	if pap.createType == config.AgentTypeWorker && wireType == string(gen.AgentTypeSubagent3p) {
 		if executorIn == nil || executorIn.CliPath == nil || strings.TrimSpace(*executorIn.CliPath) == "" {
 			jsonErr(pap.cra.w, http.StatusBadRequest, "executor.cli_path is required for subagent_3p agents")
@@ -288,17 +283,16 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 }
 
 func (pap *restAPICreateAgentPrepareAgent) decodeAndValidateRequest() ([]byte, string, string, bool) {
-	raw, err := io.ReadAll(io.LimitReader(pap.cra.r.Body, 1<<20))
-	if err != nil {
-		jsonErr(pap.cra.w, http.StatusBadRequest, "could not read request body")
+	raw, readOK := readAgentWriteBody(pap.cra.w, pap.cra.r)
+	if !readOK {
 		return nil, "", "", true
 	}
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "request body is required")
 		return nil, "", "", true
 	}
-	var presence map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &presence); err != nil {
+	presence, err := decodeRawJSONFields(raw)
+	if err != nil {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
 		return nil, "", "", true
 	}
@@ -329,46 +323,52 @@ func (pap *restAPICreateAgentPrepareAgent) decodeAndValidateRequest() ([]byte, s
 	}
 	pap.createType = coreagent.ResolveType(gen.AgentType(*typePeek.Type))
 
-	if pap.cra.a.agentLoop.GetConfig().Gateway.ValidateInbound {
-		if errMsg, serverErr := validateBodyAgainstSchema(variantName, raw); errMsg != "" {
-			if serverErr {
-				jsonErr(pap.cra.w, http.StatusInternalServerError, "inbound schema unavailable")
-			} else {
-				jsonErr(pap.cra.w, http.StatusBadRequest,
-					fmt.Sprintf("request body does not match schema %s: %s", variantName, errMsg))
-			}
-			return nil, "", "", true
-		}
+	if pap.cra.a.agentLoop.GetConfig().Gateway.ValidateInbound &&
+		!validateAgentIdentitySchema(pap.cra.w, variantName, raw, true) {
+		return nil, "", "", true
 	}
 	return raw, *typePeek.Type, variantName, false
 }
 
-func (pap *restAPICreateAgentPrepareAgent) rejectNullCreateMembers(presence map[string]json.RawMessage) bool {
+func (pap *restAPICreateAgentPrepareAgent) rejectNullCreateMembers(presence rawJSONFields) bool {
+	// Identity null/empty is intentionally a create-default request. Only the
+	// non-identity members below reject null; do not apply PUT's identity guard.
 	for _, field := range []string{"skills", "mcp_servers", "tool_policy_changes"} {
-		if value, supplied := presence[field]; supplied && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		if presence.hasNull(field) {
 			jsonErr(pap.cra.w, http.StatusBadRequest, field+" must not be null")
 			return true
 		}
 	}
-	if rawChanges, supplied := presence["tool_policy_changes"]; supplied {
-		var members map[string]json.RawMessage
-		if json.Unmarshal(rawChanges, &members) == nil {
-			for _, field := range []string{"set", "remove"} {
-				if value, exists := members[field]; exists && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-					jsonErr(pap.cra.w, http.StatusBadRequest, "tool_policy_changes."+field+" must not be null")
-					return true
-				}
+	// Inspect every occurrence of each parent as well as its nested members:
+	// decoding either level into a map would hide null before a duplicate value.
+	for _, rawChanges := range presence.valuesFor("tool_policy_changes") {
+		members, err := decodeRawJSONFields(rawChanges)
+		if err != nil {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
+			return true
+		}
+		for _, field := range []string{"set", "remove"} {
+			if members.hasNull(field) {
+				jsonErr(pap.cra.w, http.StatusBadRequest, "tool_policy_changes."+field+" must not be null")
+				return true
 			}
 		}
 	}
-	if rawServers, supplied := presence["mcp_servers"]; supplied {
-		var servers []map[string]json.RawMessage
-		if json.Unmarshal(rawServers, &servers) == nil {
-			for _, server := range servers {
-				if value, exists := server["tools"]; exists && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-					jsonErr(pap.cra.w, http.StatusBadRequest, "mcp_servers[].tools must not be null")
-					return true
-				}
+	for _, rawServers := range presence.valuesFor("mcp_servers") {
+		var servers []json.RawMessage
+		if err := json.Unmarshal(rawServers, &servers); err != nil {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
+			return true
+		}
+		for _, rawServer := range servers {
+			server, err := decodeRawJSONFields(rawServer)
+			if err != nil {
+				jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
+				return true
+			}
+			if server.hasNull("tools") {
+				jsonErr(pap.cra.w, http.StatusBadRequest, "mcp_servers[].tools must not be null")
+				return true
 			}
 		}
 	}
@@ -413,8 +413,9 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
+		pap.figure = vreq.Figure
+		pap.role = vreq.Role
 		pap.color = vreq.Color
-		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
 		pap.skills = vreq.Skills
 		pap.mcpServers = agentCreateMCPServersFromWire(vreq.McpServers)
@@ -433,8 +434,9 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
+		pap.figure = vreq.Figure
+		pap.role = vreq.Role
 		pap.color = vreq.Color
-		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
 		pap.skills = vreq.Skills
 		pap.mcpServers = agentCreateMCPServersFromWire(vreq.McpServers)
@@ -453,8 +455,9 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
+		pap.figure = vreq.Figure
+		pap.role = vreq.Role
 		pap.color = vreq.Color
-		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
 		pap.maxToolIterations = vreq.MaxToolIterations
 		return &executorRequestInput{
@@ -501,12 +504,12 @@ func (pap *restAPICreateAgentPrepareAgent) buildExecutor(wireType string, execut
 }
 
 // validateCreateFields validates the incoming shared agent fields before constructing a config.
-func (pap *restAPICreateAgentPrepareAgent) validateCreateFields() (string, string, string, bool) {
+func (pap *restAPICreateAgentPrepareAgent) validateCreateFields() (string, string, bool) {
 	// Referential validation: reject unknown skill IDs before doing any work.
 	if pap.skills != nil && len(*pap.skills) > 0 {
 		if errMsg := pap.cra.a.validateSkillIDs(*pap.skills); errMsg != "" {
 			jsonErr(pap.cra.w, http.StatusBadRequest, errMsg)
-			return "", "", "", true
+			return "", "", true
 		}
 	}
 	descTrimmed := ""
@@ -518,7 +521,7 @@ func (pap *restAPICreateAgentPrepareAgent) validateCreateFields() (string, strin
 	// description cannot be routed to by the orchestrator.
 	if pap.createType == config.AgentTypeWorker && descTrimmed == "" {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)")
-		return "", "", "", true
+		return "", "", true
 	}
 	// O12.1 — voice is Main-only (form matrix row 13): no runtime check is
 	// needed here any more. AgentCreateRequestSubagent / …Subagent3p
@@ -532,7 +535,7 @@ func (pap *restAPICreateAgentPrepareAgent) validateCreateFields() (string, strin
 	// has no fallback_models property (fallbackModels stays nil for that variant).
 	if pap.fallbackModels != nil && len(*pap.fallbackModels) > 2 {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
-		return "", "", "", true
+		return "", "", true
 	}
 	// model_params.top_p (T2): removed from the wire entirely — see
 	// agentModelParamsInput's doc comment. No explicit rejection is needed
@@ -546,34 +549,41 @@ func (pap *restAPICreateAgentPrepareAgent) validateCreateFields() (string, strin
 	// soft-bypass). Backend trims before validation.
 	if pap.cra.soul == "" || strings.TrimSpace(pap.cra.soul) == "" {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "soul is required (whitespace-only is rejected as minLength violation)")
-		return "", "", "", true
+		return "", "", true
 	}
-	colorVal := ""
-	if pap.color != nil {
-		colorVal = *pap.color
-	}
-	iconVal := ""
-	if pap.icon != nil {
-		iconVal = *pap.icon
-	}
-	// color hex regex (spec §4.4).
-	if colorVal != "" {
-		if matched, _ := regexp.MatchString(`^#[0-9A-Fa-f]{6}$`, colorVal); !matched {
-			jsonErr(pap.cra.w, http.StatusBadRequest, "color must be a valid hex code (e.g. #D4AF37)")
-			return "", "", "", true
+	pap.resolvedFigure = coreagent.DefaultFigure
+	if pap.figure != nil && string(*pap.figure) != "" {
+		canon, ok := coreagent.CanonicalFigure(string(*pap.figure))
+		if !ok {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "figure must be Robot, Man, Woman, Omnipus, or Monogram")
+			return "", "", true
 		}
+		pap.resolvedFigure = canon
 	}
-	// icon maxLength:50 (spec §4.4).
-	if len(iconVal) > 50 {
-		jsonErr(pap.cra.w, http.StatusBadRequest, "icon exceeds maxLength: 50")
-		return "", "", "", true
+	pap.resolvedRole = coreagent.DefaultRole
+	if pap.role != nil && string(*pap.role) != "" {
+		canon, ok := coreagent.CanonicalRole(string(*pap.role))
+		if !ok {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "role must be one of the curated role slugs")
+			return "", "", true
+		}
+		pap.resolvedRole = canon
 	}
-	return descTrimmed, colorVal, iconVal, false
+	colorVal := coreagent.DefaultColor
+	if pap.color != nil && string(*pap.color) != "" {
+		canon, ok := coreagent.CanonicalColor(string(*pap.color))
+		if !ok {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "color must be one of the ten identity colours")
+			return "", "", true
+		}
+		colorVal = canon
+	}
+	return descTrimmed, colorVal, false
 }
 
 // validateAndBuildConfig validates shared fields and builds the base persistent agent config.
 func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool) {
-	descTrimmed, colorVal, iconVal, stop := pap.validateCreateFields()
+	descTrimmed, colorVal, stop := pap.validateCreateFields()
 	if stop {
 		return true, true
 	}
@@ -601,8 +611,9 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 		ID:          uuid.New().String(),
 		Name:        pap.name,
 		Description: descTrimmed,
+		Figure:      pap.resolvedFigure,
+		Role:        pap.resolvedRole,
 		Color:       colorVal,
-		Icon:        iconVal,
 		Type:        pap.createType,
 	}
 	if pap.maxToolIterations != nil {
@@ -848,12 +859,8 @@ func (cra *restAPICreateAgent) publishResponse() {
 	if cra.ac.Description != "" {
 		ag.Description = &cra.ac.Description
 	}
-	if cra.ac.Color != "" {
-		ag.Color = &cra.ac.Color
-	}
-	if cra.ac.Icon != "" {
-		ag.Icon = &cra.ac.Icon
-	}
+	applyStoredAgentIdentity(&ag, cra.ac)
+
 	// Type reflects the chosen classification (custom or worker). For
 	// "custom" this matches the pre-existing hardcoded behavior. For
 	// "worker" it surfaces the create-time choice so the response — and

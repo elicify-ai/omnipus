@@ -702,6 +702,11 @@ describe('sendMessage — steer during the "__pending" session window (bugfixes3
     act(() => {
       useChatStore.getState().sendMessage('first message')
     })
+    // Capture the minted client_message_id before the spy is cleared: the
+    // gateway echoes it on the ack (pkg/gateway/websocket_first_message.go::
+    // acknowledgeNewSession), and DEL-F21/F22 made that echo the only
+    // correlated receipt an ordinary first send gets.
+    const firstSendCid = (send.mock.calls[0][0] as { client_message_id: string }).client_message_id
     send.mockClear()
 
     act(() => {
@@ -714,7 +719,7 @@ describe('sendMessage — steer during the "__pending" session window (bugfixes3
     // pendingDrainQueue. maybeDrainNext() (called inside) reads isStreaming
     // fresh — still true for the just-started turn — so it must NOT send yet.
     act(() => {
-      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'real-session-1', agent_id: 'general-assistant' })
+      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'real-session-1', agent_id: 'general-assistant', client_message_id: firstSendCid })
     })
     expect(useChatStore.getState().outboundQueue).toEqual([])
     expect(pendingDrainQueueContents()).toContain('steer before session_started')

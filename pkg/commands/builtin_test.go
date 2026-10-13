@@ -18,9 +18,14 @@ func findDefinitionByName(t *testing.T, defs []Definition, name string) Definiti
 }
 
 // TestBuiltinHelpHandler_ReturnsFormattedMessage verifies /help lists the
-// canonical noun commands (not the hidden deprecated ones) for the caller's surface.
-// Updated for D1: /skill and /use are hard-removed; and for the memory commands
-// (remember/recall/retrospective) — the canonical count is now 13.
+// canonical noun commands (not the hidden/removed ones) for the caller's surface.
+// Updated for D1 (/skill and /use hard-removed), for U10a (2026-10-09), which
+// removed /new, /agents, /start, /show, /list, /switch and /check from the
+// table entirely (FR-031), and for U10b (2026-10-10), which restored /clear as
+// a canonical command. The canonical CLI set is now 12 for the
+// asserted names (help/model/clear/cancel/tasks/skills/channels/status/config/
+// remember/recall/retrospective; stop, stop-redirect, goal and loop are also
+// canonical and all-surface).
 func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 	defs := BuiltinDefinitions()
 	helpDef := findDefinitionByName(t, defs, "help")
@@ -28,8 +33,6 @@ func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 		t.Fatalf("/help handler should not be nil")
 	}
 
-	// Call from CLI surface — should see the 13 canonical commands (skill removed;
-	// remember/recall/retrospective added).
 	var reply string
 	err := helpDef.Handler(context.Background(), Request{
 		Channel: "cli",
@@ -43,158 +46,42 @@ func TestBuiltinHelpHandler_ReturnsFormattedMessage(t *testing.T) {
 		t.Fatalf("/help handler error: %v", err)
 	}
 
-	// Canonical commands must appear (13; /skill hard-removed per D1;
-	// /clear renamed to /new with 'clear' as a hidden alias;
-	// remember/recall/retrospective added).
-	for _, name := range []string{"new", "help", "model", "cancel", "agents", "tasks", "skills", "channels", "status", "config", "remember", "recall", "retrospective"} {
+	// Canonical commands must appear. /clear is canonical again since U10b
+	// shipped the real /clear (FR-030/031, founder ruling 2026-10-09): it moves
+	// the context window in the same session and preserves the transcript.
+	for _, name := range []string{"help", "model", "clear", "cancel", "tasks", "skills", "channels", "status", "config", "remember", "recall", "retrospective"} {
 		if !strings.Contains(reply, "/"+name) {
 			t.Errorf("/help cli: missing /%s in output:\n%s", name, reply)
 		}
 	}
 
-	// Removed and hidden/deprecated commands must NOT appear.
-	for _, name := range []string{"show", "list", "switch", "check", "start", "use", "skill", "subagents", "reload"} {
+	// Removed, hidden/deprecated and alias names must NOT appear as their own
+	// command entry. /clear is NOT in this list: U10b restored it as a real
+	// canonical command (FR-030).
+	for _, name := range []string{"show", "list", "switch", "check", "start", "use", "skill", "subagents", "reload", "new", "agents", "channel", "resume"} {
 		// Check that the name doesn't appear as a /name entry (it could appear in descriptions)
-		// We check for the usage-format "/<name> " or "/<name>\n" or "/<name> -"
+		// We check for the usage-format "/<name> -" or a leading "/<name>".
 		if strings.Contains(reply, "/"+name+" -") || strings.HasPrefix(reply, "/"+name) {
 			t.Errorf("/help cli: /%s must not appear as a command in output:\n%s", name, reply)
 		}
 	}
 }
 
-// TestBuiltinShowChannel_PreservesUserVisibleBehavior verifies the deprecated
-// /show channel sub-command still works on channel surfaces (back-compat).
-func TestBuiltinShowChannel_PreservesUserVisibleBehavior(t *testing.T) {
-	defs := BuiltinDefinitions()
-	ex := NewExecutor(NewRegistry(defs), nil)
-
-	cases := []string{"telegram", "whatsapp"}
-	for _, channel := range cases {
-		var reply string
-		res := ex.Execute(context.Background(), Request{
-			Channel: channel,
-			Text:    "/show channel",
-			Reply: func(text string) error {
-				reply = text
-				return nil
-			},
-		})
-		if res.Outcome != OutcomeHandled {
-			t.Fatalf("/show channel on %s: outcome=%v, want=%v", channel, res.Outcome, OutcomeHandled)
+// TestBuiltinNoRemovedCommandTableEntries verifies that the command-table cut of
+// U10a is complete: none of the retired names resolves as a built-in command
+// name or alias (FR-031: deleted everywhere, no alias). This replaces the
+// back-compat tests that asserted the old hidden /show, /list, /switch, /check
+// and /start commands still executed — that behaviour is removed by the same
+// unit that removes the commands.
+func TestBuiltinNoRemovedCommandTableEntries(t *testing.T) {
+	// "clear" is deliberately absent: U10b (FR-030/031) restored /clear as a
+	// canonical command, so it is no longer a retired table entry.
+	removed := []string{"new", "agents", "start", "show", "list", "switch", "check", "channel", "resume"}
+	reg := NewRegistry(BuiltinDefinitions())
+	for _, name := range removed {
+		if def, found := reg.Lookup(name); found {
+			t.Errorf("retired name %q still resolves to /%s (FR-031: deleted everywhere, no alias)", name, def.Name)
 		}
-		want := "Current Channel: " + channel
-		if reply != want {
-			t.Fatalf("/show channel reply=%q, want=%q", reply, want)
-		}
-	}
-}
-
-// TestBuiltinListChannels_UsesGetEnabledChannels verifies the deprecated /list channels
-// still works on channel surfaces (back-compat).
-func TestBuiltinListChannels_UsesGetEnabledChannels(t *testing.T) {
-	rt := &Runtime{
-		GetEnabledChannels: func() []string {
-			return []string{"telegram", "slack"}
-		},
-	}
-	defs := BuiltinDefinitions()
-	ex := NewExecutor(NewRegistry(defs), rt)
-
-	var reply string
-	res := ex.Execute(context.Background(), Request{
-		Channel: "telegram", // deprecated /list has empty surfaces — runs on any channel
-		Text:    "/list channels",
-		Reply: func(text string) error {
-			reply = text
-			return nil
-		},
-	})
-	if res.Outcome != OutcomeHandled {
-		t.Fatalf("/list channels: outcome=%v, want=%v", res.Outcome, OutcomeHandled)
-	}
-	if !strings.Contains(reply, "telegram") || !strings.Contains(reply, "slack") {
-		t.Fatalf("/list channels reply=%q, want telegram and slack", reply)
-	}
-}
-
-// TestBuiltinShowAgents_RestoresOldBehavior verifies the deprecated /show agents still works.
-func TestBuiltinShowAgents_RestoresOldBehavior(t *testing.T) {
-	rt := &Runtime{
-		ListAgentIDs: func() []string {
-			return []string{"default", "coder"}
-		},
-	}
-	defs := BuiltinDefinitions()
-	ex := NewExecutor(NewRegistry(defs), rt)
-
-	var reply string
-	res := ex.Execute(context.Background(), Request{
-		Channel: "telegram",
-		Text:    "/show agents",
-		Reply: func(text string) error {
-			reply = text
-			return nil
-		},
-	})
-	if res.Outcome != OutcomeHandled {
-		t.Fatalf("/show agents: outcome=%v, want=%v", res.Outcome, OutcomeHandled)
-	}
-	if !strings.Contains(reply, "default") || !strings.Contains(reply, "coder") {
-		t.Fatalf("/show agents reply=%q, want agent IDs", reply)
-	}
-}
-
-// TestBuiltinListAgents_RestoresOldBehavior verifies the deprecated /list agents still works.
-func TestBuiltinListAgents_RestoresOldBehavior(t *testing.T) {
-	rt := &Runtime{
-		ListAgentIDs: func() []string {
-			return []string{"default", "coder"}
-		},
-	}
-	defs := BuiltinDefinitions()
-	ex := NewExecutor(NewRegistry(defs), rt)
-
-	var reply string
-	res := ex.Execute(context.Background(), Request{
-		Channel: "telegram",
-		Text:    "/list agents",
-		Reply: func(text string) error {
-			reply = text
-			return nil
-		},
-	})
-	if res.Outcome != OutcomeHandled {
-		t.Fatalf("/list agents: outcome=%v, want=%v", res.Outcome, OutcomeHandled)
-	}
-	if !strings.Contains(reply, "default") || !strings.Contains(reply, "coder") {
-		t.Fatalf("/list agents reply=%q, want agent IDs", reply)
-	}
-}
-
-// TestBuiltinListSkills_UsesRuntimeSkillNames verifies the deprecated /list skills still works.
-func TestBuiltinListSkills_UsesRuntimeSkillNames(t *testing.T) {
-	rt := &Runtime{
-		ListSkillNames: func() []string {
-			return []string{"shell", "git"}
-		},
-	}
-	defs := BuiltinDefinitions()
-	ex := NewExecutor(NewRegistry(defs), rt)
-
-	var reply string
-	res := ex.Execute(context.Background(), Request{
-		Channel: "telegram",
-		Text:    "/list skills",
-		Reply: func(text string) error {
-			reply = text
-			return nil
-		},
-	})
-	if res.Outcome != OutcomeHandled {
-		t.Fatalf("/list skills: outcome=%v, want=%v", res.Outcome, OutcomeHandled)
-	}
-	if !strings.Contains(reply, "shell") || !strings.Contains(reply, "git") {
-		t.Fatalf("/list skills reply=%q, want installed skill names", reply)
 	}
 }
 

@@ -28,7 +28,7 @@ properties:
   session_id:
     type: string
     minLength: 1
-    maxLength: 128
+    maxLength: 255
     description: >
       The session to redirect: the chat the command was typed in, root chat or
       helper. Its own current turn is stopped and the chat continues with the

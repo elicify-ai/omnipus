@@ -447,7 +447,6 @@ func (rn *run) handleFrame(raw []byte) runFlow {
 
 	case generated.WsFrameTypeSubagentStart,
 		generated.WsFrameTypeSubagentEnd,
-		generated.WsFrameTypeAgentSwitched,
 		generated.WsFrameTypeTaskStatusChanged,
 		generated.WsFrameTypeRateLimit,
 		generated.WsFrameTypeSystemOverload,

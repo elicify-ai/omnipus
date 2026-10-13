@@ -3,8 +3,8 @@ package agent
 import (
 	"encoding/json"
 
-	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // A cancellation belongs to one assistant position, not every reuse of its id.
@@ -120,15 +120,30 @@ func restartCancellations(count int, messageAt func(int) providers.Message) (map
 }
 
 // recoveryWindowHistory derives the model-only recovery view from the SAME
-// atomic snapshot used for Skip, anchor and projections. Scan the full archive
-// before selecting its retained suffix, so an evicted assistant can still own
-// its cancellation. Filter message/index pairs without renumbering or mutating
+// atomic snapshot used for Skip, anchor and projections. Scan the evicted
+// lead-in an open group still owns before the retained window, so an evicted
+// assistant can still own its cancellation. Filter message/index pairs without renumbering or mutating
 // any archive record or captured metadata. Unrelated controls stay in place.
-func recoveryWindowHistory(snap memory.WindowSnapshot) ([]providers.Message, []int) {
-	omitted, _ := restartCancellations(len(snap.Archive), func(i int) providers.Message {
-		return snap.Archive[i].Message
-	})
-	history, lines := memory.WindowHistory(snap)
+func recoveryWindowHistory(snap session.WindowView) ([]providers.Message, []int) {
+	history, lines := snap.History()
+	// Scan the evicted lead-in an open group still owns, then the retained
+	// window in archive order: a marker inside the window can belong to an
+	// assistant declared before Skip. Positions are the scan's indexes.
+	scan := make([]providers.Message, 0, len(snap.Lead)+len(snap.Live))
+	scanLine := make([]int, 0, cap(scan))
+	for _, s := range snap.Lead {
+		scan = append(scan, s.Message)
+		scanLine = append(scanLine, s.Ordinal)
+	}
+	for _, s := range snap.Live {
+		scan = append(scan, s.Message)
+		scanLine = append(scanLine, s.Ordinal)
+	}
+	omittedPos, _ := restartCancellations(len(scan), func(i int) providers.Message { return scan[i] })
+	omitted := make(map[int]bool, len(omittedPos))
+	for pos := range omittedPos {
+		omitted[scanLine[pos]] = true
+	}
 	kept, keptLines := history[:0], lines[:0]
 	for i, msg := range history {
 		if !omitted[lines[i]] {

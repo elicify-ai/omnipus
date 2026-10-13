@@ -443,13 +443,6 @@
       "count": 2
     },
     {
-      "fingerprint": "66c4a4250ac150a57a5a52a3ce828f029b3f0316d716d32c79f23659dd52d891",
-      "ruleId": "controls/raw-button",
-      "path": "src/components/chat/ChatScreen.tsx",
-      "syntax": "<button>",
-      "count": 8
-    },
-    {
       "fingerprint": "66d5721c856b7a3c39dfdcd53916f21f4aa9c287df8c4c072b5d6613bcb4ed02",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -1022,6 +1015,13 @@
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "text-emerald-400",
       "count": 2
+    },
+    {
+      "fingerprint": "380cea4bb8b4fd58abd0b5e6eedd2265828472e8bb3bb846785eefad8312ee08",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/chat/composer/ComposerMenu.tsx",
+      "syntax": "<button>",
+      "count": 1
     }
   ]
 }

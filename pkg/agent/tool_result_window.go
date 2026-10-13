@@ -23,7 +23,7 @@ func admitResultWindow(ts *turnState, adm toolResultAdmission, archived provider
 		}
 	}
 	var store session.ContextWindowStore
-	var snap memory.WindowSnapshot
+	var view session.WindowView
 	line := -1
 	if ts != nil && ts.agent != nil && ts.agent.Sessions != nil && !ts.opts.NoHistory {
 		var ok bool
@@ -31,21 +31,27 @@ func admitResultWindow(ts *turnState, adm toolResultAdmission, archived provider
 		if !ok {
 			return providers.Message{}, -1, "", fmt.Errorf("context admission: session store does not support atomic context checkpoints")
 		}
-		var err error
-		snap, err = store.AppendWindowMessage(ctx, ts.sessionKey, archived)
+		// The producer names the exact assistant occurrence that issued this call
+		// (kept from that record's own checked append); the archive returns the
+		// exact slot it assigned. No lookup by tool_call_id, no last-line guess.
+		issuer, known := ts.callIssuer(adm.ToolCallID)
+		if !known {
+			return providers.Message{}, -1, "", fmt.Errorf("context admission: tool result %q has no recorded issuing assistant", adm.ToolCallID)
+		}
+		slot, appended, err := store.AppendModelMessage(ctx, ts.sessionKey, session.ModelAppend{
+			Message: archived, ViewMembership: session.ViewMembershipModel,
+			Source: session.EntrySource{Kind: "tool"}, ToolResultFor: &issuer, AgentID: ts.agent.ID,
+		})
 		if err != nil {
 			return providers.Message{}, -1, "", fmt.Errorf("context admission: append tool result: %w", err)
 		}
-		line = len(snap.Archive) - 1
-		if line < 0 || snap.Archive[line].Role != "tool" || snap.Archive[line].ToolCallID != adm.ToolCallID || snap.Archive[line].Content != archived.Content {
-			return providers.Message{}, -1, "", fmt.Errorf("context admission: appended tool result identity is missing")
-		}
+		line, view = slot.Ordinal, appended
 	}
 	window := archived
 	if utf8.RuneCountInString(archived.Content) <= capChars {
 		return window, line, "", nil
 	}
-	mark, err := buildRecallMark("capped", adm.Tool, adm.ToolCallID, line, archived.Content, turnNumberForArchiveLine(snap.Archive, line))
+	mark, err := buildRecallMark("capped", adm.Tool, adm.ToolCallID, line, archived.Content, turnNumberForArchiveLine(viewArchive{view: view}, line))
 	if err != nil {
 		return providers.Message{}, line, "", err
 	}
@@ -71,15 +77,15 @@ func admitResultWindow(ts *turnState, adm toolResultAdmission, archived provider
 		}
 		return window, line, state, nil
 	}
-	window.Content, err = projectSource(snap.Archive, line, kept, adm.Tool, adm.ToolCallID)
+	window.Content, err = projectSource(viewArchive{view: view}, line, kept, adm.Tool, adm.ToolCallID)
 	if err != nil {
 		return providers.Message{}, line, "", err
 	}
-	after := snap.State.Clone()
+	after := view.State.Clone()
 	key := memory.ProjectionKey{ToolCallID: adm.ToolCallID, ArchiveLine: line}
 	after.Projection.Entries[key] = state
 	after.Projection.SourceRunes[key] = kept
-	if err := store.CommitWindow(ctx, ts.sessionKey, snap.State, after); err != nil {
+	if err := store.CommitWindow(ctx, ts.sessionKey, view.State, after); err != nil {
 		return providers.Message{}, line, "", fmt.Errorf("context admission: persist exact tool-result projection: %w", err)
 	}
 	return window, line, state, nil

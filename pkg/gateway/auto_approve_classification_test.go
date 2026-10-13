@@ -32,14 +32,14 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// goldenAskList28 is a literal, reviewable copy of the 28 catalog tool names
+// goldenAskList27 is a literal, reviewable copy of the 27 catalog tool names
 // the founder's ruled choices file
 // (/Users/danielpiatkowski/Desktop/auto-approve-choices.json, saved
 // 2026-09-23T14:20:18Z) marks "asks" — every non-MCP entry with
 // choice=="asks". Moving a tool off this list, or onto it, needs a
 // deliberate edit HERE as well as in pkg/tools/auto_approve.go's table
 // (§6 point 6): that is the point of the golden copy.
-var goldenAskList28 = []string{
+var goldenAskList27 = []string{
 	"add_mcp_server",
 	"browser_evaluate",
 	"browser_upload_file",
@@ -49,7 +49,6 @@ var goldenAskList28 = []string{
 	"create_skill",
 	"delete_agent",
 	"delete_task",
-	"delete_task_in_workspace",
 	"delete_workspace",
 	"disable_channel",
 	"edit_skill",
@@ -309,7 +308,7 @@ func TestAutoApproveClassification_MutationSelfCheck_SafeDefaultCatchesWrongExpe
 	}
 }
 
-// --- Check 6: ask-list lock — the golden 28 names equal the table's AutoAsks set exactly ---
+// --- Check 6: ask-list lock — the golden 27 names equal the table's AutoAsks set exactly ---
 
 func checkAskListLock(table map[string]tools.AutoApproveClass, golden []string) []string {
 	goldenSet := make(map[string]bool, len(golden))
@@ -338,18 +337,18 @@ func checkAskListLock(table map[string]tools.AutoApproveClass, golden []string) 
 }
 
 func TestAutoApproveClassification_AskListMatchesGoldenCopy(t *testing.T) {
-	if len(goldenAskList28) != 28 {
-		t.Fatalf("goldenAskList28 has %d names, want 28 (founder file tally)", len(goldenAskList28))
+	if len(goldenAskList27) != 27 {
+		t.Fatalf("goldenAskList27 has %d names, want 27 (founder file tally minus the DEL-23 retired delete_task_in_workspace)", len(goldenAskList27))
 	}
 	table := tools.AutoApproveClassTable()
-	if errs := checkAskListLock(table, goldenAskList28); len(errs) > 0 {
+	if errs := checkAskListLock(table, goldenAskList27); len(errs) > 0 {
 		t.Errorf("ask-list drift against the founder-file golden copy:\n%s", strings.Join(errs, "\n"))
 	}
 }
 
 func TestAutoApproveClassification_MutationSelfCheck_AskListLockCatchesMovedTool(t *testing.T) {
 	table := tools.AutoApproveClassTable()
-	if errs := checkAskListLock(table, goldenAskList28); len(errs) != 0 {
+	if errs := checkAskListLock(table, goldenAskList27); len(errs) != 0 {
 		t.Fatalf("precondition failed: the real table already drifts from the golden ask-list: %v", errs)
 	}
 	// Move "delete_task" off the ask-list without touching the golden copy —
@@ -362,7 +361,7 @@ func TestAutoApproveClassification_MutationSelfCheck_AskListLockCatchesMovedTool
 		t.Fatal("test fixture assumption broken: delete_task is not classified AutoAsks in the real table")
 	}
 	mutated["delete_task"] = tools.AutoRuns
-	if errs := checkAskListLock(mutated, goldenAskList28); len(errs) == 0 {
+	if errs := checkAskListLock(mutated, goldenAskList27); len(errs) == 0 {
 		t.Fatal("mutation self-check failed: moving delete_task off ASKS did not make the ask-list-lock check fail")
 	}
 }
@@ -411,7 +410,7 @@ func TestAutoApproveClassification_CatalogSanity(t *testing.T) {
 		t.Fatalf("buildCentralBuiltinRegistry(nil) only produced %d tool names; the ADR-092 D9 founder file classifies 110 catalog tools plus bash — this suite would pass vacuously against a near-empty catalog", len(names))
 	}
 	// Sanity that the system family specifically is present (it carries most
-	// of the 28-name ask-list).
+	// of the 27-name ask-list).
 	sysNames := make(map[string]bool)
 	for _, tl := range systools.AllTools(nil) {
 		sysNames[tl.Name()] = true

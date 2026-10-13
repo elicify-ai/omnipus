@@ -6,11 +6,11 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
-import { IconRenderer } from '@/components/shared/IconRenderer'
+import { AgentMark } from '@/components/agents/AgentMark'
 import type { Agent } from '@/lib/api'
 import { isWorker } from '@/lib/api'
 import { roleLabel } from './teamGraphModel'
-import { cn, initialOf } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 
 interface AddAgentPickerProps {
   /** Every global agent (the agents cache). */
@@ -148,17 +148,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
                   'hover:bg-[var(--color-surface-2)] focus-visible:bg-[var(--color-surface-2)]',
                 )}
               >
-                <div
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[length:var(--type-caption-size)] font-bold text-[var(--color-secondary)]"
-                  style={{ backgroundColor: a.color ?? 'var(--color-surface-3)' }}
-                  aria-hidden="true"
-                >
-                  {a.icon ? (
-                    <IconRenderer icon={a.icon} size={13} className="text-[var(--color-secondary)]" />
-                  ) : (
-                    initialOf(a.name)
-                  )}
-                </div>
+                <AgentMark agent={a} size={26} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-[var(--space-1)]">
                     <span className="truncate text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">

@@ -2,6 +2,8 @@
 
 **Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: founder decision, 2026-10-06.
 
+**Implementation-scope note (U5b, 2026-10-09):** the "any root or helper chat" redirect scope above is the native-engine behaviour. An **external-CLI (subagent_3p) helper chat** — a helper running on Claude Code, Codex or OpenCode — refuses `/stop-redirect` with `not_steerable`, and its live steering is **interrupt + native-conversation resume**, not the native tool-boundary injection this file otherwise describes. See `docs/agents.md` ("Workers and delegation") and FR-043 in `docs/internal/specs/session-core-spec.md` for the external-worker contract.
+
 ## Amended 2026-10-06 — founder decision
 
 Steering text is input, **not a Stop**: a mid-turn message continues the current turn. Both people and agents use `AgentLoop.StopSession`, polite now / force at 3 s / detach 3 s after force; no agent `cancel_grace` or public `hard` option.

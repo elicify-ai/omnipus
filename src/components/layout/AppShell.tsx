@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Outlet } from '@tanstack/react-router'
 import { Sidebar } from './Sidebar'
+import { AgentProfile } from '@/components/agents/AgentProfile'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
 import { Button } from '@/components/ui/button'
@@ -19,6 +20,7 @@ import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 import { useQuery } from '@tanstack/react-query'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
+import { useAgentsCrossTabRefresh } from '@/hooks/useAgentsCrossTabRefresh'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { PANEL_TAKEOVER_PX } from '@/components/panel-shell/panelWidth'
 import { SidePanelShell } from '@/components/panel-shell/SidePanelShell'
@@ -66,6 +68,11 @@ export function AppShell() {
 
   // Version-drift detection (#110): shows a toast when build_sha changes
   useVersionCheck()
+
+  // T-11 / FR-010: the shell, not the removed composer agent picker, refreshes
+  // the agent roster and workspace membership on focus and on becoming visible,
+  // even while those queries are still inside their stale time.
+  useAgentsCrossTabRefresh()
 
   // Prefetch command center data on app load so it's cached when the user navigates there
   useEffect(() => {
@@ -172,11 +179,11 @@ export function AppShell() {
       {/* Skip-to-content link — first focusable element in the shell, visually
           hidden until it receives keyboard focus (WCAG 2.4.1 Bypass Blocks).
           tabIndex={1}: the composer's positive tab ring (see the map in
-          ChatControls.tsx) starts at 2, so this link is guaranteed to be the
-          FIRST stop document-wide regardless of DOM position — without an
-          explicit positive index here, the chat screen's positive-tabIndex
-          controls would win the first Tab and the skip link would never be
-          reachable (WCAG 2.4.1 functionally dead). */}
+          ChatControls.tsx) starts at 2. Slot 3, the old agent picker, is gone.
+          This link is still the first stop document-wide — without an explicit
+          positive index here, the chat screen's positive-tabIndex controls
+          would win the first Tab and the skip link would never be reachable
+          (WCAG 2.4.1 functionally dead). */}
       <a
         href="#main-content"
         tabIndex={1}
@@ -191,6 +198,13 @@ export function AppShell() {
 
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />
+
+      {/* The ONE store-driven agent editor (AgentProfile). It reads
+          editAgentId, so it must be hosted exactly once at the shell level:
+          the sidebar's row-menu Edit, the Team tab, and the Agents screen all
+          open this same instance, and a second host anywhere would open a
+          second simultaneous sheet (CR F6). */}
+      <AgentProfile />
 
       {/* The real application host for the shared panel shell. Its chat child
           is the existing routed application column; Library and Browser are
@@ -279,7 +293,7 @@ export function AppShell() {
       <MediaLightbox />
 
       {/* Cross-workspace session search — store-driven single instance opened
-          from the sidebar search icon and the /resume slash command (step 6). */}
+          from the sidebar search icon and the /sessions slash command (step 6). */}
       <SearchModal />
 
       {/* Global toast notifications */}

@@ -527,7 +527,9 @@ func collectSubagentRows(
 //
 // There are TWO resume mechanisms and they need two different collapse rules —
 // this is not belt-and-braces, each covers a case the other cannot see.
-// spawnCorrectiveFollowUp (pkg/tools/delegate.go) branches on rec.Is3P:
+// Resume no longer mints a new session for an external-CLI child (DEL-31), but
+// records written by the removed 3P cold respawn can still exist on disk, so
+// both shapes are still collapsed:
 //
 //	NATIVE (warm resume) — reuses the session id verbatim and mints
 //	Generation+1. Collapsed by the highest-generation rule below. Against the

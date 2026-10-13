@@ -203,6 +203,28 @@ type OutboundMessage struct {
 	// passing the tool's check, which is precisely the "someone adds a second
 	// route later" regression FR-7 exists to catch.
 	OwnershipChecked bool `json:"-"`
+
+	// Return, when non-nil, marks this message as the answer to an admitted
+	// request, sent through the SOURCE OWNER's channel instance (session-core
+	// C-REPLY, FR-027/028). In-process only — never on the wire. The channel
+	// manager re-verifies the binding at the final send boundary (every
+	// attempt, and before a placeholder edit); OwnershipChecked and the
+	// system-origin exemption do not satisfy it. AgentID/WorkspaceID on such a
+	// message name the AUTHOR (the guest), who gains no connector grant.
+	Return *ReturnRoute `json:"-"`
+}
+
+// ReturnRoute is the server-validated capture a reply is sent under.
+type ReturnRoute struct {
+	// RequestID is the admitted request message id being answered.
+	RequestID string
+	// SourceSessionID is the session the request came from.
+	SourceSessionID string
+	// OwnerWorkspaceID / OwnerAgentID are the (workspace, agent) pair that
+	// owned the source instance when the request was admitted. Both empty
+	// means the instance was unbound then.
+	OwnerWorkspaceID string
+	OwnerAgentID     string
 }
 
 // MediaPart describes a single media attachment to send.

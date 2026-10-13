@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
-import type { Agent, ToolCall } from '@/lib/api'
+import type { ToolCall } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage, SessionChatState, SubagentSpan } from '@/store/chat'
 import { emptySessionState } from '@/store/chat/session'
@@ -72,7 +73,7 @@ beforeEach(() => {
   deriveCalls.n = 0
   vi.mocked(fetchAgents).mockReset()
   vi.mocked(fetchAgents).mockResolvedValue([
-    { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active' } as Agent,
+    makeAgent({ id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active' }),
   ])
   useChatStore.setState({ sessionsById: {} })
 })

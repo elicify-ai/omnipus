@@ -135,53 +135,22 @@ func TestActivateTaskGoal_BindsDefiningRecordAndIsSessionReachable(t *testing.T)
 	}
 }
 
-// TestActivateTaskGoal_NoGoalRecord_MintsOneBoundToTheRun: a task with no
-// paired goal record (created before goal records existed, GOAL-FR-023) still
-// gets a session without error — and now also a goal record, minted at run
-// start from its acceptance criteria and the floor Definition of Done and bound
-// to that session. A task completes only through a judged goal_claim (founder
-// decision 2026-09-14, issue #710), and goal_claim finds a task's goal through
-// the session it is bound to, so without the mint such a task could never
-// finish.
-func TestActivateTaskGoal_NoGoalRecord_MintsOneBoundToTheRun(t *testing.T) {
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	taskStore := GetTaskStore(al)
-	tk := &task.Task{
-		ID: "t-no-goal-record", AgentID: "native-agent", WorkspaceID: "test-ws",
-		Title: "legacy criteria-less task", Status: task.StatusNext,
-	}
-	if err := taskStore.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	// Deliberately no goal.New/Create call — this task has NO paired
-	// pkg/goal record at all (GOAL-FR-023's legacy/no-DoD case).
-
-	sid, err := al.taskExecutor.createTaskSessionSync(tk)
-	if err != nil {
-		t.Fatalf("createTaskSessionSync must not fail for a goal-record-less task: %v", err)
-	}
-	if sid == "" {
-		t.Fatal("createTaskSessionSync returned an empty session id")
-	}
-
-	found := mustActiveGoalForSession(t, sid)
-	if found == nil {
-		t.Fatal("a legacy task must get a goal record bound to its run's session — its worker could never claim otherwise")
-	}
-	if found.OwnerKind != generated.GoalOwnerKindTask || found.OwnerID != tk.ID {
-		t.Fatalf("minted record owner = %s/%s, want task/%s", found.OwnerKind, found.OwnerID, tk.ID)
-	}
-	if found.Prompt != "legacy criteria-less task" {
-		t.Fatalf("minted record prompt = %q, want the task's title (it has no prompt)", found.Prompt)
-	}
-	if len(found.DoD) == 0 {
-		t.Fatal("the minted record carries no Definition of Done — the floor must be there")
-	}
-	stored, gerr := goal.NewStore(config.OmnipusHomeDir()).GetByOwner(generated.GoalOwnerKindTask, tk.ID)
-	if gerr != nil || stored.GoalID != found.GoalID {
-		t.Fatalf("GetByOwner = %+v, %v — the task must own exactly the record bound to its session", stored, gerr)
-	}
-}
+// TestActivateTaskGoal_NoGoalRecord_MintsOneBoundToTheRun was DELETED
+// (session-core DEL-18).
+//
+// It asserted that a task with no paired goal record is MINTED one at run
+// start, bound to the run's session ("a legacy task must get a goal record
+// bound to its run's session"). That is exactly the upgrade-only minting DEL-18
+// deletes: activateTaskGoal's ErrOwnerNotFound branch now returns
+// "task %q has no paired goal record" and mints nothing — "Fresh task
+// creation/edit owns the record; upgrade-only minting is deleted (greenfield)."
+//
+// The behaviour that remains is already pinned, and pinned better, by
+// TestU6_DEL18_NoGoalMintedAtRunStart (pkg/agent/u6_legacy_goal_mint_del18_test.go),
+// which drives the same activation path and asserts NO record is created; its
+// symbol half (TestU6_DEL18_NoLegacyGoalMinterSymbols) catches the minter
+// returning under its old name. Keeping this test would only re-assert the
+// deleted behaviour.
 
 // TestActivateTaskGoal_ReRunReactivatesTerminalRecord proves R-04
 // (GOAL-FR-028): a task-owned goal that already reached a terminal state on

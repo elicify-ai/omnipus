@@ -246,15 +246,28 @@ test('(f) name collision on Create Agent surfaces server 409 error in UI', async
   await expect(errorToast).toBeVisible({ timeout: 10_000 });
 });
 
-test('(g) session with deleted agent shows read-only transcript and "Agent removed" banner', async ({ page }) => {
-  // The agent-removed banner is wired end-to-end: the backend's getSession
-  // handler (pkg/gateway/rest.go) detects a ghost session (its agent_id no
-  // longer resolves in the live config) and sets agent_removed=true on
-  // SessionDetail; the /sessions/$sessionId route reads it and passes
-  // agentRemoved to <ChatScreen>, which renders the
-  // data-testid="agent-removed-banner" bar and disables the composer
-  // (src/components/chat/ChatScreen.tsx). Issue #103 tracked this gap; it is
-  // now closed.
+test('(g) deleting an agent dead-ends its solely-owned session: API 404 and a truthful "Session not found" screen with no composer', async ({ page }) => {
+  // Current intended behaviour (session-core U12 / FR-037 / spec §C-DELETE):
+  // deleting an agent runs the shared delete cascade, which REMOVES the
+  // agent's solely-owned sessions from the shared session store
+  // (pkg/sysagent/tools/agent.go::cascadeDeleteAgentSessions — "belongs
+  // solely" = the deleted agent is the only entry in AgentIDs; multi-agent
+  // sessions survive untouched). GET /api/v1/sessions/{id} therefore 404s
+  // (pkg/gateway/rest_sessions.go::getSession → AgentLoop.ResolveSessionStore
+  // returns nil on a genuinely missing meta), and the /sessions/$sessionId
+  // route renders its SessionNotFound surface — "Session not found" /
+  // "This session may have been deleted." / "Back to Chat" — with no
+  // ChatScreen and no composer to type into
+  // (src/routes/_app/sessions.$sessionId.tsx::SessionNotFound).
+  //
+  // The data-testid="agent-removed-banner" read-only surface this test
+  // previously asserted is for sessions that SURVIVE their agent — a
+  // multi-agent conversation one participant is deleted from, or an
+  // out-of-band config removal (agent_removed=true on SessionDetail,
+  // src/components/chat/ChatScreen.tsx). Reaching one e2e needs a second
+  // agent joined into the session, which needs a real model turn — out of
+  // scope for this LLM-free test; the banner stays covered at component
+  // level by src/components/chat/ChatScreen.dead-session.test.tsx.
 
   const authHeaders = await csrfHeaders(page);
 
@@ -324,26 +337,29 @@ test('(g) session with deleted agent shows read-only transcript and "Agent remov
   });
   expect(deleteResp.ok(), `delete agent failed: ${deleteResp.status()} ${await deleteResp.text()}`).toBeTruthy();
 
-  // Step 4: Navigate to the session
+  // Step 4: The API read is gone — the cascade deleted the solely-owned
+  // session, so GET must 404 (asserted at the API level so a failure here
+  // names the backend contract, not just a missing UI element).
+  const ghostRead = await page.request.get(`/api/v1/sessions/${sessionId}`, { headers: authHeaders });
+  expect(
+    ghostRead.status(),
+    `session of a deleted agent must 404 (solely-owned sessions are deleted by the agent delete cascade), got body: ${await ghostRead.text()}`,
+  ).toBe(404);
+
+  // Step 5: The route shows the truthful dead-session screen, not a chat.
   await page.goto(`/#/sessions/${sessionId}`);
   // Wait for the route to settle (URL must contain "sessions")
   await expect(page).toHaveURL(/sessions/, { timeout: 10_000 });
-  // Wait for the app shell to render (main landmark = auth OK, not a blank
-  // page). This route renders the bare ChatScreen directly (no workspace_id
-  // on the session, so no WorkspaceTabContainer/ScreenHeader wrapper) —
-  // those are the only two components in the app that emit role="banner",
-  // so this screen never has one; `main` is the landmark this layout
-  // actually renders.
+  // Wait for the app shell to render (main landmark = auth OK, not a blank page).
   await expect(page.getByRole('main')).toBeVisible({ timeout: 10_000 });
+  // SessionNotFound's exact copy (src/routes/_app/sessions.$sessionId.tsx).
+  await expect(page.getByText('Session not found')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText('This session may have been deleted.')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Back to Chat' })).toBeVisible();
 
-  // Step 5: The banner must appear
-  const banner = page.getByTestId('agent-removed-banner');
-  await expect(banner).toBeVisible({ timeout: 15_000 });
-  await expect(banner).toContainText(/agent.*removed/i);
-
-  // Step 6: Composer must be disabled
-  const input = page.locator('textarea[placeholder*="message" i], [data-testid="chat-input"]').first();
-  await expect(input).toBeDisabled({ timeout: 5_000 });
+  // Step 6: Nothing chattable remains — the dead route renders no ChatScreen,
+  // hence no composer input at all.
+  await expect(page.getByTestId('chat-input')).toHaveCount(0);
 });
 
 test.afterAll(async ({ request }) => {

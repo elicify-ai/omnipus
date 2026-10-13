@@ -107,7 +107,7 @@ function renderPanel(mailbox: Mailbox) {
     id: 'ws-1', name: 'My Workspace', status: 'active', core_team: ['mia'],
   } as never)
   const client = makeQueryClient()
-  client.setQueryData(['agents'], [{ id: 'mia', name: 'Mia', type: 'core', locked: true }])
+  client.setQueryData(['agents'], [{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true }])
   client.setQueryData(['workspaces'], [{ id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 }])
   return render(
     <QueryClientProvider client={client}>
@@ -130,7 +130,7 @@ describe('EmailMailboxPanel folder-name overrides (C9: US-4, scenarios 4.1/4.4)'
     mockUiStore()
     fetchChannels.mockResolvedValue([])
     fetchMailboxes.mockResolvedValue([])
-    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchChannelRouting.mockResolvedValue([])
     saveAgentMailbox.mockResolvedValue({ ok: true })
     deleteAgentMailbox.mockResolvedValue(undefined)

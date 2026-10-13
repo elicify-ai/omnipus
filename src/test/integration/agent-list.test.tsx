@@ -47,13 +47,15 @@ const agentDefaults = {
   heartbeat_interval: 300,
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
+  figure: 'Omnipus' as const,
+  role: 'general' as const,
 }
 
 const mockAgents = [
-  { id: 'mia', name: 'Mia', type: 'core' as const, locked: true, color: '#6366f1', status: 'active' as const, model: 'claude-opus-4-6', description: 'General purpose assistant', ...agentDefaults },
-  { id: 'general-assistant', name: 'General Assistant', type: 'core' as const, locked: false, color: 'green', status: 'active' as const, model: 'claude-sonnet-4-6', description: 'General assistant', ...agentDefaults },
-  { id: 'researcher', name: 'Researcher', type: 'core' as const, locked: false, color: 'blue', status: 'idle' as const, model: 'claude-opus-4-6', description: 'Research specialist', ...agentDefaults },
-  { id: 'content-creator', name: 'Content Creator', type: 'Main' as const, locked: false, color: 'purple', status: 'idle' as const, model: 'claude-sonnet-4-6', description: 'Content writer', ...agentDefaults },
+  { id: 'mia', name: 'Mia', type: 'core' as const, locked: true, color: '#6E8BA8' as const, status: 'active' as const, model: 'claude-opus-4-6', description: 'General purpose assistant', ...agentDefaults },
+  { id: 'general-assistant', name: 'General Assistant', type: 'core' as const, locked: false, color: '#7A8C9E' as const, status: 'active' as const, model: 'claude-sonnet-4-6', description: 'General assistant', ...agentDefaults },
+  { id: 'researcher', name: 'Researcher', type: 'core' as const, locked: false, color: '#4F8A80' as const, status: 'idle' as const, model: 'claude-opus-4-6', description: 'Research specialist', ...agentDefaults },
+  { id: 'content-creator', name: 'Content Creator', type: 'Main' as const, locked: false, color: '#5E6973' as const, status: 'idle' as const, model: 'claude-sonnet-4-6', description: 'Content writer', ...agentDefaults },
 ]
 
 function makeClient() {

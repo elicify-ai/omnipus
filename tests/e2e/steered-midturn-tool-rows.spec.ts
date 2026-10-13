@@ -79,6 +79,10 @@ test('tool rows of the closing reply survive a mid-turn steer', async ({ page })
     '(5) run the shell command: sleep 5; echo step-five ; ' +
     '(6) finally reply with a short summary of the outputs. You MUST complete all five tool steps before replying; do not stop early.'
   await page.locator('[data-testid="chat-input"]').fill(PROMPT)
+  // The standing main chat replays its earlier turns on attach, including their
+  // `done` and tool frames. Count only the frames this prompt produces.
+  toolStarts = 0
+  dones = 0
   await page.locator('[data-testid="chat-input"]').press('Enter')
 
   // Wait until at least 3 tool calls have started (the evidence scenario:

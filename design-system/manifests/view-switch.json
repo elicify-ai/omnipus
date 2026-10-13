@@ -16,7 +16,7 @@
     {"id": "view-switch-interaction", "kind": "interaction", "file": "src/components/ui/view-switch.stories.tsx", "test": "Selection", "story": "Selection", "applicable": true},
     {"id": "view-switch-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-axe] axe", "story": "Default", "applicable": true},
     {"id": "view-switch-keyboard", "kind": "keyboard", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-keyboard] keyboard", "story": "Default", "applicable": true},
-    {"id": "view-switch-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-browser] browser", "story": "Default", "applicable": true},
+    {"id": "view-switch-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-browser] browser", "story": "Default", "requiredTargets": [{ "selector": "[data-testid=\"view-board\"]", "attribute": "aria-checked", "value": "true" }], "applicable": true},
     {"id": "view-switch-pointer", "kind": "pointer", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-pointer] pointer", "story": "Default", "applicable": true},
     {"id": "view-switch-reduced-motion", "kind": "reduced-motion", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-reduced-motion] reduced-motion", "story": "Default", "applicable": true},
     {"id": "view-switch-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-forced-colors] forced-colors", "story": "Default", "applicable": true},

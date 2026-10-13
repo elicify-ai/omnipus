@@ -81,7 +81,7 @@ func (ts *turnState) stampStreamerProducerAgentID(streamer bus.Streamer) {
 // carries no TurnID at all — confirmed via live verification to break BOTH
 // the frontend's turn_canceled -> assistant-message replay correlation
 // (chatTurnCanceledNoMatch fires on every reload after a mid-stream cancel)
-// and MarkLastEntryTruncated's own turn-scoped backward-walk matching
+// and the former truncation rewrite's own turn-scoped backward-walk matching
 // (pkg/session/unified.go), silently disabling the Truncated flag for every
 // real cancel.
 //
@@ -195,6 +195,38 @@ func (ts *turnState) stampStreamerMessageID(streamer bus.Streamer) {
 	}
 }
 
+// stampStreamerGoalID stamps this turn's captured goal id (session-core
+// FR-039 / C-GOAL) onto a freshly-obtained streamer, before any token can flow
+// through it. Mirrors stampStreamerTurnID exactly.
+//
+// Without this, the live TokenFrame/DoneFrame and the assistant entry
+// wsStreamer.Finalize persists carry no goal_id, so the SPA cannot join the
+// bubble to its own exact keyed goal criteria and falls back to the
+// latest-goal scalar the spec forbids (FR-039). The value is captured ONCE at
+// turn start (turnState.goalID) and never changes, so a later goal's frame can
+// never rebind this turn's output. An empty goalID stamps nothing (UNKNOWN
+// association), unlike SetTurnID/SetMessageID this is a legitimate common
+// value (`no proven goal`), so the empty case is left to the setter's own
+// no-op rather than treated as an error.
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-webchat streamers (telegram, wecom, sse) are untouched; only
+// wsStreamer implements SetGoalID.
+func (ts *turnState) stampStreamerGoalID(streamer bus.Streamer) {
+	if gid, ok := streamer.(GoalIDStreamer); ok {
+		gid.SetGoalID(ts.goalID)
+	}
+}
+
+// GoalIDStreamer is the optional capability a Streamer implements to receive the
+// goal the turn was dispatched under (FR-039). It is a NAMED, exported interface
+// so the one implementer (the gateway's wsStreamer) can assert it at compile time:
+// a renamed or re-signed SetGoalID there fails the build instead of silently
+// dropping goal_id from stream frames (final-gate M11).
+type GoalIDStreamer interface {
+	SetGoalID(goalID string)
+}
+
 // streamerStatsSetter is an optional interface a Streamer may implement to
 // receive turn-end stats (tokens, cost, duration) before Finalize is called.
 // The ws streamer uses this to populate the "done" frame so the chat UI shows
@@ -256,7 +288,7 @@ type streamerContinuationSetter interface {
 // streamer's own Finalize call is the choke point that actually persists the
 // assistant transcript entry, so it must stamp Truncated/TruncationReason
 // itself, on the SAME write, rather than have finalizeStreamer call
-// MarkLastEntryTruncated AFTER Finalize returns. That post-hoc call was
+// the former post-hoc truncation rewrite AFTER Finalize returns. That post-hoc call was
 // confirmed live-broken two ways: for a D4a zero-content turn, Finalize's own
 // `content != ""` gate wrote no entry at all, so the backward-walk found
 // nothing to flag (silent no-op — replay showed no assistant entry, and the
@@ -348,7 +380,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// assistant transcript entry — including the D4a zero-content case,
 		// which Finalize's own content-gate previously skipped writing an
 		// entry for at all. This REPLACES the old post-hoc
-		// MarkLastEntryTruncated call that used to run AFTER Finalize
+		// the former post-hoc truncation rewrite call that used to run AFTER Finalize
 		// returned: on the streamed path that call either found no entry to
 		// flag (D4a: Finalize wrote nothing) or, worse, walked back and
 		// mis-stamped an EARLIER same-turn narration entry sharing this
@@ -357,7 +389,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// non-streaming path (loop.go's own write choke point, gated on
 		// !hasActiveStreamer) now has an equivalent single-write fix of its
 		// own — appendAssistantTranscriptTruncated — so neither path calls
-		// MarkLastEntryTruncated post-hoc anymore; this streamer probe only
+		// the former post-hoc truncation rewrite post-hoc anymore; this streamer probe only
 		// covers the streamed case.
 		if truncReason != "" {
 			if tset, ok := s.(streamerTruncationSetter); ok {

@@ -62,7 +62,8 @@
 // The global-setup preflight throws immediately if it is unset.
 
 import { expect, type Page } from '@playwright/test'
-import { chatInput, assistantMessages, selectAgent } from './selectors'
+import { assistantMessages } from './selectors'
+import { freshChat } from './session-setup'
 import { stubCliExecutor, type StubCliTexts } from './stub-external-cli'
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -632,14 +633,15 @@ export function extractPlanCorrectCalls(
  */
 export async function startFreshChatWithAgent(page: Page, agent: RegExp): Promise<void> {
   await page.goto('/')
-  // Drive /new via the slash command (the canonical replacement for the
-  // header "New Chat" button that was removed in workspace top-bar redesign).
-  const input = chatInput(page)
-  await expect(input).toBeVisible({ timeout: 15_000 })
-  await input.fill('/new')
-  await input.press('Enter')
+  // Fresh chat via freshChat (fixtures/session-setup.ts) — the agent row's
+  // "New chat with <Agent>" button this used to click is REMOVED (founder
+  // decision D7, DECISIONS.md squad nav-agent-row-menu-20261011: capability
+  // stays, UI access point gone). freshChat creates the session through the
+  // public REST API (POST /api/v1/sessions) and deep-links the SPA's own
+  // /sessions/<id> route; the agent row is selected once it returns, so the
+  // composer is bound to the requested agent with an empty thread here.
+  await freshChat(page, agent)
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 15_000 })
-  await selectAgent(page, agent)
 }
 
 /**

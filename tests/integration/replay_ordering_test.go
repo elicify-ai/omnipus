@@ -557,18 +557,45 @@ func getMostRecentSessionID(t *testing.T, gw *testutil.TestGateway) string {
 	return page.Sessions[0].ID
 }
 
-// sessionTranscriptContains reports whether ANY transcript JSONL file in the
-// session's directory contains want. The real turn-completion path writes a
-// day-partitioned file (sessions/<id>/<YYYY-MM-DD>.jsonl), while the seeding
-// helpers write transcript.jsonl — globbing *.jsonl matches either without the
-// caller needing to know which. Path mirrors writeTranscriptEntries /
-// loop.go:340 (sessions live one level above gw.HomeDir()).
+// sessionTranscriptContains reports whether the session's CHAT-VISIBLE
+// transcript (the records a reattaching client replays) contains want.
+//
+// The real turn-completion path writes a day-partitioned file
+// (sessions/<id>/<YYYY-MM-DD>.jsonl), while the seeding helpers write
+// transcript.jsonl — globbing *.jsonl matches either without the caller needing
+// to know which. Path mirrors writeTranscriptEntries / loop.go:340 (sessions
+// live one level above gw.HomeDir()).
+//
+// Since session-core U2 (one append-only archive per session) that file also
+// holds the model-view records, and the model-only copy of the assistant reply
+// is appended ~40 ms BEFORE the chat copy (the WS streamer's Finalize writes the
+// chat entry last). A plain substring match therefore fired on the model-only
+// record and let the caller reattach before the chat entry landed, so replay
+// carried only the user message. Each line is parsed and must be a chat-visible
+// record (not view_membership "model", no model_message) with want as content.
 func sessionTranscriptContains(gw *testutil.TestGateway, sessionID, want string) bool {
 	sessionDir := filepath.Join(filepath.Dir(gw.HomeDir()), "sessions", sessionID)
 	matches, _ := filepath.Glob(filepath.Join(sessionDir, "*.jsonl"))
 	for _, p := range matches {
-		if b, err := os.ReadFile(p); err == nil && strings.Contains(string(b), want) {
-			return true
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if !strings.Contains(line, want) {
+				continue
+			}
+			var rec struct {
+				Content        string          `json:"content"`
+				ViewMembership string          `json:"view_membership"`
+				ModelMessage   json.RawMessage `json:"model_message"`
+			}
+			if json.Unmarshal([]byte(line), &rec) != nil {
+				continue // a partially written line: not yet a record
+			}
+			if rec.ViewMembership != "model" && len(rec.ModelMessage) == 0 && strings.Contains(rec.Content, want) {
+				return true
+			}
 		}
 	}
 	return false
@@ -657,6 +684,12 @@ func writeTranscriptEntries(t *testing.T, gw *testutil.TestGateway, sessionID st
 	transcriptPath := filepath.Join(sessionDir, "transcript.jsonl")
 	var sb strings.Builder
 	for _, e := range entries {
+		// session-core U2 (effects design D4/D11): the archive carries no reader
+		// default for view_membership, so a raw fixture line must state it. These
+		// are chat-replay fixtures, so an unspecified record is a chat record.
+		if _, ok := e["view_membership"]; !ok {
+			e["view_membership"] = "chat"
+		}
 		line, err := json.Marshal(e)
 		if err != nil {
 			t.Fatalf("writeTranscriptEntries: marshal entry: %v", err)

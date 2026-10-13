@@ -53,26 +53,80 @@ type kernelProbeReport struct {
 	Detail           string `json:"detail,omitempty"`
 }
 
+// kernelBackendUnavailable is the report reason when the host has no kernel
+// sandbox backend to install (no Landlock - e.g. a container whose seccomp
+// profile blocks the landlock syscalls - or no sandbox-exec). The outer test
+// skips on it, naming the reason, exactly as the sandbox package's subprocess
+// tests skip on "Landlock unavailable in child".
+const kernelBackendUnavailable = "kernel sandbox backend unavailable on this host"
+
+// kernelFixtureForceUnavailableEnv makes the inner process behave as a host
+// with no backend, so the unavailable path is testable on a host that has one.
+const kernelFixtureForceUnavailableEnv = "OMNIPUS_ENV_SETUP_KERNEL_FORCE_UNAVAILABLE"
+
+// runKernelFixtureProcess re-execs the test binary as the inner process (so it
+// can install process-global sandbox state without leaking it into this
+// process's other tests) and returns the probe report it wrote, or the raw
+// failure when it wrote none.
+func runKernelFixtureProcess(t *testing.T, extraEnv ...string) (kernelProbeReport, []byte, error) {
+	t.Helper()
+	reportPath := filepath.Join(t.TempDir(), "probe-report.json")
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestEnvironmentSetup_Confinement_RealKernel$")
+	cmd.Env = append(os.Environ(),
+		kernelFixtureSentinel+"=1",
+		kernelFixtureReportEnv+"="+reportPath)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "inner fixture process failed:\n%s", out)
+
+	raw, rerr := os.ReadFile(reportPath)
+	var rep kernelProbeReport
+	if rerr != nil {
+		return rep, out, rerr
+	}
+	require.NoError(t, json.Unmarshal(raw, &rep), "bad probe report %s: %s", raw, out)
+	return rep, out, nil
+}
+
+// An inner process that finds no kernel backend must say so in its report, so
+// the outer test can skip with the reason instead of failing on "no report".
+func TestEnvironmentSetup_Confinement_UnavailableBackendIsReportedNotSilent(t *testing.T) {
+	if os.Getenv(kernelFixtureSentinel) == "1" {
+		t.Skip("outer test only")
+	}
+	rep, out, err := runKernelFixtureProcess(t, kernelFixtureForceUnavailableEnv+"=1")
+	require.NoError(t, err, "an inner process with no kernel backend wrote no report; output:\n%s", out)
+	assert.False(t, rep.Supported)
+	assert.Equal(t, kernelBackendUnavailable, rep.SkipReason)
+}
+
 func TestEnvironmentSetup_Confinement_RealKernel(t *testing.T) {
 	if os.Getenv(kernelFixtureSentinel) == "1" {
 		kernelFixtureInner(t)
 		return
 	}
 
-	// Outer process: re-exec self so the inner can install process-global
-	// sandbox state without leaking it into this process's other tests.
-	reportPath := filepath.Join(t.TempDir(), "probe-report.json")
-	cmd := exec.Command(os.Args[0], "-test.run", "^TestEnvironmentSetup_Confinement_RealKernel$")
-	cmd.Env = append(os.Environ(),
-		kernelFixtureSentinel+"=1",
-		kernelFixtureReportEnv+"="+reportPath)
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "inner fixture process failed:\n%s", out)
-
-	raw, rerr := os.ReadFile(reportPath)
-	require.NoError(t, rerr, "inner wrote no probe report; output:\n%s", out)
-	var rep kernelProbeReport
-	require.NoError(t, json.Unmarshal(raw, &rep), "bad probe report %s: %s", raw, out)
+	rep, out, err := runKernelFixtureProcess(t)
+	require.NoError(t, err, "inner wrote no probe report; output:\n%s", out)
+	if !rep.Supported && rep.SkipReason == kernelBackendUnavailable {
+		// R2-S5-04 / R3 N7: a skip is only honest when THIS HOST really has no
+		// kernel backend. hostKernelSandboxOracle shares NO code with the
+		// product's detection (sandbox.NewLinuxBackend / SelectBackend): on
+		// Linux it issues the raw landlock_create_ruleset(2) ABI-version probe
+		// through golang.org/x/sys/unix, on darwin it checks the sandbox-exec
+		// binary. When the oracle finds a backend while the fixture's probe
+		// says "unavailable", the two disagree about the same machine: that is
+		// a backend-detection regression and it must be RED here instead of
+		// silently skipped. (Asking sandbox.SelectBackend() was not
+		// independent: on Linux it calls the same NewLinuxBackend() the
+		// fixture uses, so a shared regression read as agreement.)
+		if present, evidence := hostKernelSandboxOracle(); present {
+			t.Fatalf("the confinement fixture reported %q while the independent host oracle finds a kernel sandbox (%s) — "+
+				"a backend-detection regression, not a platform limit. Probe detail: %s",
+				rep.SkipReason, evidence, rep.Detail)
+		}
+		t.Skipf("%s: %s", rep.SkipReason, rep.Detail)
+	}
 
 	require.True(t, rep.Supported,
 		"kernel confinement could not be exercised on this host: %s %s", rep.SkipReason, rep.Detail)
@@ -160,7 +214,19 @@ func kernelFixtureInner(t *testing.T) {
 	// The REAL per-turn chain, exactly as the gateway boots it: the base
 	// registered once, and (darwin) the Seatbelt backend installed globally.
 	sandbox.RegisterTurnPolicyBase(&sandbox.TurnPolicyInput{HomePath: home, Model: sandbox.FilesystemModelOpen, AllowedPaths: []string{operatorDir}})
-	installKernelTestBackend(t, home)
+	func() {
+		// installKernelTestBackend skips the test when the host has no kernel
+		// backend; a skip alone leaves the outer process with no report. Say so.
+		defer func() {
+			if t.Skipped() {
+				writeReport(kernelProbeReport{SkipReason: kernelBackendUnavailable})
+			}
+		}()
+		if os.Getenv(kernelFixtureForceUnavailableEnv) == "1" {
+			t.Skip("forced: no kernel sandbox backend")
+		}
+		installKernelTestBackend(t, home)
+	}()
 
 	tool := NewEnvironmentSetupTool(EnvironmentSetupToolDeps{
 		Home:         home,

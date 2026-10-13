@@ -1,0 +1,11 @@
+[90m08:57:12[0m [33mWRN[0m [1m../logger/logger.go:426[0m[36m >[0m [1mdelegation denied: self-delegation is not permitted[0m [36magent_id=[0mmia [36mcomponent=[0magent [36mmode=[0mbackground [36mtarget=[0mmia
+--- FAIL: TestSessionCoreU5a_NativeSelfDelegationNeedsNoSelfEdge (0.00s)
+    sessioncore_u5a_self_delegation_test.go:45: FR-014/015/BDD-05.1: an eligible native agent's self-delegation must be permitted WITHOUT a self-edge; got denial "an agent cannot delegate to itself (\"mia\"): self-delegation is never permitted" (trust_set)
+[90m08:57:12[0m [33mWRN[0m [1m../logger/logger.go:426[0m[36m >[0m [1mdelegation denied: caller has no outgoing edge[0m [36magent_id=[0mmia [36mcomponent=[0magent [36mmode=[0mbackground [36mworkspace_id=[0m01JWMYWORKSPACE0000000001
+--- FAIL: TestSessionCoreU5a_OmittedTargetNormalizesToCaller (0.00s)
+    sessioncore_u5a_self_delegation_test.go:70: FR-014/BDD-05.1: an omitted agent_id must normalize to the caller (self-delegation) before authorization; got denial "this agent has no permitted delegation target in this workspace" (trust_set)
+--- FAIL: TestSessionCoreU5a_ExternalCLIWorkerCannotCreateHelpers (0.00s)
+    sessioncore_u5a_self_delegation_test.go:91: BLOCKED: no guard prevents an external-CLI worker from creating Omnipus helpers — required by FR-016 / BDD-05.3. Today `delegate` is registered for every agent (pkg/agent/loop_wire.go::registerSharedTools) and no delegation path checks the caller's external-CLI status; the eligibility predicate and its shape are open for the architect.
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/agent	3.793s
+FAIL

@@ -73,7 +73,12 @@ func (al *AgentLoop) removeQueuedStopEffects(sessionID string, effects []session
 	gate := al.steerAdmission()
 	for _, effect := range effects {
 		if effect.ControlID != "" && effect.Target.RunID != "" && effect.Target.BootSeq != 0 {
-			gate.removeQueuedExecution(claimForStopEffect(sessionID, effect))
+			claim := claimForStopEffect(sessionID, effect)
+			gate.removeQueuedExecution(claim)
+			// NEW-6/NEW-7: that admission can never run a body now, so the
+			// revival hold bound to exactly this execution ends with it. A
+			// replacement's hold (same generation, another run id) is untouched.
+			al.retireExternalReservations(sessionID, claim)
 		}
 	}
 }

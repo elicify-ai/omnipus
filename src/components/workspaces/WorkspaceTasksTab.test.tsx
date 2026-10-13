@@ -173,8 +173,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     needs_model: false,
     status: 'active',
     soul: '',
-    color: '#3B82F6',
-    icon: 'MagnifyingGlass',
+    color: '#6E8BA8',
     timeout_seconds: 300,
     max_tool_iterations: 50,
     max_tool_iterations_source: 'global',
@@ -183,6 +182,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     memory_enabled: true,
     ...overrides,
     revision: overrides.revision ?? '0'.repeat(64),
+    figure: overrides.figure ?? 'Omnipus',
+    role: overrides.role ?? 'general',
   }
 }
 

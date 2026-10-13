@@ -186,7 +186,7 @@ function announcerText(): string {
 
 beforeEach(() => {
   for (const fn of [fetchAgents, fetchMailboxes, fetchMailFolders, fetchMailMessages, fetchMailMessage, fetchMailSummary, markMailSeen, mintMailAttachmentPreview, revokeMailAttachmentPreview, saveMailAttachmentToLibrary]) fn.mockReset()
-  fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+  fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
   fetchMailboxes.mockResolvedValue([
     { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
   ])

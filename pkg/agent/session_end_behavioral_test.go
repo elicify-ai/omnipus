@@ -2,6 +2,13 @@
 // Fix C's session-end pipeline. Complements session_end_smoke_test.go with
 // spec-mandated #35 (happy path), #43 (bootstrap pass), and boot-gate coverage
 // for FR-029a (cheap-model allow-list).
+//
+// session-core U12 port: these recap tests originally drove the recap via
+// CloseSession(sid, "explicit"). FR-036 / DEL-08 retired the explicit trigger
+// (recap now fires only for idle/bootstrap/joined), so they are ported to the
+// still-valid "idle" trigger with every assertion unchanged — spec
+// "Regression protection": port safety assertions to the canonical
+// replacement, never weaken them.
 
 package agent
 
@@ -120,7 +127,7 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	}
 
 	// Kick the recap and wait for it.
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
@@ -225,7 +232,7 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 			sawRetroFile = true
 			retroBytes = content
 		}
-		if found && strings.Contains(string(content), "trigger=explicit") && strings.Contains(string(content), "fallback=false") {
+		if found && strings.Contains(string(content), "trigger=idle") && strings.Contains(string(content), "fallback=false") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -233,8 +240,8 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	if !sawRetroFile {
 		t.Fatal("no _retro.md file was produced in the happy path within 5s")
 	}
-	if !strings.Contains(string(retroBytes), "trigger=explicit") {
-		t.Errorf("retro missing trigger=explicit; got:\n%s", retroBytes)
+	if !strings.Contains(string(retroBytes), "trigger=idle") {
+		t.Errorf("retro missing trigger=idle; got:\n%s", retroBytes)
 	}
 	if !strings.Contains(string(retroBytes), "fallback=false") {
 		t.Errorf("happy-path retro should be fallback=false; got:\n%s", retroBytes)
@@ -278,7 +285,7 @@ func TestRunRecap_JSONParseError_WritesFallback(t *testing.T) {
 		Role: "user", Content: "hi", Timestamp: time.Now().UTC(), AgentID: "parse-agent",
 	})
 
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	// Wait for a retro to land (it will, via the fallback path).
 	// Spec-5: retros are now in <workspace>/.omnipus/retros/<date>/.
@@ -460,7 +467,7 @@ func TestRunRecap_ReasoningFallback_ExtractsJSONFromReasoning(t *testing.T) {
 		t.Fatalf("AppendTranscript: %v", err)
 	}
 
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	// Wait for last-session.md — the reasoning-extraction path must succeed.
 	deadline := time.Now().Add(5 * time.Second)
@@ -552,7 +559,7 @@ func TestRunRecap_FencedContent(t *testing.T) {
 		t.Fatalf("AppendTranscript: %v", err)
 	}
 
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
@@ -876,7 +883,7 @@ func TestRunRecap_FallbackChain_PrimaryFails(t *testing.T) {
 		Timestamp: time.Now().UTC(),
 	})
 
-	al.CloseSession(meta.ID, "explicit")
+	al.CloseSession(meta.ID, "idle")
 
 	// Wait for the recap goroutine to complete.
 	deadline := time.Now().Add(5 * time.Second)
@@ -954,7 +961,7 @@ func TestRunRecap_ModelResolution_UsesRecapModelField(t *testing.T) {
 		Timestamp: time.Now().UTC(),
 	})
 
-	al.CloseSession(meta.ID, "explicit")
+	al.CloseSession(meta.ID, "idle")
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

@@ -133,7 +133,7 @@ describe('Mail panel — workspace round trip keeps the mailbox directive correc
     fetchMailMessage.mockReset()
     fetchMailSummary.mockReset()
     markMailSeen.mockReset()
-    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }, { id: 'cleo', name: 'Cleo' }])
+    fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }, { figure: 'Omnipus', role: 'general', id: 'cleo', name: 'Cleo' }])
     fetchMailboxes.mockResolvedValue(MAILBOXES)
     fetchMailFolders.mockResolvedValue(folders)
     fetchMailMessages.mockResolvedValue({ messages: [], truncated: false, next_before_uid: null })

@@ -35,7 +35,7 @@ The two rooms:
 
 ## The four memory tools
 
-Every agent has all four. The agent calls them on its own judgment; you trigger them by asking in chat.
+Omnipus provides these four memory tools. Which an agent can use depends on its effective tool policies and runtime. Catalog presence does not grant access. Check the agent's Tools tab before relying on a manual retrospective or another memory action. Automatic recap is a separate setting and is not evidence that `run_retrospective` is granted to every agent. An agent calls the tools it has on its own judgment; you trigger them by asking in chat.
 
 | Tool | What it does | Bounds |
 |---|---|---|
@@ -49,10 +49,10 @@ Every agent has all four. The agent calls them on its own judgment; you trigger 
 With Auto recap on (Settings → Memory; it is on by default on a new install):
 
 1. A session closes after it has been idle for the timeout you set — 30 minutes by default. After a gateway restart, any session that never got a recap gets one then, spread out a few per minute.
-2. A background model call summarizes the conversation: a recap of at most 150 words, up to five wins, and up to five items to improve.
-3. The recap is written to the agent's private room and injected into its next session. The retrospective is filed under its date and appears in `recall_memory` results.
+2. A background model call summarizes the conversation: a recap of at most 150 words, up to five wins, up to five items to improve, and up to five items worth remembering.
+3. The recap, followed by any items worth remembering, is written to the agent's private room (`last-session.md`) and injected into its next session. If that write fails, no retrospective is filed, so the session still counts as not recapped and the next recap pass retries it. The retrospective is filed under its date and appears in `recall_memory` results.
 4. If the summary call fails, the most recent user messages are carried forward word for word, and the file is marked as a fallback — the session is not silently forgotten.
-5. The summary also proposes items worth remembering long-term. Nothing from that list is saved automatically; the agent still has to call `remember` for anything it wants to keep.
+5. The items worth remembering reach the agent's next session through `last-session.md`, so a fact you gave in the last conversation is still in front of the agent. They are not saved as notes: only the agent's `remember` tool creates a note. Each recap replaces `last-session.md`, so the carried items last until the next recap is written; a note made with `remember` stays.
 
 Delegated sub-task sessions never get a recap — only real conversations do.
 
@@ -80,7 +80,7 @@ The agent uses one recall mode at a time. Range pages are **quoted archive data 
 
 By default, combined tool results trigger relief above an estimated **50% of the model's context window**. The separate total-request budget also reserves space for the reply, safety margin and core instructions. These are estimates, not a promise that the provider will accept the request. See [settings](settings.md) for the tool-result share setting and [troubleshooting](troubleshooting.md#the-provider-rejects-your-model-requests) for provider rejections.
 
-Relief deletes no admitted archive bytes. If the turn is aborted, its archive appends and window metadata are rolled back to the actual turn-start snapshot; do not assume an aborted turn's results remain available for recall.
+Relief deletes no admitted archive bytes. If the turn is aborted, its window metadata is rolled back to the actual turn-start snapshot and the aborted turn's appends are kept out of the model's view — but the bytes stay in the conversation archive, so `recall_conversation` can still reach them.
 
 ```mermaid
 flowchart LR

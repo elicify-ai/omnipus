@@ -37,6 +37,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
+import { isSidebarOverlayOpen } from '@/store/sidebar'
 import { isGoalRunning } from '@/lib/goalActivity'
 import type { CancelFrame } from '@/lib/api/generated/asyncapi-types'
 
@@ -177,6 +178,93 @@ function useStopAllConfirmWindow() {
   return { stopAllArmed, stopAllArmedRef, armStopAll, disarmStopAll }
 }
 
+// US-1.4 / FR-23: Global Escape key handler — cancels a turn even when
+// the input does not have focus (e.g. user clicked somewhere else on the
+// page). The composer's own onKeyDown covers the focused-input case; the
+// effect below covers the unfocused case (T23). (Module scope, not in-function:
+// function-size budget — this essay is documentation, not logic.)
+//
+// T23 FIX: two problems existed with the previous implementation:
+//
+//   AssistantUI's cancelOnEscape: ComposerPrimitive.Input has
+//   cancelOnEscape defaulting to true, which consumed the Escape keydown
+//   before our React onKeyDown handler saw it. Fixed by passing
+//   cancelOnEscape={false} to that component.
+//
+//   Problem 2 — Guard vs. race window: a Playwright test calls
+//   page.keyboard.press('Escape') immediately after a long streaming turn
+//   starts (stop button first visible). A fast LLM can complete the turn
+//   and deliver the done frame in <1s, so by the time Escape fires:
+//   isStreaming=false, stopLabel='stop' (the reset effect already
+//   ran), and a naive guard `if (!isStreaming && stopLabel !== 'stopping')`
+//   would silently no-op — the Stop window never arms for a Stop the user
+//   pressed on a turn they just watched stream.
+//
+//   Fix: read through to the Zustand store to check if the last assistant
+//   message is in a cancellable state: either actively streaming
+//   (isStreaming:true) or very recently completed (within the race
+//   window). This is a snapshot read — it bypasses the React closure's
+//   stale isStreaming value entirely.
+//
+// cancelStream() internally gates the WS send (and the "(interrupted)" mark)
+// on a turn actually streaming, so calling it when the turn is already done
+// is safe: it sends nothing and marks nothing, because the answer finished.
+//
+// bugfixes3 Fix 3: this listener is intentionally NOT menu-aware — it has
+// no idea whether the composer's "/" or "@" menu is open. That's handled
+// upstream instead: ChatScreen.handleKeyDown (composer's onKeyDown, a
+// React synthetic handler) checks `slashOpen && shouldShowSlash` BEFORE
+// its own cancel-Escape branch, and when the menu is open it calls
+// `e.stopPropagation()` after closing the menu. Because this listener is
+// plain BUBBLE-phase on `document` (no `capture: true` below) and this app
+// mounts via `createRoot(#root)` (src/main.tsx) — React delegates its
+// synthetic events at that root container, an ancestor of which is
+// `document` — stopPropagation there prevents the native keydown from ever
+// reaching this handler. So: menu open → this function never runs for that
+// keypress; menu closed (including "closed by the Escape that just ran") →
+// this function runs normally, e.g. on the immediately-following Escape.
+//
+// bugfixes3 deferred Fix (item 5): the menu-close branch above is the only
+// one that stops propagation — ChatScreen.handleKeyDown's OWN cancel-Escape
+// branch (the `isStreaming || stopLabel === 'stopping'` guard) calls
+// `e.preventDefault()` and then `cancelState.cancelIfStreaming()` directly,
+// but does NOT stopPropagation. That keydown therefore still bubbles all
+// the way to `document`, where — before the `defaultPrevented` check
+// existed — this handler ran its OWN `shouldCancel` check (unconditioned
+// on how the event got here), found `liveState.isStreaming` still true, and
+// called `cancelStream()` a SECOND time for the exact same keypress. A
+// focused-textarea Escape mid-stream was thus double-dispatching: once via
+// the React synthetic handler, once via this native listener. Skipping
+// whenever `e.defaultPrevented` fixes this for that specific case (the
+// synthetic handler already called preventDefault before this listener
+// ever sees the event) while leaving the FR-23/T23 unfocused-Escape case
+// untouched — with no textarea focused, no React onKeyDown runs at all, so
+// `defaultPrevented` is still false by the time this listener fires and
+// cancellation proceeds exactly as before. Verified no OTHER Escape
+// producer in the app relies on this listener ALSO firing after its own
+// preventDefault: grep for `key === 'Escape'` across src/ turns up
+// Sidebar.tsx, image-lightbox.tsx, WorkspaceHeader.tsx, SearchModal.tsx,
+// and BrowserLiveView.tsx — none of them intend to also cancel an
+// unrelated, possibly-backgrounded chat stream as a side effect of their
+// own Escape handling; the ones that DO call preventDefault (SearchModal's
+// title-edit-cancel, BrowserLiveView's driving-mode release) were
+// incidentally reaching this listener too and could double-fire a stream
+// cancel that had nothing to do with what the user was doing — this check
+// removes that unintended coupling as a side effect, not just the
+// documented double-dispatch.
+//
+//   R3 N6 (combined review round 3): that defaultPrevented check alone
+//   made the precedence run the WRONG way for the sidebar overlay. This
+//   handler runs FIRST (document bubble, before the Sidebar's window
+//   bubble listener), so its own preventDefault-on-cancel was read by the
+//   Sidebar as "a layer above me consumed this" — while a turn streamed,
+//   the first Escape cancelled the turn and the overlay stayed open, and
+//   repeated Escapes escalated to Stop all. Fix: the overlay check in the
+//   handler — while the sidebar overlay is the top surface the handler
+//   stands down entirely, and the Sidebar (which ranks itself BELOW any
+//   Radix layer via the same defaultPrevented check) closes it. Rule and
+//   tests: Sidebar.overlayEscape.test.tsx, describe "Escape precedence
+//   over the turn-cancel handler".
 export function useCancelState(
   isStreaming: boolean,
   // The store action's full signature — the D9 tree paths call
@@ -286,83 +374,30 @@ export function useCancelState(
     activateFirstPress(true)
   }, [cancelAllTreeScoped, activateFirstPress])
 
-  // US-1.4 / FR-23: Global Escape key handler — cancels a turn even when
-  // the input does not have focus (e.g. user clicked somewhere else on the
-  // page). The composer's own onKeyDown covers the focused-input case; this
-  // effect covers the unfocused case (T23).
-  //
-  // T23 FIX: two problems existed with the previous implementation:
-  //
-  //   AssistantUI's cancelOnEscape: ComposerPrimitive.Input has
-  //   cancelOnEscape defaulting to true, which consumed the Escape keydown
-  //   before our React onKeyDown handler saw it. Fixed by passing
-  //   cancelOnEscape={false} to that component.
-  //
-  //   Problem 2 — Guard vs. race window: a Playwright test calls
-  //   page.keyboard.press('Escape') immediately after a long streaming turn
-  //   starts (stop button first visible). A fast LLM can complete the turn
-  //   and deliver the done frame in <1s, so by the time Escape fires:
-  //   isStreaming=false, stopLabel='stop' (the reset effect above already
-  //   ran), and a naive guard `if (!isStreaming && stopLabel !== 'stopping')`
-  //   would silently no-op — the Stop window never arms for a Stop the user
-  //   pressed on a turn they just watched stream.
-  //
-  //   Fix: read through to the Zustand store to check if the last assistant
-  //   message is in a cancellable state: either actively streaming
-  //   (isStreaming:true) or very recently completed (within the race
-  //   window). This is a snapshot read — it bypasses the React closure's
-  //   stale isStreaming value entirely.
-  //
-  // cancelStream() internally gates the WS send (and the "(interrupted)" mark)
-  // on a turn actually streaming, so calling it when the turn is already done
-  // is safe: it sends nothing and marks nothing, because the answer finished.
-  //
-  // bugfixes3 Fix 3: this listener is intentionally NOT menu-aware — it has
-  // no idea whether the composer's "/" or "@" menu is open. That's handled
-  // upstream instead: ChatScreen.handleKeyDown (composer's onKeyDown, a
-  // React synthetic handler) checks `slashOpen && shouldShowSlash` BEFORE
-  // its own cancel-Escape branch, and when the menu is open it calls
-  // `e.stopPropagation()` after closing the menu. Because this listener is
-  // plain BUBBLE-phase on `document` (no `capture: true` below) and this app
-  // mounts via `createRoot(#root)` (src/main.tsx) — React delegates its
-  // synthetic events at that root container, an ancestor of which is
-  // `document` — stopPropagation there prevents the native keydown from ever
-  // reaching this handler. So: menu open → this function never runs for that
-  // keypress; menu closed (including "closed by the Escape that just ran") →
-  // this function runs normally, e.g. on the immediately-following Escape.
-  //
-  // bugfixes3 deferred Fix (item 5): the menu-close branch above is the only
-  // one that stops propagation — ChatScreen.handleKeyDown's OWN cancel-Escape
-  // branch (the `isStreaming || stopLabel === 'stopping'` guard) calls
-  // `e.preventDefault()` and then `cancelState.cancelIfStreaming()` directly,
-  // but does NOT stopPropagation. That keydown therefore still bubbles all
-  // the way to `document`, where — before this `defaultPrevented` check
-  // existed — this handler ran its OWN `shouldCancel` check (unconditioned
-  // on how the event got here), found `liveState.isStreaming` still true, and
-  // called `cancelStream()` a SECOND time for the exact same keypress. A
-  // focused-textarea Escape mid-stream was thus double-dispatching: once via
-  // the React synthetic handler, once via this native listener. Skipping
-  // whenever `e.defaultPrevented` fixes this for that specific case (the
-  // synthetic handler already called preventDefault before this listener
-  // ever sees the event) while leaving the FR-23/T23 unfocused-Escape case
-  // untouched — with no textarea focused, no React onKeyDown runs at all, so
-  // `defaultPrevented` is still false by the time this listener fires and
-  // cancellation proceeds exactly as before. Verified no OTHER Escape
-  // producer in the app relies on this listener ALSO firing after its own
-  // preventDefault: grep for `key === 'Escape'` across src/ turns up
-  // Sidebar.tsx, image-lightbox.tsx, WorkspaceHeader.tsx, SearchModal.tsx,
-  // and BrowserLiveView.tsx — none of them intend to also cancel an
-  // unrelated, possibly-backgrounded chat stream as a side effect of their
-  // own Escape handling; the ones that DO call preventDefault (SearchModal's
-  // title-edit-cancel, BrowserLiveView's driving-mode release) were
-  // incidentally reaching this listener too and could double-fire a stream
-  // cancel that had nothing to do with what the user was doing — this check
-  // removes that unintended coupling as a side effect, not just the
-  // documented double-dispatch.
+  // US-1.4 / FR-23 / T23: the global (document-level) Escape handler. The
+  // full design essay — the T23 race window, bugfixes3's double-dispatch
+  // fixes, and the R3 N6 topmost-layer precedence — lives at module scope
+  // directly above this function (function-size budget); the handler's own
+  // in-line checks carry the short version of each rule.
   useEffect(() => {
     function handleGlobalEscape(e: KeyboardEvent) {
       if (e.key !== 'Escape') return
       if (e.defaultPrevented) return
+      // Escape acts on the TOPMOST layer only (combined-review R3 N6). A
+      // Radix dismissable layer (row ⋯ menu, dialogs, popovers) ranks above
+      // everything and is already handled by the defaultPrevented check
+      // above — DismissableLayer preventDefaults from a document-level
+      // CAPTURE listener before this bubble listener runs. Below it, the
+      // sidebar overlay ranks above the turn: while it is the top surface,
+      // this handler stands down COMPLETELY — no preventDefault, no cancel,
+      // no Stop-all arm or confirm — so Sidebar.tsx::handleKeydown (window
+      // bubble) receives a non-prevented key and closes ONLY the overlay.
+      // Cancelling here instead is exactly the regression N6 pinned: the
+      // turn died, the overlay stayed open, and repeated Escapes escalated
+      // to Stop all. The check reads the sidebar store live (same predicate
+      // the Sidebar's own handler closes on — isSidebarOverlayOpen), so the
+      // two handlers can never disagree about who owns a keypress.
+      if (isSidebarOverlayOpen()) return
       // Read live state from the store — bypasses the stale React closure
       // value for isStreaming.
       const liveState = useChatStore.getState()

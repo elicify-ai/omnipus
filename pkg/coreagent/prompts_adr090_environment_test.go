@@ -25,8 +25,8 @@ func TestPrompt_MiaRequestsDocumentDependenciesHerself(t *testing.T) {
 	if strings.Contains(prompt, "dependencies to Admin") {
 		t.Fatalf("mia prompt must not route missing document dependencies to Admin: %s", prompt)
 	}
-	if !strings.Contains(prompt, "tool:switch_agent") {
-		t.Fatalf("mia persona unchanged: switch_agent must remain for project handoff: %s", prompt)
+	if strings.Contains(prompt, "switch_agent") {
+		t.Fatalf("mia prompt must not name the deleted switch_agent tool (session-core DEL-07): %s", prompt)
 	}
 	// GENERIC INSTALL (current decision): Mia supplies the installation
 	// command or script herself; the retired structured-dependency request

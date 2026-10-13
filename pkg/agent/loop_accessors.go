@@ -221,56 +221,6 @@ func (al *AgentLoop) GetConfig() *config.Config {
 	return al.cfg
 }
 
-// GetSessionActiveAgent returns the agent that the handoff tool last switched
-// the given session to. Returns ("", false) if no handoff override is active
-// for this session_id.
-func (al *AgentLoop) GetSessionActiveAgent(sessionID string) (string, bool) {
-	if sessionID == "" {
-		return "", false
-	}
-	if v, ok := al.sessionActiveAgent.Load("session:" + sessionID); ok {
-		s, ok := v.(string)
-		if !ok {
-			logger.ErrorCF("agent", "sessionActiveAgent: invariant violated — unexpected value type",
-				map[string]any{"session_id": sessionID, "got_type": fmt.Sprintf("%T", v)})
-			return "", false
-		}
-		return s, true
-	}
-	return "", false
-}
-
-// GetLastSwitchToDefault returns whether the most recent switch_agent call
-// on the given session was a return-to-default (true) or a named-agent
-// hand-off (false), as reported by the tool itself
-// (tools.HandoffEvent.ToDefault) rather than re-derived from the resulting
-// agent id. Returns (false, false) if no such record is pending — e.g. no
-// switch_agent has run yet for this session, or it has already been
-// consumed.
-//
-// One-shot: this LoadAndDeletes the entry, since it exists only to answer
-// "was the switch that just completed a return-to-default" once, at the WS
-// agent_switched frame builder that reads it right after the matching
-// ToolExecEnd event fires. Leaving stale entries around risks a later,
-// unrelated switch_agent call on the same session silently reusing a value
-// it never itself observed.
-func (al *AgentLoop) GetLastSwitchToDefault(sessionID string) (bool, bool) {
-	if sessionID == "" {
-		return false, false
-	}
-	v, ok := al.lastSwitchToDefault.LoadAndDelete("session:" + sessionID)
-	if !ok {
-		return false, false
-	}
-	b, ok := v.(bool)
-	if !ok {
-		logger.ErrorCF("agent", "lastSwitchToDefault: invariant violated — unexpected value type",
-			map[string]any{"session_id": sessionID, "got_type": fmt.Sprintf("%T", v)})
-		return false, false
-	}
-	return b, true
-}
-
 // SetPlanEngine installs the single hybrid plan-coordinator instance
 // (ADR-049 D4) so command handlers and REST handlers can reach its Admit/
 // Release admission authority and PausePlansOwnedBy/ResumePlansOwnedBy/
@@ -349,16 +299,17 @@ func (al *AgentLoop) SetPlanStore(store *plan.Store) {
 	}
 
 	// UAT fix (fix/uat-defects-2026-08-22): re-wire the system.* tool surface
-	// (create_task_in_workspace, pkg/sysagent/tools) with the real plan store
-	// too. WireSysagentDeps runs at boot BEFORE this store exists — the
-	// gateway constructs sysAgentDeps and calls WireSysagentDeps well ahead
-	// of plan.New/SetPlanStore (see gateway.go's boot wiring region) — so
-	// every system.* tool instance registered by then was built with a nil
-	// deps.PlanStore. Without this, create_task_in_workspace(plan_id=...)
-	// fails closed with "plan store is not configured" FOREVER, for every
-	// agent, even against a plan that was just created in the very same
-	// workspace by the very same turn (the plain create_task tool above was
-	// already re-wired here; the system.* twin was not).
+	// (pkg/sysagent/tools) with the real plan store too. WireSysagentDeps runs
+	// at boot BEFORE this store exists — the gateway constructs sysAgentDeps
+	// and calls WireSysagentDeps well ahead of plan.New/SetPlanStore (see
+	// gateway.go's boot wiring region) — so every system.* tool instance
+	// registered by then was built with a nil deps.PlanStore. Without this,
+	// any system.* tool that consults deps.PlanStore fails closed — today
+	// delete_agent's active-plan ownership check (agentOwnsActivePlan) — for
+	// every agent, even against a plan that was just created in the very same
+	// workspace by the very same turn. (The original motivating caller was
+	// create_task_in_workspace, retired by DEL-23; the plan-store consumers
+	// that remain still need this re-wire.)
 	//
 	// al.sysagentDeps is read-modify-written under al.mu (mirrors the
 	// al.planStore guard a few lines up in this same function) because the

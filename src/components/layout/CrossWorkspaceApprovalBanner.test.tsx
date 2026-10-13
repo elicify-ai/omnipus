@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { WsToolApprovalRequiredFrame } from '@/lib/ws'
+import type { ToolApprovalRequiredFrame } from '@/lib/ws'
 
 const mockNavigate = vi.fn()
 vi.mock('@tanstack/react-router', () => ({
@@ -48,8 +48,8 @@ import { CrossWorkspaceApprovalBanner } from './CrossWorkspaceApprovalBanner'
 
 function requiredFrame(
   id: string,
-  extra: Partial<WsToolApprovalRequiredFrame> = {},
-): WsToolApprovalRequiredFrame {
+  extra: Partial<ToolApprovalRequiredFrame> = {},
+): ToolApprovalRequiredFrame {
   return {
     type: 'tool_approval_required',
     approval_id: id,

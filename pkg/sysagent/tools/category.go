@@ -66,9 +66,6 @@ func (*SkillListTool) Category() tools.ToolCategory   { return tools.CategorySki
 func (*SkillCreateTool) Category() tools.ToolCategory { return tools.CategorySkills }
 func (*SkillEditTool) Category() tools.ToolCategory   { return tools.CategorySkills }
 
-// System task tools
-
-func (*TaskCreateTool) Category() tools.ToolCategory { return tools.CategoryTasks }
-func (*TaskUpdateTool) Category() tools.ToolCategory { return tools.CategoryTasks }
-func (*TaskDeleteTool) Category() tools.ToolCategory { return tools.CategoryTasks }
-func (*TaskListTool) Category() tools.ToolCategory   { return tools.CategoryTasks }
+// System task tools: retired by DEL-23 (merged into the canonical pkg/tools
+// task family, which carries CategoryTasks itself). No sysagent task tool
+// remains, so this file has no task-category arm.

@@ -156,7 +156,23 @@ func newSteerAL(t *testing.T) (*AgentLoop, func()) {
 // returns its id, for use as a Launch request's SteeringSessionID.
 func newTestSteeringSession(t *testing.T, al *AgentLoop, workspaceID string) string {
 	t.Helper()
-	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", testDefaultAgentID)
+	return newTestSteeringSessionOwnedBy(t, al, workspaceID, testDefaultAgentID)
+}
+
+// newTestSteeringSessionOwnedBy creates a real chat session whose IMMUTABLE
+// owner (meta.AgentID) is ownerAgentID — the delegating agent the launcher's
+// graph gate reads (steer_launcher.go::launchSteered's
+// `parentAgentID := steererMeta.AgentID` and
+// ordinary_root_record.go::initializeOrdinaryRootRecord).
+//
+// session-core U1 / DEL-11 deleted the mutable handover owner: a session's
+// delegating identity is its immutable AgentID, set once at creation, and
+// SwitchAgent only moves the retired ActiveAgentID. A fixture that must pin a
+// caller therefore CREATES the session owned by that caller; there is no way to
+// change the owner afterwards.
+func newTestSteeringSessionOwnedBy(t *testing.T, al *AgentLoop, workspaceID, ownerAgentID string) string {
+	t.Helper()
+	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", ownerAgentID)
 	if err != nil {
 		t.Fatalf("NewSession(steerer): %v", err)
 	}
@@ -240,47 +256,26 @@ func TestLaunch_TaskOriginWithoutTaskID_Refused(t *testing.T) {
 	}
 }
 
-func TestLaunch_SteeredEmptyParentAgentHonorsFailClosedSwitch(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		strict  bool
-		wantErr bool
-	}{
-		{name: "strict default refuses", strict: true, wantErr: true},
-		{name: "operator override permits", strict: false, wantErr: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			al, cleanup := newSteerAL(t)
-			defer cleanup()
-			al.GetConfig().Tools.Delegate.RequireParentAgentID = &tc.strict
-			steerer, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "")
-			if err != nil {
-				t.Fatalf("NewSession(steerer): %v", err)
-			}
+// TestLaunch_SteeredEmptyParentAgent_Refused (F9): the fail-closed switch that
+// used to permit an empty steered-parent agent under an operator override is
+// DELETED — founder ruling F9, there is no switch-off. A delegate launch whose
+// steering session has no agent identity is refused unconditionally.
+func TestLaunch_SteeredEmptyParentAgent_Refused(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	steerer, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "")
+	if err != nil {
+		t.Fatalf("NewSession(steerer): %v", err)
+	}
 
-			result, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
-				SteeringSessionID: steerer.ID,
-				TargetAgentID:     testDefaultAgentID,
-				Task:              "do something",
-				Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-empty-parent"},
-			})
-			if tc.wantErr {
-				if !errors.Is(err, steer.ErrInvalidEdge) || result.SessionID != "" {
-					t.Fatalf("Launch() = %+v, %v; want no child and ErrInvalidEdge", result, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("Launch() with operator override: %v", err)
-			}
-			record, err := al.GetSessionLifecycleStore().Load(result.SessionID)
-			if err != nil {
-				t.Fatalf("Load(child): %v", err)
-			}
-			if record.ParentAgentID != "" {
-				t.Fatalf("ParentAgentID = %q, want empty under explicit override", record.ParentAgentID)
-			}
-		})
+	result, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: steerer.ID,
+		TargetAgentID:     testDefaultAgentID,
+		Task:              "do something",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-empty-parent"},
+	})
+	if !errors.Is(err, steer.ErrInvalidEdge) || result.SessionID != "" {
+		t.Fatalf("Launch() = %+v, %v; want no child and ErrInvalidEdge (F9: no switch-off)", result, err)
 	}
 }
 
@@ -468,10 +463,7 @@ func TestLaunch_DepthBudgetUsesEdgeAndPerformancePrecedence(t *testing.T) {
 			defer cleanup()
 			al.GetConfig().Performance.MaxDelegationDepth = tc.globalDepth
 
-			parentID := newTestSteeringSession(t, al, workspaceID)
-			if err := al.GetSessionStore().SwitchAgent(parentID, parentAgentID); err != nil {
-				t.Fatalf("SwitchAgent(parent): %v", err)
-			}
+			parentID := newTestSteeringSessionOwnedBy(t, al, workspaceID, parentAgentID)
 			result, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 				SteeringSessionID: parentID,
 				TargetAgentID:     testDefaultAgentID,
@@ -687,6 +679,55 @@ func TestLaunch_UnderStampedParent_ChildStampedAtLaunch(t *testing.T) {
 	if parentAfter.Generation != 1 || parentAfter.Stop == nil || parentAfter.Stop.Generation != 1 {
 		t.Errorf("parent record changed by the refused launch: generation=%d stop=%+v, want unchanged (gen 1, Stop.Generation 1)",
 			parentAfter.Generation, parentAfter.Stop)
+	}
+}
+
+// TestLaunch_OrdinaryRootRecordCarriesTheSessionOwnerAgentID is the direct
+// oracle for session-core U1 / DEL-11: a session's delegating identity is its
+// IMMUTABLE owner, meta.AgentID — the mutable ActiveAgentID is retired and a
+// never-switched session leaves it empty. The ordinary-root lifecycle record
+// the launcher mints for the steering session
+// (ordinary_root_record.go::initializeOrdinaryRootRecord) must therefore carry
+// meta.AgentID.
+//
+// The body proves it two ways at once. The graph carries ONLY the owner→target
+// edge, so the launch is authorized solely because the U5a gate
+// (steer_launcher.go::startingRemainingDepth) matched that edge against the
+// session's owner — with an empty record AgentID the launch refuses with
+// steer.ErrInvalidEdge. And the record itself is read back and asserted to
+// carry the owner id, so a regression to ActiveAgentID dies even if some later
+// change made the empty-caller path lenient again.
+func TestLaunch_OrdinaryRootRecordCarriesTheSessionOwnerAgentID(t *testing.T) {
+	const owner = "ordinary-root-owner"
+	const workspaceID = "01JORDINARYROOT0000000001"
+	seedWorkspaceGraph(t, workspaceID, true, []graphEdge{
+		edge(owner, testDefaultAgentID, nil, nil),
+	})
+
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+
+	steerer := newTestSteeringSessionOwnedBy(t, al, workspaceID, owner)
+	res, err := NewSteerLauncher(al).Launch(ctxWS(workspaceID, 0), steer.LaunchRequest{
+		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID,
+		Task: "record the root's owner",
+		Origin: steer.Origin{
+			Kind: steer.OriginKindDelegate, CallID: "call-ordinary-root-owner",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Launch under a session owned by %q: %v (an empty record AgentID both skips the U5a gate and fails the edge match)", owner, err)
+	}
+	if res.SessionID == "" {
+		t.Fatal("expected a child session for a launch with a real owner→target edge")
+	}
+	rootRec, err := al.GetSessionLifecycleStore().Load(steerer)
+	if err != nil {
+		t.Fatalf("Load(ordinary root): %v", err)
+	}
+	if rootRec.AgentID != owner {
+		t.Fatalf("ordinary-root record AgentID = %q, want the session's immutable owner %q "+
+			"(DEL-11: the record takes meta.AgentID, never the retired ActiveAgentID)", rootRec.AgentID, owner)
 	}
 }
 

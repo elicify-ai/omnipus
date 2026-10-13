@@ -16,7 +16,7 @@ func (te *TaskExecutor) pauseRunForGoalError(t *task.Task, taskSessionID string,
 	logger.ErrorCF("task_executor", "goal_read_error: "+reason,
 		map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": err.Error()})
 	te.writeTaskReason(t, reason)
-	te.appendRunErrorTranscript(t, taskSessionID, te.agentLoop.taskSessionStore(taskSessionID, t.AgentID), reason)
+	te.appendRunErrorTranscript(t, taskSessionID, te.agentLoop.GetSessionStore(), reason)
 	return runStepEnded, "", ""
 }
 

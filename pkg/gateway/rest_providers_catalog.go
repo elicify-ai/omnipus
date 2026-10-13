@@ -25,6 +25,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -229,7 +230,7 @@ func (a *restAPI) providerModelList(
 		if err != nil {
 			slog.Warn("rest: could not list models from local provider endpoint",
 				"provider", id, "api_base", src.apiBase, "error", err)
-			warning = fmt.Sprintf("could not fetch upstream model list: %v", err)
+			warning = upstreamListFailureText("could not fetch upstream model list", "the local endpoint could not be reached", err)
 			break
 		}
 		models = live
@@ -249,6 +250,17 @@ func (a *restAPI) providerModelList(
 		models = []string{}
 	}
 	return models, warning
+}
+
+// upstreamListFailureText is the fixed text for a failed model listing. A typed
+// upstream status is a classified fact worth keeping; anything else (a dial
+// error with an address, a TLS or OS error) is not sent to the client.
+func upstreamListFailureText(prefix, fallback string, err error) string {
+	var statusErr *providers_pkg.UpstreamStatusError
+	if errors.As(err, &statusErr) {
+		return fmt.Sprintf("%s: status %d", prefix, statusErr.Status)
+	}
+	return prefix + ": " + fallback + ". Details are in the server log."
 }
 
 // catalogModelIDs returns the row's model ids in document order.

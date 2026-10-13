@@ -282,6 +282,11 @@ type Patch struct {
 	// OwnerSessionID sets Plan.OwnerSessionID (ADR-053 m-3/FR-147 — named
 	// plan<->owner-session linkage).
 	OwnerSessionID *string
+	// InitiatedBy sets Plan.InitiatedBy. Double pointer (like Bounds): outer
+	// nil = unchanged; *outer nil = clear it (a person approved or played the
+	// plan and their action carries the authority); *outer non-nil = the agent
+	// whose execute_plan approved it.
+	InitiatedBy **task.Initiator
 
 	// --- supervision state (ADR-055/FR-050) ---
 	//
@@ -346,6 +351,29 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 		return result, err
 	}
 	return su.persist()
+}
+
+// applyPlainTextAndLinkFields copies the patch fields that need no validation
+// (handover text, the unmet-terminal signature, the owner-session link and the
+// initiating agent) onto the plan.
+func (su *storeUpdateLocked) applyPlainTextAndLinkFields() {
+	if su.patch.HandoverText != nil {
+		// No length gate here on purpose: an over-long handover is CLAMPED by
+		// normalize() below (and again by write()), never rejected. A refused
+		// write is how a plan whose members all succeeded ended up failed
+		// because one provider error string was verbose — see
+		// handover_clamp.go.
+		su.p.HandoverText = *su.patch.HandoverText
+	}
+	if su.patch.LastUnmetTerminalSignature != nil {
+		su.p.LastUnmetTerminalSignature = *su.patch.LastUnmetTerminalSignature
+	}
+	if su.patch.OwnerSessionID != nil {
+		su.p.OwnerSessionID = *su.patch.OwnerSessionID
+	}
+	if su.patch.InitiatedBy != nil {
+		su.p.InitiatedBy = *su.patch.InitiatedBy
+	}
 }
 
 // loadAndApplyFields loads the plan, captures persisted restart state, then validates and applies every non-lifecycle patch field.
@@ -456,20 +484,7 @@ func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, bool, error) {
 		}
 		su.p.FailedReason = *su.patch.FailedReason
 	}
-	if su.patch.HandoverText != nil {
-		// No length gate here on purpose: an over-long handover is CLAMPED by
-		// normalize() below (and again by write()), never rejected. A refused
-		// write is how a plan whose members all succeeded ended up failed
-		// because one provider error string was verbose — see
-		// handover_clamp.go.
-		su.p.HandoverText = *su.patch.HandoverText
-	}
-	if su.patch.LastUnmetTerminalSignature != nil {
-		su.p.LastUnmetTerminalSignature = *su.patch.LastUnmetTerminalSignature
-	}
-	if su.patch.OwnerSessionID != nil {
-		su.p.OwnerSessionID = *su.patch.OwnerSessionID
-	}
+	su.applyPlainTextAndLinkFields()
 	if err := applySupervisionPatch(su.p, su.patch); err != nil {
 		return nil, true, err
 	}

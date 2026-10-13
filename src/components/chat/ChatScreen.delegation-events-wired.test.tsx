@@ -50,7 +50,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    fetchAgents: vi.fn().mockResolvedValue([{ id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active' }]),
+    fetchAgents: vi.fn().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active' }]),
     fetchSessionMessages: vi.fn().mockResolvedValue([]),
     fetchAboutInfo: vi.fn().mockResolvedValue({ preview_port: 5001 }),
     createSession: vi.fn(),
@@ -79,8 +79,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./tools/BrowserTool', () => ({ isReplayBrowserToolName: () => false, BrowserToolReplayBlock: () => null }))
 vi.mock('./tools/WebServeUI', () => ({ WebServeBlock: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => React.createElement('div', {}) }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('@/lib/memory-observer', () => ({

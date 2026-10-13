@@ -96,30 +96,3 @@ func TestWriteJudgeVerdictTranscript_SharedStoreSession_PersistsVerdict(t *testi
 // pre-ADR-091 path covered: ExecuteTask's createTaskSessionSync still mints
 // into the per-agent store, so a verdict for such a session must keep landing
 // there. This is the half a naive "always use the shared store" fix would break.
-func TestWriteJudgeVerdictTranscript_LegacyPerAgentSession_StillPersists(t *testing.T) {
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	perAgent := al.GetAgentStore("native-agent")
-	if perAgent == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
-	}
-	sessionID := u26FreshTaskSession(t, perAgent, "native-agent")
-
-	tk := &task.Task{
-		Title: "legacy per-agent task session", Prompt: "x", Action: task.ActionLLM,
-		AgentID: "native-agent", Priority: 3, WorkspaceID: "default",
-		Status: task.StatusInProgress, SessionID: sessionID,
-	}
-	if err := al.taskStore.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	verdict := &task.JudgeVerdict{
-		ID: "verdict-legacy-1", Scope: task.VerdictScopeTask, TaskID: tk.ID,
-		Round: 1, Met: true, JudgeAgentID: "judge",
-		PerCriterion: []task.CriterionVerdict{{CriterionID: "c1", Met: true, Reason: "evidenced"}},
-	}
-	al.taskExecutor.writeJudgeVerdictTranscript(tk, sessionID, verdict)
-
-	if got := judgeVerdictEntriesIn(t, perAgent, sessionID); len(got) != 1 {
-		t.Fatalf("persisted judge_verdict entries in the legacy per-agent store = %d, want exactly 1", len(got))
-	}
-}

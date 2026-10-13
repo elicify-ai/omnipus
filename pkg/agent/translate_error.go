@@ -750,7 +750,19 @@ func classifyByMessage(body string) LLMErrorCode {
 	if isRateLimitMessage(body) {
 		return CodeRateLimited
 	}
+	// Transport failures carry no HTTP status, so only their wording says what
+	// they are. Without this they fell to CodeUnknown ("we can't tell why")
+	// although the cause was a dropped connection or unreachable provider.
+	if isNetworkMessage(body) {
+		return CodeNetwork
+	}
 	return CodeUnknown
+}
+
+// isNetworkMessage reports a transport failure by the one shared vocabulary
+// (providers.IsTransportFailure).
+func isNetworkMessage(body string) bool {
+	return providers.IsTransportFailure(errors.New(body))
 }
 
 // classifyByProviderError is the top-level dispatch: prefer
@@ -857,6 +869,45 @@ func TranslateTurnError(err error) LLMError {
 			}
 		}
 		return typedExitError(code, err)
+	}
+	// The provider ended its response with an error after the 200 (#1278): the
+	// partial text was discarded and nothing ran. Named for the person as a
+	// provider connection failure; the provider's own text stays in Detail.
+	var streamErr *common.StreamProviderError
+	if errors.As(err, &streamErr) {
+		code := CodeUnknown
+		switch streamErr.Kind() {
+		case common.StreamErrorTransient:
+			code = CodeNetwork
+		case common.StreamErrorRateLimit:
+			code = CodeRateLimited
+		case common.StreamErrorBilling:
+			code = CodeQuotaBilling
+		case common.StreamErrorAuth:
+			code = CodeProviderAuthFailed
+		case common.StreamErrorInvalidRequest:
+			code = CodeProviderRejected
+		case common.StreamErrorContentPolicy:
+			code = CodeContentPolicy
+		}
+		return LLMError{
+			Code:      code,
+			Message:   defaultUserMessage(code),
+			Retryable: isRetryable(code),
+			Detail:    buildDetail(nil, err.Error()),
+		}
+	}
+	// The sender's own message could not be saved (founder ruling 2026-10-11):
+	// the turn is refused and the sender sees only the fixed reply; the store's
+	// error stays in Detail and the log.
+	var notSaved *messageNotSavedError
+	if errors.As(err, &notSaved) {
+		return LLMError{
+			Code:      CodeUnknown,
+			Message:   messageNotSavedReply,
+			Retryable: true,
+			Detail:    buildDetail(nil, err.Error()),
+		}
 	}
 	// An ORDINARY admission refused because the same chat's previous reply is
 	// still finishing (ErrPreviousExecutionPending), or because a concurrent
@@ -982,6 +1033,19 @@ const previousReplyStillFinishingMessage = "Your previous reply is still finishi
 type curatedTurnError struct{ text string }
 
 func (e *curatedTurnError) Error() string { return e.text }
+
+// RefusalText is the Omnipus-authored sentence, readable as written by the
+// delegate tool's refusal to the calling agent (pkg/tools.refusalTexter).
+func (e *curatedTurnError) RefusalText() string { return e.text }
+
+// authoredRefusalError is a refusal whose sentence was written by Omnipus and is
+// path-free (a session id at most): the delegate tool may show it as written. It
+// is the only other type that carries RefusalText; a wrapped store error never
+// does.
+type authoredRefusalError struct{ text string }
+
+func (e *authoredRefusalError) Error() string       { return e.text }
+func (e *authoredRefusalError) RefusalText() string { return e.text }
 
 // turnErrorUserText is what a person or a model may read about a turn that
 // ended on err: the contract's plain message for err's typed code

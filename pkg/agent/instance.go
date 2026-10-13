@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,7 +17,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
-	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -32,6 +30,11 @@ type AgentInstance struct {
 	// mu protects Model, Provider, Candidates, and ThinkingLevel which may be
 	// written by SwitchModel while runTurn reads them concurrently.
 	mu sync.RWMutex
+
+	// initErr is set when the instance could not be constructed (its session
+	// store did not open). Such an instance carries only ID, Name and this error
+	// and is never registered; the registry reports it through InitErr.
+	initErr error
 
 	ID        string
 	Name      string
@@ -112,7 +115,8 @@ type AgentInstance struct {
 	// list) for callers that want to inspect the raw configured grant.
 	// ADR-072 D1/D3: this is NOT unioned into a turn's active skills any more
 	// — activeSkillNames (loop.go) only reflects opts.ForcedSkills, populated
-	// by the /<slug> command and delegate's requested_skill. The actual grant
+	// only by the /<slug> command (loop_slash.go::applyExplicitSkillCommand);
+	// delegate's requested_skill no longer writes it. The actual grant
 	// enforcement (which names ARE allowed) lives on
 	// ContextBuilder.skillAllowlist / skillAllowed, installed from this same
 	// source via WithSkillAllowlist — this field is a convenience mirror, not
@@ -158,6 +162,7 @@ type AgentInstance struct {
 
 // newAgentInstance carries the shared state of NewAgentInstance across its stages.
 type newAgentInstance struct {
+	initErr             error
 	agentCfg            *config.AgentConfig
 	defaults            *config.AgentDefaults
 	cfg                 *config.Config
@@ -207,6 +212,11 @@ func NewAgentInstance(
 	nai.registerTools()
 
 	nai.prepareIdentity()
+	if nai.initErr != nil {
+		// No session store: the instance cannot run. Hand back only the error
+		// (the registry refuses it) instead of panicking mid-construction.
+		return &AgentInstance{ID: nai.agentID, Name: nai.agentName, initErr: nai.initErr}
+	}
 
 	nai.resolveRuntimeLimits()
 
@@ -370,8 +380,14 @@ func (nai *newAgentInstance) prepareIdentity() {
 		nai.skillsFilter = nai.agentCfg.Skills
 	}
 
-	sessionsDir := filepath.Join(nai.workspace, "sessions")
-	nai.sessions = initSessionStore(sessionsDir, nai.agentID, omnipusHome())
+	// DEL-10: every agent shares the ONE session store; there is no per-agent
+	// store and no fallback to another kind of store.
+	sharedStore, storeErr := openSharedSessionStore(sessionsHomeFor(nai.cfg))
+	if storeErr != nil {
+		nai.initErr = storeErr
+		return
+	}
+	nai.sessions = sharedStore
 
 	// WithToolDiscovery gates the "Tool Discovery" prompt section on the
 	// 3-tier tool-manifest system (cfg.Tools.Manifest.Compressed, default ON)
@@ -1365,41 +1381,11 @@ func mediaTempDirPattern() string {
 	return "^" + regexp.QuoteMeta(filepath.Clean(media.TempDir())) + "(?:" + sep + "|$)"
 }
 
-// Close releases resources held by the agent's session store.
+// Close releases the agent's own resources. The session store is shared by every
+// agent and closed once, by the loop that owns it (AgentLoop.Close), never here:
+// a discarded duplicate instance must not close the store live turns are using.
 func (a *AgentInstance) Close() error {
-	if a.Sessions != nil {
-		return a.Sessions.Close()
-	}
 	return nil
-}
-
-// initSessionStore creates the unified session store for an agent.
-// homePath is the ~/.omnipus/ root so that uploads cascade-delete on
-// DeleteSession finds the correct <homePath>/uploads/<sessionID> path
-// regardless of how deep the store's baseDir is in the directory tree (N-B fix).
-// Falls back to the JSONL backend if the unified store cannot be initialized.
-func initSessionStore(dir, agentID, homePath string) session.SessionStore {
-	us, err := session.NewUnifiedStoreWithHome(dir, homePath)
-	if err != nil {
-		logger.ErrorCF("agent", "UnifiedStore init failed; falling back to JSONL backend",
-			map[string]any{"dir": dir, "error": err.Error()})
-		store, storeErr := memory.NewJSONLStore(dir)
-		if storeErr != nil {
-			logger.ErrorCF("agent", "JSONL store fallback also failed; using SessionManager",
-				map[string]any{"error": storeErr.Error()})
-			return session.NewSessionManager(dir)
-		}
-		if n, merr := memory.MigrateFromJSON(context.Background(), dir, store); merr != nil {
-			logger.ErrorCF("agent", "Memory migration failed; falling back to SessionManager",
-				map[string]any{"error": merr.Error()})
-			store.Close()
-			return session.NewSessionManager(dir)
-		} else if n > 0 {
-			logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})
-		}
-		return session.NewJSONLBackend(store)
-	}
-	return us
 }
 
 // omnipusHome returns the Omnipus data directory.

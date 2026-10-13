@@ -151,7 +151,7 @@ describe('MailPanel — Drafts survives a workspace round-trip (f5f6-round2 Item
     sessionStorage.clear()
     useUiStore.setState({ toasts: [] })
 
-    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     // ws-A and ws-C each have their own configured mailbox for 'mia'; ws-B
     // has none (US-3 AS-3's "no mailbox" empty state).
     fetchMailboxes.mockResolvedValue([

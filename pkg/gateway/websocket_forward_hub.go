@@ -184,7 +184,7 @@ func (h *WSHandler) hubBroadcastWithSequencedCopy(sessionID, frameType string, f
 }
 
 // ---------------------------------------------------------------------
-// Tool exec start/end + agent_switched
+// Tool exec start/end
 // ---------------------------------------------------------------------
 
 func (h *WSHandler) hubToolExecStart(evt agent.Event) {
@@ -297,52 +297,6 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 	}
 	h.hubPublishMetaAlsoTo(evtSID, string(generated.WsFrameTypeToolCallResult),
 		hubFrameMeta{kind: hubKindToolResult, key: string(p.ToolCallID), turnID: evt.Meta.TurnID}, data, nil)
-
-	if p.Tool == "switch_agent" && status == "success" {
-		h.hubEmitAgentSwitched(evtSID)
-	}
-}
-
-// hubEmitAgentSwitched mirrors the agent_switched construction embedded in
-// the old per-connection onToolExecEnd (websocket_forward.go) verbatim —
-// see that function's history for the ADR-071 §5.2.1/§5.2.2 rationale this
-// reproduces unchanged.
-func (h *WSHandler) hubEmitAgentSwitched(evtSID string) {
-	defaultAgent := h.agentLoop.GetRegistry().GetDefaultAgent()
-	var defaultName string
-	if defaultAgent != nil {
-		defaultName = defaultAgent.Name
-	}
-	activeAgent, activeOk := h.agentLoop.GetSessionActiveAgent(evtSID)
-	toDefault, sawToDefault := h.agentLoop.GetLastSwitchToDefault(evtSID)
-	if !activeOk {
-		logsafeWarn("websocket: switch_agent succeeded but no active agent found for session",
-			"session_id", evtSID)
-	}
-	if !sawToDefault {
-		logsafeWarn("websocket: switch_agent succeeded but no toDefault record found for session; falling back to id comparison",
-			"session_id", evtSID)
-		toDefault = !activeOk || activeAgent == "" || (defaultAgent != nil && activeAgent == defaultAgent.ID)
-	}
-	switchF := generated.AgentSwitchedFrame{
-		Type:      string(generated.WsFrameTypeAgentSwitched),
-		SessionId: evtSID,
-	}
-	if activeOk && activeAgent != "" && !toDefault {
-		agentName, _ := h.agentLoop.GetRegistry().GetAgentName(activeAgent)
-		switchF.AgentId = &activeAgent
-		if agentName != "" {
-			switchF.Message = &agentName
-		}
-	} else if defaultName != "" {
-		switchF.Message = &defaultName
-	}
-	data, err := json.Marshal(switchF)
-	if err != nil {
-		logsafeError("ws: marshal agent_switched for hub failed", "session_id", evtSID, "error", err)
-		return
-	}
-	h.hubPublishAndDeliver(evtSID, string(generated.WsFrameTypeAgentSwitched), data)
 }
 
 // ---------------------------------------------------------------------

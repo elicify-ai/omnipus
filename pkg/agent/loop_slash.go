@@ -53,6 +53,17 @@ func (al *AgentLoop) handleCommand(
 	}
 
 	rt := al.buildCommandsRuntime(agent, opts)
+	if clearHistory := rt.ClearHistory; clearHistory != nil {
+		// A /clear that is refused (helper session) or fails is reported for the
+		// person's /clear row; a clear that happens is signalled by its marker.
+		rt.ClearHistory = func() error {
+			err := clearHistory()
+			if err != nil {
+				al.notifyClearNotPerformed(msg)
+			}
+			return err
+		}
+	}
 	executor := commands.NewExecutor(al.cmdRegistry, rt)
 
 	var commandReply string
@@ -89,12 +100,15 @@ func (al *AgentLoop) handleCommand(
 // per-agent grant list, agentCfg.Skills) with opts.ForcedSkills every single
 // message — the exact force-load mechanism the on-demand Skill tool
 // (pkg/tools/skill.go) replaces. A turn's active skills are now only what was
-// explicitly loaded this turn: via opts.ForcedSkills, which the Skill tool's
-// "load" outcome and the pre-existing /<slug> slash-command
-// (applyExplicitSkillCommand) and, pre-ADR-091, delegate's requested_skill
-// (D9, the deleted spawnSubTurn's ForcedSkills append) all populated
-// one-shot, per turn — never via the agent's static grant list, which only
-// gates WHICH skills may be loaded (skillAllowed/D5), not which ones are.
+// explicitly activated this turn: opts.ForcedSkills, whose ONLY writer today
+// is the pre-existing /<slug> slash-command (applyExplicitSkillCommand) —
+// the Skill tool's own "load" outcome does NOT populate it (its loaded
+// instructions come back as an ordinary tool message and stay in the
+// conversation until context trim evicts them). Pre-ADR-091, delegate's
+// requested_skill (D9, the deleted spawnSubTurn's ForcedSkills append) also
+// populated it one-shot, per turn — never via the agent's static grant list,
+// which only gates WHICH skills may be loaded (skillAllowed/D5), not which
+// ones are.
 // See pkg/agent/subturn_identity.go::resolveRequestedSkillForChild's own doc
 // comment for the ADR-091 fix lane RX-SUBTURN finding that requested_skill's
 // grant/deny/unresolvable enforcement has no confirmed production caller
@@ -318,11 +332,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			if opts == nil {
 				return fmt.Errorf("process options not available")
 			}
-			if agent.Sessions == nil {
-				return fmt.Errorf("sessions not initialized for agent")
-			}
-
-			return clearSessionWindow(agent.Sessions, opts.SessionKey)
+			return al.clearConversation(context.Background(), agent, opts.SessionKey, opts.TranscriptSessionID)
 		}
 	}
 

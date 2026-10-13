@@ -23,6 +23,10 @@ interface SmartSelectItem {
   value: string
   label: string
   className?: string
+  /** Optional decorative glyph drawn before the label, in the list and on the
+   *  trigger when this item is selected (e.g. a role badge, an agent mark).
+   *  The label stays the accessible name; the icon must be aria-hidden. */
+  icon?: React.ReactNode
 }
 
 interface SmartSelectProps {
@@ -77,7 +81,14 @@ export function SmartSelect({
         <SelectContent>
           {items.map((item) => (
             <SelectItem key={item.value} value={item.value} className={item.className}>
-              {item.label}
+              {item.icon ? (
+                <span className="flex items-center gap-[var(--space-2)]">
+                  {item.icon}
+                  <span>{item.label}</span>
+                </span>
+              ) : (
+                item.label
+              )}
             </SelectItem>
           ))}
         </SelectContent>
@@ -120,10 +131,11 @@ function SearchableSelect({
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
 
-  const selectedLabel = React.useMemo(
-    () => items.find((item) => item.value === value)?.label ?? null,
+  const selectedItem = React.useMemo(
+    () => items.find((item) => item.value === value) ?? null,
     [items, value]
   )
+  const selectedLabel = selectedItem?.label ?? null
 
   function handleSelect(itemValue: string) {
     onValueChange(itemValue)
@@ -159,8 +171,9 @@ function SearchableSelect({
             className
           )}
         >
-          <span className={cn('line-clamp-1', !selectedLabel ? 'text-[var(--color-muted)]' : undefined)}>
-            {selectedLabel ?? placeholder}
+          <span className={cn('flex min-w-0 items-center gap-[var(--space-2)]', !selectedLabel ? 'text-[var(--color-muted)]' : undefined)}>
+            {selectedItem?.icon}
+            <span className="line-clamp-1">{selectedLabel ?? placeholder}</span>
           </span>
           <CaretUpDown size={14} className="ml-[var(--space-2)] shrink-0 opacity-50" aria-hidden="true" />
         </Button>
@@ -186,6 +199,7 @@ function SearchableSelect({
                   onSelect={() => handleSelect(item.value)}
                   className={item.className}
                 >
+                  {item.icon}
                   <span className="flex-1">{item.label}</span>
                   {item.value === value && (
                     <Check size={14} style={{ color: 'var(--color-accent)' }} className="ml-[var(--space-2)] shrink-0" aria-hidden="true" />

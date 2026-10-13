@@ -172,17 +172,53 @@ func (a *restAPI) writeMountCreateError(w http.ResponseWriter, id, name string, 
 	switch {
 	case errors.Is(err, workspace.ErrMountRefused):
 		// FR-7.5: the resolved target IS or lies inside $OMNIPUS_HOME. A
-		// policy refusal, not malformed input — 403, not 400.
-		jsonErr(w, http.StatusForbidden, err.Error())
+		// policy refusal, not malformed input - 403, not 400. The refusal text
+		// the workspace package builds carries the resolved server home and
+		// stored file names, so the client gets a fixed reason instead; the
+		// full text goes to the log.
+		slog.Warn("rest: mount target refused", "workspace_id", id, "name", name, "error", err)
+		jsonErr(w, http.StatusForbidden, mountRefusalText(err))
 	case errors.Is(err, workspace.ErrInvalidMountName),
-		errors.Is(err, workspace.ErrMountNameCollision),
-		errors.Is(err, workspace.ErrMountTargetInvalid):
+		errors.Is(err, workspace.ErrMountNameCollision):
 		jsonErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, workspace.ErrMountTargetInvalid):
+		// The wrapped cause can be a stat/permission failure with an absolute
+		// path and an OS error. The client gets the fixed class only.
+		slog.Warn("rest: mount target invalid", "workspace_id", id, "name", name, "error", err)
+		jsonErr(w, http.StatusBadRequest, mountTargetInvalidText(err))
 	case errors.Is(err, os.ErrNotExist):
 		jsonErr(w, http.StatusNotFound, "workspace not found")
 	default:
 		slog.Error("rest: create workspace mount", "error", err, "workspace_id", id, "name", name)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
+	}
+}
+
+// mountRefusalText is the fixed client reason for a refused mount target. The
+// two classes the workspace package refuses are told apart by the stable phrase
+// it uses for the operating-system class.
+func mountRefusalText(err error) string {
+	if strings.Contains(err.Error(), "operating-system directory") {
+		return "that folder is an operating-system directory - no agent workspace lives there, and writing into it " +
+			"changes the whole machine. Mount a specific folder inside it if you really need one."
+	}
+	return "that folder cannot be mounted: it is, contains or lies inside the Omnipus data directory, " +
+		"and mounting it would let an agent change Omnipus's own settings."
+}
+
+// mountTargetInvalidText is the fixed client reason for a mount target that is
+// not a usable existing directory.
+func mountTargetInvalidText(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "is not absolute"):
+		return "the folder must be given as an absolute path."
+	case strings.Contains(msg, "is not a directory"):
+		return "the path is not a folder."
+	case strings.Contains(msg, "empty path"):
+		return "the folder path is empty."
+	default:
+		return "the folder does not exist or cannot be read. Check the path and its permissions."
 	}
 }
 

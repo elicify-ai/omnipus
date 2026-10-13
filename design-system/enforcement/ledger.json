@@ -569,15 +569,6 @@
       "expiryCheckpoint": "C6"
     },
     {
-      "fingerprint": "66c4a4250ac150a57a5a52a3ce828f029b3f0316d716d32c79f23659dd52d891",
-      "ruleId": "controls/raw-button",
-      "path": "src/components/chat/ChatScreen.tsx",
-      "syntax": "<button>",
-      "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), was: C2 Lane 3: Chat, sessions and conversation surfaces",
-      "replacement": "No replacement planned: this <button> is a row in the slash/mention menu's ARIA listbox (role=\"option\"). The Button primitive always renders an adjacent role=\"status\" live-region sibling (ActionAnnouncement), which would sit between listbox rows and pollute the listbox's expected child structure. Reviewed and retained, not scheduled debt.",
-      "expiryCheckpoint": "C6"
-    },
-    {
       "fingerprint": "66d5721c856b7a3c39dfdcd53916f21f4aa9c287df8c4c072b5d6613bcb4ed02",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -1314,18 +1305,81 @@
       "owner": "C6 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Audit-log event/decision taxonomy (EVENT_STYLES/DECISION_STYLES) — governed data, not design-system chrome (SKILL.md rule 6, confirmed example). No sound permanent exception mechanism exists for a resolved ts-colors/raw-color literal (contract.json isAllowedExceptionRuleId permits only */extension-boundary or exactly ts-colors/unverified-governed-value — neither applies to a fully statically-resolved literal). Kept as owned temporary debt at the latest checkpoint (C6) pending a structural fix (e.g. reading through a scanner-recognised governed accessor) that would require a src/ change; re-review at next audit.",
       "expiryCheckpoint": "C6"
+    },
+    {
+      "fingerprint": "380cea4bb8b4fd58abd0b5e6eedd2265828472e8bb3bb846785eefad8312ee08",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/chat/composer/ComposerMenu.tsx",
+      "syntax": "<button>",
+      "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), transplanted 2026-10-11",
+      "replacement": "No replacement planned: this <button> is a row in the composer menu's ARIA listbox (role=\"option\"). The Button primitive always renders an adjacent role=\"status\" live-region sibling (ActionAnnouncement), which would sit between listbox rows and pollute the listbox's expected child structure. Reviewed and retained 2026-09-22 while the rows lived in ChatScreen.tsx; moved verbatim into this file on 2026-10-11 (the @-mention restore + ChatScreen size shrink) with the ChatScreen.tsx entry retired — that file now has zero raw buttons. Not scheduled debt.",
+      "expiryCheckpoint": "C6"
     }
   ],
   "exceptions": [
-    {"ruleId":"ts-colors/extension-boundary","path":"src/components/ui/word-boundary-text.tsx","syntax":"WordBoundaryText#className","owner":"frontend-lead — Tasks T13","reason":"Caller pass-through: the published text atom forwards className unchanged through cn to its bounded text owner. Exact caller values remain scanned; no literals or transformed class data are exempted."},
-    {"ruleId":"typography/extension-boundary","path":"src/components/ui/word-boundary-text.tsx","syntax":"WordBoundaryText#className","owner":"frontend-lead — Tasks T13","reason":"Caller pass-through: the published text atom forwards className unchanged through cn to its bounded text owner. Exact caller values remain scanned; no literals or transformed class data are exempted."},
-    {"ruleId":"spacing/extension-boundary","path":"src/components/ui/word-boundary-text.tsx","syntax":"WordBoundaryText#className","owner":"frontend-lead — Tasks T13","reason":"Caller pass-through: the published text atom forwards className unchanged through cn to its bounded text owner. Exact caller values remain scanned; no literals or transformed class data are exempted."},
-    {"ruleId":"ts-colors/extension-boundary","path":"src/components/ui/filter-menu.tsx","syntax":"FilterMenu#className","owner":"frontend-lead — Tasks T7","reason":"Caller pass-through: the published composite forwards its own className unchanged through cn to the root div. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."},
-    {"ruleId":"typography/extension-boundary","path":"src/components/ui/filter-menu.tsx","syntax":"FilterMenu#className","owner":"frontend-lead — Tasks T7","reason":"Caller pass-through: the published composite forwards its own className unchanged through cn to the root div. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."},
-    {"ruleId":"spacing/extension-boundary","path":"src/components/ui/filter-menu.tsx","syntax":"FilterMenu#className","owner":"frontend-lead — Tasks T7","reason":"Caller pass-through: the published composite forwards its own className unchanged through cn to the root div. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."},
-    {"ruleId":"ts-colors/extension-boundary","path":"src/components/ui/view-switch.tsx","syntax":"ViewSwitch#className","owner":"frontend-lead — Tasks T7","reason":"Caller pass-through: the published composite forwards its own className unchanged through cn to RadioGroup. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."},
-    {"ruleId":"typography/extension-boundary","path":"src/components/ui/view-switch.tsx","syntax":"ViewSwitch#className","owner":"frontend-lead — Tasks T7","reason":"Caller pass-through: the published composite forwards its own className unchanged through cn to RadioGroup. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."},
-    {"ruleId":"spacing/extension-boundary","path":"src/components/ui/view-switch.tsx","syntax":"ViewSwitch#className","owner":"frontend-lead — Tasks T7","reason":"Caller pass-through: the published composite forwards its own className unchanged through cn to RadioGroup. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."},
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/word-boundary-text.tsx",
+      "syntax": "WordBoundaryText#className",
+      "owner": "frontend-lead — Tasks T13",
+      "reason": "Caller pass-through: the published text atom forwards className unchanged through cn to its bounded text owner. Exact caller values remain scanned; no literals or transformed class data are exempted."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/word-boundary-text.tsx",
+      "syntax": "WordBoundaryText#className",
+      "owner": "frontend-lead — Tasks T13",
+      "reason": "Caller pass-through: the published text atom forwards className unchanged through cn to its bounded text owner. Exact caller values remain scanned; no literals or transformed class data are exempted."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/word-boundary-text.tsx",
+      "syntax": "WordBoundaryText#className",
+      "owner": "frontend-lead — Tasks T13",
+      "reason": "Caller pass-through: the published text atom forwards className unchanged through cn to its bounded text owner. Exact caller values remain scanned; no literals or transformed class data are exempted."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/filter-menu.tsx",
+      "syntax": "FilterMenu#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to the root div. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/filter-menu.tsx",
+      "syntax": "FilterMenu#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to the root div. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/filter-menu.tsx",
+      "syntax": "FilterMenu#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to the root div. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/view-switch.tsx",
+      "syntax": "ViewSwitch#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to RadioGroup. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/view-switch.tsx",
+      "syntax": "ViewSwitch#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to RadioGroup. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/view-switch.tsx",
+      "syntax": "ViewSwitch#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to RadioGroup. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
     {
       "ruleId": "spacing/extension-boundary",
       "path": "src/components/agents/AgentFormFields.tsx",
@@ -2549,6 +2603,27 @@
       "path": "src/components/chat/ChatScreen.tsx",
       "syntax": "VirtualAssistantMessageRow#dom-style.backgroundColor<-agent?.color",
       "reason": "Category: user-authored colours (per-entity agent/task/plan colour field) — migration plan §5, permanent governed registry 1; founder decision 2026-09-19; triage P2. Receiving symbol VirtualAssistantMessageRow, receiver kind dom-style, paint property backgroundColor, sourced from the agent's own user-chosen `color` field. Same boundary as the AssistantMessageAvatar entry above, in the virtualized list row renderer.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.tsx",
+      "syntax": "AgentStatusIndicator#svg-attribute.color<-color",
+      "reason": "Identity ink. The chat indicator passes the responding agent's palette colour into AgentIcon, which paints it as currentColor on the figure. The hex is governed identity data (ADR-20261007, design-system rule 6), not chrome. The component does not choose a colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "ResolvedAgentMark#svg-attribute.color<-agent?.color",
+      "reason": "Identity ink on the live reply mark. ResolvedAgentMark reads the responding agent's color and passes it to AgentIcon. Governed identity data, not a design-system chrome colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "VirtualAssistantMessageRow#svg-attribute.color<-agent?.color",
+      "reason": "Identity ink on the plain and replay reply mark. The row passes the message's own agent color into AgentIcon. Governed identity data, not a design-system chrome colour.",
       "owner": "user-authored colours exception registry"
     },
     {
@@ -4686,49 +4761,48 @@
       "reason": "Lead read (2026-09-22): line 61: destructured `className` prop, forwarded unmodified into `cn(STATUS_BADGE_CLASSES[status] ?? STATUS_BADGE_CLASSES.inbox, className)` at line 62 -- no transformation.",
       "owner": "caller pass-through exception registry"
     },
-    
-        {
-          "ruleId": "ts-colors/extension-boundary",
-          "path": "src/components/ui/text-toggle.tsx",
-          "syntax": "TextToggle#className",
-          "owner": "caller pass-through exception registry",
-          "reason": "Category: caller pass-through — migration plan §5. TextToggle's own destructured prop `className` is declared at src/components/ui/text-toggle.tsx:23:42 and is the final argument of cn() at src/components/ui/text-toggle.tsx:42:9, which is the Button className, with no conditional replacement or non-forwarding read."
-        },
     {
-          "ruleId": "typography/extension-boundary",
-          "path": "src/components/ui/text-toggle.tsx",
-          "syntax": "TextToggle#className",
-          "owner": "caller pass-through exception registry",
-          "reason": "Category: caller pass-through — migration plan §5. TextToggle's own destructured prop `className` is declared at src/components/ui/text-toggle.tsx:23:42 and is the final argument of cn() at src/components/ui/text-toggle.tsx:42:9, which is the Button className, with no conditional replacement or non-forwarding read."
-        },
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/text-toggle.tsx",
+      "syntax": "TextToggle#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. TextToggle's own destructured prop `className` is declared at src/components/ui/text-toggle.tsx:23:42 and is the final argument of cn() at src/components/ui/text-toggle.tsx:42:9, which is the Button className, with no conditional replacement or non-forwarding read."
+    },
     {
-          "ruleId": "spacing/extension-boundary",
-          "path": "src/components/ui/text-toggle.tsx",
-          "syntax": "TextToggle#className",
-          "owner": "caller pass-through exception registry",
-          "reason": "Category: caller pass-through — migration plan §5. TextToggle's own destructured prop `className` is declared at src/components/ui/text-toggle.tsx:23:42 and is the final argument of cn() at src/components/ui/text-toggle.tsx:42:9, which is the Button className, with no conditional replacement or non-forwarding read."
-        },
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/text-toggle.tsx",
+      "syntax": "TextToggle#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. TextToggle's own destructured prop `className` is declared at src/components/ui/text-toggle.tsx:23:42 and is the final argument of cn() at src/components/ui/text-toggle.tsx:42:9, which is the Button className, with no conditional replacement or non-forwarding read."
+    },
     {
-          "ruleId": "ts-colors/extension-boundary",
-          "path": "src/components/layout/SidebarShowButton.tsx",
-          "syntax": "SidebarShowButton#className",
-          "owner": "caller pass-through exception registry",
-          "reason": "Category: caller pass-through — migration plan §5. SidebarShowButton's own destructured prop `className` is declared at src/components/layout/SidebarShowButton.tsx:13:3 and flows unmodified to 1 sink — src/components/layout/SidebarShowButton.tsx:39:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read."
-        },
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/text-toggle.tsx",
+      "syntax": "TextToggle#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. TextToggle's own destructured prop `className` is declared at src/components/ui/text-toggle.tsx:23:42 and is the final argument of cn() at src/components/ui/text-toggle.tsx:42:9, which is the Button className, with no conditional replacement or non-forwarding read."
+    },
     {
-          "ruleId": "typography/extension-boundary",
-          "path": "src/components/layout/SidebarShowButton.tsx",
-          "syntax": "SidebarShowButton#className",
-          "owner": "caller pass-through exception registry",
-          "reason": "Category: caller pass-through — migration plan §5. SidebarShowButton's own destructured prop `className` is declared at src/components/layout/SidebarShowButton.tsx:13:3 and flows unmodified to 1 sink — src/components/layout/SidebarShowButton.tsx:39:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read."
-        },
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/layout/SidebarShowButton.tsx",
+      "syntax": "SidebarShowButton#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. SidebarShowButton's own destructured prop `className` is declared at src/components/layout/SidebarShowButton.tsx:13:3 and flows unmodified to 1 sink — src/components/layout/SidebarShowButton.tsx:39:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read."
+    },
     {
-          "ruleId": "spacing/extension-boundary",
-          "path": "src/components/layout/SidebarShowButton.tsx",
-          "syntax": "SidebarShowButton#className",
-          "owner": "caller pass-through exception registry",
-          "reason": "Category: caller pass-through — migration plan §5. SidebarShowButton's own destructured prop `className` is declared at src/components/layout/SidebarShowButton.tsx:13:3 and flows unmodified to 1 sink — src/components/layout/SidebarShowButton.tsx:39:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read."
-        },
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/layout/SidebarShowButton.tsx",
+      "syntax": "SidebarShowButton#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. SidebarShowButton's own destructured prop `className` is declared at src/components/layout/SidebarShowButton.tsx:13:3 and flows unmodified to 1 sink — src/components/layout/SidebarShowButton.tsx:39:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/layout/SidebarShowButton.tsx",
+      "syntax": "SidebarShowButton#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. SidebarShowButton's own destructured prop `className` is declared at src/components/layout/SidebarShowButton.tsx:13:3 and flows unmodified to 1 sink — src/components/layout/SidebarShowButton.tsx:39:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read."
+    },
     {
       "ruleId": "spacing/extension-boundary",
       "path": "src/components/chat/composer/AutoApprovePicker.tsx",
@@ -4743,7 +4817,6 @@
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: Tooltip's own destructured prop `className` is declared at src/components/ui/tooltip.tsx:46:67 and flows unmodified to 1 sink(s) — src/components/ui/tooltip.tsx:107:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
     },
-    
     {
       "ruleId": "ts-colors/extension-boundary",
       "path": "src/components/chat/composer/AutoApprovePicker.tsx",
@@ -4758,7 +4831,6 @@
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: Tooltip's own destructured prop `className` is declared at src/components/ui/tooltip.tsx:46:67 and flows unmodified to 1 sink(s) — src/components/ui/tooltip.tsx:107:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
     },
-    
     {
       "ruleId": "typography/extension-boundary",
       "path": "src/components/chat/composer/AutoApprovePicker.tsx",
@@ -4996,9 +5068,147 @@
       "syntax": "RunningIndicator#className",
       "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
       "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "AgentProfile#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — W1-6 edit-header identity preview forwards the draft colour unchanged to AgentIcon. If the optional response colour is absent, the preview alone uses generated AgentColor option 9 (Grey); it does not write that fallback into the draft or claim the edit is saved. Figure and role use the same selected draft as the visible pickers.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.tsx",
+      "syntax": "AgentIcon#dom-style.color<-color",
+      "reason": "Category: user-authored colours — identity palette ink. AgentIcon writes dom-style.color directly from its color prop, the pure kit's AgentIconColor palette union. lib/agentIdentity.ts checks exact bidirectional conformance to generated AgentColor without pulling application contracts into the package. The prop is read unchanged (no lookup, no mix). Ink stays currentColor and fully opaque. Mask cutouts are not paint attributes.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.stories.tsx",
+      "syntax": "renderAgentIcon#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — story ink is the last generated AgentColor option (Grey), not a handwritten hex. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "Swatch#dom-style.backgroundColor<-hex",
+      "reason": "Category: user-authored colours — a palette swatch fills itself from its own hex argument, one of the ten generated AgentColor options. The argument is read unchanged.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "IdentityPreview#svg-attribute.color<-color",
+      "reason": "Category: user-authored colours — the live identity preview forwards its color argument unchanged to AgentIcon. The value is a palette hex chosen in the same form.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/CreateAgentModal.tsx",
+      "syntax": "identityOnCreate#dom-style.color<-payload.color",
+      "reason": "Category: user-authored colours — create sends payload.color only after it has been checked against the generated AgentColor options. The field is the wire color, read unchanged.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/CreateAgentWizard.tsx",
+      "syntax": "initialPayload#dom-style.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — a new agent's untouched colour is Grey, the last generated AgentColor option, which is also the server default.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/wizard/Step1Identity.tsx",
+      "syntax": "Step1Identity#svg-attribute.color<-payload.color",
+      "reason": "Category: user-authored colours — the create step forwards the form's color field unchanged into the live preview. The field is a palette hex.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconSteelBlue#svg-attribute.color<-AgentColor.options[0]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Steel blue, the first generated AgentColor option (founder 2026-10-11 palette decision, AVATAR-PALETTE-DECISION.md), from the named function iconSteelBlue. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconVerdigris#svg-attribute.color<-AgentColor.options[2]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Verdigris, generated AgentColor option 2 (founder 2026-10-11 palette decision, AVATAR-PALETTE-DECISION.md), from the named function iconVerdigris. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconGraphiteViolet#svg-attribute.color<-AgentColor.options[4]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Graphite violet, generated AgentColor option 4 (founder 2026-10-11 palette decision, AVATAR-PALETTE-DECISION.md), from the named function iconGraphiteViolet. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconChampagne#svg-attribute.color<-AgentColor.options[8]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Champagne, generated AgentColor option 8 (founder 2026-10-11 palette decision, AVATAR-PALETTE-DECISION.md), from the named function iconChampagne. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconPewter#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Pewter, the last generated AgentColor option (founder 2026-10-11 palette decision, AVATAR-PALETTE-DECISION.md), from the named function iconPewter. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentProfile.wave1.test.tsx",
+      "syntax": "lockedMia#dom-style.color<-AgentColor.options[0]",
+      "reason": "Category: user-authored colours — the locked built-in fixture sets Mia's colour to Azure, the first generated AgentColor option, inside the named function lockedMia. The index is a numeric literal. The field is the wire color.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "AgentLookPicker#svg-attribute.color<-color",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): AgentLookPicker draws the preview and the five Look thumbnails with `ink = color ?? AgentColor.options[9]`, where `color` is the component's own prop carrying the agent's chosen colour (a value of the generated AgentColor enum, the ten founder-approved agent colours) passed unchanged into AgentIcon's svg colour — governed agent data, not design-system chrome (SKILL.md rule 6).",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "AgentLookPicker#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): the fallback when no colour is chosen yet is AgentColor.options[9] (#9CA3AF, the documented create-default agent colour, docs/agents.md), taken from the generated AgentColor enum and passed unchanged into AgentIcon's svg colour — governed agent data, not chrome.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentMark.tsx",
+      "syntax": "AgentMark#dom-style.color<-agent?.color",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): AgentMark passes `agent?.color` — the agent's user-chosen colour from the loaded Agent (generated AgentColor enum) — unchanged to AgentIcon, which paints the figure with it. The same governed flow AgentCard#dom-style.backgroundColor<-agent.color was registered for before the one-mark sweep.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentMark.tsx",
+      "syntax": "AgentMark#dom-style.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): the founder-chosen fallback for an agent that is not loaded is the Omnipus figure in AgentColor.options[9] (#9CA3AF, the documented create-default colour), from the generated AgentColor enum, passed unchanged to AgentIcon — governed agent data, not chrome.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/MessageItem.tsx",
+      "syntax": "MessageItem#svg-attribute.color<-agent?.color",
+      "reason": "Identity ink on the standalone/embed reply mark (founder UI feedback 2026-10-11: MessageItem joins the shared AgentStatusIndicator). MessageItem reads the responding agent's own color field and passes it unmodified into AgentStatusIndicator, which validates it against its published palette before AgentIcon paints it as currentColor — the same boundary already registered for ChatScreen.tsx's ResolvedAgentMark#svg-attribute.color<-agent?.color and VirtualAssistantMessageRow#svg-attribute.color<-agent?.color. Governed identity data (ADR-20261007, design-system rule 6), not a design-system chrome colour; the component does not choose a colour.",
+      "owner": "user-authored colours exception registry"
     }
   ],
   "reviewedBoundaries": [
+    {
+      "path": "src/components/chat/AgentStatusIndicator.monogram.wave1.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
     {
       "path": "src/components/panel-shell/usePanelShell.standalone.test.tsx",
       "kind": "test",
@@ -5655,6 +5865,11 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
+      "path": "src/components/layout/Sidebar.agentRows.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
       "path": "src/components/layout/Sidebar.focus-trap.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
@@ -5676,6 +5891,11 @@
     },
     {
       "path": "src/components/layout/Sidebar.orphan.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/layout/Sidebar.overlayEscape.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -8288,6 +8508,16 @@
       "path": "src/components/ui/RunningIndicator.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). This exact-path boundary covers the spinner-only test's dynamic whole-module import of '@/components/ui/RunningIndicator' (controls/shadcn-low-level-import). RunningIndicator and its props type are public barrel exports; the scanner treats dynamic module reach as namespace-equivalent even for published components. The boundary is test-only and does not alter production import rules."
+    },
+    {
+      "path": "src/components/agents/AgentMark.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/agents/avatarSurfaceSweep.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     }
   ]
 }

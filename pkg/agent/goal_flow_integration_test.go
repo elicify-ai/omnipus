@@ -177,12 +177,24 @@ func newSlowFirstCommitSessions(t *testing.T, base session.SessionStore, delay t
 	return &slowFirstCommitSessions{SessionStore: base, inner: inner, delay: delay}
 }
 
-func (s *slowFirstCommitSessions) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (memory.WindowSnapshot, error) {
-	return s.inner.AppendWindowMessage(ctx, key, msg)
+func (s *slowFirstCommitSessions) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (session.WindowView, error) {
+	return appendWindowMsg(s.inner, ctx, key, msg)
 }
 
-func (s *slowFirstCommitSessions) SnapshotWindow(ctx context.Context, key string) (memory.WindowSnapshot, error) {
-	return s.inner.SnapshotWindow(ctx, key)
+func (s *slowFirstCommitSessions) AppendModelMessage(ctx context.Context, key string, in session.ModelAppend) (session.ModelSlot, session.WindowView, error) {
+	return s.inner.AppendModelMessage(ctx, key, in)
+}
+
+func (s *slowFirstCommitSessions) PlaceSavedInput(ctx context.Context, key string, src session.ArchiveAddress) (session.ModelSlot, session.WindowView, error) {
+	return s.inner.PlaceSavedInput(ctx, key, src)
+}
+
+func (s *slowFirstCommitSessions) ReadModelSlots(ctx context.Context, key string, from, to int, fn func(session.ModelSlot, []byte) error) error {
+	return s.inner.ReadModelSlots(ctx, key, from, to, fn)
+}
+
+func (s *slowFirstCommitSessions) WindowView(ctx context.Context, key string) (session.WindowView, error) {
+	return s.inner.WindowView(ctx, key)
 }
 
 func (s *slowFirstCommitSessions) CommitWindow(ctx context.Context, key string, before, after memory.WindowState) error {

@@ -239,7 +239,7 @@ func TestGoalRecordAccess_WriteRecord_SideEffects(t *testing.T) {
 		t.Fatalf("frame must carry the record's criteria/dod, got criteria=%d dod=%d", len(last.Criteria), len(last.DoD))
 	}
 	for _, p := range payloads {
-		if p.State == goalPillQueued {
+		if p.State == "queued" {
 			t.Fatal("the queued state must NEVER be emitted from afterGoalRecordWrite (ADR-088 D5/D9)")
 		}
 	}

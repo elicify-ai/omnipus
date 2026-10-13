@@ -17,10 +17,9 @@ interface ChatControlsProps {
  * launcher (New Chat moved to the sidebar row + /new; Sessions superseded
  * by the sidebar accordion + SearchModal).
  *
- * The Agent picker, Model selector, and Token counter used to live here but
- * moved into the composer's context row, above the card (src/components/chat/composer/
- * {AgentPicker,ModelPicker,TokenCounter}.tsx) so they sit next to the input
- * they scope, per the Composer Redesign (variant A1).
+ * The model selector and token counter live in the composer's context row
+ * (src/components/chat/composer/{ModelPicker,TokenCounter}.tsx). The agent
+ * picker that used to sit with them is gone (FR-007).
  *
  * Touch target: pointer-coarse:min-h-[44px] on the Open browser button
  * (WCAG 2.5.8 / Fitts — 44px on coarse pointers).
@@ -141,9 +140,8 @@ export function ChatControls({ className }: ChatControlsProps) {
       )}
       style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
     >
-      {/* New Chat was removed from the header — three paths for one action was
-          redundant (Hick's Law). It lives where the user already is: the
-          sidebar's per-workspace "New chat" row and the /new slash command. */}
+      {/* New Chat was removed from the header. The composer no longer handles
+          /new either (FR-007). A fresh chat is started from the sidebar. */}
 
       {/* Open browser — ADR-039 D-A1: user-initiated live browser session,
           independent of any agent tool call. */}
@@ -154,11 +152,11 @@ export function ChatControls({ className }: ChatControlsProps) {
         disabled={creatingBrowserSession}
         // Composer tab ring — full map (single source of truth; other spots
         // point back here): skip-link=1 (AppShell.tsx) → chat input=2
-        // (ChatScreen.tsx) → agent=3 (composer/AgentPicker.tsx) → model=4
-        // (composer/ModelPicker.tsx) → attach=5 (ChatScreen.tsx) → send=6
-        // (ChatScreen.tsx) → browser=7 (this button), then natural DOM order
-        // (the header tab menu). Deliberate positive tabIndex on this closed
-        // 7-control set per operator direction.
+        // (ChatScreen.tsx) → model=4 (composer/ModelPicker.tsx) → attach=5
+        // (ChatScreen.tsx) → send=6 (ChatScreen.tsx) → browser=7 (this button),
+        // then natural DOM order (the header tab menu). Slot 3 was the agent
+        // picker; that control is gone (FR-007) and the remaining indexes are
+        // not renumbered. Deliberate positive tabIndex on this closed set.
         //
         // Slot 6 has THREE possible occupants in ChatScreen.tsx, mutually
         // exclusive by render condition so only one is ever mounted at a

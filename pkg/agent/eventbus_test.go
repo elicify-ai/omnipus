@@ -889,7 +889,7 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	}
 	seed := append(seedExchange(seedMark1, "alpha lore "), seedExchange(seedMark2, "beta lore ")...)
 	seed = append(seed, providers.Message{Role: "user", Content: "Trigger message"})
-	defaultAgent.Sessions.SetHistory("session-1", seed)
+	seedWindowHistory(defaultAgent.Sessions, "session-1", seed)
 
 	sub := al.SubscribeEvents(16)
 	defer al.UnsubscribeEvents(sub.ID)

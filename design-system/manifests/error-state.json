@@ -6,7 +6,7 @@
     { "id": "error-state-interaction", "kind": "interaction", "file": "src/components/ui/error-state.stories.tsx", "test": "Retry", "story": "Retry", "applicable": true },
     { "id": "error-state-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-axe] axe", "story": "Retry", "applicable": true },
     { "id": "error-state-keyboard", "kind": "keyboard", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-keyboard] keyboard", "story": "Retry", "applicable": true },
-    { "id": "error-state-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-browser] browser", "story": "Retry", "applicable": true },
+    { "id": "error-state-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-browser] browser", "story": "Retry", "requiredTargets": [{ "selector": "[data-testid=\"error-state\"]", "text": "Could not load channels." }], "applicable": true },
     { "id": "error-state-pointer", "kind": "pointer", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-pointer] pointer", "story": "Retry", "applicable": true },
     { "id": "error-state-reduced-motion", "kind": "reduced-motion", "applicable": false, "reason": "ErrorState adds no motion; its Button has a separate motion contract." },
     { "id": "error-state-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-forced-colors] forced-colors", "story": "Retry", "applicable": true },

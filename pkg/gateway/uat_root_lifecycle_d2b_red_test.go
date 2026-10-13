@@ -62,7 +62,8 @@ func TestUATD2b_RootFinalAnswerShowsDoneIncludingAfterRestart(t *testing.T) {
 	before, err := f.lifecycle.Load(root)
 	require.NoError(t, err)
 	require.Equal(t, session.LifecycleRunning, before.State, "positive control: actual first human turn is working while its provider is blocked")
-	state, _ := computeSessionLifecycle(f.lifecycle, root)
+	state, _, _, err := computeSessionLifecycle(f.lifecycle, root)
+	require.NoError(t, err)
 	require.NotNil(t, state)
 	require.Equal(t, generated.SessionLifecycleStateWorking, *state, "the actual UI-state consumer must see Working during the running turn")
 	release()
@@ -114,7 +115,8 @@ func uatD2bRequireRootDisplay(t *testing.T, ls *session.LifecycleStore, id strin
 	t.Helper()
 	rec, err := ls.Load(id)
 	require.NoError(t, err, "read actual durable root at %s", stage)
-	state, _ := computeSessionLifecycle(ls, id) // The real REST/UI-state boundary.
+	state, _, _, err := computeSessionLifecycle(ls, id) // The real REST/UI-state boundary.
+	require.NoError(t, err)
 	require.NotNil(t, state, "a root that ran has an authoritative lifecycle record")
 	if rec.State != wantRecord || *state != wantDisplay {
 		t.Errorf("UAT D2b: %s: root durable state=%q, computed UI lifecycle=%q; want %q/%q — the chat row must not say Working after this turn has ended", stage, rec.State, *state, wantRecord, wantDisplay)

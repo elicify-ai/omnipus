@@ -23,7 +23,10 @@ properties:
     minLength: 1
     description: >
       Agent ID of the delegate (the target node). Must be a member of the
-      workspace team. Self-edges (from_agent == to_agent) are rejected.
+      workspace team. A self-edge (from_agent == to_agent) is an ordinary,
+      fully valid edge — the agent forks a new session running itself, and any
+      agent may hold one. Which agents ship a seeded self-edge is a config-level
+      default, not a graph constraint expressed here.
     example: "planner"
   modes:
     type: array

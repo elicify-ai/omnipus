@@ -11,7 +11,7 @@ func LifecycleRecordIsStandingRoot(rec *LifecycleRecord) bool {
 		return true
 	}
 	switch rec.Origin.Kind {
-	case OriginKindChat, OriginKindChannel, OriginKindHeartbeat, OriginKindScheduled:
+	case OriginKindChat, OriginKindChannel, OriginKindMain, OriginKindHeartbeat, OriginKindScheduled:
 		return true
 	default:
 		return false

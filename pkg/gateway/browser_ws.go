@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -1460,7 +1461,7 @@ func (h *BrowserWSHandler) handleAttach(
 	onStatus, onControl, onTabs := browserAttachCallbacks(wc, request.ctx, chatSessionID, viewerID)
 	controlledByOther, err := mgr.Live().AttachContext(workCtx, panelSessionID, viewerID, onStatus, onControl, onTabs)
 	if err != nil {
-		sendFailure(sessionErrorStatus(chatSessionID, fmt.Sprintf("browser_attach failed: %s", err)),
+		sendFailure(sessionErrorStatus(chatSessionID, browserAttachFailureMessage(err)),
 			dropContext(chatSessionID, viewerID, "attach-failed"))
 		return
 	}
@@ -2121,6 +2122,18 @@ func errorStatus(message string) generated.BrowserStatusFrame {
 }
 
 // sessionErrorStatus builds a browser_status(error) frame scoped to a session.
+// browserAttachFailureMessage is the fixed, classified browser_status text for
+// a failed attach. The cause (a profile or launch-lock path, an OS error) goes
+// to the log only.
+func browserAttachFailureMessage(err error) string {
+	slog.Error("browser: attach failed", "error", err)
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timed out") {
+		return "browser_attach failed: the browser did not respond in time. Try again; details are in the server log."
+	}
+	return "browser_attach failed: the browser could not be started or attached. " +
+		"Check disk space and permissions; details are in the server log."
+}
+
 func sessionErrorStatus(sessionID, message string) generated.BrowserStatusFrame {
 	return generated.BrowserStatusFrame{
 		Type:      string(generated.WsFrameTypeBrowserStatus),

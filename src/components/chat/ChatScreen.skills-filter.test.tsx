@@ -157,11 +157,9 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 // Composer Redesign (variant A1): the skills-filter slash menu is independent
 // of the picker/model/token sub-components — stub them to null so their
 // workspaces/providers query plumbing doesn't need mocking here.
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -213,8 +211,14 @@ describe('Skills filter mode (D9)', () => {
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
-    // Commands present
+    // Founder X3: the server fixture includes /clear, so the full menu lists
+    // it. Preserve exact commands-then-skills order and reject extra rows.
     expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
+      '/sessions', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
+      '/code-review', '/data-analysis', '/web-research',
+    ])
+    expect(screen.getByText('/help')).toBeInTheDocument()
     expect(screen.getByText('/cancel')).toBeInTheDocument()
     // Skills present
     expect(screen.getByText('/web-research')).toBeInTheDocument()

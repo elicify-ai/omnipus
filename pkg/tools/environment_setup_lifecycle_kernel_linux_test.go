@@ -3,9 +3,11 @@
 package tools
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
@@ -24,4 +26,21 @@ func installKernelTestBackend(t *testing.T, home string) {
 	}
 	require.NoError(t, backend.Apply(
 		sandbox.DefaultPolicyForModel(sandbox.FilesystemModelOpen, home, nil, nil, nil, nil)))
+}
+
+// landlockCreateRulesetVersionFlag is LANDLOCK_CREATE_RULESET_VERSION from
+// <linux/landlock.h> (1 << 0), declared here on purpose: the oracle below must
+// share no constant, helper or code path with pkg/sandbox's detection.
+const landlockCreateRulesetVersionFlag = 1
+
+// hostKernelSandboxOracle answers "does this host really have a kernel
+// sandbox?" without touching pkg/sandbox: the raw landlock_create_ruleset(2)
+// version query. A positive ABI number means Landlock is usable here; any
+// errno (ENOSYS, EOPNOTSUPP, a seccomp-blocked container) means it is not.
+func hostKernelSandboxOracle() (bool, string) {
+	abi, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, 0, 0, landlockCreateRulesetVersionFlag)
+	if errno != 0 {
+		return false, fmt.Sprintf("landlock_create_ruleset(VERSION): %v", errno)
+	}
+	return true, fmt.Sprintf("landlock_create_ruleset(VERSION) = ABI %d", int(abi))
 }

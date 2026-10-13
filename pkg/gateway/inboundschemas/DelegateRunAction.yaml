@@ -8,9 +8,11 @@ description: >
   criteria + engine-injected child identity from the target agent, ADR-032)
   is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4);
   only `snapshot` here is subject to `snapshot_max_bytes`/
-  `snapshot_max_refs`. Steering is always available for a direct
-  delegation — there is no longer a launch-profile choice gating it
-  (see ADR-053 Amendment).
+  `snapshot_max_refs`. A native child can always be steered at its next
+  tool boundary — there is no launch-profile choice gating it (see ADR-053
+  Amendment). An external-CLI child is steered by interrupting its subprocess
+  and resuming the same CLI conversation, and only while a CLI run is in
+  flight; otherwise steering is refused as not_steerable.
 required:
   - action
   - target_agent_id

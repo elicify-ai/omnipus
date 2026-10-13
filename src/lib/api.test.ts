@@ -1483,6 +1483,7 @@ describe('fetchSessionDetail: per-item message resilience', () => {
 
   const validSession = {
     id: 'sid-detail',
+    type: 'chat',
     agent_id: 'agent-1',
     title: 'Test session',
     status: 'active',
@@ -2790,7 +2791,9 @@ describe('ADR-087 D2 — fetchSessionMessages (cold-load) plumbs truncated/trunc
     expect(msg.truncationReason).toBe('max_output_tokens')
   })
 
-  it('legacy rule: truncated:true with no wire reason cold-loads as truncationReason:"cancelled"', async () => {
+  // Supersession (DEL-F36, src/lib/truncation.ts): the reason is explicit on the wire; an absent
+  // reason is NOT defaulted to 'cancelled'.
+  it('truncated:true with no wire reason cold-loads with no truncationReason (no invented default)', async () => {
     fetchSpy.mockResolvedValueOnce(
       makeOkResponse([
         {
@@ -2810,7 +2813,7 @@ describe('ADR-087 D2 — fetchSessionMessages (cold-load) plumbs truncated/trunc
     expect(messages).toHaveLength(1)
     const msg = messages[0] as { truncated?: boolean; truncationReason?: string }
     expect(msg.truncated).toBe(true)
-    expect(msg.truncationReason).toBe('cancelled')
+    expect(msg.truncationReason).toBeUndefined()
   })
 
   it('a non-truncated assistant Message carries no truncated/truncationReason fields', async () => {

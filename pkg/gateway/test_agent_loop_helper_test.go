@@ -7,6 +7,8 @@ package gateway
 import (
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -40,12 +43,49 @@ import (
 // mustAgentLoopNoWorkspaceSeed for that reason: the no-seed variant still
 // constructs a real agent.AgentLoop, so it still needs isolation even though
 // it never calls ensureTestWorkspaceMembership.
+// ambientOmnipusHome is the OMNIPUS_HOME the test binary STARTED with, captured
+// at package init — before any test can call t.Setenv. It is what distinguishes
+// "this test manages its own home" from "the process happens to export one".
+var ambientOmnipusHome, ambientOmnipusHomeSet = os.LookupEnv("OMNIPUS_HOME")
+
+// ensureIsolatedTestOmnipusHome gives EVERY test its own home. A test that sets
+// OMNIPUS_HOME itself (t.Setenv) has explicitly opted into managing its own
+// home and is left alone.
+//
+// Why the ambient value matters: the earlier form returned early whenever
+// OMNIPUS_HOME was non-empty. With a process-wide OMNIPUS_HOME — an exported
+// CI variable, a developer's shell — every mustAgentLoop test then shared ONE
+// home, so a default workspace or a session written by one test was visible to
+// the next. That is the systemic form of the order-dependent failure
+// TestRunner_SessionMode_MainWithoutWorkspaceRefuses hit. t.Setenv restores the
+// variable at test end, so a test-owned value can only ever be this test's.
 func ensureIsolatedTestOmnipusHome(t *testing.T) {
 	t.Helper()
-	if os.Getenv("OMNIPUS_HOME") != "" {
-		return
+	if cur, ok := os.LookupEnv("OMNIPUS_HOME"); ok &&
+		(!ambientOmnipusHomeSet || cur != ambientOmnipusHome) {
+		return // this test set its own home: explicit opt-in to managing it
 	}
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
+}
+
+// pinConfigWorkspaceToTestHome re-points a config built BEFORE the per-test home
+// existed. config.DefaultConfig() resolves Agents.Defaults.Home (the "workspace" key) from
+// OMNIPUS_HOME / "$HOME/.omnipus" at the moment it is called, and the agent loop
+// derives its home (sessions, audit log, migration markers) from that workspace's
+// parent. A test that built its config first (newSchedulesTestAPI does) therefore
+// carried the user-home fallback path even after ensureIsolatedTestOmnipusHome had
+// set a temp OMNIPUS_HOME: it read and wrote ~/.omnipus. A workspace under the
+// process's fallback home is moved under the per-test home; anything else (a test
+// that set its own workspace) is left alone.
+func pinConfigWorkspaceToTestHome(cfg *config.Config) {
+	if cfg == nil || isolatedProcessHome == nil {
+		return
+	}
+	fallback := isolatedProcessHome.OmnipusDir + string(filepath.Separator)
+	ws := cfg.Agents.Defaults.Home
+	if rel, ok := strings.CutPrefix(ws, fallback); ok {
+		cfg.Agents.Defaults.Home = filepath.Join(config.OmnipusHomeDir(), rel)
+	}
 }
 
 // mustAgentLoop is a gateway test helper that calls agent.NewAgentLoop and
@@ -74,13 +114,48 @@ func mustAgentLoop(
 ) *agent.AgentLoop {
 	t.Helper()
 	ensureIsolatedTestOmnipusHome(t)
+	pinConfigWorkspaceToTestHome(cfg)
 	ensureTestWorkspaceMembership(t, cfg)
 	al, err := agent.NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {
 		t.Fatalf("agent.NewAgentLoop: %v", err)
 	}
+	// Mirror pkg/agent/test_helpers_test.go's mustNewAgentLoop: seed the default
+	// workspace's delegation mesh so the U5a launch gate
+	// (pkg/agent/steer_launcher.go::startingRemainingDepth) finds a caller→target
+	// edge for a launched root whose steering session has an identified owner.
+	seedDefaultDelegationGraph(t, testHarnessAgentIDs(cfg))
+	installTestSessionLauncher(t, al)
 	t.Cleanup(al.Close)
 	return al
+}
+
+// installTestSessionLauncher wires the SAME session start path production wires
+// at gateway boot: the session stores, a genuine boot epoch and the real
+// SteerLauncher on the task executor.
+//
+// S1 M9 (978c232bc) deleted the launcher-less task start path and
+// TaskExecutor.StartTaskNow now REFUSES without a launcher. The shared harness
+// installed none, so every gateway task-start test returned
+// 500 "the task could not be started" — the refusal, not the behaviour under
+// test. This is the gateway half of the same fix pkg/agent's mustNewAgentLoop
+// carries.
+func installTestSessionLauncher(t *testing.T, al *agent.AgentLoop) {
+	t.Helper()
+	home := config.OmnipusHomeDir()
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(home, "session_messages")), lifecycle)
+	// Admission refuses an unminted boot epoch; the gateway mints one at boot.
+	boot := session.NewBootEpochStore(home)
+	if _, err := boot.Mint(); err != nil {
+		t.Fatalf("installTestSessionLauncher: mint boot epoch: %v", err)
+	}
+	al.SetBootEpochStore(boot)
+	if te := agent.GetTaskExecutor(al); te != nil {
+		te.SetLifecycleStore(lifecycle)
+		te.SetSessionLauncher(agent.NewSteerLauncher(al))
+	}
 }
 
 // mustAgentLoopNoWorkspaceSeed is mustAgentLoop WITHOUT the ADR-046 P1
@@ -100,6 +175,7 @@ func mustAgentLoopNoWorkspaceSeed(
 ) *agent.AgentLoop {
 	t.Helper()
 	ensureIsolatedTestOmnipusHome(t)
+	pinConfigWorkspaceToTestHome(cfg)
 	al, err := agent.NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {
 		t.Fatalf("agent.NewAgentLoop: %v", err)
@@ -113,6 +189,83 @@ func mustAgentLoopNoWorkspaceSeed(
 // individual test creates itself (e.g. rest_workspaces_test.go's own
 // writeWorkspaceFile calls) so the two never collide.
 const testHarnessWorkspaceMembershipID = "gateway-test-harness-default"
+
+// seedDefaultDelegationGraph flags the gateway harness workspace
+// (testHarnessWorkspaceMembershipID) as THE is_default workspace under the
+// CURRENT effective Omnipus home and gives it a directed delegation edge for
+// every ordered pair of ids (self edges included) — unless the home already
+// carries an is_default workspace of another id, i.e. a test seeded its own with
+// writeWorkspaceFile first, which is left byte-for-byte untouched.
+//
+// Why: the U5a launch gate
+// (pkg/agent/steer_launcher.go::startingRemainingDepth) consults the resolved
+// (for an unbound turn, the is_default) workspace's delegation graph for the
+// caller→target edge of every launch whose steering session has an identified
+// owner. pkg/gateway's launcher tests (websocket_stop_scope_test.go,
+// one_stop_unified_test.go, qa4_refused_session_delete_test.go, …) predate that
+// gate and declare no graph, so their launches refuse (steer.ErrInvalidEdge)
+// where they used to run.
+//
+// It deliberately REUSES the one workspace file the harness already writes
+// rather than adding a second: a System Agent (coreagent.IsSystemAgentID) is an
+// IMPLICIT member of every workspace file, so a second file makes every one of
+// them ambiguous and ResolveBrowsingKey refuses — the same hazard
+// pkg/agent/test_helpers_test.go's copy of this helper documents.
+//
+// The mesh is a UNION across calls because the shared test home is reused by the
+// whole binary — a later test's agents must be able to delegate to each other
+// too. Guarded by testHarnessWorkspaceMu so it is safe under t.Parallel,
+// mirroring seedTestWorkspaceMembershipForIDs.
+func seedDefaultDelegationGraph(t *testing.T, ids []string) {
+	t.Helper()
+	home := config.OmnipusHomeDir()
+
+	testHarnessWorkspaceMu.Lock()
+	defer testHarnessWorkspaceMu.Unlock()
+
+	if def, err := workspace.ResolveDefaultID(home); err == nil && def != "" && def != testHarnessWorkspaceMembershipID {
+		return // a test seeded its own default graph — never touch it
+	}
+
+	type pair struct{ from, to string }
+	seen := map[pair]bool{}
+	if existing, ok := workspace.LoadDelegation(home, testHarnessWorkspaceMembershipID); ok {
+		for _, e := range existing {
+			seen[pair{e.FromAgent, e.ToAgent}] = true
+		}
+	}
+	for _, from := range ids {
+		for _, to := range ids {
+			seen[pair{from, to}] = true
+		}
+	}
+	if len(seen) > 0 {
+		edges := make([]workspace.DelegationEdge, 0, len(seen))
+		for p := range seen {
+			edges = append(edges, workspace.DelegationEdge{FromAgent: p.from, ToAgent: p.to})
+		}
+		if err := workspace.SaveDelegation(home, testHarnessWorkspaceMembershipID, edges); err != nil {
+			t.Fatalf("seedDefaultDelegationGraph: save delegation %s: %v", testHarnessWorkspaceMembershipID, err)
+		}
+	}
+
+	rec, err := readWorkspaceFile(home, testHarnessWorkspaceMembershipID)
+	if err != nil {
+		if !errors.Is(err, errWorkspaceNotFound) {
+			t.Fatalf("seedDefaultDelegationGraph: read %s: %v", testHarnessWorkspaceMembershipID, err)
+		}
+		rec = storedWorkspace{
+			ID:     testHarnessWorkspaceMembershipID,
+			Name:   testHarnessWorkspaceMembershipID,
+			Status: "active",
+		}
+	}
+	rec.ID = testHarnessWorkspaceMembershipID
+	rec.IsDefault = true
+	if err := writeWorkspaceFile(home, rec); err != nil {
+		t.Fatalf("seedDefaultDelegationGraph: write %s: %v", testHarnessWorkspaceMembershipID, err)
+	}
+}
 
 // testHarnessWorkspaceMu serializes read-merge-write access to the shared
 // harness seed file across concurrently running (t.Parallel) tests within

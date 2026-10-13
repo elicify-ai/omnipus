@@ -69,15 +69,27 @@ func orphanACMarkerNegatives(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			raw := []providers.Message{
-				{Role: "user", Content: "unsupported restart evidence"},
+			prefix := make([]providers.Message, 0, 4)
+			prefix = append(prefix,
+				providers.Message{Role: "user", Content: "unsupported restart evidence"},
 				orphanACGroup("incomplete parallel group", "done", "missing"),
 				orphanACResult("done", "completed partial result must remain visible"),
+			)
+			if tc.role == "" {
+				orphanACAssertUnsupported(t, prefix, "context request: incomplete or invalid tool-result group at message 2")
+				return
 			}
-			if tc.role != "" {
-				raw = append(raw, providers.Message{Role: tc.role, Content: tc.content})
+			bad := providers.Message{Role: tc.role, Content: tc.content}
+			if tc.role == "tool" {
+				// A role:"tool" record with no tool_call_id cannot be admitted at
+				// all (ARCHITECT-ANSWER-FINAL-GATE.md item 4d): seed only the
+				// prefix and put this record in memory for the send boundary.
+				orphanACAssertUnsupportedSplit(t, prefix, bad, nil,
+					"context request: incomplete or invalid tool-result group at message 2", true)
+				return
 			}
-			orphanACAssertUnsupported(t, raw, "context request: incomplete or invalid tool-result group at message 2")
+			orphanACAssertUnsupported(t, append(prefix, bad),
+				"context request: incomplete or invalid tool-result group at message 2")
 		})
 	}
 }

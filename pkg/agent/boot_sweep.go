@@ -73,8 +73,6 @@ type BootSweepResult struct {
 	RebaselinedGoals []string
 }
 
-const failedReasonPreADR091NotResumable = "pre-adr-091-not-resumable"
-
 // SteerBootRecovery is ADR-091's boot operation. Its collaborators are the
 // published pkg/steer package boundaries, so production and the
 // reboot fixture execute the same code against reopened durable stores.
@@ -164,9 +162,7 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 			if err := r.recoverSteered(ctx, id, notice); err != nil {
 				refusals = append(refusals, err)
 			}
-		case steer.ClassLegacyDelegate:
-			r.failLegacy(id, notice)
-		case steer.ClassDamagedChild, steer.ClassInvalidEdge, steer.ClassUnreadable:
+		case steer.ClassLegacyDelegate, steer.ClassDamagedChild, steer.ClassInvalidEdge, steer.ClassUnreadable:
 			notice("refused:"+id, fmt.Sprintf("session %s refused at boot: classification %s", id, class))
 		default:
 			notice("refused:"+id, fmt.Sprintf("session %s refused at boot: unknown classification %q", id, class))
@@ -217,23 +213,6 @@ func (r *SteerBootRecovery) sessionIDs() ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
-}
-
-func (r *SteerBootRecovery) failLegacy(id string, notice func(string, string)) {
-	err := r.Lifecycle.Mutate(id, func(rec *session.LifecycleRecord) error {
-		if rec.Terminal() {
-			return nil
-		}
-		rec.State = session.LifecycleFailed
-		rec.FailedReason = failedReasonPreADR091NotResumable
-		rec.NeedsInput = nil
-		return nil
-	})
-	if err != nil {
-		notice("legacy-write:"+id, fmt.Sprintf("legacy delegate %s could not be failed at boot: %v", id, err))
-		return
-	}
-	notice("legacy:"+id, fmt.Sprintf("legacy delegate %s failed at boot: %s", id, failedReasonPreADR091NotResumable))
 }
 
 func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notice func(string, string)) error {
@@ -994,7 +973,7 @@ const DefaultLifecycleRetentionDays = 90
 
 // standingRootExemptFromSweep keeps standing conversations out of the plan
 // engine's failed(interrupted) sweep (ADR-093 D3). A root has no SteeredBy edge;
-// its origin is absent or chat/channel/heartbeat/scheduled. SteerBootRecovery,
+// its origin is absent or chat/channel/main/heartbeat/scheduled. SteerBootRecovery,
 // not this sweep, produces ledger-backed stopped(restart) for an admitted
 // prior-boot ordinary execution; idle roots have no run to interrupt. A later
 // normal trigger may resume that restart stop on the same generation, while
@@ -1008,7 +987,7 @@ func standingRootExemptFromSweep(rec session.LifecycleRecord) bool {
 		return true
 	}
 	switch rec.Origin.Kind {
-	case session.OriginKindChat, session.OriginKindChannel, session.OriginKindHeartbeat, session.OriginKindScheduled:
+	case session.OriginKindChat, session.OriginKindChannel, session.OriginKindMain, session.OriginKindHeartbeat, session.OriginKindScheduled:
 		return true
 	default:
 		return false
@@ -1250,7 +1229,7 @@ func (pe *PlanEngine) reconcileUnifiedMetaStatus(rec *session.LifecycleRecord) {
 	if pe.agentLoop == nil || rec == nil || rec.AgentID == "" {
 		return
 	}
-	sessStore := pe.agentLoop.GetAgentStore(rec.AgentID)
+	sessStore := pe.agentLoop.GetSessionStore()
 	if sessStore == nil {
 		return
 	}
@@ -1496,7 +1475,12 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 			continue
 		}
 		if existing, gerr := pe.taskStore.Get(m.ID); gerr == nil && existing != nil {
-			continue // already applied — idempotent no-op.
+			// Already applied - but the goal pairing may be the write a crash
+			// cut off, so it is made good here too (a no-op when present).
+			if err := pe.pairTailMemberGoal(m.ID); err != nil {
+				return err
+			}
+			continue
 		}
 		clone := m
 		if clone.PlanID == "" {
@@ -1505,6 +1489,9 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 		if err := pe.taskStore.Create(&clone); err != nil {
 			// A collision that isn't "exists" is a real error — surface it so
 			// ReplayAtBoot marks the intent not-done and retries next boot.
+			return err
+		}
+		if err := pe.pairTailMemberGoal(m.ID); err != nil {
 			return err
 		}
 	}

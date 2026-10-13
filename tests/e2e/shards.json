@@ -23,7 +23,6 @@
         "tests/e2e/reconnect-mid-turn.spec.ts",
         "tests/e2e/quiet-disconnect-banner.spec.ts",
         "tests/e2e/delegation-hidden.spec.ts",
-        "tests/e2e/recap-continuity.spec.ts",
         "tests/e2e/catchup-scenarios.spec.ts",
         "tests/e2e/steered-session-reachability.spec.ts"
       ]
@@ -68,7 +67,8 @@
         "tests/e2e/agents.spec.ts",
         "tests/e2e/auth.spec.ts",
         "tests/e2e/burst-resilience.spec.ts",
-        "tests/e2e/side-panel-deeplink.spec.ts"
+        "tests/e2e/side-panel-deeplink.spec.ts",
+        "tests/e2e/nav-wave1.spec.ts"
       ]
     },
     {
@@ -80,6 +80,7 @@
         "tests/e2e/calendar.spec.ts",
         "tests/e2e/contract-counters.spec.ts",
         "tests/e2e/create-agent.spec.ts",
+        "tests/e2e/sidebar-agent-row-menu.spec.ts",
         "tests/e2e/side-panel-signin-return.spec.ts"
       ]
     },
@@ -246,7 +247,7 @@
       ]
     },
     {
-      "_comment": "SOLO, and deliberately exactly these five specs: the timing-sensitive set measured to flake under ANY co-tenant CPU contention (commit 4b4948e2b, 2026-07-16: at 2-wide, idle-no-reconnect saw 9 WS reconnects in 90 s with pings unanswered, and multi-turn-render/replay-fidelity/settings-memory saw the chat input disabled >30 s while a CPU-heavy co-tenant shard starved the gateway). They need the whole worker. The eight specs that later joined the old ui-heavy shard were placed there for surface affinity, not timing sensitivity -- the 2026-09-16 rebalance moved them to the concurrent ui-browser/ui-render shards so only the measured-sensitive five pay the serial solo cost. Note: retention.spec.ts re-logins without refreshing storageState (sanctioned in scripts/check-e2e-login-crosstalk.sh); settings-memory runs after it here exactly as before the split and tolerates the stale cookie via MemorySection's free-text fallback.",
+      "_comment": "SOLO. Six specs: the five measured timing-sensitive ones (see below) plus recap-continuity.spec.ts, which the same reasoning covers -- it must sit idle past the one-minute idle timeout and then wait on the recap pipeline, so any co-tenant CPU contention (the gateway starved >30 s, exactly what the measured five showed) makes it flake for reasons that are not the product. Originally: the timing-sensitive set measured to flake under ANY co-tenant CPU contention (commit 4b4948e2b, 2026-07-16: at 2-wide, idle-no-reconnect saw 9 WS reconnects in 90 s with pings unanswered, and multi-turn-render/replay-fidelity/settings-memory saw the chat input disabled >30 s while a CPU-heavy co-tenant shard starved the gateway). They need the whole worker. The eight specs that later joined the old ui-heavy shard were placed there for surface affinity, not timing sensitivity -- the 2026-09-16 rebalance moved them to the concurrent ui-browser/ui-render shards so only the measured-sensitive five pay the serial solo cost. Note: retention.spec.ts re-logins without refreshing storageState (sanctioned in scripts/check-e2e-login-crosstalk.sh); settings-memory runs after it here exactly as before the split and tolerates the stale cookie via MemorySection's free-text fallback.",
       "group": "ui-heavy",
       "key_slot": "c",
       "port": 6065,
@@ -256,7 +257,8 @@
         "tests/e2e/multi-turn-render.spec.ts",
         "tests/e2e/replay-fidelity.spec.ts",
         "tests/e2e/retention.spec.ts",
-        "tests/e2e/settings-memory.spec.ts"
+        "tests/e2e/settings-memory.spec.ts",
+        "tests/e2e/recap-continuity.spec.ts"
       ]
     },
     {

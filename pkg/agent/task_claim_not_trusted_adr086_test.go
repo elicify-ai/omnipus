@@ -130,7 +130,7 @@ func TestTaskClaimIsNeverTrustedWhenJudgeUnregistered(t *testing.T) {
 		t.Fatalf("fixture broken: claimed status = %q, want %q", claimed.Status, task.StatusInProgress)
 	}
 
-	seededRun, _, oerr := al.taskStore.OpenRun(tk.ID, nil, task.RunKindManual, "")
+	seededRun, _, oerr := al.taskStore.OpenRun(tk.ID, nil, task.RunKindManual, "", nil)
 	if oerr != nil {
 		t.Fatalf("OpenRun: %v", oerr)
 	}

@@ -50,7 +50,6 @@ func newQAReceiptFixture(t *testing.T) qaReceiptFixture {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	al, _ := newSteerAL(t)
 	wireSteerCompletionDeps(t, al)
-	al.SetSteeringMode(SteeringAll)
 	parentID := newTestSteeringSession(t, al, "ws-control-receipts-qa")
 	child, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: parentID, TargetAgentID: testDefaultAgentID,

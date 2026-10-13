@@ -142,39 +142,6 @@ describe('GoalPillTray — 13-state rendering (ADR-088 D5/D9: `queued` retired; 
   })
 })
 
-// ADR-088 D5/D9: `queued` is retired — the backend never emits it anymore
-// (the pending-confirm state it represented is deleted in full). The
-// wire-enum value survives untouched in the generated type (Constraint #8),
-// so the tray still filters it out defensively rather than the type simply
-// not existing.
-describe('GoalPillTray — queued state (retired, ADR-088 D5/D9)', () => {
-  beforeEach(() => {
-    useChatStore.setState({ goalPills: {} })
-    useJudgeActivityStore.getState().reset()
-  })
-
-  it('renders no tray at all when the only pill is queued', () => {
-    useChatStore.setState({ goalPills: { g1: makeGoal({ goal_id: 'g1', state: 'queued' }) } })
-    const { container } = render(<GoalPillTray />)
-    expect(container).toBeEmptyDOMElement()
-    expect(screen.queryByTestId('goal-pill-tray')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('goal-pill-queued')).not.toBeInTheDocument()
-  })
-
-  it('renders only the non-queued pill when a queued pill and a live pill coexist', () => {
-    useChatStore.setState({
-      goalPills: {
-        stale: makeGoal({ goal_id: 'stale', state: 'queued' }),
-        g1: makeGoal({ goal_id: 'g1', state: 'active' }),
-      },
-    })
-    render(<GoalPillTray />)
-    expect(screen.getAllByTestId('goal-pill-wrapper')).toHaveLength(1)
-    expect(screen.getByTestId('goal-pill-active')).toBeInTheDocument()
-    expect(screen.queryByTestId('goal-pill-queued')).not.toBeInTheDocument()
-  })
-})
-
 describe('GoalPillTray — click to expand', () => {
   beforeEach(() => {
     useChatStore.setState({ goalPills: {} })

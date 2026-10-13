@@ -89,7 +89,6 @@ func newBenchAgent(id string) *benchAgent {
 			"web_search": "allow", "delegate": "ask", "browser": "deny",
 		},
 		Color: "#22C55E",
-		Icon:  "robot",
 	}
 }
 
@@ -166,7 +165,6 @@ func baselineAgentRoster() []config.AgentConfig {
 			MaxToolIterations: 200,
 			Skills:            []string{"web_search", "code_review", "file_write", "delegate"},
 			Color:             "#22C55E",
-			Icon:              "robot",
 		})
 	}
 	return list
@@ -229,7 +227,6 @@ func BenchmarkConfigSave_WholeFile_Concurrent(b *testing.B) {
 							MaxToolIterations: 200,
 							Skills:            []string{"web_search", "code_review", "file_write", "delegate"},
 							Color:             "#22C55E",
-							Icon:              "robot",
 						})
 						if err := config.SaveConfig(path, cfg); err != nil {
 							atomic.AddInt64(&failed, 1)

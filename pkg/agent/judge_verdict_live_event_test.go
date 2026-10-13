@@ -37,9 +37,9 @@ func judgeVerdictPayloadsFor(c *eventCollector, sid string) []JudgeVerdictPayloa
 
 func TestWriteGoalVerdictTranscript_EmitsLiveEventWithGoalSessionID(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	meta, err := store.NewSession(session.SessionTypeChat, "", "native-agent")
 	if err != nil {

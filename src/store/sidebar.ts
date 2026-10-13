@@ -72,3 +72,24 @@ export const useSidebarStore = create<SidebarStore>()(
     }
   )
 )
+
+/**
+ * True when the sidebar is on screen as an OVERLAY — open, and not docked
+ * (an un-pinned sidebar, or a pin the viewport is too narrow to honour, the
+ * same rule Sidebar.tsx renders with).
+ *
+ * This is the shared Escape-precedence predicate (combined-review R3 N6):
+ * Escape acts on the TOPMOST layer only, and BOTH readers derive that from
+ * this one function so they can never disagree about who owns a keypress —
+ * Sidebar.tsx::handleKeydown closes the overlay when it answers true, and
+ * useCancelState's global cancel handler stands down when it answers true
+ * (the overlay, not the turn, is the surface the user is addressing). A live
+ * `getState()` + matchMedia read, not a hook: keydown listeners own no render
+ * of their own and must never act on a stale closure.
+ */
+export function isSidebarOverlayOpen(): boolean {
+  const { isOpen, isPinned } = useSidebarStore.getState()
+  if (!isOpen) return false
+  if (!isPinned) return true
+  return !window.matchMedia(`(min-width: ${SIDEBAR_PIN_BREAKPOINT}px)`).matches
+}

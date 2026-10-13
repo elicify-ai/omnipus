@@ -1679,17 +1679,17 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		},
 	}
 
-	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
+	statusResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel: baseMsg.Channel,
 		Sender: bus.SenderInfo{
 			CanonicalID: baseMsg.Sender.CanonicalID,
 		},
 		ChatID:  baseMsg.ChatID,
-		Content: "/show channel",
+		Content: "/status",
 		Peer:    baseMsg.Peer,
 	})
-	if showResp != "Current Channel: whatsapp" {
-		t.Fatalf("unexpected /show reply: %q", showResp)
+	if !strings.Contains(statusResp, "Channel: whatsapp") {
+		t.Fatalf("unexpected /status reply: %q", statusResp)
 	}
 	if provider.calls != 0 {
 		t.Fatalf("LLM should not be called for handled command, calls=%d", provider.calls)
@@ -1711,13 +1711,8 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		t.Fatalf("LLM should be called exactly once after /foo passthrough, calls=%d", provider.calls)
 	}
 
-	// "/bar", not "/new": /new is a real builtin (pkg/commands/cmd_clear.go,
-	// "Start a new chat") available on SurfaceChannel — whatsapp here would
-	// hit its Handler and reply "Chat history cleared!" instead of passing
-	// through to the LLM. This assertion predates that command (it shipped
-	// in the original PicoClaw->Omnipus squash-merge, before /new existed as
-	// a slash command at all); /bar exercises the same "second unrecognized
-	// command still passes through" behavior /foo already covers above,
+	// "/bar" is an unrecognized name, so it exercises the same "second
+	// unrecognized command still passes through" behavior /foo covers above,
 	// without colliding with a real builtin name.
 	barResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel: baseMsg.Channel,
@@ -1735,23 +1730,23 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		t.Fatalf("LLM should be called for passthrough /bar command, calls=%d", provider.calls)
 	}
 
-	// /new carries a real handler on the channel surface since the command
-	// harmonization (cmd_clear.go: canonical name "new", alias "clear") —
-	// channel users get the "Chat history cleared!" reply and no LLM turn.
-	newResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
+	// A command with a handler on the channel surface is answered inline and
+	// never reaches the LLM. (/new, the previous example here, was retired by
+	// U10a 2026-10-09 — FR-031 — so /help stands in for it.)
+	helpResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel: baseMsg.Channel,
 		Sender: bus.SenderInfo{
 			CanonicalID: baseMsg.Sender.CanonicalID,
 		},
 		ChatID:  baseMsg.ChatID,
-		Content: "/new",
+		Content: "/help",
 		Peer:    baseMsg.Peer,
 	})
-	if newResp != "Chat history cleared!" {
-		t.Fatalf("unexpected /new reply: %q", newResp)
+	if !strings.Contains(helpResp, "/status") {
+		t.Fatalf("unexpected /help reply: %q", helpResp)
 	}
 	if provider.calls != 2 {
-		t.Fatalf("LLM should NOT be called for the handled /new command, calls=%d", provider.calls)
+		t.Fatalf("LLM should NOT be called for the handled /help command, calls=%d", provider.calls)
 	}
 }
 
@@ -1810,14 +1805,14 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/switch model to deepseek/deepseek-v3.2",
+		Content: "/model deepseek/deepseek-v3.2",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
 	if !strings.Contains(switchResp, "Switched model from gpt-4.1 to deepseek/deepseek-v3.2") {
-		t.Fatalf("unexpected /switch reply: %q", switchResp)
+		t.Fatalf("unexpected /model reply: %q", switchResp)
 	}
 
 	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
@@ -1826,18 +1821,18 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/show model",
+		Content: "/model",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
 	if !strings.Contains(showResp, "Current Model: deepseek/deepseek-v3.2 (Provider: openrouter)") {
-		t.Fatalf("unexpected /show model reply after switch: %q", showResp)
+		t.Fatalf("unexpected /model reply after switch: %q", showResp)
 	}
 
 	if provider.calls != 0 {
-		t.Fatalf("LLM should not be called for /switch and /show, calls=%d", provider.calls)
+		t.Fatalf("LLM should not be called for /model, calls=%d", provider.calls)
 	}
 }
 
@@ -1888,14 +1883,14 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/switch model to missing",
+		Content: "/model missing",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
 	if switchResp != `model "missing" not found in model_list or providers` {
-		t.Fatalf("unexpected /switch error reply: %q", switchResp)
+		t.Fatalf("unexpected /model error reply: %q", switchResp)
 	}
 
 	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
@@ -1904,18 +1899,18 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/show model",
+		Content: "/model",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
 	if !strings.Contains(showResp, "Current Model: gpt-4.1 (Provider: openai)") {
-		t.Fatalf("unexpected /show model reply after rejected switch: %q", showResp)
+		t.Fatalf("unexpected /model reply after rejected switch: %q", showResp)
 	}
 
 	if provider.calls != 0 {
-		t.Fatalf("LLM should not be called for rejected /switch and /show, calls=%d", provider.calls)
+		t.Fatalf("LLM should not be called for rejected /model, calls=%d", provider.calls)
 	}
 }
 
@@ -2024,14 +2019,14 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/switch model to deepseek/deepseek-v3.2",
+		Content: "/model deepseek/deepseek-v3.2",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
 	if !strings.Contains(switchResp, "Switched model from gpt-4.1 to deepseek/deepseek-v3.2") {
-		t.Fatalf("unexpected /switch reply: %q", switchResp)
+		t.Fatalf("unexpected /model reply: %q", switchResp)
 	}
 
 	secondResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{

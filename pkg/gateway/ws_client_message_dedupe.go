@@ -308,6 +308,31 @@ func (h *WSHandler) markAcceptedMessageWorkingLocked(sessionID, clientMessageID 
 	}
 }
 
+// setAcceptedMessageState records the message's current delivery state, so a
+// retried client_message_id is answered with it (received, held, working).
+func (h *WSHandler) setAcceptedMessageState(sessionID, clientMessageID, state string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if a := h.acceptedClientMsgs[sessionID]; a != nil {
+		if m := a.byID[clientMessageID]; m != nil {
+			m.state = state
+		}
+	}
+}
+
+// acceptedMessageState is the message's current recorded delivery state ("" when
+// the message is not remembered).
+func (h *WSHandler) acceptedMessageState(sessionID, clientMessageID string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if a := h.acceptedClientMsgs[sessionID]; a != nil {
+		if m := a.byID[clientMessageID]; m != nil {
+			return m.state
+		}
+	}
+	return ""
+}
+
 func (h *WSHandler) markAcceptedMessageWorking(sessionID, clientMessageID string) {
 	h.mu.Lock()
 	h.markAcceptedMessageWorkingLocked(sessionID, clientMessageID)
@@ -345,10 +370,12 @@ func (hcm *wsHandlerHandleChatMessage) answerRetriedMessage() bool {
 	h.mu.Unlock()
 	if wrongPrincipal {
 		cid := hcm.clientMessageID
+		sid := hcm.sessionID // contract C2: message-scoped, so it names the chat
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:            string(generated.WsFrameTypeError),
 			Message:         "Could not check this chat",
 			ClientMessageId: &cid,
+			SessionId:       &sid,
 		})
 		return true
 	}

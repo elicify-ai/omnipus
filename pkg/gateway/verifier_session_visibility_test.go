@@ -74,7 +74,11 @@ func TestCreateSession_TypeVerifierSpoof_CoercedToChat(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
 
-	body := `{"type":"verifier"}`
+	// An explicit chat agent_id: without one the request resolves to the Admin
+	// agent, which a standalone (workspace-less) Admin session is now refused
+	// for (navigation FR-038, cbc3caf8a) — the refusal would mask the type
+	// coercion this test is about.
+	body := `{"type":"verifier","agent_id":"mia"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")

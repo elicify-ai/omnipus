@@ -235,6 +235,9 @@ export function CreateTaskSlideOver({
       priority: form.priority,
       workspace_id: workspaceId,
       surface: 'user',
+      // Contract-required (session-core FR-017); the Board's create form has
+      // no isolation control, so it takes the contract default.
+      run_isolated: false,
       plan_id: effectivePlanId ?? undefined,
       agent_id: form.agentId === '__none__' ? undefined : form.agentId || undefined,
       // GOAL-FR-047: both lists are now mandatory — handleSubmit refuses

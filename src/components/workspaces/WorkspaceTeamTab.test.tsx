@@ -9,10 +9,11 @@
  * graph/GraphView and WorkspaceTeamGraph tests.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Agent, Workspace, WorkspaceDelegation } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 import { useUiStore } from '@/store/ui'
 import type { WorkspaceTeamGraphProps } from './team/WorkspaceTeamGraph'
 
@@ -37,21 +38,19 @@ beforeAll(() => {
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 function agent(id: string, over: Partial<Agent> = {}): Agent {
-  return {
+  return makeAgent({
     id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
     type: 'Main',
     locked: false,
     status: 'active',
     soul: '',
-    heartbeat: '',
-    instructions: '',
     timeout_seconds: 60,
     max_tool_iterations: 10,
-    heartbeat_enabled: false,
-    heartbeat_interval: 0,
+    figure: 'Omnipus',
+    role: 'general',
     ...over,
-  } as Agent
+  })
 }
 
 const WORKSPACE: Workspace = {
@@ -178,6 +177,9 @@ function renderTab(seed?: (client: QueryClient) => void) {
   return { ...utils, client }
 }
 
+// A test that faked timers and failed must not leave them faked for the next one.
+afterEach(() => { vi.useRealTimers() })
+
 beforeEach(() => {
   // Clear call history from the PREVIOUS test — the vi.mock() factory above
   // creates these vi.fn()s once for the whole file, and vitest does not
@@ -281,6 +283,9 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
     const { client } = renderTab()
     await waitFor(() => expect(screen.getByTestId('team-node-jim')).toBeInTheDocument())
 
+    // Fake only the timer the 500 ms autosave debounce uses, so the "past the
+    // debounce" window is advanced explicitly instead of slept through.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     act(() => {
       client.setQueryData<WorkspaceDelegation>(
         workspacesQueryKeys.delegation('ws-1'),
@@ -290,9 +295,8 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
 
     // A revision-only server refresh is not a local graph change and must not
     // cause an echo PUT through the autosave debounce.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 700))
-    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+    vi.useRealTimers()
     expect(updateWorkspace).not.toHaveBeenCalled()
     expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
 
@@ -310,6 +314,38 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
         expect.objectContaining({ from_agent: 'jim', to_agent: 'planner', depth: 1 }),
       ]),
     })
+  })
+
+  it('a background refetch that CHANGES the roster is adopted without an echo PUT (HF2 recovery)', async () => {
+    // The recovery shape behind the loaded-run Team failures: the server's
+    // own refresh carries a DIFFERENT roster (a teammate joined elsewhere),
+    // the clean-draft editor adopts it — a SERVER-driven change, not a user
+    // edit. The autosave must re-base onto the adopted snapshot; letting the
+    // debounced change-detector see it arms a 500ms PUT of the server's own
+    // state straight back — delegation-flavoured (edges) when workspace and
+    // adoption land together, workspace-flavoured (core_team) when the
+    // adoption's members differ from the workspace context's roster — which
+    // 409s on the stale revision in production and renders a persistent
+    // error alert in the panel.
+    const { client } = renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-node-mia')).toBeInTheDocument())
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    act(() => {
+      client.setQueryData<WorkspaceDelegation>(
+        workspacesQueryKeys.delegation('ws-1'),
+        { ...DELEGATION, revision: '3'.repeat(64), team: ['mia', 'jim', 'planner', 'ray'] },
+      )
+    })
+
+    // Past the 500ms debounce (advanced, not slept): no echo PUT of either
+    // flavour. RTL's waitFor cannot run on faked timers, so advance first and
+    // assert the adopted roster synchronously afterwards.
+    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+    vi.useRealTimers()
+    expect(screen.getByTestId('team-node-ray')).toBeInTheDocument()
+    expect(updateWorkspace).not.toHaveBeenCalled()
+    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
   })
 
   it('keeps the reviewed revision when a refetch arrives over a dirty draft', async () => {

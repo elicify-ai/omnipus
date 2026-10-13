@@ -20,7 +20,7 @@ func (al *AgentLoop) trimWindowChecked(ctx context.Context, agent *AgentInstance
 	if !ok {
 		return compressionResult{Err: fmt.Errorf("context trim: session store does not support atomic context checkpoints")}, false
 	}
-	snap, err := store.SnapshotWindow(ctx, key)
+	snap, err := store.WindowView(ctx, key)
 	if err != nil {
 		return compressionResult{Err: err}, false
 	}
@@ -33,7 +33,7 @@ func (al *AgentLoop) trimWindowChecked(ctx context.Context, agent *AgentInstance
 	if cfg := al.GetConfig(); cfg != nil {
 		cs = cfg.Context
 	}
-	p := &windowCheckpoint{ts: ts, snapshot: snap, state: snap.State.Clone(), lines: lines,
+	p := &windowCheckpoint{ts: ts, snapshot: snap, slots: storeSlots{store: store, key: key}, state: snap.State.Clone(), lines: lines,
 		policy: capPolicyFor(cs, agentContextBudget(agent)), anchor: -1}
 	ts.mu.RLock()
 	p.notice = ts.windowNotice.clone()
@@ -124,7 +124,7 @@ func (al *AgentLoop) trimWindowChecked(ctx context.Context, agent *AgentInstance
 	al.recordWindowRelief(p, changes, emptyingSitePreTurn)
 	logger.InfoCF("agent", "windowTrim: committed context relief", map[string]any{
 		"session_key": key, "dropped_messages": dropped, "kept_msgs": len(p.messages),
-		"budget": budget, "context_archive_lines": len(snap.Archive), "context_eviction_total": evictionTotal.Load(),
+		"budget": budget, "context_archive_lines": snap.State.Count, "context_eviction_total": evictionTotal.Load(),
 	})
 	return compressionResult{DroppedMessages: dropped, RemainingMessages: len(p.messages)}, true
 }
@@ -147,7 +147,7 @@ func (p *windowCheckpoint) trimWholeTurns(fits func([]providers.Message) bool, f
 		return false
 	}
 	p.messages, p.lines = kept, lines
-	p.notice.addEvicted(turnNumberForArchiveLine(p.snapshot.Archive, p.state.Skip), turnNumberForArchiveLine(p.snapshot.Archive, cut-1))
+	p.notice.addEvicted(turnNumberForArchiveLine(p.archive(), p.state.Skip), turnNumberForArchiveLine(p.archive(), cut-1))
 	p.state.Skip = cut
 	p.state.AnchorLine = nil
 	if p.anchor >= 0 && p.anchor < cut {
@@ -161,9 +161,9 @@ func (p *windowCheckpoint) trimWholeTurns(fits func([]providers.Message) bool, f
 			delete(p.notice.shortened, key)
 		}
 	}
-	for key := range p.state.Projection.TranscriptLine {
+	for key := range p.state.Projection.TranscriptAddr {
 		if key.ArchiveLine < cut {
-			delete(p.state.Projection.TranscriptLine, key)
+			delete(p.state.Projection.TranscriptAddr, key)
 		}
 	}
 	return true

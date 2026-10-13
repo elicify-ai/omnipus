@@ -92,14 +92,18 @@ function renderPicker(over: Partial<Parameters<typeof AgentDelegatePicker>[0]> =
 }
 
 describe('AgentDelegatePicker — candidate list', () => {
-  it('lists exactly the nodes validateConnection allows, excluding the source itself', () => {
+  it('lists exactly the nodes validateConnection allows, including the source as an ordinary self-edge target', () => {
     renderPicker()
     // Valid target (team member, no existing edge) appears.
     expect(screen.getByTestId('team-node-delegate-target-mia-jim')).toBeInTheDocument()
     // Invalid target (not a team member) is excluded.
     expect(screen.queryByTestId('team-node-delegate-target-mia-planner')).toBeNull()
-    // The source itself never appears as its own candidate.
-    expect(screen.queryByTestId('team-node-delegate-target-mia-mia')).toBeNull()
+    // The source's OWN self-edge is an ordinary edge the shared model accepts
+    // (validateConnection has no identity gate — a self-edge is exempt from the
+    // cycle check and bounded by membership/duplicate like any other), so the
+    // source appears as a candidate for itself. The picker must NOT hard-code a
+    // `n.id !== source.id` filter (F6, reverify 60e299a86).
+    expect(screen.getByTestId('team-node-delegate-target-mia-mia')).toBeInTheDocument()
   })
 
   it('excludes a target that already has an edge from this source (duplicate)', () => {
@@ -147,15 +151,92 @@ describe('AgentDelegatePicker — selection', () => {
 })
 
 describe('AgentDelegatePicker — empty state', () => {
-  it('renders the empty-state message when no valid candidates exist', () => {
+  it('renders the empty-state message only when even the source self-edge is rejected (it already exists) and no other target qualifies', () => {
+    // Weaker every-agent-has-an-edge scenario: Mia already carries her own
+    // self-edge (a duplicate the model rejects) and mia/jim/planner leaves no
+    // other qualifying target — jim/planner are not members here. This is the
+    // honest empty state; a one-agent team is NOT one — the source itself is
+    // offered (see the self-edge restore suite below).
     renderPicker({
-      editState: state({ members: ['mia'] }), // jim/planner not on the team
+      editState: state({
+        members: ['mia'],
+        edges: [{ from: 'mia', to: 'mia', modes: ['direct'] }],
+      }),
       nodes: ALL_NODES,
     })
     expect(screen.queryByTestId(/team-node-delegate-target-/)).toBeNull()
     expect(
       screen.getByText(/No eligible agents/i),
     ).toBeInTheDocument()
+  })
+})
+
+// F6 (reverify 60e299a86): the shared model accepts a member's ordinary
+// self-edge, but the keyboard "Delegate…" picker still filtered
+// `n.id !== source.id`, so a keyboard user who deleted Mia→Mia could not pick
+// Mia to restore it, and a one-agent team reported no eligible agents. The
+// picker must offer the source as its own target EXACTLY when
+// `validateConnection` accepts that self-edge — via the shared validator, with
+// no duplicated identity rule — while every other protection (membership,
+// system-target, duplicate) still holds.
+describe('AgentDelegatePicker — self-edge restore (F6, keyboard path)', () => {
+  it('offers the source agent as its own target so a deleted self-edge can be restored without a drag gesture', () => {
+    renderPicker({
+      source: SOURCE,
+      nodes: [SOURCE],
+      editState: state({ members: ['mia'], edges: [] }),
+    })
+    expect(screen.getByTestId('team-node-delegate-target-mia-mia')).toBeInTheDocument()
+  })
+
+  it('a one-agent team offers that single agent itself rather than reporting no eligible agents', () => {
+    renderPicker({
+      nodes: [SOURCE],
+      editState: state({ members: ['mia'], edges: [] }),
+    })
+    expect(screen.getByTestId('team-node-delegate-target-mia-mia')).toBeInTheDocument()
+    expect(screen.queryByText(/No eligible agents/i)).toBeNull()
+  })
+
+  it('selecting the self-target calls onDelegate(source, source) — the same validated mutation path as a drag', () => {
+    const { onDelegate } = renderPicker({
+      nodes: [SOURCE],
+      editState: state({ members: ['mia'], edges: [] }),
+    })
+    fireEvent.click(screen.getByTestId('team-node-delegate-target-mia-mia'))
+    expect(onDelegate).toHaveBeenCalledWith('mia', 'mia')
+    expect(onDelegate).toHaveBeenCalledTimes(1)
+  })
+
+  it('negative control — does NOT offer the source self-edge when the model rejects it as a duplicate', () => {
+    renderPicker({
+      source: SOURCE,
+      nodes: [SOURCE],
+      editState: state({
+        members: ['mia'],
+        edges: [{ from: 'mia', to: 'mia', modes: ['direct'] }],
+      }),
+    })
+    expect(screen.queryByTestId('team-node-delegate-target-mia-mia')).toBeNull()
+  })
+
+  it('negative control — does NOT offer the source self-edge when the source is not a team member', () => {
+    renderPicker({
+      source: SOURCE,
+      nodes: [SOURCE],
+      editState: state({ members: ['jim'], edges: [] }),
+    })
+    expect(screen.queryByTestId('team-node-delegate-target-mia-mia')).toBeNull()
+  })
+
+  it('negative control — does NOT offer a system-type source as its own self target (SD-C17 system-target)', () => {
+    const judgeNode = node('judge', { name: 'Judge', type: 'system', role: 'System agent' })
+    renderPicker({
+      source: judgeNode,
+      nodes: [judgeNode],
+      editState: state({ members: ['judge'], edges: [] }),
+    })
+    expect(screen.queryByTestId('team-node-delegate-target-judge-judge')).toBeNull()
   })
 })
 
@@ -182,13 +263,18 @@ describe('AgentDelegatePicker — System agent exclusion (SD-C17)', () => {
     expect(screen.queryByText('Judge')).not.toBeInTheDocument()
   })
 
-  it('with the Judge as the ONLY other team member, the menu falls back to the empty-state message', () => {
+  it('with the Judge as the ONLY other team member, the menu offers only the source self-edge — the Judge is still excluded (F6: source is the sole candidate, not an empty state)', () => {
     const judgeNode = node('judge', { name: 'Judge', type: 'system', role: 'System agent' })
     renderPicker({
       nodes: [SOURCE, judgeNode],
       editState: state({ members: ['mia', 'judge'] }),
     })
-    expect(screen.queryByTestId(/team-node-delegate-target-/)).toBeNull()
-    expect(screen.getByText(/No eligible agents/i)).toBeInTheDocument()
+    // The Judge is excluded as a target even though it is a team member.
+    expect(screen.queryByTestId('team-node-delegate-target-mia-judge')).toBeNull()
+    expect(screen.queryByText('Judge')).not.toBeInTheDocument()
+    // Mia's own self-edge is an ordinary valid edge, so Mia is offered back to
+    // herself — the menu is NOT empty (F6).
+    expect(screen.getByTestId('team-node-delegate-target-mia-mia')).toBeInTheDocument()
+    expect(screen.queryByText(/No eligible agents/i)).toBeNull()
   })
 })

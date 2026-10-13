@@ -85,7 +85,7 @@ The Board has one column per status; the List has a Status column.
 
 | Status | What it means | How it changes |
 |---|---|---|
-| Inbox | Captured, not triaged | Every new task lands here |
+| Inbox | Captured, not triaged | Tasks created through the web form begin in Inbox. Agent-created tasks in the agent's current workspace begin in Next. Tasks delivered by an agent to another workspace begin in Inbox, awaiting local pickup. |
 | Next | Triaged and ready | You move it, or an agent does |
 | In Progress | A run is working on it | You start it, or a plan reaches it |
 | Blocked | A dependency is unmet | Set and cleared automatically |
@@ -108,6 +108,8 @@ flowchart LR
 ```
 
 A task flows from Inbox toward Done; Blocked hangs off to the side until its dependencies finish.
+
+**An agent can start a task only for an agent it has a trust line to.** When an agent calls `run_task`, Omnipus checks the workspace's trust lines (see [workspaces](workspaces.md#how-to-set-who-may-delegate-to-whom)) from that agent to the task's assignee. Running its own task needs the agent's own self-line, like any other pair. A refused start leaves the task untouched. The line's depth limit also follows the run: work started this way cannot hand off further than the line allows. Creating a task assigned to oneself does not need the self-line, but running it later does. A task you start from the web app, or one the Calendar or the queue starts, is not an agent's handoff and needs no line.
 
 **Agents cannot certify their own task runs with `update_task`.** While working on that task, an agent cannot set its status to Done or Failed; it uses `goal_claim` with `met` and evidence when finished, or `blocked` if it cannot proceed. The judge decides the outcome of the run. Outside a run, `update_task` also refuses Done for a regular task with acceptance criteria: start the task so its work can be judged rather than skipping those checks.
 

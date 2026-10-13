@@ -141,7 +141,6 @@ describe('shouldRenderToolCall — bash', () => {
 
 describe('shouldRenderToolCall — always-visible tools', () => {
   it.each([
-    'switch_agent',
     'remember',
     'get_usage',
     'run_doctor',
@@ -150,25 +149,7 @@ describe('shouldRenderToolCall — always-visible tools', () => {
   })
 })
 
-// ADR-071 D4: `hand_off` and `return_to_default` are merged into
-// `switch_agent`. Asserted explicitly (not left to the `default:`
-// fallthrough, which happens to fail open into the same `true`) per
-// ADR-071 §5.2.2c.
-describe('shouldRenderToolCall — switch_agent (ADR-071 D4 merge of hand_off + return_to_default)', () => {
-  it('is visible, non-verbose, regardless of target', () => {
-    expect(shouldRenderToolCall('switch_agent', { target: 'jim', note: 'handing off' }, false)).toBe(true)
-    expect(shouldRenderToolCall('switch_agent', { target: 'default' }, false)).toBe(true)
-    expect(shouldRenderToolCall('switch_agent', undefined, false)).toBe(true)
-  })
-
-  it('is visible when verbose', () => {
-    expect(shouldRenderToolCall('switch_agent', { target: 'jim' }, true)).toBe(true)
-  })
-
-  it('is visible on error too — no isError exception needed (neither predecessor had one)', () => {
-    expect(shouldRenderToolCall('switch_agent', { target: 'jim' }, false, true)).toBe(true)
-  })
-})
+// DEL-07: the switch_agent describe block was deleted with the tool itself — a legacy-transcript call now falls through to the always-visible `default:`.
 
 describe('shouldRenderToolCall — under-review set (not hidden by this change)', () => {
   it.each(['recall_memory', 'read_agent_metadata'])('%s is visible, non-verbose', (tool) => {

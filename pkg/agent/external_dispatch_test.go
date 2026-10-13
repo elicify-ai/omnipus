@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -99,9 +100,9 @@ const extTestEffectiveLimit = 30
 
 // withFakeDriver swaps the external driver factory for the test, returning a
 // restore func and the FakeRunner instance the factory will hand out.
-func withFakeDriver(t *testing.T) (*runner.FakeRunner, func()) {
+func withFakeDriver(t *testing.T) (*runnertest.FakeRunner, func()) {
 	t.Helper()
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 	prev := newExternalDriver
 	newExternalDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
 		return fr, nil
@@ -135,9 +136,9 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 
 	// Inject the run's events asynchronously, then signal end.
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "hello "}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "world"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "hello "}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "world"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel() // closes the event channel so the dispatcher/drain loop ends
 	}()
 
@@ -343,8 +344,8 @@ func TestExternalDispatch_ModelAutoSet(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -379,7 +380,7 @@ func TestExternalDispatch_PermissionRequestAutoApproved(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindPermissionRequest,
 			PermissionRequest: &runner.PermissionRequestEvent{
 				RequestID:   "perm-1",
@@ -387,9 +388,9 @@ func TestExternalDispatch_PermissionRequestAutoApproved(t *testing.T) {
 				Description: "wants to run rm -rf",
 				RawInput:    []byte(`{"cmd":"rm -rf /"}`),
 			},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -450,15 +451,15 @@ func TestExternalDispatch_NoApproverWired_StillAutoApproves(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindPermissionRequest,
 			PermissionRequest: &runner.PermissionRequestEvent{
 				RequestID: "perm-x",
 				ToolName:  "write",
 			},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -494,10 +495,10 @@ func TestExternalDispatch_ErrorEvent_FailsRun(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindError,
 			Err:  &runner.ErrorEvent{Message: "boom", Fatal: true},
-		})
+		}))
 		fr.Cancel()
 	}()
 
@@ -571,8 +572,8 @@ func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "done"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "done"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -661,8 +662,8 @@ func TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir(t *testing.T) 
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "done"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "done"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -885,10 +886,10 @@ func TestExternalDispatch_G2_NeverAttributesTokens(t *testing.T) {
 	// Emit a normal run (output + end). Even a token-bearing external run must not
 	// flow into the turn's stats — the dispatch path reads no usage counters.
 	go func() {
-		fr.InjectEvent(
+		require.NoError(t, fr.InjectEvent(
 			runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "external work done"}},
-		)
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -950,13 +951,13 @@ func TestExternalDispatch_SanitizesRunnerError(t *testing.T) {
 
 	rawStderr := "fatal: failed to write to /home/user/.config/claude/secrets.json: permission denied"
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindError,
 			Err: &runner.ErrorEvent{
 				Message: rawStderr,
 				Fatal:   true,
 			},
-		})
+		}))
 		fr.Cancel()
 	}()
 
@@ -1053,13 +1054,13 @@ func TestExternalDispatch_ForLLM_NoProviderShapedLeak(t *testing.T) {
 	// upstream provider returns a non-JSON body or a malformed image.
 	rawStderr := "Downloaded response does not contain a valid JPG"
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindError,
 			Err: &runner.ErrorEvent{
 				Message: rawStderr,
 				Fatal:   true,
 			},
-		})
+		}))
 		fr.Cancel()
 	}()
 

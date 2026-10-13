@@ -1,7 +1,13 @@
 type: object
 description: >
-  A single tool invocation recorded in a transcript entry.
-  Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts.
+  The DISPLAY/STATUS projection of a single tool invocation in a transcript
+  entry — the {id, tool, status, parameters, result} form the SPA renders.
+  This is NOT providers.ToolCall (the provider wire shape on the Go side):
+  it carries no provider call identity beyond `id`, no thought signature and
+  no raw function-argument string, and it must never be used in place of the
+  provider call shape (session-core C-ARCHIVE / U2; FR-004). Maps to
+  session.ToolCall on the Go side and the ToolCall interface in
+  src/lib/api.ts.
 required:
   - id
   - tool
@@ -28,13 +34,11 @@ properties:
       - interrupted
       - parked
     description: >
-      Outcome of the tool call. "interrupted" is written by the tool-call
-      status derivation in `pkg/agent/loop_run_turn_tools.go` onto a
-      delegate/spawn tool call's own persisted
-      record when the parent turn is canceled/aborted mid-flight while the
-      sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus).
-      "parked" (ADR-057 UAT defect C2 fix) is written the same way when the
-      child sub-turn instead stopped because a message_parent(kind="question",
+      Outcome of the tool call. "interrupted" is recorded on a delegate/spawn
+      tool call's own persisted record when the parent turn is canceled or
+      aborted mid-flight while the sub-turn is still in progress. "parked"
+      (ADR-057 UAT defect C2 fix) is recorded the same way when the child
+      sub-turn instead stopped because a message_parent(kind="question",
       wait=true) call parked it awaiting the parent's answer.
       Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS
       case. ToolCall carries no structured "reason" enum (that stays
@@ -69,7 +73,12 @@ properties:
       command: "ls -la"
   result:
     type: object
-    description: Return value from the tool. Shape is tool-specific.
+    description: >
+      Return value from the tool. Shape is tool-specific. This is the
+      PROJECTED content the model saw (see `content_state`); the full
+      admitted provider result bytes live in the canonical session day
+      archive and projection changes never mutate those retained bytes
+      (session-core C-ARCHIVE / U2; FR-004/FR-006).
     additionalProperties: true
   parent_tool_call_id:
     type: string

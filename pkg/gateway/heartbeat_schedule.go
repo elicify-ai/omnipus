@@ -41,13 +41,15 @@ func isHeartbeatJob(j cron.CronJob) bool {
 	return j.Payload.Kind == heartbeatJobKind || strings.HasPrefix(j.Name, heartbeatJobNamePrefix)
 }
 
-// desiredHeartbeat is the reconciler's target spec for one (workspace, agent) pair.
+// desiredHeartbeat is the reconciler's target spec for one (workspace, agent)
+// pair. It carries no session address: a heartbeat runs in the member's MAIN
+// session, whose id is computed from the pair (pkg/session/main_session.go)
+// and resolved by pickSession's SessionModeMain branch.
 type desiredHeartbeat struct {
 	workspaceID string
 	agentID     string
 	interval    int // minutes (>= 5)
 	message     string
-	sessionID   string // eager standing session id (may be empty)
 }
 
 // buildHeartbeatMessage wraps a member's heartbeat body in the standard
@@ -114,7 +116,6 @@ func computeDesiredHeartbeats(workspaces []workspace.Workspace, isWorker func(ag
 				agentID:     agentID,
 				interval:    interval,
 				message:     buildHeartbeatMessage(hb.Body),
-				sessionID:   hb.SessionID,
 			})
 		}
 	}
@@ -192,12 +193,16 @@ func ReconcileHeartbeatSchedules(
 				cur.Payload.Message != d.message ||
 				cur.AgentID != d.agentID ||
 				cur.Payload.Kind != heartbeatJobKind ||
-				cur.SessionID != d.sessionID
+				cur.SessionMode != cron.SessionModeMain ||
+				cur.SessionID != ""
 			if needsUpdate {
 				cur.Enabled = true
 				cur.AgentID = d.agentID
-				cur.SessionMode = cron.SessionModeContinue
-				cur.SessionID = d.sessionID
+				// A heartbeat runs in the member's main session (FR-017).
+				// SessionID stays empty: the id is COMPUTED from the pair, so
+				// it can neither drift from the pair nor be stored stale.
+				cur.SessionMode = cron.SessionModeMain
+				cur.SessionID = ""
 				cur.Schedule = cron.CronSchedule{Kind: "every", EveryMS: &everyMS}
 				cur.Payload = cron.CronPayload{Kind: heartbeatJobKind, Message: d.message}
 				if err := cs.UpdateJob(&cur); err != nil {
@@ -213,8 +218,7 @@ func ReconcileHeartbeatSchedules(
 			Schedule:    cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
 			Message:     d.message,
 			AgentID:     d.agentID,
-			SessionMode: cron.SessionModeContinue,
-			SessionID:   d.sessionID,
+			SessionMode: cron.SessionModeMain,
 			Enabled:     &enabled,
 		})
 		if err != nil {

@@ -1,11 +1,12 @@
 package agent
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -108,10 +109,14 @@ func TestAcceptedSteeredInstructionQ2_AgentInputCannotMintOrAlterHumanProvenance
 	if err != nil || !found || before != wantHuman {
 		t.Fatalf("SETUP persisted human provenance = %+v/%v/%v, want exact %+v/true/nil", before, found, err, wantHuman)
 	}
-	provenancePath := filepath.Join(fixture.store.BaseDir(), fixture.childID, "provenance.jsonl")
-	originalBytes, err := os.ReadFile(provenancePath)
-	if err != nil {
-		t.Fatalf("SETUP read original human provenance bytes: %v", err)
+	// The separate provenance.jsonl is RETIRED (ADR-20260928 D1.4 / session-core
+	// Decision A): the trusted source is a PRIVATE member of the message's own
+	// transcript line (ArchiveRecord.Source). "The human's provenance is
+	// unchanged" is therefore exactly "that line's inline source is unchanged",
+	// read straight from the partition the store wrote.
+	originalSource := q2InlineSource(t, fixture.store, fixture.childID, humanID)
+	if originalSource == "" || originalSource == "null" {
+		t.Fatalf("SETUP the authenticated human line must carry an inline source; got %q", originalSource)
 	}
 	fixture.baseline = q2ConsumerReadDurable(t, fixture.store, fixture.childID)
 	const messageID = "q2-agent-authored-input"
@@ -145,10 +150,49 @@ func TestAcceptedSteeredInstructionQ2_AgentInputCannotMintOrAlterHumanProvenance
 	if err != nil || !found || after != wantHuman {
 		t.Errorf("agent input altered durable human provenance = %+v/%v/%v, want exact %+v/true/nil", after, found, err, wantHuman)
 	}
-	afterBytes, err := os.ReadFile(provenancePath)
-	if err != nil || !bytes.Equal(afterBytes, originalBytes) {
-		t.Errorf("agent input changed human provenance file bytes: equal=%v err=%v", bytes.Equal(afterBytes, originalBytes), err)
+	afterSource := q2InlineSource(t, reopened, fixture.childID, humanID)
+	if afterSource != originalSource {
+		t.Errorf("agent input changed the human message's inline source: %q -> %q", originalSource, afterSource)
 	}
+}
+
+// q2InlineSource returns the private "source" member of the transcript line
+// carrying messageID, read from the session's own partition files. It is the
+// inline replacement for reading the retired provenance.jsonl: same bytes, same
+// line, no second file.
+func q2InlineSource(t *testing.T, store *session.UnifiedStore, sessionID, messageID string) string {
+	t.Helper()
+	dir := filepath.Join(store.BaseDir(), sessionID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("q2InlineSource: read session dir: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		raw, readErr := os.ReadFile(filepath.Join(dir, e.Name()))
+		if readErr != nil {
+			t.Fatalf("q2InlineSource: read partition %s: %v", e.Name(), readErr)
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var rec map[string]any
+			if json.Unmarshal([]byte(line), &rec) != nil || rec["id"] != messageID {
+				continue
+			}
+			encoded, encErr := json.Marshal(rec["source"])
+			if encErr != nil {
+				t.Fatalf("q2InlineSource: encode source: %v", encErr)
+			}
+			return string(encoded)
+		}
+	}
+	t.Fatalf("q2InlineSource: no transcript line carries message id %q", messageID)
+	return ""
 }
 
 // Ordinary chat's missing lifecycle is NOT the missing-child case. I-8 row 1
@@ -156,7 +200,6 @@ func TestAcceptedSteeredInstructionQ2_AgentInputCannotMintOrAlterHumanProvenance
 func TestAcceptedSteeredInstructionQ2_OrdinaryRootWithoutLifecycleRemainsNonSteered(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	al, _ := newSteerAL(t)
-	al.SetSteeringMode(SteeringAll)
 	rootID := newTestSteeringSession(t, al, "ws-q2-ordinary-control")
 	classifier := NewSteerRecordClassifier(al.GetSessionLifecycleStore(), al.GetSessionStore())
 	class, err := classifier.Classify(context.Background(), rootID)

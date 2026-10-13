@@ -30,11 +30,22 @@ import (
 // lifecycle record for a fourth session, and no admission slot consumed.
 //
 // Self-delegation (testDefaultAgentID -> testDefaultAgentID at every hop) is
-// deliberate: ADR-091 explicitly allows a session to delegate to its own
-// agent profile, and using one agent throughout isolates the assertion to
-// the depth arithmetic alone, with no workspace delegation-graph edges in
-// the way.
+// deliberate: ADR-091 allows a session to delegate to its own agent profile,
+// and using one agent throughout isolates the assertion to the depth
+// arithmetic alone.
+//
+// A default workspace carrying the ordinary caller→caller self-edge is seeded
+// FIRST, and the steerer session is given an IDENTIFIED lifecycle record,
+// because the settled design (FR-014) graph-gates every delegate-origin launch
+// at the launcher: startingRemainingDepth resolves the governing workspace and
+// refuses (steer.ErrInvalidEdge) when a caller→target edge is absent — for an
+// unidentified steerer the lookup is ""→target, which no edge can satisfy. With
+// the steerer owned by testDefaultAgentID and the self-edge present, the graph
+// gate is satisfied and the depth cap is the only thing under test.
 func TestLaunch_AtExhaustedDepthBudget_Refused(t *testing.T) {
+	seedWorkspaceGraph(t, "01JXDEPTHBUDGETINTEGRATION001", true, []graphEdge{
+		edge(testDefaultAgentID, testDefaultAgentID, nil, nil),
+	})
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	// D9's single source of truth for the global depth ceiling (config.go's
@@ -47,6 +58,15 @@ func TestLaunch_AtExhaustedDepthBudget_Refused(t *testing.T) {
 	ctx := context.Background()
 
 	root := newTestSteeringSession(t, al, "")
+	// Identify the steerer: an unidentified steerer (AgentID == "") makes the
+	// launcher's graph gate look for a ""→target edge, which no edge can
+	// satisfy, so the launch is refused before the depth arithmetic runs.
+	if err := al.GetSessionLifecycleStore().Persist(&session.LifecycleRecord{
+		SessionID: root, Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, AgentID: testDefaultAgentID,
+	}); err != nil {
+		t.Fatalf("persist steerer lifecycle record: %v", err)
+	}
 
 	resA, err := l.Launch(ctx, steer.LaunchRequest{
 		SteeringSessionID: root, TargetAgentID: testDefaultAgentID, Task: "do A",

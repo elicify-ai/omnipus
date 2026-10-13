@@ -74,6 +74,9 @@ const baseAgent = {
   name: 'Triage Worker',
   type: 'Main',
   locked: false,
+  // W1-5: complete server identity; an absent field is not a valid baseline.
+  figure: 'Omnipus',
+  role: 'general',
   needs_model: false,
   status: 'active',
   model: 'claude-sonnet-4-6',

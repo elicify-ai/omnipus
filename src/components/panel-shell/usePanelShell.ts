@@ -258,6 +258,21 @@ export function usePanelShell(panels: readonly PanelDefinition[], username: stri
   const focusReturnGenerationRef = useRef(0)
   panelsRef.current = panels
 
+  // A closed shell must never focus anything after it unmounts. The focus
+  // return can leave an animation-frame retry chain pending (the chat input
+  // not mounted yet, or a trigger origin that never appeared); its
+  // isCurrent() guard compares THIS instance's generation ref, which nothing
+  // bumps after unmount — and the trigger origin it reads lives at module
+  // scope, outliving the instance. Under CPU load the delayed frames land
+  // after a NEW shell has mounted and yank focus to that shell's trigger
+  // (measured: the header-Close focus test failed with the trigger focused).
+  // Bumping the generation here retires every chain this instance armed, at
+  // its next tick. The retry that legitimately needs frames — a chat input
+  // mounting late — keeps working: the shell is still mounted along it.
+  useEffect(() => () => {
+    focusReturnGenerationRef.current++
+  }, [])
+
   // Production entry points open through the global store, not requestOpen.
   // Hydrate on every user/panel/scope transition so those paths restore the
   // same remembered width as shell-owned opens.

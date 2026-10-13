@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -166,6 +167,31 @@ type wireTodo = struct {
 	Text   string              `json:"text"`
 }
 
+// setWireListFields copies a task's list-valued fields (blocked_by, todos,
+// write_set, tags) onto its wire form. Each is omitted when empty and copied,
+// never aliased.
+func setWireListFields(out *gen.Task, t task.Task) {
+	if len(t.BlockedBy) > 0 {
+		bb := append([]string{}, t.BlockedBy...)
+		out.BlockedBy = &bb
+	}
+	if len(t.Todos) > 0 {
+		todos := make([]wireTodo, 0, len(t.Todos))
+		for _, td := range t.Todos {
+			todos = append(todos, wireTodo{Text: td.Text, Status: gen.TaskTodosStatus(td.Status)})
+		}
+		out.Todos = &todos
+	}
+	if len(t.WriteSet) > 0 {
+		ws := append([]string{}, t.WriteSet...)
+		out.WriteSet = &ws
+	}
+	if len(t.Tags) > 0 {
+		tags := append([]string{}, t.Tags...)
+		out.Tags = &tags
+	}
+}
+
 // toWireTask converts an internal task.Task to the generated wire type, filling
 // the read-time agent_name and rollup fields from the registry / store. idx is
 // an optional shared rollupIndex (see its doc comment) for batch callers; pass
@@ -199,6 +225,9 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 
 	prio := t.EffectivePriority()
 	out.Priority = &prio
+	if t.RunIsolated {
+		out.RunIsolated = ptr(true)
+	}
 	surface := gen.TaskSurface(t.EffectiveSurface())
 	out.Surface = &surface
 
@@ -214,36 +243,18 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 			out.AgentName = ptr(name)
 		}
 	}
-	if len(t.BlockedBy) > 0 {
-		bb := append([]string{}, t.BlockedBy...)
-		out.BlockedBy = &bb
-	}
-	if len(t.Todos) > 0 {
-		todos := make([]wireTodo, 0, len(t.Todos))
-		for _, td := range t.Todos {
-			todos = append(todos, wireTodo{Text: td.Text, Status: gen.TaskTodosStatus(td.Status)})
-		}
-		out.Todos = &todos
-	}
+	setWireListFields(&out, t)
 	if t.ParentTaskID != "" {
 		out.ParentTaskId = ptr(t.ParentTaskID)
 	}
 	if t.PlanID != "" {
 		out.PlanId = ptr(t.PlanID)
 	}
-	if len(t.WriteSet) > 0 {
-		ws := append([]string{}, t.WriteSet...)
-		out.WriteSet = &ws
-	}
 	if t.Stream != "" {
 		out.Stream = ptr(t.Stream)
 	}
 	if t.IsJoin {
 		out.IsJoin = ptr(t.IsJoin)
-	}
-	if len(t.Tags) > 0 {
-		tags := append([]string{}, t.Tags...)
-		out.Tags = &tags
 	}
 	// GOAL-FR-003/FR-029/FR-048 (ADR-086 D5): BOTH judged lists — criteria
 	// and Definition of Done — live on the task's paired goal record and the
@@ -412,14 +423,6 @@ func toWireTrigger(tr *task.Trigger) *struct {
 		v := *tr.Config.AtMs
 		cfg.AtMs = &v
 	}
-	if tr.Config.EveryMs != nil {
-		v := *tr.Config.EveryMs
-		cfg.EveryMs = &v
-	}
-	if tr.Config.CronExpr != nil {
-		v := *tr.Config.CronExpr
-		cfg.CronExpr = &v
-	}
 	if tr.Config.Rrule != nil {
 		v := *tr.Config.Rrule
 		cfg.Rrule = &v
@@ -438,14 +441,33 @@ func toWireTrigger(tr *task.Trigger) *struct {
 	}{Config: cfg, Type: gen.TaskTriggerType(tr.Type)}
 }
 
+// legacyTimingKeysMessage reports the removed trigger keys (session-core DEL-19
+// / C-TIMING) found in a trigger config's undeclared properties. The wire
+// schema keeps `config` open, so a client that still sends `every_ms` or
+// `cron_expr` is not rejected by decoding; it is refused here, by name, instead
+// of being accepted and silently never firing. Empty means none present.
+func legacyTimingKeysMessage(extra map[string]any) string {
+	var found []string
+	for _, key := range []string{"every_ms", "cron_expr"} {
+		if _, ok := extra[key]; ok {
+			found = append(found, key)
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return "trigger config." + strings.Join(found, ", config.") +
+		" is no longer supported; use a recurring trigger with config.rrule"
+}
+
 // buildTrigger constructs an internal trigger from its primitive parts. The
 // three generated request structs (Task/TaskCreateRequest/TaskUpdateRequest) each
 // have their own anonymous trigger type with an identically-shaped config, so
 // the callers decompose them and pass the primitives here.
 func buildTrigger(
 	kind string,
-	atMs, everyMs *int64,
-	cronExpr, rrule *string,
+	atMs *int64,
+	rrule *string,
 	dtstartMs *int64,
 	tz *string,
 ) *task.Trigger {
@@ -453,14 +475,6 @@ func buildTrigger(
 	if atMs != nil {
 		v := *atMs
 		tr.Config.AtMs = &v
-	}
-	if everyMs != nil {
-		v := *everyMs
-		tr.Config.EveryMs = &v
-	}
-	if cronExpr != nil {
-		v := *cronExpr
-		tr.Config.CronExpr = &v
 	}
 	if rrule != nil {
 		v := *rrule

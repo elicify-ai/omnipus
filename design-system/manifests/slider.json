@@ -86,6 +86,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Slider [check:slider-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[role=\"slider\"]", "attribute": "aria-valuenow" }],
       "applicable": true
     },
     {

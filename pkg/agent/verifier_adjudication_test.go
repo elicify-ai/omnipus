@@ -203,7 +203,7 @@ func TestRunVerifierAdjudication_RegistersSessionBeforeDispatch(t *testing.T) {
 	if strings.Contains(spy.registerCalls[0].sessionID, "agent:judge:verify:") {
 		t.Errorf("sessionID = %q carries the retired sessionKey shape — cancel cannot match it", spy.registerCalls[0].sessionID)
 	}
-	judgeStore := al.GetAgentStore(string(coreagent.IDJudge))
+	judgeStore := al.GetSessionStore()
 	if judgeStore == nil {
 		t.Fatal("judge session store not available")
 	}
@@ -316,7 +316,7 @@ func TestVerifierWindowFeed_GoalScope_ReturnsEmptyWhenNoSessionID(t *testing.T) 
 func TestVerifierWindowFeed_GoalScope_ReadsSessionTail(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
 		t.Fatal("native-agent must have a UnifiedStore session store")
 	}
@@ -351,7 +351,7 @@ func TestVerifierWindowFeed_GoalScope_ReadsSessionTail(t *testing.T) {
 func TestVerifierWindowFeed_TaskScope_ReadsSessionTail(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
 		t.Fatal("native-agent must have a UnifiedStore session store")
 	}

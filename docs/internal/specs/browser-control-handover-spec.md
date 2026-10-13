@@ -1010,6 +1010,12 @@ operator has disabled remote control.
   `pkg/bus/bus.go`'s own line is the method declaration, not a call), so a **new** publish site
   cannot appear without classifying itself — a site that sets nothing passes the assignment
   assertion vacuously. A new site or a new assignment in either half fails with the reason stated.
+  *Census update, 2026-10-12:* the pinned census is now **nine** non-test `PublishInbound` call sites
+  (`scripts/check-operator-prompt-sites.sh`). The added site is `pkg/agent/request_reminder.go::remindUnansweredRequests`,
+  a server-composed reminder to a request's receiver: **non-operator** — it carries the owner-wake marker
+  (and the reminder marker), never sets `OperatorPrompt`, and so cannot release the wheel or clear a landed
+  Stop. The held-request wake is **not** a site of its own: it is published through
+  `pkg/agent/address_router.go::publishRequestWake`, the same function the request admission uses.
 - **FR-030**: The release MUST be audited via `pkg/gateway/browser_ws.go::auditRelease`'s record
   shape, naming the **actor who sent the prompt**, never the holder. The actor is resolved in this
   order, and the spec is explicit because the obvious carrier does not exist on most paths:

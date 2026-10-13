@@ -114,8 +114,13 @@ func TestClaudeDriver_EventChReset_AllowsResume(t *testing.T) {
 		t.Skip("stub uses a POSIX shell script")
 	}
 
-	// A stub that ignores all args, prints one valid claude result line, exits 0.
+	// A stub that ignores all args, announces its native session id (the
+	// system/init line claude emits), then one valid claude result line, exits 0.
+	// The init line is required since FR-043: Resume refuses visibly when no
+	// native conversation id was captured, so the stub must exercise the real
+	// resume path for this test to prove resumability, not the refusal.
 	stub := writeStubScript(t, `#!/bin/sh
+printf '%s\n' '{"type":"system","subtype":"init","session_id":"s1"}'
 printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 exit 0
 `)
@@ -165,7 +170,11 @@ func TestCodexDriver_EventChReset_AllowsResume(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("stub uses a POSIX shell script")
 	}
+	// The thread.started line announces codex's native thread id; since FR-043
+	// Resume refuses visibly without one, the stub must announce it so this test
+	// exercises the real resume path rather than the refusal.
 	stub := writeStubScript(t, `#!/bin/sh
+printf '%s\n' '{"type":"thread.started","thread_id":"t1"}'
 printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
 exit 0
 `)

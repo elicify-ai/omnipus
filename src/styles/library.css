@@ -11,6 +11,7 @@
 @import './tokens.generated.css';
 
 @source "../components/ui/accordion.tsx";
+@source "../components/ui/agent-icon.tsx";
 @source "../components/ui/alert-dialog.tsx";
 @source "../components/ui/avatar.tsx";
 @source "../components/ui/badge.tsx";
@@ -161,4 +162,46 @@
     background-image: none;
     animation: none;
   }
+}
+
+/* AgentIcon motion. Ink scale stays on the mark. Glow opacity and filters
+   stay on the layer behind the ink, so the ink itself never fades.
+   Durations are the identity motion oracles, not new tokens. */
+@keyframes agent-icon-pump {
+  0%, 100% { transform: scale(0.97); }
+  50% { transform: scale(1.03); }
+}
+@keyframes agent-icon-breathe {
+  0%, 100% { transform: scale(0.96); }
+  50% { transform: scale(1.01); }
+}
+@keyframes agent-icon-pop {
+  0%, 66%, 100% { transform: scale(1); }
+  74% { transform: scale(1.07); }
+  84% { transform: scale(1); }
+}
+@keyframes agent-icon-glow {
+  0%, 100% { filter: drop-shadow(0 0 0 currentColor); }
+  50% { filter: drop-shadow(0 0 4px currentColor); }
+}
+@keyframes agent-icon-think-glow {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+@keyframes agent-icon-flash {
+  0%, 66%, 100% { filter: drop-shadow(0 0 0 currentColor); }
+  75% { filter: drop-shadow(0 0 5px currentColor); }
+}
+@keyframes agent-icon-sheen {
+  0% { transform: translateX(-120%) skewX(-20deg); }
+  70%, 100% { transform: translateX(220%) skewX(-20deg); }
+}
+@utility agent-icon-sheen {
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, currentColor 45%, transparent),
+    transparent
+  );
+  transform: translateX(-120%) skewX(-20deg);
 }

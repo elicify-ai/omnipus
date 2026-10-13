@@ -1,7 +1,8 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, agentPicker, assistantMessages, userMessages, startNewChat, tokenCounter, waitForConnected } from './fixtures/selectors';
+import { chatInput, assistantMessages, userMessages, selectAgent, tokenCounter, waitForConnected } from './fixtures/selectors';
+import { freshChat, originOf } from './fixtures/session-setup';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -21,6 +22,27 @@ import { chatInput, agentPicker, assistantMessages, userMessages, startNewChat, 
  * @param page      Playwright page object
  * @param gapMs     How long to watch for the stop button to reappear (default 8s)
  */
+/**
+ * S5-08: read a session's transcript straight from the gateway, so a test can
+ * pin SERVER-side state instead of trusting the SPA's rendered view. Returns
+ * the entries; a non-2xx is an honest red (contract: GET
+ * /api/v1/sessions/{id}/messages → 200 with the transcript entries).
+ */
+async function sessionMessages(
+  page: Page,
+  origin: string,
+  sessionId: string,
+): Promise<Array<{ role?: string; content?: string }>> {
+  const resp = await page.request.get(`${origin}/api/v1/sessions/${sessionId}/messages`);
+  if (!resp.ok()) {
+    throw new Error(
+      `GET /api/v1/sessions/${sessionId}/messages failed: ${resp.status()} ${await resp.text()}`,
+    );
+  }
+  const body = (await resp.json()) as Array<{ role?: string; content?: string }>;
+  return Array.isArray(body) ? body : [];
+}
+
 async function waitForTurnFullyDone(page: Page, gapMs = 8_000): Promise<void> {
   const stopBtn = page.locator('[data-testid="stop-btn"]');
   try {
@@ -70,9 +92,9 @@ test(
     // assertion ever gets to legitimately time out or succeed, which is exactly
     // what produced a 21.8-min real hang under the old budget below).
     //
-    // Fixed overhead (sum of each step's own timeout, chatInput/newChat/picker
-    // visibility + count=0 + contains-Jim checks):
-    //   15_000 + 10_000 + 10_000 + 15_000 + 5_000 = 55s
+    // Fixed overhead (sum of each step's own timeout, chatInput/newChat
+    // visibility + count=0 + selectAgent's sidebar row checks):
+    //   15_000 + 10_000 + 15_000 + 15_000 + 15_000 + 5_000 = 75s
     //
     // Per turn (×3 — fill/press/toHaveCount/waitForTurnFullyDone):
     //   toHaveCount ceiling ................................ 300s
@@ -83,7 +105,7 @@ test(
     //   => per-turn ceiling: 300 + 188 = 488s
     // 3 turns: 3 * 488 = 1464s
     //
-    // Worst-case total: 55 + 1464 = 1519s (~25.3 min).
+    // Worst-case total: 75 + 1464 = 1539s (~25.7 min).
     //
     // The PREVIOUS budget ("940s expected + 260s margin" -> 1200s) undercounted
     // this badly in two ways: (1) it modeled each waitForTurnFullyDone call as a
@@ -94,7 +116,7 @@ test(
     // follow-up-call ceiling alone sums to 564s — already more than double the
     // old 260s margin, before even counting the toHaveCount ceilings.
     //
-    // New budget: 1519s worst-case ceiling + ~281s margin (~19%) for CI
+    // New budget: 1539s worst-case ceiling + ~261s margin (~17%) for CI
     // scheduling/runner jitter beyond each step's own declared timeout = 1800s
     // (30 min), a round number with real headroom over the computed ceiling.
     test.setTimeout(1_800_000);
@@ -104,10 +126,12 @@ test(
 
     // Start a fresh session to avoid stale messages from prior tests.
     // After goto('/') the app may restore the last active session with messages.
-    // The header "New Chat" button was removed from the redesign (see
-    // startNewChat's doc comment) — "/new" + Enter resets to an empty
-    // thread so assistantMessages count starts at 0.
-    await startNewChat(page);
+    // freshChat creates the session via the public REST API and deep-links it
+    // (the agent row's "New chat with <Agent>" button this used to click is
+    // removed — founder decision D7; FR-029/FR-031 still govern, and "/new"
+    // stays deleted), resetting to an empty thread so assistantMessages count
+    // starts at 0.
+    await freshChat(page);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
     // Switch to Jim: Mia has "no long enumerations" guardrails and may handoff to
@@ -115,11 +139,9 @@ test(
     // confuse turn-completion detection. Jim does inline generation without handoffs,
     // making the strict assistantMessages count (excludes running) reliable.
     // This test probes agent-loop context retention — the agent identity doesn't matter.
-    const picker = agentPicker(page);
-    await expect(picker).toBeVisible({ timeout: 15_000 });
-    await picker.click();
-    await page.getByRole('menuitem', { name: /Jim/i }).click();
-    await expect(picker).toContainText(/Jim/i, { timeout: 5_000 });
+    // (Sidebar row click is the only agent switch since the composer AgentPicker
+    // was removed — nav commit e84ac0532; FR-029 "no in-chat handover".)
+    await selectAgent(page, /Jim/i);
 
     // Phrasing note: we avoid the word "remember" — Jim may treat "remember …" as an
     // instruction to call the remember() tool rather than just retain context in the
@@ -159,58 +181,49 @@ test(
   },
 );
 
-test('(c) agent switch via picker: switch to a different agent, header area updates', async ({
-  page,
-}) => {
-  // The agent picker is the DropdownMenuTrigger in the header banner.
-  // Ground truth: button carries data-testid="agent-picker-trigger" (ChatControls.tsx).
-  // Shows only the agent name (e.g. "Mia") — no em-dash tagline.
-  const picker = agentPicker(page);
-  await expect(picker).toBeVisible({ timeout: 15_000 });
-
-  // Capture current agent name shown in the picker button
-  const nameBefore = await picker.textContent();
-
-  await picker.click();
-
-  // Dropdown items are Radix DropdownMenuItem — first item that is NOT the active one
-  const menuItems = page.locator('[role="menuitem"]');
-  await expect(menuItems.first()).toBeVisible({ timeout: 10_000 });
-  const count = await menuItems.count();
-  expect(count).toBeGreaterThan(0);
-
-  // Click the first menu item (may be the same agent if only one exists, which is fine)
-  await menuItems.first().click();
-
-  // Picker should now show a name (may be same or different)
-  await expect(picker).toBeVisible({ timeout: 5_000 });
-  const nameAfter = await picker.textContent();
-  // At minimum, the picker still renders without error
-  expect(nameAfter).toBeTruthy();
-  // Suppress unused-variable linting — nameBefore is recorded for debugging purposes
-  void nameBefore;
-});
+// Test (c) "agent switch via picker: switch to a different agent, header area
+// updates" was DELETED: its purpose was the composer AgentPicker dropdown, a
+// retired surface — removed outright by nav commit e84ac0532 "remove the
+// composer agent picker" (src/components/chat/ChatScreen.pickerRemoval
+// .test.tsx pins its absence) and forbidden by session-core-spec FR-029
+// ("No in-chat handover"). The behaviour that still exists — row-click agent
+// switch navigating to the eligible main chat — is exercised by tests (b) and
+// (e) below through selectAgent, which asserts the row's aria-current.
 
 test(
-  '(d) new chat button clears message list and picks a fresh session_id',
+  '(d) fresh chat clears the message list and picks a fresh session_id',
   async ({ page }) => {
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
+    const firstChat = await freshChat(page);
     await input.fill('First message in session');
     await input.press('Enter');
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 60_000 });
 
-    const urlBefore = page.url();
-
-    // Header "New Chat" button was removed (see startNewChat's doc comment
-    // in fixtures/selectors.ts) — "/new" + Enter is the replacement.
-    await startNewChat(page);
+    // The agent row's "New chat with <Agent>" button this test was named for
+    // is REMOVED (founder decision D7 — capability stays, UI access point
+    // gone); freshChat is the replacement seam.
+    const second = await freshChat(page);
 
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
-    const urlAfter = page.url();
-    void urlBefore;
-    void urlAfter;
+    // S5-08: the old tail asserted only `second.sessionId !== firstChat.sessionId`.
+    // That can NEVER fail — POST /api/v1/sessions mints a fresh id on every
+    // call, so it tested the fixture, not the product. Pin the state that
+    // actually differs: the FIRST chat still owns its message on the server
+    // while the second is genuinely empty. "The same thread with its history
+    // hidden" would make the two reads identical and fail here.
+    const origin = originOf(page);
+    const firstMessages = await sessionMessages(page, origin, firstChat.sessionId);
+    const secondMessages = await sessionMessages(page, origin, second.sessionId);
+    expect(
+      firstMessages.filter((m) => m.role === 'user'),
+      'the first chat keeps its user message server-side — the fresh chat did not replace it',
+    ).toHaveLength(1);
+    expect(
+      secondMessages,
+      'the fresh chat is empty on the server too — not the same thread with its history hidden',
+    ).toHaveLength(0);
   },
 );
 
@@ -224,11 +237,9 @@ test(
     // appears under her. Switch to Jim explicitly and ask for a long in-agent
     // explanation; Jim does in-line generation with a multi-second stream
     // window that reliably exposes the Stop button.
-    const picker = agentPicker(page);
-    await expect(picker).toBeVisible({ timeout: 15_000 });
-    await picker.click();
-    await page.getByRole('menuitem', { name: /Jim/i }).click();
-    await expect(picker).toContainText(/Jim/i, { timeout: 5_000 });
+    // (Sidebar row click is the only agent switch since the composer AgentPicker
+    // was removed — nav commit e84ac0532; FR-029 "no in-chat handover".)
+    await selectAgent(page, /Jim/i);
 
     await input.fill(
       'Explain in deep technical detail how the Internet routes packets, ' +
@@ -306,7 +317,7 @@ test(
     await waitForConnected(page, { timeout: 15_000 });
 
     // Fresh session so assistantMessages/userMessages counts start at zero.
-    await startNewChat(page);
+    await freshChat(page);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 
     // Go offline — the browser drops the WS (same mechanism verified in

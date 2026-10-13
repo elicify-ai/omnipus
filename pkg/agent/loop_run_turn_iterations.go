@@ -48,8 +48,11 @@ const (
 type agentLoopRunTurnConductorRunIterations struct {
 	rc                      *agentLoopRunTurnConductor
 	orphanToolMarkupRepairs int
-	responseContent         string
-	ret0                    agentLoopRunTurnConductorFlow
+	// emptyToolEnvelopeRetries counts this turn's retries of a tool_calls
+	// response that carried no tool call (loop_empty_tool_envelope.go).
+	emptyToolEnvelopeRetries int
+	responseContent          string
+	ret0                     agentLoopRunTurnConductorFlow
 }
 
 // agentLoopRunTurnConductorRunIterationsFlow reports how a block stage of agentLoopRunTurnConductorRunIterations wants the conductor to proceed.
@@ -115,6 +118,11 @@ turnLoop:
 			break turnLoop
 		}
 
+		if len(er.cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) > 0 {
+			// A response that carried its tool calls ends an empty-envelope blip:
+			// the retry budget is per blip, not per turn (R2-S1-10).
+			er.cn.emptyToolEnvelopeRetries = 0
+		}
 		if len(er.cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 || er.cn.rc.rx.rr.rq.ri.gracefulTerminal {
 			switch er.cn.handleInitialResponse() {
 			case agentLoopRunTurnConductorRunIterationsReturn:
@@ -547,6 +555,10 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 			cn.ret0 = agentLoopRunTurnConductorReturn
 			return agentLoopRunTurnConductorRunIterationsReturn
 		}
+	}
+
+	if flow := cn.handleEmptyToolEnvelope(); flow != agentLoopRunTurnConductorRunIterationsNext {
+		return flow
 	}
 
 	// FR-7.5/NFR-1: scan the assistant's final answer for references to

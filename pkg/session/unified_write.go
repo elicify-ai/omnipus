@@ -3,17 +3,11 @@
 package session
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
@@ -65,6 +59,13 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 		identityTouched = true
 	}
 	if patch.WorkspaceID != nil {
+		// session-core U1 / C-MAIN: a main's identity is immutable — its
+		// computed id IS the (workspace, agent) pair, so re-pointing the
+		// workspace tag would leave the id naming a pair the record no longer
+		// matches. Refuse rather than write a self-contradicting main.
+		if meta.Type == SessionTypeMain && *patch.WorkspaceID != meta.WorkspaceID {
+			return fmt.Errorf("unified_store: session %q is a main; workspace_id is immutable", sessionID)
+		}
 		meta.WorkspaceID = *patch.WorkspaceID
 		identityTouched = true
 	}
@@ -152,47 +153,6 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 	return nil
 }
 
-// ErrAlreadyActive is returned by SwitchAgent when the session's ActiveAgentID
-// already matches the requested newAgentID. Callers should treat this as success
-// (idempotent operation).
-var ErrAlreadyActive = errors.New("agent already active on this session")
-
-// SwitchAgent atomically updates the ActiveAgentID on a session.
-// The caller must NOT already hold sessionID's shard (see lockSession) — was:
-// caller must NOT hold us.mu. Returns ErrAlreadyActive if the session
-// is already on newAgentID (idempotent — callers should treat this as success).
-// newAgentID is appended to AgentIDs if not already present.
-func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
-	if err := validateSessionID(sessionID); err != nil {
-		return err
-	}
-	h := us.lockSession(sessionID)
-	defer h.Unlock()
-
-	meta, err := us.readMetaLocked(sessionID)
-	if err != nil {
-		return err
-	}
-	if meta.ActiveAgentID == newAgentID {
-		return ErrAlreadyActive
-	}
-	meta.ActiveAgentID = newAgentID
-
-	found := false
-	for _, id := range meta.AgentIDs {
-		if id == newAgentID {
-			found = true
-			break
-		}
-	}
-	if !found {
-		meta.AgentIDs = append(meta.AgentIDs, newAgentID)
-	}
-	meta.UpdatedAt = time.Now().UTC()
-	// ActiveAgentID/AgentIDs are identity-group fields (FR-053).
-	return us.u5WriteIdentityLocked(sessionID, meta)
-}
-
 // writeMetaLocked is RETAINED, post-W23, as a backward-compatible DISPATCHER
 // over the FR-054/GOAL-FR-005 targeted field-group writers
 // (u5WriteIdentityLocked/u5WriteStatsLocked/u5WriteLoopLocked,
@@ -200,8 +160,8 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 // pending_ask.go) — it is no longer "the single invalidation/update point
 // for every mutation path" (that whole-document funnel is exactly what
 // FR-084/Alternative-F forbids; see the doc comments above metaCache and
-// readMetaLocked). This file's OWN five mutation paths (createSessionLocked,
-// SetMeta, SwitchAgent, AppendTranscript, NewChannelSession) call the
+// readMetaLocked). This file's OWN four mutation paths (createSessionLocked,
+// SetMeta, AppendTranscript, NewChannelSession) call the
 // targeted writers DIRECTLY and never reach this function.
 //
 // It survives only for pkg/session/unified_api.go's two call sites
@@ -224,10 +184,10 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 // an empty loop.json/pending_ask.json it never touched).
 //
 // Caller must hold sessionID's shard (see lockSession) — was: caller must
-// hold us.mu. (writeUnifiedMetaDirect, used only by migrateLegacy before the
-// cache exists, is a SEPARATE, unmodified function — FR-060 forbids
-// changing it or providing a reader for its pre-split fused output; nothing
-// in this dispatcher touches it.)
+// hold us.mu. (The DEL-09 generic helper writeUnifiedMetaDirect is deleted;
+// CONV publishes the current-format identity group through its own
+// convWriteIdentityFile, and no reader exists for the pre-split fused shape
+// it once wrote. Nothing in this dispatcher touches either.)
 func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) error {
 	prev, prevErr := us.readMetaLocked(sessionID)
 
@@ -294,371 +254,51 @@ func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) err
 // directories (SC-001), matching AppendTranscriptStrict's contract exactly
 // — "a name, not a second behavior" per FR-002's own text.
 func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry) error {
-	_, err := us.appendTranscript(sessionID, entry, false, "append transcript", nil)
+	_, err := us.appendTranscript(sessionID, entry, "append transcript", nil)
 	return err
 }
 
-// validTruncationReasons enumerates the only accepted values for the reason
-// parameter of MarkLastEntryTruncated (ADR-087 D2). Absent on a persisted
-// entry means "cancelled" (legacy) — but a caller of this function must
-// always name one explicitly; there is no default at the write path.
-var validTruncationReasons = map[string]bool{
-	"cancelled":         true,
-	"max_output_tokens": true,
-}
-
-// MarkLastEntryTruncated finds the last assistant transcript entry for the
-// given session in transcript.jsonl that belongs to turnID and rewrites it
-// with truncated=true and truncation_reason=reason.
-//
-// reason MUST be one of "cancelled" or "max_output_tokens" (ADR-087 D2); any
-// other value is rejected with an error and the entry is left untouched —
-// this function never writes an unrecognized reason to disk.
-//
-// H2: The turnID parameter scopes the backward-walk to entries whose
-// turn_id matches. This prevents a cancel on turn T2 from mutating the
-// clean final assistant entry of a previously-completed turn T1 when both
-// share the same sessionID.
-//
-// If turnID is empty, the function falls back to the pre-H2 behavior (match
-// the last assistant entry regardless of turn_id) and logs a warning. This
-// preserves backward compatibility with any call sites that cannot supply
-// a turn ID.
-//
-// Acquires the same per-session shard as AppendTranscript (see lockSession),
-// so it serializes with any concurrent operation against THIS session
-// without contending with any other session's shard. Does NOT touch
-// context.jsonl (LLM history) — per FR-14a, the partial content there remains
-// untouched so the next turn's LLM context sees natural truncation.
-//
-// Returns nil if no matching assistant entry is found (e.g., cancel arrived
-// before any assistant content was written). Returns an error only on I/O
-// failure or an unrecognized reason.
-func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID, reason string) error {
-	if err := validateSessionID(sessionID); err != nil {
-		return err
-	}
-	if !validTruncationReasons[reason] {
-		return fmt.Errorf("unified_store: mark truncated: invalid truncation reason %q (must be \"cancelled\" or \"max_output_tokens\")", reason)
-	}
-	if turnID == "" {
-		slog.Warn(
-			"unified_store: MarkLastEntryTruncated called with empty turnID — falling back to last-assistant-entry behavior",
-			"session_id",
-			sessionID,
-		)
-	}
-
-	h := us.lockSession(sessionID)
-	defer h.Unlock()
-
-	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
-	data, err := os.ReadFile(transcriptPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// No transcript at all — nothing to mark; treat as no-op.
-			return nil
-		}
-		return fmt.Errorf("unified_store: mark truncated: read transcript: %w", err)
-	}
-
-	// Split into non-empty lines and parse.
-	rawLines := bytes.Split(data, []byte{'\n'})
-	entries := make([]json.RawMessage, 0, len(rawLines))
-	for _, line := range rawLines {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		entries = append(entries, json.RawMessage(line))
-	}
-
-	if len(entries) == 0 {
-		return nil
-	}
-
-	// Walk backward to find the last assistant entry matching turnID.
-	// When turnID is empty (backward-compat path) any assistant entry matches.
-	targetIdx := -1
-	for i := len(entries) - 1; i >= 0; i-- {
-		var e TranscriptEntry
-		if jsonErr := json.Unmarshal(entries[i], &e); jsonErr != nil {
-			// Skip malformed lines.
-			slog.Warn(
-				"unified_store: mark truncated: skipping malformed line",
-				"session_id",
-				sessionID,
-				"index",
-				i,
-				"error",
-				jsonErr,
-			)
-			continue
-		}
-		if e.Role != "assistant" {
-			continue
-		}
-		if turnID != "" && e.TurnID != turnID {
-			continue
-		}
-		targetIdx = i
-		break
-	}
-
-	if targetIdx == -1 {
-		// No matching assistant entry found — no-op, not an error.
-		return nil
-	}
-
-	// Unmarshal the target entry, set Truncated, re-marshal into the slot.
-	var target TranscriptEntry
-	if jsonErr := json.Unmarshal(entries[targetIdx], &target); jsonErr != nil {
-		return fmt.Errorf("unified_store: mark truncated: unmarshal target entry: %w", jsonErr)
-	}
-	target.Truncated = true
-	target.TruncationReason = reason
-	rewritten, jsonErr := json.Marshal(target)
-	if jsonErr != nil {
-		return fmt.Errorf("unified_store: mark truncated: marshal updated entry: %w", jsonErr)
-	}
-	entries[targetIdx] = json.RawMessage(rewritten)
-
-	// Rebuild the file contents: one JSON object per line, WITH a trailing
-	// newline after the LAST line too. This is load-bearing, not cosmetic:
-	// a rewrite that omits the final newline would leave the next
-	// AppendTranscript call's record concatenated directly onto this
-	// rewrite's last line — e.g. "{lastEntry}{newRecord}\n" — which
-	// ReadTranscript cannot parse as JSON and silently drops via its
-	// "skipping malformed transcript line" continue, losing BOTH entries.
-	// Confirmed via a byte-level repro (rewrite → append → inspect raw
-	// bytes → ReadTranscript entry count) before this fix; see
-	// TestMarkLastEntryTruncated_TrailingNewlineSurvivesSubsequentAppend
-	// and TestUpdateToolCallStatus_TrailingNewlineSurvivesSubsequentAppend.
-	// This is the PRIMARY fix; AppendJSONL (pkg/fileutil/file.go) now also
-	// carries a SECOND, independent defensive layer — it detects a missing
-	// trailing newline on the existing file and prepends one before its own
-	// record — so even a future rewrite site that forgets this discipline
-	// degrades to a defensively-recovered file, not silent data loss.
-	var buf bytes.Buffer
-	for _, line := range entries {
-		buf.Write(line)
-		buf.WriteByte('\n')
-	}
-
-	if writeErr := fileutil.WriteFileAtomic(transcriptPath, buf.Bytes(), 0o600); writeErr != nil {
-		return fmt.Errorf("unified_store: mark truncated: write transcript: %w", writeErr)
-	}
-	return nil
-}
-
-// UpdateToolCallStatus finds the transcript entry carrying a ToolCall with the
-// given ID and rewrites that ToolCall's Status and DurationMS fields in place.
-//
-// This exists for the ASYNC delegation path (DelegateTool.executeAsync,
-// pkg/tools/delegate.go): the spawning "delegate" tool call itself completes
-// — and its own ToolCall record is appended via appendToolCallTranscript —
-// almost instantly with a placeholder ack (Status="success", DurationMS≈0,
-// from tools.AsyncResult), well BEFORE the actual sub-turn goroutine finishes
-// running. The sub-turn's real terminal status/wall-clock duration is only
-// known later, at EventKindSubTurnEnd (spawnSubTurn's cleanup defer,
-// pkg/agent/subturn.go) — this method lets that defer go back and correct the
-// already-persisted placeholder record so a session reload replays the same
-// status/duration the live WS stream showed (Wave 3 fix 5b).
-//
-// Mirrors MarkLastEntryTruncated's read-mutate-rewrite-one-line pattern and
-// shares its mutex. Walks backward so a duplicate ID (should not normally
-// occur — appendToolCallTranscript writes one entry per completed tool call)
-// updates the LATEST occurrence, matching the "last occurrence wins" semantics
-// replay.go already applies when reading (buildSpawnIDsWithChildren /
-// latestByID in pkg/gateway/replay.go).
-//
-// Returns found=false (with a nil error) when no entry with a matching
-// ToolCall.ID is found. That is not necessarily an error: a child can finish
-// before the parent has appended the delegate tool call's placeholder. The
-// caller can distinguish this ordering window from a real update failure.
-//
-// found=false can ALSO legitimately occur for ASYNC delegation due to a real
-// race: DelegateTool.executeAsync launches the child sub-turn in a goroutine
-// and returns immediately, while the PARENT (the turn that called the
-// "delegate" tool) writes this tool call's OWN placeholder ack record only
-// after further processing (hooks, media, events) in its own call stack. If
-// the child's spawnSubTurn dispatch fails fast (e.g. a depth-limit or
-// target-resolution rejection), its cleanup defer can call
-// UpdateToolCallStatus BEFORE the parent's placeholder record exists yet.
-// Callers in that race window (currently only spawnSubTurn's cleanup defer,
-// pkg/agent/subturn.go) MUST retry briefly rather than treat found=false as
-// terminal — see updateToolCallStatusWithRetry.
-//
-// Returns a non-nil error only on I/O failure.
-func (us *UnifiedStore) UpdateToolCallStatus(
-	sessionID string,
-	toolCallID ToolCallID,
-	status string,
-	durationMS int64,
-) (found bool, err error) {
-	return us.UpdateToolCallStatusAndResult(sessionID, toolCallID, status, durationMS, nil)
-}
-
-// UpdateToolCallStatusAndResult is UpdateToolCallStatus's result-bearing
-// sibling (W4): it performs the exact same in-place Status/DurationMS
-// correction, and additionally rewrites the matching ToolCall's Result field
-// when result is non-nil. Passing a nil result leaves the ToolCall's existing
-// Result untouched (UpdateToolCallStatus delegates here with result=nil,
-// preserving its original status-only behavior exactly).
-//
-// This exists for spawnSubTurn's completion path (pkg/agent/subturn.go): the
-// persisted "delegate" tool_call previously never received the sub-turn's own
-// output — UpdateToolCallStatus corrected Status/DurationMS but had no way to
-// carry the result text, so a session reload showed a delegate tool_call with
-// a terminal status but an empty `result`, even though the live WS stream
-// carried the sub-turn's actual text via SubTurnEndPayload. Mirrors
-// recordExternalToolResultUpdateInPlace's (pkg/agent/external_dispatch.go)
-// read-modify-rewrite-one-line approach for the equivalent external-cli tool
-// call case.
-//
-// See UpdateToolCallStatus's doc comment above for the found=false semantics
-// (same race window, same retry-via-updateToolCallStatusWithRetry contract).
-// Returns a non-nil error only on I/O failure.
-func (us *UnifiedStore) UpdateToolCallStatusAndResult(
-	sessionID string,
-	toolCallID ToolCallID,
-	status string,
-	durationMS int64,
-	result map[string]any,
-) (found bool, err error) {
-	if toolCallID == "" {
-		return false, nil
-	}
-	n, err := us.rewriteTranscriptToolCalls(sessionID, map[ToolCallID]func(*ToolCall){
-		toolCallID: func(tc *ToolCall) {
-			tc.Status = status
-			tc.DurationMS = durationMS
-			if result != nil {
-				tc.Result = result
-			}
-		},
-	}, "update tool call status")
-	return n > 0, err
-}
-
-// ReadTranscript returns all entries from {session-id}/transcript.jsonl.
-// A transcript line that still carries the provenance write-phase marker
-// (TranscriptEntry.ProvenancePending) AND has no MessageProvenance record for
-// its ID is crash residue from an incomplete paired save (ADR-20261004
-// Correction C4): it is not shown and not admitted. This is the single
-// filter every person- and model-facing reader reaches the store through —
-// transcript render, replay and model-context assembly all read via this
-// method — while lines without the marker (all agent and tool lines, and
-// every historical user line that was never part of a paired save) always
-// pass. See filterUnpairedProvenanceLines.
+// ReadTranscript returns all entries from {session-id}/transcript.jsonl, in
+// order across the UTC day partitions. Private members of a line (a paired
+// save's trusted source) are not part of TranscriptEntry and never leave the
+// store through this reader. This is the single reader every person- and
+// model-facing transcript consumer reaches the store through.
 func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return nil, err
 	}
-	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
-	data, err := os.ReadFile(transcriptPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []TranscriptEntry{}, nil
-		}
-		return nil, fmt.Errorf("unified_store: read transcript: %w", err)
-	}
-	var entries []TranscriptEntry
-	for _, line := range bytes.Split(data, []byte{'\n'}) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var entry TranscriptEntry
-		if err := json.Unmarshal(line, &entry); err != nil {
-			if isContextWindowNoticeLine(line) {
-				return nil, fmt.Errorf("unified_store: read transcript: invalid context_window_notice: %w", err)
-			}
-			slog.Warn("unified_store: skipping malformed transcript line", "session_id", sessionID, "error", err)
-			continue
-		}
-		if err := validateContextWindowNotice(sessionID, entry); err != nil {
-			return nil, fmt.Errorf("unified_store: read transcript: %w", err)
-		}
-		entries = append(entries, entry)
-	}
-	return us.filterUnpairedProvenanceLines(sessionID, entries), nil
+	return us.readTranscriptMerged(sessionID)
 }
 
-// AddMessage implements SessionStore — appends a simple role/content message to context.jsonl.
+// AddMessage implements SessionStore — appends a simple role/content message to
+// the addressed archive (session-core Decision D; the .context backend is gone).
 func (us *UnifiedStore) AddMessage(sessionKey, role, content string) {
-	if err := us.backend.AddMessage(context.Background(), sessionKey, role, content); err != nil {
-		slog.Error("unified_store: add message", "key", sessionKey, "error", err)
-	}
+	h := us.lockSession(owningSessionID(sessionKey))
+	defer h.Unlock()
+	us.backend.AddMessage(sessionKey, role, content)
 }
 
-// AddFullMessage implements SessionStore — appends a complete message to context.jsonl.
+// AddFullMessage implements SessionStore — appends a complete message to the
+// addressed archive.
 func (us *UnifiedStore) AddFullMessage(sessionKey string, msg providers.Message) {
-	if err := us.backend.AddFullMessage(context.Background(), sessionKey, msg); err != nil {
-		slog.Error("unified_store: add full message", "key", sessionKey, "error", err)
-	}
+	h := us.lockSession(owningSessionID(sessionKey))
+	defer h.Unlock()
+	us.backend.AddFullMessage(sessionKey, msg)
 }
 
-// GetHistory implements SessionStore — returns message history from context.jsonl.
+// GetHistory implements SessionStore — returns the live model window.
 func (us *UnifiedStore) GetHistory(sessionKey string) []providers.Message {
-	msgs, err := us.backend.GetHistory(context.Background(), sessionKey)
-	if err != nil {
-		slog.Error("unified_store: get history", "key", sessionKey, "error", err)
-		return []providers.Message{}
-	}
-	return msgs
-}
-
-// SetHistory implements SessionStore.
-func (us *UnifiedStore) SetHistory(sessionKey string, history []providers.Message) {
-	if err := us.backend.SetHistory(context.Background(), sessionKey, history); err != nil {
-		slog.Error("unified_store: set history", "key", sessionKey, "error", err)
-	}
-}
-
-// TruncateHistory implements SessionStore.
-func (us *UnifiedStore) TruncateHistory(sessionKey string, keepLast int) {
-	if err := us.backend.TruncateHistory(context.Background(), sessionKey, keepLast); err != nil {
-		slog.Error("unified_store: truncate history", "key", sessionKey, "error", err)
-	}
-}
-
-// RollbackAppended implements SessionStore — truncates the on-disk archive to
-// targetArchiveLen physical lines, restores meta.Skip = min(targetSkip,
-// targetArchiveLen) and restores the projection state to the turn-start
-// emptiedSet in one meta write (ADR-066 FR-020). This is the fix for the
-// mid-turn eviction bug: if windowTrim advanced Skip during a live turn and
-// the turn then aborts, restoring Skip to its turn-start value ensures
-// GetHistory returns exactly the pre-turn live window (SC-001, SC-010).
-// Callers compute: targetSkip = initialArchiveLen - initialHistoryLength.
-func (us *UnifiedStore) RollbackAppended(sessionKey string, targetArchiveLen, targetSkip int, emptiedSet memory.ProjectionSet) {
-	if err := us.backend.RollbackAppended(context.Background(), sessionKey, targetArchiveLen, targetSkip, emptiedSet); err != nil {
-		slog.Error("unified_store: rollback appended", "key", sessionKey, "error", err)
-	}
+	return us.backend.GetHistory(sessionKey)
 }
 
 // Projection implements SessionStore.
 func (us *UnifiedStore) Projection(sessionKey string) memory.ProjectionMeta {
-	pm, err := us.backend.GetProjection(context.Background(), sessionKey)
-	if err != nil {
-		slog.Error("unified_store: get projection", "key", sessionKey, "error", err)
-		return memory.ProjectionMeta{Entries: memory.ProjectionSet{}}
-	}
-	return pm
+	return us.backend.Projection(sessionKey)
 }
 
 // SetProjectionState implements SessionStore.
 func (us *UnifiedStore) SetProjectionState(sessionKey string, pk memory.ProjectionKey, state memory.ProjectionState) {
-	if err := us.backend.SetProjectionState(context.Background(), sessionKey, pk, state); err != nil {
-		slog.Error("unified_store: set projection state", "key", sessionKey, "error", err)
-	}
-}
-
-// MarkHydrated implements SessionStore.
-func (us *UnifiedStore) MarkHydrated(sessionKey string) {
-	if err := us.backend.MarkHydrated(context.Background(), sessionKey); err != nil {
-		slog.Error("unified_store: mark hydrated", "key", sessionKey, "error", err)
-	}
+	us.backend.SetProjectionState(sessionKey, pk, state)
 }
 
 // ReadArchive implements SessionStore — returns the full archived log for
@@ -693,4 +333,33 @@ func (us *UnifiedStore) ScanArchive(
 // The retention sweep is the sole legitimate deleter of context.jsonl content.
 func (us *UnifiedStore) Save(sessionKey string) error {
 	return nil
+}
+
+// deriveCancelTruncation marks the assistant entry a cancel cut short. A
+// canceled turn appends one turn_canceled record right after its last assistant
+// entry (pkg/agent/cancel.go), so the truncation is read from that record
+// instead of being written into the earlier line: the nearest earlier assistant
+// entry of the same turn (any turn when the cancel record names none) reads as
+// truncated with reason "cancelled". An entry already marked truncated keeps its
+// own reason. Nothing on disk is rewritten (FR-006), so the physical order
+// assistant-then-turn_canceled is load-bearing.
+func deriveCancelTruncation(entries []TranscriptEntry) []TranscriptEntry {
+	for i := range entries {
+		if entries[i].Type != EntryTypeTurnCancelled {
+			continue
+		}
+		turnID := entries[i].TurnID
+		for j := i - 1; j >= 0; j-- {
+			e := &entries[j]
+			if e.Role != "assistant" || (turnID != "" && e.TurnID != turnID) {
+				continue
+			}
+			if !e.Truncated {
+				e.Truncated = true
+				e.TruncationReason = "cancelled"
+			}
+			break
+		}
+	}
+	return entries
 }

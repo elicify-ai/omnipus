@@ -77,7 +77,9 @@ var knownTaskDeleters = []taskDeleter{
 	// ---- the task-delete surfaces: each must remove the paired goal first --
 	{where: "pkg/gateway.restAPI.handleTaskDelete", mustClean: true},
 	{where: "pkg/tools.TaskDeleteTool.Execute", mustClean: true},
-	{where: "pkg/sysagent/tools.TaskDeleteTool.Execute", mustClean: true},
+	// create_task's rollback after a failed paired-goal write: removes any
+	// partially written goal record first, then the just-saved task.
+	{where: "pkg/tools.taskCreateToolExecute.persistAndRespond", mustClean: true},
 
 	// ---- not task deletes: each states what it actually deletes -----------
 	{

@@ -77,7 +77,7 @@ func newInjectionTestTurn(t *testing.T) (*AgentLoop, *turnState, session.Session
 // admitted to the model.
 func TestVerifierInjection_BannerNamesMatchedPattern(t *testing.T) {
 	al, ts, store := newInjectionTestTurn(t)
-	seedAssistantCall(t, store, ts.sessionKey, "call_hostile", "read_file", 1)
+	seedAssistantCall(t, ts, store, "call_hostile", "read_file", 1)
 
 	admitted := al.admitToolResult(ts, toolResultAdmission{
 		Tool: "read_file", ToolCallID: "call_hostile",
@@ -99,7 +99,7 @@ func TestVerifierInjection_BannerNamesMatchedPattern(t *testing.T) {
 // fires".
 func TestVerifierInjection_CleanResultNotFlagged(t *testing.T) {
 	al, ts, store := newInjectionTestTurn(t)
-	seedAssistantCall(t, store, ts.sessionKey, "call_clean", "read_file", 1)
+	seedAssistantCall(t, ts, store, "call_clean", "read_file", 1)
 
 	vc := NewVerifierCapture()
 	RegisterVerifierCapture(ts.turnID, vc)
@@ -125,8 +125,8 @@ func TestVerifierInjection_CleanResultNotFlagged(t *testing.T) {
 // not a code-level rejection).
 func TestVerifierInjection_FlaggedCallRecordedOnCapture(t *testing.T) {
 	al, ts, store := newInjectionTestTurn(t)
-	seedAssistantCall(t, store, ts.sessionKey, "call_a", "read_file", 1)
-	seedAssistantCall(t, store, ts.sessionKey, "call_b", "read_file", 1)
+	seedAssistantCall(t, ts, store, "call_a", "read_file", 1)
+	seedAssistantCall(t, ts, store, "call_b", "read_file", 1)
 
 	vc := NewVerifierCapture()
 	RegisterVerifierCapture(ts.turnID, vc)

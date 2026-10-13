@@ -68,8 +68,8 @@ func TestExternalDispatch_InjectsEgressProxyEnv(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -114,8 +114,8 @@ func TestExternalDispatch_GracefulDegradationNoProxy(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "degraded-ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "degraded-ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 

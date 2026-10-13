@@ -25,6 +25,7 @@ import type {
   Message as WireMessage,
 } from '@/lib/api/generated/openapi-types'
 import { _recordApiSchemaError, request } from './http'
+import type { UserDeliveryState } from '../userDeliveryState'
 
 // ── Sessions ──────────────────────────────────────────────────────────────────
 
@@ -37,8 +38,11 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // includeVerifier opt-in surfaces it (UsageScreen's "By session" tab only).
   // 'delegate' (ADR-057 FR-008/W2c) tags a subordinate session minted by a
   // delegation — it always carries a non-empty parent_session_id below.
-  // Like 'scheduled'/'heartbeat'/'verifier' it is server-minted only.
-  type: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
+  // Like 'scheduled'/'main'/'verifier' it is server-minted only.
+  // Derived from the generated Session schema (contract-first #8) — 'main'
+  // (FR-002, the one standing session for an eligible workspace/agent pair)
+  // is a server-minted wire value, so the union is never hand-maintained.
+  type: WireSessionShape['type']
   status?: WireSessionShape['status']
   task_id?: string
   workspace_id?: string
@@ -86,13 +90,32 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // when lifecycle_state is 'stopped'. The stopped sidebar row shows its
   // cause alongside the Stopped label.
   stop_note?: WireSessionShape['stop_note']
+  // Wave 1 Sessions. Projected queued/running classification, not a raw
+  // lifecycle-record export. Present only when the same loaded lifecycle record's
+  // canonical current-boot projection produces lifecycle_state: working:
+  // queued for a queued record, running for a running record. Omitted for any
+  // other projected display state, including Interrupted after a prior-boot root
+  // execution, and when no usable lifecycle record is available.
+  // lifecycle_state is authoritative. The Sessions Running filter matches running;
+  // queued does not match. A nonmatching parent may remain as hierarchy context.
+  execution?: WireSessionShape['execution']
+  // How many background shell commands this session itself owns. Omitted when
+  // the process table is unavailable (unknown, not zero). Zero means checked
+  // and none. Not a roll-up of child sessions.
+  background_command_count?: WireSessionShape['background_command_count']
+  // FR-047 (C-ATTENTION): the server's read-only main-attention value.
+  // Present as true or false on a valid main (including the default Admin
+  // main), omitted on every other session — so absence stays absent
+  // (unknown), and is never coerced to false here.
+  needs_attention?: WireSessionShape['needs_attention']
 }
 
 interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that renames nested stats fields before public Session type; the wire shape is validated via WireSessionSchema, this type only models the pre-transform intermediate
   id: string
   agent_id: string
   title: string
-  type?: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
+  // Derived from the generated Session schema (see the public Session above).
+  type?: WireSessionShape['type']
   status?: WireSessionShape['status']
   task_id?: string
   workspace_id?: string
@@ -107,6 +130,9 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   // ADR-20260928 MAJ-009 — wire pass-through (see public Session above).
   lifecycle_state?: WireSessionShape['lifecycle_state']
   stop_note?: WireSessionShape['stop_note']
+  execution?: WireSessionShape['execution']
+  background_command_count?: WireSessionShape['background_command_count']
+  needs_attention?: WireSessionShape['needs_attention']
   stats?: {
     tokens_in: number
     tokens_out: number
@@ -151,6 +177,14 @@ function rawToSession(raw: RawSession): Session {
     // absent (a session with no lifecycle record shows no lifecycle label).
     lifecycle_state: raw.lifecycle_state,
     stop_note: raw.stop_note,
+    // Absent stays absent. Do not coerce a missing execution to a value, and
+    // do not turn a missing background count into 0 — unknown is not none.
+    execution: raw.execution,
+    background_command_count: raw.background_command_count,
+    // FR-047: verbatim pass-through — true, false, or absent stays exactly
+    // that. A main without the field (or any non-main, which never carries
+    // it) must read as unknown downstream, never as a fabricated off.
+    needs_attention: raw.needs_attention,
   }
 }
 
@@ -182,6 +216,14 @@ interface MessageBase { // not-wire-format
    * populates ChatMessage.agentId from each frame's agent_id.
    */
   agentId?: string
+  /**
+   * The generated wire correlation id (`Message.client_message_id`,
+   * #823 catch-up redesign): present on saved user entries that were
+   * persisted with the client-supplied id, forwarded verbatim by
+   * rawToMessage. Absent on entries written before the field existed and
+   * on non-user entries.
+   */
+  clientMessageId?: string
   /**
    * Per-turn model record (Phase 1, FR-013). Only populated for assistant
    * messages that have a recorded model on the wire. Legacy turns and
@@ -237,12 +279,60 @@ interface MessageBase { // not-wire-format
    * see that action's doc comment).
    */
   turnId?: string
+  /**
+   * U8 participant label (session-core F15/F17) — who wrote a user-role
+   * entry. The generated ChatParticipant shape (wire `Message.participant`),
+   * forwarded verbatim by rawToMessage / the replay + user_message reducers:
+   * a server-stamped DISPLAY record (kind, plain-text display_name, source
+   * platform, agent pair) — never an id or a route, and never present on the
+   * web user's own messages (F17: own bubbles carry no label, so its presence
+   * is exactly the own-vs-other discriminator the thread renders by). The
+   * backend strips control characters before stamping (pkg/agent/
+   * participant.go), but this stays PLAIN TEXT at render time — never
+   * markdown or HTML.
+   */
+  participant?: WireMessage['participant']
+  /**
+   * U8 reply pair (F15/F17) — who a reply went to (wire
+   * `Message.reply_to_participant`, camelCase twin per the turnId convention).
+   * Server-stamped from the addressing capture, so the model cannot name a
+   * recipient. Present only on reply entries (assistant role); renders as the
+   * "author → recipient" header.
+   */
+  replyToParticipant?: WireMessage['reply_to_participant']
+  /**
+   * U8 reply pair (F15/F17) — the request id a reply answers (wire
+   * `Message.reply_to_message_id`). Pairs the reply bubble with the
+   * send_message tool call that produced it (whose `reply_to` argument names
+   * the same request id) — the pairing the thread uses to hide that chip —
+   * and, with replyToParticipant absent, degrades the header to
+   * "<author> → reply".
+   */
+  replyToMessageId?: string
 }
 
 export interface UserMessage extends MessageBase { // not-wire-format: SPA-internal user message. Status 'error' means the WS send failed; Retry button re-sends the content.
   role: 'user'
   /** 'done' — delivered to gateway. 'error' — WS send failed; show Retry. */
   status?: 'done' | 'error'
+  /**
+   * FR-024 (session-core) — the REST adapter (`rawToMessage`) stamps ONLY the
+   * terminal 'discarded' value, from the wire
+   * `input_disposition.state === 'discarded'` on a cold load: Stop discarded
+   * this input before it was delivered, and the bubble must show the same
+   * quiet "Not delivered" state the live `message_status` frame drives. The
+   * type is nevertheless the FULL deliveryStatus set shared with
+   * ChatMessage (src/store/chat/types.ts) - ONE alias in
+   * src/lib/userDeliveryState.ts. ChatMessage intersects this
+   * interface, so a narrower literal here would collapse the intersection and
+   * break every store writer of the transient states ('queued'/'sending'/
+   * 'received'/'working'/'failed' — store-only, never produced by the REST
+   * path). Ruling S3-02 deleted the two /clear-only settled states
+   * ('not-performed'/'unconfirmed'): a refusal is the wire's message_status
+   * failed, and a held clear stays queued with no deadline. The union lives in
+   * lib/userDeliveryState.ts, the single source.
+   */
+  deliveryStatus?: UserDeliveryState
   tool_calls?: never
 }
 
@@ -369,6 +459,15 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
   content?: string
   summary?: string
   timestamp: string
+  /** Generated wire correlation id (`Message.client_message_id`) — present on saved user entries. */
+  client_message_id?: string
+  /**
+   * FR-024 (session-core) — read-only record that this user input was
+   * DISCARDED by Stop before it was delivered into the agent's model input.
+   * Present on discarded entries only; absent on every delivered message
+   * (contracts/components/schemas/Message.yaml `input_disposition`).
+   */
+  input_disposition?: WireMessage['input_disposition']
   tokens?: number
   cost?: number
   status?: 'ok' | 'error' | 'interrupted'
@@ -417,6 +516,22 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
    * Turn-correlation id (wire `Message.turn_id`) — see MessageBase.turnId.
    */
   turn_id?: string
+  /**
+   * U8 participant label (session-core F15/F17) — wire `Message.participant`,
+   * present on server-written user-role entries only. See
+   * MessageBase.participant for the display-record contract.
+   */
+  participant?: WireMessage['participant']
+  /**
+   * U8 reply pair — wire `Message.reply_to_participant`, present on reply
+   * entries only. See MessageBase.replyToParticipant.
+   */
+  reply_to_participant?: WireMessage['reply_to_participant']
+  /**
+   * U8 reply pair — wire `Message.reply_to_message_id`, the request id the
+   * reply answers. See MessageBase.replyToMessageId.
+   */
+  reply_to_message_id?: string
 }
 
 function rawToToolCall(raw: RawToolCall): ToolCall {
@@ -485,7 +600,26 @@ function rawToMessage(raw: RawMessage): Message {
       tokens: raw.tokens,
       cost: raw.cost,
       agentId: raw.agent_id || undefined,
+      // The generated wire correlation id (`Message.client_message_id`,
+      // present on saved user entries): lets client-side reconcilers match a
+      // server row to the optimistic bubble that was sent under that id
+      // (the /clear transcript re-read's merge does exactly that).
+      clientMessageId: raw.client_message_id,
       status: (baseStatus === 'done' || baseStatus === 'error') ? baseStatus : 'done',
+      // FR-024 — the wire `input_disposition` (present on discarded user
+      // inputs only) maps onto the same quiet deliveryStatus the live
+      // `message_status` frame stamps, so a reloaded thread shows the
+      // identical "Not delivered" status — never an error. The message text
+      // is kept (the archived bytes are preserved, BDD-07.3); an absent or
+      // unknown disposition leaves the field undefined and today's rendering
+      // unchanged.
+      ...(raw.input_disposition?.state === 'discarded' ? { deliveryStatus: 'discarded' as const } : {}),
+      // U8/F15/F17 — the server-stamped participant display record. Present
+      // on server-written entries only (channel participants, peer requests):
+      // the web user's own rows carry none, which is what keeps them
+      // label-free, right-side bubbles. Forwarded verbatim — plain text is
+      // the renderer's contract, never parsed as markup.
+      ...(raw.participant ? { participant: raw.participant } : {}),
     } satisfies UserMessage
   }
   if (role === 'system') {
@@ -548,6 +682,11 @@ function rawToMessage(raw: RawMessage): Message {
     ...(raw.turn_id ? { turnId: raw.turn_id } : {}),
     ...(modelField ? { model: modelField } : {}),
     ...(raw.truncated ? { truncated: true as const, truncationReason } : {}),
+    // U8/F15/F17 — the reply pair: who the answer went to (server-held
+    // capture, never model input) and the request id it answers (the chip
+    // pairing key). Forwarded verbatim; absent on every non-reply entry.
+    ...(raw.reply_to_message_id ? { replyToMessageId: raw.reply_to_message_id } : {}),
+    ...(raw.reply_to_participant ? { replyToParticipant: raw.reply_to_participant } : {}),
   } satisfies AssistantMessage
 }
 
@@ -660,12 +799,43 @@ export async function fetchSessionPage(
 // fetchSessionPage() remains the single-page primitive for callers that DO
 // want to control paging themselves — SessionTree.tsx's useSessionForest
 // fetches one node's children a page at a time by design (BDD-103).
+// Coverage rides on the array itself so existing callers (Sidebar, Usage,
+// session restore, pagination tests) keep using .map/.find/.length. The
+// Sessions view reads partialErrors/incomplete and must not treat a partial
+// list as proof that a parent is missing.
+export interface SessionFetchCoverage { // not-wire-format: client-only flags derived while walking SessionPage cursors; not a wire object
+  /** Sanitized per-store failure tokens gathered across every page. Empty when none reported any. */
+  partialErrors: string[]
+  /** True when any page reported partial_errors, or the max-page walk aborted. */
+  incomplete: boolean
+}
+
+export type SessionListResult = Session[] & SessionFetchCoverage
+
+export function readSessionFetchCoverage(sessions: readonly Session[] | undefined): SessionFetchCoverage {
+  if (!sessions) return { partialErrors: [], incomplete: false }
+  const extra = sessions as Partial<SessionFetchCoverage>
+  return {
+    partialErrors: Array.isArray(extra.partialErrors) ? extra.partialErrors : [],
+    incomplete: extra.incomplete === true,
+  }
+}
+
+function finishSessionFetch(sessions: Session[], partialErrors: string[], incomplete: boolean): SessionListResult {
+  const result = sessions as SessionListResult
+  result.partialErrors = partialErrors
+  result.incomplete = incomplete
+  return result
+}
+
 export async function fetchSessions(
   agentId?: string,
   type?: Session['type'],
   opts?: FetchSessionsOptions,
 ): Promise<Session[]> {
   const sessions: Session[] = []
+  const partialErrors: string[] = []
+  let incomplete = false
   let offset = opts?.offset
   // Safety valve, not a normal exit: the server's own default page size is
   // 50, so 1000 pages is 50,000 sessions — far past any real install. If a
@@ -676,15 +846,22 @@ export async function fetchSessions(
   for (let i = 0; i < MAX_PAGES; i++) {
     const page = await fetchSessionPage(agentId, type, { ...opts, offset })
     sessions.push(...page.sessions)
-    if (!page.nextCursor) return sessions
+    if (page.partialErrors && page.partialErrors.length > 0) {
+      incomplete = true
+      for (const token of page.partialErrors) {
+        if (!partialErrors.includes(token)) partialErrors.push(token)
+      }
+    }
+    if (!page.nextCursor) return finishSessionFetch(sessions, partialErrors, incomplete)
     offset = Number(page.nextCursor)
   }
+  incomplete = true
   console.warn(`[api] fetchSessions: aborted after ${MAX_PAGES} pages — server kept returning next_cursor; result is INCOMPLETE`)
   void maybeDevToast(
     `[api] Session list exceeded ${MAX_PAGES} pages — showing a partial set`,
     'GET:/sessions:max-pages',
   )
-  return sessions
+  return finishSessionFetch(sessions, partialErrors, incomplete)
 }
 
 // ── Session tree assembly (ADR-057 US-19/FR-091/FR-097, W16d) ─────────────────
@@ -869,6 +1046,16 @@ function parseWireMessageList(items: unknown[], endpoint: string): Message[] {
   return messages
 }
 
+// The chat-view read's X-Has-Earlier-Messages response header (contracts/
+// openapi.yaml GET /sessions/{id}/messages — "true" when the body starts at
+// the session's last /clear marker and earlier transcript entries exist
+// before it; the header is always present on a success response). Keyed by
+// session id, written by fetchSessionMessages and read by the chat state
+// writers (src/store/chat/has-earlier.ts consumers) after their read — the
+// smallest header channel that changes no caller's signature or return
+// shape. lib cannot import the store, so the flag hops through here.
+export const sessionMessagesHasEarlier: Record<string, boolean | undefined> = {}
+
 export async function fetchSessionMessages(sessionId: string): Promise<Message[]> {
   // Top-level shape assertion only: the body must be an array. A non-array
   // body (an error page, a wholly different endpoint shape) is a genuine
@@ -880,6 +1067,7 @@ export async function fetchSessionMessages(sessionId: string): Promise<Message[]
     path,
     undefined,
     z.array(z.unknown()) as ZodType<unknown[]>,
+    (headers) => { sessionMessagesHasEarlier[sessionId] = headers.get('X-Has-Earlier-Messages') === 'true' },
   )
   return parseWireMessageList(rawItems, `GET /api/v1${path}`)
 }
@@ -888,6 +1076,8 @@ export interface SessionDetail { // not-wire-format: SPA-internal detail type. U
   session: Session
   messages: Message[]
   agent_removed?: boolean
+  /** Mirrors the generated SessionDetail.has_earlier_messages: messages starts at the session's last /clear marker and earlier transcript entries exist before it (cleared context). Absent (or false) when messages is the whole transcript. */
+  has_earlier_messages?: boolean
 }
 
 export async function fetchSessionDetail(sessionId: string): Promise<SessionDetail> {
@@ -900,11 +1090,12 @@ export async function fetchSessionDetail(sessionId: string): Promise<SessionDeta
   // (Issue 3 / library-uat HIGH finding — see the block comment above
   // fetchSessionMessages for the full rationale and the placeholder
   // judgment call).
-  type RawSessionDetailShape = { session: RawSession; messages: unknown[]; agent_removed?: boolean }
+  type RawSessionDetailShape = { session: RawSession; messages: unknown[]; agent_removed?: boolean; has_earlier_messages?: boolean }
   const shapeSchema = z.object({
     session: WireSessionSchema,
     messages: z.array(z.unknown()),
     agent_removed: z.boolean().optional(),
+    has_earlier_messages: z.boolean().optional(),
   })
   const path = `/sessions/${encodeURIComponent(sessionId)}`
   const raw = await request<RawSessionDetailShape>(
@@ -916,6 +1107,7 @@ export async function fetchSessionDetail(sessionId: string): Promise<SessionDeta
     session: rawToSession(raw.session),
     messages: parseWireMessageList(raw.messages, `GET /api/v1${path}`),
     agent_removed: raw.agent_removed,
+    has_earlier_messages: raw.has_earlier_messages,
   }
 }
 

@@ -19,7 +19,7 @@ export interface Toast {
 
 interface UiStore {
   // Search modal — cross-workspace session search (step 6 of the sidebar-merge
-  // plan). Opened from the sidebar search icon (Sidebar.tsx) and the /resume
+  // plan). Opened from the sidebar search icon (Sidebar.tsx) and the /sessions
   // slash command (useSlashMenu.ts). The SearchModal component is mounted once
   // at the AppShell root, so either entry point drives the same single instance.
   //
@@ -28,7 +28,7 @@ interface UiStore {
   //   - 'sessions' (default): the original session-search panel — sessions
   //     focus, ArrowUp/Down walks sessions, Enter opens the highlighted one.
   //     Entered via `openSearchModal` (sidebar search icon, a workspace's
-  //     "More…" button with a workspaceId filter, /resume).
+  //     "More…" button with a workspaceId filter, /sessions).
   //   - 'workspaces': the workspace-switch panel — ALL workspaces listed
   //     (including zero-session ones), session groups start collapsed,
   //     ArrowUp/Down walks workspace headers, Enter switches to the
@@ -36,13 +36,24 @@ interface UiStore {
   //     via `openWorkspaceSwitcher` (/workspace only).
   // Kept as a separate action rather than an `openSearchModal(workspaceId?,
   // mode?)` overload so every existing `openSearchModal` call site (sidebar
-  // icon, "More…", /resume) stays source-compatible with zero changes.
+  // icon, "More…", /sessions) stays source-compatible with zero changes.
   searchModalOpen: boolean
   searchModalWorkspaceFilter: string | null
+  /** Agent id for Past sessions. Null means every agent. */
+  searchModalAgentFilter: string | null
   searchModalMode: 'sessions' | 'workspaces'
-  openSearchModal: (workspaceId?: string) => void
+  openSearchModal: (workspaceId?: string, agentId?: string) => void
+  setSearchModalAgentFilter: (agentId: string | null) => void
   openWorkspaceSwitcher: () => void
   closeSearchModal: () => void
+  /**
+   * One-shot: Sessions Open asked for this session's Activity panel.
+   * ActivityBar opens the panel only after this id is the active chat, then clears it.
+   * Null means nobody is waiting.
+   */
+  activityPanelRequest: string | null
+  requestActivityPanel: (sessionId: string) => void
+  consumeActivityPanelRequest: (sessionId: string) => void
 
   // Create agent modal
   createAgentModalOpen: boolean
@@ -186,18 +197,40 @@ const toastTimers = new Map<string, ReturnType<typeof setTimeout>>()
 export const useUiStore = create<UiStore>((set, get) => ({
   searchModalOpen: false,
   searchModalWorkspaceFilter: null,
+  searchModalAgentFilter: null,
   searchModalMode: 'sessions',
-  openSearchModal: (workspaceId?: string) =>
-    set({ searchModalOpen: true, searchModalWorkspaceFilter: workspaceId ?? null, searchModalMode: 'sessions' }),
+  openSearchModal: (workspaceId?: string, agentId?: string) =>
+    set({
+      searchModalOpen: true,
+      searchModalWorkspaceFilter: workspaceId ?? null,
+      searchModalAgentFilter: agentId ?? null,
+      searchModalMode: 'sessions',
+    }),
+  setSearchModalAgentFilter: (agentId) => set({ searchModalAgentFilter: agentId }),
   openWorkspaceSwitcher: () =>
-    set({ searchModalOpen: true, searchModalWorkspaceFilter: null, searchModalMode: 'workspaces' }),
+    set({
+      searchModalOpen: true,
+      searchModalWorkspaceFilter: null,
+      searchModalAgentFilter: null,
+      searchModalMode: 'workspaces',
+    }),
   // Reset the mode back to 'sessions' on every close so a prior /workspace
   // open can't leak into the next open via the sidebar search icon or
-  // /resume (both of which go through openSearchModal, which already sets
+  // /sessions (both of which go through openSearchModal, which already sets
   // 'sessions' explicitly — this reset is the belt-and-braces default for
   // any other close path, e.g. Escape/outside-click, which don't call
-  // openSearchModal at all).
-  closeSearchModal: () => set({ searchModalOpen: false, searchModalWorkspaceFilter: null, searchModalMode: 'sessions' }),
+  // openSearchModal at all). The agent filter resets with it.
+  closeSearchModal: () => set({
+    searchModalOpen: false,
+    searchModalWorkspaceFilter: null,
+    searchModalAgentFilter: null,
+    searchModalMode: 'sessions',
+  }),
+  activityPanelRequest: null,
+  requestActivityPanel: (sessionId) => set({ activityPanelRequest: sessionId }),
+  consumeActivityPanelRequest: (sessionId) => {
+    if (get().activityPanelRequest === sessionId) set({ activityPanelRequest: null })
+  },
 
   createAgentModalOpen: false,
   createAgentModalType: 'Main',

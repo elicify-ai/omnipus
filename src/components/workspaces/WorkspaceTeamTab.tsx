@@ -18,7 +18,6 @@ import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { AgentProfile } from '@/components/agents/AgentProfile'
 import { useUiStore } from '@/store/ui'
 import { useActiveWorkspace } from './WorkspaceTabContainer'
 import { WorkspaceTeamGraph } from './team/WorkspaceTeamGraph'
@@ -94,6 +93,9 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
   // server baseline is tracked so a background refetch can adopt server changes
   // without clobbering in-flight edits, and so dirtiness is computed honestly.
   const [editState, setEditState] = useState<TeamEditState | null>(null)
+  // Last committed editState, for the adoption effect to read without an updater.
+  const editStateRef = useRef<TeamEditState | null>(null)
+  useEffect(() => { editStateRef.current = editState }, [editState])
   const baselineRef = useRef<string>('')
   const hydratedRef = useRef(false)
   const revisionRef = useRef(workspace.revision)
@@ -144,40 +146,6 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
       JSON.stringify(buildSaveEdges(s)) + '|' + [...s.members].sort().join(','),
     [],
   )
-
-  useEffect(() => {
-    if (!delegation) return
-    const seed = workspace.core_team ?? []
-    const next = buildTeamEditState(delegation, seed)
-    const nextKey = stateKey(next)
-    if (!hydratedRef.current) {
-      hydratedRef.current = true
-      revisionRef.current = delegation.revision
-      baselineRef.current = nextKey
-      setEditState(next)
-      // D3 fix: flip the reactive readiness flag in the SAME commit the
-      // freshly-hydrated data lands (see `hydrated`'s doc comment above) —
-      // batched with `setEditState` above into one render, so there is no
-      // intermediate frame where `disabled` is already false but the data
-      // is still stale.
-      setHydrated(true)
-      return
-    }
-    // Background refetch: adopt the new server value only when the user has no
-    // pending edits (local state still equals the previous baseline).
-    setEditState((prev) => {
-      if (!prev) {
-        baselineRef.current = nextKey
-        revisionRef.current = delegation.revision
-        return next
-      }
-      const adopt = stateKey(prev) === baselineRef.current
-      if (!adopt) return prev
-      baselineRef.current = nextKey
-      revisionRef.current = delegation.revision
-      return next
-    })
-  }, [delegation, workspace.core_team, stateKey])
 
   // ── Auto-save ───────────────────────────────────────────────────────────────
   // The auto-save `data` MUST include `members`, not just `edges` — D7 fix.
@@ -352,6 +320,7 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
     status: saveStatus,
     error: saveError,
     lastSavedAt,
+    rebaseline,
   } = useAutoSave(saveBody, saveFn, {
     // D3 residual (2nd site) fix: `hydrated` (reactive state), not
     // `hydratedRef.current` — see `hydrated`'s doc comment above for why a
@@ -362,6 +331,55 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
     // `beaconFlush`'s definition for why.
     beaconFlush,
   })
+
+  // ── Hydration / background-refetch adoption ────────────────────────────────
+  // Declared AFTER useAutoSave so the adopt branch can call its rebaseline
+  // (below) — a const from this render, not hoisted.
+  useEffect(() => {
+    if (!delegation) return
+    const seed = workspace.core_team ?? []
+    const next = buildTeamEditState(delegation, seed)
+    const nextKey = stateKey(next)
+    if (!hydratedRef.current) {
+      hydratedRef.current = true
+      revisionRef.current = delegation.revision
+      baselineRef.current = nextKey
+      setEditState(next)
+      // D3 fix: flip the reactive readiness flag in the SAME commit the
+      // freshly-hydrated data lands (see `hydrated`'s doc comment above) —
+      // batched with `setEditState` above into one render, so there is no
+      // intermediate frame where `disabled` is already false but the data
+      // is still stale.
+      setHydrated(true)
+      return
+    }
+    // Background refetch: adopt the new server value only when the user has no
+    // pending edits (local state still equals the previous baseline).
+    // Decided OUTSIDE a state updater: an updater must be pure (React may run
+    // it twice), and this adoption writes refs and re-bases the autosave.
+    // editStateRef is the last committed editState, so a pending user edit is
+    // seen exactly as the updater form saw it.
+    const prev = editStateRef.current
+    if (!prev) {
+      baselineRef.current = nextKey
+      revisionRef.current = delegation.revision
+      setEditState(next)
+      return
+    }
+    if (stateKey(prev) !== baselineRef.current) return
+    baselineRef.current = nextKey
+    revisionRef.current = delegation.revision
+    // SERVER-driven adoption, not a user edit — re-base the autosave onto
+    // the adopted snapshot so the debounced change-detector never sees it
+    // as an edit. Without this, a refetch carrying a changed roster armed
+    // a 500ms echo PUT of the server's own state straight back (measured
+    // under load in the HF2 Team integration tests: the echo PUT failed
+    // CSRF client-side and rendered a persistent error alert inside the
+    // panel after a successful recovery; with a live session it carries
+    // the pre-adoption revision and 409s).
+    rebaseline({ members: next.members, edges: buildSaveEdges(next) })
+    setEditState(next)
+  }, [delegation, workspace.core_team, stateKey, rebaseline])
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const workerIds = useMemo(() => {
@@ -562,9 +580,10 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
         )}
       </div>
 
-      {/* The shared global-agent editor. Store-driven (reads editAgentId), so
-          opening it here edits the SAME global definition as the Agents screen. */}
-      <AgentProfile />
+      {/* The unified global-agent editor is NOT mounted here: it is
+          store-driven (reads editAgentId) and hosted ONCE in the app shell —
+          a second host here opened two simultaneous sheets whenever the
+          sidebar's row-menu Edit sat next to this tab (CR F6). */}
     </div>
   )
 }

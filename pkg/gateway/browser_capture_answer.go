@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
@@ -31,7 +30,7 @@ func (ic *captureIngestConn) answerCaptureOffer(socket context.Context, cs *brow
 		return err
 	}
 	if err != nil {
-		if sendErr := send(generated.ErrorFrame{Type: string(generated.WsFrameTypeError), Message: fmt.Sprintf("capture ingest offer failed: %v", err)}); sendErr != nil {
+		if sendErr := send(generated.ErrorFrame{Type: string(generated.WsFrameTypeError), Message: "capture ingest offer failed; details are in the server log"}); sendErr != nil {
 			return sendErr
 		}
 		return err

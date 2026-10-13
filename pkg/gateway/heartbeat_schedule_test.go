@@ -44,11 +44,13 @@ func neverWorker(_ string) bool { return false }
 func alwaysWorker(_ string) bool { return true }
 
 // buildMemberConfigs is a convenience constructor for workspace.MemberConfigs.
+// It carries no session address since session-core U1 (DEL-01): the heartbeat
+// runs in the member's computed main session, not in a stored standing one.
 func buildMemberConfigs(
 	agentID string,
 	enabled bool,
 	intervalMins int,
-	body, sessionID string,
+	body string,
 ) map[string]workspace.MemberConfig {
 	return map[string]workspace.MemberConfig{
 		agentID: {
@@ -56,7 +58,6 @@ func buildMemberConfigs(
 				Enabled:         enabled,
 				IntervalMinutes: intervalMins,
 				Body:            body,
-				SessionID:       sessionID,
 			},
 		},
 	}
@@ -68,7 +69,7 @@ func TestReconcileHeartbeat_CreatesForEnabledMain(t *testing.T) {
 		{
 			ID:            "ws1",
 			CoreTeam:      []string{"mia"},
-			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check open PRs.", ""),
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check open PRs."),
 		},
 	}
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
@@ -85,7 +86,10 @@ func TestReconcileHeartbeat_CreatesForEnabledMain(t *testing.T) {
 	assert.Equal(t, "every", j.Schedule.Kind, "heartbeat job must use contract-valid kind 'every'")
 	require.NotNil(t, j.Schedule.EveryMS)
 	assert.Equal(t, int64(15)*60_000, *j.Schedule.EveryMS)
-	assert.Equal(t, cron.SessionModeContinue, j.SessionMode)
+	assert.Equal(t, cron.SessionModeMain, j.SessionMode,
+		"a heartbeat runs in the member's main session (FR-017)")
+	assert.Empty(t, j.SessionID,
+		"the main id is computed from the pair; the job carries no stored address")
 	assert.Contains(t, j.Payload.Message, "Check open PRs.")
 }
 
@@ -95,7 +99,7 @@ func TestReconcileHeartbeat_WorkerNeverScheduled(t *testing.T) {
 		{
 			ID:            "ws1",
 			CoreTeam:      []string{"planner"},
-			MemberConfigs: buildMemberConfigs("planner", true, 10, "Check tasks.", ""),
+			MemberConfigs: buildMemberConfigs("planner", true, 10, "Check tasks."),
 		},
 	}
 	// isWorker returns true for every agent → reconciler must skip planner.
@@ -109,7 +113,7 @@ func TestReconcileHeartbeat_DisablingRemovesJob(t *testing.T) {
 		{
 			ID:            "ws1",
 			CoreTeam:      []string{"mia"},
-			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks."),
 		},
 	}
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
@@ -127,7 +131,7 @@ func TestReconcileHeartbeat_IntervalChangeUpdatesInPlace(t *testing.T) {
 		{
 			ID:            "ws1",
 			CoreTeam:      []string{"mia"},
-			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks."),
 		},
 	}
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
@@ -151,7 +155,7 @@ func TestReconcileHeartbeat_Idempotent(t *testing.T) {
 		{
 			ID:            "ws1",
 			CoreTeam:      []string{"mia"},
-			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks."),
 		},
 	}
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
@@ -183,7 +187,7 @@ func TestReconcileHeartbeat_LeavesUserSchedulesAlone(t *testing.T) {
 		{
 			ID:            "ws1",
 			CoreTeam:      []string{"mia"},
-			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks."),
 		},
 	}
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
@@ -203,7 +207,7 @@ func TestReconcileHeartbeat_MessageDriftRestampsInPlace(t *testing.T) {
 		{
 			ID:            "ws1",
 			CoreTeam:      []string{"mia"},
-			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check the build queue.", ""),
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check the build queue."),
 		},
 	}
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
@@ -229,12 +233,12 @@ func TestReconcileHeartbeat_MultiWorkspaceMultiMember(t *testing.T) {
 		{
 			ID:            "ws1",
 			CoreTeam:      []string{"mia"},
-			MemberConfigs: buildMemberConfigs("mia", true, 15, "WS1 check.", ""),
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "WS1 check."),
 		},
 		{
 			ID:            "ws2",
 			CoreTeam:      []string{"ray"},
-			MemberConfigs: buildMemberConfigs("ray", true, 20, "WS2 scout.", ""),
+			MemberConfigs: buildMemberConfigs("ray", true, 20, "WS2 scout."),
 		},
 	}
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
@@ -250,43 +254,57 @@ func TestReconcileHeartbeat_MultiWorkspaceMultiMember(t *testing.T) {
 	assert.True(t, names[heartbeatJobName("ws2", "ray")], "ws2/ray job must exist")
 }
 
-func TestReconcileHeartbeat_SessionIDPropagatesToJob(t *testing.T) {
+// TestReconcileHeartbeat_JobCarriesNoSessionAddress is the post-U1 shape of
+// the retired "session_id propagates to the job" test: the reconciler must
+// produce a job in MAIN mode with an EMPTY SessionID, because the main id is
+// computed from the (workspace, agent) pair rather than stored on the job.
+func TestReconcileHeartbeat_JobCarriesNoSessionAddress(t *testing.T) {
 	cs := newReconcileCron(t)
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
 			CoreTeam:      []string{"mia"},
-			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", "sess-abc-123"),
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks."),
 		},
 	}
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 	jobs := heartbeatJobsFor(cs)
 	require.Len(t, jobs, 1)
-	assert.Equal(t, "sess-abc-123", jobs[0].SessionID, "session_id must propagate to the cron job")
+	assert.Empty(t, jobs[0].SessionID, "a heartbeat job must carry no stored session address")
+	assert.Equal(t, cron.SessionModeMain, jobs[0].SessionMode,
+		"a heartbeat job must run in main mode")
 }
 
-func TestReconcileHeartbeat_SessionIDDriftUpdatesInPlace(t *testing.T) {
+// TestReconcileHeartbeat_StaleSessionIDClearedInPlace covers an install whose
+// stored heartbeat job still carries a session address from the retired
+// continue-mode wiring: the reconciler must CLEAR it in place (same job id, no
+// duplicate) and switch the job to main mode.
+func TestReconcileHeartbeat_StaleSessionIDClearedInPlace(t *testing.T) {
 	cs := newReconcileCron(t)
 	workspaces := []workspace.Workspace{
 		{
 			ID:            "ws1",
 			CoreTeam:      []string{"mia"},
-			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", "sess-old"),
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks."),
 		},
 	}
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 	first := heartbeatJobsFor(cs)
 	require.Len(t, first, 1)
 	firstID := first[0].ID
-	assert.Equal(t, "sess-old", first[0].SessionID)
 
-	// Replace session_id → reconciler must update in place.
-	workspaces[0].MemberConfigs["mia"].Heartbeat.SessionID = "sess-new"
+	// Simulate the pre-U1 job: continue mode with a stored standing-session id.
+	stale := first[0]
+	stale.SessionMode = cron.SessionModeContinue
+	stale.SessionID = "sess-old"
+	require.NoError(t, cs.UpdateJob(&stale))
+
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
 	after := heartbeatJobsFor(cs)
-	require.Len(t, after, 1, "session_id drift must update in place, not duplicate")
+	require.Len(t, after, 1, "a stale session address must be cleared in place, not duplicated")
 	assert.Equal(t, firstID, after[0].ID)
-	assert.Equal(t, "sess-new", after[0].SessionID)
+	assert.Empty(t, after[0].SessionID, "the stale stored address must be cleared")
+	assert.Equal(t, cron.SessionModeMain, after[0].SessionMode, "and the job moved to main mode")
 }
 
 func TestReconcileHeartbeat_WorkspaceDeletionRemovesJobs(t *testing.T) {
@@ -295,12 +313,12 @@ func TestReconcileHeartbeat_WorkspaceDeletionRemovesJobs(t *testing.T) {
 		{
 			ID:            "ws1",
 			CoreTeam:      []string{"mia"},
-			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks.", ""),
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check tasks."),
 		},
 		{
 			ID:            "ws2",
 			CoreTeam:      []string{"ray"},
-			MemberConfigs: buildMemberConfigs("ray", true, 20, "Scout.", ""),
+			MemberConfigs: buildMemberConfigs("ray", true, 20, "Scout."),
 		},
 	}
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))
@@ -319,12 +337,12 @@ func TestReleaseHeartbeatJobsForWorkspace(t *testing.T) {
 		{
 			ID:            "ws-alpha",
 			CoreTeam:      []string{"mia"},
-			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check.", ""),
+			MemberConfigs: buildMemberConfigs("mia", true, 15, "Check."),
 		},
 		{
 			ID:            "ws-beta",
 			CoreTeam:      []string{"ray"},
-			MemberConfigs: buildMemberConfigs("ray", true, 20, "Scout.", ""),
+			MemberConfigs: buildMemberConfigs("ray", true, 20, "Scout."),
 		},
 	}
 	require.NoError(t, ReconcileHeartbeatSchedules(cs, workspaces, neverWorker))

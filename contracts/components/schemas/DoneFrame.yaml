@@ -35,6 +35,13 @@ properties:
       #823 catch-up redesign. The id of the turn's last assistant message, matching the
       message_id stamped on that message's token frames and on its persisted transcript
       entry.
+  goal_id:
+    type: string
+    description: >-
+      session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under
+      (captured at turn start), spread onto the done frame so a no-stream turn's bubble
+      (created from this frame's message_id, not from tokens) still joins to the exact
+      keyed goal criteria. Absent means UNKNOWN association.
   seq:
     type: integer
     format: int64

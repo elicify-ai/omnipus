@@ -71,6 +71,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "DisclosureRow [check:disclosure-row-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"disclosure-row-a\"]", "attribute": "aria-expanded", "value": "false" }],
       "applicable": true
     },
     {

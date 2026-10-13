@@ -10,28 +10,17 @@ package gateway
 // "Occurrence expansion endpoint" / FR-008 / FR-008a). The REST handler
 // (HandleTaskOccurrences, rest_tasks.go) does query-param parsing, the
 // task-selection predicate, and HTTP status mapping; everything below is a
-// plain function of (tasks, range, query tz, an every_ms anchor lookup) so
+// plain function of (tasks, range, query tz) so
 // tests 7/8 (TestOccurrences_LegacyCronAndEveryMs,
 // TestOccurrences_BucketingAndCaps) exercise it directly without linking the
 // full gateway test binary.
 //
-// Three trigger flavors, three expansion strategies:
+// One trigger flavor (the legacy cron_expr and every_ms expansions were deleted
+// — session-core DEL-19):
 //   - rrule (task.ExpandRRULE / task.IsRegular / task.RegularPeriodMs /
 //     task.CountRegularInRange) — provably-regular rules (no BY* modifiers)
 //     get O(1) arithmetic bucket derivation; irregular rules iterate and
 //     consume the 10,000-occurrence budget.
-//   - cron_expr (legacy, expandCronServerZone below) — always expanded by
-//     walking gronx.NextTickAfter in the SERVER's local zone (Timezone
-//     Semantics §2, D8 display-only), matching pkg/cron/service.go's own
-//     computeNextRun exactly (same time.UnixMilli + gronx.NextTickAfter
-//     call shape) so the endpoint and the live scheduler can never disagree
-//     — always consumes the iteration budget (no arithmetic shortcut for
-//     cron).
-//   - every_ms (legacy, FR-008a) — always provably regular: countEveryMsInRange
-//     below derives per-day counts by pure modular arithmetic, never
-//     consuming the iteration budget, projected forward from the live
-//     job's NextRunAtMS (the everyAnchor callback) since the engine keeps
-//     no stored DTSTART-like anchor for `every` jobs.
 //
 // Bucketing (D6): span ≤ 8×24h ("detail" mode, Week/Day views) returns raw
 // instants for every day, one whole-range call per task. span > 8×24h
@@ -44,8 +33,6 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
-
-	"github.com/adhocore/gronx"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -63,13 +50,13 @@ const (
 	perTaskInstantCap = 500
 
 	// perTaskIterationBudget is the total number of occurrences an
-	// IRREGULAR (BY*-modified rrule, or any cron_expr) trigger may walk
+	// IRREGULAR (BY*-modified rrule) trigger may walk
 	// per task per request in overview (bucketed) mode, counting every
 	// occurrence enumerated to build a DayBucket's count as well as any
 	// destined for occurrences_ms (spec: "counting bucket enumeration").
-	// Provably-regular triggers (rrule with no BY* modifiers, every_ms)
+	// Provably-regular triggers (rrule with no BY* modifiers)
 	// NEVER decrement this — their bucket counts are derived in O(1) via
-	// task.CountRegularInRange / countEveryMsInRange, never iterated, so a
+	// task.CountRegularInRange, never iterated, so a
 	// dense regular rule (e.g. plain FREQ=MINUTELY) over a 400-day span
 	// renders complete buckets with truncated:false.
 	perTaskIterationBudget = 10000
@@ -160,13 +147,12 @@ type wireOccurrenceRun = struct {
 // non-terminal OR terminal-but-repeating with a non-exhausted series — see
 // HandleTaskOccurrences / task.Task.SeriesRetired) and to the requested
 // workspace; this function only additionally filters by trigger FLAVOR
-// (recurring-capable: `recurring` with rrule/cron_expr, or `every`) since
+// (recurring-capable: `recurring` with an rrule) since
 // manual/once triggers render via the existing due/fire-chip path, not this
 // endpoint.
 //
-// everyAnchor resolves an `every`-triggered task's live armed NextRunAtMS
-// (FR-008a's projection anchor); returning ok=false omits that task (no
-// live anchor to project from).
+// The every_ms anchor argument is retired (session-core DEL-19: the legacy
+// every projection is deleted); callers still pass it and it is ignored.
 //
 // The only error path is an unloadable tz or an invalid range — both are
 // already validated by the REST handler before this is called, so in
@@ -182,7 +168,7 @@ func buildOccurrenceSets(
 	tasks []task.Task,
 	fromMs, toMs int64,
 	tz string,
-	everyAnchor func(taskID string) (int64, bool),
+	_ func(taskID string) (int64, bool), // retired every_ms anchor (DEL-19); callers still pass it
 	// runsInRange is a trailing VARIADIC dependency (rather than a plain
 	// required parameter) so the many call sites that predate the
 	// run-history feature (task_occurrences_test.go) keep compiling
@@ -208,7 +194,7 @@ func buildOccurrenceSets(
 	detail := (toMs - fromMs) <= detailSpanThresholdMs
 	out := make([]gen.TaskOccurrenceSet, 0, len(tasks))
 	for i := range tasks {
-		set, ok := buildOneOccurrenceSet(&tasks[i], fromMs, toMs, loc, detail, everyAnchor, runsFn)
+		set, ok := buildOneOccurrenceSet(&tasks[i], fromMs, toMs, loc, detail, nil, runsFn)
 		if ok {
 			out = append(out, set)
 		}
@@ -228,7 +214,7 @@ func buildOneOccurrenceSet(
 	fromMs, toMs int64,
 	loc *time.Location,
 	detail bool,
-	everyAnchor func(taskID string) (int64, bool),
+	_ func(taskID string) (int64, bool), // retired every_ms anchor (DEL-19); callers still pass it
 	runsInRange runsInRangeFn,
 ) (gen.TaskOccurrenceSet, bool) {
 	if t.Trigger == nil {
@@ -289,54 +275,12 @@ func buildOneOccurrenceSet(
 			}
 			occMs, buckets, truncated = res.raw, res.buckets, res.truncated
 
-		case cfg.CronExpr != nil && *cfg.CronExpr != "":
-			expr := *cfg.CronExpr
-
-			if detail {
-				occMs, truncated = expandCronServerZone(expr, fromMs, toMs, perTaskInstantCap)
-				break
-			}
-			res, err := buildOverview(loc, fromMs, toMs, nil, cronDayFn(expr))
-			if err != nil {
-				slog.Warn("task_occurrences: cron overview expansion failed, skipping task",
-					"task_id", t.ID, "error", err)
-				return gen.TaskOccurrenceSet{}, false
-			}
-			occMs, buckets, truncated = res.raw, res.buckets, res.truncated
-
 		default:
-			// Neither rrule nor cron_expr set on a `recurring` trigger:
-			// malformed data (creation-time ValidateTrigger should prevent
-			// this) — omit defensively rather than erroring the whole
-			// request.
+			// A `recurring` trigger without an rrule (the legacy cron_expr form is
+			// no longer supported — session-core DEL-19): omit defensively rather
+			// than erroring the whole request.
 			return gen.TaskOccurrenceSet{}, false
 		}
-
-	case task.TriggerEvery:
-		if t.Trigger.Config.EveryMs == nil {
-			return gen.TaskOccurrenceSet{}, false
-		}
-		everyMs := *t.Trigger.Config.EveryMs
-		anchorMs, ok := everyAnchor(t.ID)
-		if !ok {
-			// FR-008a: no live armed job to project from right now — the
-			// engine keeps no stored anchor for `every` jobs, so there is
-			// nothing to render (not an error).
-			return gen.TaskOccurrenceSet{}, false
-		}
-
-		if detail {
-			occMs, truncated = task.ProjectEveryMs(anchorMs, everyMs, fromMs, toMs, perTaskInstantCap)
-			break
-		}
-		v := everyMs
-		res, err := buildOverview(loc, fromMs, toMs, &v, everyMsDayFn(anchorMs, everyMs))
-		if err != nil {
-			slog.Warn("task_occurrences: every_ms overview expansion failed, skipping task",
-				"task_id", t.ID, "error", err)
-			return gen.TaskOccurrenceSet{}, false
-		}
-		occMs, buckets, truncated = res.raw, res.buckets, res.truncated
 
 	case task.TriggerManual, task.TriggerOnce:
 		// not recurring-capable, rendered by the existing due/fire-chip path
@@ -765,108 +709,4 @@ func irregularRruleDayFn(rruleBody string, dtstartMs int64, ruleTZ string) overv
 	}
 }
 
-// cronDayFn expands a day's legacy cron_expr occurrences by iterating
-// expandCronServerZone (gronx, server zone), consuming `budget` occurrences.
-// Always the irregular/budgeted path — cron has no arithmetic shortcut.
-func cronDayFn(expr string) overviewDayFn {
-	return func(dayFromMs, dayToMs int64, budget int) (dayResult, error) {
-		instants, truncated := expandCronServerZone(expr, dayFromMs, dayToMs, budget)
-		if truncated {
-			return dayResult{truncated: true}, nil
-		}
-		dr := dayResult{count: len(instants), consumed: len(instants)}
-		if len(instants) > 0 {
-			dr.firstMs = instants[0]
-			if len(instants) <= 3 {
-				dr.instants = instants
-			}
-		}
-		return dr, nil
-	}
-}
-
-// everyMsDayFn derives a day's every_ms occurrences arithmetically
-// (countEveryMsInRange), never consuming the iteration budget — every_ms is
-// always provably regular (FR-008a projects from a fixed anchor at a fixed
-// interval, no wall-clock/DST reasoning at all).
-func everyMsDayFn(anchorMs, everyMs int64) overviewDayFn {
-	return func(dayFromMs, dayToMs int64, _ int) (dayResult, error) {
-		count, first, hasAny := countEveryMsInRange(anchorMs, everyMs, dayFromMs, dayToMs)
-		if !hasAny {
-			return dayResult{}, nil
-		}
-		dr := dayResult{count: count, firstMs: first}
-		if count <= 3 {
-			instants := make([]int64, count)
-			for i := 0; i < count; i++ {
-				instants[i] = first + int64(i)*everyMs
-			}
-			dr.instants = instants
-		}
-		return dr, nil
-	}
-}
-
 // --- flavor-specific expansion primitives -----------------------------------
-
-// expandCronServerZone expands a legacy cron_expr trigger's occurrences
-// within [fromMs, toMs) by walking gronx.NextTickAfter in the SERVER's local
-// zone (time.UnixMilli's implicit time.Local) — the identical mechanism
-// pkg/cron/service.go's computeNextRun uses for a "cron"-kind job
-// (`gronx.NextTickAfter(schedule.Expr, time.UnixMilli(nowMS), false)`), so
-// this endpoint's expansion and the live scheduler's own fire computation
-// can never disagree (Timezone Semantics §2, D8: display-only, no reverse
-// zone-mapping). The first call is inclusive (captures a tick exactly at
-// fromMs, honoring the half-open [from, to) contract); subsequent calls are
-// exclusive (advance strictly past the last found tick).
-func expandCronServerZone(expr string, fromMs, toMs int64, limit int) ([]int64, bool) {
-	if limit <= 0 || fromMs >= toMs {
-		return nil, false
-	}
-	cur := time.UnixMilli(fromMs)
-	inclusive := true
-	var out []int64
-	truncated := false
-	for {
-		next, err := gronx.NextTickAfter(expr, cur, inclusive)
-		if err != nil {
-			break // unparseable/exhausted — treat as "no further ticks"
-		}
-		ms := next.UnixMilli()
-		if ms < fromMs || ms >= toMs {
-			break
-		}
-		out = append(out, ms)
-		if len(out) >= limit {
-			truncated = true
-			break
-		}
-		cur = next
-		inclusive = false
-	}
-	return out, truncated
-}
-
-// countEveryMsInRange derives, by pure modular arithmetic (no iteration),
-// the count and first occurrence of a fixed-interval every_ms projection
-// (anchorMs, anchorMs+everyMs, anchorMs+2*everyMs, …) within the half-open
-// [fromMs, toMs) range. hasAny is false when the range contains none.
-// Mirrors task.ProjectEveryMs's anchor+step semantics (FR-008a) but reports
-// only the count/first an overview day needs, in O(1), instead of
-// enumerating instants — the arithmetic-derivation counterpart to
-// task.CountRegularInRange for the every_ms flavor.
-func countEveryMsInRange(anchorMs, everyMs, fromMs, toMs int64) (count int, first int64, hasAny bool) {
-	if everyMs <= 0 || fromMs >= toMs {
-		return 0, 0, false
-	}
-	var k int64
-	if anchorMs < fromMs {
-		k = (fromMs - anchorMs + everyMs - 1) / everyMs
-	}
-	first = anchorMs + k*everyMs
-	if first >= toMs {
-		return 0, 0, false
-	}
-	n := (toMs-1-first)/everyMs + 1
-	return int(n), first, true
-}

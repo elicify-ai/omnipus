@@ -106,6 +106,7 @@ type toolCtxKey struct{ name string }
 
 var (
 	ctxKeyChannel               = &toolCtxKey{"channel"}
+	ctxKeyOwnGoalSession        = &toolCtxKey{"ownGoalSession"}
 	ctxKeyChatID                = &toolCtxKey{"chatID"}
 	ctxKeyAgentID               = &toolCtxKey{"agentID"}
 	ctxKeySessionKey            = &toolCtxKey{"sessionKey"}
@@ -423,6 +424,20 @@ func WithRunningTaskID(ctx context.Context, taskID string) context.Context {
 // "" if unset (no task run in progress for this turn). See WithRunningTaskID.
 func ToolRunningTaskID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyRunningTaskID).(string)
+	return v
+}
+
+// WithOwnGoalSession marks the turn as running in sessionID, a steered
+// helper's OWN session that carries the goal the helper was launched with. The
+// helper may claim that goal (goal_claim) even though its delegation depth is
+// above zero; it still cannot amend it (set_goal stays owner-session-only).
+func WithOwnGoalSession(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, ctxKeyOwnGoalSession, sessionID)
+}
+
+// ToolOwnGoalSession returns the session WithOwnGoalSession named, or "".
+func ToolOwnGoalSession(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyOwnGoalSession).(string)
 	return v
 }
 

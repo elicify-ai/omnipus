@@ -435,10 +435,10 @@ func (al *AgentLoop) effectiveGoalCompileWindowTokens() int {
 // goalCompileWindowText renders the bounded session-transcript window fed
 // into a /goal compile call (ADR-079 D1): non-authoritative background
 // context, distinct from and subordinate to the goal statement (INV-3).
-// Mirrors goalSessionWindowText's (verifier_adjudication.go) shared-store-
-// first resolution EXACTLY — same 2026-09-06 UAT fix (live chat sessions are
-// written to the SHARED store first, legacy per-agent store as the old-
-// install fallback) — but passes the COMPILE budget
+// Mirrors goalSessionWindowText's (verifier_adjudication.go) shared-store
+// resolution EXACTLY — same 2026-09-06 UAT fix (live chat sessions are
+// written to the SHARED store; DEL-10 later deleted the per-agent stores) —
+// but passes the COMPILE budget
 // (effectiveGoalCompileWindowTokens) rather than the Judge's
 // effectiveVerifierWindowTokens. The read+render tail itself
 // (sessionWindowText -> renderVerifierWindowText) is fully shared with the
@@ -453,17 +453,7 @@ func (al *AgentLoop) goalCompileWindowText(goalSessionID, agentID string) string
 		return ""
 	}
 	budget := al.effectiveGoalCompileWindowTokens()
-	if shared := al.GetSessionStore(); shared != nil {
-		if text := al.sessionWindowText(shared, goalSessionID, budget, nil); text != "" {
-			return text
-		}
-		logger.WarnCF("agent", "goal compile: window empty from the SHARED store — falling back to the legacy per-agent store",
-			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
-	} else {
-		logger.WarnCF("agent", "goal compile: no shared session store — window falling back to the legacy per-agent store",
-			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
-	}
-	store := al.GetAgentStore(agentID)
+	store := al.GetSessionStore()
 	if store == nil {
 		return ""
 	}

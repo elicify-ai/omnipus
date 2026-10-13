@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -451,36 +453,116 @@ func TestProcessSystemMessage_AsyncResult_SessionIsolation_NoCrossSessionLeak(t 
 	}
 }
 
-// TestProcessSystemMessage_AsyncResult_NoOriginSession_FallsBackToMainKey
-// covers the narrower fallback: when the inbound system message carries no
-// AsyncTranscriptSessionID at all (no origin session known), the notify-turn
-// still falls back to the agent-wide "main" key exactly as it did before this
-// fix — there is no session to scope to, so this is not a regression case.
-func TestProcessSystemMessage_AsyncResult_NoOriginSession_FallsBackToMainKey(t *testing.T) {
-	al, msgBus, _, defaultAgent := newAsyncResultTestLoop(t, &mockProvider{})
+// asyncNoHistoryProvider records the exact message list of every Chat call, so
+// the oracle can inspect what a no-origin notify turn builds.
+type asyncNoHistoryProvider struct {
+	mu       sync.Mutex
+	requests [][]providers.Message
+}
 
+func (p *asyncNoHistoryProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.requests = append(p.requests, append([]providers.Message(nil), messages...))
+	p.mu.Unlock()
+	return &providers.LLMResponse{Content: "notify turn answer", ToolCalls: []providers.ToolCall{}}, nil
+}
+
+func (p *asyncNoHistoryProvider) GetDefaultModel() string { return "test-model" }
+
+func (p *asyncNoHistoryProvider) recorded() [][]providers.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([][]providers.Message(nil), p.requests...)
+}
+
+// TestProcessSystemMessage_AsyncResult_NoOriginSession_RunsWithoutHistory is the
+// SUPERSESSION of ..._FallsBackToMainKey. Oracle source:
+// ARCHITECT-ANSWER-FINAL-GATE.md item 4a, which applies DEL-10 step 0
+// (ARCHITECT-ANSWER-DEL10.md): "Remove the agent:<id>:main model-content key
+// fallback… A system message with no origin session runs without session
+// history". The old oracle read GetHistory("agent:<id>:main"); that key is
+// deliberately no longer written, so the old test could only fail.
+//
+// Oracles: no error and a published outbound response; the provider request
+// holds only system prompts plus this one notify user message, with NO prior
+// history; the shared store gains no session and no agent:<id>:main or
+// agent:<id>:system:* directory; and a second no-origin message never sees the
+// first one's content.
+func TestProcessSystemMessage_AsyncResult_NoOriginSession_RunsWithoutHistory(t *testing.T) {
+	provider := &asyncNoHistoryProvider{}
+	al, msgBus, _, defaultAgent := newAsyncResultTestLoop(t, provider)
+	store := al.GetSessionStore()
+	require.NotNil(t, store, "the loop owns one shared session store")
+	before, err := store.ListSessions()
+	require.NoError(t, err)
+
+	const firstContent = "no TranscriptSessionID on this event"
 	msg := drainNotify(t, al, msgBus, AsyncNotifyEvent{
 		Channel:    "webchat",
 		ChatID:     "direct",
 		SourceKind: "bash",
-		Content:    "no TranscriptSessionID on this event",
+		Content:    firstContent,
 		// AgentID and TranscriptSessionID deliberately left unset.
 	})
 	require.Empty(t, msg.AsyncTranscriptSessionID, "test precondition: no origin session on this message")
 
-	_, err := al.processSystemMessage(context.Background(), msg)
-	require.NoError(t, err)
+	_, err = al.processSystemMessage(context.Background(), msg)
+	require.NoError(t, err, "a no-origin notify turn must still run")
 
-	mainKey := "agent:" + defaultAgent.ID + ":main"
-	require.NotNil(t, defaultAgent.Sessions)
-	// Give the async turn goroutine (if any) a brief moment; runAgentLoop
-	// itself is synchronous here so this is just defensive against future
-	// changes, mirroring the existing FallsBackToDefault test's spirit.
-	time.Sleep(10 * time.Millisecond)
-	mainHistory := defaultAgent.Sessions.GetHistory(mainKey)
-	assert.NotEmpty(t, mainHistory,
-		"with no origin session known, the notify-turn must still use the agent-wide 'main' key %q "+
-			"(unchanged fallback behavior — not a regression)", mainKey)
+	// A response reaches the outbound bus.
+	select {
+	case out := <-msgBus.OutboundChan():
+		assert.Contains(t, out.Content, "notify turn answer", "the notify turn's answer must be published")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the notify turn published no outbound response")
+	}
+
+	requests := provider.recorded()
+	require.NotEmpty(t, requests, "the notify turn must reach the provider")
+	first := requests[0]
+	var nonSystem []providers.Message
+	for _, m := range first {
+		if m.Role != "system" {
+			nonSystem = append(nonSystem, m)
+		}
+	}
+	require.Len(t, nonSystem, 1, "a no-origin turn must carry NO prior history: %+v", first)
+	assert.Equal(t, "user", nonSystem[0].Role)
+	assert.Contains(t, nonSystem[0].Content, firstContent,
+		"the one non-system message is this notify message")
+
+	// The shared store gains no session, and no fallback-key directory exists.
+	after, err := store.ListSessions()
+	require.NoError(t, err)
+	assert.Len(t, after, len(before), "a no-origin notify turn must not create a session")
+
+	entries, err := os.ReadDir(store.BaseDir())
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.NotEqual(t, "agent:"+defaultAgent.ID+":main", e.Name(),
+			"DEL-10 step 0 removed the agent-wide main history bucket")
+		assert.False(t, strings.HasPrefix(e.Name(), "agent:"+defaultAgent.ID+":system:"),
+			"the one-off scope key must never be persisted as a session directory: %s", e.Name())
+	}
+
+	// Isolation control: a second no-origin message must not see the first.
+	second := drainNotify(t, al, msgBus, AsyncNotifyEvent{
+		Channel: "webchat", ChatID: "direct", SourceKind: "bash", Content: "a second unrelated notify",
+	})
+	_, err = al.processSystemMessage(context.Background(), second)
+	require.NoError(t, err)
+	requests = provider.recorded()
+	require.GreaterOrEqual(t, len(requests), 2, "the second notify turn must also reach the provider")
+	for _, m := range requests[len(requests)-1] {
+		assert.NotContains(t, m.Content, firstContent,
+			"a no-origin turn must never inherit another no-origin turn's history")
+	}
 }
 
 // TestResolveMessageRoute_BoundDrop_SkipsGetDefaultAgent verifies TDD #10 /
@@ -761,171 +843,6 @@ func TestBuildContinuationTarget_ResolvesWorkspaceID_FromChannelBinding(t *testi
 	assert.Equal(t, "sales", target.WorkspaceID)
 }
 
-// TestResolveMessageRoute_ExplicitAgentIDOverridesHandoffOverride pins that
-// when a message carries an explicit agent_id AND a stale "session:" override
-// exists for that session from a prior handoff, the explicit selection wins and
-// the override is cleared. This prevents Ray's tool calls leaking into Jim's
-// session after the user switches the SPA dropdown back to Jim.
-func TestResolveMessageRoute_ExplicitAgentIDOverridesHandoffOverride(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-
-	cfg := &config.Config{}
-	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
-
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	t.Cleanup(func() { al.Close() })
-
-	for _, id := range []string{"jim", "ray"} {
-		ag := NewAgentInstance(&config.AgentConfig{ID: id, Name: id},
-			&cfg.Agents.Defaults, cfg, &mockProvider{})
-		ag.Home = filepath.Join(home, "agents", id)
-		ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(id, id)
-		al.registry.mu.Lock()
-		al.registry.agents[id] = ag
-		al.registry.mu.Unlock()
-	}
-
-	const sessionID = "sess-leak-1"
-	// Simulate the state left by a prior Mia → Ray handoff, keyed by session_id.
-	al.sessionActiveAgent.Store("session:"+sessionID, "ray")
-
-	// User picks Jim in the SPA dropdown — webchat sends agent_id=jim with the session_id.
-	msg := bus.InboundMessage{
-		Channel:   "webchat",
-		SessionID: sessionID,
-		Content:   "what is my name",
-		Metadata:  map[string]string{"agent_id": "jim"},
-	}
-	route, agent, err := al.resolveMessageRoute(msg)
-	if err != nil {
-		t.Fatalf("resolveMessageRoute: %v", err)
-	}
-	if route.AgentID != "jim" {
-		t.Fatalf("explicit agent_id=jim was overridden — routed to %q", route.AgentID)
-	}
-	if agent == nil || agent.ID != "jim" {
-		t.Fatalf("returned agent should be jim, got %+v", agent)
-	}
-	wantSK := "agent:jim:session:" + sessionID
-	if route.SessionKey != wantSK {
-		t.Errorf("session key = %q, want %q", route.SessionKey, wantSK)
-	}
-	// Stale override must be gone so future no-agent-id messages route to jim.
-	if _, stale := al.sessionActiveAgent.Load("session:" + sessionID); stale {
-		t.Error("explicit agent_id should have cleared the stale handoff override")
-	}
-}
-
-// TestResolveMessageRoute_HandoffOverrideStillAppliesWhenNoExplicitAgentID
-// confirms the "session:" override still routes correctly when the message has
-// no explicit agent_id, and that the session key uses the new formula.
-func TestResolveMessageRoute_HandoffOverrideStillAppliesWhenNoExplicitAgentID(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-
-	cfg := &config.Config{}
-	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
-
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	t.Cleanup(func() { al.Close() })
-
-	ag := NewAgentInstance(&config.AgentConfig{ID: "ray", Name: "ray"},
-		&cfg.Agents.Defaults, cfg, &mockProvider{})
-	ag.Home = filepath.Join(home, "agents", "ray")
-	ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo("ray", "ray")
-	al.registry.mu.Lock()
-	al.registry.agents["ray"] = ag
-	al.registry.mu.Unlock()
-
-	const sessionID = "sess-leak-2"
-	// Set override using the new session-scoped key.
-	al.sessionActiveAgent.Store("session:"+sessionID, "ray")
-
-	msg := bus.InboundMessage{
-		Channel:   "webchat",
-		SessionID: sessionID,
-		Content:   "follow up after handoff with no agent_id metadata",
-	}
-	route, _, err := al.resolveMessageRoute(msg)
-	if err != nil {
-		t.Fatalf("resolveMessageRoute: %v", err)
-	}
-	if route.AgentID != "ray" {
-		t.Fatalf("handoff override should still route to ray when no explicit agent_id, got %q", route.AgentID)
-	}
-	wantSK := "agent:ray:session:" + sessionID
-	if route.SessionKey != wantSK {
-		t.Errorf("session key = %q, want %q", route.SessionKey, wantSK)
-	}
-}
-
-// TestResolveMessageRoute_ChannelHandoffOverride_RoutesByChatScope pins the
-// channel-handoff fix (P1). A channel (whatsapp/telegram/…) inbound message
-// carries NO SessionID, so sessionScopeKey resolves its handoff override under
-// the chat scope ("chat:<channel>:<chatID>"), NOT "session:<id>". The handoff
-// now stores the override under that same chat-scope key, so after Mia hands off
-// to Ray in a WhatsApp chat, the next WhatsApp message routes to Ray. Regression
-// for the bug where the override was stored ONLY under "session:<id>" — which
-// channel messages never look up — so routing fell back to ResolveRoute and the
-// original agent "stayed".
-func TestResolveMessageRoute_ChannelHandoffOverride_RoutesByChatScope(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-
-	cfg := &config.Config{}
-	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
-
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	t.Cleanup(func() { al.Close() })
-
-	for _, id := range []string{"mia", "ray"} {
-		ag := NewAgentInstance(&config.AgentConfig{ID: id, Name: id},
-			&cfg.Agents.Defaults, cfg, &mockProvider{})
-		ag.Home = filepath.Join(home, "agents", id)
-		ag.ContextBuilder = NewContextBuilder(ag.Home).WithAgentInfo(id, id)
-		al.registry.mu.Lock()
-		al.registry.agents[id] = ag
-		al.registry.mu.Unlock()
-	}
-
-	const chatID = "15555550100@s.whatsapp.net"
-	// State left by a Mia → Ray handoff on a WhatsApp chat: onHandoffFrontend
-	// writes the override under the chat-scope key for non-webchat channels.
-	al.sessionActiveAgent.Store("chat:whatsapp:"+chatID, "ray")
-
-	// Next inbound WhatsApp message from the same chat — NO SessionID (channels
-	// don't carry one), no explicit agent_id.
-	msg := bus.InboundMessage{
-		Channel: "whatsapp",
-		ChatID:  chatID,
-		Content: "are you still there?",
-	}
-	route, agent, err := al.resolveMessageRoute(msg)
-	if err != nil {
-		t.Fatalf("resolveMessageRoute: %v", err)
-	}
-	if route.AgentID != "ray" {
-		t.Fatalf(
-			"channel handoff override should route the whatsapp message to ray, got %q ('agent stays' regression)",
-			route.AgentID,
-		)
-	}
-	if agent == nil || agent.ID != "ray" {
-		t.Fatalf("returned agent should be ray, got %+v", agent)
-	}
-	wantSK := "agent:ray:chat:whatsapp:" + chatID
-	if route.SessionKey != wantSK {
-		t.Errorf("session key = %q, want %q", route.SessionKey, wantSK)
-	}
-}
-
 // TestResolveMessageRoute_ExplicitWorkerAgentIDDegradesToDefault verifies RESIDUAL
 // PATH 1: a message that explicitly addresses a worker via agent_id metadata must
 // NOT let the worker answer as a persona. It degrades to the normal ResolveRoute
@@ -970,54 +887,6 @@ func TestResolveMessageRoute_ExplicitWorkerAgentIDDegradesToDefault(t *testing.T
 	}
 	if route.AgentID != "mia" {
 		t.Errorf("AgentID = %q, want %q (worker degrades to base default)", route.AgentID, "mia")
-	}
-}
-
-// TestResolveMessageRoute_WorkerHandoffPinClearedAndFallsBack verifies RESIDUAL
-// PATH 2: a stale session handoff pin that points at a worker must be cleared and
-// routing must fall back to the chat-target default. A worker pin is illegitimate
-// (handoff now rejects worker targets), so resolution drops it.
-func TestResolveMessageRoute_WorkerHandoffPinClearedAndFallsBack(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-
-	cfg := &config.Config{}
-	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
-	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
-		{ID: "hans", Type: config.AgentTypeWorker},
-	}
-
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	t.Cleanup(func() { al.Close() })
-
-	registerInstance(t, al, cfg, home, "mia", config.AgentTypeCore)
-	registerInstance(t, al, cfg, home, "hans", config.AgentTypeWorker)
-
-	const sessionID = "sess-worker-pin"
-	// Simulate a stale pin to a worker (no explicit agent_id on the message).
-	al.sessionActiveAgent.Store("session:"+sessionID, "hans")
-
-	msg := bus.InboundMessage{
-		Channel:   "webchat",
-		SessionID: sessionID,
-		Content:   "follow up",
-	}
-	route, agent, err := al.resolveMessageRoute(msg)
-	if err != nil {
-		t.Fatalf("resolveMessageRoute: %v", err)
-	}
-	if route.AgentID == "hans" || (agent != nil && agent.ID == "hans") {
-		t.Fatalf("worker pin resolved to the worker (route=%q) — workers are not chat targets", route.AgentID)
-	}
-	if route.AgentID != "mia" {
-		t.Errorf("AgentID = %q, want %q (worker pin degrades to base default)", route.AgentID, "mia")
-	}
-	// The stale worker pin must have been deleted.
-	if _, stale := al.sessionActiveAgent.Load("session:" + sessionID); stale {
-		t.Error("stale worker handoff pin should have been cleared")
 	}
 }
 

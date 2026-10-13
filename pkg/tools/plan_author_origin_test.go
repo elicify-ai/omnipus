@@ -103,6 +103,7 @@ func TestPlanExecuteTool_ExplicitKindOverridesRegistryCollision(t *testing.T) {
 	// Checker deliberately wired to say "admin" IS an agent — the explicit
 	// user kind must override it.
 	tool.SetIsAgentIDChecker(func(id string) bool { return id == "admin" })
+	allowPlanExecution(tool)
 
 	res := tool.Execute(context.Background(), map[string]any{"plan_id": p.ID})
 	if res.IsError {
@@ -153,6 +154,7 @@ func TestPlanExecuteTool_LegacyKindlessFallsBackToChecker(t *testing.T) {
 	pHuman := seedPlanWithKind(t, planStore, taskStore, "ws-1", "daniel", "", false)
 	tool2 := NewPlanExecuteTool(planStore, taskStore)
 	tool2.SetIsAgentIDChecker(func(id string) bool { return id == "admin" })
+	allowPlanExecution(tool2)
 	res2 := tool2.Execute(context.Background(), map[string]any{"plan_id": pHuman.ID})
 	if res2.IsError {
 		t.Fatalf("legacy kindless + human probe must pass soft tier, got: %s", res2.ForLLM)

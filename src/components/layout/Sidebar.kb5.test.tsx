@@ -157,10 +157,10 @@ describe('Sidebar — KB-5 active workspace expansion', () => {
     mockWorkspacesState.activeWorkspaceId = 'ws-1'
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const activeToggle = await screen.findByLabelText('Collapse Test Workspace One sessions')
+    const activeToggle = await screen.findByLabelText('Hide Test Workspace One agents')
     expect(activeToggle.getAttribute('aria-expanded')).toBe('true')
 
-    const inactiveToggle = screen.getByLabelText('Expand Test Workspace Two sessions')
+    const inactiveToggle = screen.getByLabelText('Show Test Workspace Two agents')
     expect(inactiveToggle.getAttribute('aria-expanded')).toBe('false')
   })
 
@@ -168,8 +168,8 @@ describe('Sidebar — KB-5 active workspace expansion', () => {
     mockWorkspacesState.activeWorkspaceId = null
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const toggleOne = await screen.findByLabelText('Expand Test Workspace One sessions')
-    const toggleTwo = screen.getByLabelText('Expand Test Workspace Two sessions')
+    const toggleOne = await screen.findByLabelText('Show Test Workspace One agents')
+    const toggleTwo = screen.getByLabelText('Show Test Workspace Two agents')
     expect(toggleOne.getAttribute('aria-expanded')).toBe('false')
     expect(toggleTwo.getAttribute('aria-expanded')).toBe('false')
   })
@@ -177,13 +177,13 @@ describe('Sidebar — KB-5 active workspace expansion', () => {
   it('does not collapse the previously-active workspace when switching to a new one', async () => {
     mockWorkspacesState.activeWorkspaceId = 'ws-1'
     const { rerender } = render(<Sidebar />, { wrapper: makeWrapper() })
-    await screen.findByLabelText('Collapse Test Workspace One sessions')
+    await screen.findByLabelText('Hide Test Workspace One agents')
 
     mockWorkspacesState.activeWorkspaceId = 'ws-2'
     await act(async () => { rerender(<Sidebar />) })
 
-    const toggleOne = await screen.findByLabelText('Collapse Test Workspace One sessions')
-    const toggleTwo = screen.getByLabelText('Collapse Test Workspace Two sessions')
+    const toggleOne = await screen.findByLabelText('Hide Test Workspace One agents')
+    const toggleTwo = screen.getByLabelText('Hide Test Workspace Two agents')
     expect(toggleOne.getAttribute('aria-expanded')).toBe('true')
     expect(toggleTwo.getAttribute('aria-expanded')).toBe('true')
   })
@@ -192,11 +192,11 @@ describe('Sidebar — KB-5 active workspace expansion', () => {
     mockWorkspacesState.activeWorkspaceId = 'ws-1'
     const { rerender } = render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const toggle = await screen.findByLabelText('Collapse Test Workspace One sessions')
+    const toggle = await screen.findByLabelText('Hide Test Workspace One agents')
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
 
     await act(async () => { fireEvent.click(toggle) })
-    const collapsedToggle = screen.getByLabelText('Expand Test Workspace One sessions')
+    const collapsedToggle = screen.getByLabelText('Show Test Workspace One agents')
     expect(collapsedToggle.getAttribute('aria-expanded')).toBe('false')
 
     // Re-render with the SAME active workspace — a naive "always expand the
@@ -204,7 +204,7 @@ describe('Sidebar — KB-5 active workspace expansion', () => {
     // effect must not, since activeWorkspaceId never changed.
     await act(async () => { rerender(<Sidebar />) })
 
-    const stillCollapsed = screen.getByLabelText('Expand Test Workspace One sessions')
+    const stillCollapsed = screen.getByLabelText('Show Test Workspace One agents')
     expect(stillCollapsed.getAttribute('aria-expanded')).toBe('false')
   })
 })

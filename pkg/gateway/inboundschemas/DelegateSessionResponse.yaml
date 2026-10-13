@@ -1,10 +1,10 @@
 type: object
 title: DelegateSessionResponse
 description: >
-  Response shape shared by `delegate` actions that spawn or resume a
-  child session — `run`, `follow_up` (native warm resume or 3P cold
-  respawn), and a 3P `respond` (which spawns a new corrective session,
-  D5). Reused rather than duplicated across those three actions (DoD-11).
+  Response shape for a `delegate` action that publishes a child session
+  (`run`). No action creates a replacement session for an existing child:
+  resume and respond continue the same child (an external-CLI child
+  continues the same CLI conversation or the action is refused).
 required:
   - session_id
   - generation
@@ -16,9 +16,7 @@ properties:
     type: string
     minLength: 1
     description: >
-      The child session id. For a native `follow_up`, equals the input
-      `session_id` (warm resume, same session, new generation). For a 3P
-      `follow_up`/`respond`, a NEW session id (cold respawn, D5).
+      The id of the newly published child session.
     example: "550e8400-e29b-41d4-a716-446655440000"
   generation:
     type: integer
@@ -39,7 +37,9 @@ properties:
     example: "660e8400-e29b-41d4-a716-446655440000"
   is_3p:
     type: boolean
-    description: True when this session dispatches via an external CLI runner.
+    description: >
+      True when this session dispatches via an external CLI runner. Taken from
+      the classification persisted at launch, not re-read from a mutable registry.
     example: false
   state:
     type: string

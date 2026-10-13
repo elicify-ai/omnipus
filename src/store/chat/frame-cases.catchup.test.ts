@@ -13,7 +13,7 @@ import { useUiStore } from '@/store/ui'
 import { emptySessionState } from './session'
 import { gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, replayErrorRetryAttempts, replayErrorRetryTimers } from './runtime-state'
 import type { ChatMessage } from './types'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { ServerFrame } from '@/lib/ws'
 
 const SID = 'session-catchup-1'
 
@@ -70,7 +70,7 @@ describe('session_snapshot (§6.2/§4.6)', () => {
       seq: 42,
       boot_id: 'boot-A',
       reason: 'unknown_position',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = bucket()
     expect(b.messageOrder).toEqual(['u2'])
@@ -100,7 +100,7 @@ describe('session_snapshot (§6.2/§4.6)', () => {
 
     useChatStore.getState().handleFrame({
       type: 'session_snapshot', session_id: SID, seq: 99, boot_id: 'boot-new', reason: 'boot_mismatch',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // Still the OLD cursor — not the snapshot's own seq:99/boot_id:'boot-new'.
     expect(bucket().cursor).toEqual({ bootId: 'boot-prior', seq: 7 })
@@ -119,12 +119,12 @@ describe('catch_up_complete (§4.1/§6.2)', () => {
   it('D2b: is NOT dropped by the seq gate when its own seq equals the cursor already established by a prior frame', () => {
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'x', turn_id: 't1', message_id: 'm1', seq: 18,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     expect(bucket().cursor).toEqual({ bootId: '', seq: 18 })
 
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: 18, boot_id: 'boot-X', mode: 'incremental',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // If this were dropped by the seq gate, awaitingCatchUp would stay at
     // its emptySessionState() default (false) and cursor.bootId would still
@@ -146,7 +146,7 @@ describe('catch_up_complete (§4.1/§6.2)', () => {
       seq: 50,
       boot_id: 'boot-A',
       mode: 'incremental',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = bucket()
     expect(b.cursor).toEqual({ bootId: 'boot-A', seq: 50 })
@@ -173,7 +173,7 @@ describe('user_message (§1.2/§4.7, founder decision Q1)', () => {
       content: 'hello from tab 2',
       timestamp: '2026-09-23T00:00:00Z',
       seq: 10,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = bucket()
     expect(b.messageOrder).toEqual(['server-msg-1'])
@@ -204,7 +204,7 @@ describe('user_message (§1.2/§4.7, founder decision Q1)', () => {
       content: 'hi',
       timestamp: '2026-09-23T00:00:01Z',
       seq: 11,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = bucket()
     expect(b.messageOrder).toEqual(['my-client-id'])
@@ -214,10 +214,10 @@ describe('user_message (§1.2/§4.7, founder decision Q1)', () => {
   it('D5: idempotent — a duplicate user_message (same server id) is not inserted twice', () => {
     useChatStore.getState().handleFrame({
       type: 'user_message', session_id: SID, id: 'server-msg-3', content: 'x', timestamp: 't', seq: 12,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'user_message', session_id: SID, id: 'server-msg-3', content: 'x', timestamp: 't', seq: 12,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = bucket()
     expect(b.messageOrder).toEqual(['server-msg-3'])
@@ -228,10 +228,10 @@ describe('token{replace:true} (§4.4 projection replay)', () => {
   it('D7: replace:true OVERWRITES an existing bubble\'s content instead of appending', () => {
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'partial answer so far', turn_id: 't1', message_id: 'm1', seq: 1,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: ' more', turn_id: 't1', message_id: 'm1', seq: 2,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     let b = bucket()
     expect(b.messagesById.m1.content).toBe('partial answer so far more')
 
@@ -240,7 +240,7 @@ describe('token{replace:true} (§4.4 projection replay)', () => {
     // not a delta. Must overwrite, not append.
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'partial answer so far more', turn_id: 't1', message_id: 'm1', replace: true, seq: 3,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     b = bucket()
     expect(b.messagesById.m1.content).toBe('partial answer so far more')
 
@@ -248,7 +248,7 @@ describe('token{replace:true} (§4.4 projection replay)', () => {
     // matching — a real append would have doubled it.
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'entirely different replayed text', turn_id: 't1', message_id: 'm1', replace: true, seq: 4,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     b = bucket()
     expect(b.messagesById.m1.content).toBe('entirely different replayed text')
   })
@@ -256,8 +256,8 @@ describe('token{replace:true} (§4.4 projection replay)', () => {
 
 describe('applySeqGate wiring (§6.2) — a frame TYPE with no id-based dedup of its own', () => {
   it('D6: a duplicate-seq `token` frame is applied exactly once, proving the seq gate (not a per-case dedup) is what stops it', () => {
-    const tokenFrame = (): WsReceiveFrame =>
-      ({ type: 'token', session_id: SID, content: 'hi', turn_id: 't1', message_id: 'm1', seq: 7 } as WsReceiveFrame)
+    const tokenFrame = (): ServerFrame =>
+      ({ type: 'token', session_id: SID, content: 'hi', turn_id: 't1', message_id: 'm1', seq: 7 } as ServerFrame)
     useChatStore.getState().handleFrame(tokenFrame())
     useChatStore.getState().handleFrame(tokenFrame())
 
@@ -283,13 +283,13 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
     // Establish a cursor at seq 5.
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     expect(bucket().cursor).toEqual({ bootId: 'boot-gap', seq: 5 })
 
     // A frame arrives at seq 9 — a genuine gap (expected 6).
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // The cursor is untouched by the gap frame (still at 5) — proving it
     // was never applied, only the re-attach fired.
@@ -312,7 +312,7 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
 
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // Three more gapped frames arrive in a row, all still ahead of the same
     // unresolved gap (cursor never advances past 5) — only the FIRST should
@@ -320,7 +320,7 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
     for (const seq of [9, 10, 11]) {
       useChatStore.getState().handleFrame({
         type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq,
-      } as WsReceiveFrame)
+      } as ServerFrame)
     }
     expect(sent).toHaveLength(1)
 
@@ -328,10 +328,10 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
     // clears — a LATER, genuinely new gap sends again.
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-gap', mode: 'incremental',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'GAP2', turn_id: 't1', message_id: 'm3', seq: 20,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     expect(sent).toHaveLength(2)
   })
 
@@ -341,10 +341,10 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
 
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 1, boot_id: 'boot-ok',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'b', turn_id: 't1', message_id: 'm1', seq: 2,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     expect(send).not.toHaveBeenCalled()
   })
@@ -367,10 +367,10 @@ describe('safety hardening (subagent-control-plane stream) — gap re-attach ret
     // Establish a cursor at seq 5, then a genuine gap at seq 9 — mirrors D8.
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     expect(sent).toHaveLength(1) // the original fire-once send (D8)
 
     // Nothing ever answers this attach_session (its response is lost, e.g.
@@ -400,17 +400,17 @@ describe('safety hardening (subagent-control-plane stream) — gap re-attach ret
 
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     expect(sent).toHaveLength(1)
 
     // The server's response finally lands, resolving the gap — BEFORE the
     // first retry timer fires.
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-gap', mode: 'incremental',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // The pending retry must not fire now that the gap is resolved.
     vi.advanceTimersByTime(60_000)
@@ -439,10 +439,10 @@ describe('safety hardening (subagent-control-plane stream) — gap re-attach ret
       // Establish a cursor at seq 5, then a genuine gap at seq 9 — mirrors D8.
       useChatStore.getState().handleFrame({
         type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
-      } as WsReceiveFrame)
+      } as ServerFrame)
       useChatStore.getState().handleFrame({
         type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
-      } as WsReceiveFrame)
+      } as ServerFrame)
       expect(sent).toHaveLength(1)
 
       // Attempts 1-4 fire at 1s/2s/4s/8s (cumulative 15s) — ordinary backoff
@@ -471,10 +471,10 @@ describe('safety hardening (subagent-control-plane stream) — gap re-attach ret
       // attempt counter, so a LATER stuck episode warns the user again.
       useChatStore.getState().handleFrame({
         type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-gap', mode: 'incremental',
-      } as WsReceiveFrame)
+      } as ServerFrame)
       useChatStore.getState().handleFrame({
         type: 'token', session_id: SID, content: 'GAP2', turn_id: 't1', message_id: 'm3', seq: 20,
-      } as WsReceiveFrame)
+      } as ServerFrame)
       expect(sent).toHaveLength(9) // the fresh episode's first re-attach
       vi.advanceTimersByTime(31_000) // episode 2's attempts 1-5
       expect(sent).toHaveLength(14)
@@ -502,7 +502,7 @@ describe('Opus review round 3 N4 — done{replay_error} re-attaches WITHOUT sinc
 
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, stats: { replay_error: true },
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // Not sent yet — backoff hasn't elapsed.
     expect(sent).toHaveLength(0)
@@ -514,7 +514,7 @@ describe('Opus review round 3 N4 — done{replay_error} re-attaches WITHOUT sinc
     // A SECOND failure backs off longer (2x base), not the same delay again.
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, stats: { replay_error: true },
-    } as WsReceiveFrame)
+    } as ServerFrame)
     vi.advanceTimersByTime(1999)
     expect(sent).toHaveLength(1) // still not sent — needs 2000ms this time
     vi.advanceTimersByTime(1)
@@ -529,18 +529,18 @@ describe('Opus review round 3 N4 — done{replay_error} re-attaches WITHOUT sinc
     } as never)
     useChatStore.setState({ sessionsById: { [SID]: emptySessionState() } } as never)
 
-    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, stats: { replay_error: true } } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, stats: { replay_error: true } } as ServerFrame)
     vi.advanceTimersByTime(1_000)
     expect(sent).toHaveLength(1)
 
     // Rebuild genuinely succeeds this time.
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: 10, boot_id: 'boot-1', mode: 'snapshot',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // A LATER, unrelated failure — should back off from the BASE delay
     // again (1000ms), not continue counting from the earlier incident.
-    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, stats: { replay_error: true } } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, stats: { replay_error: true } } as ServerFrame)
     vi.advanceTimersByTime(999)
     expect(sent).toHaveLength(1)
     vi.advanceTimersByTime(1)
