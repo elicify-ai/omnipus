@@ -4,7 +4,7 @@
 
 | Header | Value |
 |---|---|
-| Status | **Proposed** — corrected once after the one ADR-mode grill and the founder interview. Two new points (FQ-17, FQ-18) are open; they are listed at the end and do not reopen answered questions. The ask list (OSA-3) still needs the security-lead pass before the specification is accepted (founder record F:D6). |
+| Status | **Accepted** — founder approval 2026-10-13 (with the spec `docs/internal/specs/omnipus-system-agent-spec.md`). Earlier status: Proposed, corrected once after the ADR-mode grill and the founder interview; later dated sections record founder answers and fix rounds. Widened R-A1 (Omnipus shell under Auto-approve + cross-workspace reach) founder-accepted 2026-10-13; follow-up issue #1284 |
 | Date | 2026-10-12 (founder decision date; correction round the same day). The ID carries the UTC date 2026-10-11 produced by `scripts/new-adr-id.sh "Omnipus system agent"`. |
 | Deciders | Daniel Piatkowski (founder). |
 | Author | Architect. |

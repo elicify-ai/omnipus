@@ -1,7 +1,7 @@
 # Feature Specification: The Omnipus system agent
 
 **Created**: 2026-10-12 · **Fix rounds 1–4**: 2026-10-13 · **Fix after the independent Opus review**: 2026-10-13 (§0.16)
-**Status**: Draft — fix round 4 applied (2026-10-13); an independent Opus review, a founder interview and one more fix follow
+**Status**: Approved — founder approval 2026-10-13, after the ADR grill, four GPT spec grill rounds, an independent Opus review and their fix rounds
 **Size**: Feature (spec-driven; 5-reviewer gate; every engine/WebSocket bundle needs hands-on UAT by a tester and an independent validator on the exact landing commit — root `CLAUDE.md`, "Definition of Done")
 **Release**: v0.1.1 (founder answer R1 A, 2026-10-12, relayed by team-lead)
 
@@ -3981,7 +3981,7 @@ UI development of WU-10 may start in parallel with WU-3/WU-4 against generated c
 
 RQ-1–RQ-4, GQ-1–GQ-4, FQ-RM-1/2, Q-R3-1/2, FQ-R3-A/B, EQ-1 (A), EQ-2 (reading test only) and the Opus-review questions Q1–Q9 are answered (§0.7–§0.16). **No founder questions are open; no blocking point remains.**
 
-Non-blocking, for the founder's attention at approval (OR-OBS-003): Omnipus holds `bash` (ceiling `ask`; Auto-approve on by default since ADR-092) **and** cross-workspace filesystem authority (FR-006), so a peer message whose command the ADR-092 pre-flights allow runs with Omnipus's wider reach. It is named under R-A1 in §19.1 as a reach the founder has **not** separately accepted; no design change is proposed.
+Non-blocking, for the founder's attention at approval (OR-OBS-003): Omnipus holds `bash` (ceiling `ask`; Auto-approve on by default since ADR-092) **and** cross-workspace filesystem authority (FR-006), so a peer message whose command the ADR-092 pre-flights allow runs with Omnipus's wider reach. It is named under R-A1 in §19.1. **Founder-accepted 2026-10-13** ("accept for now"), after team-lead corrected the description to include Auto-approve: allowed shell commands run without asking. Follow-up: issue #1284 aligns the protection of Omnipus's internal files later. No design change in this spec.
 
 ---
 
