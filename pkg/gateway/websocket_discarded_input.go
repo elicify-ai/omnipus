@@ -83,11 +83,48 @@ func (h *WSHandler) announceClearNotPerformed(sessionID, transcriptEntryID strin
 		return
 	}
 	h.dropPendingMessageStatus(sessionID, clientID)
+	h.heldTickMu.Lock()
+	defer h.heldTickMu.Unlock()
+	h.setAcceptedMessageState(sessionID, clientID, "failed") // terminal: a held tick after this is dropped
 	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
 		Type:            string(generated.WsFrameTypeMessageStatus),
 		SessionId:       sessionID,
 		ClientMessageId: clientID,
 		State:           "failed",
+	}, nil)
+}
+
+// announceClearHeld publishes message_status state=held for a /clear the server
+// has accepted but not yet applied because it is stopping the running reply first
+// (founder, option A). It is the same frame and hub path as the @-recipient held
+// tick, for the /clear's own row (sessionId + that row's client_message_id), sent
+// after "received" and before any "failed" or the clear marker. A /clear that
+// already failed is never reported held.
+func (h *WSHandler) announceClearHeld(sessionID, transcriptEntryID string) {
+	if h == nil || h.agentLoop == nil {
+		return
+	}
+	clientID, found := h.clientMessageIDLookup(sessionID, transcriptEntryID)
+	if clientID == "" {
+		reason := "the /clear row could not be found in the transcript"
+		if found {
+			reason = "the /clear message carried no client_message_id"
+		}
+		slog.Warn("ws: a held /clear could not be framed as held; its row keeps the ordinary look",
+			"session_id", sessionID, "entry_id", transcriptEntryID, "reason", reason)
+		return
+	}
+	h.heldTickMu.Lock()
+	defer h.heldTickMu.Unlock()
+	if h.acceptedMessageState(sessionID, clientID) == "failed" {
+		return
+	}
+	h.setAcceptedMessageState(sessionID, clientID, "held")
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
+		Type:            string(generated.WsFrameTypeMessageStatus),
+		SessionId:       sessionID,
+		ClientMessageId: clientID,
+		State:           "held",
 	}, nil)
 }
 

@@ -320,6 +320,19 @@ func (h *WSHandler) setAcceptedMessageState(sessionID, clientMessageID, state st
 	}
 }
 
+// acceptedMessageState is the message's current recorded delivery state ("" when
+// the message is not remembered).
+func (h *WSHandler) acceptedMessageState(sessionID, clientMessageID string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if a := h.acceptedClientMsgs[sessionID]; a != nil {
+		if m := a.byID[clientMessageID]; m != nil {
+			return m.state
+		}
+	}
+	return ""
+}
+
 func (h *WSHandler) markAcceptedMessageWorking(sessionID, clientMessageID string) {
 	h.mu.Lock()
 	h.markAcceptedMessageWorkingLocked(sessionID, clientMessageID)

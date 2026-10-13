@@ -69,13 +69,13 @@ type ordinaryExecutionPreparation struct{ execution *executionDisposition }
 // FIFO admission. Only an actual human message may revive a saved session.
 func (al *AgentLoop) prepareOrdinaryExecution(ctx context.Context, msg bus.InboundMessage, opts processOptions) (ordinaryExecutionPreparation, error) {
 	if msg.Metadata[ownerWakeMetadataKey] != "" {
-		return al.prepareOrdinarySessionExecution(ctx, msg.SessionID, opts, &ownerWakeRevivalPrincipal)
+		return al.prepareOrdinarySessionExecution(ctx, msg.SessionID, opts, &ownerWakeRevivalPrincipal, msg.TranscriptEntryID)
 	}
 	if !reviveInboundIsHumanTurn(msg) {
 		return ordinaryExecutionPreparation{}, nil
 	}
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}
-	return al.prepareOrdinarySessionExecution(ctx, msg.SessionID, opts, &by)
+	return al.prepareOrdinarySessionExecution(ctx, msg.SessionID, opts, &by, msg.TranscriptEntryID)
 }
 
 // ownerWakeRevivalPrincipal admits the owner wake after a guest answer. Like the
@@ -90,11 +90,14 @@ var errOwnerWakeRetained = errors.New("ordinary admission: owner wake dropped: t
 // prepareOrdinarySessionExecution admits one ordinary execution of sessionID and,
 // once it is admitted, delivers the requests held for the session while it was
 // stopped (deliverHeldRequests): an admitted turn is the session running again.
-// The delivery runs after the admission locks are released.
-func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessionID string, opts processOptions, revival *steer.Principal) (ordinaryExecutionPreparation, error) {
+// The delivery runs after the admission locks are released. admittingEntryID is
+// the transcript entry of the message being admitted (absent when the execution
+// is not a message): if that message is itself a held request's wake, the delivery
+// skips that request, which this very turn is about to give to the model.
+func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessionID string, opts processOptions, revival *steer.Principal, admittingEntryID ...string) (ordinaryExecutionPreparation, error) {
 	preparation, err := al.admitOrdinarySessionExecution(ctx, sessionID, opts, revival)
 	if err == nil && preparation.execution != nil {
-		al.deliverHeldRequests(sessionID)
+		al.deliverHeldRequests(sessionID, admittingEntryID...)
 	}
 	return preparation, err
 }

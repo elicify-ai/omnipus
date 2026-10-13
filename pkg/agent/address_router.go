@@ -91,13 +91,6 @@ var (
 	_ tools.ReplyRouter = AddressRouter{}
 )
 
-// ErrRequestRecordedNotStarted marks an admission whose request is durably
-// recorded (transcript and ledger) but whose wake could not be published. It is
-// NOT a refusal: the request will be delivered when the receiver next runs, so a
-// caller reports it as waiting, never as failed (a "failed" row invites a re-send
-// and a duplicate request).
-var ErrRequestRecordedNotStarted = errors.New("the request was recorded but the receiver's turn could not be started")
-
 // ErrPeerRefused wraps every refusal that admitted nothing.
 var ErrPeerRefused = errors.New("peer request refused")
 
@@ -226,8 +219,18 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 	if err := al.publishRequestWake(pubCtx, a.Receiver, requestID, receiverSessionID, entry.Content); err != nil {
 		al.heldRepublished.Delete(requestID)
 		// The request is durable in the receiver's main and answerable; only
-		// the turn start failed. Report it rather than hide it.
-		return requestID, receiverSessionID, held, fmt.Errorf("%w: request %s: %w", ErrRequestRecordedNotStarted, requestID, err)
+		// the turn start failed. It is HELD exactly like a request for a stopped
+		// receiver: the capture says so (its delivery then moves the sender's row
+		// on), the web sender's row says waiting and an agent sender is told it
+		// was queued - never "failed"/"refused", which invites a re-send and a
+		// duplicate request. The receiver's next admitted turn delivers it.
+		logger.WarnCF("agent", "request recorded but the receiver's turn could not be started; held for its next turn",
+			map[string]any{"request_id": requestID, "session_id": receiverSessionID, "error": err.Error()})
+		held = true
+		if mErr := ledger.MarkHeld(receiverSessionID, requestID); mErr != nil {
+			logger.ErrorCF("agent", "a held request could not be marked held; its sender's row will not move on when it is delivered",
+				map[string]any{"request_id": requestID, "session_id": receiverSessionID, "error": mErr.Error()})
+		}
 	}
 	return requestID, receiverSessionID, held, nil
 }

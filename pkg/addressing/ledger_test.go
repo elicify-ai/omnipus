@@ -294,3 +294,87 @@ func TestLedger_MarkDelivered_UnknownRequestIsNotAnError(t *testing.T) {
 		t.Fatalf("MarkDelivered on an unknown request = %v, want nil", err)
 	}
 }
+
+// R3-SRV-SFH-07: the delivery mark and the read of the capture it transitions
+// are ONE ledger operation. It reports the capture as it was BEFORE the mark and
+// whether this call performed the held-to-delivered transition, so a caller can
+// move the sender's row on exactly once; a read failure marks nothing.
+func TestLedger_MarkDeliveredFirst_ReportsThePriorCaptureOnceAndNeverMarksOnAFailure(t *testing.T) {
+	l, dir := newLedger(t, "recv")
+	c := capture("recv")
+	c.Held = true
+	c.SenderMessageID = "cm-1"
+	if err := l.Put(c); err != nil {
+		t.Fatal(err)
+	}
+
+	prior, first, err := l.MarkDeliveredFirst("recv", "q1")
+	if err != nil || !first || !prior.Held || prior.Delivered || prior.SenderMessageID != "cm-1" {
+		t.Fatalf("first mark = %+v first=%v err=%v, want the held capture, first=true", prior, first, err)
+	}
+	if _, again, rErr := l.MarkDeliveredFirst("recv", "q1"); rErr != nil || again {
+		t.Fatalf("a repeat mark must report first=false, got first=%v err=%v", again, rErr)
+	}
+	if _, unk, uErr := l.MarkDeliveredFirst("recv", "never-captured"); uErr != nil || unk {
+		t.Fatalf("an unknown request is not an error and not a first delivery, got first=%v err=%v", unk, uErr)
+	}
+
+	// A failure marks nothing: the transition is still available afterwards.
+	c2 := capture("recv")
+	c2.RequestID = "q2"
+	c2.Held = true
+	if pErr := l.Put(c2); pErr != nil {
+		t.Fatal(pErr)
+	}
+	file := filepath.Join(dir, "recv", ledgerFileName)
+	saved, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(file, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, first, err := l.MarkDeliveredFirst("recv", "q2"); err == nil || first {
+		t.Fatalf("an unreadable ledger must fail the mark, got first=%v err=%v", first, err)
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, saved, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, first, err := l.MarkDeliveredFirst("recv", "q2"); err != nil || !first {
+		t.Fatalf("after the fault the transition must still be available, got first=%v err=%v", first, err)
+	}
+}
+
+// R3 N1: a request recorded but not woken is marked held after the fact.
+func TestLedger_MarkHeld_SetsHeldOnceAndNeverResurrectsADeliveredRequest(t *testing.T) {
+	l, _ := newLedger(t, "recv")
+	if err := l.Put(capture("recv")); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.MarkHeld("recv", "q1"); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := l.Get("recv", "q1")
+	if err != nil || !ok || !got.Held {
+		t.Fatalf("after MarkHeld: %+v ok=%v err=%v, want Held", got, ok, err)
+	}
+	if _, _, err := l.MarkDeliveredFirst("recv", "q1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.MarkHeld("recv", "q1"); err != nil {
+		t.Fatal(err)
+	}
+	got, _, _ = l.Get("recv", "q1")
+	if !got.Delivered {
+		t.Fatalf("MarkHeld after delivery must not clear Delivered: %+v", got)
+	}
+	if err := l.MarkHeld("recv", "never-captured"); err != nil {
+		t.Fatalf("an unknown request is not an error: %v", err)
+	}
+}

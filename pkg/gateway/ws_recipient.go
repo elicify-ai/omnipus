@@ -132,14 +132,6 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 	if errors.Is(err, errRecipientSourceRefused) {
 		return
 	}
-	if errors.Is(err, agent.ErrRequestRecordedNotStarted) {
-		// Recorded in the recipient's main and its ledger; only the wake could not
-		// be published. It is delivered when the recipient next runs, so the row
-		// says it is waiting - "failed" would invite a duplicate re-send.
-		logsafeWarn("ws: request recorded but the recipient's turn could not be started; reported as held",
-			"session_id", srcID, "error", err)
-		held, err = true, nil
-	}
 	if err != nil {
 		logsafeWarn("ws: could not deliver the request to the recipient", "session_id", srcID, "error", err)
 		if hcm.sessionID == "" {
@@ -153,12 +145,35 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 	}
 	hcm.admitted = true
 	if held {
-		// The recipient is stopped: the request waits until it runs again. The
-		// sender's row says so (after "received"); a held request is not a
-		// failure and no later tick reports it as one.
-		hcm.h.setAcceptedMessageState(hcm.sessionID, hcm.clientMessageID, "held")
-		hcm.sendMessageStatus("held")
+		// The request waits until the recipient runs (it is stopped, or its wake
+		// could not be published - both are held in the ledger). The sender's row
+		// says so (after "received"); a held request is not a failure and no later
+		// tick reports it as one.
+		hcm.h.announceRequestHeld(hcm.sessionID, hcm.clientMessageID, hcm.wc)
 	}
+}
+
+// announceRequestHeld sends the "held" tick unless the request was already
+// delivered: a recipient that resumed inside the window between the admission
+// and this call has moved the row to working, and a held tick after that would
+// leave the row waiting for ever (and make a retry replay "held"). Serialised
+// with announceHeldRequestDelivered by heldTickMu.
+func (h *WSHandler) announceRequestHeld(sessionID, clientMessageID string, origin *wsConn) {
+	if h == nil || sessionID == "" || clientMessageID == "" {
+		return
+	}
+	h.heldTickMu.Lock()
+	defer h.heldTickMu.Unlock()
+	if h.acceptedMessageState(sessionID, clientMessageID) == "working" {
+		return
+	}
+	h.setAcceptedMessageState(sessionID, clientMessageID, "held")
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
+		Type:            string(generated.WsFrameTypeMessageStatus),
+		SessionId:       sessionID,
+		ClientMessageId: clientMessageID,
+		State:           "held",
+	}, origin)
 }
 
 // announceHeldRequestDelivered moves the sender's row on when a held request is
@@ -169,6 +184,8 @@ func (h *WSHandler) announceHeldRequestDelivered(senderSessionID, clientMessageI
 	if h == nil || senderSessionID == "" || clientMessageID == "" {
 		return
 	}
+	h.heldTickMu.Lock()
+	defer h.heldTickMu.Unlock()
 	h.setAcceptedMessageState(senderSessionID, clientMessageID, "working")
 	h.hubPublishFrame(senderSessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
 		Type:            string(generated.WsFrameTypeMessageStatus),

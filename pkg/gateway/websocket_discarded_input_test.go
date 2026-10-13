@@ -194,3 +194,46 @@ func TestAnnounceClearNotPerformed_RowWithoutClientIDIsLoggedNotSilent(t *testin
 	assert.Contains(t, out, `"level":"WARN"`, "a refused /clear with no client_message_id cannot be framed; that must be logged")
 	assert.Contains(t, out, "clear-row-noid")
 }
+
+// R3 follow-up (founder, option A): the held /clear is framed as the existing
+// message_status state=held for the /clear's own row (sessionId + the row's
+// client_message_id), after "received" and before any "failed". A held tick that
+// arrives after the row failed is dropped: failed is terminal.
+func TestClearHeld_IsFramedAsAHeldMessageStatusAndNeverFollowsFailed(t *testing.T) {
+	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
+	wc := makeTestConn()
+	handler.handleChatMessageWithClientID(context.Background(), "chat-held-clear", "", "/clear", "", nil,
+		"", "", false, "client-held-clear-1", nil, wc)
+	received := readMessageStatusFrames(t, wc, 1)
+	require.Equal(t, "received", received[0].State)
+	sessionID := received[0].SessionId
+	bindTestConnToSession(handler, "chat-held-clear", sessionID, wc)
+
+	store := handler.agentLoop.ResolveSessionStore(sessionID)
+	require.NotNil(t, store)
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	var entryID string
+	for _, e := range entries {
+		if e.ClientMessageID == "client-held-clear-1" {
+			entryID = e.ID
+		}
+	}
+	require.NotEmpty(t, entryID, "setup: the persisted /clear row")
+
+	handler.agentLoop.NotifyClearHeldForTest(sessionID, entryID)
+	frames := readMessageStatusFrames(t, wc, 1)
+	assert.Equal(t, "held", frames[0].State)
+	assert.Equal(t, "client-held-clear-1", frames[0].ClientMessageId)
+	assert.Equal(t, sessionID, frames[0].SessionId)
+
+	handler.agentLoop.NotifyClearNotPerformedForTest(sessionID, entryID)
+	assert.Equal(t, "failed", readMessageStatusFrames(t, wc, 1)[0].State)
+
+	handler.agentLoop.NotifyClearHeldForTest(sessionID, entryID) // late: the row already failed
+	select {
+	case raw := <-wc.sendCh:
+		t.Fatalf("a held frame was sent after failed: %s", raw)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
