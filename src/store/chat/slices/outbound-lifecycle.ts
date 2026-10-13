@@ -16,6 +16,7 @@ import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/ws-schemas'
 import type { CancelFrame } from '@/lib/api/generated/asyncapi-types'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { isOmnipusAgentId } from '@/lib/omnipus'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
@@ -329,6 +330,40 @@ function clearCatchUpSideChannelsOnDisconnect(): void {
   }
 }
 
+/**
+ * The workspace id a message frame carries as `metadata.workspace_id`.
+ */
+function outboundWorkspaceId(): string {
+  // M4 workspace→turn binding (BLOCKER 1). When the user is chatting inside
+  // a workspace, the active workspace id is the single source of truth in
+  // useWorkspacesStore (set by WorkspaceTabContainer from the route param;
+  // null on the global/inbox chat). We forward it as `metadata.workspace_id`
+  // so the server stamps the session with this workspace and any task the
+  // agent creates this turn (task_create / delegation) lands on THIS
+  // workspace's board instead of the agent's default workspace. Absent (or
+  // empty) when not in a workspace, matching the backend's default-workspace
+  // fallback. The contract caps it at 128 chars; an over-length id is dropped
+  // rather than sent (the outbound Zod validator would otherwise toast every
+  // turn for a malformed local id).
+  const activeWorkspaceIdRaw = useWorkspacesStore.getState().activeWorkspaceId
+  // omnipus-system-agent FR-003 / OSA-9.1: Omnipus's one chat lives in the
+  // default workspace whatever workspace is active (its entry never
+  // switches it, FR-100). Its frames carry NO workspace_id — the server
+  // refuses a frame that would re-bind the Omnipus chat to another
+  // workspace (pkg/gateway/websocket_chat.go, sessionIsOmnipusChat), and
+  // an absent value leaves the session's own binding as-is. The workspace
+  // a workflow acts on travels as `workflow_start` target data instead.
+  const inOmnipusChat = isOmnipusAgentId(useSessionStore.getState().activeAgentId)
+  return (
+    !inOmnipusChat &&
+    typeof activeWorkspaceIdRaw === 'string' &&
+    activeWorkspaceIdRaw.length > 0 &&
+    activeWorkspaceIdRaw.length <= 128
+      ? activeWorkspaceIdRaw
+      : ''
+  )
+}
+
 export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, abandonPendingKickoffInternal, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
   return {
     enqueueOutboundMessage: (content, queuedMessage) => {
@@ -430,24 +465,10 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const modelNameRaw = opts?.model_name
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
-      // M4 workspace→turn binding (BLOCKER 1). When the user is chatting inside
-      // a workspace, the active workspace id is the single source of truth in
-      // useWorkspacesStore (set by WorkspaceTabContainer from the route param;
-      // null on the global/inbox chat). We forward it as `metadata.workspace_id`
-      // so the server stamps the session with this workspace and any task the
-      // agent creates this turn (task_create / delegation) lands on THIS
-      // workspace's board instead of the agent's default workspace. Absent (or
-      // empty) when not in a workspace, matching the backend's default-workspace
-      // fallback. The contract caps it at 128 chars; an over-length id is dropped
-      // rather than sent (the outbound Zod validator would otherwise toast every
-      // turn for a malformed local id).
-      const activeWorkspaceIdRaw = useWorkspacesStore.getState().activeWorkspaceId
-      const workspaceId =
-        typeof activeWorkspaceIdRaw === 'string' &&
-        activeWorkspaceIdRaw.length > 0 &&
-        activeWorkspaceIdRaw.length <= 128
-          ? activeWorkspaceIdRaw
-          : ''
+      // M4 workspace→turn binding and the Omnipus-chat exception: see outboundWorkspaceId.
+      const workspaceId = outboundWorkspaceId()
+      // K8 (FR-012): target data naming the workflow a screen button started.
+      const workflowStartFrame = opts?.workflowStart ? { workflow_start: opts.workflowStart } : {}
 
       // Merge model_name + workspace_id into a single `metadata` object so the
       // two payload build sites below stay in sync. The frame omits `metadata`
@@ -579,6 +600,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             agent_id: activeAgentId ?? undefined,
             ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
             ...metadataFrame,
+            ...workflowStartFrame,
             // @-addressed steer (founder 2026-10-11 Q1 B): legal here — a
             // steer always carries a real session_id ('__pending' steers are
             // enqueued above, never put on the wire).
@@ -727,6 +749,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
+          ...workflowStartFrame,
           // @-addressed ordinary send (founder 2026-10-11 Q1 B): the pair
           // rides WITH this session_id, never alone.
           ...(() => {

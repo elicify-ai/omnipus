@@ -64,7 +64,7 @@ The Tasks panel shows three views of workspace work, switched with the selector 
 1. In the sidebar, find the **Workspaces** section and click the **+** next to its title. A name field appears in the list.
 2. Type a name and press **Enter**. The workspace opens on Chat. Press **Escape** to cancel instead.
 3. In Chat, Ava runs a short setup interview: she asks what the workspace is for and adds agents to the team as you describe the work. A new workspace starts with Ava alone; she builds the team with you.
-4. To skip the interview, open the **Team** panel yourself and add agents with **Add agent**.
+4. To build the team yourself, open the **Team** panel. An empty team shows **No agents yet** with **Set up a team** (Omnipus designs a team with you in its chat) and **Add agent**.
 
 ## How to set who may delegate to whom
 
@@ -74,8 +74,12 @@ While Team first loads, it shows **Loading team…**. If loading fails before th
 
 If Team is already visible and refreshing the workspace fails, the editor stays usable. A notice above it shows the failure reason and **Retry**, and identifies the displayed team as the last known data. The notice stays visible while a retry is waiting; if retries keep failing, it shows the latest reason and still offers **Retry**. A successful retry removes the notice and updates the team in place, without reloading the page. This works both beside Chat and in the full-screen Team panel.
 
-1. Open the workspace's **Team** panel. Each agent on the team appears as a node in a picture.
-2. To grow the team, click **Add agent** and pick from your agents. Membership saves on its own; the indicator in the header shows when it has saved.
+**The Team list.** The Team panel opens on **List**; **Graph** (the switch in its header, also reachable with the arrow keys) shows the trust picture described below. The list has one card per agent on the team: its portrait and name, whether it is a **Conversation agent** or a **Worker** (workers, including **Worker · external program**, have their own section), its model, and the other workspaces it works in. Omnipus never appears in the list; in the default workspace it appears only in the Graph view, as its own self-line. Each card's **⋯** button — reachable by keyboard and touch, not only by hovering — offers **Edit** (the agent's profile, used in every workspace), **Remove from this workspace** (after a confirmation; the agent stays in its other workspaces) and, for agents you created, **Delete everywhere…**, which first lists every workspace the agent is in and stays unavailable while that list cannot load. While the team loads the list shows placeholders; if it cannot load it shows the error with **Retry** — never the empty-team offer; if a refresh fails, the cards stay with **this team may be out of date** and **Retry**.
+
+**Adding agents.** **Add agent** offers **Create with Omnipus** — Omnipus's chat opens with creating an agent for this workspace already started, and you stay in this workspace — and **Add an existing agent**, a searchable list of your agents that are not on the team yet. Omnipus, Judge and Plan Supervisor are never offered; an agent that is in no workspace at all is marked **Not in any workspace**. Picking one adds it at once and says **Added … · Undo**. If the server's answer is lost, a notice says the change **was not confirmed** with **Retry**, which re-reads the workspace before trying again so nothing is added twice.
+
+1. To work on trust lines, switch the Team panel to **Graph**. Each agent on the team appears as a node in a picture.
+2. To grow the team, use **Add agent** in the Team header. Trust-line changes save on their own; the indicator in the Graph toolbar shows when they have saved.
    If you added an agent in another tab or window, return to this tab or expand the workspace in the sidebar. The agent list and this workspace's membership refresh without a page reload. The message box has no agent picker beside it: your chat's agent is chosen in the sidebar. Typing `@` at the very start of the message opens a menu to address another agent; it does not switch your chat's agent. If loading workspaces fails, the workspace view is replaced by **Failed to load workspace. Check your connection and try again.** Select **Retry** there.
 3. To trust one agent to delegate to another, drag from the small gold dot on the first agent's node onto the second node. A line appears between them. That line is the trust.
 4. Click the line to tune it with the settings in the table below.

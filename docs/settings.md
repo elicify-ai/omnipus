@@ -108,6 +108,7 @@ Each tab and neighbor screen has one job.
 |---|---|
 | Settings, Providers | Connect providers, manage keys and sign-ins, set the default model |
 | Settings, Models | Context budget: per-result caps, the combined share of the model's context window used by tool results, and model context-length overrides |
+| Settings, System agents | The agents the system runs on — Judge, Plan Supervisor and Omnipus — each opened in the shared agent editor |
 | Settings, Integrations | Web-search and voice-input providers, with their keys |
 | Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
 | Settings, Gateway | The address and port the gateway listens on; restarting it; god mode in its danger zone |
@@ -133,6 +134,10 @@ If the host cannot measure available memory, Omnipus holds agent concurrency at 
 The rate limits live in Settings, Security, under its advanced section. Two numbers, both per agent: model calls per hour, and tool calls per minute. Leave either blank for no limit.
 
 Profile holds one setting your agents read every turn: **Workspace Context**. It is a free-text page about you — your role, your preferences, how you like answers — saved automatically and shared with all agents. Your display name, timezone, and font size are personal display choices stored in this browser, so they do not follow you to another machine.
+
+## System agents
+
+**Settings → System agents** lists the three agents the system itself runs on: **Judge** (checks whether goals and tasks meet their acceptance criteria), **Plan Supervisor** (corrects a running plan when it stalls or misses its definition of done) and **Omnipus** (sets up and changes your agents, teams, skills, connectors, providers and channels). They are not part of any team and cannot be deleted. Each row shows the agent's model; **Edit** opens the same agent editor every agent uses, so what you can change is what that editor allows for the agent — for Omnipus that includes its model, which you can change even when no model is working, because saving is a settings change and not a chat with the model. The Omnipus chat's gear button opens this tab directly. While the list loads the rows are placeholders; if it cannot load, the tab says **Could not load the system agents.** with **Retry**; if a refresh fails after it loaded, the rows stay with **Could not refresh — this list may be out of date.** and **Retry**.
 
 ## Tool calls per turn
 

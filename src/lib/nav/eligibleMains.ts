@@ -6,6 +6,7 @@
  * a failed roster as an empty team.
  */
 import type { Agent, Session, WorkspaceMemberConfig } from '@/lib/api'
+import { isOmnipusAgentId } from '@/lib/omnipus'
 import { mainSessionIdOfMember } from './sessionCoreSeam'
 
 export type EligibleRow = { // not-wire-format: browser-built roster row for one eligible workspace main; assembled from seam ids, never a gateway payload
@@ -55,8 +56,13 @@ const COLLEAGUE_TYPES = new Set<Agent['type']>(['core', 'Main'])
 /** Built-in Admin. Shown only as the validated default-workspace main, never via membership. */
 const ADMIN_AGENT_ID = 'admin'
 
+/**
+ * Omnipus is a hidden member of the default workspace: it is reached only
+ * through its fixed sidebar entry, never as a workspace agent row
+ * (omnipus-system-agent FR-004, BDD-1.5).
+ */
 function isEligibleColleague(agent: Agent): boolean {
-  return agent.id !== ADMIN_AGENT_ID && COLLEAGUE_TYPES.has(agent.type)
+  return agent.id !== ADMIN_AGENT_ID && !isOmnipusAgentId(agent.id) && COLLEAGUE_TYPES.has(agent.type)
 }
 
 function validatedId(id: string | undefined): string | undefined {
@@ -82,6 +88,7 @@ function rowFor(workspaceId: string, agent: Agent, mainSessionId: string): Eligi
 
 function cachedRowStillEligible(row: EligibleRow, input: EligibleInput): boolean {
   if (row.workspaceId !== input.workspaceId) return false
+  if (isOmnipusAgentId(row.agentId)) return false
   if (row.agentId === ADMIN_AGENT_ID) return input.isDefaultWorkspace
   const known = input.roster.find((entry) => entry.agent.id === row.agentId)
   if (!known) return true

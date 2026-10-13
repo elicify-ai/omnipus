@@ -1,11 +1,12 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Buildings, CaretDown, CaretRight } from '@phosphor-icons/react'
+import { Buildings, CaretDown, CaretRight, Plus } from '@phosphor-icons/react'
 import type { Agent, Session, Workspace } from '@/lib/api'
 import { workspacesQueryKeys } from '@/lib/api'
 import { queryClient } from '@/lib/queryClient'
 import type { EligibleRow } from '@/lib/nav/eligibleMains'
 import { useSelectSession } from '@/components/chat/useSelectSession'
+import { useOpenOmnipus } from '@/hooks/useOpenOmnipus'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ErrorState } from '@/components/ui/error-state'
@@ -266,6 +267,9 @@ function WorkspaceBlock({
             onOverlayClose={onOverlayClose}
           />
         ))}
+        {isExpanded && !rosterFailed && (
+          <AddAgentRow workspace={project} onOverlayClose={onOverlayClose} />
+        )}
         {isExpanded && hiddenRows.length > 0 && (
           <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)]">
             <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
@@ -282,6 +286,30 @@ function WorkspaceBlock({
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * omnipus-system-agent FR-045, BDD-4.1 (F:D17): the sidebar's "Add agent"
+ * opens Omnipus's chat with W1 started for THIS workspace; the active
+ * workspace does not change. There is no manual create form (F:D18).
+ */
+function AddAgentRow({ workspace, onOverlayClose }: { workspace: Workspace; onOverlayClose: () => void }) {
+  const openOmnipus = useOpenOmnipus()
+  return (
+    <Button
+      variant="ghost"
+      data-testid={`sidebar-add-agent-${workspace.id}`}
+      aria-label={`Add agent to ${workspace.name}`}
+      onClick={() => {
+        const outcome = openOmnipus({ workflow: 'W1', workspaceId: workspace.id, workspaceName: workspace.name })
+        if (outcome !== 'attach-failed') onOverlayClose()
+      }}
+      className="h-auto w-full justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)]"
+    >
+      <Plus size={12} aria-hidden="true" />
+      Add agent
+    </Button>
   )
 }
 

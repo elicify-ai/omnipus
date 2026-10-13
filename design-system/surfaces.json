@@ -2,6 +2,108 @@
   "version": 1,
   "surfaces": [
     {
+      "id": "_app/omnipus",
+      "kind": "route",
+      "source": "src/routes/_app/omnipus.tsx",
+      "symbol": "Route",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:app-omnipus:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/app-omnipus.test.tsx",
+          "test": "_app/omnipus surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-omnipus:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/omnipus surface browser contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-omnipus:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/omnipus surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/omnipus"
+      }
+    },
+    {
+      "id": "src/components/chat/OmnipusChatScreen.tsx#OmnipusChatScreen",
+      "kind": "screen",
+      "source": "src/components/chat/OmnipusChatScreen.tsx",
+      "symbol": "OmnipusChatScreen",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:src-components-chat-omnipuschatscreen-tsx-omnipuschatscreen:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-chat-omnipuschatscreen-tsx-omnipuschatscreen.test.tsx",
+          "test": "src/components/chat/OmnipusChatScreen.tsx#OmnipusChatScreen surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-chat-omnipuschatscreen-tsx-omnipuschatscreen:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/chat/OmnipusChatScreen.tsx#OmnipusChatScreen surface browser contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-chat-omnipuschatscreen-tsx-omnipuschatscreen:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/chat/OmnipusChatScreen.tsx#OmnipusChatScreen surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/omnipus"
+      }
+    },
+    {
+      "id": "src/components/screens/SettingsScreen.tsx#tab:system-agents",
+      "kind": "tab",
+      "source": "src/components/screens/SettingsScreen.tsx",
+      "symbol": "tab:system-agents",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-screens-settingsscreen-tsx-tab-system-agents:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-screens-settingsscreen-tsx-tab-system-agents.test.tsx",
+          "test": "src/components/screens/SettingsScreen.tsx#tab:system-agents surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-screens-settingsscreen-tsx-tab-system-agents:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/screens/SettingsScreen.tsx#tab:system-agents surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-screens-settingsscreen-tsx-tab-system-agents:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/screens/SettingsScreen.tsx#tab:system-agents surface browser contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/settings?tab=system-agents"
+      }
+    },
+    {
       "id": "__root",
       "kind": "route",
       "source": "src/routes/__root.tsx",
@@ -6361,6 +6463,13 @@
     }
   ],
   "sourceOwners": [
+    {"source":"src/components/chat/OmnipusChatScreen.tsx","lane":3},
+    {"source":"src/components/layout/sidebar/OmnipusEntry.tsx","lane":7},
+    {"source":"src/components/settings/SystemAgentsSection.tsx","lane":6},
+    {"source":"src/components/workspaces/team/TeamGraphView.tsx","lane":2},
+    {"source":"src/components/workspaces/team/TeamListView.tsx","lane":2},
+    {"source":"src/components/workspaces/team/useTeamMembership.ts","lane":2},
+    {"source":"src/routes/_app/omnipus.tsx","lane":3},
     {"source":"src/components/workspaces/WorkItemDetails.tsx","lane":1},
     {"source":"src/components/workspaces/useBoardCardHeights.ts","lane":1},
     {"source":"src/components/workspaces/TaskElapsedTime.tsx","lane":1},

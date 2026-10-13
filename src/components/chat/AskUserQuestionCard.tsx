@@ -20,6 +20,13 @@
 //     with an auto marker.
 //   - Answer disabled until every question is answered/resolved; Cancel
 //     always present (discards selections, EC-1).
+//   - Keyboard first (GitHub #1066, omnipus-system-agent FR-109): every
+//     question has a visible confirm — "Next" on all but the last, the
+//     footer "Answer" on the last — that advances (or submits) by click or
+//     keyboard alike; ↑/↓ move between the options and the free-text field;
+//     Space toggles an option; Enter confirms the question (on an unselected
+//     option of an unanswered multi-select question it first picks that
+//     option). Single-select keeps advancing on selection.
 //   - Client-fired 5-minute grace auto-submit (US-3 S3): once every question
 //     is selected/resolved, 5 minutes with no card interaction submits,
 //     marking auto-resolved answers auto_default.
@@ -71,6 +78,15 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
   const [now, setNow] = useState(() => Date.now())
   const lastInteraction = useRef(Date.now())
   const submitted = useRef(false)
+  const optionsRef = useRef<HTMLDivElement | null>(null)
+  // Set when a confirm moved to another question, so focus follows to its
+  // first option (keyboard users keep their place).
+  const focusOnSwitch = useRef(false)
+  useEffect(() => {
+    if (!focusOnSwitch.current) return
+    focusOnSwitch.current = false
+    optionsRef.current?.querySelector<HTMLElement>('[data-ask-nav]')?.focus()
+  }, [active])
 
   const questions = card.questions
 
@@ -90,13 +106,66 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
     lastInteraction.current = Date.now()
   }
 
+  function answeredIn(q: Question, nextDrafts: Record<string, AnswerDraft>): boolean {
+    const d = nextDrafts[q.header] ?? { selected: [], freeText: '' }
+    return d.selected.length > 0 || d.freeText.trim() !== '' || autoResolved.has(q.header)
+  }
+
   function advanceFrom(_header: string, nextDrafts: Record<string, AnswerDraft>) {
     // Auto-advance to the first question still unanswered under nextDrafts.
-    const idx = questions.findIndex((q) => {
-      const d = nextDrafts[q.header] ?? { selected: [], freeText: '' }
-      return d.selected.length === 0 && d.freeText.trim() === '' && !autoResolved.has(q.header)
-    })
-    if (idx >= 0) setActive(idx)
+    const idx = questions.findIndex((q) => !answeredIn(q, nextDrafts))
+    if (idx >= 0) {
+      focusOnSwitch.current = true
+      setActive(idx)
+    }
+  }
+
+  // #1066: confirm the question at `index` — by the visible Next/Answer
+  // control or by Enter. Moves to the next unanswered question after it
+  // (wrapping), or submits the whole card from the last question once every
+  // question is answered. Never confirms an unanswered question.
+  function confirmQuestion(index: number, nextDrafts: Record<string, AnswerDraft>) {
+    touch()
+    const current = questions[index]
+    if (!current || !answeredIn(current, nextDrafts)) return
+    const unansweredAfter = [...questions.slice(index + 1), ...questions.slice(0, index)]
+      .find((candidate) => !answeredIn(candidate, nextDrafts))
+    if (unansweredAfter) {
+      focusOnSwitch.current = true
+      setActive(questions.indexOf(unansweredAfter))
+      return
+    }
+    if (index < questions.length - 1) {
+      focusOnSwitch.current = true
+      setActive(index + 1)
+      return
+    }
+    submit()
+  }
+
+  // Arrow-key movement among the active question's options and free text.
+  function moveFocus(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    const items = Array.from(optionsRef.current?.querySelectorAll<HTMLElement>('[data-ask-nav]') ?? [])
+    const at = items.indexOf(event.target as HTMLElement)
+    if (at < 0) return
+    event.preventDefault()
+    const next = event.key === 'ArrowDown' ? Math.min(items.length - 1, at + 1) : Math.max(0, at - 1)
+    items[next]?.focus()
+  }
+
+  function optionKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, q: Question, index: number, label: string) {
+    if (event.key !== 'Enter' || !q.multi_select) return
+    // Multi-select: Enter confirms instead of toggling (Space toggles).
+    event.preventDefault()
+    const cur = draftFor(q.header)
+    if (cur.selected.length === 0 && cur.freeText.trim() === '') {
+      const next = { ...drafts, [q.header]: { selected: [label], freeText: '' } }
+      setDrafts(next)
+      confirmQuestion(index, next)
+      return
+    }
+    confirmQuestion(index, drafts)
   }
 
   function selectOption(q: Question, label: string) {
@@ -235,7 +304,9 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
   }
 
   // ── Pending: the flat, tabbed question zone ──────────────────────────────
-  const q = questions[Math.min(active, questions.length - 1)]
+  const activeIndex = Math.min(active, questions.length - 1)
+  const q = questions[activeIndex]
+  const isLastQuestion = activeIndex === questions.length - 1
   const remainingMs = card.default_safe_at ? new Date(card.default_safe_at).getTime() - now : 0
 
   return (
@@ -302,7 +373,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
           </div>
         )}
 
-        <div className="flex flex-col" data-testid="ask-user-options">
+        <div className="flex flex-col" data-testid="ask-user-options" ref={optionsRef} onKeyDown={moveFocus}>
           {orderedOptions(q).map((o) => {
             const d = draftFor(q.header)
             const selected = d.selected.includes(o.label)
@@ -313,6 +384,8 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                 variant="ghost"
                 aria-pressed={selected}
                 onClick={() => selectOption(q, o.label)}
+                onKeyDown={(event) => optionKeyDown(event, q, activeIndex, o.label)}
+                data-ask-nav
                 data-testid="ask-user-option"
                 className={cn(
                   'h-auto w-full items-start justify-start gap-[var(--space-2-5)] px-[var(--space-2)] py-[var(--space-2)] text-left font-[var(--font-weight-regular)]',
@@ -364,12 +437,40 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
               tabIndex={0}
               value={draftFor(q.header).freeText}
               onChange={(e) => typeFreeText(q, e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return
+                e.preventDefault()
+                confirmQuestion(activeIndex, drafts)
+              }}
+              aria-label={`Your own answer to: ${q.question}`}
+              data-ask-nav
               placeholder="Something else — type your own answer…"
               data-testid="ask-user-free-text"
               className="w-full bg-transparent border-0 border-b border-dashed border-[var(--color-border)] focus:border-solid focus:border-[var(--color-accent)] outline-none py-[var(--space-1)] px-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)] placeholder:text-[var(--color-muted)]"
             />
           </div>
         </div>
+
+        {/* #1066: the visible per-question confirm. The last question's
+            confirm is the footer's Answer, which submits the whole card. */}
+        {!isLastQuestion && (
+          <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] pt-[var(--space-2)]">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!isAnswered(q)}
+              onClick={() => confirmQuestion(activeIndex, drafts)}
+              data-testid="ask-user-next"
+              className="h-auto rounded-lg px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)]"
+            >
+              Next
+            </Button>
+            <span className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid="ask-user-keys-hint">
+              ↑↓ move · {q.multi_select ? 'Space select · ' : ''}Enter next
+            </span>
+          </div>
+        )}
 
         {q.default_safe && q.recommended && card.default_safe_at && !autoResolved.has(q.header) && (
           <div

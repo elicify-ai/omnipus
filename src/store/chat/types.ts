@@ -12,6 +12,7 @@ import type {
   CancelFrame,
   ServerFrame,
   LLMError as GeneratedLLMError,
+  WorkflowStart,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 import type { UserDeliveryState } from '@/lib/userDeliveryState'
@@ -1048,7 +1049,12 @@ export interface ChatStore {
   //   forwards it as `metadata.model_name` in the WS message frame. The
   //   server honors it when present and falls back to the agent's `model`
   //   config when absent.
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; clientMessageId?: string; queuedAt?: string }) => void
+  /**
+   * `workflowStart` (omnipus-system-agent K8, FR-012): target data a screen
+   * button attaches to its message into Omnipus's main (W1 create an agent,
+   * W18 set up a team, for a named workspace). Never an instruction.
+   */
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; clientMessageId?: string; queuedAt?: string; workflowStart?: WorkflowStart }) => void
   /**
    * Review finding 17 — "Try again" on a failed user message used to call
    * `sendMessage(content)` with a brand-new id, which left the FAILED

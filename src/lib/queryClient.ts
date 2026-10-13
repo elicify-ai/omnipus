@@ -240,6 +240,13 @@ const _schemaErrorLastToast = new Map<string, number>()
 const _SCHEMA_ERROR_DEDUP_MS = 5_000
 
 
+function firstIssueText(err: ApiSchemaError): string {
+  const issue = err.zodIssues[0]
+  if (!issue) return ''
+  const field = issue.path.length > 0 ? issue.path.join('.') : 'response'
+  return `: ${field} — ${issue.message}`
+}
+
 function _handleApiSchemaError(err: unknown): void {
   if (!(err instanceof ApiSchemaError)) return
   if (typeof window === 'undefined') return
@@ -254,7 +261,9 @@ function _handleApiSchemaError(err: unknown): void {
   void import('@/store/ui')
     .then(({ useUiStore }) => {
       useUiStore.getState().addToast({
-        message: 'Backend response failed validation. Server may be a different version. Please refresh.',
+        // GitHub #1076: say what is wrong (which endpoint, which field) — never
+        // guess a version mismatch the browser cannot know about.
+        message: `The server sent data this page could not read (${err.endpoint}${firstIssueText(err)}).`,
         variant: 'error',
       })
     })

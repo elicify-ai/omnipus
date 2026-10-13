@@ -2,16 +2,17 @@
  * enterWorkspaceChat body (FR-004).
  *
  * Validates the remembered pointer, then resolveWorkspaceEntry. Exact visible
- * pointer, else the seam's validated Ava main, else unavailable / Retry with
- * send off. A transport failure keeps the committed chat and does not fall
- * back. Entry attaches without acknowledgement. A newer navigation intent
+ * pointer, else the first conversation agent's validated main in team order
+ * (omnipus-system-agent FR-107), else the empty "Set up a team" state; a
+ * first agent without a resolved main is unavailable / Retry with send off.
+ * A transport failure keeps the committed chat and does not fall back. Entry attaches without acknowledgement. A newer navigation intent
  * wins; a late resolution must not split the tuple.
  */
-import { fetchSessionDetail, fetchSessions, fetchWorkspace, readSessionFetchCoverage } from '@/lib/api'
+import { fetchAgents, fetchSessionDetail, fetchSessions, fetchWorkspace, readSessionFetchCoverage } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
-import type { Session, WorkspaceMemberConfig } from '@/lib/api'
+import type { Session } from '@/lib/api'
 import { ApiError } from '@/lib/api-error'
-import { resolveWorkspaceEntry, workspaceEntryBlocksSend, type EntryResult, type FailedAttempt, type PointerVerdict, type WelcomeEntry } from '@/lib/nav/workspaceEntry'
+import { resolveWorkspaceEntry, workspaceEntryBlocksSend, type EmptyTeamEntry, type EntryResult, type EntryTeam, type FailedAttempt, type PointerVerdict, type WelcomeEntry } from '@/lib/nav/workspaceEntry'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { clearPendingAutoApproveOnSessionChange, readPersistedSessionByWorkspace, useSessionStore } from '@/store/session'
@@ -19,6 +20,7 @@ import { clearPendingAutoApproveOnSessionChange, readPersistedSessionByWorkspace
 export type WorkspaceEntryView =
   | { status: 'exact'; acknowledged: false }
   | WelcomeEntry
+  | EmptyTeamEntry
   | Extract<EntryResult, { status: 'unavailable' }>
   | FailedAttempt
 
@@ -133,12 +135,13 @@ async function resolvePartialListPointer(
 async function loadInputs(workspaceId: string): Promise<{
   sessions: Session[]
   transportFailed: boolean
-  member: WorkspaceMemberConfig
+  team: EntryTeam
   pointerVerdict: PointerVerdict
 }> {
-  const [sessionsResult, workspaceResult] = await Promise.allSettled([
+  const [sessionsResult, workspaceResult, agentsResult] = await Promise.allSettled([
     fetchSessions(),
     fetchWorkspace(workspaceId),
+    fetchAgents(),
   ])
   const sessions = sessionsResult.status === 'fulfilled' && Array.isArray(sessionsResult.value)
     ? sessionsResult.value
@@ -156,14 +159,17 @@ async function loadInputs(workspaceId: string): Promise<{
     pointerVerdict = await resolvePartialListPointer(remembered, workspaceId, sessions)
   }
   // Exact restore needs only the visible session and its immutable owner.
-  // Workspace details are required only to resolve the welcome/unavailable path.
+  // The team (workspace + agents) is required only to resolve the
+  // welcome / empty-team / unavailable path; a team that could not load is a
+  // retryable failure, never a fallback (dataset D4).
   const exactAvailable = pointerVerdict === 'visible'
-  const transportFailed = sessionsFailed || (workspaceResult.status === 'rejected' && !exactAvailable)
+  const teamFailed = workspaceResult.status === 'rejected' || agentsResult.status === 'rejected'
+  const transportFailed = sessionsFailed || (teamFailed && !exactAvailable)
   // A transport failure outranks every pointer classification — the pointer
   // could not actually be checked (previously done by re-classifying with the
   // flag at the call site; now applied once, here).
   if (transportFailed) pointerVerdict = 'timeout'
-  for (const [resource, result] of [['sessions', sessionsResult], ['workspace', workspaceResult]] as const) {
+  for (const [resource, result] of [['sessions', sessionsResult], ['workspace', workspaceResult], ['agents', agentsResult]] as const) {
     if (result.status !== 'rejected') continue
     const fields = {
       workspaceId, resource,
@@ -173,8 +179,12 @@ async function loadInputs(workspaceId: string): Promise<{
     logDiagnostic('sessionWorkspaceEntryLoadFailed', fields)
   }
   const workspace = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null
-  const member = workspace?.member_configs?.ava ?? {}
-  return { sessions, transportFailed, member, pointerVerdict }
+  const team: EntryTeam = {
+    coreTeam: workspace?.core_team ?? [],
+    memberConfigs: workspace?.member_configs ?? {},
+    agents: agentsResult.status === 'fulfilled' ? agentsResult.value : [],
+  }
+  return { sessions, transportFailed, team, pointerVerdict }
 }
 
 function committedNow(): { sessionId: string; agentId: string } | null {
@@ -217,7 +227,7 @@ function applyEntry(
     return
   }
 
-  if (result.status === 'unavailable') {
+  if (result.status === 'unavailable' || result.status === 'empty-team') {
     if (!stillViewing) return
     useSessionStore.setState({ workspaceEntry: result })
     if (useSessionStore.getState().activeSessionId !== null) {
@@ -297,7 +307,7 @@ async function execute(workspaceId: string): Promise<void> {
       rememberedSessionId: rememberedId(workspaceId),
       pointerVerdict: loaded.pointerVerdict,
       sessions: loaded.sessions,
-      avaMember: loaded.member,
+      team: loaded.team,
       committed,
     })
     applyEntry(workspaceId, result, loaded.sessions, token)

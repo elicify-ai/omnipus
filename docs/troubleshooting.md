@@ -188,6 +188,10 @@ After the upgrade there is deliberately no fallback that reads an old entry: it 
 
 A page, panel, or the onboarding wizard could not load or render — for example when a tab still references JavaScript files from an earlier deployment. This is not a sign-in failure and not a reason to restart setup. Press **Reload page** to fetch the current files and try again. If the message keeps returning, open your browser's developer console and copy the error when reporting the problem. Look for `[router] route load/render failed:` or `[app] Uncaught render error:`.
 
+## An agent is missing and a notice says its data is invalid
+
+If one agent's saved data does not match what the web app expects (for example a name longer than 100 characters), that one agent is left out of the agent lists and a notice names it: *One agent's data is invalid and is hidden from the list: <agent id>, field <field> (<reason>).* Every other agent stays usable. Fix the named field — for example shorten the name in `config.json` or through the API — and the agent returns on the next refresh. A response the web app cannot read at all says *The server sent data this page could not read* with the address and field; it does not mean the browser and server versions differ.
+
 ## The web app looks outdated after a source build
 
 The Go binary embeds the web app from `pkg/gateway/spa/` — a copy of the frontend build output, not the output itself, so building without refreshing that copy serves an old interface. `make build` refreshes it and builds in one step. Confirm a change reached the binary by searching the bundled assets for a string only it contains:
