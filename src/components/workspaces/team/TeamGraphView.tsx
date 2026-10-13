@@ -20,8 +20,10 @@ import { Card } from '@/components/ui/card'
 import { useUiStore } from '@/store/ui'
 import { useActiveWorkspace } from '../WorkspaceTabContainer'
 import { WorkspaceTeamGraph } from './WorkspaceTeamGraph'
+import { AddAgentPicker } from './AddAgentPicker'
 import {
   addEdge,
+  addMember,
   buildSaveEdges,
   buildTeamEditState,
   buildTeamGraphModel,
@@ -54,7 +56,17 @@ export interface GraphSaveStatus { // not-wire-format: in-browser autosave statu
   lastSavedAt?: Date | null
 }
 
-export function TeamGraphView({ renderSaveStatus }: { renderSaveStatus: (state: GraphSaveStatus) => React.ReactNode }) {
+export function TeamGraphView({
+  renderSaveStatus,
+  onCreateWithOmnipus,
+  workspaces,
+}: {
+  renderSaveStatus: (state: GraphSaveStatus) => React.ReactNode
+  /** FR-103: the Create-with-Omnipus choice offered from the graph's picker. */
+  onCreateWithOmnipus?: () => void
+  /** Every workspace, for the picker's "Not in any workspace" mark. */
+  workspaces?: readonly Workspace[]
+}) {
   const workspace = useActiveWorkspace()
   const workspaceId = workspace.id
   const queryClient = useQueryClient()
@@ -75,6 +87,11 @@ export function TeamGraphView({ renderSaveStatus }: { renderSaveStatus: (state: 
     queryFn: () => fetchWorkspaceDelegation(workspaceId),
     staleTime: 15_000,
     enabled: !!workspaceId,
+    // The Team shell already loads this graph while the list is shown; on
+    // switching to Graph, show exactly that result (data, or its failure with
+    // Retry) instead of silently re-requesting it.
+    refetchOnMount: false,
+    retryOnMount: false,
   })
 
   const {
@@ -387,6 +404,8 @@ export function TeamGraphView({ renderSaveStatus }: { renderSaveStatus: (state: 
     return s
   }, [agents])
 
+  const memberIds = useMemo(() => new Set(editState?.members ?? []), [editState])
+
   const graph = useMemo(() => {
     if (!editState) return { nodes: [], edges: [], defaultDepth: DEFAULT_DEPTH_FALLBACK }
     return buildTeamGraphModel(editState, agents)
@@ -428,6 +447,11 @@ export function TeamGraphView({ renderSaveStatus }: { renderSaveStatus: (state: 
   const handleSetDepth = useCallback(
     (from: string, to: string, depth: number | undefined) =>
       setEditState((prev) => (prev ? setEdgeDepth(prev, from, to, depth) : prev)),
+    [],
+  )
+  const handleAddMember = useCallback(
+    (agentId: string) =>
+      setEditState((prev) => (prev ? addMember(prev, agentId) : prev)),
     [],
   )
   const handleDeleteEdge = useCallback(
@@ -501,6 +525,11 @@ export function TeamGraphView({ renderSaveStatus }: { renderSaveStatus: (state: 
           Drag the gold dot to delegate · click an edge to tune modes &amp; depth
         </p>
         {renderSaveStatus({ status: saveStatus, error: saveError ?? undefined, lastSavedAt })}
+        {/* ADR-075 FR-047: the "this agent gets the workspace's live logins"
+            disclosure travels INSIDE AddAgentPicker, so both of this view's
+            render sites carry it. In the graph view a pick becomes a node
+            and saves with the graph's own autosave. */}
+        <AddAgentPicker agents={agents} memberIds={memberIds} workspaces={workspaces} onAdd={handleAddMember} onCreateWithOmnipus={onCreateWithOmnipus} />
       </div>
 
       {/* spec §6.3 "Team graph — Stale / partial: cached + hint": a failed
@@ -551,9 +580,11 @@ export function TeamGraphView({ renderSaveStatus }: { renderSaveStatus: (state: 
                 No agents on this team yet
               </p>
               <p className="mt-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-                Use Add agent above to add the first agent, then draw delegation edges between them.
+                Add an agent to drop the first node, then draw delegation edges between them.
               </p>
             </div>
+            {/* ADR-075 FR-047: second render site — the disclosure comes with the picker. */}
+            <AddAgentPicker agents={agents} memberIds={memberIds} workspaces={workspaces} onAdd={handleAddMember} onCreateWithOmnipus={onCreateWithOmnipus} />
           </div>
         ) : (
           <WorkspaceTeamGraph

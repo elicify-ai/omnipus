@@ -37,6 +37,7 @@ import { handleCatchUpFrame } from './catchup-frames'
 import { handleProviderFrame } from './provider-frames'
 import { handleMailPanelObserverFrame } from './mail-panel-observer-frames'
 import { handleSecretRequestFrame } from './secret-request-frames'
+import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
 
@@ -2374,9 +2375,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         case 'tool_call_result': {
           if (!targetSid) break
           const clampedResult = clampToolResult(frame.result)
-          // ADR-091 D7/D10: see case 'tool_call_start' — every result here
-          // is for this session's own flat tool call; no span-nesting path.
-          withBucket(targetSid, (b) => applyToolCallResultFrame(b, frame, clampedResult))
+          withBucket(targetSid, (b) => applyToolCallResultFrame(b, frame, clampedResult)) // ADR-091 D7/D10: own flat call (see tool_call_start)
+          refreshRosterAfterAgentMutation(frame) // #215: a successful agent change refreshes roster + teams
           break
         }
 

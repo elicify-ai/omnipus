@@ -51,17 +51,18 @@ export function invalidAgentRowText(row: InvalidAgentRow): string {
 const reported = new Set<string>()
 
 /**
- * Report each rejected row once per page life (the list is polled — the same
- * bad row must not toast on every poll): console, diagnostics and one toast
- * naming the agent and field.
+ * Report each rejected row: logged on every load (the console and the
+ * diagnostics record name the agent and field each time), but toasted once per
+ * page life — the list is polled, and the same bad row must not toast on every
+ * poll.
  */
 export function reportInvalidAgentRows(invalid: readonly InvalidAgentRow[]): void {
   for (const row of invalid) {
+    console.warn('[agents] invalid agent row dropped (validation failed)', row)
+    logDiagnostic('agentsInvalidRowDropped', { agentId: row.id, field: row.field })
     const key = `${row.id}|${row.field}|${row.message}`
     if (reported.has(key)) continue
     reported.add(key)
-    console.warn('[agents] invalid agent row dropped', row)
-    logDiagnostic('agentsInvalidRowDropped', { agentId: row.id, field: row.field })
     if (typeof window === 'undefined') continue
     void import('@/store/ui')
       .then(({ useUiStore }) => {

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChatCircleDots, MagnifyingGlass, Plus, Star, UserPlus, Warning } from '@phosphor-icons/react'
+import { ChatCircleDots, MagnifyingGlass, Plus, Star, Warning } from '@phosphor-icons/react'
 import {
   Popover,
   PopoverAnchor,
@@ -24,9 +24,8 @@ interface AddAgentPickerProps {
   memberIds: ReadonlySet<string>
   onAdd: (agentId: string) => void
   /**
-   * omnipus-system-agent FR-103: when given, the popover first offers
-   * "Create with Omnipus" and "Add an existing agent"; the second shows the
-   * candidate list. Omitted → the candidate list opens directly.
+   * omnipus-system-agent FR-103: when given (and not controlled), the popover
+   * also offers "Create with Omnipus instead" below the candidate list.
    */
   onCreateWithOmnipus?: () => void
   /**
@@ -92,9 +91,6 @@ export function AddAgentPicker({
   const open = controlled ? controlled.open : ownOpen
   const setOpen = controlled ? controlled.onOpenChange : setOwnOpen
   const [query, setQuery] = useState('')
-  // FR-103: the two Add choices come first when Omnipus creation is wired.
-  const choiceStep = !!onCreateWithOmnipus && !controlled
-  const [step, setStep] = useState<'choose' | 'existing'>(choiceStep ? 'choose' : 'existing')
 
   // F:D21: an agent no workspace's team lists. Unknown without the list.
   const inSomeWorkspace = useMemo(() => {
@@ -131,10 +127,7 @@ export function AddAgentPicker({
       open={open}
       onOpenChange={(o) => {
         setOpen(o)
-        if (!o) {
-          setQuery('')
-          setStep(choiceStep ? 'choose' : 'existing')
-        }
+        if (!o) setQuery('')
       }}
     >
       {controlled ? (
@@ -156,39 +149,6 @@ export function AddAgentPicker({
         align="end"
         className="w-72 border-[var(--color-border)] bg-[var(--color-surface-1)] p-0"
       >
-        {step === 'choose' && onCreateWithOmnipus && !controlled ? (
-          <div className="flex flex-col py-[var(--space-1)]" role="group" aria-label="Add agent">
-            <Button
-              variant="ghost"
-              autoFocus
-              data-testid="team-add-agent-create-with-omnipus"
-              onClick={() => {
-                setOpen(false)
-                onCreateWithOmnipus()
-              }}
-              className="h-auto w-full justify-start gap-[var(--space-2)] rounded-none px-[var(--space-2)] py-[var(--space-2)] text-left"
-            >
-              <ChatCircleDots size={16} aria-hidden="true" />
-              <span className="min-w-0 flex-1">
-                <span className="block text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Create with Omnipus</span>
-                <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Omnipus plans the agent with you in its chat</span>
-              </span>
-            </Button>
-            <Button
-              variant="ghost"
-              data-testid="team-add-agent-existing"
-              onClick={() => setStep('existing')}
-              className="h-auto w-full justify-start gap-[var(--space-2)] rounded-none px-[var(--space-2)] py-[var(--space-2)] text-left"
-            >
-              <UserPlus size={16} aria-hidden="true" />
-              <span className="min-w-0 flex-1">
-                <span className="block text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Add an existing agent</span>
-                <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Pick an agent you already have</span>
-              </span>
-            </Button>
-          </div>
-        ) : (
-        <>
         {/* FR-047. First thing in the popover, above the search and the
             candidates — see the component doc comment for why it is here and
             not in a tooltip, a toast, or the release notes. */}
@@ -236,7 +196,7 @@ export function AddAgentPicker({
             <p className="px-[var(--space-2-5)] py-[var(--space-3)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               {query.trim()
                 ? 'No matching agents.'
-                : 'No other agents.'}
+                : 'No other agents'}
             </p>
           ) : (
             candidates.map((a) => (
@@ -275,7 +235,23 @@ export function AddAgentPicker({
             ))
           )}
         </div>
-        </>
+        {/* FR-103: the other Add choice, available from the graph view's
+            picker too (the list view offers both in its Add agent menu). */}
+        {onCreateWithOmnipus && !controlled && (
+          <div className="border-t border-[var(--color-border)] p-[var(--space-1)]">
+            <Button
+              variant="ghost"
+              data-testid="team-add-agent-create-with-omnipus"
+              onClick={() => {
+                setOpen(false)
+                onCreateWithOmnipus()
+              }}
+              className="h-auto w-full justify-start gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-body-compact-size)]"
+            >
+              <ChatCircleDots size={14} aria-hidden="true" />
+              Create with Omnipus instead
+            </Button>
+          </div>
         )}
       </PopoverContent>
     </Popover>

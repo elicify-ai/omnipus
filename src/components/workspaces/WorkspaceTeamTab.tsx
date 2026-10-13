@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Graph, ListBullets, Plus, UsersThree } from '@phosphor-icons/react'
-import { fetchAgents, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
+import { fetchAgents, fetchWorkspaceDelegation, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { useOpenOmnipus } from '@/hooks/useOpenOmnipus'
 import { useUiStore } from '@/store/ui'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -51,6 +51,14 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
   useEffect(() => () => useUiStore.getState().closeEditAgentSlideOver(), [])
 
   const agentsQuery = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, staleTime: 60_000 })
+  // Warm the delegation graph even while the list is shown, so switching to
+  // Graph opens the editor at once (same key and freshness as the graph view).
+  useQuery({
+    queryKey: workspacesQueryKeys.delegation(workspace.id),
+    queryFn: () => fetchWorkspaceDelegation(workspace.id),
+    staleTime: 15_000,
+    enabled: !!workspace.id,
+  })
   const workspacesQuery = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
@@ -107,7 +115,8 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
             { value: 'graph', label: 'Graph', icon: <Graph size={14} aria-hidden="true" />, testId: 'team-view-graph' },
           ]}
         />
-        {addAgent}
+        {/* The list view's Add agent menu; the graph view carries its own picker. */}
+        {view === 'list' && addAgent}
       </div>
 
       {membership.status.kind === 'uncertain' && (
@@ -137,7 +146,11 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
             addAgent={addAgent}
           />
         ) : (
-          <TeamGraphView renderSaveStatus={(state) => <AutoSaveIndicator {...state} />} />
+          <TeamGraphView
+            renderSaveStatus={(state) => <AutoSaveIndicator {...state} />}
+            onCreateWithOmnipus={() => startWorkflow('W1')}
+            workspaces={workspacesQuery.data}
+          />
         )}
       </div>
       {/* The unified global-agent editor is NOT mounted here: it is
