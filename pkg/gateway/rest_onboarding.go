@@ -2041,9 +2041,6 @@ const probeSignInUnavailableMsg = "sign-in cannot be probed for this provider"
 // subscription backend.
 const signInProbeTimeout = 90 * time.Second
 
-// signInProbePrompt is the smallest prompt that still forces a real turn.
-const signInProbePrompt = "hi"
-
 // probeSignIn runs the `auth: sign_in` half of POST /onboarding/probe-provider.
 //
 // Which rows probe is a fixed structural fact (providers.OAuthEntryOwner),
