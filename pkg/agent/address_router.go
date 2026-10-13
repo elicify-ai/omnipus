@@ -193,7 +193,7 @@ func (al *AgentLoop) admitRequest(ctx context.Context, a RequestAdmission) (requ
 		ID:        requestID,
 		Role:      "user",
 		AgentID:   a.Receiver.AgentID,
-		Content:   composeRequestText(requestID, a.SenderLabel, a.Content),
+		Content:   capture.Text,
 		Timestamp: capture.AdmittedAt,
 		// Display label of the left-side sender (F15), from the router-built
 		// Sender, never from the request text.
