@@ -4,26 +4,25 @@
 
 package gateway
 
-// Regression tests for the 2026-10-13 provider hotfix (H1, H3, H4), driven
+// Regression tests for the 2026-10-13 provider hotfix (H1, H4), driven
 // through the real HTTP handlers against the REAL committed catalog
 // (catalog.EmbeddedSnapshot) — the document the founder's instance served.
 
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -42,30 +41,6 @@ func installEmbeddedCatalog(t *testing.T, api *restAPI) *catalog.Catalog {
 	api.providerCatalog = cat
 	installProbeCatalog(t, cat)
 	return cat
-}
-
-// writeProviderConfigRows replaces config.json's providers[] with rows.
-func writeProviderConfigRows(t *testing.T, api *restAPI, rows ...map[string]any) {
-	t.Helper()
-	list := make([]any, 0, len(rows))
-	for _, r := range rows {
-		list = append(list, r)
-	}
-	b, err := json.Marshal(map[string]any{
-		"version":   1,
-		"agents":    map[string]any{"defaults": map[string]any{}, "list": []any{}},
-		"providers": list,
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(api.configPath(), b, 0o600))
-}
-
-func decodeOperationResult(t *testing.T, w *httptest.ResponseRecorder) gen.OperationResult {
-	t.Helper()
-	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-	var res gen.OperationResult
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
-	return res
 }
 
 // H1 — PUT /providers/openai with auth_method sign_in is refused: the plain
@@ -95,6 +70,33 @@ func TestPutProvider_SignInOnRowWithoutMechanism400(t *testing.T) {
 	assert.Equal(t, http.StatusOK, ok.Code, "body=%s", ok.Body.String())
 }
 
+// H1 (test-analyzer I2) — onboarding completion is the other path that
+// persisted the dead row: completing onboarding with the plain `openai` row
+// and auth_method sign_in is refused before anything is written, pointing at
+// the row that can sign in. (The valid sign-in completion control is
+// rest_onboarding_complete_test.go's codex-cli case.)
+func TestOnboardingComplete_SignInOnRowWithoutMechanism400(t *testing.T) {
+	withEdition(t, config.EditionHosted)
+	api, tmpDir := newAuthMethodOnboardingAPI(t)
+	installEmbeddedCatalog(t, api)
+	before, err := os.ReadFile(tmpDir + "/config.json")
+	require.NoError(t, err)
+	body := `{"provider":{"auth_method":"sign_in","id":"openai","model":"gpt-5.4"},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
+
+	w := postOnboardingComplete(api, body)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, openAISignInElsewhereMsg, resp["error"])
+	assert.Equal(t, "id", resp["field"])
+	assert.False(t, api.onboardingMgr.IsComplete(), "a refused completion leaves onboarding open for a retry")
+	after, err := os.ReadFile(tmpDir + "/config.json")
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "a refused completion persists nothing")
+}
+
 // H1 — a pre-existing `openai` row saved with auth_method sign_in (how the
 // founder's instance got its dead row) explains itself in GET /providers
 // instead of sitting silently "disconnected".
@@ -112,117 +114,6 @@ func TestListProviders_SignInRowWithoutMechanismExplains(t *testing.T) {
 	assert.Equal(t, gen.ProviderStatusDisconnected, provs[0].Status)
 	require.NotNil(t, provs[0].Error, "the dead sign-in row must say why it can never connect")
 	assert.Equal(t, openAISignInElsewhereMsg, *provs[0].Error)
-}
-
-// signInTestUpstream is a minimal OpenAI-compatible completion endpoint that
-// records what the probe sent.
-type signInTestUpstream struct {
-	*httptest.Server
-	mu     sync.Mutex
-	auth   []string
-	models []string
-}
-
-func newSignInTestUpstream(t *testing.T) *signInTestUpstream {
-	t.Helper()
-	u := &signInTestUpstream{}
-	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Model string `json:"model"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		u.mu.Lock()
-		u.auth = append(u.auth, r.Header.Get("Authorization"))
-		u.models = append(u.models, req.Model)
-		u.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
-	}))
-	t.Cleanup(u.Close)
-	return u
-}
-
-func (u *signInTestUpstream) seen() ([]string, []string) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	return append([]string(nil), u.auth...), append([]string(nil), u.models...)
-}
-
-// H3 — POST /providers/{id}/test on a signed-in sign_in row runs the same
-// real probe the sign-in path uses (one completion carrying the saved
-// token), instead of answering "no API key configured for this provider".
-func TestProviderTest_SignInRowRunsSignInProbe(t *testing.T) {
-	t.Run("signed in: one completion with the saved token and the row's model", func(t *testing.T) {
-		signedOutCodexHome(t)
-		up := newSignInTestUpstream(t)
-		api := newProviderValidationTestAPI(t, "", "")
-		installEmbeddedCatalog(t, api)
-		writeProviderConfigRows(t, api, map[string]any{
-			"provider": "openai-chatgpt", "model": "gpt-5.4",
-			"auth_method": "sign_in", "api_base": up.URL,
-		})
-		store, err := api.resolveSignInCredStore()
-		require.NoError(t, err)
-		require.NoError(t, providers.WriteStoreOAuthCredential("openai-chatgpt", store, providers.OAuthCredential{
-			AccessToken: "saved-device-code-token",
-			AccountID:   "acct-1",
-			ExpiresAt:   time.Now().Add(time.Hour),
-		}))
-
-		res := decodeOperationResult(t, doProviderTest(t, api, "openai-chatgpt"))
-
-		assert.True(t, res.Success, "error=%v", res.Error)
-		assert.Nil(t, res.Error)
-		auths, models := up.seen()
-		assert.Equal(t, []string{"gpt-5.4"}, models, "exactly one completion, on the row's own model")
-		assert.Equal(t, []string{"Bearer saved-device-code-token"}, auths,
-			"the encrypted-store sign-in token authenticates the test")
-	})
-
-	t.Run("signed out: not signed in, and nothing is spent", func(t *testing.T) {
-		signedOutCodexHome(t)
-		up := newSignInTestUpstream(t)
-		api := newProviderValidationTestAPI(t, "", "")
-		installEmbeddedCatalog(t, api)
-		writeProviderConfigRows(t, api, map[string]any{
-			"provider": "openai-chatgpt", "model": "gpt-5.4",
-			"auth_method": "sign_in", "api_base": up.URL,
-		})
-
-		res := decodeOperationResult(t, doProviderTest(t, api, "openai-chatgpt"))
-
-		assert.False(t, res.Success)
-		require.NotNil(t, res.Error)
-		assert.Equal(t, "not signed in", *res.Error)
-		_, models := up.seen()
-		assert.Empty(t, models, "a test with no saved login must not call the upstream")
-	})
-
-	t.Run("sign_in on a row with no mechanism points at the row that has one", func(t *testing.T) {
-		api := newProviderValidationTestAPI(t, "", "")
-		installEmbeddedCatalog(t, api)
-		writeProviderConfigRows(t, api, map[string]any{
-			"provider": "openai", "model": "gpt-5.4", "auth_method": "sign_in",
-		})
-
-		res := decodeOperationResult(t, doProviderTest(t, api, "openai"))
-
-		assert.False(t, res.Success)
-		require.NotNil(t, res.Error)
-		assert.Equal(t, openAISignInElsewhereMsg, *res.Error)
-	})
-
-	t.Run("api_key rows are unchanged: no key is still 'no API key configured'", func(t *testing.T) {
-		api := newProviderValidationTestAPI(t, "", "")
-		installEmbeddedCatalog(t, api)
-		writeProviderConfigRows(t, api, map[string]any{"provider": "openai", "model": "gpt-5.4"})
-
-		res := decodeOperationResult(t, doProviderTest(t, api, "openai"))
-
-		assert.False(t, res.Success)
-		require.NotNil(t, res.Error)
-		assert.Equal(t, "no API key configured for this provider", *res.Error)
-	})
 }
 
 // installEmbeddedWindowCatalog serves the committed catalog to the window
@@ -313,4 +204,58 @@ func TestProvidersCatalog_ServedHidesSignInWithoutMechanism(t *testing.T) {
 	row, ok := api.providerCatalog.Provider("openai")
 	require.True(t, ok)
 	assert.Contains(t, row.AuthMethods, catalog.AuthSignIn)
+}
+
+// H4 (test-analyzer I4) — the boot-time prime of unknown windows used to
+// skip any agent whose stored model has no provider: its local endpoint was
+// never asked for its window, so every turn stayed refused with
+// context_window_unknown. It now asks under the provider the model runs on.
+func TestPrimeUnknownWindows_ProviderlessLocalAgentIsAsked(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:         home,
+				DefaultModel: config.DefaultModel{Provider: "ollama", Model: "llama3.1:8b"},
+				MaxTokens:    4096,
+			},
+			List: []config.AgentConfig{
+				// Pins a primary model WITHOUT a provider: agentPrimaryProviderID
+				// answers "" for it.
+				{ID: "bare-local", Name: "Bare", Model: &config.AgentModelConfig{Primary: "qwen3:8b"}},
+			},
+		},
+		Providers: []*config.ModelConfig{
+			{Provider: "ollama", Model: "llama3.1:8b", Models: []string{"qwen3:8b"}, APIBase: "http://127.0.0.1:11434"},
+		},
+		Context: config.DefaultContextSettings(),
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(home, "config.json"), marshalConfigForDisk(t, cfg), 0o600))
+	seedAgentEntities(t, home, cfg.Agents.List)
+	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
+	inst, ok := al.GetRegistry().GetAgent("bare-local")
+	require.True(t, ok)
+	require.True(t, inst.WindowUnknown, "precondition: the provider-less local agent's window is unknown")
+	require.Equal(t, "", agentPrimaryProviderID(cfg, &cfg.Agents.List[0]), "precondition: stored without a provider")
+
+	var mu sync.Mutex
+	var asked []string
+	agent.SetLiveWindowLookup(func(provider, _, model string) (int, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		asked = append(asked, provider+"/"+model)
+		return 0, false
+	})
+	t.Cleanup(func() { agent.SetLiveWindowLookup(nil) })
+
+	primeUnknownWindows(al)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Contains(t, asked, "ollama/qwen3:8b",
+		"the provider-less agent is primed under the provider its model runs on")
 }

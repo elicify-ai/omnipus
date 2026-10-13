@@ -92,3 +92,43 @@ func TestResolveWindow_ExternalCLIWorkerIsExempt(t *testing.T) {
 	assert.Equal(t, cloudWindowFloor, native.Window)
 	assert.True(t, native.Clamped)
 }
+
+// H4 (test-analyzer I4) — RuntimeWindowPair keys the window ladder by the
+// pair the agent's turns actually run on: a pinned provider is kept
+// verbatim; an empty provider resolves exactly as the candidate builder
+// resolves it (oracle: resolveAgentCandidatesWithPrimaryProvider, the
+// function NewAgentInstance uses), including the existing runtime fallback
+// to the default provider for an ambiguous bare model (issue #1292 tracks
+// changing that startup behaviour).
+func TestRuntimeWindowPair_MatchesTheRuntimeCandidate(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []*config.ModelConfig{
+			{Provider: "openrouter", Model: "z-ai/glm-5.3"},
+			{Provider: "openai", Model: "gpt-5.4"},
+			{Provider: "openai-chatgpt", Model: "gpt-5.4"},
+		},
+	}
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Provider: "openai", Model: "gpt-5.4"}
+
+	cases := []struct {
+		name, provider, model, wantProvider, wantModel string
+	}{
+		{"pinned provider is verbatim", "openai-chatgpt", "gpt-5.4", "openai-chatgpt", "gpt-5.4"},
+		{"pinned provider never re-resolved", "zai", "z-ai/glm-5.3", "zai", "z-ai/glm-5.3"},
+		{"bare model offered once resolves to its provider", "", "z-ai/glm-5.3", "openrouter", "z-ai/glm-5.3"},
+		{"ambiguous bare model keeps the runtime's default-provider fallback", "", "gpt-5.4", "openai", "gpt-5.4"},
+		{"empty model stays empty", "", "", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, m := RuntimeWindowPair(cfg, tc.provider, tc.model)
+			assert.Equal(t, tc.wantProvider, p)
+			assert.Equal(t, tc.wantModel, m)
+			if tc.provider == "" && tc.model != "" {
+				c := resolveAgentCandidatesWithPrimaryProvider(cfg, "openai", tc.model, "", nil, nil)
+				require.NotEmpty(t, c)
+				assert.Equal(t, c[0].Provider, p, "must equal the runtime's own primary candidate")
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ package providers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
 // writeSSEEvents writes each event as one `event:`/`data:` SSE frame, then
@@ -130,17 +133,19 @@ func TestCodexProvider_Chat_ItemsKeepOutputIndexOrder(t *testing.T) {
 
 func TestCodexProvider_Chat_CompletedOutputWinsWithoutDuplicates(t *testing.T) {
 	// When the completed event DOES carry the output, it is authoritative:
-	// the same answer streamed as items and deltas must not be appended twice.
+	// the streamed item is neither appended (no duplicate) nor substituted.
+	// The two sources deliberately differ so "terminal wins" is observable.
 	p := codexStreamProvider(t,
-		textDeltaEvent("msg_1", "Hi"),
-		itemDoneEvent(0, messageItem("msg_1", "Hi")),
-		completedEvent([]map[string]any{messageItem("msg_1", "Hi")}),
+		textDeltaEvent("msg_1", "streamed draft"),
+		itemDoneEvent(0, messageItem("msg_1", "streamed draft")),
+		completedEvent([]map[string]any{messageItem("msg_1", "terminal answer")}),
 	)
 
 	resp, err := p.Chat(t.Context(), []Message{{Role: "user", Content: "x"}}, nil, "gpt-5.4", nil)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Hi", resp.Content)
+	assert.Equal(t, "terminal answer", resp.Content)
+	assert.Equal(t, "completed", resp.Diagnostics.OutputSource)
 }
 
 func TestCodexProvider_Chat_TrulyEmptyStreamStaysEmpty(t *testing.T) {
@@ -281,4 +286,90 @@ func TestCodexProvider_Chat_CapturedNativeSearchAnswerOnlyInOutputItemDone(t *te
 	assert.Empty(t, resp.ToolCalls, "web_search_call is the backend's own search, not a tool call for the agent")
 	assert.Equal(t, "stop", resp.FinishReason)
 	assert.Equal(t, []string{"web_search_call", "message"}, resp.Diagnostics.OutputItemTypes)
+}
+
+// terminalEvent is a non-completed terminal stream event (failed or
+// incomplete) carrying an EMPTY output, the shape the backend uses.
+func terminalEvent(eventType, status string, extra map[string]any) map[string]any {
+	r := map[string]any{
+		"id": "resp_h5", "object": "response", "status": status, "output": []any{},
+		"usage": map[string]any{
+			"input_tokens": 15000, "output_tokens": 9, "total_tokens": 15009,
+			"input_tokens_details":  map[string]any{"cached_tokens": 0},
+			"output_tokens_details": map[string]any{"reasoning_tokens": 0},
+		},
+	}
+	for k, v := range extra {
+		r[k] = v
+	}
+	return map[string]any{"type": eventType, "response": r}
+}
+
+// Silent-failure F3: output recovered from items on a response the provider
+// cut off under its CONTENT POLICY is a refusal, not a token-cap cutoff. It
+// must not come back as a "length" answer the agent would auto-continue; it
+// is the content-policy stream error (non-retriable, never a fallback).
+func TestCodexProvider_Chat_ContentFilterAfterRecoveredItemsIsAPolicyRefusal(t *testing.T) {
+	p := codexStreamProvider(t,
+		itemDoneEvent(0, messageItem("msg_1", "partial text before the filter")),
+		terminalEvent("response.incomplete", "incomplete",
+			map[string]any{"incomplete_details": map[string]any{"reason": "content_filter"}}),
+	)
+
+	resp, err := p.Chat(t.Context(), []Message{{Role: "user", Content: "x"}}, nil, "gpt-6.1-sol", nil)
+
+	require.Error(t, err)
+	assert.Nil(t, resp, "no answer to continue")
+	var spe *common.StreamProviderError
+	require.True(t, errors.As(err, &spe), "err = %v", err)
+	assert.Equal(t, common.StreamErrorContentPolicy, spe.Kind())
+	require.NotNil(t, spe.Usage, "token usage survives the refusal")
+	assert.Equal(t, 15009, spe.Usage.TotalTokens)
+	fe := ClassifyError(err, "openai-chatgpt", "gpt-6.1-sol")
+	require.NotNil(t, fe)
+	assert.Equal(t, FailoverFormat, fe.Reason)
+	assert.False(t, fe.IsRetriable(), "a policy refusal never walks the fallback chain")
+}
+
+// Test-analyzer I5: a token-cap cutoff still reads as one after recovery —
+// FinishReason "length" (truncation handling applies), usage kept, and the
+// diagnostics name the incomplete reason.
+func TestCodexProvider_Chat_IncompleteMaxTokensKeepsLengthAfterRecovery(t *testing.T) {
+	p := codexStreamProvider(t,
+		itemDoneEvent(0, messageItem("msg_1", "first half of a long answer")),
+		terminalEvent("response.incomplete", "incomplete",
+			map[string]any{"incomplete_details": map[string]any{"reason": "max_output_tokens"}}),
+	)
+
+	resp, err := p.Chat(t.Context(), []Message{{Role: "user", Content: "x"}}, nil, "gpt-6.1-sol", nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, "first half of a long answer", resp.Content)
+	assert.Equal(t, "length", resp.FinishReason)
+	require.NotNil(t, resp.Usage)
+	assert.Equal(t, 15009, resp.Usage.TotalTokens)
+	assert.Equal(t, "incomplete", resp.Diagnostics.Status)
+	assert.Equal(t, "max_output_tokens", resp.Diagnostics.IncompleteReason)
+	assert.Equal(t, "output_item.done", resp.Diagnostics.OutputSource)
+}
+
+// Test-analyzer I5: items streamed before a `response.failed` are never an
+// answer — in particular a recovered function_call must not be executed.
+func TestCodexProvider_Chat_FailedTerminalAfterItemsIsAnError(t *testing.T) {
+	p := codexStreamProvider(t,
+		itemDoneEvent(0, map[string]any{
+			"id": "fc_1", "type": "function_call", "status": "completed",
+			"call_id": "call_1", "name": "write_file", "arguments": `{"path":"a.txt"}`,
+		}),
+		terminalEvent("response.failed", "failed",
+			map[string]any{"error": map[string]any{"code": "server_error", "message": "upstream failed"}}),
+	)
+
+	resp, err := p.Chat(t.Context(), []Message{{Role: "user", Content: "x"}}, nil, "gpt-6.1-sol", nil)
+
+	require.Error(t, err)
+	assert.Nil(t, resp, "no tool call may be returned from a failed response")
+	var spe *common.StreamProviderError
+	require.True(t, errors.As(err, &spe), "err = %v", err)
+	assert.Equal(t, "server_error", spe.Code)
 }

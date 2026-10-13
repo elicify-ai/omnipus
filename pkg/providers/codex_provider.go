@@ -223,7 +223,7 @@ func (s *codexStreamedOutput) diagnostics(resp *responses.Response, source strin
 			d.OutputItemTypes = append(d.OutputItemTypes, item.Type)
 		}
 		d.Status = string(resp.Status)
-		d.IncompleteReason = string(resp.IncompleteDetails.Reason)
+		d.IncompleteReason = resp.IncompleteDetails.Reason
 	}
 	return d
 }

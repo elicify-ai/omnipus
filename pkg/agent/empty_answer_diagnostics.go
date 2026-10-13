@@ -22,22 +22,20 @@ import (
 // tool arguments or credentials.
 func emptyAnswerLogFields(
 	agentID string, iteration int,
-	candidates []providers.FallbackCandidate, requestedModel, answeredModel string,
+	answeredProvider, answeredModel, requestedModel string,
 	resp *providers.LLMResponse,
 ) map[string]any {
+	// The answering provider is the one the call site stamped from the
+	// attempt that actually ran — never looked up by model id, because the
+	// same model can be a candidate on two providers. "unknown" when no
+	// call site stamped one.
+	provider := answeredProvider
+	if provider == "" {
+		provider = "unknown"
+	}
 	model := answeredModel
 	if model == "" {
 		model = requestedModel
-	}
-	provider := ""
-	for _, c := range candidates {
-		if c.Model == model {
-			provider = c.Provider
-			break
-		}
-	}
-	if provider == "" && len(candidates) > 0 {
-		provider = candidates[0].Provider
 	}
 	fields := map[string]any{
 		"agent_id":  agentID,

@@ -120,7 +120,7 @@ The model cannot call tools, and Omnipus sends its tool list with every request,
 
 ### "model … is offered by several providers; choose the provider"
 
-The model name was given without a provider, and more than one connected provider offers it. Omnipus will not pick an account for you. Set the agent's model together with its provider, or remove the provider you do not want to use. The chat's model picker sends only the model name, so for now pick such a model on the agent instead of in the chat.
+You picked a model in the chat's model picker, which sends only the model name, and more than one connected provider offers that name. Omnipus does not pick an account for this switch, and the reply uses the agent's current model. Choose the model together with its provider in the agent's model setting instead, or remove the provider you do not want to use. Pin agents' models to a provider in general: a model saved without one can start on the default provider when its name is ambiguous.
 
 ### "The model returned an empty response"
 

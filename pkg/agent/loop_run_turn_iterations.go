@@ -663,8 +663,8 @@ func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoop
 			// no content) so the next empty-answer defect is diagnosable.
 			rt := cn.rc.rx.rr.rq.ri.rf.rt
 			logger.WarnCF("agent", "LLM returned empty response after retry; using fallback message",
-				emptyAnswerLogFields(rt.ts.agent.ID, rt.iteration, rt.activeCandidates, rt.llmModel,
-					rt.ts.lastProducedModel, cn.rc.rx.rr.rq.ri.rf.response))
+				emptyAnswerLogFields(rt.ts.agent.ID, rt.iteration, rt.ts.lastProducedProvider,
+					rt.ts.lastProducedModel, rt.llmModel, cn.rc.rx.rr.rq.ri.rf.response))
 		}
 		// ADR-087 D6.10: this round did not go through
 		// evaluateTruncatedSuccess (it was not itself truncated, or it

@@ -61,7 +61,9 @@ A fallback is not used for every error. Omnipus moves to the next model after te
 
 Authentication and billing failures also move to the next model. Invalid request format, context overflow, image-size errors, and unrecognized errors stop the chain. Canceling a request also stops it. If every eligible model fails or is cooling down, the whole request fails with the recorded attempts.
 
-A model name offered by more than one connected provider is ambiguous. For example, `gpt-5.4` is offered by both **OpenAI** and **ChatGPT (subscription)**. If such a name is saved without its provider, Omnipus does not guess which account to bill. It reports `model "gpt-5.4" is offered by several providers (openai, openai-chatgpt); choose the provider`. Choose the model together with its provider in the agent's model setting. The chat's model picker currently sends only the model name, so picking such a model there fails with this message, and the reply uses the agent's current model.
+A model name offered by more than one connected provider is ambiguous. For example, `gpt-5.4` is offered by both **OpenAI** and **ChatGPT (subscription)**. The chat's model picker currently sends only the model name. If you pick such a model there, Omnipus does not guess which account to bill. The switch fails, its error details read `model "gpt-5.4" is offered by several providers (openai, openai-chatgpt); choose the provider`, and the reply uses the agent's current model.
+
+An agent whose model was saved without a provider is resolved differently when the agent starts. If its model name is ambiguous, it can start on the default provider instead of asking. Pin every agent's model to a provider: choose the model together with its provider in the agent's model setting.
 
 When an agent's model was saved without a provider, its context window now comes from the provider the model actually runs on. Before, it came from a 128,000-token fallback. For example, `z-ai/glm-5.3` on OpenRouter now gets its catalog window of 1,048,576 tokens. An agent that runs an external command-line tool manages its own context, so it has no Omnipus context window.
 

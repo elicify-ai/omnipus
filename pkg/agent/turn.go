@@ -603,6 +603,12 @@ type turnState struct {
 	// streaming path, setLastProducedModel is called by the streamer wrapper
 	// after each chat completes.
 	lastProducedModel string
+	// lastProducedProvider is the provider that produced the most recent
+	// LLM response, stamped beside lastProducedModel by the same call sites
+	// (provider hotfix H5). The model id alone cannot name it: the same
+	// model can be a candidate on two providers. Same goroutine as
+	// lastProducedModel; no synchronization needed.
+	lastProducedProvider string
 
 	// toolCallProgress is G1's turn-scoped liveness signal for an in-flight
 	// tool-call argument stream (see protocoltypes.ToolCallProgress's doc
@@ -791,6 +797,16 @@ func (ts *turnState) setLastProducedModel(model string) {
 		return
 	}
 	ts.lastProducedModel = model
+}
+
+// setLastProducedProvider stamps the provider that produced the most recent
+// LLM response (provider hotfix H5) — the answering candidate's own
+// provider, never reconstructed from the model id.
+func (ts *turnState) setLastProducedProvider(provider string) {
+	if ts == nil {
+		return
+	}
+	ts.lastProducedProvider = provider
 }
 
 // auditUser returns the authenticated gateway principal for this turn, used to
