@@ -171,3 +171,19 @@ export function detectToolResultSentinels(result: unknown): ToolResultSentinels 
     statusConfig,
   }
 }
+
+/**
+ * #1284 (omnipus-system-agent FR-254–FR-256, L1 amendment §2): a tool or
+ * command refused because it named one of Omnipus's own protected files.
+ * The server words it in one of two ways (pkg/tools/shell_path_guard.go —
+ * "…is inside Omnipus's protected internal files…"; pkg/tools/fserrors.go
+ * ErrCarveOut — "…path is a protected carve-out…"); both are plain error
+ * text, not a structured sentinel, so detection is by those fixed phrases.
+ */
+export function isProtectedFileRefusal(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    (value.includes("is inside Omnipus's protected internal files") ||
+      value.includes('path is a protected carve-out'))
+  )
+}

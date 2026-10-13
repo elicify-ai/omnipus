@@ -16,7 +16,7 @@ import {
   isCancelledStatus,
   type ToolBadgeStatusConfig,
 } from '@/lib/toolStatusConfig'
-import { detectToolResultSentinels } from './toolResultSentinels'
+import { detectToolResultSentinels, isProtectedFileRefusal } from './toolResultSentinels'
 import {
   ClientTruncatedDisplay,
   DelegationFailureDisplay,
@@ -27,6 +27,7 @@ import {
   isMarshalErrorResult,
   isTruncatedResult,
   safeJson,
+  ProtectedFileRefusalDisplay,
 } from './toolResultDisplay'
 
 interface GenericToolCallProps {
@@ -310,8 +311,11 @@ export function GenericToolCall({
 
               {permissionDenied && <PermissionDeniedDisplay failure={permissionDenied} />}
 
+              {/* #1284: a protected-file refusal reads as its own block. */}
+              {isProtectedFileRefusal(plainResult) && <ProtectedFileRefusalDisplay message={plainResult} />}
+
               {/* Plain result: normal rendering */}
-              {plainResult !== undefined && (
+              {plainResult !== undefined && !isProtectedFileRefusal(plainResult) && (
                 <pre
                   tabIndex={0}
                   role="region"
@@ -324,9 +328,11 @@ export function GenericToolCall({
             </div>
           )}
 
-          {error && (
+          {error && (isProtectedFileRefusal(error) ? (
+            <ProtectedFileRefusalDisplay message={error} />
+          ) : (
             <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)] font-body">{error}</div>
-          )}
+          ))}
         </div>
       )}
     </div>
