@@ -996,6 +996,14 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"request_secret":    allow,
 				"list_secrets":      allow,
 				"read_conversation": allow,
+				// Founder decision #1294 (2026-10-14): new custom agents can
+				// talk to each other by default — send_message is both the
+				// sending tool and the RECEIVER's admission policy
+				// (address_router.go::receiverSendPolicy), and answer_request
+				// is how a request is answered. Membership checks are
+				// unchanged, and an explicit per-agent deny still refuses.
+				"send_message":   allow,
+				"answer_request": allow,
 				// Structural floor (CLAUDE.md constraint 6): every agent needs
 				// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
 				// seeded here as real data rather than the retired compositor.go
