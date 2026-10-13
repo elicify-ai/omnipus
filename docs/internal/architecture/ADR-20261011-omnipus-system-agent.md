@@ -94,6 +94,16 @@ Source: founder answers AW-1, AW-2. Detail: specification US-20, FR-190–FR-198
 | Summaries and notes (reuse) | The one-line summary is the first sentence of the conversation's existing idle recap (title if none); the recap's `worth_remembering` items are written automatically to a new per-(agent, workspace) memory room. No extra model call. |
 | Boundary (AW-2) | Nothing crosses workspaces. This also corrects an existing leak: the recap carry-forward `last-session.md` lives in the agent-wide private room today and is moved to per-(agent, workspace) storage. |
 
+## Dated notes from specification fix round 3 (2026-10-13) — not yet grilled
+
+| ADR text | Note |
+|---|---|
+| OSA-14 (person routing) | Per Q-R3-1 A, steering from a connection in "main chat" mode affects the agent's **shared** main chat for everyone, the user included (labelled in the People tab and `/help`). Per Q-R3-2 B, each connection keeps its own per-person conversation; identity links only recognise people. The allow list and person table are **one People list** per connection ("Talks to", "Can use commands"); routing is resolved before the conversation is prepared. Detail: spec §6.9, §6.10, §6.15. |
+| OSA-14 and the R34 "Email is a channel like any other" line | **Superseded by EM-1:** email is an agent tool, not a chat channel — no routing, rooms, awareness or "who can reach" for email; its tools and `connect_mailbox` stay. The Connectors page has two categories, Chat channels and Agent tools (EM-2). |
+| OSA-15 (rooms) | Rooms are their own record (not sessions with an optional agent); room requests follow an explicit state machine, are never steered into a running turn, carry a pause generation, and are delivered once per member with retry reconciliation. Detail: spec §6.11, §6.13, §6.14. |
+| OSA-16 (awareness) | Every memory path takes an immutable (workspace, agent) scope; recaps refresh after new activity (session-core D9). Whether ordinary private notes become per workspace is founder question FQ-R3-B. |
+
+
 
 
 ---
