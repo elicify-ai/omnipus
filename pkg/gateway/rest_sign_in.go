@@ -257,7 +257,7 @@ func (a *restAPI) signInMethodFor(providerID string) (method string, ok bool) {
 			// Declared is not enough (provider hotfix H1): the plain
 			// `openai` row declares sign_in in the registry but has no
 			// mechanism — only openai-chatgpt can source an OpenAI login.
-			if !supportsSignIn || !signInMechanism(p) {
+			if !supportsSignIn || !providers_pkg.HasSignInMechanism(p) {
 				return "", false
 			}
 			return builtinSignInMethodShape(providerID), true

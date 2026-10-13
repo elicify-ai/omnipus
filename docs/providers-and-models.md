@@ -11,6 +11,7 @@ The catalog includes cloud services, local model servers, command-line providers
 | Provider choice | How you connect | What to expect |
 |---|---|---|
 | Popular cloud providers | Enter an application programming interface (API) key or use **Sign in** when offered | The catalog supplies the known model list |
+| ChatGPT (subscription) | Use **Sign in** with your OpenAI account | Uses your ChatGPT plan; this is where OpenAI sign-in lives |
 | Other catalog providers | Search under **All providers** and enter the requested credential | Unsupported entries are disabled with a reason |
 | Ollama and other local providers | Select the local provider and confirm its endpoint | Omnipus asks the local server which models are installed |
 | Command-line providers | Use **Sign in** with the provider's command-line tool | Omnipus uses that tool's signed-in session |
@@ -27,7 +28,7 @@ Use a fallback chain when an agent must keep working through temporary failures.
 1. Open **Settings**, then select **Providers**.
 2. Select **Connect a provider**. You see popular choices, recent choices, search, **All providers**, and **Custom endpoint**.
 3. Choose a provider. If it has variants, choose the plan, region, and authentication method shown.
-4. Enter the API key, or select **Sign in** when the provider offers it.
+4. Enter the API key, or select **Sign in** when the provider offers it. Sign-in is offered only where Omnipus can actually sign you in. For OpenAI, that is the **ChatGPT (subscription)** provider (or **Codex CLI**); the plain **OpenAI** provider takes an API key only.
 5. Select **Continue**, then complete the connection step. The provider appears in your configured provider list.
 6. Choose a model in the **Default model** card, or open an agent and choose its model there.
 
@@ -59,6 +60,10 @@ Some providers cannot be enumerated from a published catalog. Ollama and other l
 A fallback is not used for every error. Omnipus moves to the next model after temporary failures such as timeouts, connection drops, overload, or rate limits. It skips a model that is cooling down after recent failures. A successful request clears that model's cooldown.
 
 Authentication and billing failures also move to the next model. Invalid request format, context overflow, image-size errors, and unrecognized errors stop the chain. Canceling a request also stops it. If every eligible model fails or is cooling down, the whole request fails with the recorded attempts.
+
+A model name offered by more than one connected provider is ambiguous. For example, `gpt-5.4` is offered by both **OpenAI** and **ChatGPT (subscription)**. If such a name is saved without its provider, Omnipus does not guess which account to bill. It reports `model "gpt-5.4" is offered by several providers (openai, openai-chatgpt); choose the provider`. Choose the model together with its provider in the agent's model setting. The chat's model picker currently sends only the model name, so picking such a model there fails with this message, and the reply uses the agent's current model.
+
+When an agent's model was saved without a provider, its context window now comes from the provider the model actually runs on. Before, it came from a 128,000-token fallback. For example, `z-ai/glm-5.3` on OpenRouter now gets its catalog window of 1,048,576 tokens. An agent that runs an external command-line tool manages its own context, so it has no Omnipus context window.
 
 You set fallbacks per agent. Open the agent's **Identity** settings and use **Fallback models**. Their order matters. A fallback should use a tool-capable model and a provider with valid credentials; otherwise it cannot rescue the request.
 

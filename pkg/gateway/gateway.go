@@ -1765,7 +1765,7 @@ func newReloadConfigLoader(
 // the embedded snapshot, the persisted last-known-good under homePath, and
 // the release puller the refresh ticker uses later (Boot itself does no
 // network I/O). The served projection hides `sign_in` on rows this build
-// cannot sign in with (signInMechanism, provider hotfix H1).
+// cannot sign in with (providers.HasSignInMechanism, provider hotfix H1).
 func bootProviderCatalog(homePath string) *catalog.Catalog {
 	return catalog.Boot(
 		context.Background(),
@@ -1773,7 +1773,7 @@ func bootProviderCatalog(homePath string) *catalog.Catalog {
 		catalog.NewGHReleasePuller(),
 		catalog.NewFileStore(homePath),
 		catalogLogAdapter{},
-		catalog.WithSignInGate(signInMechanism),
+		catalog.WithSignInGate(providers.HasSignInMechanism),
 	)
 }
 

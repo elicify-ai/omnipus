@@ -237,7 +237,7 @@ func providerToJSON(p *Provider, gate SignInGate) providerJSON {
 		Regions:           providerRegionsToJSON(p.Regions),
 		Tier:              p.Tier,
 		UnsupportedReason: p.UnsupportedReason,
-		AuthMethods:       servedAuthMethods(p, gate),
+		AuthMethods:       ServedAuthMethods(p, gate),
 		Aliases:           p.Aliases,
 		Locality:          p.Locality,
 		CLIKind:           p.CLIKind,
@@ -291,11 +291,12 @@ func providerRegionsToJSON(regions []ProviderRegion) []providerRegionJSON {
 	return out
 }
 
-// servedAuthMethods is the row's auth_methods as served: `sign_in` is
+// ServedAuthMethods is the row's auth_methods as served (and as the
+// generated reference docs list them): `sign_in` is
 // dropped when gate rejects the row AND another method remains (the
 // contract's minItems: 1). The returned slice never aliases p.AuthMethods
 // when anything was dropped, so the Document stays untouched.
-func servedAuthMethods(p *Provider, gate SignInGate) []AuthMethod {
+func ServedAuthMethods(p *Provider, gate SignInGate) []AuthMethod {
 	if gate == nil || !declaresSignIn(p.AuthMethods) || gate(*p) {
 		return p.AuthMethods
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -34,8 +35,13 @@ func renderProviders(doc *catalog.Document) string {
 	fmt.Fprintf(&out, "%s\n\n# Providers and models\n\n", generatedHeader)
 	out.WriteString("Tool use is catalog data. Omnipus sends tools with every request, so models marked **No** are not usable for agent requests.\n\n")
 	out.WriteString("## Providers\n\n| Provider | Authentication | Tool use |\n|---|---|---|\n")
-	for _, provider := range doc.Providers {
-		fmt.Fprintf(&out, "| %s (`%s`) | %s | Unknown (not in catalog) |\n", escape(provider.Name), provider.ID, authLabel(provider.AuthMethods))
+	for i := range doc.Providers {
+		provider := &doc.Providers[i]
+		// The methods a user is actually offered: sign_in only where this
+		// build has a sign-in mechanism (provider hotfix H1), exactly as
+		// GET /providers/catalog serves them.
+		methods := catalog.ServedAuthMethods(provider, providers.HasSignInMechanism)
+		fmt.Fprintf(&out, "| %s (`%s`) | %s | Unknown (not in catalog) |\n", escape(provider.Name), provider.ID, authLabel(methods))
 	}
 	out.WriteString("\n## Models\n\n")
 	for _, provider := range doc.Providers {

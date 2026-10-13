@@ -21,33 +21,16 @@ import (
 // on such a row created a provider that stays "disconnected" forever beside
 // the row that really owns the vendor's sign-in (openai-chatgpt).
 //
-// signInMechanism is therefore the gate every "is sign-in offered here?"
-// decision uses on top of the declared method: the served catalog projection
-// (catalog.WithSignInGate at boot), PUT /providers/{id}, the sign-in routes
-// (signInMethodFor), onboarding completion, and POST /providers/{id}/test.
-
-// signInMechanism reports whether this build can actually exercise a sign-in
-// for row. It is exactly the three mechanisms probeSignIn dispatches on:
-//
-//   - a `cli_kind` row (a vendor CLI holds the login),
-//   - a first-party OAuth owner (providers.OAuthEntryOwner — the only ids the
-//     device-code flow ever writes credentials for),
-//   - a `token_source: codex-auth-json` row (reads the Codex CLI's saved
-//     token).
-//
-// No provider id is named here beyond what OAuthEntryOwner already encodes.
-// Keep this in step with probeSignIn's switch: a mechanism added there must
-// be added here, or the row's sign-in is hidden.
-func signInMechanism(row catalog.Provider) bool {
-	return row.CLIKind != "" ||
-		providers.OAuthEntryOwner(row.ID) ||
-		row.TokenSource == catalog.TokenSourceCodexAuthJSON
-}
+// providers.HasSignInMechanism is therefore the gate every "is sign-in
+// offered here?" decision uses on top of the declared method: the served
+// catalog projection (catalog.WithSignInGate at boot), PUT /providers/{id},
+// the sign-in routes (signInMethodFor), onboarding completion, POST
+// /providers/{id}/test, and the generated reference docs (cmd/docsref).
 
 // rowOffersSignIn reports whether row both declares `sign_in` and has a
 // mechanism this build can exercise.
 func rowOffersSignIn(row catalog.Provider) bool {
-	return catalogOffersAuth(row.AuthMethods, gen.ProbeProviderRequestAuthSignIn) && signInMechanism(row)
+	return catalogOffersAuth(row.AuthMethods, gen.ProbeProviderRequestAuthSignIn) && providers.HasSignInMechanism(row)
 }
 
 // signInElsewhereMsg answers a sign-in request on a row that cannot sign in
