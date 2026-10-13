@@ -141,6 +141,9 @@ describe('WU-10 fixed Omnipus entry', () => {
     await entry()
     vi.mocked(fetchSessions).mockRejectedValue(new Error('Attention refresh offline'))
     await act(async () => { await client.invalidateQueries({ queryKey: ['sessions'] }) })
-    expect(screen.getByRole('button', { name: /^omnipus(?:\s|$)/i })).toHaveAccessibleName(/stale|out of date|last known/i)
+    // FR-112 is a visible-state oracle, not a same-tick observer-delivery oracle.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^omnipus(?:\s|$)/i })).toHaveAccessibleName(/stale|out of date|last known/i)
+    })
   })
 })

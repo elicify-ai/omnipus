@@ -16,6 +16,7 @@ import { useUiStore } from '@/store/ui'
 import { WorkspaceContextProvider } from './WorkspaceTabContainer'
 import { WorkspaceTeamTab } from './WorkspaceTeamTab'
 import { DEFAULT, EXTERNAL_WORKER, JUDGE, MIA, OMNIPUS, OMNIPUS_MAIN, RESEARCH, REVISION, SALES, WORKER, agent, delegation } from '../../../tests/omnipus-l1-ui-red/fixtures'
+import { installGraphTestGeometry } from '../../../tests/omnipus-l1-ui-red/graphGeometry'
 
 const navigate = vi.hoisted(() => vi.fn())
 vi.mock('@tanstack/react-router', async (original) => ({
@@ -31,18 +32,13 @@ vi.mock('@/lib/api', async (original) => ({
 import { fetchAgents, fetchWorkspaces, fetchWorkspaceDelegation, updateWorkspace, updateWorkspaceDelegation, workspacesQueryKeys } from '@/lib/api'
 
 // React Flow geometry is an environment boundary, not a substitute graph.
-class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
 const clients: QueryClient[] = []
 let socket: WsConnection
 let send = vi.fn<WsConnection['send']>()
 
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.stubGlobal('ResizeObserver', ResizeObserverStub)
-  vi.stubGlobal('DOMMatrixReadOnly', class { m22 = 1 })
-  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
-    x: 0, y: 0, width: 800, height: 600, top: 0, left: 0, right: 800, bottom: 600, toJSON: () => ({}),
-  })
+  installGraphTestGeometry()
   Object.defineProperty(document, 'hidden', { configurable: true, value: false })
   vi.mocked(fetchAgents).mockResolvedValue([MIA, WORKER, EXTERNAL_WORKER, OMNIPUS, JUDGE])
   vi.mocked(fetchWorkspaces).mockResolvedValue([DEFAULT, SALES, RESEARCH])
@@ -256,10 +252,13 @@ describe('WU-10 Team state contract (FR-112, spec §6.3)', () => {
     await settled(client)
     vi.mocked(fetchAgents).mockRejectedValue(new Error('Refresh offline'))
     await act(async () => { await client.invalidateQueries({ queryKey: ['agents'] }) })
-    expect(screen.getByText(/may be out of date/i)).toBeVisible()
-    expect(screen.getByText('Mia', { exact: true })).toBeVisible()
-    expect(screen.getByText('sales-model', { exact: true })).toBeVisible()
-    expect(screen.queryByRole('button', { name: /^set up a team$/i })).not.toBeInTheDocument()
+    // Preserve every original postcondition; invalidate completion precedes DOM delivery.
+    await waitFor(() => {
+      expect(screen.getByText(/may be out of date/i)).toBeVisible()
+      expect(screen.getByText('Mia', { exact: true })).toBeVisible()
+      expect(screen.getByText('sales-model', { exact: true })).toBeVisible()
+      expect(screen.queryByRole('button', { name: /^set up a team$/i })).not.toBeInTheDocument()
+    })
   })
   it('section 6.3 a failed Graph refresh retains its cached graph with a stale hint', async () => {
     const client = renderTeam()
@@ -269,8 +268,11 @@ describe('WU-10 Team state contract (FR-112, spec §6.3)', () => {
     expect(screen.getByTestId('team-graph-canvas')).toBeInTheDocument()
     vi.mocked(fetchWorkspaceDelegation).mockRejectedValue(new Error('Delegation refresh offline'))
     await act(async () => { await client.invalidateQueries({ queryKey: workspacesQueryKeys.delegation('sales') }) })
-    expect(screen.getByText(/may be out of date|stale|last known/i)).toBeVisible()
-    expect(screen.getByTestId('team-graph-canvas')).toBeInTheDocument()
+    // Same cue and retained-graph assertions, after the real observer render.
+    await waitFor(() => {
+      expect(screen.getByText(/may be out of date|stale|last known/i)).toBeVisible()
+      expect(screen.getByTestId('team-graph-canvas')).toBeInTheDocument()
+    })
   })
   it('BDD-12.13 an add response lost after submit is not confirmed, with Retry and no false Added', async () => {
     const orphan = agent('orphan', { name: 'Orphan' })
