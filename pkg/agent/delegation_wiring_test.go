@@ -160,7 +160,7 @@ func TestDelegationWiring_RuntimeGraphRefresh_AddEdge(t *testing.T) {
 func TestDelegationWiring_BootPath(t *testing.T) {
 	const wsID = "01JWWIRINGBOOT00000000001"
 	seedWorkspaceGraph(t, wsID, true, []graphEdge{
-		edge("jim", "ava", nil, nil),
+		edge("jim", "researcher", nil, nil),
 		edge("jim", "planner", nil, nil),
 	})
 
@@ -177,8 +177,8 @@ func TestDelegationWiring_BootPath(t *testing.T) {
 	if !strings.Contains(got, "## Delegation") {
 		t.Fatalf("boot path: Delegation block missing for %q.\ngot: %s", agentID, got)
 	}
-	if !strings.Contains(got, "ava") {
-		t.Fatalf("boot path: 'ava' must appear (graph edge jim→ava).\ngot: %s", got)
+	if !strings.Contains(got, "researcher") {
+		t.Fatalf("boot path: 'researcher' must appear (graph edge jim→researcher).\ngot: %s", got)
 	}
 }
 
@@ -195,7 +195,7 @@ func TestDelegationWiring_AgentAddedOnReload(t *testing.T) {
 		edge("custom-helper", "worker", nil, nil),
 	})
 
-	al, _ := wireTestLoopWithGraph(t, "ava")
+	al, _ := wireTestLoopWithGraph(t, "mia")
 
 	const newAgentID = "custom-helper"
 	liveCfg := al.GetConfig()
@@ -351,7 +351,7 @@ func TestDelegationWiring_FailClosedWhenNoDefaultWorkspace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	const agentID = "ava"
+	const agentID = "mia"
 	al, cb := wireTestLoopWithGraph(t, agentID)
 	_ = al
 
@@ -372,7 +372,7 @@ func TestDelegationWiring_FailClosedWhenWorkspaceUnreadable(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	const agentID = "ava"
+	const agentID = "mia"
 	al, cb := wireTestLoopWithGraph(t, agentID)
 	_ = al
 
@@ -400,9 +400,9 @@ func TestDelegationWiring_WorkspaceIDThreaded(t *testing.T) {
 	home := seedWorkspaceGraph(t, wsDefault, true, []graphEdge{
 		edge("jim", "worker", nil, nil),
 	})
-	// Bound workspace: jim→ava only (NOT worker).
+	// Bound workspace: jim→researcher only (NOT worker).
 	writeWorkspaceFileForTest(t, home, wsBound, false, []graphEdge{
-		edge("jim", "ava", nil, nil),
+		edge("jim", "researcher", nil, nil),
 	})
 
 	const agentID = "jim"
@@ -415,10 +415,10 @@ func TestDelegationWiring_WorkspaceIDThreaded(t *testing.T) {
 		t.Fatalf("default workspace: expected 'worker'; got:\n%s", gotDefault)
 	}
 
-	// With bound workspaceID (wsBound): ava must appear, worker must NOT.
+	// With bound workspaceID (wsBound): researcher must appear, worker must NOT.
 	gotBound := cb.buildDynamicContext(0, wsBound, "", "", "", "")
-	if !strings.Contains(gotBound, "ava") {
-		t.Fatalf("bound workspace: expected 'ava'; got:\n%s", gotBound)
+	if !strings.Contains(gotBound, "researcher") {
+		t.Fatalf("bound workspace: expected 'researcher'; got:\n%s", gotBound)
 	}
 	if strings.Contains(gotBound, "worker") {
 		t.Fatalf("bound workspace: 'worker' must NOT appear (not in wsBound graph); got:\n%s", gotBound)
@@ -430,13 +430,13 @@ func TestDelegationWiring_WorkspaceIDThreaded(t *testing.T) {
 //
 // This is the parity test: seeds a graph (mia→jim "direct" only — the
 // edge vocabulary's entry for the asynchronous delegate-tool call pattern,
-// ADR-090 §3: Mia → Jim for heavy work — NO mia→ava), renders the delegation
+// ADR-090 §3: Mia → Jim for heavy work — NO mia→researcher), renders the delegation
 // block for mia, and asserts:
 //   (a) 'jim' appears with delegate, but not create_task.
-//   (b) 'ava' does NOT appear.
+//   (b) 'researcher' does NOT appear.
 //   (c) buildDelegationDenyChecker for mia→jim allows background and denies
 //       task — matching (a) exactly.
-//   (d) buildDelegationDenyChecker for mia→ava denies — matching (b) exactly.
+//   (d) buildDelegationDenyChecker for mia→researcher denies — matching (b) exactly.
 //
 // This proves advertisement == enforcement by construction.
 // ---------------------------------------------------------------------------
@@ -446,7 +446,8 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	seedWorkspaceGraph(t, wsID, true, []graphEdge{
 		// mia→jim: direct/background only, no task.
 		edge("mia", "jim", []string{"direct"}, nil),
-		// No mia→ava edge.
+		// No mia→researcher edge (researcher is a seeded agent, so (d) is a
+		// real no-edge denial, not an unknown-agent one).
 	})
 
 	const agentID = "mia"
@@ -470,9 +471,9 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 		t.Errorf("parity: create_task for jim must NOT appear (task mode not in edge); got:\n%s", got)
 	}
 
-	// (b) ava must NOT appear.
-	if strings.Contains(got, "ava") {
-		t.Errorf("parity: 'ava' must NOT appear (no mia→ava edge); got:\n%s", got)
+	// (b) researcher must NOT appear.
+	if strings.Contains(got, "researcher") {
+		t.Errorf("parity: 'researcher' must NOT appear (no mia→researcher edge); got:\n%s", got)
 	}
 
 	// (c) gate: mia→jim background allowed.
@@ -486,9 +487,9 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 		t.Errorf("parity: gate must DENY mia→jim task (not in edge Modes); got allow")
 	}
 
-	// (d) gate: mia→ava denied (no edge).
-	if denial := checkBG(ctxWS(wsID, 0), "ava"); denial == nil {
-		t.Errorf("parity: gate must DENY mia→ava (no edge); got allow")
+	// (d) gate: mia→researcher denied (no edge).
+	if denial := checkBG(ctxWS(wsID, 0), "researcher"); denial == nil {
+		t.Errorf("parity: gate must DENY mia→researcher (no edge); got allow")
 	}
 }
 
@@ -497,7 +498,7 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 //
 // resolveDelegationLabel must return a label that includes the agent name for
 // recognized core-agent IDs, without duplicating the Subtitle when the Name
-// already contains it (e.g. "Ava — Builder" must not become "Ava — Builder (Builder)").
+// already contains it (e.g. "Omnipus — System agent" must not gain a second "(System agent)").
 // ---------------------------------------------------------------------------
 
 func TestResolveDelegationLabel_CoreAgent(t *testing.T) {
@@ -512,7 +513,7 @@ func TestResolveDelegationLabel_CoreAgent(t *testing.T) {
 		wantNotDuplicate string // Subtitle must not appear twice in the label
 		wantOk           bool
 	}{
-		{"ava", "Ava", "Builder (Builder)", true},
+		{"omnipus", "Omnipus", "System agent (System agent)", true},
 		{"jim", "Jim", "Orchestrator (Orchestrator)", true},
 		{"mia", "Mia", "Assistant (Assistant)", true},
 		{"worker", "General Purpose", "General Purpose (General Purpose)", true},
@@ -559,12 +560,12 @@ func TestResolveDelegationLabel_CoreAgent(t *testing.T) {
 }
 
 // minimalTestConfig returns a *config.Config seeded with the ADR-090 core
-// agent roster (Mia, Jim, Ava, Admin, Planner, Researcher, General Purpose +
+// agent roster (Mia, Jim, Omnipus, Planner, Researcher, General Purpose +
 // hidden engine agents) so NewAgentRegistry can find them. Ray is not seeded.
 func minimalTestConfig(t *testing.T) *config.Config {
 	t.Helper()
 	cfg := config.DefaultConfig()
-	// Seed core agents so the registry contains ava/jim/mia/ray.
+	// Seed core agents so the registry contains mia/jim/omnipus (ray is not seeded).
 	coreagent.SeedConfig(cfg)
 	return cfg
 }

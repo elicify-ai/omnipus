@@ -85,9 +85,10 @@ func loadGatewayConfigWithWorkspaceSeedDefaults(t *testing.T, excludeIDs []any) 
 
 // TestDefaultWorkspaceDelegationEdges_FrozenSelfEdgeOracle is the independent
 // oracle for the install/built-in seed writer: every ordinary built-in
-// (mia, jim, ava, admin, planner, researcher, worker) carries exactly one
-// self-row with ordinary direct/task modes and a pinned depth of 3; the two
-// hidden type:system seed records (judge, plansupervisor) carry none.
+// (mia, jim, omnipus, planner, researcher, worker) carries exactly one
+// self-row with ordinary direct/task modes and a pinned depth of 3 — except
+// Omnipus, whose self-row depth is exactly 1 (omnipus-system-agent §6.2); the
+// two hidden type:system seed records (judge, plansupervisor) carry none.
 func TestDefaultWorkspaceDelegationEdges_FrozenSelfEdgeOracle(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg), "SeedConfig on an empty config must modify")
@@ -97,7 +98,7 @@ func TestDefaultWorkspaceDelegationEdges_FrozenSelfEdgeOracle(t *testing.T) {
 
 	// FROZEN expected self-row set — hardcoded from the spec, NOT computed by
 	// defaultWorkspaceDelegationEdges / coreagent.SeedDelegationEdges.
-	wantSelf := []string{"mia", "jim", "ava", "admin", "planner", "researcher", "worker"}
+	wantSelf := []string{"mia", "jim", "omnipus", "planner", "researcher", "worker"}
 	for _, id := range wantSelf {
 		e, ok := self[id]
 		if !ok {
@@ -110,7 +111,11 @@ func TestDefaultWorkspaceDelegationEdges_FrozenSelfEdgeOracle(t *testing.T) {
 		if e.Depth == nil {
 			t.Fatalf("self-row %s→%s must carry an explicit depth of min(3, ceiling), got nil (inherit)", id, id)
 		}
-		assert.Equal(t, 3, *e.Depth, "fresh self-row %s→%s must pin depth 3 (FreshSelfDelegationMaxDepth)", id, id)
+		wantDepth := 3
+		if id == "omnipus" {
+			wantDepth = 1
+		}
+		assert.Equal(t, wantDepth, *e.Depth, "fresh self-row %s→%s must pin depth %d", id, id, wantDepth)
 	}
 
 	// The two hidden type:system seed records explicitly lack a self default.
@@ -125,7 +130,7 @@ func TestDefaultWorkspaceDelegationEdges_FrozenSelfEdgeOracle(t *testing.T) {
 // TestEnsureDefaultWorkspace_SeedsSelfRowForEveryOrdinaryMember exercises the
 // full install seed pipeline (defaultWorkspaceTeam -> defaultWorkspaceDelegationEdges
 // -> seedEdgesForTeam -> persist) end-to-end: every on-team member has a
-// PERSISTED self-row; judge/plansupervisor/admin have none.
+// PERSISTED self-row; judge/plansupervisor have none.
 func TestEnsureDefaultWorkspace_SeedsSelfRowForEveryOrdinaryMember(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
@@ -133,8 +138,7 @@ func TestEnsureDefaultWorkspace_SeedsSelfRowForEveryOrdinaryMember(t *testing.T)
 			List: []config.AgentConfig{
 				{ID: "mia", Type: config.AgentTypeCore},
 				{ID: "jim", Type: config.AgentTypeCore},
-				{ID: "ava", Type: config.AgentTypeCore},
-				{ID: "admin", Type: config.AgentTypeCore},
+				{ID: "omnipus", Type: config.AgentTypeCore},
 				{ID: "worker", Type: config.AgentTypeWorker},
 				{ID: "planner", Type: config.AgentTypeWorker},
 				{ID: "researcher", Type: config.AgentTypeWorker},
@@ -157,7 +161,7 @@ func TestEnsureDefaultWorkspace_SeedsSelfRowForEveryOrdinaryMember(t *testing.T)
 				id, selfRowIDs(loadStoredDelegationEdges(t, home, ws.ID)))
 		}
 	}
-	for _, id := range []string{"judge", "plansupervisor", "admin"} {
+	for _, id := range []string{"judge", "plansupervisor"} {
 		if _, ok := self[id]; ok {
 			t.Fatalf("%q must have no persisted self-row (off-team / excluded by seed data)", id)
 		}

@@ -138,6 +138,25 @@ type FSPolicy struct {
 	// for one. See Validate's PathGrants loop.
 	PathGrants []PathGrant
 
+	// SetupRoots are workspace WORK directories (workspaces/<id>/work) this
+	// turn may reach although they sit under the workspaces/ carve-out root:
+	// the cross-workspace setup authority only Omnipus holds
+	// (omnipus-system-agent FR-006, L1 amendment §2.2 A8). Each one is exempt
+	// from the carve-out exactly the way the turn's own WorkDir is — only the
+	// path inside that work directory, never the workspace record
+	// (workspaces/<id>.json), its .omnipus room, or anything else under the
+	// root. They are also write grants (WithSetupRoots adds them to
+	// AllowedRoots), so writes there go through the same os.Root-anchored
+	// mount handle.
+	//
+	// App layer only, for now: the kernel derivation (KernelDeniedPathsFor,
+	// DeriveKernelPolicy) does not read this field, so a bash child of the
+	// same turn is still denied these directories — the safe direction. The
+	// kernel half arrives with the #1284 allow-list (WU-23).
+	//
+	// nil for every turn of every other agent.
+	SetupRoots []string
+
 	// ReadConfined extends WorkDir confinement to the three operations that
 	// ADR-063 FR-2.2 deliberately left open outside the secret set —
 	// FSOpRead, FSOpList and FSOpSend (ADR-084 JUDGE-FR-060).
@@ -241,6 +260,21 @@ func (p FSPolicy) Validate() error {
 	case FSScopeConfined, FSScopeUnrestricted, FSScopeAsk, FSScopeAllow:
 	default:
 		return fmt.Errorf("fspolicy: unknown Scope %q", p.Scope)
+	}
+
+	// SetupRoots obey the same shape rule as WorkDir: absolute, and never at
+	// or above a carve-out root (a setup root at $OMNIPUS_HOME would exempt
+	// every carve-out at once).
+	for _, root := range p.SetupRoots {
+		if strings.TrimSpace(root) == "" || !filepath.IsAbs(root) {
+			return fmt.Errorf("fspolicy: SetupRoots entry %q is not an absolute path", root)
+		}
+		cleanSetup := filepath.Clean(root)
+		for _, carve := range p.CarveOuts {
+			if CoversForDeny(cleanSetup, filepath.Clean(carve)) {
+				return fmt.Errorf("fspolicy: SetupRoots entry %q is at or above the carve-out root %q", root, carve)
+			}
+		}
 	}
 
 	// PathGrants (ADR-092 FR-036/FR-037): each grant must be an absolute
@@ -384,6 +418,32 @@ func EffectiveFSPolicyWithReadConfined(
 		AllowedRoots: nil,
 		ReadConfined: readConfined,
 	}, nil
+}
+
+// WithSetupRoots returns a copy of p carrying roots — workspace work
+// directories, each resolved to its realpath like WorkDir — as SetupRoots
+// (carve-out exemption) and as AllowedRoots (write grant). It fails closed: a
+// root that cannot be resolved, or a policy the result would make invalid,
+// returns an error and the zero FSPolicy.
+func WithSetupRoots(p FSPolicy, roots []string) (FSPolicy, error) {
+	if len(roots) == 0 {
+		return p, nil
+	}
+	out := p
+	out.SetupRoots = append([]string(nil), p.SetupRoots...)
+	out.AllowedRoots = append([]string(nil), p.AllowedRoots...)
+	for _, root := range roots {
+		resolved, err := realpath(root)
+		if err != nil {
+			return FSPolicy{}, fmt.Errorf("fspolicy: resolve setup root %q: %w", root, err)
+		}
+		out.SetupRoots = append(out.SetupRoots, resolved)
+		out.AllowedRoots = append(out.AllowedRoots, resolved)
+	}
+	if err := out.Validate(); err != nil {
+		return FSPolicy{}, err
+	}
+	return out, nil
 }
 
 // realpath resolves path to an absolute, symlink-resolved location. When the

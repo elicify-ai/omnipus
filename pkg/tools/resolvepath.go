@@ -43,6 +43,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -1569,10 +1570,42 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool, g
 	if mountWorkspaceID != "" {
 		policy.AllowedRoots = workspace.AllowedMountRoots(home, mountWorkspaceID)
 	}
+	if coreagent.HasCrossWorkspaceSetupAuthority(ToolAgentID(ctx)) {
+		var setupErr error
+		if policy, setupErr = withSetupAuthority(policy, home); setupErr != nil {
+			return fspolicy.FSPolicy{}, setupErr
+		}
+	}
 	if len(grantOverlay) > 0 && len(grantOverlay[0]) > 0 {
 		policy.PathGrants = append(append([]fspolicy.PathGrant(nil), policy.PathGrants...), grantOverlay[0]...)
 	}
 	return policy, nil
+}
+
+// withSetupAuthority adds Omnipus's cross-workspace setup authority to policy
+// (omnipus-system-agent FR-006, L1 amendment §2.2 A8): every workspace's WORK
+// directory becomes a setup root (reachable despite the workspaces/ carve-out,
+// writable through the os.Root-anchored mount handle) and every workspace's
+// mounts become write grants. Workspace records, .omnipus rooms and every other
+// protected entry stay carve-outs. A listing or resolution failure fails the
+// turn's policy closed rather than dropping the authority silently.
+func withSetupAuthority(policy fspolicy.FSPolicy, home string) (fspolicy.FSPolicy, error) {
+	ids, err := workspace.ListWorkspaceIDs(home)
+	if err != nil {
+		return fspolicy.FSPolicy{}, fmt.Errorf("setup authority: list workspaces: %w", err)
+	}
+	roots := make([]string, 0, len(ids))
+	for _, id := range ids {
+		dir, dirErr := workspace.SafeWorkDir(home, id)
+		if dirErr != nil {
+			// A record whose id is not a safe workspace identifier names no
+			// work directory; it grants nothing (never a path probe).
+			continue
+		}
+		roots = append(roots, dir)
+		policy.AllowedRoots = append(policy.AllowedRoots, workspace.AllowedMountRoots(home, id)...)
+	}
+	return fspolicy.WithSetupRoots(policy, roots)
 }
 
 // ResolvePathAllowingPatterns bridges the operator-configured AllowRead/

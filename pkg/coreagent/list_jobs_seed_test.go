@@ -36,10 +36,9 @@ func TestListJobs_ResolvedPostureAcrossSeededRoster(t *testing.T) {
 
 	want := map[coreagent.CoreAgentID]string{
 		// Chat targets have independent role-specific list_jobs policies.
-		coreagent.IDMia:   "deny",
-		coreagent.IDJim:   "allow",
-		coreagent.IDAva:   "deny",
-		coreagent.IDAdmin: "deny",
+		coreagent.IDMia:     "deny",
+		coreagent.IDJim:     "allow",
+		coreagent.IDOmnipus: "deny",
 		// Delegation-only roles explicitly deny list_jobs in their sparse seeds.
 		coreagent.IDWorker:     "deny",
 		coreagent.IDPlanner:    "deny",

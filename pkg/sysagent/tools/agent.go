@@ -227,6 +227,9 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	if strings.TrimSpace(ac.name) == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", "Provide a name for the agent")), true
 	}
+	if coreagent.IsReservedAgentName(ac.name) {
+		return reservedNameResult(), true
+	}
 	ac.description, _ = ac.args["description"].(string)
 	if strings.TrimSpace(ac.description) == "" {
 		return tools.ErrorResult(
@@ -291,12 +294,43 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	if err := rejectUnknownAgentFields(ac.args, agentCreateArgNames); err != nil {
 		return fieldErrorResult(err), true
 	}
+	if r0, stop := refuseManagementGrants(ac.args); stop {
+		return r0, true
+	}
 	if _, _, err := parseOptionalHeartbeat(ac.args); err != nil {
 		return fieldErrorResult(err), true
 	}
 	ac.id = toSlug(ac.name)
 	if err := validateID(ac.id); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "")), true
+	}
+	return nil, false
+}
+
+// refuseManagementGrants refuses a create whose tool_policy_changes grant any
+// management-family tool with a non-deny policy — "allow" and "ask" are both
+// grants — or remove one (dropping the constructor's Deny lets the agent ride
+// the ceiling) (omnipus-system-agent FR-025, BDD-14.3). Runs before any
+// write. A malformed patch is refused with the shared decoder's own message.
+func refuseManagementGrants(args map[string]any) (*tools.ToolResult, bool) {
+	raw, present := args["tool_policy_changes"]
+	if !present {
+		return nil, false
+	}
+	patch, err := decodePolicyPatch(raw)
+	if err != nil {
+		return fieldErrorResult(err), true
+	}
+	if tool, bad := coreagent.ManagementGrantViolation(patch.Set); bad {
+		return tools.ErrorResult(errorJSON("MANAGEMENT_GRANT_REFUSED", coreagent.ManagementGrantRefusal(tool),
+			"Set "+tool+" to deny or leave it out; ask Omnipus to make management changes")), true
+	}
+	// Removing the constructor's explicit Deny lets the new agent ride the
+	// ceiling (allow or ask for this family) — the same grant, refused the
+	// same way (founder-approved security fix, 2026-10-14).
+	if tool, bad := coreagent.ManagementRemoveViolation(patch.Remove); bad {
+		return tools.ErrorResult(errorJSON("MANAGEMENT_GRANT_REFUSED", coreagent.ManagementRemoveRefusal(tool),
+			"Leave "+tool+" out of remove; ask Omnipus to make management changes")), true
 	}
 	return nil, false
 }
@@ -372,6 +406,11 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	// coreagent.NewCustomAgentToolsCfg()) — so the two agent-creation
 	// paths cannot drift out of sync on this seed again.
 	ac.newAgent.Tools = coreagent.NewCustomAgentToolsCfg()
+	if ac.newAgent.Type == config.AgentTypeWorker {
+		// §6.5 (FR-007): the worker tier gets no secret card, secret list or
+		// conversation reading.
+		coreagent.RestrictForWorkerTier(ac.newAgent.Tools)
+	}
 	fields := mutationFieldNames(ac.args)
 	if err := agentmutation.ValidateFields(ac.newAgent, fields); err != nil {
 		return fieldErrorResult(err), true
@@ -872,11 +911,11 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type": []string{"integer", "null"}, "minimum": 1, "maximum": 1000,
 				"description": "New max tool calls per turn for this agent, 1-1000. Must not exceed the global limit set in Settings → Performance (a higher value is refused). Pass null to clear the agent's own value and use the global limit; omit to leave it unchanged.",
 			},
-			"skills":              skillsParameters(true),
-			"mcp_servers":         mcpServersParameters(),
-			"tool_policy_changes": toolPolicyChangesParameters(),
-			"memory_enabled":      map[string]any{"type": "boolean"},
-			"default":             map[string]any{"type": "boolean"},
+			// tool_policy_changes and mcp_servers are deliberately absent:
+			// set_agent_permissions owns them on an existing agent (FR-024).
+			"skills":         skillsParameters(true),
+			"memory_enabled": map[string]any{"type": "boolean"},
+			"default":        map[string]any{"type": "boolean"},
 			"voice": map[string]any{
 				"type":        "string",
 				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",

@@ -16,8 +16,8 @@ func TestADR090_ExactRosterAndPolicyInventory(t *testing.T) {
 	}{
 		{"mia", "Mia", config.AgentTypeCore, true, false, false, false},
 		{"jim", "Jim", config.AgentTypeCore, true, false, false, false},
-		{"ava", "Ava", config.AgentTypeCore, true, false, false, false},
-		{"admin", "Admin", config.AgentTypeCore, true, false, false, false},
+		// omnipus-system-agent FR-001/FR-008: Omnipus replaces Ava and Admin.
+		{"omnipus", "Omnipus", config.AgentTypeCore, true, false, false, false},
 		{"planner", "Planner", config.AgentTypeWorker, false, true, false, true},
 		{"researcher", "Researcher", config.AgentTypeWorker, false, true, false, true},
 		{"worker", "General Purpose", config.AgentTypeWorker, false, true, false, true},
@@ -79,7 +79,7 @@ func TestADR090_ExactRosterAndPolicyInventory(t *testing.T) {
 		t.Errorf("fresh legacy default flags = %d, want exactly 1", defaultFlags)
 	}
 
-	for _, retired := range []string{"ray", "explorer", "max"} {
+	for _, retired := range []string{"ray", "explorer", "max", "ava", "admin"} {
 		if ByID(CoreAgentID(retired)) != nil {
 			t.Errorf("retired identity %q still resolves through ByID", retired)
 		}
@@ -98,7 +98,7 @@ func TestADR090_ExactRosterAndPolicyInventory(t *testing.T) {
 
 func assertADR090PolicyInventory(t *testing.T, cfg *config.Config) {
 	t.Helper()
-	ordinary := map[string]bool{"mia": true, "jim": true, "ava": true, "admin": true, "planner": true, "researcher": true, "worker": true}
+	ordinary := map[string]bool{"mia": true, "jim": true, "omnipus": true, "planner": true, "researcher": true, "worker": true}
 	for _, got := range cfg.Agents.List {
 		if ordinary[got.ID] && len(got.Tools.Builtin.Policies) >= len(AllStaticToolNames()) {
 			t.Errorf("ordinary role %q policy has %d entries; want a sparse map smaller than catalog %d", got.ID, len(got.Tools.Builtin.Policies), len(AllStaticToolNames()))
@@ -111,10 +111,11 @@ func assertADR090PolicyInventory(t *testing.T, cfg *config.Config) {
 
 func TestADR090_FreshSkillAssignmentsAndExplicitEmptySelectionsPersist(t *testing.T) {
 	wantSkills := map[string][]string{
-		"mia":            {"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
-		"jim":            {"interview", "orchestrate", "plan", "define-goal"},
-		"ava":            {"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team"},
-		"admin":          {"interview", "mcp-install", "provider-setup", "channel-setup", "doctor"},
+		"mia": {"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
+		"jim": {"interview", "orchestrate", "plan", "define-goal"},
+		// Omnipus ships no fresh skill assignment until WU-9 grants its
+		// workflow skills (FR-010); the retired Ava/Admin skills are gone.
+		"omnipus":        nil,
 		"planner":        {"plan", "define-goal"},
 		"researcher":     {"deep-research"},
 		"worker":         {"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
@@ -147,10 +148,11 @@ func TestADR090_FreshSkillAssignmentsAndExplicitEmptySelectionsPersist(t *testin
 
 func TestADR090_RolePolicyRequiredExclusionsAndOutboundAsk(t *testing.T) {
 	want := map[string]map[string]config.ToolPolicy{
-		"mia":        {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
-		"jim":        {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "bash": config.ToolPolicyDeny, "serve_web": config.ToolPolicyDeny, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
-		"ava":        {"create_plan": config.ToolPolicyDeny, "execute_plan": config.ToolPolicyDeny, "stop_plan": config.ToolPolicyDeny, "add_mcp_server": config.ToolPolicyDeny},
-		"admin":      {"add_mcp_server": config.ToolPolicyAllow},
+		"mia": {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
+		"jim": {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "bash": config.ToolPolicyDeny, "serve_web": config.ToolPolicyDeny, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
+		// omnipus-system-agent §6.5: add_mcp_server rides the FR-020 ask
+		// ceiling; plan control and browser tools are outside its supporting set.
+		"omnipus":    {"add_mcp_server": config.ToolPolicyAsk, "create_plan": config.ToolPolicyDeny, "browser_evaluate": config.ToolPolicyDeny},
 		"planner":    {"send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk},
 		"researcher": {"bash": config.ToolPolicyDeny, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk},
 		"worker":     {"create_plan": config.ToolPolicyDeny, "execute_plan": config.ToolPolicyDeny, "stop_plan": config.ToolPolicyDeny, "serve_web": config.ToolPolicyAllow, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk},
@@ -166,7 +168,7 @@ func TestADR090_RolePolicyRequiredExclusionsAndOutboundAsk(t *testing.T) {
 }
 
 func TestADR090_RoleInventoryClassifiesEveryStaticTool(t *testing.T) {
-	for _, id := range []CoreAgentID{IDMia, IDJim, IDAva, IDAdmin, IDPlanner, IDResearcher, IDWorker} {
+	for _, id := range []CoreAgentID{IDMia, IDJim, IDOmnipus, IDPlanner, IDResearcher, IDWorker} {
 		inventory := ADR090RolePolicyInventory(id)
 		if len(inventory) != len(AllStaticToolNames()) {
 			t.Fatalf("inventory for %q has %d tools, want %d", id, len(inventory), len(AllStaticToolNames()))

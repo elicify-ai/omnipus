@@ -81,7 +81,7 @@ func newSetupHarness(t *testing.T, admin bool) *setupTestHarness {
 	tool := NewEnvironmentSetupTool(EnvironmentSetupToolDeps{
 		Home:            home,
 		AgentWorkDir:    agentDir,
-		Admin:           admin,
+		SetupAuthority:  admin,
 		GodMode:         true, // no kernel sandbox needed here; confinement is the sandbox package's own coverage
 		Store:           storageSeamStore{},
 		AuditFailClosed: true,
@@ -299,7 +299,7 @@ func TestEnvironmentSetup_CrossWorkspace_NonAdmin_Refused(t *testing.T) {
 	})
 	require.NotNil(t, start)
 	require.True(t, start.IsError, "non-Admin cross-workspace target must be refused")
-	assert.Contains(t, start.ForLLM, "only Admin can target another workspace")
+	assert.Contains(t, start.ForLLM, "only Omnipus can target another workspace")
 
 	// The audit trail shows WHO tried to reach WHICH workspace.
 	auditAll := h.auditContents(t)

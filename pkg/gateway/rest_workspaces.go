@@ -24,7 +24,6 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -495,14 +494,10 @@ func workspaceToWireFrom(
 		}
 		wire.MemberConfigs = &wireMC
 	}
-	// C-MAIN: Admin is not a team member (no member_configs entry), so his main
-	// rides on the default workspace as a read-only top-level id, present only
-	// when it resolves — same resolver and validation as a member's address.
-	if w.IsDefault && mains != nil {
-		if id := mains(w, string(coreagent.IDAdmin)); id != "" {
-			wire.AdminMainSessionId = &id
-		}
-	}
+	// admin_main_session_id is no longer filled: Admin is retired
+	// (omnipus-system-agent FR-008) and Omnipus's main is an ordinary member
+	// main in member_configs. The optional wire field is removed with its SPA
+	// consumer in WU-11.
 	// FR-5/FR-8.2: mounts, with each entry's status computed live (never
 	// stored — see mountsToWire's doc comment).
 	wire.Mounts = mountsToWire(home, w.ID)
@@ -880,6 +875,11 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, vErr.Error())
 			return
 		}
+		// omnipus-system-agent FR-003: a created workspace is never the
+		// default one, so Omnipus cannot be on its team.
+		if refuseOmnipusMembership(w, false, nil, *req.CoreTeam) {
+			return
+		}
 	}
 
 	// Stamp the creating user's username as owner (attribution only, not a gate).
@@ -903,24 +903,16 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	if req.CoreTeam != nil && len(*req.CoreTeam) > 0 {
 		ws.CoreTeam = deduplicateStrings(*req.CoreTeam)
 	} else {
-		// No explicit team (nil, OR an explicit empty array — an empty array
-		// means "unspecified", not "deliberately no team"; otherwise a caller
-		// sending "core_team": [] would get a permanently teamless workspace
-		// with setup_pending left false and no agent ever available to run the
-		// interview and add members): new user-created workspaces start with
-		// only Ava on the team — she interviews the user and builds out the
-		// rest of the team herself (the setup_pending flow). This deliberately
-		// does NOT mirror ensureDefaultWorkspace's full-roster seed, which
-		// remains reserved for the auto-created boot default workspace
-		// ("My Workspace").
-		ws.CoreTeam = newWorkspaceSetupTeam(cfg)
-		// Only mark setup_pending when the seed actually produced a
-		// non-empty team. newWorkspaceSetupTeam returns nil when Ava is absent
-		// from the live config (e.g. a lite/custom install) — without this
-		// guard, such an install's workspace would be permanently stuck with
-		// setup_pending=true and an empty core_team: nothing (no kickoff-eligible
-		// agent) is ever available to run the interview and clear the flag.
-		ws.SetupPending = len(ws.CoreTeam) > 0
+		// No explicit team (nil, or an explicit empty array): a new
+		// user-created workspace starts with an empty team. Ava, who used to
+		// be seeded here to run the setup interview, is retired
+		// (omnipus-system-agent FR-008); Omnipus builds the team from its own
+		// chat (W1/W18), so there is no in-workspace interview agent and
+		// setup_pending stays false. This deliberately does NOT mirror
+		// ensureDefaultWorkspace's full-roster seed, which remains reserved
+		// for the auto-created boot default workspace.
+		ws.CoreTeam = nil
+		ws.SetupPending = false
 	}
 	// Seed default delegation edges from each team agent's seeded role (M5),
 	// restricted to edges whose endpoints are both on this workspace's team so a
@@ -1063,6 +1055,13 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	defer unlock()
 
 	if rw.loadAndValidateTeam() {
+		return
+	}
+	// omnipus-system-agent FR-003: Omnipus belongs to the default workspace
+	// only — decided before any side effect, ahead of the generic built-in
+	// rule so the refusal names the real boundary.
+	if rw.req.CoreTeam != nil &&
+		refuseOmnipusMembership(rw.w, rw.ws.IsDefault, rw.ws.CoreTeam, deduplicateStrings(*rw.req.CoreTeam)) {
 		return
 	}
 	// D8 refusal BEFORE any side effect (founder ruling 2026-10-11, gate

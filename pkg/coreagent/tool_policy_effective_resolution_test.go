@@ -70,7 +70,7 @@ func TestEffectiveResolution_InspectSession_JudgeAllow_OthersDeny(t *testing.T) 
 		"(Judge, inspect_session) must resolve allow through the real compositor merge")
 
 	for _, id := range []coreagent.CoreAgentID{
-		coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDAdmin,
+		coreagent.IDMia, coreagent.IDJim, coreagent.IDOmnipus,
 		coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker,
 	} {
 		assert.Equalf(t, "deny", resolveFor(t, cfg, string(id), "inspect_session", nil),
@@ -109,7 +109,7 @@ func TestEffectiveResolution_PlanExecution_DefaultCeiling_JimAllowOthersAsk(t *t
 				"silently overruling his seeded allow again", tool)
 
 		for _, id := range []coreagent.CoreAgentID{
-			coreagent.IDMia, coreagent.IDAva, coreagent.IDAdmin,
+			coreagent.IDMia, coreagent.IDOmnipus,
 			coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker,
 		} {
 			assert.Equalf(t, "deny", resolveFor(t, cfg, string(id), tool, nil),

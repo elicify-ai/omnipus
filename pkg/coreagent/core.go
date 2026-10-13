@@ -16,6 +16,7 @@ package coreagent
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -25,10 +26,16 @@ import (
 type CoreAgentID string
 
 const (
-	IDJim   CoreAgentID = "jim"
-	IDAva   CoreAgentID = "ava"
-	IDMia   CoreAgentID = "mia"
-	IDAdmin CoreAgentID = "admin"
+	IDJim CoreAgentID = "jim"
+	IDMia CoreAgentID = "mia"
+	// IDOmnipus is the one system agent (omnipus-system-agent spec FR-001,
+	// ADR-20261011): a core, locked, chat-target identity that replaces the
+	// retired Ava and Admin roles (FR-008 — their ids are gone, so any
+	// remaining compile-time reference surfaces as a build error). It is an
+	// ordinary hidden member of the default workspace only (FR-003), its turns
+	// root at its own agent home, and it alone holds the cross-workspace
+	// setup authority over workspace folders (FR-006, L1 amendment A8).
+	IDOmnipus CoreAgentID = "omnipus"
 	// IDWorker is the seeded general-purpose sub-agent worker (the worker tier).
 	// It is NOT a base/core agent: it is seeded with Type=worker, carries a native
 	// Executor, is never a chat target, has no heartbeat, and is never the
@@ -124,31 +131,30 @@ type CoreAgent struct {
 	Color       string // Canonical palette hex
 }
 
-// All returns every seeded agent in display order: the 4 base agents (Mia first,
-// as the default) followed by the general-purpose worker. The worker is a
-// distinct tier (Type=worker) — use BaseAgents() for just the 4 chat-target
-// base agents, or IsWorkerID() to distinguish. Max was retired from the seeded
-// base in Spec-3 (v0.1.0 roster re-cast).
+// All returns every seeded agent in display order: the 3 base agents (Mia first,
+// as the default; then Jim and Omnipus) followed by the specialists and the
+// general-purpose worker. The worker is a distinct tier (Type=worker) — use
+// BaseAgents() for just the chat-target base agents, or IsWorkerID() to
+// distinguish. Max was retired in Spec-3; Ava and Admin were retired by the
+// Omnipus system agent (spec FR-008).
 func All() []*CoreAgent {
 	return []*CoreAgent{
 		Mia(),
 		Jim(),
-		Ava(),
-		Admin(),
+		Omnipus(),
 		Planner(),
 		Researcher(),
 		Worker(),
 	}
 }
 
-// BaseAgents returns only the 4 base (core, chat-target) agents, excluding the
+// BaseAgents returns only the base (core, chat-target) agents, excluding the
 // worker tier. Use this where the worker must NOT be treated as a base agent.
 func BaseAgents() []*CoreAgent {
 	return []*CoreAgent{
 		Mia(),
 		Jim(),
-		Ava(),
-		Admin(),
+		Omnipus(),
 	}
 }
 
@@ -257,7 +263,7 @@ func GetPrompt(id string) string {
 // the same set of strings so existing tooling (CLI, audit log, telemetry) keeps
 // working without an alias layer.
 //
-// The built-in chat roster (Mia / Jim / Ava / Admin) keeps `core` — ResolveType is only
+// The built-in chat roster (Mia / Jim / Omnipus) keeps `core` — ResolveType is only
 // for user-creatable types. Callers handling a built-in must NOT call this.
 func ResolveType(wire generated.AgentType) config.AgentType {
 	switch wire {
@@ -289,20 +295,6 @@ func Jim() *CoreAgent {
 	}
 }
 
-// Ava returns the Builder core agent.
-func Ava() *CoreAgent {
-	return &CoreAgent{
-		ID:       IDAva,
-		Name:     "Ava",
-		Subtitle: "Builder",
-		Description: "Configures agents, teams and skills, including models, tool permissions and connector assignments. " +
-			"Reviews one combined proposal with you before applying changes and checking the result.",
-		Figure: DefaultFigure,
-		Role:   DefaultRole,
-		Color:  "#A97142",
-	}
-}
-
 // Mia returns the Assistant core agent (default ⭐).
 func Mia() *CoreAgent {
 	return &CoreAgent{
@@ -317,22 +309,52 @@ func Mia() *CoreAgent {
 	}
 }
 
-// Admin returns the chat-capable operator role. Admin configures the harness;
-// it is a core runtime identity, not a hidden system agent.
+// Omnipus returns the system agent (omnipus-system-agent spec FR-001). Its
+// name is reserved (FR-002) and its identity is locked like every built-in.
 //
 // Visible roster colours (All, the set TestCoreAgentMetadataDifferentiation
-// checks) are distinct: Mia Steel blue #6E8BA8, Jim Verdigris #4F8A80, Ava
-// Bronze #A97142, Admin Champagne #CDBA96, Planner Titanium #7A8C9E,
-// Researcher Graphite violet #7B7290, General Purpose Pewter #8E9196. Hidden
-// Judge (Steel blue) and Plan Supervisor (Verdigris) are not in All() and are
-// outside that check.
-func Admin() *CoreAgent {
+// checks) are distinct: Mia Steel blue #6E8BA8, Jim Verdigris #4F8A80, Omnipus
+// Bronze #A97142, Planner Titanium #7A8C9E, Researcher Graphite violet #7B7290,
+// General Purpose Pewter #8E9196. Hidden Judge (Steel blue) and Plan
+// Supervisor (Verdigris) are not in All() and are outside that check.
+//
+// Placeholder identity text until WU-9 wires the prometheus-authored copy
+// (docs/internal/specs/omnipus-wu9-draft/).
+func Omnipus() *CoreAgent {
 	return &CoreAgent{
-		ID: IDAdmin, Name: "Admin", Subtitle: "Operator",
-		Description: "Configures connectors, providers, channels, diagnostics, and document dependencies.",
-		Figure:      DefaultFigure, Role: string(generated.AgentRoleSecurity),
-		Color: "#CDBA96",
+		ID:       IDOmnipus,
+		Name:     OmnipusName,
+		Subtitle: "System agent",
+		Description: "Sets up and changes your agents, teams, skills, connectors, providers and channels, " +
+			"with one summary question before any change.",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#A97142",
 	}
+}
+
+// OmnipusName is the system agent's display name. It is reserved: no other
+// agent may be created or renamed to it (trimmed, case-insensitive — FR-002).
+const OmnipusName = "Omnipus"
+
+// ReservedNameRefusal is the exact refusal text every name-write path returns
+// for the reserved name (spec §6.2: 409 on REST, an error result on the agent
+// tools).
+const ReservedNameRefusal = "the name Omnipus is reserved"
+
+// IsReservedAgentName reports whether name, trimmed and compared without
+// letter case, is the system agent's reserved name (FR-002). A similar name
+// such as "Omnipus Helper" is not reserved.
+func IsReservedAgentName(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), OmnipusName)
+}
+
+// HasCrossWorkspaceSetupAuthority reports whether the agent holds the
+// cross-workspace setup authority over workspace folders (FR-006, L1
+// amendment A8): only Omnipus. The authority covers workspaces/<any>/work and
+// their mounts; it grants nothing over internal files.
+func HasCrossWorkspaceSetupAuthority(id string) bool {
+	return CoreAgentID(id) == IDOmnipus
 }
 
 // Worker returns the seeded general-purpose sub-agent worker. It is a distinct

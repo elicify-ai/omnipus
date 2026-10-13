@@ -73,10 +73,10 @@ func ensureBuiltinRosterPresent(home string, w storedWorkspace, cfg *config.Conf
 // workspace's Team tab.
 //
 // Ids excluded from workspace teams by ROLE (coreagent.
-// ExcludedFromWorkspaceTeams — the Admin standalone operator, and the hidden
-// System Agents) are skipped: they are members of nothing BY DESIGN
-// (ADR-090 FR-001), so naming them here would cry wolf on every boot over
-// the designed state and drown the agents that actually need a remedy.
+// ExcludedFromWorkspaceTeams — the hidden System Agents) are skipped: they
+// are members of nothing BY DESIGN (ADR-090 FR-001), so naming them here
+// would cry wolf on every boot over the designed state and drown the agents
+// that actually need a remedy.
 func logWorkspacelessAgents(home string, cfg *config.Config) {
 	if cfg == nil || len(cfg.Agents.List) == 0 {
 		return
@@ -161,14 +161,6 @@ func workspaceMemberConfigsFromWire(
 // workspace's core_team with zero validation. Returns nil for an empty
 // coreTeam (nothing to validate).
 //
-// It also rejects the Admin standalone operator (ADR-090 FR-001/FR-006: "no
-// team membership"; "Admin and hidden agents cannot be added as ordinary
-// teammates to bypass role boundaries"). Admin is a registered CORE agent —
-// Type=="core", chat-able — so the IsSystem() check above does not catch it;
-// the roster-driven coreagent.ExcludedFromWorkspaceTeams predicate does. (An
-// id reaching that predicate with it true can only be Admin here: system ids
-// were already rejected by IsSystem(), unregistered ids by the lookup.)
-//
 // This rejection stays exactly as it was even after ADR-052's Judge/verifier
 // fix made System Agents IMPLICIT members of EVERY workspace (operator
 // decision, 2026-07-21: "make the judge a member of every workspace, keep it
@@ -199,7 +191,7 @@ func validateCoreTeamMembers(cfg *config.Config, coreTeam []string) error {
 		}
 		if coreagent.ExcludedFromWorkspaceTeams(coreagent.CoreAgentID(id)) {
 			return fmt.Errorf(
-				"core_team member %q is the Admin standalone operator and cannot be added to a workspace team roster (ADR-090)", id)
+				"core_team member %q is a hidden System Agent and cannot be added to a workspace team roster", id)
 		}
 	}
 	return nil

@@ -802,6 +802,13 @@ type DelegationPolicy struct {
 	// Depth is the maximum delegation chain depth for the seeded edges.
 	// Zero means uncapped (nil pointer = uncapped).
 	Depth *int `json:"depth,omitempty"`
+
+	// SelfDepth lowers the depth of the seeded SELF-edge only (from == to)
+	// below the fresh self pin (coreagent.FreshSelfDelegationMaxDepth) when
+	// set and smaller; nil keeps the pin. Seed data, never consulted at
+	// delegation time: Omnipus's self-row ships depth 1
+	// (omnipus-system-agent spec §6.2).
+	SelfDepth *int `json:"self_depth,omitempty"`
 }
 
 // ExecutorKind enumerates the runtime used to execute a sub-agent task.

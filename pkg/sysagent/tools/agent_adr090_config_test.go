@@ -225,7 +225,9 @@ func TestUpdateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
 	}
 }
 
-func TestUpdateAgent_RejectsUnconfiguredMCPServerWithoutWrite(t *testing.T) {
+// FR-024: connector assignments of an existing agent change only through
+// set_agent_permissions, with update_agent's former validation.
+func TestSetAgentPermissions_RejectsUnconfiguredMCPServerWithoutWrite(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory(nil, map[string][]string{"mail": {"inbox_read"}})
 	store := agentstore.New(deps.Home)
@@ -233,7 +235,7 @@ func TestUpdateAgent_RejectsUnconfiguredMCPServerWithoutWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
+	result := systools.NewAgentPermissionsTool(deps).Execute(context.Background(), map[string]any{
 		"id":          "writer",
 		"revision":    currentAgentRevision(t, deps, "writer"),
 		"mcp_servers": []any{map[string]any{"id": "ghost"}},
@@ -257,7 +259,9 @@ func TestUpdateAgent_RejectsUnconfiguredMCPServerWithoutWrite(t *testing.T) {
 	}
 }
 
-func TestUpdateAgent_RejectsNonLiveConnectorToolNameWithoutWrite(t *testing.T) {
+// FR-024: connector assignments of an existing agent change only through
+// set_agent_permissions, with update_agent's former validation.
+func TestSetAgentPermissions_RejectsNonLiveConnectorToolNameWithoutWrite(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	_, _, mailHook := mailLiveInventory()
 	deps.AgentConfigInventory = mailHook
@@ -266,7 +270,7 @@ func TestUpdateAgent_RejectsNonLiveConnectorToolNameWithoutWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
+	result := systools.NewAgentPermissionsTool(deps).Execute(context.Background(), map[string]any{
 		"id":       "writer",
 		"revision": currentAgentRevision(t, deps, "writer"),
 		"mcp_servers": []any{map[string]any{
@@ -306,13 +310,21 @@ func TestUpdateAgent_EmptySkillsAndMCPServersClear(t *testing.T) {
 	}
 
 	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":       "writer",
+		"revision": currentAgentRevision(t, deps, "writer"),
+		"skills":   []any{},
+	})
+	if result.IsError {
+		t.Fatalf("empty skills clear must succeed, got: %s", result.ForLLM)
+	}
+	// FR-024: the connector clear goes through set_agent_permissions.
+	result = systools.NewAgentPermissionsTool(deps).Execute(context.Background(), map[string]any{
 		"id":          "writer",
 		"revision":    currentAgentRevision(t, deps, "writer"),
-		"skills":      []any{},
 		"mcp_servers": []any{},
 	})
 	if result.IsError {
-		t.Fatalf("empty clears must succeed, got: %s", result.ForLLM)
+		t.Fatalf("empty mcp_servers clear must succeed, got: %s", result.ForLLM)
 	}
 	ag, err := store.Get("writer")
 	if err != nil {
@@ -701,7 +713,9 @@ func TestCollectLiveMCPNames_IncludesPublicAndRemote(t *testing.T) {
 	}
 }
 
-func TestUpdateAgent_AcceptsRemoteAndPublicMCPToolNames(t *testing.T) {
+// FR-024: connector assignments of an existing agent change only through
+// set_agent_permissions, with update_agent's former validation.
+func TestSetAgentPermissions_AcceptsRemoteAndPublicMCPToolNames(t *testing.T) {
 	public, _, hook := mailLiveInventory()
 	for _, toolName := range []string{"inbox_read", public} {
 		t.Run(toolName, func(t *testing.T) {
@@ -711,7 +725,7 @@ func TestUpdateAgent_AcceptsRemoteAndPublicMCPToolNames(t *testing.T) {
 			if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 				t.Fatal(err)
 			}
-			result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
+			result := systools.NewAgentPermissionsTool(deps).Execute(context.Background(), map[string]any{
 				"id":       "writer",
 				"revision": currentAgentRevision(t, deps, "writer"),
 				"mcp_servers": []any{map[string]any{

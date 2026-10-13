@@ -359,6 +359,12 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 		}
 		return true
 	}
+	// FR-022: the overrides are what this agent would store; Omnipus never
+	// stores a per-agent ask (inherited echoes of the ceiling are not
+	// overrides and never trip this).
+	if refuseOmnipusPerAgentAsk(rau.w, rau.agentID, overrides) {
+		return true
+	}
 	mutation, updateErr := agentstore.New(rau.a.homePath).MutateState(rau.agentID, rau.req.Revision, func(agentRec *config.AgentConfig) error {
 		if err := agentmutation.ValidateFields(*agentRec, []string{"tools_cfg"}); err != nil {
 			return err

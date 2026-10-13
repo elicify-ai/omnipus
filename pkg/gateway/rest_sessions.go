@@ -980,14 +980,15 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
 		return
 	}
-	// Navigation FR-038: Admin has no standalone, workspace-less session.
+	// omnipus-system-agent FR-003: Omnipus's chats live in the default
+	// workspace only.
 	reqWorkspaceID := ""
 	if req.WorkspaceId != nil {
 		reqWorkspaceID = *req.WorkspaceId
 	}
-	msg, adminFault := adminChatRefusal(a.homePath, agentID, reqWorkspaceID)
-	if adminFault != nil {
-		jsonServerFailure(w, http.StatusInternalServerError, "could not check where Admin's chat may live", adminFault)
+	msg, omnipusFault := omnipusChatRefusal(a.homePath, agentID, reqWorkspaceID)
+	if omnipusFault != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not check where Omnipus's chat may live", omnipusFault)
 		return
 	}
 	if msg != "" {

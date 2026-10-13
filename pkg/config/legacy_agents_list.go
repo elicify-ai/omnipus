@@ -73,8 +73,7 @@ import (
 var coreAgentIDs = map[string]bool{
 	"mia":            true,
 	"jim":            true,
-	"ava":            true,
-	"admin":          true,
+	"omnipus":        true,
 	"planner":        true,
 	"researcher":     true,
 	"worker":         true,

@@ -51,12 +51,12 @@ var d2BrowserVerbs = []string{
 }
 
 // browsingAgents are the seeded agents that hold the browser surface.
-var browsingAgents = []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDAva}
+var browsingAgents = []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim}
 
 // zeroBrowserAgents have explicit ADR-090 browser exclusions, which must
 // remain effective even when the global ceiling permits a browser tool.
 var zeroBrowserAgents = []coreagent.CoreAgentID{
-	coreagent.IDAdmin, coreagent.IDPlanner,
+	coreagent.IDOmnipus, coreagent.IDPlanner,
 	coreagent.IDResearcher, coreagent.IDWorker,
 }
 

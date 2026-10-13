@@ -160,7 +160,7 @@ func TestBootMains_AcrossSavedWorkspacesWithExistingAndCorruptMains(t *testing.T
 	logs := sf1CaptureSlog(t)
 	env := u1NewEnv(t, false)
 	const def, other = "01JSF1DEFAULT00000000000C", "01JSF1OTHERWS000000000000D"
-	env.seedWorkspace(t, def, true, "jim", "mia") // jim (corrupt) is listed BEFORE mia (healthy)
+	env.seedWorkspace(t, def, true, "jim", "mia", "omnipus") // jim (corrupt) is listed BEFORE mia (healthy); Omnipus is a default member (FR-003)
 	env.seedWorkspace(t, other, false, "mia", "jim")
 
 	// An existing, healthy main for (other, jim): created before boot. Nothing
@@ -191,8 +191,8 @@ func TestBootMains_AcrossSavedWorkspacesWithExistingAndCorruptMains(t *testing.T
 				got = append(got, id)
 			}
 		}
-		want := []string{u1MainID(def, "admin"), u1MainID(def, "mia"), u1MainID(other, "jim"), u1MainID(other, "mia")}
-		assert.Equal(t, want, got, "boot %d: Admin's, the healthy default member (created AFTER the corrupt one failed), the reused existing main and the main boot created in the non-default workspace; no replacement for the corrupt one", boot)
+		want := []string{u1MainID(def, "mia"), u1MainID(def, "omnipus"), u1MainID(other, "jim"), u1MainID(other, "mia")}
+		assert.Equal(t, want, got, "boot %d: the healthy default members (created AFTER the corrupt one failed) — Omnipus as an ordinary member — the reused existing main and the main boot created in the non-default workspace; no replacement for the corrupt one", boot)
 
 		after, err := os.ReadFile(existingPath)
 		require.NoError(t, err)
@@ -207,13 +207,14 @@ func TestBootMains_AcrossSavedWorkspacesWithExistingAndCorruptMains(t *testing.T
 		"the corrupt pair is identified by workspace and agent in an error log: %s", out)
 }
 
-// I2: Admin's main address reaches the real workspace JSON response - validated
-// against the generated Workspace schema - only on the default workspace and
-// only once the main resolves.
-func TestWorkspaceJSON_AdminMainSessionIDThroughTheRealResponse(t *testing.T) {
+// I2 (after the Admin retirement, omnipus-system-agent FR-003/FR-008): the
+// real workspace JSON response — validated against the generated Workspace
+// schema — never carries the retired admin_main_session_id; Omnipus's main is
+// an ordinary member_configs main on the default workspace once it resolves.
+func TestWorkspaceJSON_OmnipusMainIsAnOrdinaryMemberMainThroughTheRealResponse(t *testing.T) {
 	env := u1NewEnv(t, false)
 	const def, other = "01JSF1DEFAULT00000000000E", "01JSF1OTHERWS000000000000F"
-	env.seedWorkspace(t, def, true, "mia")
+	env.seedWorkspace(t, def, true, "mia", "omnipus")
 	env.seedWorkspace(t, other, false, "mia")
 
 	raw := func(id string) ([]byte, map[string]any) {
@@ -237,23 +238,22 @@ func TestWorkspaceJSON_AdminMainSessionIDThroughTheRealResponse(t *testing.T) {
 		assert.NoError(t, schema.Validate(doc), "the workspace response must validate against Workspace.yaml: %s", body)
 	}
 
-	before, m := raw(def)
-	validate(before)
-	_, present := m["admin_main_session_id"]
-	assert.False(t, present, "before the main exists the field is omitted, never a guessed id")
-
 	env.api.ensureBootMains()
 
 	body, m := raw(def)
 	validate(body)
-	got, ok := m["admin_main_session_id"].(string)
-	require.True(t, ok, "the default workspace JSON carries admin_main_session_id once Admin's main resolves")
-	assert.Equal(t, u1MainID(def, "admin"), got)
+	_, present := m["admin_main_session_id"]
+	assert.False(t, present, "the retired admin_main_session_id is never filled")
+	mc := u1MemberConfig(m, "omnipus")
+	require.NotNil(t, mc, "Omnipus carries an ordinary member_configs entry on the default workspace")
+	got, ok := mc["main_session_id"].(string)
+	require.True(t, ok, "the entry carries Omnipus's main once it resolves")
+	assert.Equal(t, u1MainID(def, "omnipus"), got)
 	assert.LessOrEqual(t, len(got), 255, "the contract bounds the id at 255")
-	assert.Nil(t, u1MemberConfig(m, "admin"), "no fake membership entry for Admin")
 
 	body, m = raw(other)
 	validate(body)
 	_, present = m["admin_main_session_id"]
 	assert.False(t, present, "a non-default workspace never carries it")
+	assert.Nil(t, u1MemberConfig(m, "omnipus"), "Omnipus is not a member of a non-default workspace")
 }

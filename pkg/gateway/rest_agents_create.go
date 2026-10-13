@@ -270,6 +270,9 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 		jsonErr(pap.cra.w, http.StatusUnprocessableEntity, "name is required")
 		return true
 	}
+	if refuseReservedAgentName(pap.cra.w, pap.name) {
+		return true
+	}
 	if pap.createType == config.AgentTypeWorker && wireType == string(gen.AgentTypeSubagent3p) {
 		if executorIn == nil || executorIn.CliPath == nil || strings.TrimSpace(*executorIn.CliPath) == "" {
 			jsonErr(pap.cra.w, http.StatusBadRequest, "executor.cli_path is required for subagent_3p agents")

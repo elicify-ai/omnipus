@@ -512,8 +512,9 @@ func TestWorkspaceCreate_LargeCoreTeamAccepted(t *testing.T) {
 // for newly added members — otherwise, per ADR-037's fail-closed rule (no
 // edge ⇒ deny), no member of a freshly-created team could delegate to any
 // other. Mirrors TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers: team
-// [ava, jim, worker] seeds Jim→Ava, Jim→Worker, Jim→Jim and Worker→Worker.
-// No retired role may enter the graph.
+// [ava, jim, worker] seeds Jim→Worker plus every member's self-row. "ava" is
+// an ordinary member id here: Ava's role, and Jim's role edge to her, are
+// retired (omnipus-system-agent FR-008). No retired role may enter the graph.
 func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 	deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim", "worker")
 	tool := systools.NewWorkspaceCreateTool(deps)
@@ -538,18 +539,14 @@ func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 
 	id := workspaceID(t, result.ForLLM)
 	edges := delegationEdgesFromDisk(t, home, id)
-	// Ratified Jim→Ava delegation joins Jim→Worker, and every member of the
-	// freshly-created team gets its ordinary self-row (session-core FR-014/015):
-	// ava, jim and worker each carry {id→id}.
-	if len(edges) != 5 {
-		t.Fatalf("expected exactly 5 seeded edges, got %d: %v", len(edges), edges)
+	// Jim→Worker, and every member of the freshly-created team gets its
+	// ordinary self-row (session-core FR-014/015): ava, jim and worker each
+	// carry {id→id}.
+	if len(edges) != 4 {
+		t.Fatalf("expected exactly 4 seeded edges, got %d: %v", len(edges), edges)
 	}
-	jimAva := findEdge(edges, "jim", "ava")
-	if jimAva == nil {
-		t.Fatal("Jim must be able to delegate team configuration to Ava")
-	}
-	if _, pinned := jimAva["depth"]; pinned {
-		t.Fatal("Jim→Ava must inherit the global depth ceiling, not the self-edge cap")
+	if findEdge(edges, "jim", "ava") != nil {
+		t.Error("jim→ava must not be seeded — Jim's role edge to Ava is retired (FR-008)")
 	}
 	if findEdge(edges, "jim", "ray") != nil {
 		t.Error("jim→ray must be dropped — ray is not on the team")
@@ -654,7 +651,7 @@ func TestWorkspaceCreate_SelfEdgesPinDepthAtCeilingOr3(t *testing.T) {
 					t.Errorf("%s→%s depth present=%v value=%d, want %d", pair[0], pair[1], ok, d, tc.want)
 				}
 			}
-			for _, pair := range [][2]string{{"jim", "ava"}, {"jim", "worker"}} {
+			for _, pair := range [][2]string{{"jim", "worker"}} {
 				e := findEdge(edges, pair[0], pair[1])
 				if e == nil {
 					t.Fatalf("expected non-self edge %s→%s", pair[0], pair[1])
@@ -1150,10 +1147,11 @@ func modesOf(edge map[string]any) []string {
 }
 
 // TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers verifies scenario 1:
-// team [ava] → update to [ava, jim, worker] seeds exactly the three edges
-// whose endpoints are both on the new team AND touch a newly added member
-// (jim→ava, jim→worker, ava→worker) — jim→ray is dropped because ray is off
-// team, even though it's part of Jim's compiled-in seed. Also asserts Jim's
+// team [ava] → update to [ava, jim, worker] seeds exactly the edges whose
+// endpoints are both on the new team AND touch a newly added member
+// (jim→worker plus the new members' self-rows) — jim→ray is dropped because
+// ray is off team, even though it's part of Jim's compiled-in seed. Jim's
+// former role edge to Ava is retired (omnipus-system-agent FR-008). Also asserts Jim's
 // 2-value seed vocabulary ([task, background]) maps to
 // the 2-value trust-edge vocabulary ([task, direct]) per edgeModeCategory,
 // and that depth (unset for Jim/Ava's seed) stays absent.
@@ -1196,16 +1194,12 @@ func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 	}
 
 	edges := delegationEdgesFromDisk(t, home, id)
-	// Ratified Jim→Ava delegation joins Jim→Worker and both self-edges.
-	if len(edges) != 4 {
-		t.Fatalf("expected exactly 4 seeded edges, got %d: %v", len(edges), edges)
+	// Jim→Worker and both new members' self-edges.
+	if len(edges) != 3 {
+		t.Fatalf("expected exactly 3 seeded edges, got %d: %v", len(edges), edges)
 	}
-	jimAva := findEdge(edges, "jim", "ava")
-	if jimAva == nil {
-		t.Fatal("Jim must be able to delegate team configuration to Ava")
-	}
-	if _, pinned := jimAva["depth"]; pinned {
-		t.Fatal("Jim→Ava must inherit the global depth ceiling, not the self-edge cap")
+	if findEdge(edges, "jim", "ava") != nil {
+		t.Error("jim→ava must not be seeded — Jim's role edge to Ava is retired (FR-008)")
 	}
 	if findEdge(edges, "jim", "ray") != nil {
 		t.Error("jim→ray must be dropped — ray is not on the team")
@@ -1521,8 +1515,8 @@ func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
 	if findEdge(edges, "jim", "jim") == nil {
 		t.Errorf("expected Jim self edge to be seeded, got %v", edges)
 	}
-	if findEdge(edges, "jim", "ava") == nil {
-		t.Errorf("expected Jim→Ava delegation edge to be seeded (ADR-090 §3: Jim delegates configuration proposals to Ava), got %v", edges)
+	if findEdge(edges, "jim", "ava") != nil {
+		t.Errorf("jim→ava must not be seeded — Jim's role edge to Ava is retired (FR-008), got %v", edges)
 	}
 	if findEdge(edges, "jim", "worker") != nil {
 		t.Error("jim→worker must NOT be seeded — worker is absent from the live config")
@@ -1530,8 +1524,8 @@ func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
 	if findEdge(edges, "ava", "worker") != nil {
 		t.Error("ava→worker must NOT be seeded — worker is absent from local config")
 	}
-	if len(edges) != 2 {
-		t.Errorf("expected exactly 2 seeded edges (Jim self edge + Jim→Ava configuration-delegation edge), got %d: %v", len(edges), edges)
+	if len(edges) != 1 {
+		t.Errorf("expected exactly 1 seeded edge (Jim self edge), got %d: %v", len(edges), edges)
 	}
 }
 

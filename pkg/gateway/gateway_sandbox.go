@@ -211,6 +211,20 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		// implementation registers itself (same name, no duplicate entry in
 		// a set).
 		out["grep"] = struct{}{}
+		// omnipus-system-agent §6.5 (FR-007, FR-021): the secret, connection
+		// and conversation tool names are classified ahead of their
+		// implementations (WU-4/5/6/7; landing 2 for read_conversation and
+		// list_mailboxes), under the same rule as the ADR-052 four above.
+		// set_agent_permissions is implemented and registers through
+		// systools.AllTools. Mirrors pkg/coreagent/seed.go's
+		// allStaticToolNames (TestBuildKnownBuiltinToolNames_
+		// MatchesCoreagentStaticToolCatalog enforces the two stay in sync).
+		for _, name := range []string{
+			"request_secret", "list_secrets", "remove_secret", "select_secret_version",
+			"connect_channel", "connect_mailbox", "read_conversation", "list_mailboxes",
+		} {
+			out[name] = struct{}{}
+		}
 		knownBuiltinToolNamesCache = out
 	})
 	return knownBuiltinToolNamesCache

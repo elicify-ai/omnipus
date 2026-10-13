@@ -222,18 +222,16 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 	})
 
 	t.Run("differentiation: base agent in default team is accepted (control)", func(t *testing.T) {
-		// Control proving the guard is real (not hardcoded): "ava" is the ONLY
-		// agent newWorkspaceSetupTeam seeds by default, so a freshly
-		// created workspace (no explicit core_team) already has her on-team.
-		// (This control previously used "mia" via defaultWorkspaceTeam's
-		// full base roster; that seed now applies only to the auto-created
-		// boot default workspace, ensureDefaultWorkspace — not to ordinary
-		// POST-created workspaces like this one.)
+		// Control proving the guard is real (not hardcoded): a base agent put
+		// on the team is accepted. (A POST-created workspace now starts with an
+		// empty team — the Ava-only seed is retired, omnipus-system-agent
+		// FR-008 — so the team is set explicitly.)
 		api, _ := newWorkerTestRestAPI(t)
 		wsID := ensureTestWorkspace(t, api)
+		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 
 		body := fmt.Sprintf(
-			`{"title":"BaseAgentDefaultTeamTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"ava",`+minimalCriteriaDodJSON+`}`,
+			`{"title":"BaseAgentDefaultTeamTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"mia",`+minimalCriteriaDodJSON+`}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -243,8 +241,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 		api.HandleTasks(w, r)
 
 		require.Equal(t, http.StatusCreated, w.Code,
-			"ava is newWorkspaceSetupTeam's sole default seed member, so a fresh workspace accepts her "+
-				"without an explicit core_team; body=%s", w.Body.String())
+			"a base agent on the workspace team is accepted; body=%s", w.Body.String())
 	})
 }
 

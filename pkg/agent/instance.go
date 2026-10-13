@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
@@ -302,7 +303,7 @@ func (nai *newAgentInstance) registerTools() {
 		nai.toolsRegistry.Register(tools.NewEnvironmentSetupTool(tools.EnvironmentSetupToolDeps{
 			Home:            config.OmnipusHomeDir(),
 			AgentWorkDir:    nai.workspace,
-			Admin:           nai.agentCfg != nil && routing.NormalizeAgentID(nai.agentCfg.ID) == "admin",
+			SetupAuthority:  nai.agentCfg != nil && coreagent.HasCrossWorkspaceSetupAuthority(routing.NormalizeAgentID(nai.agentCfg.ID)),
 			GodMode:         GodModeActive(nai.cfg),
 			AuditFailClosed: resolveBoolWithDefault(nai.cfg.Sandbox.PathGuardAuditFailClosed, nai.cfg.Sandbox.AuditLog),
 		}))

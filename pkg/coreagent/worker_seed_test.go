@@ -109,8 +109,7 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 	// the delegation-edges check below is independent of AgentConfig.
 	findSeeded(t, cfg, string(coreagent.IDJim))
 	findSeeded(t, cfg, string(coreagent.IDMia))
-	findSeeded(t, cfg, string(coreagent.IDAdmin))
-	findSeeded(t, cfg, string(coreagent.IDAva))
+	findSeeded(t, cfg, string(coreagent.IDOmnipus))
 	findSeeded(t, cfg, string(coreagent.IDWorker))
 
 	hasTarget := func(p *config.DelegationPolicy, id string) bool {
@@ -157,7 +156,7 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 	// Admin and Researcher included (Mia ships her self-edge PLUS the
 	// General Purpose edge, seedfix gap 6; see seedfix_retro_mia_test.go) (Admin's is dropped from any workspace
 	// graph because Admin is off-team, but the SEED must still carry it).
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDAva, coreagent.IDAdmin, coreagent.IDResearcher} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDOmnipus, coreagent.IDResearcher} {
 		idp := coreagent.SeedDelegationEdges(id)
 		require.NotNil(t, idp, "%s must ship a default self-edge", id)
 		assert.Len(t, idp.To, 1, "%s ships exactly one edge (its self-edge)", id)

@@ -287,6 +287,23 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"edit_skill":   AutoAsks,
 	"remove_skill": AutoAsks,
 
+	// Omnipus system agent (omnipus-system-agent FR-021, BDD-3.3): the
+	// connection, permission and secret-removal/selection tools are on the
+	// explicit ask-list — Auto never runs them without a person's approval,
+	// and an unattended run refuses them. Asking for a secret on the card,
+	// listing secret names and mailboxes, and reading the agent's own
+	// conversations run like the other reads (the secret card is itself the
+	// person's step).
+	"connect_channel":       AutoAsks,
+	"connect_mailbox":       AutoAsks,
+	"set_agent_permissions": AutoAsks,
+	"remove_secret":         AutoAsks,
+	"select_secret_version": AutoAsks,
+	"request_secret":        AutoRuns,
+	"list_secrets":          AutoRuns,
+	"list_mailboxes":        AutoRuns,
+	"read_conversation":     AutoRuns,
+
 	// Shell (§3.7)
 	"bash": AutoShellMode,
 }

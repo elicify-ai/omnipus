@@ -225,7 +225,7 @@ func defaultToolPoliciesGeneral() map[string]string {
 		// existing tool-approval mechanism IS the approval; no new
 		// workflow. Founder ruling (2026-09-18): setup permission is set
 		// at BOTH levels — the global ceiling asks, and every agent
-		// permitted to set up environments (Mia, General Purpose, Admin,
+		// permitted to set up environments (Mia, General Purpose, Omnipus,
 		// new custom native agents) ALSO carries an explicit per-agent
 		// "ask", so a later ceiling raise does not silently loosen any
 		// of them. As with every ceiling entry, this grants the tool to
@@ -361,7 +361,7 @@ func defaultToolPoliciesBrowser() map[string]string {
 		"browser_open_tab":   "allow",
 		// ADR-075 D2 — the interaction verbs and the accessibility
 		// snapshot. This is the global ceiling. ADR-090 ordinary-role seeds
-		// allow browser tools for Mia, Jim and Ava; other ordinary roles deny
+		// allow browser tools for Mia and Jim; other ordinary roles deny
 		// them. See ADR090RolePolicyInventory.
 		//
 		// These entries and the per-agent maps are ONE COMMIT with
@@ -382,7 +382,7 @@ func defaultToolPoliciesBrowser() map[string]string {
 		// Attaching a host file to a page on the operator's signed-in
 		// session is the one browser action that moves their data
 		// outward, so it is consent-gated at the ceiling as well as per agent.
-		// Mia, Jim and Ava use Ask; other ordinary roles deny this tool.
+		// Mia and Jim use Ask; other ordinary roles deny this tool.
 		"browser_upload_file": "ask",
 		// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow.
 		// This is a decision, not an inheritance — the browser
@@ -390,7 +390,7 @@ func defaultToolPoliciesBrowser() map[string]string {
 		// "ask") — because handing the browser to the human is the
 		// conservative direction: the tool takes nothing and reaches
 		// no page, and an "ask" on it would put an approval card
-		// between the agent and its own stand-down. Mia, Jim and Ava use
+		// between the agent and its own stand-down. Mia and Jim use
 		// Allow for browser_handover; other ordinary roles deny it.
 		"browser_handover": "allow",
 	}
@@ -407,17 +407,20 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"list_workspaces":     "allow",
 		"get_workspace":       "allow",
 		"read_agent_metadata": "allow",
-		"configure_provider":  "allow",
-		"list_providers":      "allow",
-		"test_provider":       "allow",
-		"list_models":         "allow",
-		"run_doctor":          "allow",
-		"get_usage":           "allow",
-		// ADR-090 raises the fresh ceiling so Admin can perform the approved
-		// installation workflow. Every other built-in and new custom agent
-		// carries an explicit local deny; an operator-set global Ask or Deny
-		// remains authoritative under strictest-wins resolution.
-		"add_mcp_server": "allow",
+		// omnipus-system-agent FR-020: provider, connector, channel, skill and
+		// agent removals/changes on this list ship "ask" — Omnipus confirms the
+		// whole plan once with Go, and each of these still raises its own
+		// approval after Go (FR-027). Every other built-in and new custom
+		// agent carries an explicit local deny for them.
+		"configure_provider": "ask",
+		"list_providers":     "allow",
+		"test_provider":      "allow",
+		"list_models":        "allow",
+		"run_doctor":         "allow",
+		"get_usage":          "allow",
+		// FR-020: adding a connector asks (see configure_provider above); an
+		// operator-set global Deny remains authoritative under strictest-wins.
+		"add_mcp_server": "ask",
 		// remove_mcp_server stays "ask", deliberately asymmetric: removing
 		// a server narrows capability rather than widening it, destroys no
 		// data, and is recoverable by re-adding the entry. The server name
@@ -429,10 +432,10 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"list_mcp_servers":  "allow",
 		"create_skill":      "allow",
 		"edit_skill":        "allow",
-		"remove_skill":      "allow", // Ava confirms the combined proposal once.
+		"remove_skill":      "ask", // FR-020
 		"list_skills":       "allow",
-		"enable_channel":    "allow",
-		"configure_channel": "allow",
+		"enable_channel":    "ask",   // FR-020
+		"configure_channel": "ask",   // FR-020
 		"disable_channel":   "allow", // reversible, not a delete
 		"list_channels":     "allow",
 		"test_channel":      "allow",
@@ -442,7 +445,21 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"get_agent_tools":   "allow",
 		"create_agent":      "allow",
 		"update_agent":      "allow",
-		"delete_agent":      "allow", // Ava confirms the combined proposal once.
+		"delete_agent":      "ask", // FR-020
+		// omnipus-system-agent FR-021 / §6.5: connections, permission changes
+		// and secret removal/selection ask and sit on the Auto ask-list;
+		// asking for, listing and reading secrets, mailboxes and own
+		// conversations is allowed (each is also explicitly denied per agent
+		// wherever §6.5 says so).
+		"connect_channel":       "ask",
+		"connect_mailbox":       "ask",
+		"set_agent_permissions": "ask",
+		"remove_secret":         "ask",
+		"select_secret_version": "ask",
+		"request_secret":        "allow",
+		"list_secrets":          "allow",
+		"read_conversation":     "allow",
+		"list_mailboxes":        "allow",
 	}
 }
 
@@ -686,7 +703,7 @@ func defaultToolPoliciesGrep() map[string]string {
 		// cross-workspace scope, never a mutation. The founder
 		// ruling (unified-search-and-grep-spec.md MV-8) requires an
 		// EXPLICIT "allow" for every seeded agent tier
-		// (pkg/coreagent/core.go: Jim/Mia/Ava/Ray, the Worker, the
+		// (pkg/coreagent/core.go: Mia/Jim/Omnipus, the Worker, the
 		// specialist tier, every system agent), so unlike most
 		// entries in this map the ceiling is not a real gate for
 		// anyone in the shipped roster — it exists so a name absent

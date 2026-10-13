@@ -41,7 +41,7 @@ func TestToolPolicy_ExecutePlanSeed(t *testing.T) {
 	assert.Equal(t, "deny", resolveFor(t, cfg, string(coreagent.IDJim), "run_task", nil),
 		"run_task is engine-facing and is not part of Jim's shipped tool row")
 	for _, id := range []coreagent.CoreAgentID{
-		coreagent.IDMia, coreagent.IDAva, coreagent.IDAdmin,
+		coreagent.IDMia, coreagent.IDOmnipus,
 		coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker,
 	} {
 		for _, tool := range planExecutionTools {

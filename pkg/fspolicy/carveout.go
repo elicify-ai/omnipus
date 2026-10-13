@@ -1,6 +1,7 @@
 package fspolicy
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -162,16 +163,31 @@ func IsCarveOut(resolvedAbsPath string, policy FSPolicy) bool {
 		// THIS SAME root (never when WorkDir is at or above it) AND
 		// cleanPath itself falls within that WorkDir.
 		if policy.WorkDir != "" &&
-			!SameLocationForDeny(cleanWorkDir, cleanRoot) &&
-			CoversForGrant(cleanRoot, cleanWorkDir) &&
-			coversForGrantChain(cleanWorkDir, cleanPath, pathChain, pathChainOK) {
+			ownTreeExempts(cleanWorkDir, cleanRoot, cleanPath, pathChain, pathChainOK) {
 			return false
+		}
+		// Setup roots (FR-006, Omnipus only) are exempt under the SAME
+		// per-root rule as WorkDir: the setup root must be a proper
+		// descendant of this carve-out root and the path must lie within it.
+		for _, setupRoot := range policy.SetupRoots {
+			if ownTreeExempts(filepath.Clean(setupRoot), cleanRoot, cleanPath, pathChain, pathChainOK) {
+				return false
+			}
 		}
 
 		return true
 	}
 
 	return false
+}
+
+// ownTreeExempts is the per-root own-tree exception (BLOCK #2): anchor must be
+// a PROPER descendant of the carve-out root cleanRoot (never at or above it),
+// and cleanPath must lie within anchor.
+func ownTreeExempts(anchor, cleanRoot, cleanPath string, pathChain []os.FileInfo, pathChainOK bool) bool {
+	return !SameLocationForDeny(anchor, cleanRoot) &&
+		CoversForGrant(cleanRoot, anchor) &&
+		coversForGrantChain(anchor, cleanPath, pathChain, pathChainOK)
 }
 
 // isWithinOrEqual reports whether candidate is root itself or lives strictly

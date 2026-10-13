@@ -23,7 +23,7 @@ func TestSeedfix_RunRetrospective_NotDeniedForConversationalBuiltins(t *testing.
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 	for _, id := range []coreagent.CoreAgentID{
-		coreagent.IDAva, coreagent.IDMia, coreagent.IDJim, coreagent.IDAdmin, coreagent.IDWorker,
+		coreagent.IDMia, coreagent.IDJim, coreagent.IDOmnipus, coreagent.IDWorker,
 	} {
 		got := resolveFor(t, cfg, string(id), "run_retrospective", nil)
 		// The EXACT value, not "allow or ask" (R1 delta T8): a flip between the

@@ -857,6 +857,7 @@ func (al *AgentLoop) rewireFastUpsertRegistry(newRegistry *AgentRegistry, cfg *c
 	}
 	wireDelegationInjectors(al, newRegistry)
 	wireWorkingDirInjectors(al, newRegistry)
+	wireModeNoteInjectors(al, newRegistry)
 	// ADR-072 R1 fix regression (live UAT, 2026-09-02): wireProjectShelfResolvers
 	// was only ever called once, from NewAgentLoop at boot — unlike its
 	// siblings above, it was never re-applied here, so a mounted project's

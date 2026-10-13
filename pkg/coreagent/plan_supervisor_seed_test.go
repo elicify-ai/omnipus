@@ -515,8 +515,8 @@ func TestPlanContainmentParity_ResolvedPolicy(t *testing.T) {
 				"same literal value; a sparse map that omits execute_plan needs an explicit stop_plan deny",
 			a.ID, exec, stop)
 	}
-	require.GreaterOrEqual(t, checked, 4,
-		"sanity: the sweep must have covered the four chat-target base agents, not silently skipped everything")
+	require.GreaterOrEqual(t, checked, 3,
+		"sanity: the sweep must have covered the three chat-target base agents (Mia, Jim, Omnipus — FR-008 retired Ava and Admin), not silently skipped everything")
 }
 
 // TestPlanContainmentParity_NonOwnersCannotStartAPlan pins the premise the

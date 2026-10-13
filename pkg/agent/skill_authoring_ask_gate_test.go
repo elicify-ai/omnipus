@@ -123,9 +123,10 @@ func TestRunTurn_AvaCreateSkillSeededAllow_RealSeed(t *testing.T) {
 	cfg.Sandbox.AuditLog = true
 
 	coreagent.SeedConfig(cfg)
-	// Route directly to Ava so this turn does not depend on the default-agent
-	// resolution ladder.
-	cfg.Agents.Defaults.DefaultAgentID = string(coreagent.IDAva)
+	// Route directly to Omnipus — the skill author since Ava's retirement
+	// (omnipus-system-agent §6.5: create_skill rides the allow ceiling for it)
+	// — so this turn does not depend on the default-agent resolution ladder.
+	cfg.Agents.Defaults.DefaultAgentID = string(coreagent.IDOmnipus)
 
 	// create_skill is a search-only lazy tool under ADR-090 (the upfront set
 	// names `Skill`, not `create_skill`): on a compressed request it is
