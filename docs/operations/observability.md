@@ -12,7 +12,7 @@ You don't enable these. They run on every install, by default, with no extra ser
 
 Each session has a single JSONL file at `~/.omnipus/agents/<agentID>/sessions/<session-id>/transcript.jsonl` (one line per entry, append-only, atomic writes via temp-file-rename). Note that this is the **unified** store path used by the live runtime; the older `pkg/session/daypartition.go::PartitionStore` writes day-partitioned files under a `sessions/<session_id>/<YYYY-MM-DD>.jsonl` layout for the legacy backend. The replay APIs surface the unified store.
 
-### Entry types (`pkg/session/daypartition.go:30-40`)
+### Entry types (`pkg/session/daypartition.go::EntryType`)
 
 | `type` value | What it records |
 |---|---|
@@ -21,8 +21,11 @@ Each session has a single JSONL file at `~/.omnipus/agents/<agentID>/sessions/<s
 | `compaction` | A context-compression summary written when token budget is exceeded |
 | `system` | System-level event (boot, shutdown, sandbox state change) |
 | `turn_canceled` | A turn that was cancelled mid-stream, with cancel method + descendants |
+| `provider_fallback` | The note that a fallback model answered, with the models involved, written once per session and model pair |
+| `judge_verdict` | The Judge agent's verdict on a task's completion claim |
+| `context_window_notice` | A context-window diagnostic shown only in Verbose chat; never part of the model's history |
 
-### What's on every entry (`pkg/session/daypartition.go:115-145`)
+### What's on every entry (`pkg/session/daypartition.go::TranscriptEntry`)
 
 ```json
 {
@@ -45,7 +48,7 @@ Each session has a single JSONL file at `~/.omnipus/agents/<agentID>/sessions/<s
       "result":     {"…"}
     }
   ],
-  "agent_id":   "ray"
+  "agent_id":   "mia"
 }
 ```
 
@@ -61,22 +64,24 @@ When a turn is cancelled, a dedicated `turn_canceled` entry is appended carrying
 
 ### Replay
 
-The SPA reads the transcript from disk on demand. There's no separate "chat history" database — the JSONL **is** the history. To replay a session in code or in tests, call `UnifiedStore.ReadTranscript(sessionID)` (`pkg/session/unified.go:555`) — this is the live runtime store, not the legacy `PartitionStore` day-partitioned backend. `ReadTranscript` returns the entries in order.
+The SPA reads the transcript from disk on demand. There's no separate "chat history" database — the JSONL **is** the history. To replay a session in code or in tests, call `UnifiedStore.ReadTranscript(sessionID)` (`pkg/session/unified_write.go::ReadTranscript`) — this is the live runtime store, not the legacy `PartitionStore` day-partitioned backend. `ReadTranscript` returns the entries in order.
 
 ## Live event stream
 
-While a turn is running, the agent loop emits typed events into the in-process event bus (`pkg/agent/events.go`). 26 event kinds (`pkg/agent/events.go::EventKind`, names from `eventKindNames` at `pkg/agent/events.go:84-110`):
+While a turn is running, the agent loop emits typed events into the in-process event bus (`pkg/agent/events.go`). The event kinds in `pkg/agent/events.go::EventKind` (the names come from `eventKindNames`, which is the complete list):
 
 | Category | Events |
 |---|---|
 | **Turn lifecycle** | `turn_start`, `turn_end`, `turn_timeout` |
-| **LLM lifecycle** | `llm_request`, `llm_delta`, `llm_response`, `llm_retry`, `empty_response_retry` |
-| **Context management** | `context_compress`, `compaction_retry`, `session_summarize` |
-| **Tool execution** | `tool_exec_start`, `tool_exec_end`, `tool_exec_skipped` |
+| **LLM lifecycle** | `llm_request`, `llm_delta`, `llm_response`, `llm_retry`, `empty_response_retry`, `provider_retry`, `provider_fallback` |
+| **Context management** | `context_compress`, `compaction_retry` |
+| **Tool execution** | `tool_exec_start`, `tool_exec_end`, `tool_exec_skipped`, `tool_result_projection` |
 | **Sub-turns (sub-agents, spawn)** | `subturn_spawn`, `subturn_end`, `subturn_result_delivered`, `subturn_orphan` |
 | **Steering / interrupt** | `steering_injected`, `follow_up_queued`, `interrupt_received` |
 | **System / errors** | `error`, `rate_limit`, `background_process_kill` |
 | **Channel / user-facing** | `whatsapp_pairing`, `notification` |
+| **Tasks, plans and goals** | `task_status_changed`, `plan_status_changed`, `goal_status_changed`, `loop_status_changed`, `task_run_status`, `goal_outcome`, `judge_verdict` |
+| **Helpers** | `subagent_message`, `subagent_state` |
 
 ### Who consumes the events
 
