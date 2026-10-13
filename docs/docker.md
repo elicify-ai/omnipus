@@ -167,13 +167,7 @@ Run from the repo root:
 docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 
-The compose file maps `127.0.0.1:5000:5000` and sets `OMNIPUS_GATEWAY_PORT=5000` on the gateway service so the in-container listener matches the host port. It does **not** currently set `OMNIPUS_GATEWAY_HOST`, so add it before the mapping is reachable:
-
-```yaml
-    environment:
-      - OMNIPUS_GATEWAY_PORT=5000
-      - OMNIPUS_GATEWAY_HOST=0.0.0.0
-```
+The compose file maps `127.0.0.1:5000:5000` and sets `OMNIPUS_GATEWAY_PORT=5000` and `OMNIPUS_GATEWAY_HOST=0.0.0.0` on the gateway service, so the in-container listener matches the host port and is reachable through the mapping. A plain `docker compose up` starts nothing, because both services are profile-gated; the `--profile gateway` flag is required.
 
 Check logs:
 

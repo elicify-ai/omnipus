@@ -193,7 +193,7 @@ docker run -d \
 
 Then open `http://localhost:5000`. The `OMNIPUS_GATEWAY_HOST=0.0.0.0` line is required: without it the gateway listens only on the container's own loopback and the published port reaches nothing.
 
-Or with compose: see the [Docker guide](docs/docker.md#quick-start--docker-compose). Both services in the compose file are profile-gated, so a plain `docker compose up` starts nothing; start the gateway with `--profile gateway`, and add `OMNIPUS_GATEWAY_HOST=0.0.0.0` to its `environment` first (the guide shows how).
+Or with compose: see the [Docker guide](docs/docker.md#quick-start--docker-compose). Both services in the compose file are profile-gated, so a plain `docker compose up` starts nothing; start the gateway with `--profile gateway` (`docker compose -f docker-compose.yml --profile gateway up -d`).
 
 The published image (`ghcr.io/elicify-ai/omnipus:latest`) is built from [`docker/Dockerfile.goreleaser`](docker/Dockerfile.goreleaser): an Alpine image with only `ca-certificates` and `tzdata` on top of the Go binary.
 
