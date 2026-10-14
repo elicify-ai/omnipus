@@ -232,46 +232,31 @@ func (s *Service) readRoom(roomID string) (*room, error) {
 }
 
 func (s *Service) readJournals(roomID string, r *room) error {
-	lines, err := s.journal.Read(roomID, StreamEntries)
+	if err := readStream(s.journal, roomID, StreamEntries, r.addEntry); err != nil {
+		return err
+	}
+	if err := readStream(s.journal, roomID, StreamDeliveries, func(d deliveryRecord) { r.putDelivery(&d) }); err != nil {
+		return err
+	}
+	if err := readStream(s.journal, roomID, StreamMirrors, func(m mirrorRecord) { r.mirrored[m.AnswerID] = true }); err != nil {
+		return err
+	}
+	return readStream(s.journal, roomID, StreamTurns, func(t turnRecord) { r.turns[t.TurnID] = true })
+}
+
+// readStream decodes every line of one journal stream, in order, into fn.
+// An undecodable line fails the whole read (never skipped).
+func readStream[T any](j Journal, roomID, stream string, fn func(T)) error {
+	lines, err := j.Read(roomID, stream)
 	if err != nil {
 		return err
 	}
-	for _, line := range lines {
-		var e storedEntry
-		if err := json.Unmarshal(line, &e); err != nil {
-			return fmt.Errorf("entry: %w", err)
+	for i, line := range lines {
+		var v T
+		if err := json.Unmarshal(line, &v); err != nil {
+			return fmt.Errorf("%s line %d: %w", stream, i+1, err)
 		}
-		r.addEntry(e)
-	}
-	if lines, err = s.journal.Read(roomID, StreamDeliveries); err != nil {
-		return err
-	}
-	for _, line := range lines {
-		var d deliveryRecord
-		if err := json.Unmarshal(line, &d); err != nil {
-			return fmt.Errorf("delivery: %w", err)
-		}
-		r.putDelivery(&d)
-	}
-	if lines, err = s.journal.Read(roomID, StreamMirrors); err != nil {
-		return err
-	}
-	for _, line := range lines {
-		var m mirrorRecord
-		if err := json.Unmarshal(line, &m); err != nil {
-			return fmt.Errorf("mirror: %w", err)
-		}
-		r.mirrored[m.AnswerID] = true
-	}
-	if lines, err = s.journal.Read(roomID, StreamTurns); err != nil {
-		return err
-	}
-	for _, line := range lines {
-		var t turnRecord
-		if err := json.Unmarshal(line, &t); err != nil {
-			return fmt.Errorf("turn: %w", err)
-		}
-		r.turns[t.TurnID] = true
+		fn(v)
 	}
 	return nil
 }

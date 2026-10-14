@@ -111,7 +111,7 @@ func (f *fakeDeps) AgentName(id string) (string, bool)          { n, ok := f.nam
 func (f *fakeDeps) admittedTo() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out []string
+	out := make([]string, 0, len(f.admits))
 	for _, a := range f.admits {
 		out = append(out, a.Receiver.AgentID)
 	}

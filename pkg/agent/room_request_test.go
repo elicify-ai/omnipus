@@ -8,6 +8,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -258,5 +259,27 @@ func TestGateRoomRequest_CancelledRequestIsDiscardedAndNotRun(t *testing.T) {
 	rt.allow = true
 	if _, proceed := f.al.gateRoomRequest(wake); !proceed {
 		t.Fatal("positive control: a current room request must pass the fence")
+	}
+}
+
+// §6.14 / BDD-17.30 pricing seam: the room allocation reads the installed
+// RoomCallPricer; the turn's own cost keeps the built-in estimate.
+func TestRoomCallPricer_FeedsOnlyTheRoomAllocation(t *testing.T) {
+	al, ts := newTestAgentLoopForRateLimit(t)
+	ts.opts.roomCost = &roomCostMeter{inputs: 1}
+	usage := &providers.UsageInfo{PromptTokens: 1000, CompletionTokens: 1000, TotalTokens: 2000}
+	estimate := estimateLLMCallCost("fixture-model", usage)
+	al.SetRoomCallPricer(func(string, providers.UsageInfo) float64 { return 0.03 })
+	al.debitLLMUsage(ts, "fixture-model", usage)
+	if _, cost, _ := ts.opts.roomCost.snapshot(); cost != 0.03 {
+		t.Fatalf("room meter cost = %v, want the pricer's 0.03", cost)
+	}
+	if _, turnCost := ts.GetTurnStats(); turnCost != estimate || estimate == 0.03 {
+		t.Fatalf("turn cost = %v, want the unchanged estimate %v", turnCost, estimate)
+	}
+	al.SetRoomCallPricer(nil)
+	al.debitLLMUsage(ts, "fixture-model", usage)
+	if _, cost, _ := ts.opts.roomCost.snapshot(); cost != 0.03+estimate {
+		t.Fatalf("without the pricer the meter must add the estimate: %v", cost)
 	}
 }

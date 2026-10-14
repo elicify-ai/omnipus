@@ -41,6 +41,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -293,7 +294,7 @@ func (al *AgentLoop) authorizeRoomRequest(ctx context.Context, a RoomRequestAdmi
 	}
 	// The decision can take as long as a person needs: membership and policy
 	// are read again before anything is written.
-	if err := al.roomReceiverEligible(a.Receiver); err != nil {
+	if err = al.roomReceiverEligible(a.Receiver); err != nil {
 		return err
 	}
 	policy, err = al.roomReceiverPolicy(a.Receiver)
@@ -357,7 +358,7 @@ func (al *AgentLoop) commitRoomRequest(ctx context.Context, a RoomRequestAdmissi
 		Text:              composeRoomRequestText(a.DeliveryID, a.SenderLabel, a.RoomName, a.ModelText),
 		Held:              held,
 	}
-	if err := ledger.Put(capture); err != nil {
+	if err = ledger.Put(capture); err != nil {
 		return RoomAdmission{}, roomStorageRefusal("the request could not be recorded", err)
 	}
 	al.pendingRequests.Store(a.DeliveryID, mainID)
@@ -562,6 +563,31 @@ func (al *AgentLoop) roomTurnEnded(msg bus.InboundMessage, err error) {
 	if msg.Metadata[requestReminderMetadataKey] != "" {
 		rt.RoomReminderTurnEnded(msg.SessionID)
 	}
+}
+
+// RoomCallPricer is the named deterministic pricing seam of the room cost
+// (§6.14, BDD-17.30): when installed, the cost the room allocation reads for
+// each model call of a room-request turn comes from it instead of the
+// built-in estimate. It changes nothing else: the turn's own stats, the done
+// frame and the transcript keep estimateLLMCallCost. Nil (production) uses
+// the built-in estimate.
+type RoomCallPricer func(model string, usage providers.UsageInfo) float64
+
+// SetRoomCallPricer installs (or, with nil, removes) the room pricing seam.
+func (al *AgentLoop) SetRoomCallPricer(p RoomCallPricer) {
+	if p == nil {
+		al.roomPricer.Store(nil)
+		return
+	}
+	al.roomPricer.Store(&p)
+}
+
+// roomCallCost is the cost of one model call as the room allocation reads it.
+func (al *AgentLoop) roomCallCost(model string, usage *providers.UsageInfo, estimate float64) float64 {
+	if p := al.roomPricer.Load(); p != nil && usage != nil {
+		return (*p)(model, *usage)
+	}
+	return estimate
 }
 
 // roomCostMeter accumulates the cost and consumed inputs of the turn that

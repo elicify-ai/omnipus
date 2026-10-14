@@ -41,7 +41,8 @@ func resolveTyped(text string, members []Agent) typedMentions {
 			continue
 		}
 		rest := lower[i+1:]
-		bestLen, bestIDs, bestName := 0, []string(nil), ""
+		bestLen, bestName := 0, ""
+		bestIDs := make([]string, 0, 2)
 		for _, m := range members {
 			name := strings.ToLower(strings.TrimSpace(m.Name))
 			if name == "" || name == mentionAll || !strings.HasPrefix(rest, name) || !boundaryAt(rest, len(name)) {
@@ -49,7 +50,8 @@ func resolveTyped(text string, members []Agent) typedMentions {
 			}
 			switch {
 			case len(name) > bestLen:
-				bestLen, bestIDs, bestName = len(name), []string{m.ID}, strings.TrimSpace(m.Name)
+				bestLen, bestName = len(name), strings.TrimSpace(m.Name)
+				bestIDs = append(bestIDs[:0], m.ID)
 			case len(name) == bestLen:
 				bestIDs = append(bestIDs, m.ID)
 			}

@@ -50,7 +50,7 @@ func (s *Service) Create(workspaceID string, req generated.RoomCreateRequest, pr
 		}
 		rec.OriginSessionID = origin
 	}
-	if err := s.loadAll(); err != nil {
+	if err = s.loadAll(); err != nil {
 		return generated.Room{}, err
 	}
 	r, err := s.createRecord(rec)
