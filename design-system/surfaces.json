@@ -6392,6 +6392,176 @@
           "status": "planned"
         }
       ]
+    },
+    {
+      "id": "_app/workspaces.$workspaceId.rooms.$roomId",
+      "kind": "route",
+      "source": "src/routes/_app/workspaces.$workspaceId.rooms.$roomId.tsx",
+      "symbol": "Route",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:app-workspaces-workspaceid-rooms-roomid:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/app-workspaces-workspaceid-rooms-roomid.test.tsx",
+          "test": "_app/workspaces.$workspaceId.rooms.$roomId surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-workspaces-workspaceid-rooms-roomid:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/workspaces.$workspaceId.rooms.$roomId surface browser contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-workspaces-workspaceid-rooms-roomid:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/workspaces.$workspaceId.rooms.$roomId surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/workspaces/$workspaceId/rooms/$roomId"
+      }
+    },
+    {
+      "id": "src/components/rooms/RoomScreen.tsx#RoomScreen",
+      "kind": "screen",
+      "source": "src/components/rooms/RoomScreen.tsx",
+      "symbol": "RoomScreen",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:src-components-rooms-roomscreen-tsx-roomscreen:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-rooms-roomscreen-tsx-roomscreen.test.tsx",
+          "test": "src/components/rooms/RoomScreen.tsx#RoomScreen surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-roomscreen-tsx-roomscreen:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/RoomScreen.tsx#RoomScreen surface browser contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-roomscreen-tsx-roomscreen:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/RoomScreen.tsx#RoomScreen surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/workspaces/$workspaceId/rooms/$roomId"
+      }
+    },
+    {
+      "id": "src/components/rooms/SquadDialog.tsx#SquadDialog",
+      "kind": "modal",
+      "source": "src/components/rooms/SquadDialog.tsx",
+      "symbol": "SquadDialog",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-squaddialog:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-rooms-squaddialog-tsx-squaddialog.test.tsx",
+          "test": "src/components/rooms/SquadDialog.tsx#SquadDialog surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-squaddialog:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/SquadDialog.tsx#SquadDialog surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-squaddialog:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/SquadDialog.tsx#SquadDialog surface browser contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/rooms/SquadDialog.tsx#SquadDialog"
+      }
+    },
+    {
+      "id": "src/components/rooms/SquadDialog.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/rooms/SquadDialog.tsx",
+      "symbol": "overlay:1",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-overlay-1:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-rooms-squaddialog-tsx-overlay-1.test.tsx",
+          "test": "src/components/rooms/SquadDialog.tsx#overlay:1 surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-overlay-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/SquadDialog.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-overlay-1:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/SquadDialog.tsx#overlay:1 surface browser contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/rooms/SquadDialog.tsx#overlay:1"
+      }
+    },
+    {
+      "id": "src/components/chat/AddParticipant.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/chat/AddParticipant.tsx",
+      "symbol": "overlay:1",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:src-components-chat-addparticipant-tsx-overlay-1:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-chat-addparticipant-tsx-overlay-1.test.tsx",
+          "test": "src/components/chat/AddParticipant.tsx#overlay:1 surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-chat-addparticipant-tsx-overlay-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/chat/AddParticipant.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-chat-addparticipant-tsx-overlay-1:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/chat/AddParticipant.tsx#overlay:1 surface browser contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/chat/AddParticipant.tsx#overlay:1"
+      }
     }
   ],
   "sourceOwners": [
@@ -8153,6 +8323,50 @@
     {
       "source": "src/routes/onboarding.tsx",
       "lane": 1
+    },
+    {
+      "source": "src/components/chat/AddParticipant.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/RoomTrafficEntry.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/layout/sidebar/WorkspaceGroupChats.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/rooms/RoomComposer.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/RoomHeader.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/RoomScreen.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/RoomTranscript.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/SquadDialog.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/roomModel.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/useRoomSend.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/routes/_app/workspaces.$workspaceId.rooms.$roomId.tsx",
+      "lane": 3
     }
   ]
 }

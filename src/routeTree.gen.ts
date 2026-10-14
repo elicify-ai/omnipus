@@ -44,6 +44,7 @@ import { Route as AppWorkspacesWorkspaceIdMailRouteImport } from './routes/_app/
 import { Route as AppWorkspacesWorkspaceIdMediaRouteImport } from './routes/_app/workspaces.$workspaceId.media'
 import { Route as AppWorkspacesWorkspaceIdSettingsRouteImport } from './routes/_app/workspaces.$workspaceId.settings'
 import { Route as AppWorkspacesWorkspaceIdTeamRouteImport } from './routes/_app/workspaces.$workspaceId.team'
+import { Route as AppWorkspacesWorkspaceIdRoomsRoomIdRouteImport } from './routes/_app/workspaces.$workspaceId.rooms.$roomId'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -229,6 +230,12 @@ const AppWorkspacesWorkspaceIdTeamRoute =
     path: '/team',
     getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
   } as any)
+const AppWorkspacesWorkspaceIdRoomsRoomIdRoute =
+  AppWorkspacesWorkspaceIdRoomsRoomIdRouteImport.update({
+    id: '/rooms/$roomId',
+    path: '/rooms/$roomId',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -264,6 +271,7 @@ export interface FileRoutesByFullPath {
   '/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
   '/workspaces/$workspaceId/': typeof AppWorkspacesWorkspaceIdIndexRoute
+  '/workspaces/$workspaceId/rooms/$roomId': typeof AppWorkspacesWorkspaceIdRoomsRoomIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
@@ -297,6 +305,7 @@ export interface FileRoutesByTo {
   '/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdIndexRoute
+  '/workspaces/$workspaceId/rooms/$roomId': typeof AppWorkspacesWorkspaceIdRoomsRoomIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -335,6 +344,7 @@ export interface FileRoutesById {
   '/_app/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/_app/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
   '/_app/workspaces/$workspaceId/': typeof AppWorkspacesWorkspaceIdIndexRoute
+  '/_app/workspaces/$workspaceId/rooms/$roomId': typeof AppWorkspacesWorkspaceIdRoomsRoomIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -372,6 +382,7 @@ export interface FileRouteTypes {
     | '/workspaces/$workspaceId/settings'
     | '/workspaces/$workspaceId/team'
     | '/workspaces/$workspaceId/'
+    | '/workspaces/$workspaceId/rooms/$roomId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -405,6 +416,7 @@ export interface FileRouteTypes {
     | '/workspaces/$workspaceId/settings'
     | '/workspaces/$workspaceId/team'
     | '/workspaces/$workspaceId'
+    | '/workspaces/$workspaceId/rooms/$roomId'
   id:
     | '__root__'
     | '/_app'
@@ -442,6 +454,7 @@ export interface FileRouteTypes {
     | '/_app/workspaces/$workspaceId/settings'
     | '/_app/workspaces/$workspaceId/team'
     | '/_app/workspaces/$workspaceId/'
+    | '/_app/workspaces/$workspaceId/rooms/$roomId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -699,6 +712,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWorkspacesWorkspaceIdTeamRouteImport
       parentRoute: typeof AppWorkspacesWorkspaceIdRoute
     }
+    '/_app/workspaces/$workspaceId/rooms/$roomId': {
+      id: '/_app/workspaces/$workspaceId/rooms/$roomId'
+      path: '/rooms/$roomId'
+      fullPath: '/workspaces/$workspaceId/rooms/$roomId'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdRoomsRoomIdRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
   }
 }
 
@@ -727,6 +747,7 @@ interface AppWorkspacesWorkspaceIdRouteChildren {
   AppWorkspacesWorkspaceIdSettingsRoute: typeof AppWorkspacesWorkspaceIdSettingsRoute
   AppWorkspacesWorkspaceIdTeamRoute: typeof AppWorkspacesWorkspaceIdTeamRoute
   AppWorkspacesWorkspaceIdIndexRoute: typeof AppWorkspacesWorkspaceIdIndexRoute
+  AppWorkspacesWorkspaceIdRoomsRoomIdRoute: typeof AppWorkspacesWorkspaceIdRoomsRoomIdRoute
 }
 
 const AppWorkspacesWorkspaceIdRouteChildren: AppWorkspacesWorkspaceIdRouteChildren =
@@ -743,6 +764,8 @@ const AppWorkspacesWorkspaceIdRouteChildren: AppWorkspacesWorkspaceIdRouteChildr
       AppWorkspacesWorkspaceIdSettingsRoute,
     AppWorkspacesWorkspaceIdTeamRoute: AppWorkspacesWorkspaceIdTeamRoute,
     AppWorkspacesWorkspaceIdIndexRoute: AppWorkspacesWorkspaceIdIndexRoute,
+    AppWorkspacesWorkspaceIdRoomsRoomIdRoute:
+      AppWorkspacesWorkspaceIdRoomsRoomIdRoute,
   }
 
 const AppWorkspacesWorkspaceIdRouteWithChildren =

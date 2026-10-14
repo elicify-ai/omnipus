@@ -315,6 +315,8 @@ function handleUserMessageFrame({ frame, targetSid, withBucket }: {
       // own-vs-other discriminator the thread renders by. Forwarded
       // verbatim — the replay path stamps the identical field.
       ...(userMsgFrame.participant ? { participant: userMsgFrame.participant } : {}),
+      // K33 / FR-202: a group chat's request to this agent renders collapsed.
+      ...(userMsgFrame.room_ref ? { roomRef: userMsgFrame.room_ref } : {}),
     }
     return produce(b, (draft) => {
       draft.messagesById[newMsg.id] = newMsg

@@ -594,6 +594,7 @@ interface ReplayMessageFrameFields {
   replayParticipant: ReplayMessageFrame['participant']
   replayReplyToMessageId: string | undefined
   replayReplyToParticipant: ReplayMessageFrame['reply_to_participant']
+  replayRoomRef: ReplayMessageFrame['room_ref']
 }
 
 function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayMessageFrameFields {
@@ -666,6 +667,7 @@ function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayM
     replayParticipant,
     replayReplyToMessageId,
     replayReplyToParticipant,
+    replayRoomRef: replayFrame.room_ref,
   }
 }
 
@@ -775,7 +777,7 @@ function bakePendingNonAssistantToolCalls(draft: SessionChatState): void {
 // parsed fields: reads nothing else (and mints an id/timestamp when the
 // frame lacks one).
 function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
-  const { role, text, messageId, messageTimestamp, replayAgentId, replayModel, replayTurnId, replayTruncated, replayTruncationReason, replayInputDiscarded, replayParticipant, replayReplyToMessageId, replayReplyToParticipant } = fields
+  const { role, text, messageId, messageTimestamp, replayAgentId, replayModel, replayTurnId, replayTruncated, replayTruncationReason, replayInputDiscarded, replayParticipant, replayReplyToMessageId, replayReplyToParticipant, replayRoomRef } = fields
   return {
     id: messageId ?? generateId(),
     role,
@@ -814,6 +816,8 @@ function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
     ...(replayParticipant && role === 'user' ? { participant: replayParticipant } : {}),
     ...(replayReplyToMessageId && role === 'assistant' ? { replyToMessageId: replayReplyToMessageId } : {}),
     ...(replayReplyToParticipant && role === 'assistant' ? { replyToParticipant: replayReplyToParticipant } : {}),
+    // K33 / FR-202: group-chat traffic (request or answer) renders collapsed.
+    ...(replayRoomRef ? { roomRef: replayRoomRef } : {}),
   }
 }
 

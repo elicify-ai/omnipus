@@ -37,6 +37,7 @@ import { handleCatchUpFrame } from './catchup-frames'
 import { handleProviderFrame } from './provider-frames'
 import { handleMailPanelObserverFrame } from './mail-panel-observer-frames'
 import { handleSecretRequestFrame } from './secret-request-frames'
+import { handleRoomFrame } from './room-frames'
 import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
@@ -643,6 +644,8 @@ function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: T
   // across several tokens stamps the pair once.
   if (frame.reply_to_message_id && !m.replyToMessageId) m.replyToMessageId = frame.reply_to_message_id
   if (frame.reply_to_participant && !m.replyToParticipant) m.replyToParticipant = frame.reply_to_participant
+  // K33 / FR-202: an answer into a group chat, mirrored here, renders collapsed.
+  if (frame.room_ref && !m.roomRef) m.roomRef = frame.room_ref
   m.isStreaming = true
   m.status = 'streaming'
   draft.isStreaming = true
@@ -828,6 +831,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
         content: frame.content,
         agentId: frame.agent_id ?? prevMsg.agentId,
         turnId: turnId ?? prevMsg.turnId,
+        ...(frame.room_ref ? { roomRef: frame.room_ref } : {}),
       }
       draft.messagesById[messageId] = bubble
       if (idx !== -1) draft.messageOrder[idx] = messageId
@@ -867,6 +871,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
     // (see applyTokenContentTo for the merged-continuation path).
     ...(frame.reply_to_message_id ? { replyToMessageId: frame.reply_to_message_id } : {}),
     ...(frame.reply_to_participant ? { replyToParticipant: frame.reply_to_participant } : {}),
+    ...(frame.room_ref ? { roomRef: frame.room_ref } : {}), // K33 / FR-202
     ...(idCollision ? { mergedReplayIds: [messageId] } : {}),
   }
   if (idCollision) {
@@ -958,6 +963,7 @@ function applyMessageStatusCase(
 export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, deleteBucket, resolveKickoffAttempt, abandonPendingKickoffInternal, syncForeground, armRateLimitClear, maybeDrainNext, runtime }: FrameContext): FrameSlice {
   return {
     handleFrame: (frame) => {
+      if (handleRoomFrame(frame)) return // group-chat frames never touch session routing (room-frames.ts)
       // Resolve which session this frame belongs to.
       // session_started is special: it carries the new id for the pending message.
       // ask_user_question nests its session id on card.session_id (required

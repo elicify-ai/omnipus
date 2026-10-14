@@ -239,6 +239,13 @@ interface MessageBase { // not-wire-format
   /** Retained Q33 diagnostic, shared by REST history and live/replayed notice frames. */
   contextWindowNotice?: WireMessage['context_window_notice']
   /**
+   * K33 / FR-202: this main-chat entry is group-chat traffic — the room's
+   * request to this agent, or this agent's answer into the room. Display and
+   * navigation data only (generated `RoomRef`); rendered as a collapsed
+   * "From group <name>: …" entry.
+   */
+  roomRef?: WireMessage['room_ref']
+  /**
    * Goal outcome line (founder decision 2026-09-14): set on a `role: 'system'`
    * message that records how a goal ENDED — from the persisted
    * `system_subtype: goal_outcome` transcript entry on a cold REST load
@@ -461,6 +468,8 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
   timestamp: string
   /** Generated wire correlation id (`Message.client_message_id`) — present on saved user entries. */
   client_message_id?: string
+  /** K33: the generated group-chat reference (`Message.room_ref`). */
+  room_ref?: WireMessage['room_ref']
   /**
    * FR-024 (session-core) — read-only record that this user input was
    * DISCARDED by Stop before it was delivered into the agent's model input.
@@ -620,6 +629,7 @@ function rawToMessage(raw: RawMessage): Message {
       // label-free, right-side bubbles. Forwarded verbatim — plain text is
       // the renderer's contract, never parsed as markup.
       ...(raw.participant ? { participant: raw.participant } : {}),
+      ...(raw.room_ref ? { roomRef: raw.room_ref } : {}),
     } satisfies UserMessage
   }
   if (role === 'system') {
@@ -687,6 +697,7 @@ function rawToMessage(raw: RawMessage): Message {
     // pairing key). Forwarded verbatim; absent on every non-reply entry.
     ...(raw.reply_to_message_id ? { replyToMessageId: raw.reply_to_message_id } : {}),
     ...(raw.reply_to_participant ? { replyToParticipant: raw.reply_to_participant } : {}),
+    ...(raw.room_ref ? { roomRef: raw.room_ref } : {}),
   } satisfies AssistantMessage
 }
 

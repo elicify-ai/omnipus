@@ -87,6 +87,8 @@ import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
+import { MainChatAddParticipant } from './AddParticipant'
+import { RoomTrafficMessage } from './RoomTrafficEntry'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
@@ -1486,6 +1488,8 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
             row = shouldRenderJudgeVerdictInThread(verboseChatEnabled) && msg.verdict
               ? <JudgeVerdictThreadCard verdict={msg.verdict} />
               : null
+          } else if (msg.roomRef) {
+            row = <RoomTrafficMessage message={msg} /> // FR-202: collapsed group-chat traffic
           } else if (msg.role === 'user') {
             row = (
               <VirtualUserMessageRow
@@ -1639,6 +1643,7 @@ function VirtualizedMessageListInner({
       if (!shouldRenderJudgeVerdictInThread(verboseChatEnabled) || !msg.verdict) return null
       return <JudgeVerdictThreadCard verdict={msg.verdict} />
     }
+    if (msg.roomRef) return <RoomTrafficMessage message={msg} /> // FR-202: collapsed group-chat traffic
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
@@ -1726,6 +1731,8 @@ function VirtualizedMessageListInner({
                 {({ message }) => {
                   const isLast = message.id === messages[messages.length - 1]?.id
                   if (!isLast) return null
+                  const last = messages[messages.length - 1]
+                  if (last?.roomRef) return <RoomTrafficMessage message={last} /> // FR-202
                   if (message.role === 'user') return <UserMessage />
                   if (message.role === 'system') return <SystemMessage />
                   return <AssistantMessage />
@@ -3216,6 +3223,9 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           </span>
         </div>
       )}
+
+      {/* FR-207: "Add participant" at the top-left of a member's main chat (absent for Omnipus). */}
+      <MainChatAddParticipant />
 
       {/* Above-feed kind. FeedKindLabel also keeps the old Task: line when no descriptor matches. */}
       <FeedKindLabel />

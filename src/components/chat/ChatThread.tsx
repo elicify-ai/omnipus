@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
 import { MessageItem } from './MessageItem'
+import { RoomTrafficMessage } from './RoomTrafficEntry'
 import { fetchSessionMessages } from '@/lib/api'
 
 interface ChatThreadProps {
@@ -35,7 +36,8 @@ export function ChatThread({ sessionId }: ChatThreadProps) {
   return (
     <div role="log" aria-label="Chat messages">
       {messages.map((msg) => (
-        <MessageItem key={msg.id} message={msg} />
+        // FR-202: group-chat traffic renders as one collapsed entry.
+        msg.roomRef ? <RoomTrafficMessage key={msg.id} message={msg} /> : <MessageItem key={msg.id} message={msg} />
       ))}
     </div>
   )

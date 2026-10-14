@@ -99,6 +99,8 @@ The hamburger means **Show sidebar** only; there is no second hamburger for pane
 
 The chat is a conversation with the workspace's agents. When the open conversation is the one this workspace remembers, a status line above the messages names it: **&lt;Agent name&gt; - Main Session** (for example **Jim - Main Session**) for a main chat identified by the matching server update — the agent's current name, so a rename updates the line — **Extra chat**, or **Extra chat —** plus the title when that chat has one, **Task run**, or **Helper**. That line stays while older messages are loading. For a main chat the line is derived from the team list: while the team list is still loading, the line is briefly absent rather than showing a placeholder name, and if the team list cannot be loaded, the agent's ID appears in place of the name — the same fallback the server itself uses — with a note that agent names could not be loaded. A task transcript that is not the conversation this workspace remembers still shows **Task:** and the task title. Replies stream in; each tool an agent uses appears as a card you can expand or collapse ([tools](tools.md) explains what agents can do). A call refused because it named one of Omnipus's own files shows as **Protected Omnipus file — refused**, with the explanation that these files are protected from every agent in every mode, God Mode included, and that nothing can approve it ([security](security.md)). When an agent wants to do something sensitive, an approval card appears above the message box in the chat the work belongs to and asks you to approve it once, deny it, or always allow it; typing in the message box never answers it, and a notice at the top points you to a card waiting in another chat — [security](security.md#approve-a-request) covers the rules behind it. Each active [goal](goals.md) shows as its own small pill under the message box.
 
+In an agent's main chat, **Add participant** at the top left starts a [group chat](group-chats.md) with that agent and another agent of the workspace; the main chat itself stays one-to-one. It is not offered in Omnipus's chat. When the agent works on a request from a group, the main chat shows the request and the agent's answer as one collapsed line, **From group <name>: …**, which expands to the full text and an **Open group <name>** link.
+
 ### Answering a question card
 
 When an agent asks you questions, a card docks above the message box with one tab per question. Every question can be answered with the keyboard alone:
@@ -318,6 +320,7 @@ App-wide settings live behind **Settings** in the account menu, on tabs from pro
 
 - [getting-started](getting-started.md) — install, create the account, finish onboarding.
 - [workspaces](workspaces.md) — what a workspace is and what lives inside one.
+- [group chats](group-chats.md) — talk to several agents of a workspace at once.
 - [agents](agents.md) — the roster, the default agent, building your own.
 - [tasks](tasks.md) — the board, list, and graph views, and plans.
 - [tools](tools.md) — what agents can do, and the permissions that gate them.
