@@ -566,8 +566,11 @@ func (t *DelegateTool) Description() string {
 		"calls get no overlap check. Delegate directly for a single self-contained piece of work. " +
 		"action=\"run\" (default) launches a session. It returns at once with the child's session_id " +
 		"and whether it is running or queued (with its place in line). You get a message when the " +
-		"child finishes, asks a question, or hits a problem. Check on it with delegate status, " +
-		"redirect it with delegate redirect, stop it with delegate stop_all. " +
+		"child finishes, asks a question, or hits a problem. Rely on these messages instead of polling: " +
+		"do other useful work, or end your turn stating what you are waiting for. Use status for a " +
+		"specific current-state check, redirect to change its instruction, or stop_all to stop it and " +
+		"its helpers. Consecutive status/peek/inbox reads of the same child without new information " +
+		"trigger warnings and can stop your turn, even when you alternate actions. " +
 		"A run has two modes. Without a goal (the default) the helper is done when it returns a non-empty " +
 		"final answer and none of its own helpers are still running; an empty answer is a failure. With a " +
 		"goal — pass criteria and dod together, one without the other is refused — the helper works toward " +
