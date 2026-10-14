@@ -122,7 +122,6 @@ func TestSeed_PlanSupervisorSystemAgent(t *testing.T) {
 
 	assert.Equal(t, config.AgentTypeSystem, ps.Type, "Type=system")
 	assert.True(t, ps.Locked, "Locked=true")
-	assert.False(t, ps.Default, "Default=false — a System Agent can never be the routing default")
 	require.NotNil(t, ps.MemoryEnabled, "MemoryEnabled must be explicitly set, not left nil")
 	assert.False(t, *ps.MemoryEnabled, "MemoryEnabled=false")
 	assert.False(t, ps.MemoryEnabledEffective(), "MemoryEnabledEffective() must resolve false")
@@ -152,7 +151,6 @@ func TestSeed_PlanSupervisorReEnforced_Tamper(t *testing.T) {
 			continue
 		}
 		cfg.Agents.List[i].Locked = false
-		cfg.Agents.List[i].Default = true
 		cfg.Agents.List[i].Type = config.AgentTypeCustom
 		cfg.Agents.List[i].Name = "Renamed"
 		cfg.Agents.List[i].Tools.Builtin.Policies["bash"] = config.ToolPolicyAllow
@@ -164,7 +162,6 @@ func TestSeed_PlanSupervisorReEnforced_Tamper(t *testing.T) {
 
 	ps := findSeeded(t, cfg, string(coreagent.IDPlanSupervisor))
 	assert.True(t, ps.Locked, "Locked re-enforced")
-	assert.False(t, ps.Default, "stray Default cleared")
 	assert.Equal(t, config.AgentTypeSystem, ps.Type, "Type re-enforced to system")
 	assert.Equal(t, coreagent.PlanSupervisor().Name, ps.Name, "Name re-enforced")
 	assert.Equal(t, config.ToolPolicyDeny, ps.Tools.Builtin.Policies["bash"],
@@ -515,8 +512,8 @@ func TestPlanContainmentParity_ResolvedPolicy(t *testing.T) {
 				"same literal value; a sparse map that omits execute_plan needs an explicit stop_plan deny",
 			a.ID, exec, stop)
 	}
-	require.GreaterOrEqual(t, checked, 4,
-		"sanity: the sweep must have covered the four chat-target base agents, not silently skipped everything")
+	require.GreaterOrEqual(t, checked, 3,
+		"sanity: the sweep must have covered the three chat-target base agents (Mia, Jim, Omnipus — FR-008 retired Ava and Admin), not silently skipped everything")
 }
 
 // TestPlanContainmentParity_NonOwnersCannotStartAPlan pins the premise the

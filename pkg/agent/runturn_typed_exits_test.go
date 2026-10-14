@@ -118,7 +118,7 @@ func TestRunTurn_SilentExitsNowTyped(t *testing.T) {
 			al := mustNewAgentLoop(t, cfg, msgBus, provider)
 			t.Cleanup(al.Close)
 
-			agent := al.GetRegistry().GetDefaultAgent()
+			agent := al.GetRegistry().primaryChatAgentForTest()
 			require.NotNil(t, agent)
 
 			sub := al.SubscribeEvents(64)

@@ -1,0 +1,90 @@
+title: Room
+description: >
+  A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158,
+  FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep
+  their required agent_id. Members work in their own main sessions (GC-8).
+  Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}.
+type: object
+required:
+  - id
+  - workspace_id
+  - kind
+  - name
+  - members
+  - muted
+  - paused
+  - generation
+  - hidden
+  - allocated_cost_micro_usd
+  - allocated_cost_unpriced
+  - needs_attention
+additionalProperties: false
+properties:
+  id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  workspace_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  kind:
+    type: string
+    enum:
+      - team
+      - squad
+      - adhoc
+  name:
+    type: string
+    minLength: 1
+    maxLength: 80
+  members:
+    type: array
+    maxItems: 256
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+    description: Member agent ids. Never null.
+  muted:
+    type: array
+    maxItems: 256
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+    description: Muted member agent ids (all room kinds). Never null.
+  paused:
+    type: boolean
+  generation:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Durable pause generation; /pause increments it (§6.11).
+  origin_session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: The main chat the room was started from, when any.
+  read_only_reason:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: Present when the room is read-only, with the reason.
+  hidden:
+    type: boolean
+    description: >
+      Team room below two conversation agents: hidden, history kept.
+  allocated_cost_micro_usd:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Allocated cost in micro-dollars (§6.14).
+  allocated_cost_unpriced:
+    type: boolean
+    description: True when at least one counted turn had an unknown price ("plus unpriced turns").
+  needs_attention:
+    type: boolean
+    description: >
+      Derived: true while any member state is awaiting_approval or
+      waiting_on_user.

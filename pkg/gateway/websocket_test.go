@@ -136,7 +136,7 @@ func TestWSHandlerNoAuthRequired(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	// Send a message without auth — should succeed when token not configured.
-	frame := wsClientFrameTestHelper{Type: "message", Content: "hello no-auth"}
+	frame := wsClientFrameTestHelper{Type: "message", Content: "hello no-auth", AgentID: "mia"}
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 	err = conn.WriteMessage(websocket.TextMessage, data)
@@ -174,7 +174,7 @@ func TestWSHandlerValidAuth(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData))
 
 	// After valid auth, send a message — must succeed.
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello after auth"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello after auth", AgentID: "mia"}
 	msgData, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	err = conn.WriteMessage(websocket.TextMessage, msgData)
@@ -252,7 +252,7 @@ func TestWSHandlerAuth_BadFirstFrame_UsesSharedConstant(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
 
 	// First frame is a "message" frame, not the required "auth" envelope.
-	badFirst := wsClientFrameTestHelper{Type: "message", Content: "no auth frame sent"}
+	badFirst := wsClientFrameTestHelper{Type: "message", Content: "no auth frame sent", AgentID: "mia"}
 	badData, err := json.Marshal(badFirst)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, badData))
@@ -346,7 +346,7 @@ func TestWSHandlerMalformedFrame(t *testing.T) {
 
 	// Connection must remain open: send another valid frame.
 	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
-	validFrame := wsClientFrameTestHelper{Type: "message", Content: "still alive"}
+	validFrame := wsClientFrameTestHelper{Type: "message", Content: "still alive", AgentID: "mia"}
 	validData, err := json.Marshal(validFrame)
 	require.NoError(t, err)
 	err = conn.WriteMessage(websocket.TextMessage, validData)
@@ -374,7 +374,7 @@ func TestWSHandlerCancelFrame(t *testing.T) {
 
 	// Connection must remain open after cancel.
 	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
-	pingFrame := wsClientFrameTestHelper{Type: "message", Content: "after cancel"}
+	pingFrame := wsClientFrameTestHelper{Type: "message", Content: "after cancel", AgentID: "mia"}
 	pingData, err := json.Marshal(pingFrame)
 	require.NoError(t, err)
 	err = conn.WriteMessage(websocket.TextMessage, pingData)
@@ -399,7 +399,7 @@ func TestWSHandlerMessagePublishedToBus(t *testing.T) {
 	// Authenticate first — required by authenticateWS before any other frames.
 	sendWSAuthFrameDevMode(t, conn)
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "publish-to-bus-test"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "publish-to-bus-test", AgentID: "mia"}
 	msgData, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
@@ -425,6 +425,7 @@ func TestWSHandlerMessageMediaThreadedToBus(t *testing.T) {
 
 	msgFrame := wsClientFrameTestHelper{
 		Type:    "message",
+		AgentID: "mia",
 		Content: "look at this image",
 		// One valid ref, one bogus string that must be dropped.
 		Media: []string{"media://abc123", "not-a-media-ref"},
@@ -461,6 +462,7 @@ func TestWSHandlerMessageMediaOnly_NotDropped(t *testing.T) {
 
 	msgFrame := wsClientFrameTestHelper{
 		Type:    "message",
+		AgentID: "mia",
 		Content: "",
 		Media:   []string{"media://abc123"},
 	}
@@ -495,6 +497,7 @@ func TestWSHandlerMessageMediaBogusRef_IncreasesDropCount(t *testing.T) {
 	const bogusCount = 3
 	msgFrame := wsClientFrameTestHelper{
 		Type:    "message",
+		AgentID: "mia",
 		Content: "text with bad media",
 		Media:   []string{"not-a-ref", "http://example.com/file.jpg", "media://"},
 	}
@@ -549,7 +552,7 @@ func TestWSHandlerAuthNotRequired_NoFirstFrameNeeded(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Send message directly (no auth frame first) — must be accepted.
-	frame := wsClientFrameTestHelper{Type: "message", Content: "no-auth-needed"}
+	frame := wsClientFrameTestHelper{Type: "message", Content: "no-auth-needed", AgentID: "mia"}
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))

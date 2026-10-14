@@ -619,7 +619,6 @@ type FallbackModelSlice []FallbackModel
 
 type AgentConfig struct {
 	ID          string            `json:"id"`
-	Default     bool              `json:"default,omitempty"`
 	Name        string            `json:"name,omitempty"`
 	Description string            `json:"description,omitempty"`
 	Home        string            `json:"workspace,omitempty"`
@@ -802,6 +801,13 @@ type DelegationPolicy struct {
 	// Depth is the maximum delegation chain depth for the seeded edges.
 	// Zero means uncapped (nil pointer = uncapped).
 	Depth *int `json:"depth,omitempty"`
+
+	// SelfDepth lowers the depth of the seeded SELF-edge only (from == to)
+	// below the fresh self pin (coreagent.FreshSelfDelegationMaxDepth) when
+	// set and smaller; nil keeps the pin. Seed data, never consulted at
+	// delegation time: Omnipus's self-row ships depth 1
+	// (omnipus-system-agent spec §6.2).
+	SelfDepth *int `json:"self_depth,omitempty"`
 }
 
 // ExecutorKind enumerates the runtime used to execute a sub-agent task.
@@ -1014,7 +1020,6 @@ type AgentDefaults struct {
 	ToolFeedback   ToolFeedbackConfig `json:"tool_feedback,omitempty"`
 	SplitOnMarker  bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 	TimeoutSeconds int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled
-	DefaultAgentID string             `json:"default_agent_id,omitempty"      env:"OMNIPUS_DEFAULT_AGENT_ID"`
 
 	// AutoRecapEnabled gates the session-end recap pipeline (FR-033).
 	// When false, CloseSession is a no-op and no background LLM calls are made.
@@ -2230,11 +2235,10 @@ type BrowserToolConfig struct {
 	// renderer) and removes that wait.
 	//
 	// It warms the SAME session the live panel uses — the WORKSPACE-OWNED tab
-	// set (BrowserManager.OperatorSessionID) — on ONE agent: the default agent
-	// (agents.defaults.default_agent_id), or, when that is unset/has no
-	// browser manager, the lexicographically-first agent that has one. It is
-	// not a per-agent pool: warming every agent would spawn one renderer per
-	// agent for a panel only one of them is likely to open first.
+	// set (BrowserManager.OperatorSessionID) — for ONE workspace: the default
+	// workspace (omnipus-system-agent FR-126). With no browser manager for
+	// it, nothing is warmed and the reason is logged. It is not a pool:
+	// warming every workspace would spawn renderers for panels nobody opens.
 	//
 	// Best-effort and never blocks or fails boot (Hard Constraint #4), exactly
 	// like WarmAtBoot: a failure is logged at WARN, audited, and the ordinary
@@ -2640,26 +2644,10 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// legacy_agents_list.go.
 	stripLegacyAgentsList(cfg, path, onSelfHeal)
 
-	// NOTE (ADR-054 D6.4): this used to call RepairMultipleDefaults(cfg) here
-	// to enforce an at-most-one AgentConfig.Default==true invariant (F11).
-	// That repair function — and the field's role in default-agent
-	// resolution — is retired: RepairMultipleDefaults and
-	// AgentInstance.IsRoutingDefault (which consumed it) are dead code and
-	// have been removed. Splitting agents into independent per-entity files
-	// means two concurrent writes to two different agents could each set
-	// Default=true with no shared lock to serialize them (each delta
-	// individually valid, the composition not). Rather than inventing a
-	// cross-entity lock for a single bool, "the one default" signal moved
-	// entirely to the settings singleton (Agents.Defaults.DefaultAgentID,
-	// which already existed) — a single string field the existing
-	// config-write lock already serializes, structurally incapable of having
-	// two winners. See pkg/agent.AgentRegistry.GetDefaultAgent and
-	// pkg/routing.RouteResolver.resolveDefaultAgentID for the current
-	// (settings-only) resolution ladder. AgentConfig.Default itself is left
-	// in place on the wire/struct (read/written by the REST agent
-	// create/PUT/list handlers) purely for backward display compatibility
-	// until those handlers are converted to the entity-store write path;
-	// it is no longer consulted by any resolution logic.
+	// omnipus-system-agent FR-120 / K17: there is no default agent. A
+	// leftover agents.defaults.default_agent_id is ignored, with a warning on
+	// every load and reload, never migrated.
+	warnIgnoredDefaultAgentKey(data)
 
 	// ADR-029 FR-029/OBS-001: enforce the two-representation rule. A channel
 	// instance that carries BOTH a bound representation (WorkspaceID + Identity)

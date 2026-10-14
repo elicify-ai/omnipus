@@ -19,39 +19,6 @@ import (
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
-// TestAgentDelete_RefusesDefaultAgent proves the F8 guard: an agent that is
-// the configured default agent (cfg.Agents.Defaults.DefaultAgentID) cannot
-// be deleted, and the guard runs BEFORE any destructive action — the entity
-// record must survive a rejected delete.
-func TestAgentDelete_RefusesDefaultAgent(t *testing.T) {
-	deps, home := newTestDepsWithHome(t)
-	store := agentstore.New(home)
-	if err := store.Create("default-agent", &config.AgentConfig{
-		ID:   "default-agent",
-		Name: "Default Agent",
-	}); err != nil {
-		t.Fatalf("test setup: create agent entity record: %v", err)
-	}
-	deps.GetCfg().Agents.Defaults.DefaultAgentID = "default-agent"
-
-	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":       "default-agent",
-		"confirm":  true,
-		"revision": currentAgentRevision(t, deps, "default-agent"),
-	})
-	if !result.IsError {
-		t.Fatal("expected error when deleting the configured default agent, got success")
-	}
-	m := parseError(t, result.ForLLM)
-	errBlock, _ := m["error"].(map[string]any)
-	if errBlock["code"] != "AGENT_IS_DEFAULT" {
-		t.Errorf("expected error code AGENT_IS_DEFAULT, got %v", errBlock["code"])
-	}
-	if _, err := store.Get("default-agent"); err != nil {
-		t.Errorf("default agent entity record must survive a rejected delete, Get error = %v", err)
-	}
-}
-
 // TestAgentDelete_CascadeDeletesSoleOwnedSessionAndUploads proves that
 // delete_agent removes a session in the shared session store that belongs
 // SOLELY to the deleted agent, together with its uploads directory.

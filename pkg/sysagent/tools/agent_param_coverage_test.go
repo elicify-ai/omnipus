@@ -56,7 +56,7 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 		"cli_path": true, "provider": true, "fallback_models": true,
 		"heartbeat": true, "max_tool_iterations": true,
 		"skills": true, "mcp_servers": true, "tool_policy_changes": true,
-		"memory_enabled": true, "default": true, "voice": true,
+		"memory_enabled": true, "voice": true,
 		"context_window_override": true, "model_params": true,
 	}
 
@@ -101,10 +101,9 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 	consumedByExecute := map[string]bool{
 		"id": true, "revision": true, "name": true, "description": true, "soul": true,
 		"model": true, "fallback_models": true, "provider": true,
-		"color": true, "skills": true, "mcp_servers": true,
-		"tool_policy_changes": true,
+		"color": true, "skills": true,
 		"max_tool_iterations": true,
-		"memory_enabled":      true, "default": true, "voice": true,
+		"memory_enabled":      true, "voice": true,
 		"context_window_override": true, "model_params": true,
 	}
 
@@ -272,7 +271,7 @@ func TestAgentToolNestedParameterSchemasAreTyped(t *testing.T) {
 	deps, _ := newTestDeps(t)
 	for _, tool := range []interface{ Parameters() map[string]any }{
 		systools.NewAgentCreateTool(deps),
-		systools.NewAgentUpdateTool(deps),
+		systools.NewAgentPermissionsTool(deps),
 	} {
 		params := tool.Parameters()
 		props := objectAt(t, params, "properties")
@@ -304,7 +303,12 @@ func TestAgentToolNestedParameterSchemasAreTyped(t *testing.T) {
 		if _, ok := patchProps["remove"]; !ok {
 			t.Error("tool_policy_changes.properties missing remove")
 		}
-
+	}
+	for _, tool := range []interface{ Parameters() map[string]any }{
+		systools.NewAgentCreateTool(deps),
+		systools.NewAgentUpdateTool(deps),
+	} {
+		props := objectAt(t, tool.Parameters(), "properties")
 		model := objectAt(t, props, "model_params")
 		if model["additionalProperties"] != false {
 			t.Errorf("model_params.additionalProperties=%v, want false", model["additionalProperties"])

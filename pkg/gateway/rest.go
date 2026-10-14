@@ -66,6 +66,9 @@ var errAgentVanishedDuringUpdate = errors.New("agent no longer exists")
 // the current config, since config can hot-reload.
 type restAPI struct {
 	agentLoop *agent.AgentLoop
+	// setupOfferPoster posts the workspace-setup offer into Omnipus's main
+	// (FR-047). nil means the real poster (workspace_setup_offer.go).
+	setupOfferPoster workspaceSetupOfferPoster
 	// stopSession, when set, replaces agentLoop.StopSession in the delete
 	// path (a test seam for outcomes a real Stop cannot be made to produce
 	// portably, such as a failed background-shell kill). Nil in production.

@@ -321,8 +321,8 @@ describe('ChannelConfigPanel — Routing section', () => {
       { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' } as never,
       { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim' } as never,
     ])
-    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: undefined })
-    vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: 'mia' })
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: '', workspace_id: '', bound: false })
+    vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: 'mia', workspace_id: 'ws-1', bound: true })
   })
 
   it('renders the Routing section header', async () => {
@@ -346,24 +346,17 @@ describe('ChannelConfigPanel — Routing section', () => {
     })
   })
 
-  it('renders help text about global default fallback', async () => {
-    // Content test: routing section includes the description copy about (Global default).
-    renderChannelConfigPanel('telegram')
-    await waitFor(() => {
-      const matches = screen.getAllByText(/global.?default/i)
-      expect(matches.length).toBeGreaterThan(0)
-      // At least one match must be the help text paragraph (not the SmartSelect option).
-      expect(
-        matches.some((el) => el.tagName.toLowerCase() === 'p'),
-      ).toBe(true)
-    })
-  })
+  // The "renders help text about global default fallback" test was deleted
+  // with the global default itself (omnipus-system-agent K14): the routing
+  // section no longer offers or mentions any global default.
 
   it('shows the current routing agent name when routing is pre-seeded', async () => {
     // Persistence test: pre-seeded routing with "mia" causes SmartSelect to show "Mia".
     const client = makeQueryClient()
-    client.setQueryData(['channel-routing', 'telegram'], { default_agent_id: 'mia' })
+    client.setQueryData(['channel-routing', 'telegram'], { default_agent_id: 'mia', workspace_id: 'ws-1', bound: true })
     client.setQueryData(['agents'], [{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }, { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim' }])
+    client.setQueryData(['workspaces', { status: 'active' }], [{ id: 'ws-1', name: 'WS One', status: 'active', is_default: false, pinned: false, pin_order: 0, task_count: 0, revision: '0'.repeat(64), created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }])
+    client.setQueryData(['workspaces', 'ws-1'], { id: 'ws-1', name: 'WS One', status: 'active', is_default: false, pinned: false, pin_order: 0, task_count: 0, revision: '0'.repeat(64), created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', core_team: ['mia'] })
     client.setQueryData(['channel-config', 'telegram'], {})
 
     render(
@@ -382,16 +375,19 @@ describe('ChannelConfigPanel — Routing section', () => {
     })
   })
 
-  // NOTE (ADR-029): the former "selecting an agent ID …" and "selecting (Global
-  // default) …" behavioral tests were REMOVED here. They asserted the pre-ADR-029
-  // routing UX — a flat agent picker with a "(Global default)" sentinel that PUTs
-  // `{ default_agent_id }` with no workspace. That UX is replaced by the
-  // workspace-bound flow (select workspace → workspace-filtered agents → mandatory
-  // agent → PUT `{ workspace_id, default_agent_id }`; "no workspace" = unbind).
-  // The new-flow routing assertions (workspace select, member filtering, mandatory
-  // + hint, no global-default option, unbind) now live authoritatively in
-  // src/components/skills/ChannelConfigPanel.test.tsx, which mocks fetchWorkspaces/
-  // fetchWorkspace + core_team and asserts the setChannelRouting payload.
+  // NOTE (ADR-029, amended omnipus-system-agent K14): the former "selecting an
+  // agent ID …" and "selecting (Global default) …" behavioral tests were REMOVED
+  // here. They asserted the pre-ADR-029 routing UX — a flat agent picker with a
+  // "(Global default)" sentinel that PUTs `{ default_agent_id }` with no
+  // workspace. That UX is replaced by the workspace-bound flow (select workspace
+  // → workspace-filtered agents → mandatory agent → PUT
+  // `{ workspace_id, default_agent_id }`); the unbind mode is itself removed now —
+  // the PUT requires the nonblank pair and an unbound instance reports
+  // `bound: false`. The new-flow routing assertions (workspace select, member
+  // filtering, mandatory + hint, no global-default option, unbound display) now
+  // live authoritatively in src/components/skills/ChannelConfigPanel.test.tsx,
+  // which mocks fetchWorkspaces/fetchWorkspace + core_team and asserts the
+  // setChannelRouting payload.
 })
 
 // ── Section 3: ChannelsScreen degraded state ──────────────────────────────────
@@ -416,8 +412,8 @@ describe('ChannelsScreen — degraded channel state', () => {
     mockUiStore()
     // ConnectorsScreen resolves each configured row's workspace→agent binding
     // via these queries — give them deterministic empty defaults so the
-    // "No workspace bound" fallback renders instead of an unmocked real fetch.
-    vi.mocked(fetchChannelRouting).mockResolvedValue({})
+    // unbound fallback renders instead of an unmocked real fetch.
+    vi.mocked(fetchChannelRouting).mockResolvedValue({ default_agent_id: '', workspace_id: '', bound: false })
     vi.mocked(fetchWorkspaces).mockResolvedValue([])
     vi.mocked(fetchAgents).mockResolvedValue([])
   })
@@ -456,6 +452,57 @@ describe('ChannelsScreen — degraded channel state', () => {
     await waitFor(() => {
       expect(screen.getByText('missing SLACK_BOT_TOKEN credential')).toBeInTheDocument()
     })
+  })
+
+  it('shows last_dropped_at beside the reason on a routing drop (K15)', async () => {
+    // K15: degraded/degraded_reason also carry a ROUTING drop — a channel that
+    // dropped an inbound message it could not route (unbound instance, missing
+    // or ineligible bound agent). The drop time rides the same degraded display.
+    vi.mocked(fetchChannels).mockResolvedValue([
+      makeChannel({
+        id: 'whatsapp',
+        name: 'WhatsApp',
+        enabled: true,
+        degraded: true,
+        degraded_reason: 'bind this channel to an agent in a workspace',
+        last_dropped_at: '2026-10-14T09:30:00Z',
+      }),
+    ])
+
+    renderRealChannelsScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText(/bind this channel to an agent in a workspace/)).toBeInTheDocument()
+    })
+    const row = screen.getByText(/bind this channel to an agent in a workspace/).closest('p')
+    // F09 / S09: derive the local display independently with the documented
+    // Intl medium-date/short-time format, never the production helper or its
+    // observed output. Another date in 2026 must not satisfy the oracle.
+    const suppliedTime = new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium', timeStyle: 'short',
+    }).format(new Date('2026-10-14T09:30:00Z'))
+    expect(row).not.toBeNull()
+    expect(row?.textContent).toBe(`bind this channel to an agent in a workspace · last dropped ${suppliedTime}`)
+  })
+
+  it('does not show a drop time when last_dropped_at is absent (K15)', async () => {
+    vi.mocked(fetchChannels).mockResolvedValue([
+      makeChannel({
+        id: 'slack',
+        name: 'Slack',
+        enabled: true,
+        degraded: true,
+        degraded_reason: 'missing SLACK_BOT_TOKEN credential',
+      }),
+    ])
+
+    renderRealChannelsScreen()
+
+    await waitFor(() => {
+      expect(screen.getByText('missing SLACK_BOT_TOKEN credential')).toBeInTheDocument()
+    })
+    const row = screen.getByText('missing SLACK_BOT_TOKEN credential').closest('p')
+    expect(row?.textContent).not.toContain('last dropped')
   })
 
   it('does not show degraded_reason text when degraded_reason is absent', async () => {

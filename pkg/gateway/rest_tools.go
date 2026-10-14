@@ -19,19 +19,26 @@ import (
 
 // --- Tools ---
 
-// HandleTools handles GET /api/v1/tools — returns the list of tools available to the agent.
+// toolRegistryNotReady is the 503 body for a tool listing requested before
+// boot wires the central builtin registry (omnipus-system-agent FR-125).
+const toolRegistryNotReady = "tool registry not ready"
+
+// HandleTools handles GET /api/v1/tools — the install's tool catalogue, read
+// from the central builtin registry (plus connected MCP tools), never through
+// an agent (FR-125, §6.4). 503 before the registry is wired.
 func (a *restAPI) HandleTools(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	registry := a.agentLoop.GetRegistry()
-	agent := registry.GetDefaultAgent()
-	if agent == nil {
-		jsonOK(w, []map[string]any{})
+	if a.builtinRegistry == nil {
+		jsonErr(w, http.StatusServiceUnavailable, toolRegistryNotReady)
 		return
 	}
-	allTools := agent.Tools.GetAll()
+	allTools := a.builtinRegistry.All()
+	if a.mcpRegistry != nil {
+		allTools = append(allTools, a.mcpRegistry.All()...)
+	}
 	tools := make([]map[string]any, 0, len(allTools))
 	for _, t := range allTools {
 		name := t.Name()
@@ -357,6 +364,12 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 		} else {
 			jsonErr(rau.w, http.StatusBadRequest, selectErr.Error())
 		}
+		return true
+	}
+	// FR-022: the overrides are what this agent would store; Omnipus never
+	// stores a per-agent ask (inherited echoes of the ceiling are not
+	// overrides and never trip this).
+	if refuseOmnipusPerAgentAsk(rau.w, rau.agentID, overrides) {
 		return true
 	}
 	mutation, updateErr := agentstore.New(rau.a.homePath).MutateState(rau.agentID, rau.req.Revision, func(agentRec *config.AgentConfig) error {

@@ -168,7 +168,7 @@ func rootAssertFreshHumanAdmission(t *testing.T, al *AgentLoop, previous *sessio
 	t.Cleanup(gate.open)
 	done := make(chan rootHumanResult, 1)
 	go func() {
-		response, _, err := al.processMessage(context.Background(), rootHumanMessage(previous.SessionID))
+		response, _, err := al.processMessageAsPrimaryForTest(context.Background(), rootHumanMessage(previous.SessionID))
 		done <- rootHumanResult{response: response, err: err}
 	}()
 	select {

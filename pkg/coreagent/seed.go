@@ -4,7 +4,6 @@ package coreagent
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -335,6 +334,17 @@ var allStaticToolNames = []string{
 	// defaultToolPoliciesGeneral), the per-agent seeds and this literal land
 	// together.
 	"environment_setup",
+	// Omnipus system agent (omnipus-system-agent spec §6.5, FR-007, FR-021):
+	// the secret, connection, permission and conversation tools are
+	// classified here — and in the shipped ceiling, the role inventories, the
+	// custom constructor and the Auto table — in the same change, ahead of
+	// their implementations landing (WU-4/5/6/7, landing 2 for
+	// read_conversation and list_mailboxes), under the same rule as the
+	// ADR-052 four above. set_agent_permissions is implemented in
+	// pkg/sysagent/tools (FR-024).
+	"request_secret", "list_secrets", "remove_secret", "select_secret_version",
+	"connect_channel", "connect_mailbox", "set_agent_permissions",
+	"read_conversation", "list_mailboxes",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -413,10 +423,6 @@ func coreAgentSkills(id CoreAgentID) []string {
 		return []string{"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
 	case IDJim:
 		return []string{"interview", "orchestrate", "plan", "define-goal"}
-	case IDAva:
-		return []string{"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team"}
-	case IDAdmin:
-		return []string{"interview", "mcp-install", "provider-setup", "channel-setup", "doctor"}
 	case IDPlanner:
 		return []string{"plan", "define-goal"}
 	case IDResearcher:
@@ -429,17 +435,19 @@ func coreAgentSkills(id CoreAgentID) []string {
 }
 
 // HasSystemAllowsInConstructorSeed returns true if the named core agent's
-// constructor seed contains explicit system.* allow entries (FR-062).
-// Today only Ava qualifies. This is the predicate for the boot-time
-// "critical abort on corrupt config" path.
+// seed grants the system-management tools (FR-062). Today only Omnipus
+// qualifies (spec §6.5: the management family rides the ceiling for it alone).
+// This is the predicate for the boot-time "critical abort on corrupt config"
+// path.
 func HasSystemAllowsInConstructorSeed(agentID string) bool {
-	return CoreAgentID(agentID) == IDAva
+	return CoreAgentID(agentID) == IDOmnipus
 }
 
 // coreAgentDelegation supplies fresh workspace graph defaults: Jim can assign
-// Planner, Researcher, General Purpose, himself and Ava for configuration
-// proposals; Mia can hand work to General Purpose and fork herself; Planner can
-// ask Researcher and fork itself; General Purpose can fork itself.
+// Planner, Researcher, General Purpose and himself; Mia can hand work to
+// General Purpose and fork herself; Planner can ask Researcher and fork
+// itself; General Purpose can fork itself; Omnipus forks itself for its
+// helpers at depth 1.
 //
 // SELF-EDGE (settled design, 2026-10-09): EVERY agent gets a self-edge
 // CANDIDATE — it may fork a NEW session running the same agent exactly like any
@@ -470,7 +478,7 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 	switch id {
 	case IDJim:
 		return &config.DelegationPolicy{
-			To: []config.AgentRef{ref(IDPlanner), ref(IDResearcher), ref(IDWorker), ref(IDJim), ref(IDAva)},
+			To: []config.AgentRef{ref(IDPlanner), ref(IDResearcher), ref(IDWorker), ref(IDJim)},
 			Modes: []config.DelegationMode{
 				config.DelegationModeTask,
 				config.DelegationModeBackground,
@@ -499,8 +507,12 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 			To:    []config.AgentRef{ref(IDWorker)},
 			Modes: []config.DelegationMode{config.DelegationModeTask, config.DelegationModeBackground},
 		}
+	case IDOmnipus:
+		// Omnipus's one ordinary self-row (OSA-8) runs its helpers; its depth
+		// is exactly 1 (spec §6.2) — a helper never forks again.
+		return &config.DelegationPolicy{To: []config.AgentRef{ref(IDOmnipus)}, SelfDepth: intPtr(1)}
 	default:
-		// Every other agent (Ava, Admin, Researcher, the hidden System
+		// Every other agent (Researcher, the hidden System
 		// Agents, and every custom agent created later) gets a SINGLE self-edge
 		// CANDIDATE. Which ids actually receive the row is decided by the WRITERS
 		// from the operator's exclusion data (config.workspace_seed_defaults.
@@ -554,10 +566,22 @@ const FreshSelfDelegationMaxDepth = 3
 // (delegationDepthCeiling / workspaceDelegationDepthCeiling); non-positive
 // is treated as unset and the pin stays 3.
 func SeededEdgeDepth(from, to string, policyDepth *int, ceiling int) *int {
+	return SeededEdgeDepthWithSelf(from, to, policyDepth, nil, ceiling)
+}
+
+// SeededEdgeDepthWithSelf is SeededEdgeDepth plus a role's SelfDepth data
+// (config.DelegationPolicy.SelfDepth): for a self-edge it lowers the fresh pin
+// further to selfDepth when that is set and smaller — Omnipus's self-row ships
+// depth 1 (spec §6.2). It never raises the pin and never touches a non-self
+// edge. Callers that hold the seeded DelegationPolicy pass its SelfDepth.
+func SeededEdgeDepthWithSelf(from, to string, policyDepth, selfDepth *int, ceiling int) *int {
 	if from == to {
 		d := FreshSelfDelegationMaxDepth
 		if ceiling > 0 && ceiling < d {
 			d = ceiling
+		}
+		if selfDepth != nil && *selfDepth > 0 && *selfDepth < d {
+			d = *selfDepth
 		}
 		return &d
 	}
@@ -654,8 +678,8 @@ func SeedConfig(cfg *config.Config) bool {
 		// migrate (§6.2), and re-running it on every boot would silently
 		// restore a grant list the operator later emptied on purpose — the
 		// exact ADR-054 D6.4 "reports success, doesn't stick" failure mode.
-		// Gating on isFreshInstall (same flag as the AutoRecap/DefaultAgentID
-		// seeds above) makes this fire once, on the very first boot, and
+		// Gating on isFreshInstall (same flag as the AutoRecap
+		// seed above) makes this fire once, on the very first boot, and
 		// never again. Do NOT restore this to an unconditional migration.
 		if sc.isFreshInstall && len(a.Skills) == 0 {
 			if seedSkills := coreAgentSkills(ca.ID); len(seedSkills) > 0 {
@@ -667,8 +691,7 @@ func SeedConfig(cfg *config.Config) bool {
 		// Idempotent Type re-enforcement (tamper protection). The subagent tier
 		// (worker + specialists) MUST carry Type=worker and base agents Type=core —
 		// these classify routing and chat-target eligibility, so a tampered/absent
-		// Type is corrected on every boot. A subagent-tier agent can never be the
-		// default: clear a stray Default flag too.
+		// Type is corrected on every boot.
 		wantType := config.AgentTypeCore
 		if IsSubagentTierID(ca.ID) {
 			wantType = config.AgentTypeWorker
@@ -678,10 +701,6 @@ func SeedConfig(cfg *config.Config) bool {
 			sc.modified = true
 		}
 		if IsSubagentTierID(ca.ID) {
-			if a.Default {
-				a.Default = false
-				sc.modified = true
-			}
 			// Idempotent executor migration: the seeded subagent-tier agents run
 			// native. Fill the executor only when the existing entry has none, so an
 			// operator who pointed it at an external-cli/remote runtime keeps their
@@ -722,13 +741,6 @@ func SeedConfig(cfg *config.Config) bool {
 		}
 		policies := coreAgentSeed(ca.ID)
 		isSubagentTier := IsSubagentTierID(ca.ID)
-		// Mia is the default agent on fresh installs: she appears first in the
-		// All() list and is the friendliest entry-point for new users. A subagent
-		// (worker or specialist) is NEVER the default — it is not a chat target.
-		// Only set Default=true on the fresh-seed path (here). The re-enforcement
-		// loop above intentionally does NOT touch the Default field on existing
-		// entries so operator choices survive config reload.
-		isDefault := ca.ID == IDMia
 		// Type: the subagent tier (worker + specialists) is Type=worker; every
 		// other seeded agent is a base/core agent.
 		agentType := config.AgentTypeCore
@@ -744,7 +756,6 @@ func SeedConfig(cfg *config.Config) bool {
 			Color:       ca.Color,
 			Type:        agentType,
 			Locked:      true,
-			Default:     isDefault,
 			CreatedAt:   timePtr(time.Now().UTC()),
 			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill
 			// resolution. Nil for agents with no seeded skills (unrestricted).
@@ -815,30 +826,6 @@ func (sc *seedConfig) seedFreshInstallDefaults() {
 			sc.cfg.Agents.Defaults.BootstrapRecapEnabled = true
 			sc.modified = true
 		}
-	}
-
-	// RELEASE BLOCKER fix: Mia being "the default agent" on a fresh install
-	// was previously ONLY expressed via the per-entity AgentConfig.Default
-	// stamp on her fresh-seed record below (isDefault := ca.ID == IDMia) —
-	// but ADR-054 D6.4 moved default-agent RESOLUTION entirely to the
-	// settings singleton (cfg.Agents.Defaults.DefaultAgentID; see
-	// pkg/agent.AgentRegistry.GetDefaultAgent and
-	// pkg/routing.RouteResolver.resolveDefaultAgentID) and nothing ever seeded
-	// THAT field, so a fresh install had NO configured default at all:
-	// webchat and channel routing each fell back to a DIFFERENT priority-2/3
-	// default and disagreed. Seed the singleton here, on the exact same
-	// isFreshInstall gate the AutoRecap seed above uses, so a fresh install's
-	// actual resolved default matches the documented "Mia is default" intent.
-	// The per-entity Default:true stamp on Mia's fresh-seed record below is
-	// UNCHANGED (kept for backward display compatibility per config.go's
-	// ADR-054 D6.4 note) — this only adds the singleton write alongside it.
-	// Guarded by "still empty" so an operator's pre-boot env override
-	// (OMNIPUS_DEFAULT_AGENT_ID) is never clobbered, and so this is a
-	// fresh-install-only seed, not a re-enforcement that would overwrite an
-	// operator's later choice on every subsequent boot.
-	if sc.isFreshInstall && strings.TrimSpace(sc.cfg.Agents.Defaults.DefaultAgentID) == "" {
-		sc.cfg.Agents.Defaults.DefaultAgentID = string(IDMia)
-		sc.modified = true
 	}
 }
 
@@ -964,6 +951,21 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				"recall_memory":       allow,
 				"run_retrospective":   allow,
 				"recall_conversation": allow,
+				// Spec §6.5 (FR-007): a new custom MAIN agent may ask for its
+				// own secrets on the card, list them and read its own
+				// conversations. The worker tier gets deny instead —
+				// RestrictForWorkerTier applies that at creation time.
+				"request_secret":    allow,
+				"list_secrets":      allow,
+				"read_conversation": allow,
+				// Founder decision #1294 (2026-10-14): new custom agents can
+				// talk to each other by default — send_message is both the
+				// sending tool and the RECEIVER's admission policy
+				// (address_router.go::receiverSendPolicy), and answer_request
+				// is how a request is answered. Membership checks are
+				// unchanged, and an explicit per-agent deny still refuses.
+				"send_message":   allow,
+				"answer_request": allow,
 				// Structural floor (CLAUDE.md constraint 6): every agent needs
 				// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
 				// seeded here as real data rather than the retired compositor.go
@@ -1002,4 +1004,21 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 		},
 	}
 	return policies
+}
+
+// workerTierDeniedTools are the §6.5 tools a new custom MAIN agent is
+// granted but the worker tier (wire Subagent / subagent_3p) is not
+// (OR-MIN-002): workers never see the secret card or other conversations.
+var workerTierDeniedTools = []string{"request_secret", "list_secrets", "read_conversation"}
+
+// RestrictForWorkerTier tightens a NewCustomAgentToolsCfg map for a new
+// worker-tier agent: the §6.5 main-only tools become explicit deny. A nil
+// cfg is left alone.
+func RestrictForWorkerTier(cfg *config.AgentToolsCfg) {
+	if cfg == nil || cfg.Builtin.Policies == nil {
+		return
+	}
+	for _, name := range workerTierDeniedTools {
+		cfg.Builtin.Policies[name] = config.ToolPolicyDeny
+	}
 }

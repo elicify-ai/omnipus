@@ -70,12 +70,12 @@ func TestLoadTool_FullTierReturnsNoopSuccess(t *testing.T) {
 // ── C3: Policy-denied tools must give a clear reason ─────────────────────────
 
 // TestLoadTool_PolicyDeniedCarriesReason reproduces C3:
-// ToolSearch{names:["create_task"]} for Ava currently says
+// ToolSearch{names:["create_task"]} for Omnipus currently says
 // "unknown or not available" instead of "denied by … policy".
 //
 // Note on the subject: create_task was chosen when it was ManifestLazy under
 // ADR-071 D3's split. ADR-090 §5.4 promoted it into the global upfront set
-// (ManifestFull), and Ava's ADR-090 role policy deliberately does NOT grant
+// (ManifestFull), and Omnipus's ADR-090 role policy deliberately does NOT grant
 // it — which makes it an even stronger subject: it now exercises the
 // policy-denied FULL-tier path in execLoad (pkg/tools/tools_tool.go), where
 // canLoad returns a "denied…" reason for a denied full-tier name exactly as
@@ -86,28 +86,28 @@ func TestLoadTool_PolicyDeniedCarriesReason(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// create_task is upfront (ADR-090 §5.4) and NOT in Ava's role-policy
+	// create_task is upfront (ADR-090 §5.4) and NOT in Omnipus's role-policy
 	// allow set.
 	require.Equal(t, tools.ManifestFull, tools.ToolManifestTier("create_task"),
 		"create_task must be ManifestFull (ADR-090 §5.4 upfront set) for this test to be meaningful")
 
-	// Structural guarantee: create_task must NOT be in Ava's policy-filtered set.
-	avaAgent, ok := al.registry.GetAgent("ava")
+	// Structural guarantee: create_task must NOT be in Omnipus's policy-filtered set.
+	omnipusAgent, ok := al.registry.GetAgent("omnipus")
 	require.True(t, ok)
-	allTools := avaAgent.Tools.GetAll()
-	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, avaAgent.AgentType, avaAgent.LoadToolPolicy())
+	allTools := omnipusAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, omnipusAgent.AgentType, omnipusAgent.LoadToolPolicy())
 	for _, tool := range policyFiltered {
 		require.NotEqual(t, "create_task", tool.Name(),
-			"create_task must NOT be policy-allowed for ava — update test if Ava policy changed")
+			"create_task must NOT be policy-allowed for omnipus — update test if Omnipus policy changed")
 	}
 
-	tt := loadToolFor(t, al, "ava")
-	ctx := execCtx("ava", "sess-c3-denied")
+	tt := loadToolFor(t, al, "omnipus")
+	ctx := execCtx("omnipus", "sess-c3-denied")
 
 	result := tt.Execute(ctx, map[string]any{"names": []any{"create_task"}})
 
 	assert.True(t, result.IsError,
-		"create_task must be rejected for ava (policy denied); got: %s", result.ForLLM)
+		"create_task must be rejected for omnipus (policy denied); got: %s", result.ForLLM)
 	assert.True(t,
 		strings.Contains(result.ForLLM, "denied") || strings.Contains(result.ForLLM, "policy"),
 		"error message must mention 'denied' or 'policy'; got: %s", result.ForLLM)
@@ -142,9 +142,9 @@ func TestLoadTool_UnknownNameSuggestsAlternative(t *testing.T) {
 
 // ── C1 control: Allowed lazy tool still loads ─────────────────────────────────
 
-// TestLoadTool_AllowedLazySucceeds_Ava confirms that Ava can still load
+// TestLoadTool_AllowedLazySucceeds_Omnipus confirms that Omnipus can still load
 // find_skills (allowed, lazy) after the C2/C3/C4 fixes.
-func TestLoadTool_AllowedLazySucceeds_Ava(t *testing.T) {
+func TestLoadTool_AllowedLazySucceeds_Omnipus(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
@@ -153,14 +153,14 @@ func TestLoadTool_AllowedLazySucceeds_Ava(t *testing.T) {
 	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("find_skills"),
 		"find_skills must be ManifestLazy")
 
-	tt := loadToolFor(t, al, "ava")
-	ctx := execCtx("ava", "sess-c1-ava-lazy")
+	tt := loadToolFor(t, al, "omnipus")
+	ctx := execCtx("omnipus", "sess-c1-omnipus-lazy")
 
 	result := tt.Execute(ctx, map[string]any{"names": []any{"find_skills"}})
 	assert.False(t, result.IsError,
-		"find_skills must be loadable by ava; got: %s", result.ForLLM)
+		"find_skills must be loadable by omnipus; got: %s", result.ForLLM)
 
-	// A hallucinated name for ava must still fail.
+	// A hallucinated name for omnipus must still fail.
 	result2 := tt.Execute(ctx, map[string]any{"names": []any{"definitely_not_a_real_tool_xyz"}})
 	assert.True(t, result2.IsError,
 		"hallucinated name must be rejected")

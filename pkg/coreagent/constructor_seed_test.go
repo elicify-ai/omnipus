@@ -28,7 +28,7 @@ import (
 //
 // Traces to: pkg/coreagent/core.go — coreAgentSeed (FR-008, FR-010, FR-022).
 func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
-	for _, id := range []CoreAgentID{IDMia, IDJim, IDAva, IDAdmin, IDPlanner, IDResearcher, IDWorker} {
+	for _, id := range []CoreAgentID{IDMia, IDJim, IDOmnipus, IDPlanner, IDResearcher, IDWorker} {
 		t.Run(string(id), func(t *testing.T) {
 			assert.Equal(t, adr090SparseRolePolicies(id), coreAgentSeed(id),
 				"ordinary role seed must be exactly the sparse ADR-090 delta")
@@ -36,22 +36,24 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 	}
 }
 
-// TestBoot_HasSystemAllowsInConstructorSeed verifies that only Ava returns true
-// from HasSystemAllowsInConstructorSeed.
+// TestBoot_HasSystemAllowsInConstructorSeed verifies that only Omnipus returns
+// true from HasSystemAllowsInConstructorSeed (omnipus-system-agent §6.5: the
+// management family rides the ceiling for Omnipus alone; Ava is retired,
+// FR-008).
 //
 // BDD: Given each core agent ID,
 //
 //	When HasSystemAllowsInConstructorSeed is called,
-//	Then only Ava returns true;
+//	Then only Omnipus returns true;
 //	And all other known core agents return false.
 //
 // Traces to: pkg/coreagent/core.go — HasSystemAllowsInConstructorSeed (FR-062).
 func TestBoot_HasSystemAllowsInConstructorSeed(t *testing.T) {
-	assert.True(t, HasSystemAllowsInConstructorSeed(string(IDAva)),
-		"Ava must return true (she has explicit system.* allows)")
+	assert.True(t, HasSystemAllowsInConstructorSeed(string(IDOmnipus)),
+		"Omnipus must return true (it holds the management tools)")
 
-	nonAvaAgents := []CoreAgentID{IDJim, IDMia, IDAdmin}
-	for _, id := range nonAvaAgents {
+	nonManagementAgents := []CoreAgentID{IDJim, IDMia}
+	for _, id := range nonManagementAgents {
 		assert.False(t, HasSystemAllowsInConstructorSeed(string(id)),
 			"agent %q must return false (no explicit system.* allows)", id)
 	}
@@ -155,22 +157,21 @@ func TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances(t *testing.T) {
 	cfg := &config.Config{}
 	SeedConfig(cfg)
 
-	var avaAgent *config.AgentConfig
+	var omnipusAgent *config.AgentConfig
 	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == string(IDAva) {
-			avaAgent = &cfg.Agents.List[i]
+		if cfg.Agents.List[i].ID == string(IDOmnipus) {
+			omnipusAgent = &cfg.Agents.List[i]
 			break
 		}
 	}
-	require.NotNil(t, avaAgent, "SeedConfig must add Ava to cfg.Agents.List")
-	require.NotNil(t, avaAgent.Tools, "Ava's Tools config must be non-nil after seed")
+	require.NotNil(t, omnipusAgent, "SeedConfig must add Omnipus to cfg.Agents.List")
+	require.NotNil(t, omnipusAgent.Tools, "Omnipus's Tools config must be non-nil after seed")
 
-	// Ava is redesigned: deny-by-default (fully-enumerated explicit map, no
-	// DefaultPolicy field), no legacy "system.*" rail.
-	_, hasRail := avaAgent.Tools.Builtin.Policies["system.*"]
-	assert.False(t, hasRail, "Ava must NOT carry the dead 'system.*' rail after redesign")
+	// No legacy "system.*" rail; the persisted map is exactly the role seed.
+	_, hasRail := omnipusAgent.Tools.Builtin.Policies["system.*"]
+	assert.False(t, hasRail, "Omnipus must NOT carry the dead 'system.*' rail")
 
-	assert.Equal(t, adr090SparseRolePolicies(IDAva), avaAgent.Tools.Builtin.Policies)
+	assert.Equal(t, adr090SparseRolePolicies(IDOmnipus), omnipusAgent.Tools.Builtin.Policies)
 }
 
 // TestJimSeed_DenyDefaultWithExplicitAllows verifies that Jim's constructor seed

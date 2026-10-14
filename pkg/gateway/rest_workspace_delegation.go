@@ -384,11 +384,12 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 // that actually exist in the live config so a lite/custom roster never
 // produces a dangling team member.
 //
-// This is NOT used for ordinary user-created workspaces any more — those seed
-// via newWorkspaceSetupTeam (Ava-only + setup_pending) so Ava can interview
-// the user and build out the team herself. defaultWorkspaceTeam remains
-// reserved for ensureDefaultWorkspace's one-time boot seed, which still needs
-// a working full roster out of the box with no interview step.
+// This is NOT used for ordinary user-created workspaces — those start with an
+// empty team that Omnipus builds from its own chat (omnipus-system-agent
+// W1/W18). defaultWorkspaceTeam remains reserved for ensureDefaultWorkspace's
+// one-time boot seed, which still needs a working full roster out of the box
+// with no interview step. Omnipus is on it as an ordinary hidden member
+// (FR-003).
 //
 // Worker is intentionally included. Omitting it used to drop every →worker
 // seed edge in seedEdgesForTeam (both endpoints must be on-team), so Jim/Mia/
@@ -396,11 +397,8 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 // though coreagent.SeedDelegationEdges defines those edges. That was UAT
 // DEF-001 (2026-07-13).
 //
-// Admin and the hidden System Agents are intentionally EXCLUDED
-// (coreagent.ExcludedFromWorkspaceTeams, ADR-090 FR-001): Admin is the
-// standalone operator — chat-able core, "no team membership" — so blindly
-// iterating coreagent.All() (which includes Admin) used to seed exactly the
-// membership every write path now refuses.
+// The hidden System Agents are intentionally EXCLUDED
+// (coreagent.ExcludedFromWorkspaceTeams).
 func defaultWorkspaceTeam(cfg *config.Config) []string {
 	if cfg == nil {
 		return nil
@@ -415,34 +413,6 @@ func defaultWorkspaceTeam(cfg *config.Config) []string {
 	// coreagent.All() there just as it did here — Mia first, then Jim/Ava/Ray,
 	// Worker, then the three specialists).
 	return workspace.DefaultWorkspaceTeamIDs(configuredIDs)
-}
-
-// newWorkspaceSetupTeam returns the seed roster for a NEW user-created
-// workspace (POST /api/v1/workspaces with no explicit core_team): just Ava,
-// filtered to whether her ID is actually present in the live config (same
-// presence-filter pattern as defaultWorkspaceTeam, so a lite/custom install
-// that omitted Ava never produces a dangling team member).
-//
-// This is deliberately NOT the full install roster. New workspaces now start
-// with only Ava on the team; she interviews the user and builds out the rest
-// of the team herself (the setup_pending flow — handleWorkspacePost sets
-// ws.SetupPending=true alongside this seed, cleared once the setup kickoff
-// turn is accepted). defaultWorkspaceTeam above remains unchanged and is used
-// exclusively by ensureDefaultWorkspace for the auto-created boot default
-// workspace ("My Workspace"), which still gets the full roster.
-func newWorkspaceSetupTeam(cfg *config.Config) []string {
-	if cfg == nil {
-		return nil
-	}
-	present := make(map[string]bool, len(cfg.Agents.List))
-	for i := range cfg.Agents.List {
-		present[cfg.Agents.List[i].ID] = true
-	}
-	avaID := string(coreagent.IDAva)
-	if !present[avaID] {
-		return nil
-	}
-	return []string{avaID}
 }
 
 // seedEdgesForTeam filters a set of default edges down to those whose endpoints

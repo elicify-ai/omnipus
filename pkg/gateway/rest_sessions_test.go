@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
@@ -1623,38 +1622,4 @@ func TestCreateSessionHTTP_RejectsWorker(t *testing.T) {
 	api.createSessionHTTP(w2, r2)
 	require.Equal(t, http.StatusCreated, w2.Code,
 		"a base agent must be able to back a session (control)")
-}
-
-// TestFirstChatTargetAgentID_SkipsWorker verifies RESIDUAL PATH 6: the last-resort
-// fallback never lands on a worker even when the worker appears first in the list.
-// It returns the first chat-target agent instead.
-func TestFirstChatTargetAgentID_SkipsWorker(t *testing.T) {
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				// Worker appears first but must be skipped — workers are never chat targets.
-				{ID: "hans", Type: config.AgentTypeWorker},
-				{ID: "mia"},
-			},
-		},
-	}
-	got := firstChatTargetAgentID(cfg)
-	assert.NotEqual(t, "hans", got, "firstChatTargetAgentID must never return a worker")
-	assert.Equal(t, "mia", got, "firstChatTargetAgentID must return the first chat-target agent")
-}
-
-// TestFirstChatTargetAgentID_AllWorkersReturnsEmpty verifies the degenerate case:
-// when every agent is a worker, the fallback returns "" rather than a
-// worker (the caller then surfaces a "no agent configured" error).
-func TestFirstChatTargetAgentID_AllWorkersReturnsEmpty(t *testing.T) {
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				{ID: "w1", Type: config.AgentTypeWorker},
-				{ID: "w2", Type: config.AgentTypeWorker},
-			},
-		},
-	}
-	assert.Equal(t, "", firstChatTargetAgentID(cfg),
-		"when all agents are workers, the fallback must return empty, never a worker")
 }

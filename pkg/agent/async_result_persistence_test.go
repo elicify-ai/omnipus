@@ -10,7 +10,7 @@
 // result arrives. Before this fix, AsyncNotifyEvent.AgentID and the
 // originating turn's TranscriptSessionID had nowhere to go on
 // bus.InboundMessage, so processSystemMessage reconstructed the turn by
-// guessing GetRegistry().GetDefaultAgent() and never bound a transcript
+// guessing the default agent and never bound a transcript
 // session at all — the confirmed root cause of both a live "Worker vs Jim"
 // speaker-attribution flip and permanent, silent data loss when the
 // originating WS connection had already closed. See
@@ -60,14 +60,6 @@ func newAsyncResultTestLoop(
 				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
-				// Explicit override rather than relying on alphabetical
-				// fallback ordering — asyncResultTestDefaultID
-				// ("mia-default") does not sort before
-				// asyncResultTestDelegateID ("ava-worker"), so
-				// GetDefaultAgent's Priority 2 fallback alone would pick the
-				// delegate. Naming the override explicitly is also the more
-				// realistic production shape (config.Agents.Defaults.DefaultAgentID).
-				DefaultAgentID: asyncResultTestDefaultID,
 			},
 			List: []config.AgentConfig{
 				{ID: asyncResultTestDefaultID, Name: "Default Agent", Type: config.AgentTypeCustom},
@@ -79,8 +71,9 @@ func newAsyncResultTestLoop(
 	al = mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(al.Close)
 
-	defaultAgent = al.GetRegistry().GetDefaultAgent()
-	require.NotNil(t, defaultAgent, "test setup: default agent must exist")
+	var found bool
+	defaultAgent, found = al.GetRegistry().GetAgent(asyncResultTestDefaultID)
+	require.True(t, found, "test setup: the second (non-delegate) agent must exist")
 	var ok bool
 	delegate, ok = al.GetRegistry().GetAgent(asyncResultTestDelegateID)
 	require.True(t, ok, "test setup: delegate agent must be registered")

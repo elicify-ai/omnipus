@@ -32,8 +32,17 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		"delete_workspace":  true,
 		"delete_task":       true,
 		"remove_mcp_server": true,
-		// remove_skill and delete_agent are ADR-090 proposal-confirmed writes,
-		// so their fresh ceiling is allow rather than a second Ask gate.
+	}
+
+	// approvalGated is the omnipus-system-agent ask-list (spec §6.5): FR-020
+	// moves these management tools to "ask" at the shipped ceiling, and
+	// FR-021 ships the five new secret/connection/permission tools "ask".
+	// (delete_agent and remove_skill were allow before FR-020.)
+	approvalGated := map[string]bool{
+		"delete_agent": true, "remove_skill": true, "configure_provider": true,
+		"enable_channel": true, "configure_channel": true,
+		"connect_channel": true, "connect_mailbox": true, "set_agent_permissions": true,
+		"remove_secret": true, "select_secret_version": true,
 	}
 
 	// operatorOnly is a SECOND, distinct exception to the allow-by-default
@@ -54,7 +63,9 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// Security -> Tool Policies, or config.json), never a code branch — CLAUDE.md
 	// hard constraint 6.
 	operatorOnly := map[string]string{
-		"add_mcp_server": "allow",
+		// omnipus-system-agent FR-020: add_mcp_server ships "ask" (was
+		// allow) — installing a connector is approval-gated.
+		"add_mcp_server": "ask",
 		// request_mount (ADR-063 FR-7.2) belongs to the same class as
 		// add_mcp_server — an agent widening its OWN boundary — but is seeded
 		// "ask" rather than "deny" because the widening is exactly what the
@@ -99,6 +110,17 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("expected seeded policy %q for operator-only tool %q, got %q", want, name, got)
+		}
+	}
+
+	for name := range approvalGated {
+		if got := cfg.Sandbox.ToolPolicies[name]; got != "ask" {
+			t.Errorf("FR-020/FR-021: %q must ship 'ask', got %q", name, got)
+		}
+	}
+	for _, name := range []string{"request_secret", "list_secrets"} {
+		if got := cfg.Sandbox.ToolPolicies[name]; got != "allow" {
+			t.Errorf("FR-021: %q must ship 'allow', got %q", name, got)
 		}
 	}
 
@@ -176,7 +198,7 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// the kernel sandbox can positively clear — this is a routing value, not
 	// a return to "always ask".
 	for name, policy := range cfg.Sandbox.ToolPolicies {
-		if destructive[name] {
+		if destructive[name] || approvalGated[name] {
 			continue
 		}
 		if _, isOperatorOnly := operatorOnly[name]; isOperatorOnly {

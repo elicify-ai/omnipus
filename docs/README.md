@@ -1,6 +1,6 @@
 # Omnipus documentation
 
-Omnipus is a team of AI agents you run yourself, on your own machine. You choose the model and keep the keys; four agents ship with it — Mia, Jim, Ava and Admin.
+Omnipus is a team of AI agents you run yourself, on your own machine. You choose the model and keep the keys; three chat agents ship with it — Mia, Jim and the system agent Omnipus.
 
 ## Start here
 
@@ -43,7 +43,7 @@ Talk from your platforms.
 
 | Page | What it covers |
 |---|---|
-| [Connectors](connectors.md) | Setup and default agent |
+| [Connectors](connectors.md) | Setup and binding to a workspace and agent |
 | [Connectors](connectors.md) | Connect chat apps and choose which agent answers |
 | Platform guides | [Telegram](connectors/telegram.md), [Discord](connectors/discord.md), [Slack](connectors/slack.md), [WhatsApp](connectors/whatsapp_native.md), [Matrix](connectors/matrix.md), [IRC](connectors/irc.md), [LINE](connectors/line.md), [Google Chat](connectors/google-chat.md), [DingTalk](connectors/dingtalk.md), [Feishu](connectors/feishu.md), [WeCom](connectors/wecom.md), [WeChat](connectors/weixin.md), [QQ](connectors/qq.md) |
 

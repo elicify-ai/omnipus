@@ -151,7 +151,6 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			"mcp_servers":         mcpServersParameters(),
 			"tool_policy_changes": toolPolicyChangesParameters(),
 			"memory_enabled":      map[string]any{"type": "boolean"},
-			"default":             map[string]any{"type": "boolean"},
 			"voice": map[string]any{
 				"type":        "string",
 				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
@@ -227,6 +226,9 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	if strings.TrimSpace(ac.name) == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", "Provide a name for the agent")), true
 	}
+	if coreagent.IsReservedAgentName(ac.name) {
+		return reservedNameResult(), true
+	}
 	ac.description, _ = ac.args["description"].(string)
 	if strings.TrimSpace(ac.description) == "" {
 		return tools.ErrorResult(
@@ -291,12 +293,43 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	if err := rejectUnknownAgentFields(ac.args, agentCreateArgNames); err != nil {
 		return fieldErrorResult(err), true
 	}
+	if r0, stop := refuseManagementGrants(ac.args); stop {
+		return r0, true
+	}
 	if _, _, err := parseOptionalHeartbeat(ac.args); err != nil {
 		return fieldErrorResult(err), true
 	}
 	ac.id = toSlug(ac.name)
 	if err := validateID(ac.id); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "")), true
+	}
+	return nil, false
+}
+
+// refuseManagementGrants refuses a create whose tool_policy_changes grant any
+// management-family tool with a non-deny policy — "allow" and "ask" are both
+// grants — or remove one (dropping the constructor's Deny lets the agent ride
+// the ceiling) (omnipus-system-agent FR-025, BDD-14.3). Runs before any
+// write. A malformed patch is refused with the shared decoder's own message.
+func refuseManagementGrants(args map[string]any) (*tools.ToolResult, bool) {
+	raw, present := args["tool_policy_changes"]
+	if !present {
+		return nil, false
+	}
+	patch, err := decodePolicyPatch(raw)
+	if err != nil {
+		return fieldErrorResult(err), true
+	}
+	if tool, bad := coreagent.ManagementGrantViolation(patch.Set); bad {
+		return tools.ErrorResult(errorJSON("MANAGEMENT_GRANT_REFUSED", coreagent.ManagementGrantRefusal(tool),
+			"Set "+tool+" to deny or leave it out; ask Omnipus to make management changes")), true
+	}
+	// Removing the constructor's explicit Deny lets the new agent ride the
+	// ceiling (allow or ask for this family) — the same grant, refused the
+	// same way (founder-approved security fix, 2026-10-14).
+	if tool, bad := coreagent.ManagementRemoveViolation(patch.Remove); bad {
+		return tools.ErrorResult(errorJSON("MANAGEMENT_GRANT_REFUSED", coreagent.ManagementRemoveRefusal(tool),
+			"Leave "+tool+" out of remove; ask Omnipus to make management changes")), true
 	}
 	return nil, false
 }
@@ -372,6 +405,11 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	// coreagent.NewCustomAgentToolsCfg()) — so the two agent-creation
 	// paths cannot drift out of sync on this seed again.
 	ac.newAgent.Tools = coreagent.NewCustomAgentToolsCfg()
+	if ac.newAgent.Type == config.AgentTypeWorker {
+		// §6.5 (FR-007): the worker tier gets no secret card, secret list or
+		// conversation reading.
+		coreagent.RestrictForWorkerTier(ac.newAgent.Tools)
+	}
 	fields := mutationFieldNames(ac.args)
 	if err := agentmutation.ValidateFields(ac.newAgent, fields); err != nil {
 		return fieldErrorResult(err), true
@@ -408,11 +446,6 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 			"Set OMNIPUS_HOME environment variable")), true
 	}
 
-	if _, present := ac.args["default"]; present {
-		if err := requireDefaultWriter(ac.t.deps); err != nil {
-			return fieldErrorResult(err), true
-		}
-	}
 	ac.finalID = ac.id
 	// #904 D10/D15: re-check the agent's own limit against a FRESH read of
 	// the global immediately before the write — prepareConfig checked it
@@ -439,20 +472,9 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", fmt.Sprintf("persistence=%s stage=%s revision=%s", mutation.PersistenceStatus, mutation.ErrorStage, mutation.Revision), "Read the agent state before retrying")), true
 	}
 
-	if raw, present := ac.args["default"]; present {
-		if want, ok := raw.(bool); ok {
-			if err := writeDefaultSingleton(ac.t.deps, ac.finalID, want); err != nil {
-				// No NotifyAgentCreated here — see this function's doc comment:
-				// the entity is durable but not yet listable (stop=true skips
-				// publishAndRespond/publishAgentActivation entirely).
-				return defaultSingletonPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args)), true
-			}
-		}
-	}
-
 	// Create agent workspace and write personality files.
 	if err := datamodel.InitAgentHome(omnipusHome, ac.finalID); err != nil {
-		// Entity (and optional default singleton) already durable. Do not
+		// Entity already durable. Do not
 		// delete them: report the actual revision so the caller can read
 		// and recover instead of claiming a complete create.
 		// No NotifyAgentCreated here — see this function's doc comment: the
@@ -872,11 +894,10 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type": []string{"integer", "null"}, "minimum": 1, "maximum": 1000,
 				"description": "New max tool calls per turn for this agent, 1-1000. Must not exceed the global limit set in Settings → Performance (a higher value is refused). Pass null to clear the agent's own value and use the global limit; omit to leave it unchanged.",
 			},
-			"skills":              skillsParameters(true),
-			"mcp_servers":         mcpServersParameters(),
-			"tool_policy_changes": toolPolicyChangesParameters(),
-			"memory_enabled":      map[string]any{"type": "boolean"},
-			"default":             map[string]any{"type": "boolean"},
+			// tool_policy_changes and mcp_servers are deliberately absent:
+			// set_agent_permissions owns them on an existing agent (FR-024).
+			"skills":         skillsParameters(true),
+			"memory_enabled": map[string]any{"type": "boolean"},
 			"voice": map[string]any{
 				"type":        "string",
 				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
@@ -1007,24 +1028,6 @@ func (ad *agentDeleteToolExecute) validateAndLoad() (*tools.ToolResult, bool) {
 	}
 	if err := agentstore.ValidateRevision(ad.revision); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_REVISION", err.Error(), "Read the agent again and retry with its current revision")), true
-	}
-	// Guard 0: refuse outright — BEFORE any
-	// destructive action — if id is the configured default agent. Deleting
-	// it would leave cfg.Agents.Defaults.DefaultAgentID pointing at a
-	// nonexistent id, silently demoting default-agent resolution to its
-	// Priority-2 fallback (Registry.GetDefaultAgent / route.go's
-	// resolveDefaultAgentID — see CLAUDE.md's "Default agent (single source
-	// of truth)" section, itself a former release blocker for exactly this
-	// kind of silent divergence). A nil GetCfg/Config (test scaffolding
-	// without a wired config) skips the check rather than trusting an
-	// unknown default — matches configAgentPresenceSet's
-	// precedent for "no config visible" defaulting to exclude, never allow.
-	if ad.t.deps.GetCfg != nil {
-		if cfg := ad.t.deps.GetCfg(); cfg != nil && cfg.Agents.Defaults.DefaultAgentID == ad.id {
-			return tools.ErrorResult(errorJSON("AGENT_IS_DEFAULT",
-				fmt.Sprintf("agent %q is the configured default agent and cannot be deleted", ad.id),
-				"Set another agent as default first (Agents screen ★), then retry delete_agent")), true
-		}
 	}
 	// ADR-054 D2/D6 rule 5/§11 checklist item 6: agents are per-entity
 	// records under entities/agents/<id>.json, not config.json's

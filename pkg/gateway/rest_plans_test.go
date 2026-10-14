@@ -53,11 +53,11 @@ func newTestRestAPIWithPlans(t *testing.T) *restAPI {
 			},
 			List: []config.AgentConfig{
 				{
-					ID:      testPlansAgentID,
-					Name:    "Plans Test Agent",
-					Default: true,
-					Type:    config.AgentTypeCustom,
-					Home:    agentWorkspace,
+					ID:   testPlansAgentID,
+					Name: "Plans Test Agent",
+
+					Type: config.AgentTypeCustom,
+					Home: agentWorkspace,
 				},
 			},
 		},
@@ -707,7 +707,7 @@ func TestPlanPut_DoDAndOwnerFrozenOnceNotDraft(t *testing.T) {
 	api := newTestRestAPIWithPlans(t)
 	cfg := api.agentLoop.GetConfig()
 	cfg.Agents.List = append(cfg.Agents.List,
-		config.AgentConfig{ID: "other-owner-agent", Name: "Other Owner", Type: config.AgentTypeCustom, Default: false})
+		config.AgentConfig{ID: "other-owner-agent", Name: "Other Owner", Type: config.AgentTypeCustom})
 	wsID := createTestWorkspace(t, api, "Freeze WS")
 
 	wCreate := postPlan(t, api, wsID,

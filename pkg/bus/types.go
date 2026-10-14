@@ -87,9 +87,9 @@ type InboundMessage struct {
 	// async tool/delegate result (AsyncNotifyEvent.AgentID). A DEDICATED
 	// carrier, following the same pattern as GatewayUserID above: without it,
 	// the consumer (processSystemMessage) has no way to know which agent
-	// actually produced the work and must guess via GetDefaultAgent() —
-	// the confirmed, exact cause of a live "Worker vs Jim" speaker-attribution
-	// flip when an async result from a non-default agent lands. Channel/
+	// actually produced the work — guessing (formerly via a default agent)
+	// was the confirmed, exact cause of a live "Worker vs Jim"
+	// speaker-attribution flip. A message without it is discarded (FR-131). Channel/
 	// task/scheduled inbound messages never set this field, so it is empty
 	// there structurally — not by a runtime guard.
 	AsyncOriginAgentID string `json:"async_origin_agent_id,omitempty"`

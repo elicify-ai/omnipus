@@ -1,4 +1,4 @@
-import { Circle, Star } from '@phosphor-icons/react'
+import { Circle } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AgentMark } from './AgentMark'
@@ -10,8 +10,6 @@ interface AgentCardProps {
   agent: Agent
   /** Override the click handler. When omitted, opens the edit slide-over. */
   onClick?: () => void
-  /** Called when the user clicks "Set as default". Provided by the parent screen. */
-  onSetDefault?: () => void
 }
 
 const typeBadgeVariant: Record<string, 'secondary' | 'outline' | 'default'> = {
@@ -33,7 +31,7 @@ export function providerBindingCopy(agent: Pick<Agent, 'needs_model' | 'degraded
   return null
 }
 
-export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
+export function AgentCard({ agent, onClick }: AgentCardProps) {
   const openEditAgentSlideOver = useUiStore((s) => s.openEditAgentSlideOver)
   const handleOpen = onClick ?? (() => openEditAgentSlideOver(agent.id))
   const bindingCopy = providerBindingCopy(agent)
@@ -49,11 +47,8 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
         data-testid={`agent-card-${agent.id}`}
         onClick={handleOpen}
         className={cn(
+          // h-full (not h-auto) makes every card in a grid row the same height.
           'block h-full w-full whitespace-normal rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-left',
-          // pb reserves the strip the absolute "Set as default" occupies: without it
-          // a two-line description pushes the chips row under that button and the two
-          // overlap. h-full (not h-auto) makes every card in a grid row the same height.
-          'pb-[var(--space-8)]',
           'hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)] transition-all duration-150',
           'focus-visible:border-[var(--color-accent)]'
         )}
@@ -71,19 +66,6 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
               </span>
               {agent.status === 'active' && (
                 <Circle size={7} weight="fill" className="text-[var(--color-success)] shrink-0" />
-              )}
-              {agent.default && (
-                <>
-                  <Star
-                    size={11}
-                    weight="fill"
-                    className="text-[var(--color-accent)] shrink-0"
-                    aria-label="Default agent"
-                  />
-                  <span className="text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-accent)] shrink-0">
-                    Default
-                  </span>
-                </>
               )}
             </div>
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] line-clamp-2 mb-[var(--space-2)]">
@@ -130,22 +112,6 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
           </div>
         </div>
       </Button>
-
-      {/* "Set as default" sits outside the card button to avoid nested-button HTML violation.
-          Persistent (no group-hover gating — touch users would never see it) and sized for a
-          44×44 tap target per WCAG 2.5.8 (token: --spacing-tap-target-min). */}
-      {!agent.default && onSetDefault && (
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={onSetDefault}
-          className="absolute bottom-3 right-4 h-auto min-h-tap-target-min min-w-tap-target-min gap-[var(--space-1)] px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-accent)]"
-          aria-label={`Set ${agent.name} as default agent`}
-        >
-          <Star size={12} weight="fill" />
-          Set as default
-        </Button>
-      )}
     </div>
   )
 }

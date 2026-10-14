@@ -1241,10 +1241,9 @@ func TestHandleWorkspaces_RepositoryFieldRejected_PUT(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // newTestRestAPIWithAvaRoster builds a restAPI whose config registers the full
-// base install roster (mia/jim/ava/ray/worker), so both newWorkspaceSetupTeam
-// (Ava-only, used by POST-created workspaces) and defaultWorkspaceTeam (full
-// roster, used only by ensureDefaultWorkspace) have real agents to filter
-// against. newTestRestAPIWithHome deliberately registers no agents at all, so
+// install roster (mia/jim/ava/ray/worker; "ava" and "ray" are ordinary ids
+// here), so defaultWorkspaceTeam (full roster, used only by
+// ensureDefaultWorkspace) has real agents to filter against. newTestRestAPIWithHome deliberately registers no agents at all, so
 // it cannot exercise either seed path meaningfully.
 func newTestRestAPIWithAvaRoster(t *testing.T) *restAPI {
 	t.Helper()
@@ -1257,7 +1256,7 @@ func newTestRestAPIWithAvaRoster(t *testing.T) *restAPI {
 			Defaults: config.AgentDefaults{
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore},
 				{ID: "jim", Name: "Jim", Type: config.AgentTypeCore},
 				{ID: "ava", Name: "Ava", Type: config.AgentTypeCore},
 				{ID: "ray", Name: "Ray", Type: config.AgentTypeCore},
@@ -1292,51 +1291,35 @@ func newTestRestAPIWithAvaRoster(t *testing.T) *restAPI {
 	}
 }
 
-// TestHandleWorkspacePost_NoCoreTeam_SeedsAvaOnly_SetupPending verifies that a
-// POST /api/v1/workspaces with no explicit core_team now seeds ONLY Ava (not
-// the full install roster), sets setup_pending=true, and produces no
-// delegation edges (ava's only coreagent seed edge is ava->worker, and worker
-// is off-team so seedEdgesForTeam drops it — that is intended).
-// BDD:
-//
-//	Given a config with the full base roster (mia/jim/ava/ray/worker) registered,
-//	When POST /api/v1/workspaces is called with no core_team field,
-//	Then 201 with core_team=["ava"] and setup_pending=true in the wire response,
-//	And the persisted on-disk file has the same core_team + setup_pending, and
-//	an empty delegation list.
-func TestHandleWorkspacePost_NoCoreTeam_SeedsAvaOnly_SetupPending(t *testing.T) {
-	api := newTestRestAPIWithAvaRoster(t)
+// FR-047 / OSA-9 W8 / chief WU-10 ruling: Ava's retirement does NOT remove
+// the pending offer. An empty workspace starts pending for Omnipus's existing
+// main; the 201 snapshot precedes the server-owned consume.
+func TestHandleWorkspacePost_NoCoreTeam_StartsEmpty_SetupPending(t *testing.T) {
+	assertNewWorkspaceStartsEmpty(t, `{"name":"NewTeamWorkspace"}`)
+}
 
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
-		strings.NewReader(`{"name":"NewTeamWorkspace"}`))
-	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/workspaces"
-	api.HandleWorkspaces(w, r)
-
-	require.Equal(t, http.StatusCreated, w.Code, "POST /workspaces must return 201; body=%s", w.Body.String())
-	var ws gen.Workspace
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ws))
-
-	require.NotNil(t, ws.CoreTeam, "core_team must be present in the wire response")
-	assert.Equal(t, []string{"ava"}, *ws.CoreTeam,
-		"a new user-created workspace with no explicit core_team must seed ONLY Ava")
-	require.NotNil(t, ws.SetupPending, "setup_pending must be present in the wire response")
-	assert.True(t, *ws.SetupPending, "setup_pending must be true for an auto-seeded Ava-only workspace")
-
-	// Persisted file must agree byte-for-byte on both fields, plus empty delegation.
-	stored, err := readWorkspaceFile(api.homePath, ws.Id)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"ava"}, stored.CoreTeam, "on-disk core_team must match the wire response")
-	assert.True(t, stored.SetupPending, "on-disk setup_pending must be true")
-	seeded, storeOK := workspace.LoadDelegation(api.homePath, ws.Id)
-	require.True(t, storeOK, "delegation store record must be readable")
-	// Ava's ava→worker policy edge is dropped (worker is off-team), but Ava
-	// still gets her own ordinary self-row (session-core FR-014/015: every
-	// ordinary built-in is seeded) — and nothing else.
-	require.Len(t, seeded, 1, "the Ava-only team must seed exactly Ava's self-row")
-	assert.Equal(t, "ava", seeded[0].FromAgent)
-	assert.Equal(t, "ava", seeded[0].ToAgent)
+// assertNewWorkspaceStartsEmpty keeps the restored F06 response oracle on
+// the real POST path and observes the later server consume separately.
+func assertNewWorkspaceStartsEmpty(t *testing.T, body string) {
+	t.Helper()
+	h := newL1WU10SetupHarness(t)
+	var request gen.WorkspaceCreateRequest
+	require.NoError(t, json.Unmarshal([]byte(body), &request))
+	ws := h.post(t, request)
+	if ws.CoreTeam != nil {
+		assert.Empty(t, *ws.CoreTeam, "a new workspace without an explicit team starts with an empty team")
+	}
+	require.NotNil(t, ws.SetupPending, "FR-047 / W8: the 201 snapshot must carry pending=true")
+	assert.True(t, *ws.SetupPending, "CHECK F06: Ava's retirement must not erase the server-owned pending offer")
+	h.awaitOffer(t, ws.Id)
+	h.awaitHandler(t)
+	stored, readErr := readWorkspaceFile(h.api.homePath, ws.Id)
+	require.NoError(t, readErr)
+	assert.Empty(t, stored.CoreTeam, "on-disk core_team must be empty")
+	assert.False(t, stored.SetupPending, "only successful server publication consumes pending after the 201")
+	seeded, readable := workspace.LoadDelegation(h.api.homePath, ws.Id)
+	require.True(t, readable)
+	assert.Empty(t, seeded, "an empty team seeds no delegation edge")
 }
 
 // TestHandleWorkspacePost_ExplicitCoreTeam_HonoredVerbatim_NoSetupPending
@@ -1459,56 +1442,10 @@ func TestHandleWorkspacePut_CoreTeam_RejectsSystemAgentAndUnregisteredID(t *test
 	}
 }
 
-// TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending is a
-// regression test: an explicit but EMPTY
-// core_team array ("core_team": []) must be treated exactly like an absent
-// core_team (nil) — i.e. "unspecified" — NOT as "deliberately no team".
-// Before this fix, req.CoreTeam != nil was true for a zero-length slice, so
-// the explicit-team branch ran with an empty team and setup_pending left
-// false, producing a permanently teamless workspace: no agent was ever on
-// the team to run the setup interview and no code path would ever set
-// setup_pending=true for it afterward.
-// BDD:
-//
-//	Given a config with the full base roster (mia/jim/ava/ray/worker) registered,
-//	When POST /api/v1/workspaces is called with "core_team": [] (present but empty),
-//	Then 201 with core_team=["ava"] and setup_pending=true in the wire response
-//	(identical outcome to omitting core_team entirely), and the persisted
-//	on-disk file agrees, with only Ava's own self-row (mirrors the no-core_team case).
-func TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending(t *testing.T) {
-	api := newTestRestAPIWithAvaRoster(t)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
-		strings.NewReader(`{"name":"EmptyTeamWorkspace","core_team":[]}`))
-	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/workspaces"
-	api.HandleWorkspaces(w, r)
-
-	require.Equal(t, http.StatusCreated, w.Code, "POST /workspaces must return 201; body=%s", w.Body.String())
-	var ws gen.Workspace
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ws))
-
-	require.NotNil(t, ws.CoreTeam, "core_team must be present in the wire response")
-	assert.Equal(t, []string{"ava"}, *ws.CoreTeam,
-		"an explicit EMPTY core_team must be treated as unspecified and seed ONLY Ava, "+
-			"exactly like an absent core_team")
-	require.NotNil(t, ws.SetupPending, "setup_pending must be present in the wire response")
-	assert.True(t, *ws.SetupPending,
-		"setup_pending must be true — an explicit empty core_team must never produce a "+
-			"permanently teamless, non-setup_pending workspace")
-
-	stored, err := readWorkspaceFile(api.homePath, ws.Id)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"ava"}, stored.CoreTeam, "on-disk core_team must match the wire response")
-	assert.True(t, stored.SetupPending, "on-disk setup_pending must be true")
-	seeded, storeOK := workspace.LoadDelegation(api.homePath, ws.Id)
-	require.True(t, storeOK, "delegation store record must be readable")
-	// No cross edge survives an Ava-only team (ava→worker is off-team), but Ava
-	// still carries her own ordinary self-row (session-core FR-014/015).
-	require.Len(t, seeded, 1, "the Ava-only seed team must seed exactly Ava's self-row")
-	assert.Equal(t, "ava", seeded[0].FromAgent)
-	assert.Equal(t, "ava", seeded[0].ToAgent)
+// An explicit empty team follows the same FR-047/W8 pending-offer rule as
+// an omitted team, while still creating no members or delegation edges.
+func TestHandleWorkspacePost_ExplicitEmptyCoreTeam_StartsEmpty_SetupPending(t *testing.T) {
+	assertNewWorkspaceStartsEmpty(t, `{"name":"EmptyTeamWorkspace","core_team":[]}`)
 }
 
 // TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending is a
@@ -1534,8 +1471,7 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 			List: []config.AgentConfig{
 				{ID: "mia", Type: config.AgentTypeCore},
 				{ID: "jim", Type: config.AgentTypeCore},
-				{ID: "ava", Type: config.AgentTypeCore},
-				{ID: "admin", Type: config.AgentTypeCore},
+				{ID: "omnipus", Type: config.AgentTypeCore},
 				{ID: "worker", Type: config.AgentTypeWorker},
 				{ID: "planner", Type: config.AgentTypeWorker},
 				{ID: "researcher", Type: config.AgentTypeWorker},
@@ -1550,21 +1486,19 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 	ws := wss[0]
 	assert.True(t, ws.IsDefault)
 	assert.ElementsMatch(t,
-		[]string{"mia", "jim", "ava", "worker", "planner", "researcher"},
-		ws.CoreTeam, "the boot default workspace must seed the FULL ADR-090 §2.0 workspace roster — "+
-			"admin stays out as the standalone operator (ADR-090 FR-001)")
-	assert.NotContains(t, ws.CoreTeam, "admin",
-		"admin must never be auto-seeded onto the default workspace team")
+		[]string{"mia", "jim", "omnipus", "worker", "planner", "researcher"},
+		ws.CoreTeam, "the boot default workspace must seed the FULL built-in workspace roster — "+
+			"Omnipus included as an ordinary default-workspace member (omnipus-system-agent FR-003)")
 	bootEdges, storeOK := workspace.LoadDelegation(home, ws.ID)
 	require.True(t, storeOK, "delegation store record must be readable")
-	// 6 ordinary self-rows (one per on-team member) + the 4 Jim cross edges
-	// (jim→ava/worker/planner/researcher) + planner→researcher + mia→worker = 12. The former
+	// 6 ordinary self-rows (one per on-team member) + the 3 Jim cross edges
+	// (jim→worker/planner/researcher) + planner→researcher + mia→worker = 11. The former
 	// jim→jim / worker→worker policy self edges are now the generic self-rows;
-	// admin's produced self-row is dropped (off-team).
-	assert.Len(t, bootEdges, 12, "the boot default workspace must seed the ordinary self-rows "+
-		"plus the full ADR-090 cross-edge set")
+	// Jim's role edge to the retired Ava is gone (omnipus-system-agent FR-008).
+	assert.Len(t, bootEdges, 11, "the boot default workspace must seed the ordinary self-rows "+
+		"plus the full cross-edge set")
 	// Name the edges, not just their count: a wrong edge in place of any of
-	// these keeps the count at 12 (R2 gap 14). "mia->worker" is the edge the
+	// these keeps the count at 11 (R2 gap 14). "mia->worker" is the edge the
 	// UAT DEF-001 fix exists to produce — Worker must be on-team so the
 	// coreagent ->worker seed survives seedEdgesForTeam.
 	bootPairs := make(map[string]bool, len(bootEdges))
@@ -1572,8 +1506,8 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 		bootPairs[e.FromAgent+"->"+e.ToAgent] = true
 	}
 	for _, want := range []string{
-		"mia->mia", "mia->worker", "jim->ava", "jim->worker", "jim->jim", "jim->planner", "jim->researcher",
-		"ava->ava", "worker->worker", "planner->planner", "planner->researcher", "researcher->researcher",
+		"mia->mia", "mia->worker", "jim->worker", "jim->jim", "jim->planner", "jim->researcher",
+		"omnipus->omnipus", "worker->worker", "planner->planner", "planner->researcher", "researcher->researcher",
 	} {
 		assert.True(t, bootPairs[want], "the boot default workspace must seed edge %s", want)
 	}
@@ -1590,23 +1524,20 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 // setup-kickoff turn handler, never by an ordinary field update.
 // BDD:
 //
-//	Given a workspace created with setup_pending=true (Ava-only seed),
+//	Given a workspace record with setup_pending=true,
 //	When PUT /api/v1/workspaces/{id} renames it (no setup_pending field sent),
 //	Then the returned and persisted workspace still has setup_pending=true.
 func TestHandleWorkspacePut_PreservesSetupPending(t *testing.T) {
 	api := newTestRestAPIWithAvaRoster(t)
 
-	wPost := httptest.NewRecorder()
-	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
-		strings.NewReader(`{"name":"SetupPendingWS"}`))
-	rPost.Header.Set("Content-Type", "application/json")
-	rPost.URL.Path = "/api/v1/workspaces"
-	api.HandleWorkspaces(wPost, rPost)
-	require.Equal(t, http.StatusCreated, wPost.Code)
-	var created gen.Workspace
-	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &created))
-	require.NotNil(t, created.SetupPending)
-	require.True(t, *created.SetupPending, "precondition: the created workspace must be setup_pending")
+	// The POST path no longer creates setup_pending workspaces (the Ava-only
+	// seed is retired, omnipus-system-agent FR-008), so the setup_pending
+	// record is written directly: the rule under test is the PUT's.
+	created := gen.Workspace{Id: "01JSETUPPENDINGPRESERVE0001"}
+	require.NoError(t, writeWorkspaceFile(api.homePath, storedWorkspace{
+		ID: created.Id, Name: "SetupPendingWS", Status: "active", CoreTeam: []string{"mia"},
+		SetupPending: true, CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	}))
 
 	wPut := httptest.NewRecorder()
 	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id,
@@ -1629,85 +1560,25 @@ func TestHandleWorkspacePut_PreservesSetupPending(t *testing.T) {
 	assert.True(t, stored.SetupPending, "on-disk setup_pending must survive an unrelated PUT")
 }
 
-// newTestRestAPIWithoutAva builds a restAPI whose config roster deliberately
-// omits Ava (mirrors newTestRestAPIWithAvaRoster minus the "ava" entry) — used
-// to exercise the SetupPending gate: newWorkspaceSetupTeam returns an
-// empty seed when Ava is absent from the live config (e.g. a lite/custom
-// install), and handleWorkspacePost must not mark such a workspace
-// setup_pending, since nothing would ever be able to run the interview and
-// clear the flag.
-func newTestRestAPIWithoutAva(t *testing.T) *restAPI {
-	t.Helper()
-	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
-	tmpDir := t.TempDir()
-
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
-			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
-				{ID: "jim", Name: "Jim", Type: config.AgentTypeCore},
-				{ID: "ray", Name: "Ray", Type: config.AgentTypeCore},
-				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker},
-			},
-		},
+// FR-047 / OSA-9 W8 supersede the false-pending oracle: Ava is retired,
+// but Omnipus exists and receives the server-owned offer for the empty team.
+func TestHandleWorkspacePost_NoAva_EmptyTeam_SetupPending(t *testing.T) {
+	h := newL1WU10SetupHarness(t)
+	for _, ac := range h.loop.GetConfig().Agents.List {
+		assert.NotEqual(t, "ava", ac.ID, "the real shipped roster has no retired Ava")
 	}
-	cfgJSON, err := json.Marshal(cfg)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgJSON, 0o600))
-	// ADR-054 D2/D6: see newTestRestAPIWithAvaRoster's identical comment —
-	// persist real entity records so this roster survives any future reload
-	// trigger, not just the in-memory cfg.Agents.List this package's current
-	// tests happen to rely on.
-	seedAgentEntities(t, tmpDir, cfg.Agents.List)
-
-	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
-	return &restAPI{
-		agentLoop:     al,
-		allowedOrigin: "http://localhost:3000",
-		homePath:      tmpDir,
-		taskStore:     task.New(filepath.Join(tmpDir, "tasks")),
-		taskLock:      task.TaskFileLock,
+	ws := h.post(t, gen.WorkspaceCreateRequest{Name: "No Ava workspace"})
+	require.NotNil(t, ws.SetupPending, "CHECK F06: absence of Ava is not absence of the setup offer")
+	assert.True(t, *ws.SetupPending)
+	if ws.CoreTeam != nil {
+		assert.Empty(t, *ws.CoreTeam)
 	}
-}
-
-// TestHandleWorkspacePost_NoAva_EmptyTeam_NoSetupPending is a
-// regression test: POST /api/v1/workspaces with no explicit core_team, against a
-// config that does NOT include Ava, must seed an EMPTY core_team AND leave
-// setup_pending false/absent — never setup_pending=true with an empty team,
-// which would strand the workspace forever (no agent is ever available to run
-// the interview and clear the flag).
-// BDD:
-//
-//	Given a config roster with no Ava,
-//	When POST /api/v1/workspaces is called with no core_team field,
-//	Then 201 with core_team absent/empty and setup_pending absent/false in the
-//	wire response, and the same on disk.
-func TestHandleWorkspacePost_NoAva_EmptyTeam_NoSetupPending(t *testing.T) {
-	api := newTestRestAPIWithoutAva(t)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
-		strings.NewReader(`{"name":"NoAvaWorkspace"}`))
-	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/workspaces"
-	api.HandleWorkspaces(w, r)
-
-	require.Equal(t, http.StatusCreated, w.Code, "POST /workspaces must return 201; body=%s", w.Body.String())
-	var ws gen.Workspace
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &ws))
-
-	assert.Nil(t, ws.CoreTeam, "core_team must be absent/empty in the wire response when Ava is not in the config")
-	assert.Nil(t, ws.SetupPending,
-		"setup_pending must be absent/false when the auto-seed produced an empty team")
-
-	stored, err := readWorkspaceFile(api.homePath, ws.Id)
-	require.NoError(t, err)
-	assert.Empty(t, stored.CoreTeam, "on-disk core_team must be empty")
-	assert.False(t, stored.SetupPending,
-		"on-disk setup_pending must be false — an empty team must never be left setup_pending forever")
+	h.awaitOffer(t, ws.Id)
+	h.awaitHandler(t)
+	stored, readErr := readWorkspaceFile(h.api.homePath, ws.Id)
+	require.NoError(t, readErr)
+	assert.Empty(t, stored.CoreTeam)
+	assert.False(t, stored.SetupPending, "successful server offer clears pending, not Ava's absence")
 }
 
 // TestHandleWorkspacePut_SerializesAgainstWorkspaceLock is a

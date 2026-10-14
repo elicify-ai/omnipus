@@ -711,14 +711,6 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		setAgentModelProvider(&ag, ac.Model)
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
-		// The wire `default` is DERIVED from the settings singleton
-		// (cfg.Agents.Defaults.DefaultAgentID), never read from the per-entity
-		// ac.Default bool — see updateAgent's singleton-write block for why:
-		// nothing (routing, registry.GetDefaultAgent) has consulted the
-		// per-entity flag since ADR-054 D6.4, so echoing it back here would
-		// silently disagree with which agent actually receives inbound
-		// messages with no more-specific routing rule.
-		ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
 		// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
 		ag.NeedsModel = agentNeedsModel(cfg, &ac)
 		// ADR-067 FR-016/FR-031 (T067-09): degraded_reason is derived too,
@@ -786,9 +778,6 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			setAgentModelProvider(&ag, ac.Model)
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 			ag.Soul = soul
-			// Derived from the settings singleton — see listAgents' comment on
-			// the same line shape for the full rationale.
-			ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
 			// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
 			ag.NeedsModel = agentNeedsModel(cfg, &ac)
 			// ADR-067 FR-016/FR-031 (T067-09) — see listAgents.

@@ -23,17 +23,13 @@ import (
 //
 // Rules (session-core C-ADDRESS, FR-045; contract MessageFrame.recipient):
 //   - valid only together with session_id (the owning chat);
-//   - never on a workspace-setup kickoff frame;
 //   - a well-formed pair that resolves to an eligible main NOW;
 //   - not the owning chat's own pair;
 //   - the receiver's existing send_message policy admits it (Ask uses the
 //     existing approval path).
-func (h *WSHandler) refuseRecipient(ctx context.Context, sessionID string, setupKickoff bool, to addressing.Pair) (refusal string, askApproved bool) {
+func (h *WSHandler) refuseRecipient(ctx context.Context, sessionID string, to addressing.Pair) (refusal string, askApproved bool) {
 	if strings.TrimSpace(sessionID) == "" {
 		return "a request to another agent needs an existing chat (session_id)", false
-	}
-	if setupKickoff {
-		return "a workspace setup message cannot be addressed to another agent", false
 	}
 	if err := to.Validate(); err != nil {
 		return "the addressed agent is not a valid {workspace_id, agent_id} pair", false

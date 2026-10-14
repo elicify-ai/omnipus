@@ -143,7 +143,7 @@ func newAsyncChildPublicationTestLoop(
 		NewSteerUpwardDeliverer(),
 	)
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent, "test setup: default agent must exist")
 	return al, msgBus, agent
 }
@@ -163,7 +163,7 @@ func TestInteractiveRoot_GenericAsyncForUserStillPublishes(t *testing.T) {
 	al, msgBus, _ := newAsyncChildPublicationTestLoop(t, provider, false)
 	probe := registerAsyncChildPublicationProbe(t, al)
 
-	result, err := al.ProcessDirectWithChannel(
+	result, err := al.processDirectWithChannelPrimaryForTest(
 		context.Background(), "run the async probe", "root-session", "telegram", "root-chat",
 	)
 	require.NoError(t, err)
@@ -185,7 +185,7 @@ func TestInteractiveRoot_ToolPreviewStillPublishesOnExternalChannel(t *testing.T
 	al.RegisterTool(probe)
 	setAskPolicyForAllAgents(t, al, childPreviewProbeName, config.ToolPolicyAllow)
 
-	result, err := al.ProcessDirectWithChannel(
+	result, err := al.processDirectWithChannelPrimaryForTest(
 		context.Background(), "run the preview probe", "root-preview-session", "telegram", "root-chat",
 	)
 	require.NoError(t, err)

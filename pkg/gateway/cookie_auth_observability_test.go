@@ -284,7 +284,7 @@ func TestAuthenticateWS_LogsInvalidSessionCookie(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData),
 		"the frame-based fallback must still authenticate after an invalid cookie")
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello after invalid cookie"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello after invalid cookie", AgentID: "mia"}
 	msgData, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))

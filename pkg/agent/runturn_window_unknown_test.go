@@ -82,7 +82,7 @@ func TestRunTurn_LocalEndpointUnknownWindow_RefusedTyped(t *testing.T) {
 	require.NoError(t, err, "NewAgentLoop must succeed — an unknown window is a turn refusal, not a boot failure")
 	defer al.Close()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	assert.True(t, agent.WindowUnknown, "the instance must carry the unknown-window state")
 	assert.Equal(t, 0, agent.ContextWindow, "never 128,000 for a local endpoint")
@@ -90,7 +90,7 @@ func TestRunTurn_LocalEndpointUnknownWindow_RefusedTyped(t *testing.T) {
 	sub := al.SubscribeEvents(32)
 	t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
 
-	_, procErr := al.ProcessDirect(context.Background(), "hello", "test-session-window-unknown")
+	_, procErr := al.processDirectPrimaryForTest(context.Background(), "hello", "test-session-window-unknown")
 	require.Error(t, procErr, "a turn on an endpoint with no reported window must be refused")
 	assert.True(t, errors.Is(procErr, ErrContextWindowUnknown),
 		"refusal must wrap ErrContextWindowUnknown, got: %v", procErr)

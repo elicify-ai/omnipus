@@ -118,7 +118,7 @@ function agent(id: string, over: Partial<Agent> = {}): Agent {
 }
 
 const AGENTS: Agent[] = [
-  agent('mia', { name: 'Mia', default: true }),
+  agent('mia', { name: 'Mia' }),
   agent('jim', { name: 'Jim' }),
   agent('planner', { name: 'Planner', type: 'Subagent' }),
 ]
@@ -313,7 +313,8 @@ describe('WorkspaceTeamGraph — edges', () => {
 describe('WorkspaceTeamGraph — AgentNode keyboard guard (bubbling hijack regression)', () => {
   it('Enter on the node Remove button removes the member, and does NOT open the agent', async () => {
     const { props } = renderGraph()
-    // jim is not the default agent, so its Remove button is rendered.
+    // jim is a regular member, so its Remove button is rendered (members are
+    // never shielded from removal — there is no default agent any more).
     // getByLabelText, not getByRole: React Flow's node wrapper renders with
     // `visibility: hidden` in jsdom (nodes are never "measured" without a
     // real layout engine — see the module's own ResizeObserver/geometry

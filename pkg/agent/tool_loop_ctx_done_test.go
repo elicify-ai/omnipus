@@ -172,7 +172,7 @@ func TestRunTurn_ToolBatch_TurnContextDone_StopsStartingQueuedCalls(t *testing.T
 			sub := al.SubscribeEvents(256)
 			defer al.UnsubscribeEvents(sub.ID)
 
-			_, err := al.ProcessDirect(context.Background(), "run the batch", "test-session-ctx-done-"+tc.mode)
+			_, err := al.processDirectPrimaryForTest(context.Background(), "run the batch", "test-session-ctx-done-"+tc.mode)
 
 			require.Error(t, err, "a turn whose context is done must end with the typed exit error")
 			assert.True(t, errors.Is(err, tc.wantSentinel), "error must wrap %v, got %v", tc.wantSentinel, err)

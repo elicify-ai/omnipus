@@ -19,7 +19,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/routing"
 )
 
 // specToolLimitMessage is the exact text from the spec's Machine-Verifiable
@@ -100,21 +99,17 @@ func TestLoop_StopsAtEffectiveLimit(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &toolLimitOnlyProvider{})
 	al.RegisterTool(&toolLimitTestTool{})
 
-	if _, err := al.ProcessDirectWithChannel(context.Background(), "hello", "tool-limit-904", "test", "chat1"); err != nil {
+	if _, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hello", "tool-limit-904", "test", "chat1"); err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
-	def := al.registry.GetDefaultAgent()
+	def := al.registry.primaryChatAgentForTest()
 	if def == nil {
 		t.Fatal("no default agent")
 	}
 	if def.MaxIterations != 2 {
 		t.Fatalf("instance MaxIterations = %d, want 2 (global 2 caps own 5)", def.MaxIterations)
 	}
-	route := al.registry.ResolveRoute(routing.RouteInput{
-		Channel: "test",
-		Peer:    &routing.RoutePeer{Kind: string(bus.PeerDirect), ID: "cron"},
-	})
-	history := def.Sessions.GetHistory(route.SessionKey)
+	history := def.Sessions.GetHistory(directTurnHistoryKeyForTest(def.ID, "test", "chat1"))
 	if len(history) != 6 {
 		t.Fatalf("history len = %d, want 6 (limit 2 → user + 2×(assistant,tool) + final)", len(history))
 	}

@@ -49,7 +49,7 @@ import (
 // (ignores meta.Skip — reads from line 0).
 func archiveLineCountFromAgent(t *testing.T, al *AgentLoop, sessionKey string) int {
 	t.Helper()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	archived, err := agent.Sessions.ReadArchive(context.Background(), sessionKey)
 	require.NoError(t, err)
@@ -59,7 +59,7 @@ func archiveLineCountFromAgent(t *testing.T, al *AgentLoop, sessionKey string) i
 // archiveLinesFromAgent returns the full archive for the given session.
 func archiveLinesFromAgent(t *testing.T, al *AgentLoop, sessionKey string) []memory.ArchivedMessage {
 	t.Helper()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	archived, err := agent.Sessions.ReadArchive(context.Background(), sessionKey)
 	require.NoError(t, err)
@@ -70,7 +70,7 @@ func archiveLinesFromAgent(t *testing.T, al *AgentLoop, sessionKey string) []mem
 // turn by calling AddFullMessage directly on the session store. This mirrors
 // what the turn engine does when processing tool results and assistant replies.
 func appendInTurnMessages(al *AgentLoop, sessionKey string, msgs []providers.Message) {
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	for _, m := range msgs {
 		agent.Sessions.AddFullMessage(sessionKey, m)
 	}
@@ -122,7 +122,7 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 		"precondition: archive must contain all seeded messages before trim")
 
 	// --- Phase 2: evict turns via windowTrim so meta.Skip > 0.
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	_, ok := al.windowTrim(agent, "", sk)
 	require.True(t, ok, "windowTrim must evict turns from the over-budget session")
@@ -273,7 +273,7 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 	}
 	seedHistory(t, al, sk, history)
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	preTrimArchiveLen := archiveLineCountFromAgent(t, al, sk)
@@ -563,7 +563,7 @@ func TestAbortPath_MidTurnEviction_HardAbort(t *testing.T) {
 	}
 	seedHistory(t, al, sk, history)
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	// Confirm baseline: 12 messages, Skip=0.
@@ -681,7 +681,7 @@ func TestAbortPath_MidTurnEviction_RestoreSession(t *testing.T) {
 	}
 	seedHistory(t, al, sk, history)
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	// Phase 2: pre-turn eviction → keep 8 visible (Skip=4).

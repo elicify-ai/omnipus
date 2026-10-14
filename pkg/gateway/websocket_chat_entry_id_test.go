@@ -22,7 +22,7 @@ func TestHandleChatMessage_PublishedMessageCarriesPersistedEntryID(t *testing.T)
 
 	send := func(chatID, sessionID, content string) bus.InboundMessage {
 		t.Helper()
-		handler.handleChatMessage(context.Background(), chatID, sessionID, content, "", nil, "", "", false, wc)
+		handler.handleChatMessage(context.Background(), chatID, sessionID, content, "mia", nil, "", "", wc)
 		select {
 		case msg := <-msgBus.InboundChan():
 			return msg

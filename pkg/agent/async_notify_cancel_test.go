@@ -102,7 +102,7 @@ func TestAsyncNotify_SuppressedWhenOriginatingTurnWasCanceled(t *testing.T) {
 
 	const sessionKey = "test-session-bash-async-postcancel"
 	ctx := context.Background()
-	firstTurnResp, err := al.ProcessDirectWithChannel(
+	firstTurnResp, err := al.processDirectWithChannelPrimaryForTest(
 		ctx, "please run a background command", sessionKey, "telegram", "12345",
 	)
 	require.NoError(t, err)
@@ -140,7 +140,7 @@ func TestAsyncNotify_FiresNormallyWhenOriginatingTurnWasNotCanceled(t *testing.T
 
 	const sessionKey = "test-session-bash-async-nocancel"
 	ctx := context.Background()
-	firstTurnResp, err := al.ProcessDirectWithChannel(
+	firstTurnResp, err := al.processDirectWithChannelPrimaryForTest(
 		ctx, "please run a background command", sessionKey, "telegram", "12345",
 	)
 	require.NoError(t, err)

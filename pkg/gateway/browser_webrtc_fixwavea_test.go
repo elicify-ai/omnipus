@@ -98,7 +98,7 @@ func TestBrowserWS_SlowWebRTCOffer_DoesNotBlockReadLoop(t *testing.T) {
 	}()
 	t.Cleanup(func() { conn.Close(); <-readerDone })
 	writeBrowserAuthFrame(t, conn, "dev-token")
-	agentID := al.GetRegistry().GetDefaultAgent().ID
+	agentID := primaryChatAgent(al.GetRegistry()).ID
 	require.NoError(t, conn.WriteJSON(generated.BrowserAttachFrame{
 		Type: string(generated.WsFrameTypeBrowserAttach), AgentId: agentID, SessionId: "pending-offer",
 	}))
@@ -171,7 +171,7 @@ func TestHandleWebRTCOffer_SupersededByDetachDuringNegotiation_TearsDownCleanly(
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
@@ -297,7 +297,7 @@ func TestHandleWebRTCOffer_SupersedeDoesNotBlockFenceOnSlowStop(t *testing.T) {
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)

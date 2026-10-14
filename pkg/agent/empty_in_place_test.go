@@ -130,7 +130,7 @@ func newLiveReloadHarness(t *testing.T, home string, provider *testutil.Scenario
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(func() { al.Close() })
 
-	mia := registerAgent(t, al, home, "mia", provider, true)
+	mia := registerAgent(t, al, home, "mia", provider)
 	al.RegisterTool(&bigResultTool{size: 30_000})
 	mia.StoreToolPolicy(&tools.ToolPolicyCfg{
 		Policies: map[string]config.ToolPolicy{"big_tool": "allow"},

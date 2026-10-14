@@ -71,7 +71,7 @@ func TestBrowserSSRFWiring_SingletonNotMutated_CloneAccepts(t *testing.T) {
 			"if this passes, browser-tool registration mutated the shared checker in place")
 
 	// --- Half 2: the browser tool's OWN checker (a clone) must ACCEPT it.
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")

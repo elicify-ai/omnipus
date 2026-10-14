@@ -170,7 +170,6 @@ func newSteerTurnDrainMultiAgentAL1020(t *testing.T, provider providers.LLMProvi
 	cfg := &config.Config{Agents: config.AgentsConfig{
 		Defaults: config.AgentDefaults{
 			Home:              home,
-			DefaultAgentID:    testDefaultAgentID,
 			DefaultModel:      config.DefaultModel{Model: "test-model"},
 			MaxTokens:         4096,
 			MaxToolIterations: 10,

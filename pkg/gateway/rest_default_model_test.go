@@ -133,9 +133,6 @@ func newDefaultModelAPI(
 				DefaultModel:      pair,
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
-				// The routing singleton (ADR-054 D6.4) so the turn-time
-				// oracle's ProcessDirectWithChannel resolves a default agent.
-				DefaultAgentID: "mia",
 			},
 			// A real chat-target agent so default-agent resolution (and the
 			// turn-time oracle's ProcessDirect) has something to resolve to.

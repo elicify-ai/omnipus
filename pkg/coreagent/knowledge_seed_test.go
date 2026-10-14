@@ -23,8 +23,7 @@ var knowledgeSeedMatrix = map[string]struct {
 }{
 	string(coreagent.IDMia):        {read: config.ToolPolicyAllow, write: config.ToolPolicyAsk},
 	string(coreagent.IDJim):        {read: config.ToolPolicyAllow, write: config.ToolPolicyAsk},
-	string(coreagent.IDAva):        {read: config.ToolPolicyAllow, write: config.ToolPolicyDeny},
-	string(coreagent.IDAdmin):      {read: config.ToolPolicyAllow, write: config.ToolPolicyDeny},
+	string(coreagent.IDOmnipus):    {read: config.ToolPolicyAllow, write: config.ToolPolicyDeny},
 	string(coreagent.IDPlanner):    {read: config.ToolPolicyAllow, write: config.ToolPolicyDeny},
 	string(coreagent.IDResearcher): {read: config.ToolPolicyAllow, write: config.ToolPolicyDeny},
 	string(coreagent.IDWorker):     {read: config.ToolPolicyAllow, write: config.ToolPolicyAsk},

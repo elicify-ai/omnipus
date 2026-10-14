@@ -11,14 +11,14 @@
 # guard's observed exit code for each.
 #
 # Covers:
-#   1. A clean fixture with exactly 2 OperatorPrompt=true sites and 9
+#   1. A clean fixture with exactly 2 OperatorPrompt=true sites and 10
 #      PublishInbound call sites — exits 0.
 #   2. A THIRD OperatorPrompt=true site planted — CAUGHT (exit 1).
 #   3. Only 1 OperatorPrompt=true site (one removed) — CAUGHT (exit 1).
 #   4. OperatorPrompt=true mentioned only inside a `//` comment — NOT counted
-#      (does not change the 2/9 verdict).
+#      (does not change the 2/10 verdict).
 #   5. OperatorPrompt=true inside a _test.go file — NOT counted.
-#   6. A TENTH PublishInbound call site planted — CAUGHT (exit 1).
+#   6. An ELEVENTH PublishInbound call site planted — CAUGHT (exit 1).
 #   7. The PublishInbound func DEFINITION line itself (no leading dot) is
 #      NEVER counted as a call site.
 #   8. A tree missing the required pkg/ directory — exits 2, never a silent
@@ -74,7 +74,7 @@ assert_contains() {
   fi
 }
 
-# A clean, minimal 2-site/9-call fixture, reused as the base for every test.
+# A clean, minimal 2-site/10-call fixture, reused as the base for every test.
 plant_clean_baseline() {
   setup_fixture "pkg/gateway/websocket.go" '
 package gateway
@@ -146,6 +146,13 @@ func (al *AgentLoop) remindUnansweredRequests(ctx context.Context, reminder bus.
 	}
 }
 '
+  setup_fixture "pkg/agent/workspace_setup_offer.go" '
+package agent
+
+func (al *AgentLoop) PostWorkspaceSetupOffer(ctx context.Context, offer WorkspaceSetupOffer) error {
+	return al.bus.PublishInbound(ctx, workspaceSetupOfferInbound(offer))
+}
+'
   setup_fixture "pkg/agent/loop.go" '
 package agent
 
@@ -167,7 +174,7 @@ func (mb *MessageBus) PublishInbound(ctx context.Context, msg InboundMessage) er
 echo "=== check-operator-prompt-sites self-test (ADR-085 BROWSER-FR-029/FR-029a) ==="
 echo ""
 
-echo "Test 1: a clean 2-site/9-call fixture exits 0"
+echo "Test 1: a clean 2-site/10-call fixture exits 0"
 setup_skeleton
 plant_clean_baseline
 OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
@@ -255,7 +262,7 @@ assert_exit_code "test-file-exit" 0 "$EXIT_CODE"
 assert_contains "test-file-count" "OperatorPrompt assigned true: 2 site(s) (want exactly 2)" "$OUTPUT"
 
 echo ""
-echo "Test 6: a TENTH PublishInbound call site is caught"
+echo "Test 6: an ELEVENTH PublishInbound call site is caught"
 setup_skeleton
 plant_clean_baseline
 setup_fixture "pkg/agent/rogue_publish.go" '
@@ -270,7 +277,7 @@ EXIT_CODE=$?
 echo "  observed exit=$EXIT_CODE"
 assert_exit_code "tenth-call-exit" 1 "$EXIT_CODE"
 assert_contains "tenth-call-finding" "rogue_publish.go" "$OUTPUT"
-assert_contains "tenth-call-count" "PublishInbound call sites: 10 (want exactly 9)" "$OUTPUT"
+assert_contains "tenth-call-count" "PublishInbound call sites: 11 (want exactly 10)" "$OUTPUT"
 
 echo ""
 echo "Test 7: the PublishInbound func definition itself is never counted"

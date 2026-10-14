@@ -1,12 +1,12 @@
 # Agents
 
-Agents do the work in Omnipus. Omnipus ships four built-in chat colleagues—Mia, Jim, Ava and Admin—plus the native workers Planner, Researcher and General Purpose. Judge and Plan Supervisor are internal engine agents. You can create your own Main agents and workers from Agents.
+Agents do the work in Omnipus. Omnipus ships three built-in chat colleagues—Mia, Jim and the system agent Omnipus—plus the native workers Planner, Researcher and General Purpose. Judge and Plan Supervisor are internal engine agents. You can create your own Main agents and workers from Agents.
 
 ## What it is
 
 Open **Agents** in the sidebar and the roster has four sections:
 
-- **Built-in roster** — Mia, Jim, Ava and Admin. Their identity and base instructions are protected, and Mia is the initial default.
+- **Built-in roster** — Mia, Jim and Omnipus. Their identity and base instructions are protected, and Mia is the initial default.
 - **Main agents** — chat colleagues you create yourself.
 - **Sub-agent workers** — shipped and user-created workers. They are not chat colleagues; other agents delegate work to them, and you can assign workspace tasks to workers on the team.
 - **System** — Judge and Plan Supervisor, internal engine agents that cannot be selected for chat or delegation.
@@ -22,28 +22,35 @@ A filter above the roster narrows the list to one [workspace](workspaces.md) tea
 
 ## The base agents
 
-The four built-in agents cover the everyday jobs.
+The three built-in chat agents cover the everyday jobs.
 
 | Agent | Role | What it is for |
 |---|---|---|
 | Mia | Assistant | Your everyday starting point. Answers questions and connects you with the right specialist. |
 | Jim | Planner and Orchestrator | Turns a complex goal into tasks, delegates them to the right agents, and tracks the work to completion. |
-| Ava | Builder | Interviews you about what you need, then creates a custom agent with the personality and tools you asked for. |
-| Admin | Operator | Configures connectors, providers, channels, diagnostics and document dependencies. |
+| Omnipus | System agent | Sets up and changes your agents, teams, skills, connectors, providers and channels, for every workspace, from one conversation. |
 
-Any chat colleague can ask a teammate for help: start a message with `@` and pick the agent, and the request is delivered to that agent's own chat. Omnipus no longer moves your conversation over to another agent. Ava is also a shortcut for creating agents: skip the form and describe what you want to her in chat.
+Any chat colleague can ask a teammate for help: start a message with `@` and pick the agent, and the request is delivered to that agent's own chat. Omnipus no longer moves your conversation over to another agent.
 
-## How to set your default agent
+### The Omnipus system agent
 
-Omnipus picks the default when a conversation has no specific agent assigned.
+Omnipus replaces the earlier Ava and Admin agents. It lives in your default workspace only: it cannot be added to another workspace or removed from the default one, and its chats live there. It works from its own folder, and its file tools can still reach the work folders of every workspace (and their mounts) to set them up — never a workspace's record or its private memory folder. Other agents keep to their own workspace.
 
-1. Open **Agents** in the sidebar.
-2. Find the card of the agent you want as the default.
-3. Click **Set as default** on the card. The star moves to that agent.
+- **Protected name.** No other agent can be created or renamed to "Omnipus" (spaces and letter case do not matter). A similar name such as "Omnipus Helper" is fine.
+- **Approvals.** Deleting an agent, removing a skill or connector, adding a connector, configuring a provider, and enabling or configuring a channel ask for your approval, as does changing an agent's permissions (`set_agent_permissions`). This holds even with Auto-approve on.
+- **No per-agent Ask for Omnipus.** You can set any of Omnipus's tools to Deny, but not to Ask on Omnipus itself; set Ask on the global tool policy instead. Every path that changes per-agent permissions refuses it with "Omnipus takes no per-agent Ask; set Ask globally or use Deny".
+- **God Mode.** While God Mode is on, Omnipus is told so in every turn; it then proceeds without approvals.
 
-Any chat colleague can hold the star, built-in or one you created. Workers never can.
+When an agent changes another agent through its tools, permissions are a separate step: `update_agent` changes identity, model and skills, while per-agent tool permissions and connector assignments change only through `set_agent_permissions`, which always asks you first. A saved permission or connector-assignment change, from the agent's settings or through `set_agent_permissions`, applies to the agent's next request and next tool call without a restart. A newly created agent can never be granted a management tool (agent, workspace, skill, connector, provider, channel, permission, secret or settings changes) — those stay with Omnipus.
 
-A connector can also name its own default, which wins there. See [connectors](connectors.md).
+## How a conversation finds its agent
+
+Every conversation names its agent — there is no global default agent any more.
+
+- A chat in the sidebar always opens one agent's main chat; you pick the agent by the row you click.
+- A new chat names its agent on the first message: pick an agent before you send, because there is no default to fall back to.
+- A connector answers through the workspace and agent it is bound to; an unbound connector delivers nothing. See [connectors](connectors.md).
+- Omnipus has exactly one conversation, its main chat. Asking for a new chat with Omnipus opens that main chat instead; the server refuses a second Omnipus conversation outright.
 
 ## How to create your own agent
 
@@ -107,15 +114,14 @@ Open a built-in agent's card, then **Basics**: the role badge, look, and colour 
 |---|---|---|---|
 | Mia | Omnipus | General assistant | Steel blue |
 | Jim | Omnipus | General assistant | Verdigris |
-| Ava | Omnipus | General assistant | Bronze |
-| Admin | Omnipus | Security | Champagne |
+| Omnipus | Omnipus | General assistant | Bronze |
 | Planner | Omnipus | General assistant | Titanium |
 | Researcher | Omnipus | General assistant | Graphite violet |
 | General Purpose | Omnipus | General assistant | Pewter |
 
 Agent identity is the figure, role badge and palette colour. The legacy icon is not an editable identity field.
 
-A built-in agent keeps working wherever it sits, and the sidebar's row menu treats it accordingly. **Hide from sidebar** is available for every member row, built-ins included — hiding only removes the row from one workspace's list; it never touches membership, tasks or the main chat. **Remove** is different: it ends the agent's membership in that one workspace (the agent stays in the Agents list and in other workspaces, and its chat history is kept — deletion is still the only thing that removes an agent and its data). A workspace's default agent cannot be removed, and a built-in agent cannot be removed from the default workspace, because Omnipus re-adds the built-ins there every time the server starts; the row's **Remove** action is disabled and states the reason instead of failing silently.
+A built-in agent keeps working wherever it sits, and the sidebar's row menu treats it accordingly. **Hide from sidebar** is available for every member row, built-ins included — hiding only removes the row from one workspace's list; it never touches membership, tasks or the main chat. **Remove** is different: it ends the agent's membership in that one workspace (the agent stays in the Agents list and in other workspaces, and its chat history is kept — deletion is still the only thing that removes an agent and its data). A built-in agent cannot be removed from the default workspace, because Omnipus re-adds the built-ins there every time the server starts; the row's **Remove** action is disabled and states the reason instead of failing silently.
 
 ### Existing agents' identity
 
@@ -141,7 +147,7 @@ You can also set the value when you create the agent: open **Advanced** in the c
 
 A value above the global limit is not saved. On the profile, the field shows the refusal, which names the global limit and suggests raising it in Settings, Performance; your other changes on the profile still save. In the create form, creating the agent fails with the same message. Values must be whole numbers from 1 to 1000.
 
-The same rules apply everywhere an agent is created or changed, including when you ask an agent in a chat to do it, as you would with Ava. The `create_agent` and `update_agent` tools refuse a value above the global limit or outside 1 to 1000, and sending an empty value (`null`) to `update_agent` clears the agent's own value.
+The same rules apply everywhere an agent is created or changed, including when you ask an agent in a chat to do it, as you would with Omnipus. The `create_agent` and `update_agent` tools refuse a value above the global limit or outside 1 to 1000, and sending an empty value (`null`) to `update_agent` clears the agent's own value.
 
 **An old higher value.** Earlier releases let an agent's own limit be higher than the global one. Upgrading keeps that stored value untouched, but it no longer applies: the agent runs at the global limit, and its profile says the value has no effect. The gateway log lists every such agent in one warning at start-up. Type a lower value or click **Use global limit** to clear the warning. Lowering the global limit in Settings is the only thing that ever rewrites an agent's own value, and it asks you first.
 
@@ -215,6 +221,7 @@ An agent can send a request to another agent without delegating a worker. It cal
 - **The recipient answers with `answer_request`** (or `send_message` with `reply_to` set to the request id). A plain reply in the recipient's own chat does not reach the sender.
 - **A stopped recipient holds it.** The sender is told the request will be delivered when the recipient runs again; nothing is lost.
 - **Policy still applies.** The recipient must be an eligible agent in that workspace, and the recipient's own `send_message` policy decides whether the request is let through (an `ask` policy asks first).
+- **New custom agents can talk to each other by default.** An agent you create starts with `send_message` and `answer_request` allowed, so it can send requests and answer them. To switch that off for one agent, set its `send_message` to `deny`; requests to it are then refused.
 - **Helpers cannot use it.** A worker that another agent delegated to messages only its own conversation, so it cannot send this kind of request.
 
 You can do the same thing yourself by typing `@` and an agent's name at the start of a chat message; see [the chat window](using-omnipus-ui.md).
@@ -243,7 +250,7 @@ If nothing needs attention, the agent records an all-clear. The sidebar lists ch
 ## Related pages
 
 - [Workspaces](workspaces.md) — where teams live and delegation trust is set
-- [Connectors](connectors.md) — per-connector default agents and routing
+- [Connectors](connectors.md) — binding a connector to a workspace and its main agent
 - [Tools](tools.md) — the allow, ask, and deny rules for Omnipus tools
 - [Skills](skills.md) — reusable playbooks an agent picks up
 - [Calendar](calendar.md) — scheduled task work, separate from heartbeats

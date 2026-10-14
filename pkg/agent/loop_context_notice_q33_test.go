@@ -45,7 +45,7 @@ func TestContextOverflowRetryDoesNotPublishNormalChatNotice_Q33(t *testing.T) {
 	t.Cleanup(msgBus.Close)
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(al.Close)
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("fixture: expected the default agent")
 	}

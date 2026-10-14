@@ -381,7 +381,7 @@ func TestAuthenticateWS_SecondAccountAuthenticates(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData))
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello from second account"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello from second account", AgentID: "mia"}
 	msgData, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData),
@@ -878,7 +878,7 @@ func TestWSAuthAcceptsSessionCookie(t *testing.T) {
 	// — proving the connection is already authenticated via the cookie at
 	// handshake time (a pre-Wave-2 server would have rejected this as "first
 	// message must be {\"type\":\"auth\"...}").
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello via cookie auth"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello via cookie auth", AgentID: "mia"}
 	msgData, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData),

@@ -907,21 +907,10 @@ describe('D4/D8 — Remove · disabled with a visible reason', () => {
     expect(apiMocks.updateWorkspace).not.toHaveBeenCalled()
   })
 
-  it('Remove is disabled with a visible reason for the workspace default agent (Team-panel parity)', async () => {
-    const defaultJim = makeAgent({ id: 'jim', name: 'Jim', type: 'core', default: true })
-    renderList({
-      workspace: workspaceWith({ mia: miaMember, jim: jimMember }),
-      agents: [mia, defaultJim],
-    })
-    await openRowMenu('Jim')
-    const remove = screen.getByRole('menuitem', { name: /Remove/ })
-    expect(remove).toHaveAttribute('data-disabled')
-    expect(remove.textContent).toContain('Jim is the default agent')
-    await act(async () => {
-      fireEvent.click(remove)
-    })
-    expect(apiMocks.updateWorkspace).not.toHaveBeenCalled()
-  })
+  // The "workspace default agent" refusal test was deleted with the feature
+  // (omnipus-system-agent K11/K12, bundle B1): there is no default agent any
+  // more, so `removeDisabledReason` no longer carries that clause and the
+  // Team-panel parity it asserted has no subject.
 
   it('the Admin row gets History and Edit but no Hide, and a Remove disabled with a reason', async () => {
     register(adminMember, ADMIN_MAIN)

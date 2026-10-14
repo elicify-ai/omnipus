@@ -645,7 +645,7 @@ export interface paths {
         };
         /**
          * Health check
-         * @description Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP 503 with status "degraded" plus a reason on a gateway-fatal condition (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
+         * @description Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP 503 with status "degraded" plus a reason on a gateway-fatal condition (agent loop dead, config reload failed). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
          */
         get: operations["getHealth"];
         put?: never;
@@ -1234,12 +1234,12 @@ export interface paths {
         };
         /**
          * Get channel routing configuration
-         * @description Returns the routing configuration for the specified channel, including which agent handles its inbound messages.
+         * @description Returns the routing configuration for the specified channel: its workspace binding and main agent, or — for an instance that is not yet bound — `bound: false` with empty ids (FR-128). Never an invented or legacy destination.
          */
         get: operations["getChannelRouting"];
         /**
          * Set channel routing configuration
-         * @description Sets the routing configuration for the specified channel. The default_agent_id field controls which agent handles inbound messages arriving on this channel. Omit it or leave it empty to fall back to the global default agent.
+         * @description Binds the channel instance to a workspace and names its main agent. Both workspace_id and default_agent_id are required and nonblank (omnipus-system-agent FR-127, K14); there is no unbound mode and no global default agent. A missing or blank value is refused with 400 "bind this channel to an agent in a workspace" and changes nothing. Saving a valid binding clears the channel's routing degradation (FR-129).
          */
         put: operations["setChannelRouting"];
         post?: never;
@@ -3928,6 +3928,194 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/secret-requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the value-free state of a secret request
+         * @description Spec K5 (FR-079). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Value-free: returns the state and, when submitted, the reference names. A request that is unknown or not accessible to the caller's account is 404.
+         */
+        get: operations["getSecretRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/secret-requests/{id}/submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit (or cancel) a secret card
+         * @description Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of `values` or `cancel: true`. All checks run before any write; any failure writes nothing. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
+         */
+        post: operations["submitSecretRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List stored secret names
+         * @description Spec K6 (FR-073, FR-086, FR-241). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-6. Names and metadata only, never a value.
+         */
+        get: operations["listSecrets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/secrets/{reference}/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change a private secret's options
+         * @description Spec K49 (FR-241). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-5. Private kind only (another kind is 422); authenticated web user only; audited.
+         */
+        patch: operations["updateSecretOptions"];
+        trace?: never;
+    };
+    "/agents/{id}/dependencies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List what depends on an agent
+         * @description Spec K50, §6.19 (FR-243, FR-244). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-20. Connections it answers as main agent, mailboxes, private secrets and rooms per workspace (People rows from landing 2).
+         */
+        get: operations["getAgentDependencies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/rooms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a workspace's rooms
+         * @description Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+         */
+        get: operations["listWorkspaceRooms"];
+        put?: never;
+        /**
+         * Create a squad or an ad-hoc room
+         * @description Spec K24 (FR-161, FR-172). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team room is never created through this route.
+         */
+        post: operations["createRoom"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a room
+         * @description Spec K23. Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+         */
+        get: operations["getRoom"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a squad or an ad-hoc room
+         * @description Spec K24 (FR-207). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team room is not deletable (422).
+         */
+        delete: operations["deleteRoom"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms/{id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Add, remove, mute or unmute room members
+         * @description Spec K24 (FR-204, FR-207). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team room accepts only mute and unmute (other actions 422).
+         */
+        patch: operations["updateRoomMembers"];
+        trace?: never;
+    };
+    "/rooms/{id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post a message into a room
+         * @description Spec K26 (FR-166). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. Accepted for recording; the recorded entry arrives over the WebSocket as room_entry with the same client_message_id.
+         */
+        post: operations["postRoomMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4645,10 +4833,10 @@ export interface components {
         /** @description Body for POST /sessions. Creates a new session for an agent. */
         SessionCreateRequest: {
             /**
-             * @description Agent ID that will own this session. Defaults to "main" when omitted. Must reference an existing agent (400 if not found).
+             * @description Agent ID that will own this session. Required and nonblank — there is no default agent (omnipus-system-agent FR-122, K16); a missing or blank value is refused with 400 "an agent must be named". Must reference an existing chat-target agent (400 if not found). Omnipus has exactly one conversation, so naming Omnipus is refused with 409 carrying its main session id (FR-005).
              * @example jim
              */
-            agent_id?: string;
+            agent_id: string;
             /**
              * @description Session type. Defaults to "chat" when omitted. "main" is absent.
              * @example chat
@@ -4828,6 +5016,8 @@ export interface components {
             subagent_state?: components["schemas"]["SubagentStateFrame"];
             subagent_message?: components["schemas"]["SubagentMessageFrame"];
             subagent_end?: components["schemas"]["SubagentEndFrame"];
+            /** @description Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry. */
+            room_ref?: components["schemas"]["RoomRef"];
         };
         /** @description The DISPLAY/STATUS projection of a single tool invocation in a transcript entry — the {id, tool, status, parameters, result} form the SPA renders. This is NOT providers.ToolCall (the provider wire shape on the Go side): it carries no provider call identity beyond `id`, no thought signature and no raw function-argument string, and it must never be used in place of the provider call shape (session-core C-ARCHIVE / U2; FR-004). Maps to session.ToolCall on the Go side and the ToolCall interface in src/lib/api.ts. */
         ToolCall: {
@@ -8499,11 +8689,6 @@ export interface components {
             rate_limits?: components["schemas"]["AgentRateLimits"];
             stats?: components["schemas"]["AgentStats"];
             /**
-             * @description Whether this agent is the current global default that handles inbound messages with no more-specific routing rule. This is a COMPUTED value — the backend derives it by comparing the agent's id against the single default-agent setting each time it builds a response; it is never stored per-agent. At most one agent is default at a time. Main only — workers never default.
-             * @example false
-             */
-            default?: boolean;
-            /**
              * @description List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
              * @example [
              *       "web-research"
@@ -9015,11 +9200,6 @@ export interface components {
             };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
-             * @description Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
-             * @example false
-             */
-            default?: boolean;
-            /**
              * @description Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills. Rejected 400 on subagent_3p agents (CLI doesn't see Omnipus skills).
              * @example [
              *       "web-research"
@@ -9428,15 +9608,21 @@ export interface components {
              */
             native_available?: boolean;
             /**
-             * @description True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential). The channel is NOT serving despite enabled=true.
+             * @description True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential) — the channel is NOT serving despite enabled=true — or when it dropped an inbound message it could not route (omnipus-system-agent FR-121, K15: unbound instance, missing or ineligible bound agent). A routing degradation is cleared when a valid binding is saved (FR-129).
              * @example false
              */
             degraded?: boolean;
             /**
-             * @description Human-readable reason the channel is degraded. Present only when degraded is true.
+             * @description Human-readable reason the channel is degraded. Present only when degraded is true. For a routing drop it is the drop reason, e.g. "bind this channel to an agent in a workspace".
              * @example whatsapp native is not compiled into this build
              */
             degraded_reason?: string;
+            /**
+             * Format: date-time
+             * @description When this channel last dropped an inbound message it could not route (K15). Present only while the routing degradation is active.
+             * @example 2026-10-14T09:30:00Z
+             */
+            last_dropped_at?: string;
         };
         /**
          * RetentionConfig
@@ -9987,7 +10173,7 @@ export interface components {
         };
         /**
          * HealthResponse
-         * @description Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
+         * @description Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
          */
         HealthResponse: {
             /**
@@ -11607,6 +11793,11 @@ export interface components {
              */
             status: "connected" | "disconnected" | "error";
             /**
+             * @description Human-readable reason for the current status, safe to display — for example the missing secret reference that keeps an enabled server from starting (#1277). Present only when status is "error"; never contains a secret value.
+             * @example secret reference MCP_NOTION_TOKEN is missing
+             */
+            status_reason?: string;
+            /**
              * @description Number of tools exposed by this server.
              * @example 5
              */
@@ -12423,19 +12614,40 @@ export interface components {
         };
         /**
          * ChannelRouting
-         * @description Routing configuration for a single communication channel. Controls which agent handles inbound messages arriving on this channel.
+         * @description Routing configuration for a single communication channel instance, as read back by GET and returned by PUT /channels/{id}/routing. Every channel is bound to a workspace and names that binding's main agent (omnipus-system-agent FR-127, K14); there is no global default agent and no unbound routing mode. An instance that has no binding yet is reported truthfully (FR-128): `bound` is false and both ids are empty strings — never an invented or legacy destination.
          */
         ChannelRouting: {
             /**
-             * @description ID of the agent that handles this channel's inbound messages. Omitted or empty means fall back to the global default agent.
-             * @example 550e8400-e29b-41d4-a716-446655440000
+             * @description ID of the bound main agent that answers this channel's inbound messages. Empty string when `bound` is false. (Landing 1 keeps the historical key name; it no longer means any global-default fallback.)
+             * @example mia
              */
-            default_agent_id?: string;
+            default_agent_id: string;
             /**
-             * @description Workspace this channel instance is bound to. Required (non-empty) for a bound instance; empty/omitted = unbound (legacy default routing).
+             * @description Workspace this channel instance is bound to. Empty string when `bound` is false.
              * @example my-workspace
              */
-            workspace_id?: string;
+            workspace_id: string;
+            /**
+             * @description True when the instance is bound to a workspace and names a main agent. An unbound instance drops every inbound message loudly until bound.
+             * @example true
+             */
+            bound: boolean;
+        };
+        /**
+         * ChannelRoutingUpdateRequest
+         * @description Body for PUT /channels/{id}/routing. Binds the channel instance to a workspace and names the main agent that answers it. Both fields are required and nonblank (omnipus-system-agent FR-127, K14); the legacy unbound mode is removed, so a request missing either is refused with 400 "bind this channel to an agent in a workspace" and changes nothing. Saving a valid binding clears the instance's routing `degraded` status (FR-129).
+         */
+        ChannelRoutingUpdateRequest: {
+            /**
+             * @description Workspace to bind the channel instance to. Must exist and be active.
+             * @example my-workspace
+             */
+            workspace_id: string;
+            /**
+             * @description The bound main agent: a chat-capable member of the workspace's team (never a worker or system agent). Landing 1 keeps the historical key name.
+             * @example mia
+             */
+            default_agent_id: string;
         };
         /**
          * ChannelCreateRequest
@@ -12518,6 +12730,17 @@ export interface components {
             username?: string;
             /** @description True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned. */
             configured: boolean;
+            /**
+             * @description #1277. Whether the mailbox can serve. "degraded" when it is enabled but cannot start — for example its password secret reference is missing; status_reason then names the cause. Optional: omitted by servers that do not report it.
+             * @example ok
+             * @enum {string}
+             */
+            status?: "ok" | "degraded";
+            /**
+             * @description #1277. Human-readable reason for the status, safe to display — for example the missing secret reference. Present only when status is "degraded"; never contains a secret value.
+             * @example secret reference MAIL_MIA_SALES_PASSWORD is missing
+             */
+            status_reason?: string;
             /** @description Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy — operator HTML never ships raw into outbound mail. The plain-text signature part is derived at compose time and never stored. Absent or empty means no signature is applied. This is configuration, not mail content: storing it in config.json does not violate the no-local-mail-store rule (D6). A value longer than 16,384 characters is rejected with HTTP 400 on configure. */
             signature_html?: string;
             /** @description Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name. */
@@ -14860,7 +15083,7 @@ export interface components {
              */
             is_default?: boolean;
             /**
-             * @description True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise. Server-set; ignored on input (readOnly).
+             * @description True while this workspace's setup offer is pending. Set server-side when a workspace is created with an empty team; cleared server-side when the server posts the setup offer into Omnipus's main chat (omnipus-system-agent FR-047, K9), and set back to true if posting it fails. Absent/false otherwise. Server-set; ignored on input (readOnly).
              * @example false
              */
             readonly setup_pending?: boolean;
@@ -17680,6 +17903,153 @@ export interface components {
             error?: string;
         };
         /**
+         * SecretSubmitRequest
+         * @description Body of POST /api/v1/secret-requests/{id}/submit (spec omnipus-system-agent K5; FR-062, FR-063). Exactly one of `values` or `cancel: true`. The only place secret values ever travel. Semantic rules enforced by the handler with inbound validation on AND off (§7.2): the keys of `values` must equal the request's field keys; each value is 4–16,384 bytes of UTF-8 without NUL; the whole body is at most 65,536 bytes (413). The schema's character limits are deliberately no stricter than those byte rules. Errors never echo a value.
+         */
+        SecretSubmitRequest: {
+            /** @description Field key → typed value. Keys are the card's field keys (`^[a-z][a-z0-9_]{0,31}$`); the handler refuses any other key. */
+            values?: {
+                [key: string]: string;
+            };
+            /**
+             * @description The person cancelled the card; nothing is stored.
+             * @enum {boolean}
+             */
+            cancel?: true;
+        } & (unknown | unknown);
+        /**
+         * SecretRequestState
+         * @description Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Absence is never read as success.
+         */
+        SecretRequestState: {
+            request_id: string;
+            /** @enum {string} */
+            state: "pending" | "submitted" | "cancelled" | "stopped" | "interrupted" | "refused";
+            /** @description Reference names the values were stored under. Present only when state is `submitted`. */
+            reference_names?: string[];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * SecretNameEntry
+         * @description One stored secret version as listed by GET /api/v1/secrets (spec omnipus-system-agent K6; FR-073, FR-086, FR-241). Names and metadata only — never a value.
+         */
+        SecretNameEntry: {
+            /** @description Reference name of this version. */
+            reference: string;
+            /** @enum {string} */
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
+            /** Format: int64 */
+            version: number;
+            recipient: components["schemas"]["SecretRecipientDisplay"];
+            /** @description The owning (workspace, agent) pair — agent_private kind only. */
+            owner?: components["schemas"]["AgentAddress"];
+            /** @description What uses this version (display labels). Never null. */
+            consumers: string[];
+            /** @enum {string} */
+            state: "stored" | "selected" | "superseded";
+            /** @description agent_private kind only (FR-241): whether the variable is injected into turns triggered by a channel person. Default false. */
+            available_in_channel_turns?: boolean;
+        };
+        /**
+         * SecretOptionsUpdateRequest
+         * @description Body of PATCH /api/v1/secrets/{reference}/options (spec omnipus-system-agent K49; FR-241). Private kind only; authenticated web user only; audited.
+         */
+        SecretOptionsUpdateRequest: {
+            /** @description Inject this private variable into channel-triggered turns. */
+            available_in_channel_turns: boolean;
+        };
+        /**
+         * Room
+         * @description A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}.
+         */
+        Room: {
+            id: string;
+            workspace_id: string;
+            /** @enum {string} */
+            kind: "team" | "squad" | "adhoc";
+            name: string;
+            /** @description Member agent ids. Never null. */
+            members: string[];
+            /** @description Muted member agent ids (all room kinds). Never null. */
+            muted: string[];
+            paused: boolean;
+            /**
+             * Format: int64
+             * @description Durable pause generation; /pause increments it (§6.11).
+             */
+            generation: number;
+            /** @description The main chat the room was started from, when any. */
+            origin_session_id?: string;
+            /** @description Present when the room is read-only, with the reason. */
+            read_only_reason?: string;
+            /** @description Team room below two conversation agents: hidden, history kept. */
+            hidden: boolean;
+            /**
+             * Format: int64
+             * @description Allocated cost in micro-dollars (§6.14).
+             */
+            allocated_cost_micro_usd: number;
+            /** @description True when at least one counted turn had an unknown price ("plus unpriced turns"). */
+            allocated_cost_unpriced: boolean;
+            /** @description Derived: true while any member state is awaiting_approval or waiting_on_user. */
+            needs_attention: boolean;
+        };
+        /**
+         * RoomCreateRequest
+         * @description Body of POST /api/v1/workspaces/{id}/rooms (spec omnipus-system-agent K24; FR-161, FR-172). Creates a squad or an ad-hoc room; the team room is never created through this route. Semantic rules enforced by the handler with inbound validation on and off: a squad needs a name; at least two distinct agents, all members of the workspace.
+         */
+        RoomCreateRequest: {
+            /** @enum {string} */
+            kind: "squad" | "adhoc";
+            /** @description Required for a squad. */
+            name?: string;
+            agent_ids: string[];
+            /** @description The main chat the room is started from, when any. */
+            origin_session_id?: string;
+        };
+        /**
+         * RoomMembersUpdateRequest
+         * @description Body of PATCH /api/v1/rooms/{id}/members (spec omnipus-system-agent K24; FR-204, FR-207). The team room accepts only mute and unmute; removing a member below two agents follows the two-agent rule (FR-204).
+         */
+        RoomMembersUpdateRequest: {
+            /** @enum {string} */
+            action: "add" | "remove" | "mute" | "unmute";
+            agent_ids: string[];
+        };
+        /**
+         * RoomMessageRequest
+         * @description Body of POST /api/v1/rooms/{id}/messages (spec omnipus-system-agent K26; FR-166, §6.13). `mentions` come from the picker and are authoritative; typed text resolves only by §6.13's exact-name rule. The recorded entry arrives over the WebSocket as room_entry, carrying the same client_message_id.
+         */
+        RoomMessageRequest: {
+            client_message_id: string;
+            text: string;
+            /** @description Agent ids picked in the @-picker, or the reserved value `all`. */
+            mentions: string[];
+        };
+        /**
+         * AgentDependency
+         * @description One thing that depends on an agent in one workspace (spec omnipus-system-agent K50, §6.19; FR-243). Landing 1 kinds: a channel connection whose main agent it is, a mailbox, a private secret, a room; `people_row` is filled from landing 2 (WU-14).
+         */
+        AgentDependency: {
+            workspace_id: string;
+            /** @enum {string} */
+            kind: "channel_main_agent" | "people_row" | "mailbox" | "private_secret" | "room";
+            /** @description Id of the dependent item (connection id, mailbox id, reference name, room id). */
+            id: string;
+            /** @description Display label. */
+            label: string;
+        };
+        /**
+         * AgentDependencyList
+         * @description Everything that depends on an agent (spec omnipus-system-agent K50, §6.19; FR-243, FR-244). Returned by GET /api/v1/agents/{id}/dependencies, and as the 409 body when a delete is refused because the list is non-empty and `delete_everything` was not true.
+         */
+        AgentDependencyList: {
+            agent_id: string;
+            /** @description Never null; empty when nothing depends on the agent. */
+            dependencies: components["schemas"]["AgentDependency"][];
+        };
+        /**
          * StopNote
          * @description The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
          */
@@ -17975,6 +18345,23 @@ export interface components {
             seq?: number;
         };
         /**
+         * RoomRef
+         * @description Reference from a main-session entry (or an approval) to the room (group chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215, FR-251). Display and navigation data only: it never grants access to the room. `role` says whether the entry is the room's request to this agent or this agent's answer into the room; a room pre-admission approval card (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomRef) — keep both copies in sync by hand.
+         */
+        RoomRef: {
+            /** @description Id of the room. */
+            room_id: string;
+            /** @description Display name of the room at the time the entry was written. */
+            room_name: string;
+            /** @description The room delivery id, which is also the receiver's request id (spec §6.11, FR-216). */
+            request_id: string;
+            /**
+             * @description `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
+             * @enum {string}
+             */
+            role: "request" | "answer";
+        };
+        /**
          * ExternalCliTool
          * @description The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
          * @example claude-code
@@ -17999,6 +18386,19 @@ export interface components {
              * @enum {string}
              */
             readonly status?: "ok" | "broken";
+        };
+        /**
+         * SecretRecipientDisplay
+         * @description Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+         */
+        SecretRecipientDisplay: {
+            /**
+             * @description Recipient kind.
+             * @enum {string}
+             */
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private";
+            /** @description Display lines, in order. Never null, never empty. */
+            lines: string[];
         };
     };
     responses: {
@@ -18935,6 +19335,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Storage failed; reports actual saved state. */
             500: {
                 headers: {
@@ -18950,6 +19359,8 @@ export interface operations {
         parameters: {
             query: {
                 revision: components["schemas"]["ConfigurationRevision"];
+                /** @description Spec omnipus-system-agent K50, §6.19 (FR-243; landing 1, WU-20). Explicit, audited opt-in to delete the agent together with its dependencies (AgentDependencyList). Without it, a non-empty dependency list refuses the delete with 409. */
+                delete_everything?: boolean;
             };
             header?: never;
             path: {
@@ -18976,12 +19387,14 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            /** @description Revision or inherited global policy changed; no writes occurred. */
+            /** @description Revision or inherited global policy changed; no writes occurred (no body). Or, spec omnipus-system-agent K50 (FR-243; landing 1, WU-20): the agent has dependencies and `delete_everything` was not true — nothing was deleted and the body is the full dependency list. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AgentDependencyList"];
+                };
             };
             /** @description Storage failed; reports actual saved state. */
             500: {
@@ -19123,6 +19536,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Storage failed; reports actual saved state. */
             500: {
@@ -20727,7 +21149,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ChannelRouting"];
+                "application/json": components["schemas"]["ChannelRoutingUpdateRequest"];
             };
         };
         responses: {
@@ -26630,6 +27052,329 @@ export interface operations {
             429: components["responses"]["429TooManyRequests"];
         };
     };
+    getSecretRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Secret request id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current request state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretRequestState"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    submitSecretRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Secret request id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretSubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Stored (or cancelled). Returns the resulting state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretRequestState"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description The request is not pending (including a duplicate submit); body is its current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretRequestState"];
+                };
+            };
+            /** @description Body larger than 65,536 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listSecrets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stored secret versions. Never null. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretNameEntry"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    updateSecretOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Reference name of the secret version. */
+                reference: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretOptionsUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretNameEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            422: components["responses"]["422UnprocessableEntity"];
+        };
+    };
+    getAgentDependencies: {
+        parameters: {
+            query?: {
+                /** @description Limit the list to one workspace. */
+                workspace_id?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Agent ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dependency list. Never null. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentDependencyList"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listWorkspaceRooms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rooms of the workspace. Never null. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    createRoom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Room created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            422: components["responses"]["422UnprocessableEntity"];
+        };
+    };
+    getRoom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Room ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The room. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteRoom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Room ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Room deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            422: components["responses"]["422UnprocessableEntity"];
+        };
+    };
+    updateRoomMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Room ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomMembersUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated room. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            422: components["responses"]["422UnprocessableEntity"];
+        };
+    };
+    postRoomMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Room ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted for recording. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            422: components["responses"]["422UnprocessableEntity"];
+        };
+    };
 }
 
 // ── Named type re-exports from components.schemas ────────────────────────────
@@ -26901,6 +27646,7 @@ export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
+export type ChannelRoutingUpdateRequest = components["schemas"]["ChannelRoutingUpdateRequest"];
 export type ChannelCreateRequest = components["schemas"]["ChannelCreateRequest"];
 export type ChannelCreateResponse = components["schemas"]["ChannelCreateResponse"];
 export type Mailbox = components["schemas"]["Mailbox"];
@@ -27054,3 +27800,13 @@ export type MessageParentBlocker = components["schemas"]["MessageParentBlocker"]
 export type MessageParentQuestion = components["schemas"]["MessageParentQuestion"];
 export type MessageParentHandback = components["schemas"]["MessageParentHandback"];
 export type MessageParentResponse = components["schemas"]["MessageParentResponse"];
+export type SecretSubmitRequest = components["schemas"]["SecretSubmitRequest"];
+export type SecretRequestState = components["schemas"]["SecretRequestState"];
+export type SecretNameEntry = components["schemas"]["SecretNameEntry"];
+export type SecretOptionsUpdateRequest = components["schemas"]["SecretOptionsUpdateRequest"];
+export type Room = components["schemas"]["Room"];
+export type RoomCreateRequest = components["schemas"]["RoomCreateRequest"];
+export type RoomMembersUpdateRequest = components["schemas"]["RoomMembersUpdateRequest"];
+export type RoomMessageRequest = components["schemas"]["RoomMessageRequest"];
+export type AgentDependency = components["schemas"]["AgentDependency"];
+export type AgentDependencyList = components["schemas"]["AgentDependencyList"];

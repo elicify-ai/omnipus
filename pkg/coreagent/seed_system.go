@@ -567,7 +567,6 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 				Color:       sa.Color,
 				Type:        config.AgentTypeSystem,
 				Locked:      true,
-				Default:     false,
 				CreatedAt:   timePtr(time.Now().UTC()),
 				// Explicit, non-nil for any System Agent that declares one
 				// (systemAgentSkills); nil — i.e. unrestricted — only for one
@@ -606,12 +605,6 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 			}
 			if a.Type != config.AgentTypeSystem {
 				a.Type = config.AgentTypeSystem
-				modified = true
-			}
-			// A System Agent is never a chat target, so it can never be the
-			// routing default — clear a stray/tampered Default flag.
-			if a.Default {
-				a.Default = false
 				modified = true
 			}
 			if a.Name != sa.Name {

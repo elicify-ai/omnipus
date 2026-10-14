@@ -152,10 +152,9 @@ func sanitizeCoreTeam(raw []any) []string {
 
 // firstExcludedTeamMember returns the first team entry whose roster identity
 // is barred from workspace-team membership (coreagent.
-// ExcludedFromWorkspaceTeams — the Admin standalone operator and the hidden
-// System Agents), or "" when the team is clean. ADR-090 FR-006: "Admin and
-// hidden agents cannot be added as ordinary teammates to bypass role
-// boundaries." These tool write paths bypass the REST validator
+// ExcludedFromWorkspaceTeams — the hidden System Agents), or "" when the
+// team is clean. ADR-090 FR-006: hidden agents cannot be added as ordinary
+// teammates to bypass role boundaries. These tool write paths bypass the REST validator
 // (gateway's validateCoreTeamMembers), so without this check an agent-driven
 // update_workspace could land exactly the membership the API refuses —
 // sanitizeCoreTeam above only dedupes.
@@ -173,10 +172,13 @@ func firstExcludedTeamMember(team []string) string {
 // already uses, so an operator moving between the Team tab and an
 // agent-driven tool call sees one consistent rejection instead of two.
 func excludedTeamMemberMessage(id string) string {
-	if coreagent.CoreAgentID(id) == coreagent.IDAdmin {
-		return fmt.Sprintf("core_team member %q is the Admin standalone operator and cannot be added to a workspace team roster (ADR-090)", id)
-	}
 	return fmt.Sprintf("core_team member %q is a hidden System Agent and cannot be added to a workspace team roster", id)
+}
+
+// omnipusMembershipError is the FR-003 refusal in this package's error shape.
+func omnipusMembershipError() *tools.ToolResult {
+	return tools.ErrorResult(errorJSON("INVALID_INPUT", coreagent.OmnipusMembershipRefusalText,
+		"Leave Omnipus on the default workspace's team only"))
 }
 
 // workspaceFromFile reads a workspace JSON into the workspace struct.
@@ -322,6 +324,11 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	if excluded := firstExcludedTeamMember(w.CoreTeam); excluded != "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", excludedTeamMemberMessage(excluded),
 			"Remove the excluded role from core_team — ADR-090 bars it from workspace teams"))
+	}
+	// omnipus-system-agent FR-003: a created workspace is never the default
+	// one, so Omnipus cannot be on its team.
+	if coreagent.OmnipusMembershipRefusal(false, nil, w.CoreTeam) {
+		return omnipusMembershipError()
 	}
 	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
 	if delegationErr != nil {
@@ -485,6 +492,12 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 		if excluded := firstExcludedTeamMember(teamDiffAdded(oldTeam, w.CoreTeam)); excluded != "" {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", excludedTeamMemberMessage(excluded),
 				"Remove the excluded role from core_team — ADR-090 bars it from workspace teams"))
+		}
+		// omnipus-system-agent FR-003: Omnipus belongs to the default
+		// workspace only — refused before any write, ahead of the generic
+		// built-in rule so the message names the real boundary.
+		if coreagent.OmnipusMembershipRefusal(w.IsDefault, oldTeam, w.CoreTeam) {
+			return omnipusMembershipError()
 		}
 		// D8 (founder ruling 2026-10-11, gate round 1 S1): the SAME built-in
 		// roster rule the REST PUT enforces, from the SAME pkg/workspace

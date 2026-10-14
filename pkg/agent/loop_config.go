@@ -74,11 +74,6 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		return fmt.Errorf("registry creation failed: %w", err)
 	}
 
-	// Apply configurable default agent override on the new registry.
-	if cfg.Agents.Defaults.DefaultAgentID != "" {
-		registry.SetDefaultAgentOverride(cfg.Agents.Defaults.DefaultAgentID)
-	}
-
 	// Ensure shared tools are re-registered on the new registry
 	registerSharedTools(al, cfg, al.bus, registry, provider)
 
@@ -136,6 +131,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Re-wire per-turn working-directory injectors on the new registry, same
 	// reasoning: a workspace's core_team can change via hot-reload too.
 	wireWorkingDirInjectors(al, registry)
+	wireModeNoteInjectors(al, registry)
 
 	// Re-wire per-workspace project-shelf resolvers (ADR-072 R1 fix regression,
 	// live UAT 2026-09-02): this was missing here, so a mounted project's

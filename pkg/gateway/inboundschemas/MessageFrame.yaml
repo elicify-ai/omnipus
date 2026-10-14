@@ -58,8 +58,12 @@ properties:
     minLength: 1
     maxLength: 128
     description: >
-      Route this message to a specific agent by ID. If omitted the default
-      agent (typically "main") handles the message.
+      Route this message to a specific agent by ID. There is no default
+      agent. Spec
+      omnipus-system-agent K8 (FR-122, landing 1, WU-1): a frame without
+      `session_id` MUST carry a nonblank `agent_id`; the server enforces this
+      semantically (error frame "an agent must be named") with inbound
+      validation on and off, and there is no default agent.
   recipient:
     $ref: ./AgentAddress.yaml
     description: >
@@ -130,9 +134,8 @@ properties:
       the server routes this turn to the chosen model, falling back to
       the agent's `model` config when absent; `workspace_id` — the
       active workspace this chat belongs to; and
-      `workspace_setup_kickoff` (boolean) — a one-time marker that
-      this message is the workspace setup kickoff for
-      `metadata.workspace_id`.
+      `workspace_setup_kickoff` (boolean) — a retired client kickoff
+      marker that the server refuses (see the property below).
     properties:
       model_name:
         type: string
@@ -161,12 +164,20 @@ properties:
       workspace_setup_kickoff:
         type: boolean
         description: >
-          One-time marker that this message is the workspace-setup kickoff
-          turn for `metadata.workspace_id`. When true, the server treats the
-          frame as the one-time workspace-setup kickoff — the frame's
-          `content` is ignored and replaced by a server-composed
-          instruction; a system-role entry is recorded; the workspace's
-          `setup_pending` flag is cleared exactly once (idempotency-guarded);
-          duplicate and malformed kickoffs are rejected with an error frame.
-          Absent/false for ordinary messages.
+          Retired client kickoff marker (omnipus-system-agent K9, FR-047).
+          The server is the only producer of the workspace-setup offer: right
+          after a workspace is created with an empty team it posts the offer
+          into Omnipus's existing main chat and clears that workspace's
+          `setup_pending` exactly once. A client frame with this key set to
+          true is refused with an error frame and has no other effect
+          ("workspace setup is started by the server when a workspace is
+          created; a client kickoff is refused", with session_id echoed only
+          when the frame carried one); a non-boolean value is refused as
+          malformed. Absent or false for ordinary messages.
         example: true
+  workflow_start:
+    $ref: './WorkflowStart.yaml'
+    description: >
+      Spec omnipus-system-agent K8 (FR-012). Optional target data naming the
+      workflow (W1 / W18) and the target workspace the user picked on a
+      screen. Data only, never an instruction.

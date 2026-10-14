@@ -37,10 +37,9 @@ func TestSeedConfig_BuiltInsEnforceCanonicalTriplesAndSecondCallIsStable(t *test
 	}{
 		{id: string(IDMia), role: "general", color: "#6E8BA8"},
 		{id: string(IDJim), role: "general", color: "#4F8A80"},
-		{id: string(IDAva), role: "general", color: "#A97142"},
+		{id: string(IDOmnipus), role: "general", color: "#A97142"},
 		// Metallic palette (founder, 2026-10-11): each seed keeps its colour
 		// family's equivalent, so the visible roster stays distinct.
-		{id: string(IDAdmin), role: "security", color: "#CDBA96"},
 		{id: string(IDPlanner), role: "general", color: "#7A8C9E"},
 		{id: string(IDResearcher), role: "general", color: "#7B7290"},
 		{id: string(IDWorker), role: "general", color: "#8E9196"},

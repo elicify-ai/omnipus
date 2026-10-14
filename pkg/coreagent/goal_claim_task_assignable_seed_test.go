@@ -14,7 +14,7 @@ func TestSeed_GoalClaim_ADR090ResolvedPosture(t *testing.T) {
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 	for _, id := range []coreagent.CoreAgentID{
-		coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDAdmin,
+		coreagent.IDMia, coreagent.IDJim, coreagent.IDOmnipus,
 		coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker,
 	} {
 		assert.Equalf(t, "allow", resolveFor(t, cfg, string(id), "goal_claim", nil), "%s goal_claim", id)

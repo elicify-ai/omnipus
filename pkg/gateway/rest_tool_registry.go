@@ -110,6 +110,14 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FR-125 / §6.4: the central builtin registry is the only source; before
+	// boot wires it there is nothing truthful to list, so say so (503) rather
+	// than proxying one agent's tool set.
+	if a.builtinRegistry == nil {
+		jsonErr(w, http.StatusServiceUnavailable, toolRegistryNotReady)
+		return
+	}
+
 	var entries []gen.ToolRegistryEntry
 	seen := make(map[string]struct{})
 
@@ -138,13 +146,10 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 		entries = append(entries, entry)
 	}
 
-	// M16: central BuiltinRegistry is the authoritative supply-side source when wired.
-	// Comment: per-agent ToolRegistry remains the demand-side filter at LLM-call time.
-	// Full migration to central-registry-only at LLM call assembly is tracked separately.
-	if a.builtinRegistry != nil {
-		for _, t := range a.builtinRegistry.All() {
-			addTool(t, string(toolSourceBuiltin), "")
-		}
+	// M16: central BuiltinRegistry is the authoritative supply-side source.
+	// Per-agent ToolRegistry remains the demand-side filter at LLM-call time.
+	for _, t := range a.builtinRegistry.All() {
+		addTool(t, string(toolSourceBuiltin), "")
 	}
 
 	// M16: central MCPRegistry provides MCP tools when wired.
@@ -154,28 +159,6 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 		for _, t := range a.mcpRegistry.All() {
 			sid, _ := a.mcpRegistry.GetServerID(t.Name())
 			addTool(t, "mcp", sid)
-		}
-	}
-
-	// Fallback: when central registries are not wired (test setups or pre-boot),
-	// read from the default agent's tool set as before.
-	if a.builtinRegistry == nil {
-		registry := a.agentLoop.GetRegistry()
-		defaultAgent := registry.GetDefaultAgent()
-		if defaultAgent != nil {
-			for _, t := range defaultAgent.Tools.GetAll() {
-				// FR-027: source discriminator.
-				source := string(toolSourceBuiltin)
-				var serverID string
-				if t.Category() == tools.CategoryMCP {
-					source = "mcp"
-					// G11: attempt server ID lookup via mcpRegistry if wired.
-					if a.mcpRegistry != nil {
-						serverID, _ = a.mcpRegistry.GetServerID(t.Name())
-					}
-				}
-				addTool(t, source, serverID)
-			}
 		}
 	}
 

@@ -227,7 +227,7 @@ func TestProcessMessage_InFlightStopFence_VisibleErrorNoReviveNoSecondTurn(t *te
 	provider := &adr093FailingProvider{}
 	adr093UseProvider(t, al, provider)
 
-	_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel:       "webchat",
 		Sender:        bus.SenderInfo{CanonicalID: "webchat_user"},
 		ChatID:        parentID,

@@ -64,7 +64,7 @@ func TestFirstUserMessage_OverBoundRejectsWithCorrelatedNotSaved(t *testing.T) {
 	handler, msgBus, wc := newIssue1090BoundHarness(t, bound)
 	handler.handleChatMessageWithClientID(
 		context.Background(), "1090-sf2-over-bound-chat", "", content, "mia", nil,
-		"", "", false, clientID, nil, wc,
+		"", "", clientID, nil, wc,
 	)
 
 	// Intake has returned; no writer or agent consumes these queues. Inspect
@@ -113,7 +113,7 @@ func TestFirstUserMessage_AtBoundIsSavedAndAcknowledged(t *testing.T) {
 	handler, msgBus, wc := newIssue1090BoundHarness(t, bound)
 	handler.handleChatMessageWithClientID(
 		context.Background(), "1090-sf2-at-bound-chat", "", content, "mia", nil,
-		"", "", false, clientID, nil, wc,
+		"", "", clientID, nil, wc,
 	)
 
 	frames := issue1090DrainQueuedFrames(t, wc)

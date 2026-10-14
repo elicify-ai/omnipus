@@ -30,7 +30,7 @@ func TestOwnerWake_CarriesTheAnswerBodyIntoTheRequestersNextRequest(t *testing.T
 		meta.AgentID, meta.WorkspaceID,
 		session.TranscriptEntry{ID: "ans-1", AgentID: "ava", Content: "ANSWER-BODY-XYZ the budget is 12"})
 
-	_, _, err = h.al.processMessage(context.Background(), wake)
+	_, _, err = h.al.processMessageAsPrimaryForTest(context.Background(), wake)
 	require.NoError(t, err)
 
 	calls := h.provider.calls()

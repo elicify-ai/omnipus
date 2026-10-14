@@ -305,7 +305,7 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 			Content: event.Content,
 			// FIX 5d: dedicated carriers so processSystemMessage can resolve
 			// the TRUE originating agent and transcript session instead of
-			// guessing GetDefaultAgent() / leaving the reconstructed turn with
+			// guessing an agent / leaving the reconstructed turn with
 			// no transcript binding at all. See bus.InboundMessage's doc
 			// comments on these two fields for the full rationale.
 			AsyncOriginAgentID:       event.AgentID,

@@ -22,3 +22,17 @@ properties:
   active:
     type: boolean
     description: true to start receiving pairing frames for channel_id on this connection, false to stop.
+  request_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with
+      the chat request that started it (QR pairing in chat, WU-7).
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: >
+      Spec K10. The chat session the pairing belongs to, when it was
+      started from a chat.

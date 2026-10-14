@@ -62,7 +62,7 @@ func TestRecipient_StoppedRecipientHoldsTheRequestAndTellsTheSenderRow(t *testin
 	statusStates(t, wc, 50*time.Millisecond) // drop owner-chat leftovers
 
 	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
-	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray are you there", "ann", nil, "", "ws-1", false, "held-cid-1", nil, &to, wc)
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray are you there", "ann", nil, "", "ws-1", "held-cid-1", nil, &to, wc)
 
 	assert.Equal(t, []string{"received", "held"}, statusStates(t, wc, 400*time.Millisecond),
 		"received first, then held, and never failed for a held request")
@@ -77,7 +77,7 @@ func TestRecipient_RunnableRecipientIsNeverReportedHeld(t *testing.T) {
 	statusStates(t, wc, 50*time.Millisecond)
 
 	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
-	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray hello", "ann", nil, "", "ws-1", false, "held-cid-2", nil, &to, wc)
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray hello", "ann", nil, "", "ws-1", "held-cid-2", nil, &to, wc)
 
 	assert.Equal(t, []string{"received"}, statusStates(t, wc, 400*time.Millisecond))
 }
@@ -93,7 +93,7 @@ func TestRecipient_HeldRequestDeliveryMovesTheSendersRowToWorking(t *testing.T) 
 	statusStates(t, wc, 50*time.Millisecond)
 
 	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
-	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray wake up", "ann", nil, "", "ws-1", false, "held-cid-3", nil, &to, wc)
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray wake up", "ann", nil, "", "ws-1", "held-cid-3", nil, &to, wc)
 	require.Equal(t, []string{"received", "held"}, statusStates(t, wc, 300*time.Millisecond))
 
 	recvMain, err := session.MainSessionID("ws-1", "ray")
@@ -122,7 +122,7 @@ func TestRecipient_RetryOfAHeldMessageReplaysHeld(t *testing.T) {
 
 	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
 	send := func() {
-		h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray wake up", "ann", nil, "", "ws-1", false, "held-cid-4", nil, &to, wc)
+		h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray wake up", "ann", nil, "", "ws-1", "held-cid-4", nil, &to, wc)
 	}
 	send()
 	require.Equal(t, []string{"received", "held"}, statusStates(t, wc, 300*time.Millisecond))
@@ -144,7 +144,7 @@ func TestRecipient_RecordedButWakeFailedIsHeldNotFailed(t *testing.T) {
 	b.Close() // every later PublishInbound fails
 
 	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
-	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray hello", "ann", nil, "", "ws-1", false, "held-cid-5", nil, &to, wc)
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray hello", "ann", nil, "", "ws-1", "held-cid-5", nil, &to, wc)
 
 	states := statusStates(t, wc, 300*time.Millisecond)
 	assert.NotContains(t, states, "failed", "a recorded request is not a failed one: %v", states)
@@ -164,7 +164,7 @@ func TestRecipient_WakeFailedRequest_DeliveryMovesTheRowToWorking(t *testing.T) 
 	b.Close() // the recipient's wake cannot be published
 
 	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
-	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray hello", "ann", nil, "", "ws-1", false, "held-cid-n1", nil, &to, wc)
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray hello", "ann", nil, "", "ws-1", "held-cid-n1", nil, &to, wc)
 	require.Equal(t, []string{"received", "held"}, statusStates(t, wc, 300*time.Millisecond))
 
 	recvMain, err := session.MainSessionID("ws-1", "ray")

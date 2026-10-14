@@ -52,7 +52,7 @@ func TestNoOrphanWatchArmedOnClose(t *testing.T) {
 	// Start a real turn — the blocking provider parks inside Chat until its
 	// context is canceled, so the turn stays genuinely registered
 	// (activeTurnStates) and alive for as long as this test lets it.
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start blocking turn for ws-close test"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start blocking turn for ws-close test", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))

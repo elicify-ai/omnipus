@@ -21,7 +21,7 @@ func TestAnswerRequest_ResolvesAllowForTheConversationalRoles(t *testing.T) {
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 	assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["answer_request"], "the shipped ceiling entry")
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDAdmin} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDOmnipus} {
 		assert.Equal(t, "allow", resolveFor(t, cfg, string(id), "answer_request", nil),
 			"%s can receive a request and must be able to answer it", id)
 		assert.Equal(t, "allow", resolveFor(t, cfg, string(id), "send_message", nil),

@@ -369,8 +369,9 @@ func TestCreateSession_ValidateInbound_InvalidBody(t *testing.T) {
 func TestCreateSession_ValidateInbound_ValidBody(t *testing.T) {
 	api := newTestRestAPIWithValidation(t)
 
-	// Valid body — both fields conform to the schema.
-	body := `{"type":"chat"}`
+	// Valid body — every field conforms to the schema (agent_id is required,
+	// omnipus-system-agent K16).
+	body := `{"type":"chat","agent_id":"test-agent"}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")

@@ -27,8 +27,8 @@ import (
 func TestAnnounceDiscardedInput_FramesTheClientAndBlocksALaterWorkingTick(t *testing.T) {
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
-	handler.handleChatMessageWithClientID(context.Background(), "chat-u7-discard", "", "queued", "", nil,
-		"", "", false, "client-u7-1", nil, wc)
+	handler.handleChatMessageWithClientID(context.Background(), "chat-u7-discard", "", "queued", "mia", nil,
+		"", "", "client-u7-1", nil, wc)
 	received := readMessageStatusFrames(t, wc, 1)
 	sessionID := received[0].SessionId
 	require.Equal(t, "received", received[0].State)
@@ -115,8 +115,8 @@ func sessionEntryForDisposition(id, content, clientID string) session.Transcript
 func TestClearNotPerformed_IsFramedAsAFailedMessageStatus(t *testing.T) {
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
-	handler.handleChatMessageWithClientID(context.Background(), "chat-s302", "", "/clear", "", nil,
-		"", "", false, "client-s302-1", nil, wc)
+	handler.handleChatMessageWithClientID(context.Background(), "chat-s302", "", "/clear", "mia", nil,
+		"", "", "client-s302-1", nil, wc)
 	received := readMessageStatusFrames(t, wc, 1)
 	sessionID := received[0].SessionId
 	bindTestConnToSession(handler, "chat-s302", sessionID, wc)
@@ -221,8 +221,8 @@ func TestCaptureSlogWarn_ConcurrentLogAndReadIsRaceFree(t *testing.T) {
 func TestAnnounceClearNotPerformed_UnresolvableRowIsLoggedNotSilent(t *testing.T) {
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
-	handler.handleChatMessageWithClientID(context.Background(), "chat-r2s2", "", "hello", "", nil,
-		"", "", false, "client-r2s2-1", nil, wc)
+	handler.handleChatMessageWithClientID(context.Background(), "chat-r2s2", "", "hello", "mia", nil,
+		"", "", "client-r2s2-1", nil, wc)
 	sessionID := readMessageStatusFrames(t, wc, 1)[0].SessionId
 
 	logs := captureSlogWarn(t)
@@ -236,8 +236,8 @@ func TestAnnounceClearNotPerformed_UnresolvableRowIsLoggedNotSilent(t *testing.T
 func TestAnnounceClearNotPerformed_RowWithoutClientIDIsLoggedNotSilent(t *testing.T) {
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
-	handler.handleChatMessageWithClientID(context.Background(), "chat-r2s2b", "", "hello", "", nil,
-		"", "", false, "client-r2s2-2", nil, wc)
+	handler.handleChatMessageWithClientID(context.Background(), "chat-r2s2b", "", "hello", "mia", nil,
+		"", "", "client-r2s2-2", nil, wc)
 	sessionID := readMessageStatusFrames(t, wc, 1)[0].SessionId
 	store := handler.agentLoop.ResolveSessionStore(sessionID)
 	require.NoError(t, store.AppendTranscript(sessionID, session.TranscriptEntry{
@@ -258,8 +258,8 @@ func TestAnnounceClearNotPerformed_RowWithoutClientIDIsLoggedNotSilent(t *testin
 func TestClearHeld_IsFramedAsAHeldMessageStatusAndNeverFollowsFailed(t *testing.T) {
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
-	handler.handleChatMessageWithClientID(context.Background(), "chat-held-clear", "", "/clear", "", nil,
-		"", "", false, "client-held-clear-1", nil, wc)
+	handler.handleChatMessageWithClientID(context.Background(), "chat-held-clear", "", "/clear", "mia", nil,
+		"", "", "client-held-clear-1", nil, wc)
 	received := readMessageStatusFrames(t, wc, 1)
 	require.Equal(t, "received", received[0].State)
 	sessionID := received[0].SessionId
@@ -302,8 +302,8 @@ func TestClearHeld_ReleaseMovesTheRecordedStateOnAndNeverOverwritesFailed(t *tes
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
 	seed := func(chatID, clientID string) (sessionID, entryID string) {
-		handler.handleChatMessageWithClientID(context.Background(), chatID, "", "/clear", "", nil,
-			"", "", false, clientID, nil, wc)
+		handler.handleChatMessageWithClientID(context.Background(), chatID, "", "/clear", "mia", nil,
+			"", "", clientID, nil, wc)
 		received := readMessageStatusFrames(t, wc, 1)
 		require.Equal(t, "received", received[0].State)
 		sessionID = received[0].SessionId

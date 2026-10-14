@@ -12,7 +12,7 @@ The browser belongs to the workspace whose chat opened it. That workspace's team
 
 If the video cannot connect, you get an error with a reason and a Retry button — never a blank frame, never a quieter stand-in picture.
 
-On a fresh install, Mia, Jim and Ava have browser tools. Admin and the shipped workers do not. Operators can change supported capability settings — see [agents](agents.md) and [tools](tools.md).
+On a fresh install, Mia and Jim have browser tools. Omnipus and the shipped workers do not. Operators can change supported capability settings — see [agents](agents.md) and [tools](tools.md).
 
 ## When you would use it
 

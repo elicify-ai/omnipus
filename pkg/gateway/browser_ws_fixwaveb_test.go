@@ -178,7 +178,7 @@ func TestBrowserWS_ReadLoop_StaysResponsiveWhileViewportHandlerRuns(t *testing.T
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, agent)
 	require.NoError(t, conn.WriteJSON(generated.BrowserAttachFrame{
 		Type:      string(generated.WsFrameTypeBrowserAttach),

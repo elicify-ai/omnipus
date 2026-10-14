@@ -839,7 +839,7 @@ func TestCreateAgent_ImmediateSessionCreate_NoRace(t *testing.T) {
 
 	// No sleep here — this is the exact sequence the bug report reproduced via
 	// curl (create, then immediately use).
-	sessBody, err := json.Marshal(gen.SessionCreateRequest{AgentId: &created.Id})
+	sessBody, err := json.Marshal(gen.SessionCreateRequest{AgentId: created.Id})
 	require.NoError(t, err)
 	sw := httptest.NewRecorder()
 	sr := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", bytes.NewReader(sessBody))
@@ -921,10 +921,8 @@ func TestCreateAgent_TypeWorker_PersistsAndEchoes(t *testing.T) {
 	// default general-purpose worker is locked by coreagent.SeedConfig, but
 	// that path is not the REST create path.
 	assert.False(t, created.Locked, "newly-created worker must not be locked")
-	assert.False(t, created.Default != nil && *created.Default,
-		"newly-created worker must not be the default")
 
-	// Persisted to config.json with type=worker and no default flag.
+	// Persisted with type=worker.
 	entry := findTypeTestAgentInStore(t, api.homePath, "My Worker")
 	require.NotNil(t, entry, "worker must be persisted")
 	assert.Equal(t, config.AgentTypeWorker, entry.Type)

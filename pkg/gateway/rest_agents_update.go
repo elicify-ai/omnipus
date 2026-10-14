@@ -40,7 +40,6 @@ type restAPIUpdateAgent struct {
 	updatedExecutor         *config.ExecutorConfig
 	newName                 string
 	newModel                string
-	defaultAgentIDChanged   bool
 	modelIdentityChanged    bool
 	mutationResult          agentstore.MutationResult
 	activationFailed        string
@@ -87,7 +86,6 @@ func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
 	add(req.ModelParams != nil, "model_params")
 	add(req.MaxToolIterations != nil, "max_tool_iterations")
 	add(req.MemoryEnabled != nil, "memory_enabled")
-	add(req.Default != nil, "default")
 	add(req.Voice != nil, "voice")
 	add(req.Executor != nil, "executor")
 	return fields
@@ -209,6 +207,13 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 		return true
 	}
 
+	// omnipus-system-agent FR-120 / B1: the default-agent concept is gone.
+	// A client still sending `default` is refused loudly before any write —
+	// in both validation modes, so an ordinary field bundled with it is not
+	// silently saved while the retired one is dropped.
+	if rejectRetiredDefaultField(uf.w, uf.rawBody) {
+		return true
+	}
 	validateEnabled := uf.cfg.Gateway.ValidateInbound
 	if validateEnabled && !validateAgentIdentitySchema(uf.w, "AgentUpdateRequest", uf.rawBody, false) {
 		return true
@@ -271,7 +276,30 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	if !acceptAgentIdentityWrite(uf.w, &uf.ru.req, uf.presence) {
 		return true
 	}
+	if uf.refuseOmnipusRules() {
+		return true
+	}
 	return uf.validateMaxToolIterations()
+}
+
+// refuseOmnipusRules applies the Omnipus system agent's write rules before any
+// field is persisted: a rename to the reserved name is refused (FR-002), and a
+// per-agent "ask" for Omnipus in either capability form is refused (FR-022).
+func (uf *restAPIUpdateAgentFlow) refuseOmnipusRules() bool {
+	if uf.ru.req.Name != nil && refuseReservedAgentName(uf.w, *uf.ru.req.Name) {
+		return true
+	}
+	if changes := uf.ru.req.ToolPolicyChanges; changes != nil && changes.Set != nil {
+		if refuseOmnipusPerAgentAsk(uf.w, uf.ru.id, policyMapOf(*changes.Set)) {
+			return true
+		}
+	}
+	if tc := uf.ru.req.ToolsCfg; tc != nil && tc.Builtin != nil {
+		if refuseOmnipusPerAgentAsk(uf.w, uf.ru.id, policyMapOf(tc.Builtin.Policies)) {
+			return true
+		}
+	}
+	return false
 }
 
 // acceptAgentIdentityWrite rejects a present figure, role, or colour that is
@@ -376,17 +404,6 @@ func (uf *restAPIUpdateAgentFlow) rejectSystemAgentDisable() bool {
 // validateTarget enforces agent-type, lock, skill, and executor constraints.
 func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 	uf.foundAgent = uf.cfg.Agents.List[uf.foundIdx]
-	// Worker agents can never be the routing default — they are not chat targets
-	// (invoked only via delegation). Reject an attempt to star a worker before
-	// any work is done so the single-default invariant and routing stay coherent.
-	if uf.ru.req.Default != nil && *uf.ru.req.Default && uf.foundAgent.IsWorker() {
-		jsonErr(
-			uf.w,
-			http.StatusBadRequest,
-			"a worker agent cannot be set as the default agent (workers are not chat targets)",
-		)
-		return true
-	}
 	// Worker agents have no heartbeat — they execute one delegated task at a
 	// Heartbeat is workspace-scoped (ADR-027); per-agent heartbeat writes on the
 	// agent PUT path are silently ignored. Workers still cannot carry heartbeat.
@@ -586,27 +603,12 @@ func (uf *restAPIUpdateAgentFlow) preparePersistence() bool {
 	// stays nil (skipping the check — see withToolPolicyCoverageGuard's doc
 	// comment) unless the caller actually sent tools_cfg.
 
-	// defaultAgentIDChanged is set INSIDE the persist closure below, iff this
-	// request actually flips cfg.Agents.Defaults.DefaultAgentID (the settings
-	// singleton registry.GetDefaultAgent/routing.resolveDefaultAgentID
-	// consult). It gates needsReload further down: AgentProfile.tsx's autosave
-	// sends `default: <current value>` on EVERY save (not only the deliberate
-	// ★ toggle), so gating on mere req.Default != nil would force a full
-	// reload — dropping the WebSocket — on every unrelated profile edit. A
-	// full reload is genuinely required here (not merely convenient) because
-	// both registry.GetDefaultAgent's cached defaultAgentOverride field and
-	// AgentRegistry's nested *routing.RouteResolver each capture their own
-	// config.Config snapshot at last full-registry-rebuild time — a bare
-	// SwapConfig (what every OTHER config-only field on this handler relies
-	// on) never reaches either, so without a rebuild the two ladders would
-	// keep disagreeing exactly as this bug fix set out to close.
-
 	// modelIdentityChanged is set INSIDE the persist closure below, iff this
 	// request actually changed the stored primary model, its provider, or the
 	// fallback chain. Compared against the stored record rather than keyed on
-	// req.Model/req.Provider/req.FallbackModels being present, for the same
-	// reason as defaultAgentIDChanged: AgentProfile.tsx's autosave resends all
-	// three on every save, and an unchanged model must not rebuild the agent.
+	// req.Model/req.Provider/req.FallbackModels being present, because
+	// AgentProfile.tsx's autosave resends all three on every save, and an
+	// unchanged model must not rebuild the agent.
 
 	// CLAUDE.md hard constraint 6 — same caller-side completeness check
 	// createAgent performs, for the same reason: a tools_cfg.builtin sent here
@@ -710,22 +712,9 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	// on the NEXT turn with no reload required at all, unlike the old
 	// per-agent policy this replaced.
 	//
-	// defaultAgentIDChanged (set inside the persist closure above, iff this
-	// request actually flipped agents.defaults.default_agent_id) also forces
-	// a reload — see that variable's doc comment. This is deliberately NOT
-	// keyed off req.Default != nil (which AgentProfile.tsx's autosave sends
-	// on every save, unrelated edits included); only a real transition of the
-	// singleton earns the WebSocket-dropping cost of a full rebuild, because
-	// nothing short of one re-syncs registry.GetDefaultAgent's cached
-	// override AND the registry's nested RouteResolver's own config
-	// snapshot — the two ladders this bug fix makes agree.
-	//
-	// fastAgentUpsert (issue #571), not a full config reload: a default-agent
-	// flip is only real once the registry's cached override AND its nested
-	// RouteResolver snapshot are rebuilt (ADR-037 — a control that looks like
-	// it worked and changed no routing is the anti-pattern this project
-	// bans), and a soul change is only real once a fresh AgentInstance/
-	// ContextBuilder picks up the new SOUL.md — but neither requires
+	// fastAgentUpsert (issue #571), not a full config reload: a soul change is
+	// only real once a fresh AgentInstance/ContextBuilder picks up the new
+	// SOUL.md — but that does not require
 	// restarting channels/cron/schedulers/the plan engine or rebuilding
 	// every OTHER agent's instance, only this one agent's. See
 	// AgentLoop.UpsertAgentFast for how the resolver/override/wiring parity
@@ -779,9 +768,16 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	// single-agent rebuild for the agent's next turn to use it (D18: a
 	// running turn keeps the instance it started with).
 	maxToolIterationsChanged := uf.ru.req.MaxToolIterations != nil || uf.ru.clearsMaxToolIterations
-	needsReload := uf.ru.req.Soul != nil || uf.ru.defaultAgentIDChanged || contextWindowOverrideChanged ||
+	// #1296: the running AgentInstance snapshots its tool policy and MCP
+	// server assignment at construction, so a permission change (sparse
+	// tool_policy_changes, a tools_cfg replacement, or an mcp_servers write)
+	// needs the same single-agent rebuild; without it the next peer request
+	// and the next tool resolution keep the old decision until a restart.
+	permissionsChanged := uf.ru.req.ToolPolicyChanges != nil || uf.ru.req.ToolsCfg != nil ||
+		uf.ru.req.McpServers != nil
+	needsReload := uf.ru.req.Soul != nil || contextWindowOverrideChanged ||
 		uf.ru.req.Skills != nil || uf.ru.req.ModelParams != nil || uf.ru.modelIdentityChanged ||
-		maxToolIterationsChanged
+		maxToolIterationsChanged || permissionsChanged
 	if needsReload {
 		// fastAgentUpsert returns a non-empty message only when neither the
 		// single-agent swap nor its full-reload fallback could publish the
@@ -861,20 +857,13 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 		soul = ""
 	}
 	ag.Soul = soul
-	// Populate Default, Skills, and Executor from the live config after the write
-	// (handles both the req.Default=true case and the leave-unchanged case, and
-	// ensures a GET→edit→PUT round-trip echoes the persisted executor).
+	// Populate Skills and Executor from the live config after the write, so a
+	// GET→edit→PUT round-trip echoes the persisted executor.
 	if liveCfg := uf.ru.a.agentLoop.GetConfig(); liveCfg != nil {
 		for _, ac := range liveCfg.Agents.List {
 			if ac.ID == agentID {
 				applyStoredAgentIdentity(&ag, ac)
 				ag.Type = coreagent.ToWireType(ac)
-				// Derived from the settings singleton — see listAgents' comment
-				// for the full rationale. liveCfg is fetched fresh above, and
-				// (when defaultAgentIDChanged fired) TriggerReload has already
-				// rebuilt it from the just-written config.json, so this reflects
-				// the singleton this exact request just persisted.
-				ag.Default = boolPtr(ac.ID == liveCfg.Agents.Defaults.DefaultAgentID)
 				// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
 				ag.NeedsModel = agentNeedsModel(liveCfg, &ac)
 				// ADR-067 FR-016/FR-031 (T067-09): the PUT response carries
@@ -982,48 +971,6 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 			return fmt.Errorf("invalid revision: %w", updateErr)
 		}
 		return &configurationMutationError{Result: result, Err: fmt.Errorf("update agent entity record: %w", updateErr)}
-	}
-	// Single-default invariant, for real this time: the settings
-	// singleton (agents.defaults.default_agent_id) is the ONLY thing
-	// registry.GetDefaultAgent and routing.resolveDefaultAgentID
-	// consult, and the ONLY thing the wire `default` field is derived
-	// from (listAgents/getAgent above, this handler's response
-	// below) — so it is also the only thing that needs writing here.
-	// There is no more N-write fan-out across every OTHER agent's
-	// entity record: a per-entity bool never had to be reconciled
-	// once "the one default" became a single string behind the
-	// existing config-write lock (this closure already holds
-	// a.configMu via withToolPolicyCoverageGuard), and that old loop
-	// was itself racy (each Update below was its own
-	// independently-locked write, so two concurrent PUTs to two
-	// different agents could each "win" with no shared lock to
-	// serialize them — precisely the failure mode ADR-054 D6.4
-	// retired RepairMultipleDefaults over).
-	//
-	// true  → point the singleton at this agent (worker guard
-	//         already rejected this request above if foundAgent is a
-	//         worker, so `id` is always a valid chat-target here).
-	// false → clear the singleton ONLY if it currently names this
-	//         agent, so un-starring the actual default reverts to
-	//         the registry's own fallback ladder (main sentinel,
-	//         then first non-worker) instead of leaving the
-	//         singleton pointed at an agent that just un-defaulted
-	//         itself. Un-starring an agent that the singleton
-	//         doesn't currently name is a no-op — matches the old
-	//         per-entity semantics ("clear this agent only, leave
-	//         others unchanged").
-	if rp.ru.req.Default != nil {
-		defaultsMap := ensureMap(m, "agents", "defaults")
-		cur, _ := defaultsMap["default_agent_id"].(string)
-		if *rp.ru.req.Default {
-			if cur != rp.ru.id {
-				defaultsMap["default_agent_id"] = rp.ru.id
-				rp.ru.defaultAgentIDChanged = true
-			}
-		} else if cur == rp.ru.id {
-			defaultsMap["default_agent_id"] = ""
-			rp.ru.defaultAgentIDChanged = true
-		}
 	}
 	// O6: heartbeat is now fully per-agent (written inside the agent-found
 	// block above). The legacy global heartbeat block was removed; there is
@@ -1169,28 +1116,6 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 		}
 		agentRec.FallbackModels = fbs
 	}
-	// Default flag: ADR-054 D6.4 moved default-agent RESOLUTION
-	// entirely to the settings singleton
-	// (cfg.Agents.Defaults.DefaultAgentID — see registry.go's
-	// GetDefaultAgent and route.go's resolveDefaultAgentID). This
-	// per-entity bool is retained only for backward display
-	// compatibility (see config.go's ADR-054 D6.4 note) — it is
-	// NOT read by any resolution logic, and the wire `default`
-	// field is derived from the singleton at every response site
-	// (listAgents/getAgent above, updateAgent's response below),
-	// never from this field. The actual singleton write happens
-	// further down in THIS SAME a.configMu-locked closure (see the
-	// "agents.defaults.default_agent_id" write after the entity
-	// write below succeeds), so both land atomically or not at
-	// all — that replaces the old racy N-write fan-out that used
-	// to clear Default on every OTHER agent's entity record (see
-	// git history: independently-locked per-entity writes with no
-	// shared lock could each set Default=true, which is exactly
-	// the composition ADR-054 D6.4 retired RepairMultipleDefaults
-	// over).
-	if rp.ru.req.Default != nil {
-		agentRec.Default = *rp.ru.req.Default
-	}
 }
 
 func (rp *restAPIUpdateAgentPersistAgent) updateToolsConfig(agentRec *config.AgentConfig) {
@@ -1306,4 +1231,28 @@ func (rp *restAPIUpdateAgentPersistAgent) updateExecutorAndSkills(agentRec *conf
 			agentRec.Skills = nil
 		}
 	}
+}
+
+// retiredDefaultFieldRefusal is the 400 body for a write still carrying the
+// retired `default` flag (omnipus-system-agent FR-120, K12).
+const retiredDefaultFieldRefusal = "default is retired — there is no default agent; " +
+	"bind each channel to a workspace and its main agent instead"
+
+// rejectRetiredDefaultField writes a 400 and returns true when the request
+// body's top level carries the retired `default` key. A body that is not a
+// JSON object is left to the normal decode, which reports it.
+func rejectRetiredDefaultField(w http.ResponseWriter, raw []byte) bool {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return false
+	}
+	if _, present := top["default"]; !present {
+		return false
+	}
+	writeJSON(w, http.StatusBadRequest, gen.ErrorResponse{
+		Error: retiredDefaultFieldRefusal,
+		Code:  strPtr("invalid_input"),
+		Field: strPtr("default"),
+	})
+	return true
 }

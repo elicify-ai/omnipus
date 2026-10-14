@@ -155,6 +155,20 @@ channels:
         $ref: '#/components/messages/MailPanelObserverAckFrame'
       MailPanelObserverErrorFrame:
         $ref: '#/components/messages/MailPanelObserverErrorFrame'
+      SecretRequestFrame:
+        $ref: '#/components/messages/SecretRequestFrame'
+      SecretRequestResolvedFrame:
+        $ref: '#/components/messages/SecretRequestResolvedFrame'
+      AttachRoomFrame:
+        $ref: '#/components/messages/AttachRoomFrame'
+      RoomSnapshotFrame:
+        $ref: '#/components/messages/RoomSnapshotFrame'
+      RoomEntryFrame:
+        $ref: '#/components/messages/RoomEntryFrame'
+      RoomMemberStateFrame:
+        $ref: '#/components/messages/RoomMemberStateFrame'
+      RoomMetaFrame:
+        $ref: '#/components/messages/RoomMetaFrame'
   browser:
     address: /api/v1/browser/ws
     description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
@@ -313,6 +327,55 @@ operations:
       $ref: '#/channels/chat'
     messages:
     - $ref: '#/channels/chat/messages/MailPanelObserverFrame'
+  sendAttachRoom:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: Attach to a room and catch up after a cursor (spec K45).
+    messages:
+    - $ref: '#/channels/chat/messages/AttachRoomFrame'
+  receiveSecretRequest:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: Secure secret card request — value-free (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/SecretRequestFrame'
+  receiveSecretRequestResolved:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: A secret request left the pending state (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/SecretRequestResolvedFrame'
+  receiveRoomSnapshot:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: Room catch-up answer to attach_room (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/RoomSnapshotFrame'
+  receiveRoomEntry:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: A new room entry, live (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/RoomEntryFrame'
+  receiveRoomMemberState:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: A room member's delivery state changed (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/RoomMemberStateFrame'
+  receiveRoomMeta:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: Room members, mutes, pause, cost or read-only state changed (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/RoomMetaFrame'
   receiveSessionStarted:
     action: receive
     channel:
@@ -1570,7 +1633,804 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/MailPanelObserverErrorFrame'
+    SecretRequestFrame:
+      name: SecretRequestFrame
+      title: secret_request
+      summary: Secure secret card request — value-free (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SecretRequestFrame'
+    SecretRequestResolvedFrame:
+      name: SecretRequestResolvedFrame
+      title: secret_request_resolved
+      summary: A secret request left the pending state (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SecretRequestResolvedFrame'
+    AttachRoomFrame:
+      name: AttachRoomFrame
+      title: attach_room
+      summary: Attach this connection to a room and catch up after a cursor (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/AttachRoomFrame'
+    RoomSnapshotFrame:
+      name: RoomSnapshotFrame
+      title: room_snapshot
+      summary: Room catch-up answer to attach_room (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RoomSnapshotFrame'
+    RoomEntryFrame:
+      name: RoomEntryFrame
+      title: room_entry
+      summary: A new room entry, live (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RoomEntryFrame'
+    RoomMemberStateFrame:
+      name: RoomMemberStateFrame
+      title: room_member_state
+      summary: A room member's delivery state changed (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RoomMemberStateFrame'
+    RoomMetaFrame:
+      name: RoomMetaFrame
+      title: room_meta
+      summary: Room members, mutes, pause, cost or read-only state changed (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RoomMetaFrame'
   schemas:
+    RoomRef:
+      title: RoomRef
+      description: >
+        Reference from a main-session entry (or an approval) to the room (group
+        chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215,
+        FR-251). Display and navigation data only: it never grants access to the
+        room. `role` says whether the entry is the room's request to this agent or
+        this agent's answer into the room; a room pre-admission approval card
+        (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml
+        (components.schemas.RoomRef) — keep both copies in sync by hand.
+      type: object
+      required:
+        - room_id
+        - room_name
+        - request_id
+        - role
+      additionalProperties: false
+      properties:
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Id of the room.
+        room_name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Display name of the room at the time the entry was written.
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            The room delivery id, which is also the receiver's request id
+            (spec §6.11, FR-216).
+        role:
+          type: string
+          enum:
+            - request
+            - answer
+          description: >
+            `request` — the room's request delivered to this agent;
+            `answer` — this agent's answer appended to the room.
+    WorkflowStart:
+      title: WorkflowStart
+      description: >
+        Optional target data on a MessageFrame that starts an Omnipus workflow
+        from a screen (spec omnipus-system-agent K8; FR-012). Target data only —
+        it names which workflow and which workspace the user picked; it is never
+        an instruction and grants nothing. The server treats it as data for the
+        Omnipus turn (landing 1, WU-10). Mirrored inline in
+        contracts/asyncapi.yaml (components.schemas.WorkflowStart) — keep both
+        copies in sync by hand.
+      type: object
+      required:
+        - workflow
+        - target_workspace_id
+      additionalProperties: false
+      properties:
+        workflow:
+          type: string
+          enum:
+            - W1
+            - W18
+          description: >
+            W1 — create an agent in a workspace; W18 — set up a whole team.
+        target_workspace_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The workspace the workflow targets.
+    SecretRecipientDisplay:
+      title: SecretRecipientDisplay
+      description: >
+        Server-composed, value-free description of where a secret will be used
+        (spec omnipus-system-agent K2; FR-065). Built by the server from the
+        recorded recipient descriptor; a client never supplies it. `lines` are the
+        display lines for the kind: endpoint (provider_key); transport + command
+        or URL (mcp_env); channel instance + field (channel_credential); hosts +
+        username + mailbox id (mailbox_password); workspace + agent + variable
+        (agent_private). Mirrored inline in contracts/asyncapi.yaml
+        (components.schemas.SecretRecipientDisplay) — keep both copies in sync by
+        hand.
+      type: object
+      required:
+        - kind
+        - lines
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+            - provider_key
+            - mcp_env
+            - channel_credential
+            - mailbox_password
+            - agent_private
+          description: Recipient kind.
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            type: string
+            minLength: 1
+            maxLength: 500
+          description: Display lines, in order. Never null, never empty.
+    SecretRequestField:
+      title: SecretRequestField
+      description: >
+        One field of a secret card (spec omnipus-system-agent K1; FR-061). The
+        card holds 1–8 fields; the user types one value per field, sent only in
+        the authenticated REST submit (SecretSubmitRequest.values, keyed by
+        `key`). Mirrored inline in contracts/asyncapi.yaml
+        (components.schemas.SecretRequestField) — keep both copies in sync by
+        hand.
+      type: object
+      required:
+        - key
+        - label
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+          pattern: '^[a-z][a-z0-9_]{0,31}$'
+          description: Field key; the submit's `values` map uses exactly these keys.
+        label:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Field label shown on the card.
+    SecretRequestFrame:
+      title: SecretRequestFrame
+      description: >
+        Server → client (spec omnipus-system-agent K1; FR-061, FR-078, FR-240).
+        A secure secret card: an agent asks the person to type one or more secret
+        values. The frame is value-free; values travel only in the authenticated
+        REST submit (POST /api/v1/secret-requests/{id}/submit). Every field is
+        server-derived from the request record — the request id is never
+        authority by itself (§6.7). The card renders in the chat whose session id
+        is `root_session_id` (or `session_id` when omitted), the same root-origin
+        rule as approvals (L1-AMENDMENTS-20261013 §1.3, R7). THIS FILE EXISTS for
+        the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync
+        — the GENERATING copy is the inline schema in contracts/asyncapi.yaml.
+        Keep both copies in sync by hand. Landing 1, WU-4 produces it.
+      type: object
+      required:
+        - type
+        - request_id
+        - session_id
+        - acting_agent_id
+        - acting_agent_name
+        - purpose
+        - recipient
+        - fields
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: secret_request
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Server-minted id of the secret request.
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The acting session that asked for the secret.
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            Server-derived root of the acting session's chain (the chat the card
+            renders in). Omitted when equal to session_id.
+        acting_agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The agent that asked.
+        acting_agent_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Display name of the agent that asked.
+        origin_label:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >
+            Server-derived turn origin label (§6.18), e.g. "for group <name>" when
+            the work came from a room. Omitted for a plain web turn.
+        workspace_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Workspace of the acting session, when it has one.
+        owner:
+          type: object
+          required:
+            - workspace_id
+            - agent_id
+          additionalProperties: false
+          properties:
+            workspace_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+            agent_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+          description: >
+            The owning (workspace, agent) pair — present only for the
+            agent_private kind.
+        purpose:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Why the agent needs the secret, in the agent's words.
+        recipient:
+          $ref: '#/components/schemas/SecretRecipientDisplay'
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/SecretRequestField'
+          description: The fields to fill, in order. Never null, never empty.
+    SecretRequestResolvedFrame:
+      title: SecretRequestResolvedFrame
+      description: >
+        Server → client (spec omnipus-system-agent K3; FR-074). Emitted once to
+        every connected client when a secret request leaves the pending state.
+        Value-free. THIS FILE EXISTS for the Constraint #8 5-step process and the
+        pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
+        schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
+        Landing 1, WU-4 produces it.
+      type: object
+      required:
+        - type
+        - request_id
+        - state
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: secret_request_resolved
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The request_id from the secret_request frame this resolves.
+        state:
+          type: string
+          enum:
+            - submitted
+            - cancelled
+            - stopped
+            - interrupted
+            - refused
+          description: The terminal state the request reached.
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The acting session the request belonged to.
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            Root of the acting session's chain, so the root chat's card clears
+            without a lookup. Omitted when equal to session_id.
+    SessionStateSecretRequest:
+      title: SessionStateSecretRequest
+      description: >
+        One entry of the `secret_requests` list on SessionStateFrame and
+        SessionSnapshotFrame (spec omnipus-system-agent K4; FR-074, FR-079): a
+        pending request, or a recent terminal one (value-free; at most the last
+        32 terminal entries per session, §6.2), so a reloaded card restores its
+        true state. Absence of an entry is never success. Same card fields as
+        SecretRequestFrame plus `state`. Mirrored inline in
+        contracts/asyncapi.yaml (components.schemas.SessionStateSecretRequest) —
+        keep both copies in sync by hand.
+      type: object
+      required:
+        - request_id
+        - session_id
+        - state
+        - acting_agent_id
+        - acting_agent_name
+        - purpose
+        - recipient
+        - fields
+        - updated_at
+      additionalProperties: false
+      properties:
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Same value and semantics as SecretRequestFrame.root_session_id.
+        state:
+          type: string
+          enum:
+            - pending
+            - submitted
+            - cancelled
+            - stopped
+            - interrupted
+            - refused
+        acting_agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        acting_agent_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        origin_label:
+          type: string
+          minLength: 1
+          maxLength: 200
+        workspace_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        owner:
+          type: object
+          required:
+            - workspace_id
+            - agent_id
+          additionalProperties: false
+          properties:
+            workspace_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+            agent_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+          description: Present only for the agent_private kind.
+        purpose:
+          type: string
+          minLength: 1
+          maxLength: 500
+        recipient:
+          $ref: '#/components/schemas/SecretRecipientDisplay'
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/SecretRequestField'
+        reference_names:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+            minLength: 1
+            maxLength: 256
+          description: >
+            Reference names the submitted values were stored under. Present only
+            when state is `submitted`.
+        updated_at:
+          type: string
+          format: date-time
+          description: When the request last changed state.
+    RoomEntryAuthor:
+      title: RoomEntryAuthor
+      description: >
+        Author of a room entry (spec omnipus-system-agent K26): the person (kind
+        `user`) or a member agent (kind `agent`, with agent_id). Mirrored inline
+        in contracts/asyncapi.yaml (components.schemas.RoomEntryAuthor) — keep
+        both copies in sync by hand.
+      type: object
+      required:
+        - kind
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+            - user
+            - agent
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Present iff kind is `agent`.
+    RoomDeliveryState:
+      title: RoomDeliveryState
+      description: >
+        State of one (room message, member) delivery (spec omnipus-system-agent
+        K27, §6.11; FR-169, FR-201, FR-213). request_id is the stable delivery id,
+        which is also the receiver's request id. The values are exactly the
+        §6.11 states; the UI labels are in the §6.11 table. Anything the server
+        cannot prove after a restart is `unknown`, never `working`. Mirrored
+        inline in contracts/asyncapi.yaml (components.schemas.RoomDeliveryState)
+        — keep both copies in sync by hand.
+      type: object
+      required:
+        - agent_id
+        - request_id
+        - state
+      additionalProperties: false
+      properties:
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The member agent.
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        state:
+          type: string
+          enum:
+            - recorded
+            - awaiting_approval
+            - admitted
+            - held
+            - working
+            - waiting_on_user
+            - answered
+            - refused
+            - failed
+            - interrupted
+            - unavailable
+            - cancelled
+            - unknown
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Optional reason, e.g. `rate_limit` or `removed`.
+    RoomEntry:
+      title: RoomEntry
+      description: >
+        One entry of a room transcript (spec omnipus-system-agent K26; FR-166).
+        Group entries carry the authoring agent and the resolved addressees.
+        Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntry)
+        — keep both copies in sync by hand.
+      type: object
+      required:
+        - id
+        - room_id
+        - seq
+        - author
+        - text
+        - addressees
+        - after_pause
+        - deliveries
+        - timestamp
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Position in the room transcript; strictly increasing.
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Echo of RoomMessageRequest.client_message_id for a person's entry.
+        author:
+          $ref: '#/components/schemas/RoomEntryAuthor'
+        text:
+          type: string
+          maxLength: 5242880
+        addressees:
+          type: array
+          maxItems: 256
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Resolved addressee agent ids. Never null.
+        after_pause:
+          type: boolean
+          description: >
+            True for an answer to work consumed before a /pause; such an answer
+            never forwards its mentions (§6.11).
+        deliveries:
+          type: array
+          maxItems: 256
+          items:
+            $ref: '#/components/schemas/RoomDeliveryState'
+          description: Per-member delivery states for this entry. Never null.
+        timestamp:
+          type: string
+          format: date-time
+    RoomEntryFrame:
+      title: RoomEntryFrame
+      description: >
+        Server → client (spec omnipus-system-agent K26, K45). A new room entry,
+        live, after attach_room. THIS FILE EXISTS for the Constraint #8 5-step
+        process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is
+        the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by
+        hand. Landing 1, WU-15 produces it.
+      type: object
+      required:
+        - type
+        - room_id
+        - seq
+        - entry
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: room_entry
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Room stream position of this frame.
+        entry:
+          $ref: '#/components/schemas/RoomEntry'
+    RoomMemberStateFrame:
+      title: RoomMemberStateFrame
+      description: >
+        Server → client (spec omnipus-system-agent K27, K45; FR-201, FR-213). A
+        member's delivery state changed. THIS FILE EXISTS for the Constraint #8
+        5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING
+        copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in
+        sync by hand. Landing 1, WU-15 produces it.
+      type: object
+      required:
+        - type
+        - room_id
+        - seq
+        - delivery
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: room_member_state
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+        delivery:
+          $ref: '#/components/schemas/RoomDeliveryState'
+    AttachRoomFrame:
+      title: AttachRoomFrame
+      description: >
+        Client → server (spec omnipus-system-agent K45; FR-201, FR-213, FR-217).
+        Attach this connection to a room and catch up from after_seq. Carried on
+        the existing hub connection without an agent session. The server answers
+        with room_snapshot (entries after the cursor, in order), then live
+        room_entry / room_member_state / room_meta frames, each with seq.
+        Landing 1, WU-15 handles it; until then the server has no handler for
+        this frame type.
+      type: object
+      required:
+        - type
+        - room_id
+        - after_seq
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: attach_room
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        after_seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Highest room seq the client already has; 0 for a first load.
+    RoomSnapshotFrame:
+      title: RoomSnapshotFrame
+      description: >
+        Server → client (spec omnipus-system-agent K45, K26, K27). The answer to
+        attach_room: the room entries after the cursor in order, the members,
+        mutes, member states, pause state, generation and allocated cost.
+        `complete` is false when the server could not serve every entry after the
+        cursor. THIS FILE EXISTS for the Constraint #8 5-step process and the
+        pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
+        schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
+        Landing 1, WU-15 produces it.
+      type: object
+      required:
+        - type
+        - room_id
+        - seq
+        - entries
+        - members
+        - muted
+        - member_states
+        - paused
+        - generation
+        - allocated_cost_micro_usd
+        - allocated_cost_unpriced
+        - complete
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: room_snapshot
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Room stream position this snapshot is current to.
+        entries:
+          type: array
+          maxItems: 10000
+          items:
+            $ref: '#/components/schemas/RoomEntry'
+          description: Entries after the cursor, in seq order. Never null.
+        members:
+          type: array
+          maxItems: 256
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+        muted:
+          type: array
+          maxItems: 256
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+        member_states:
+          type: array
+          maxItems: 10000
+          items:
+            $ref: '#/components/schemas/RoomDeliveryState'
+          description: Current delivery states of outstanding requests. Never null.
+        paused:
+          type: boolean
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+        read_only_reason:
+          type: string
+          minLength: 1
+          maxLength: 200
+        allocated_cost_micro_usd:
+          type: integer
+          format: int64
+          minimum: 0
+        allocated_cost_unpriced:
+          type: boolean
+        complete:
+          type: boolean
+    RoomMetaFrame:
+      title: RoomMetaFrame
+      description: >
+        Server → client (spec omnipus-system-agent K45). The room's members,
+        mutes, pause state, allocated cost or read-only state changed. THIS FILE
+        EXISTS for the Constraint #8 5-step process and the
+        pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
+        schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
+        Landing 1, WU-15 produces it.
+      type: object
+      required:
+        - type
+        - room_id
+        - seq
+        - members
+        - muted
+        - paused
+        - generation
+        - allocated_cost_micro_usd
+        - allocated_cost_unpriced
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: room_meta
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+        members:
+          type: array
+          maxItems: 256
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+        muted:
+          type: array
+          maxItems: 256
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+        paused:
+          type: boolean
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+        read_only_reason:
+          type: string
+          minLength: 1
+          maxLength: 200
+        allocated_cost_micro_usd:
+          type: integer
+          format: int64
+          minimum: 0
+        allocated_cost_unpriced:
+          type: boolean
     ChatParticipant:
       title: ChatParticipant
       description: >
@@ -1698,6 +2558,13 @@ components:
       - mail_panel_observer
       - mail_panel_observer_ack
       - mail_panel_observer_error
+      - secret_request
+      - secret_request_resolved
+      - attach_room
+      - room_snapshot
+      - room_entry
+      - room_member_state
+      - room_meta
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -1742,6 +2609,12 @@ components:
           media:
             minItems: 1
       properties:
+        workflow_start:
+          $ref: '#/components/schemas/WorkflowStart'
+          description: >
+            Spec omnipus-system-agent K8 (FR-012). Optional target data naming the
+            workflow (W1 / W18) and the target workspace the user picked on a
+            screen. Data only, never an instruction.
         type:
           type: string
           const: message
@@ -1814,8 +2687,8 @@ components:
           description: 'Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks
             a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn
             to the chosen model, falling back to the agent''s `model` config when absent; `workspace_id` — the active workspace
-            this chat belongs to; and `workspace_setup_kickoff` (boolean) — a one-time marker that this message is the workspace
-            setup kickoff for `metadata.workspace_id`.
+            this chat belongs to; and `workspace_setup_kickoff` (boolean) — a retired client kickoff marker that the server
+            refuses (see the property below).
 
             '
           properties:
@@ -1842,11 +2715,12 @@ components:
               example: 01JXDEFAULT000000000000001
             workspace_setup_kickoff:
               type: boolean
-              description: 'One-time marker that this message is the workspace-setup kickoff turn for `metadata.workspace_id`.
-                When true, the server treats the frame as the one-time workspace-setup kickoff — the frame''s `content` is
-                ignored and replaced by a server-composed instruction; a system-role entry is recorded; the workspace''s `setup_pending`
-                flag is cleared exactly once (idempotency-guarded); duplicate and malformed kickoffs are rejected with an
-                error frame. Absent/false for ordinary messages.
+              description: 'Retired client kickoff marker (omnipus-system-agent K9, FR-047). The server is the only producer
+                of the workspace-setup offer: right after a workspace is created with an empty team it posts the offer into
+                Omnipus''s existing main chat and clears that workspace''s `setup_pending` exactly once. A client frame with this
+                key set to true is refused with an error frame and has no other effect ("workspace setup is started by the server
+                when a workspace is created; a client kickoff is refused", with session_id echoed only when the frame carried one);
+                a non-boolean value is refused as malformed. Absent or false for ordinary messages.
 
                 '
               example: true
@@ -2109,6 +2983,13 @@ components:
       - content
       additionalProperties: false
       properties:
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+            main-session entry is a room request to this agent or this agent's
+            answer into a room, so live, history and replay render the same
+            collapsed entry.
         type:
           type: string
           const: token
@@ -2224,6 +3105,13 @@ components:
       - session_id
       additionalProperties: false
       properties:
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+            main-session entry is a room request to this agent or this agent's
+            answer into a room, so live, history and replay render the same
+            collapsed entry.
         type:
           type: string
           const: done
@@ -3722,6 +4610,13 @@ components:
       - role
       additionalProperties: false
       properties:
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+            main-session entry is a room request to this agent or this agent's
+            answer into a room, so live, history and replay render the same
+            collapsed entry.
         type:
           type: string
           const: replay_message
@@ -4496,6 +5391,35 @@ components:
       - expires_in_ms
       additionalProperties: false
       properties:
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
+            session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat
+            whose session id equals this value renders the inline approval.
+            Omitted when equal to session_id.
+        acting_agent_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263; spec K7). Display name of the
+            agent that made the call, named in the card header.
+        origin_label:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >
+            Spec K7, §6.18. Server-derived turn origin, e.g. "while answering
+            <person> on <connection>", "for group <name>", "asked by <Agent>".
+            Omitted for a plain web turn.
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec K7, FR-251. Present on a room's pre-admission approval card
+            (request id = delivery id).
         type:
           type: string
           const: tool_approval_required
@@ -4568,6 +5492,15 @@ components:
       - state
       additionalProperties: false
       properties:
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
+            session's chain (ParentSessionID walk, 16 hops, cycle guard): lets the
+            root chat's card clear without a lookup.
+            Omitted when equal to session_id.
         type:
           type: string
           const: tool_approval_resolved
@@ -4815,6 +5748,60 @@ components:
       - expires_in_ms
       additionalProperties: false
       properties:
+        tool_call_id:
+          type: string
+          minLength: 1
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as
+            ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete
+            and approvable. Optional until bundle B3 (WU-8) makes it required.
+        turn_id:
+          type: string
+          minLength: 1
+          description: >
+            Same value as ToolApprovalRequiredFrame.turn_id. Optional until
+            bundle B3 (WU-8).
+        args:
+          type: object
+          additionalProperties: true
+          description: >
+            Same value as ToolApprovalRequiredFrame.args — an object, never null.
+            Optional until bundle B3 (WU-8). The snapshot reaches exactly the
+            connections the live frame reaches (same audience rule).
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommandSegmentInfo'
+          description: Same value and rules as ToolApprovalRequiredFrame.segments.
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
+            session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat
+            whose session id equals this value renders the inline approval.
+            Omitted when equal to session_id.
+        acting_agent_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263; spec K7). Display name of the
+            agent that made the call, named in the card header.
+        origin_label:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >
+            Spec K7, §6.18. Server-derived turn origin, e.g. "while answering
+            <person> on <connection>", "for group <name>", "asked by <Agent>".
+            Omitted for a plain web turn.
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec K7, FR-251. Present on a room's pre-admission approval card
+            (request id = delivery id).
         approval_id:
           type: string
           minLength: 1
@@ -4871,6 +5858,17 @@ components:
       - emitted_at
       additionalProperties: false
       properties:
+        secret_requests:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/SessionStateSecretRequest'
+          description: >
+            Spec omnipus-system-agent K4 (FR-079). Pending and recent terminal
+            secret requests visible to this connection, so a reloaded secret card
+            restores its true state. Always an array when present, never null;
+            absence of a request is never read as success. Optional: an emit that
+            carries no secret-request state omits it.
         type:
           type: string
           const: session_state
@@ -5197,6 +6195,20 @@ components:
       - status
       additionalProperties: false
       properties:
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with
+            the chat request that started it (QR pairing in chat, WU-7).
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            Spec K10. The chat session the pairing belongs to, when it was
+            started from a chat.
         type:
           type: string
           const: whatsapp_pairing
@@ -5228,6 +6240,20 @@ components:
       - active
       additionalProperties: false
       properties:
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with
+            the chat request that started it (QR pairing in chat, WU-7).
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            Spec K10. The chat session the pairing belongs to, when it was
+            started from a chat.
         type:
           type: string
           const: whatsapp_pairing_subscribe
@@ -7294,6 +8320,17 @@ components:
       - seq
       additionalProperties: false
       properties:
+        secret_requests:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/SessionStateSecretRequest'
+          description: >
+            Spec omnipus-system-agent K4 (FR-079). Pending and recent terminal
+            secret requests visible to this connection, so a reloaded secret card
+            restores its true state. Always an array when present, never null;
+            absence of a request is never read as success. Optional: an emit that
+            carries no secret-request state omits it.
         type:
           type: string
           const: session_snapshot
@@ -7379,6 +8416,13 @@ components:
       - timestamp
       additionalProperties: false
       properties:
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+            main-session entry is a room request to this agent or this agent's
+            answer into a room, so live, history and replay render the same
+            collapsed entry.
         type:
           type: string
           const: user_message

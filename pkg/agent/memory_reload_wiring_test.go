@@ -42,7 +42,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // memReloadTestLoop builds a real AgentLoop with audit logging enabled and the
-// core agent roster seeded (ava, mia, jim, ray), rooted at a fresh OMNIPUS_HOME
+// core agent roster seeded (mia, jim, omnipus, …), rooted at a fresh OMNIPUS_HOME
 // so agent workspaces and the audit log resolve under a hermetic temp dir.
 // Returns the loop and the path audit.jsonl will be written to.
 func memReloadTestLoop(t *testing.T) (*AgentLoop, string) {
@@ -163,9 +163,9 @@ func TestReloadWiring_MemoryRateLimiter_SameInstancePersistsAcrossReload(t *test
 	limiterBefore := al.memoryRateLimiter
 	require.NotNil(t, limiterBefore, "NewAgentLoop must construct a shared memory rate limiter")
 
-	const agentID = "ava"
+	const agentID = "mia"
 	// Exhaust the per-agent budget directly against the limiter object that
-	// is (or should be) wired onto ava's remember tool. "<local>" mirrors the
+	// is (or should be) wired onto mia's remember tool. "<local>" mirrors the
 	// caller identity callerIdentity(ctx) derives when no channel/chatID is
 	// set (empty channel + empty chatID -> "<local>"), matching the
 	// ExecuteWithContext(ctx, ..., "", "", nil) call below.

@@ -22,6 +22,7 @@ func AllTools(d *Deps) []tools.Tool {
 		NewAgentGetTool(d),
 		NewAgentGetToolsTool(d),
 		NewAgentUpdateTool(d),
+		NewAgentPermissionsTool(d),
 		NewAgentDeleteTool(d),
 		NewAgentReadMetadataTool(d),
 
@@ -74,7 +75,7 @@ func AllTools(d *Deps) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 31 system tools.
+// BuildRegistry creates a ToolRegistry containing all 32 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()

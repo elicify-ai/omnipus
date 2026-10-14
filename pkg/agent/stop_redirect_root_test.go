@@ -65,7 +65,7 @@ func newStopRedirectRoot(t *testing.T) (*AgentLoop, *session.LifecycleRecord, *r
 	}
 	humanDone := make(chan error, 1)
 	go func() {
-		_, _, perr := al.processMessage(context.Background(), msg)
+		_, _, perr := al.processMessageAsPrimaryForTest(context.Background(), msg)
 		humanDone <- perr
 	}()
 	r1AwaitProvider(t, provider, 1)

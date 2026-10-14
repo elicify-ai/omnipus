@@ -21,10 +21,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// adr090KnowledgePosture is the founder-approved matrix, independent of the seed.
+// adr090KnowledgePosture is the founder-approved matrix, independent of the
+// seed. Omnipus replaces Ava and Admin (omnipus-system-agent FR-008); its
+// §6.5 supporting set holds the knowledge reads and no knowledge write.
 var adr090KnowledgePosture = map[string]struct{ read, write string }{
-	"mia": {"allow", "ask"}, "jim": {"allow", "ask"}, "ava": {"allow", "deny"},
-	"admin": {"allow", "deny"}, "planner": {"allow", "deny"}, "researcher": {"allow", "deny"},
+	"mia": {"allow", "ask"}, "jim": {"allow", "ask"}, "omnipus": {"allow", "deny"},
+	"planner": {"allow", "deny"}, "researcher": {"allow", "deny"},
 	"worker": {"allow", "ask"}, "judge": {"deny", "deny"}, "plansupervisor": {"deny", "deny"},
 }
 

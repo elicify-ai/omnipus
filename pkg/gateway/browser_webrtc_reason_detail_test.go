@@ -113,7 +113,7 @@ func newHandleWebRTCOfferWithFailingStart(
 func TestHandleWebRTCOffer_StartFailure_CarriesRealCauseToTheOperator(t *testing.T) {
 	handler, al, _ := newMeasuredFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 
 	got := newHandleWebRTCOfferWithFailingStart(t, handler, al, defaultAgent.ID, errors.New(startFailureCause))
@@ -133,7 +133,7 @@ func TestHandleWebRTCOffer_StartFailure_CarriesRealCauseToTheOperator(t *testing
 func TestHandleWebRTCOffer_ViewerOfferFailure_CarriesRealCauseToTheOperator(t *testing.T) {
 	handler, al, _ := newMeasuredFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 
 	captureCapableManager(t, al, defaultAgent.ID)

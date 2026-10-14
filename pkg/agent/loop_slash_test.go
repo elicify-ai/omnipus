@@ -33,7 +33,7 @@ func TestHandleCommand_UseTokenIsNormalMessage(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &recordingProvider{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 
 	// "/use" is no longer a registered command, so it falls through as a normal message.
 	opts := processOptions{}
@@ -72,7 +72,7 @@ func TestApplyExplicitSkillCommand_OneShot(t *testing.T) {
 		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
 	}
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -298,7 +298,7 @@ func TestApplyMemoryCommandPrompt_Precedence(t *testing.T) {
 	// Install a skill whose slug collides with a memory command name.
 	writeSkillFile(t, cfg.Agents.Defaults.Home, "remember")
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}

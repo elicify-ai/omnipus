@@ -96,6 +96,10 @@ tags:
   description: Usage statistics and aggregations.
 - name: system
   description: System-level probes (e.g. host-CLI availability) — read-only diagnostics used by the SPA roster UI.
+- name: Secrets
+  description: "Secure secret card requests and stored secret names (Omnipus system agent, landing 1). Values travel only in the authenticated submit."
+- name: Rooms
+  description: "Group chats (rooms): team room, squads, ad-hoc rooms (Omnipus system agent, landing 1)."
 components:
   securitySchemes:
     BearerAuth:
@@ -1793,6 +1797,8 @@ components:
       $ref: ./components/schemas/ChannelTestResponse.yaml
     ChannelRouting:
       $ref: ./components/schemas/ChannelRouting.yaml
+    ChannelRoutingUpdateRequest:
+      $ref: ./components/schemas/ChannelRoutingUpdateRequest.yaml
     ChannelCreateRequest:
       $ref: ./components/schemas/ChannelCreateRequest.yaml
     ChannelCreateResponse:
@@ -2284,6 +2290,26 @@ components:
       $ref: ./components/schemas/MessageParentHandback.yaml
     MessageParentResponse:
       $ref: ./components/schemas/MessageParentResponse.yaml
+    SecretSubmitRequest:
+      $ref: ./components/schemas/SecretSubmitRequest.yaml
+    SecretRequestState:
+      $ref: ./components/schemas/SecretRequestState.yaml
+    SecretNameEntry:
+      $ref: ./components/schemas/SecretNameEntry.yaml
+    SecretOptionsUpdateRequest:
+      $ref: ./components/schemas/SecretOptionsUpdateRequest.yaml
+    Room:
+      $ref: ./components/schemas/Room.yaml
+    RoomCreateRequest:
+      $ref: ./components/schemas/RoomCreateRequest.yaml
+    RoomMembersUpdateRequest:
+      $ref: ./components/schemas/RoomMembersUpdateRequest.yaml
+    RoomMessageRequest:
+      $ref: ./components/schemas/RoomMessageRequest.yaml
+    AgentDependency:
+      $ref: ./components/schemas/AgentDependency.yaml
+    AgentDependencyList:
+      $ref: ./components/schemas/AgentDependencyList.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -3374,6 +3400,16 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           description: Revision or inherited global policy changed; no writes occurred.
+        '422':
+          description: >
+            Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a
+            per-agent tool policy of `ask` for Omnipus is refused — "Omnipus
+            takes no per-agent Ask; set Ask globally or use Deny". `deny` is
+            accepted. No writes occurred.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Storage failed; reports actual saved state.
           content:
@@ -3407,6 +3443,16 @@ paths:
         required: true
         schema:
           $ref: '#/components/schemas/ConfigurationRevision'
+      - name: delete_everything
+        in: query
+        required: false
+        schema:
+          type: boolean
+        description: >
+          Spec omnipus-system-agent K50, §6.19 (FR-243; landing 1, WU-20).
+          Explicit, audited opt-in to delete the agent together with its
+          dependencies (AgentDependencyList). Without it, a non-empty
+          dependency list refuses the delete with 409.
       responses:
         '200':
           description: Agent deleted. Reports persisted and activated state.
@@ -3423,7 +3469,16 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
         '409':
-          description: Revision or inherited global policy changed; no writes occurred.
+          description: >
+            Revision or inherited global policy changed; no writes occurred
+            (no body). Or, spec omnipus-system-agent K50 (FR-243; landing 1,
+            WU-20): the agent has dependencies and `delete_everything` was not
+            true — nothing was deleted and the body is the full dependency
+            list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentDependencyList'
         '500':
           description: Storage failed; reports actual saved state.
           content:
@@ -3580,6 +3635,16 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           description: Revision or inherited global policy changed; no writes occurred.
+        '422':
+          description: >
+            Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a
+            per-agent tool policy of `ask` for Omnipus is refused — "Omnipus
+            takes no per-agent Ask; set Ask globally or use Deny". `deny` is
+            accepted. No writes occurred.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Storage failed; reports actual saved state.
           content:
@@ -3784,7 +3849,7 @@ paths:
       description: >
         Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP
         503 with status "degraded" plus a reason on a gateway-fatal condition
-        (agent loop dead, config reload failed, default agent unloadable). The
+        (agent loop dead, config reload failed). The
         audit_* and catalog fields describe a degraded SUBSYSTEM while the
         gateway itself is still serving and never change the status code — a
         stale provider catalog (ADR-067 FR-037) makes the model picker less
@@ -5037,8 +5102,10 @@ paths:
       operationId: getChannelRouting
       summary: Get channel routing configuration
       description: >
-        Returns the routing configuration for the specified channel, including
-        which agent handles its inbound messages.
+        Returns the routing configuration for the specified channel: its
+        workspace binding and main agent, or — for an instance that is not yet
+        bound — `bound: false` with empty ids (FR-128). Never an invented or
+        legacy destination.
       tags:
       - Channels
       security:
@@ -5072,10 +5139,13 @@ paths:
       operationId: setChannelRouting
       summary: Set channel routing configuration
       description: >
-        Sets the routing configuration for the specified channel. The
-        default_agent_id field controls which agent handles inbound messages
-        arriving on this channel. Omit it or leave it empty to fall back to the
-        global default agent.
+        Binds the channel instance to a workspace and names its main agent.
+        Both workspace_id and default_agent_id are required and nonblank
+        (omnipus-system-agent FR-127, K14); there is no unbound mode and no
+        global default agent. A missing or blank value is refused with 400
+        "bind this channel to an agent in a workspace" and changes nothing.
+        Saving a valid binding clears the channel's routing degradation
+        (FR-129).
       tags:
       - Channels
       security:
@@ -5093,7 +5163,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChannelRouting'
+              $ref: '#/components/schemas/ChannelRoutingUpdateRequest'
       responses:
         '200':
           description: Updated channel routing configuration.
@@ -12821,6 +12891,396 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '429':
           $ref: '#/components/responses/429TooManyRequests'
+  /secret-requests/{id}:
+    get:
+      operationId: getSecretRequest
+      summary: Read the value-free state of a secret request
+      description: >
+        Spec K5 (FR-079). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Value-free:
+        returns the state and, when submitted, the reference names. A request
+        that is unknown or not accessible to the caller's account is 404.
+      tags:
+      - Secrets
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Secret request id.
+      responses:
+        '200':
+          description: Current request state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretRequestState'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /secret-requests/{id}/submit:
+    post:
+      operationId: submitSecretRequest
+      summary: Submit (or cancel) a secret card
+      description: >
+        Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with
+        WU-4. Authenticated web user only. Body is exactly one of `values` or
+        `cancel: true`. All checks run before any write; any failure writes
+        nothing. Malformed bodies (both values and cancel, missing or extra
+        field, null, value outside limits, NUL) are 400 with a value-free
+        message; a body over 65,536 bytes is 413; a request not pending is
+        409 with its current state.
+      tags:
+      - Secrets
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Secret request id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecretSubmitRequest'
+      responses:
+        '200':
+          description: Stored (or cancelled). Returns the resulting state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretRequestState'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          description: The request is not pending (including a duplicate submit); body is its current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretRequestState'
+        '413':
+          description: Body larger than 65,536 bytes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /secrets:
+    get:
+      operationId: listSecrets
+      summary: List stored secret names
+      description: >
+        Spec K6 (FR-073, FR-086, FR-241). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-6.
+        Names and metadata only, never a value.
+      tags:
+      - Secrets
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Stored secret versions. Never null.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SecretNameEntry'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /secrets/{reference}/options:
+    patch:
+      operationId: updateSecretOptions
+      summary: Change a private secret's options
+      description: >
+        Spec K49 (FR-241). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-5. Private kind
+        only (another kind is 422); authenticated web user only; audited.
+      tags:
+      - Secrets
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: reference
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Reference name of the secret version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecretOptionsUpdateRequest'
+      responses:
+        '200':
+          description: Updated entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecretNameEntry'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+  /agents/{id}/dependencies:
+    get:
+      operationId: getAgentDependencies
+      summary: List what depends on an agent
+      description: >
+        Spec K50, §6.19 (FR-243, FR-244). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-20.
+        Connections it answers as main agent, mailboxes, private secrets and
+        rooms per workspace (People rows from landing 2).
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+      - name: workspace_id
+        in: query
+        required: false
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description: Limit the list to one workspace.
+      responses:
+        '200':
+          description: Dependency list. Never null.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentDependencyList'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /workspaces/{id}/rooms:
+    get:
+      operationId: listWorkspaceRooms
+      summary: List a workspace's rooms
+      description: >
+        Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+      tags:
+      - Rooms
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      responses:
+        '200':
+          description: Rooms of the workspace. Never null.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Room'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    post:
+      operationId: createRoom
+      summary: Create a squad or an ad-hoc room
+      description: >
+        Spec K24 (FR-161, FR-172). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team
+        room is never created through this route.
+      tags:
+      - Rooms
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Workspace ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoomCreateRequest'
+      responses:
+        '201':
+          description: Room created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Room'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+  /rooms/{id}:
+    get:
+      operationId: getRoom
+      summary: Get a room
+      description: >
+        Spec K23. Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+      tags:
+      - Rooms
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Room ID.
+      responses:
+        '200':
+          description: The room.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Room'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deleteRoom
+      summary: Delete a squad or an ad-hoc room
+      description: >
+        Spec K24 (FR-207). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team room is
+        not deletable (422).
+      tags:
+      - Rooms
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Room ID.
+      responses:
+        '204':
+          description: Room deleted.
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+  /rooms/{id}/members:
+    patch:
+      operationId: updateRoomMembers
+      summary: Add, remove, mute or unmute room members
+      description: >
+        Spec K24 (FR-204, FR-207). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team
+        room accepts only mute and unmute (other actions 422).
+      tags:
+      - Rooms
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Room ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoomMembersUpdateRequest'
+      responses:
+        '200':
+          description: Updated room.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Room'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+  /rooms/{id}/messages:
+    post:
+      operationId: postRoomMessage
+      summary: Post a message into a room
+      description: >
+        Spec K26 (FR-166). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. Accepted for
+        recording; the recorded entry arrives over the WebSocket as
+        room_entry with the same client_message_id.
+      tags:
+      - Rooms
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Room ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoomMessageRequest'
+      responses:
+        '202':
+          description: Accepted for recording.
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
 
 security:
 - BearerAuth: []

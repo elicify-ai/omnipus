@@ -221,35 +221,6 @@ func TestProcessSystemMessage_AsyncResult_AttributesToOriginatingAgent(t *testin
 	assert.NotEqual(t, defaultAgent.ID, assistantEntries[0].AgentID)
 }
 
-// TestProcessSystemMessage_AsyncResult_FallsBackToDefaultWhenNoOriginKnown
-// is the complementary case: when the inbound message carries no
-// AsyncOriginAgentID (e.g. a hypothetical future producer with no turn scope
-// of its own, or a legacy/synthetic system message), processSystemMessage
-// must still fall back to GetDefaultAgent() — the fallback is a genuine
-// last resort, not removed by this fix.
-func TestProcessSystemMessage_AsyncResult_FallsBackToDefaultWhenNoOriginKnown(t *testing.T) {
-	al, msgBus, _, defaultAgent := newAsyncResultTestLoop(t, &mockProvider{})
-
-	msg := drainNotify(t, al, msgBus, AsyncNotifyEvent{
-		Channel:    "webchat",
-		ChatID:     "direct",
-		SourceKind: "bash",
-		Content:    "no AgentID/TranscriptSessionID on this event",
-		// AgentID and TranscriptSessionID deliberately left unset.
-	})
-	require.Empty(t, msg.AsyncOriginAgentID, "test precondition: no origin agent on this message")
-
-	_, err := al.processSystemMessage(context.Background(), msg)
-	require.NoError(t, err)
-
-	// No TranscriptSessionID means nothing to assert against a session
-	// store — the meaningful assertion is that processSystemMessage did not
-	// error out and used SOME agent (implicitly the default, since
-	// GetDefaultAgent() is the only fallback and a nil agent would have
-	// produced an error return above).
-	require.NotNil(t, defaultAgent)
-}
-
 // TestProcessSystemMessage_AsyncResult_PersistsWithoutLiveConnection is the
 // FIX 5d data-loss regression test (root cause #2): it proves the async
 // result reaches transcript.jsonl even when NO live streaming connection
@@ -503,12 +474,15 @@ func TestProcessSystemMessage_AsyncResult_NoOriginSession_RunsWithoutHistory(t *
 	require.NoError(t, err)
 
 	const firstContent = "no TranscriptSessionID on this event"
+	// The origin AGENT is named (a message with no addressable agent is
+	// discarded, FR-131); only the origin SESSION is absent.
 	msg := drainNotify(t, al, msgBus, AsyncNotifyEvent{
 		Channel:    "webchat",
 		ChatID:     "direct",
+		AgentID:    defaultAgent.ID,
 		SourceKind: "bash",
 		Content:    firstContent,
-		// AgentID and TranscriptSessionID deliberately left unset.
+		// TranscriptSessionID deliberately left unset.
 	})
 	require.Empty(t, msg.AsyncTranscriptSessionID, "test precondition: no origin session on this message")
 
@@ -553,7 +527,7 @@ func TestProcessSystemMessage_AsyncResult_NoOriginSession_RunsWithoutHistory(t *
 
 	// Isolation control: a second no-origin message must not see the first.
 	second := drainNotify(t, al, msgBus, AsyncNotifyEvent{
-		Channel: "webchat", ChatID: "direct", SourceKind: "bash", Content: "a second unrelated notify",
+		Channel: "webchat", ChatID: "direct", AgentID: defaultAgent.ID, SourceKind: "bash", Content: "a second unrelated notify",
 	})
 	_, err = al.processSystemMessage(context.Background(), second)
 	require.NoError(t, err)
@@ -580,7 +554,7 @@ func TestResolveMessageRoute_BoundDrop_SkipsGetDefaultAgent(t *testing.T) {
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	// mia is the global default chat agent; "ray" is NOT in the list (deleted).
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 	}
 	// The instance "whatsapp.eu" is bound: WorkspaceID + agent identity.
 	cfg.Channels = map[string]config.ChannelInstanceConfig{
@@ -635,54 +609,6 @@ func TestResolveMessageRoute_BoundDrop_SkipsGetDefaultAgent(t *testing.T) {
 	}
 }
 
-// TestResolveMessageRoute_Unbound_DefaultUnchanged verifies TDD #11 / regression:
-// an unbound channel instance (no WorkspaceID, no Identity) with no explicit
-// agent_id and no handoff pin routes via the existing default cascade, unchanged.
-// GetDefaultAgent IS called and the global default agent handles the message.
-func TestResolveMessageRoute_Unbound_DefaultUnchanged(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-
-	cfg := &config.Config{}
-	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
-	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
-	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
-	}
-	// No channels configuration: bare type key / no WorkspaceID → unbound.
-	cfg.Channels = map[string]config.ChannelInstanceConfig{}
-
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	t.Cleanup(func() { al.Close() })
-
-	registerInstance(t, al, cfg, home, "mia", config.AgentTypeCustom)
-
-	msg := bus.InboundMessage{
-		Channel: "telegram",
-		ChatID:  "user123",
-		Content: "hi",
-	}
-
-	preDrift := al.GetDriftDropped()
-	_, agent, err := al.resolveMessageRoute(msg)
-	postDrift := al.GetDriftDropped()
-
-	if err != nil {
-		t.Fatalf("unbound default route must succeed; got: %v", err)
-	}
-	if agent == nil {
-		t.Fatal("unbound default route must return an agent; got nil")
-	}
-	if agent.ID != "mia" {
-		t.Errorf("unbound route: agent = %q, want %q", agent.ID, "mia")
-	}
-	// Drift counter must NOT increment for an unbound route.
-	if postDrift != preDrift {
-		t.Errorf("driftDropped changed for unbound route: pre=%d post=%d; must not increment", preDrift, postDrift)
-	}
-}
-
 // TestResolveMessageRoute_BoundDrift_WorkerAgent verifies DS-3 row 4 at the
 // agent-loop level: when the bound agent is a worker (not a chat target),
 // the route drops and the default is NOT used.
@@ -694,7 +620,7 @@ func TestResolveMessageRoute_BoundDrift_WorkerAgent_LoopLevel(t *testing.T) {
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "worker1", Type: config.AgentTypeWorker},
 	}
 	cfg.Channels = map[string]config.ChannelInstanceConfig{
@@ -757,7 +683,7 @@ func TestProcessSystemMessage_MediaToolDelivery_StampsWorkspaceID(t *testing.T) 
 	ws := "sales"
 	require.NoError(t, al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &ws}))
 
-	resp, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	resp, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "system",
 		// originChannel/originChatID parse from ChatID as "channel:chat_id".
 		ChatID: "telegram:chat1",
@@ -784,7 +710,7 @@ func TestProcessSystemMessage_MediaToolDelivery_StampsWorkspaceID(t *testing.T) 
 func TestBuildContinuationTarget_ResolvesWorkspaceID_FromSessionMeta(t *testing.T) {
 	al := newMediaWorkspaceIDTestLoopOnly(t, "telegram")
 
-	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "web", "main")
+	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "web", "mia")
 	require.NoError(t, err)
 	ws := "sales"
 	require.NoError(t, al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &ws}))
@@ -819,10 +745,12 @@ func TestBuildContinuationTarget_ResolvesWorkspaceID_FromChannelBinding(t *testi
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 		Channels: map[string]config.ChannelInstanceConfig{
+			// FR-121: a binding names its workspace AND main agent.
 			"telegram.sales": {
 				Type:        "telegram",
 				Enabled:     true,
 				WorkspaceID: "sales",
+				Identity:    &config.ChannelIdentity{Kind: "agent", ID: "mia"},
 			},
 		},
 	}
@@ -830,6 +758,7 @@ func TestBuildContinuationTarget_ResolvesWorkspaceID_FromChannelBinding(t *testi
 	t.Cleanup(func() { msgBus.Close() })
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
 	t.Cleanup(al.Close)
+	writeWorkspaceTeamRecord(t, omnipusHome(), "sales", false, []string{"mia"}, "Sales", "")
 
 	target, err := al.buildContinuationTarget(bus.InboundMessage{
 		Channel:    "telegram",
@@ -843,22 +772,21 @@ func TestBuildContinuationTarget_ResolvesWorkspaceID_FromChannelBinding(t *testi
 	assert.Equal(t, "sales", target.WorkspaceID)
 }
 
-// TestResolveMessageRoute_ExplicitWorkerAgentIDDegradesToDefault verifies RESIDUAL
+// TestResolveMessageRoute_ExplicitWorkerAgentIDIsRefused verifies RESIDUAL
 // PATH 1: a message that explicitly addresses a worker via agent_id metadata must
-// NOT let the worker answer as a persona. It degrades to the normal ResolveRoute
-// cascade, which resolves the chat-target default ("mia"). The worker is invocable
-// only via delegation, never as a chat target.
-func TestResolveMessageRoute_ExplicitWorkerAgentIDDegradesToDefault(t *testing.T) {
+// NOT let the worker answer as a persona — and, with no default agent
+// (omnipus-system-agent FR-120), it is refused rather than re-routed to
+// another agent. The worker is invocable only via delegation.
+func TestResolveMessageRoute_ExplicitWorkerAgentIDIsRefused(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
-	// The route cascade reads cfg.Agents.List to resolve the default — give it a
-	// chat-target default and a worker.
+	// A chat agent that must NOT be substituted, and the worker.
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "hans", Type: config.AgentTypeWorker},
 	}
 
@@ -876,18 +804,10 @@ func TestResolveMessageRoute_ExplicitWorkerAgentIDDegradesToDefault(t *testing.T
 		Metadata:  map[string]string{"agent_id": "hans"},
 	}
 	route, agent, err := al.resolveMessageRoute(msg)
-	if err != nil {
-		t.Fatalf("resolveMessageRoute: %v", err)
-	}
-	if route.AgentID == "hans" || (agent != nil && agent.ID == "hans") {
-		t.Fatalf(
-			"explicit agent_id=worker resolved to the worker (route=%q) — workers are not chat targets",
-			route.AgentID,
-		)
-	}
-	if route.AgentID != "mia" {
-		t.Errorf("AgentID = %q, want %q (worker degrades to base default)", route.AgentID, "mia")
-	}
+	require.Error(t, err, "an explicit worker target is refused")
+	assert.Contains(t, err.Error(), "worker")
+	assert.Nil(t, agent, "no agent — neither the worker nor a substitute — may answer")
+	assert.Empty(t, route.AgentID)
 }
 
 // TestResolveMessageRoute_ExplicitBaseAgentIDStillResolves is the control: an
@@ -901,7 +821,7 @@ func TestResolveMessageRoute_ExplicitBaseAgentIDStillResolves(t *testing.T) {
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "jim"},
 	}
 

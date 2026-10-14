@@ -19,7 +19,7 @@ import { invalidateWorkspaceRoster, setHiddenFromSidebar, surfaceActionError } f
 import { SidebarAgentIcon } from './SidebarAgentIcon'
 import { attentionCountLabel, useAttentionMotion } from './attentionCue'
 import { beginPairExtra } from './pairExtra'
-import { workspaceMains, type RosterState } from './workspaceRoster'
+import { workspaceMains, OMNIPUS_AGENT_ID, type RosterState } from './workspaceRoster'
 import './attention.css'
 import './agent-row.css'
 
@@ -330,6 +330,15 @@ function AgentMainRow({
 
   const confirmExtra = () => {
     const asked = useSessionStore.getState().newChatPrompt
+    // FR-005: Omnipus has one conversation. An extra would be refused by the
+    // server at the mint ("Omnipus has one conversation; continue it in its
+    // main chat (session <id>)") — route to that main chat instead, and clear
+    // the now-answered prompt.
+    if (row.agentId === OMNIPUS_AGENT_ID) {
+      dismissNewChatPrompt()
+      openMain()
+      return
+    }
     beginPairExtra(workspace.id, row.agentId, navigate, onOverlayClose, 'confirm', asked?.clientMessageId)
   }
 

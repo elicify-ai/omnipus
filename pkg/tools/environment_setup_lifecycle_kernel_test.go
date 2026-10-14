@@ -229,11 +229,11 @@ func kernelFixtureInner(t *testing.T) {
 	}()
 
 	tool := NewEnvironmentSetupTool(EnvironmentSetupToolDeps{
-		Home:         home,
-		AgentWorkDir: agentDir,
-		Admin:        false,
-		GodMode:      false, // THE POINT: the real per-turn kernel policy
-		Store:        lifecycleStore{target: target},
+		Home:           home,
+		AgentWorkDir:   agentDir,
+		SetupAuthority: false,
+		GodMode:        false, // THE POINT: the real per-turn kernel policy
+		Store:          lifecycleStore{target: target},
 	})
 
 	ctx := WithToolContext(t.Context(), "cli", "chat")

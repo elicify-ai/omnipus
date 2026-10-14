@@ -51,11 +51,10 @@ func newOriginTestRestAPI(t *testing.T, agentIDs ...string) *restAPI {
 		home := filepath.Join(tmpDir, "agents", id)
 		require.NoError(t, os.MkdirAll(home, 0o700))
 		agents = append(agents, config.AgentConfig{
-			ID:      id,
-			Name:    "Agent " + id,
-			Type:    config.AgentTypeCustom,
-			Home:    home,
-			Default: id == agentIDs[0],
+			ID:   id,
+			Name: "Agent " + id,
+			Type: config.AgentTypeCustom,
+			Home: home,
 		})
 	}
 	cfg := &config.Config{

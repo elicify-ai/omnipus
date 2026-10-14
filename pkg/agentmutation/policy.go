@@ -46,7 +46,7 @@ var externalUnsupported = map[string]struct{}{
 }
 
 var ordinaryBuiltins = map[string]struct{}{
-	"mia": {}, "jim": {}, "ava": {}, "admin": {}, "planner": {}, "researcher": {}, "worker": {},
+	"mia": {}, "jim": {}, "omnipus": {}, "planner": {}, "researcher": {}, "worker": {},
 }
 
 type FieldDescriptor struct {

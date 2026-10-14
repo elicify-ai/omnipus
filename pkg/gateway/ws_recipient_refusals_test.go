@@ -56,7 +56,6 @@ func TestRecipient_EveryRefusalTellsTheSenderWhy(t *testing.T) {
 		name      string
 		sessionID func(owner string) string
 		to        addressing.Pair
-		kickoff   bool
 		setup     func(*recipientDeps)
 		want      string
 	}{
@@ -64,11 +63,6 @@ func TestRecipient_EveryRefusalTellsTheSenderWhy(t *testing.T) {
 			name: "no owning chat", sessionID: func(string) string { return "" },
 			to:   addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"},
 			want: "needs an existing chat (session_id)",
-		},
-		{
-			name: "workspace setup kickoff", sessionID: func(o string) string { return o },
-			to: addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}, kickoff: true,
-			want: "workspace setup message cannot be addressed to another agent",
 		},
 		{
 			name: "malformed pair", sessionID: func(o string) string { return o },
@@ -112,7 +106,7 @@ func TestRecipient_EveryRefusalTellsTheSenderWhy(t *testing.T) {
 
 			to := tc.to
 			h.handleChatMessageToRecipient(context.Background(), "chat-owner", tc.sessionID(sid),
-				"@x do it", "ann", nil, "", "ws-1", tc.kickoff, "", nil, &to, wc)
+				"@x do it", "ann", nil, "", "ws-1", "", nil, &to, wc)
 
 			frames := recipientRefusalFrames(t, wc)
 			require.Len(t, frames, 1, "a refusal must reach the sender exactly once: %v", frames)
@@ -160,7 +154,7 @@ func TestRecipient_SenderPrincipalIsTheConnectionPrincipal(t *testing.T) {
 
 			to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
 			h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid,
-				"@ray please review X", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+				"@ray please review X", "ann", nil, "", "ws-1", "", nil, &to, wc)
 
 			in, ok := nextInbound(t, b, 2*time.Second)
 			require.True(t, ok, "the recipient's turn must be started")

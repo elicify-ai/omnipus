@@ -334,7 +334,7 @@ func TestHandleBrowserInspect_InspectPointHardError_SoftErrorWithReason(t *testi
 		cfg.Tools.Browser.ProfileDir = filepath.Join(blockerPath, "profiles")
 	})
 
-	defaultAgent := api.agentLoop.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(api.agentLoop.GetRegistry())
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 	_, outcome := api.agentLoop.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome,
@@ -407,7 +407,7 @@ func TestHandleBrowserInspect_Success_MarshalsTagTextHtml(t *testing.T) {
 		cfg.Tools.Browser.PageTimeoutSec = 30
 	})
 
-	defaultAgent := api.agentLoop.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(api.agentLoop.GetRegistry())
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 	mgr, outcome := api.agentLoop.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)

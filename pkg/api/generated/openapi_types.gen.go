@@ -746,6 +746,60 @@ func (e AgentCreateRequestSubagent3pType) Valid() bool {
 	}
 }
 
+// Defines values for AgentDependencyKind.
+const (
+	AgentDependencyKindChannelMainAgent AgentDependencyKind = "channel_main_agent"
+	AgentDependencyKindMailbox          AgentDependencyKind = "mailbox"
+	AgentDependencyKindPeopleRow        AgentDependencyKind = "people_row"
+	AgentDependencyKindPrivateSecret    AgentDependencyKind = "private_secret"
+	AgentDependencyKindRoom             AgentDependencyKind = "room"
+)
+
+// Valid indicates whether the value is a known member of the AgentDependencyKind enum.
+func (e AgentDependencyKind) Valid() bool {
+	switch e {
+	case AgentDependencyKindChannelMainAgent:
+		return true
+	case AgentDependencyKindMailbox:
+		return true
+	case AgentDependencyKindPeopleRow:
+		return true
+	case AgentDependencyKindPrivateSecret:
+		return true
+	case AgentDependencyKindRoom:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDependencyListDependenciesKind.
+const (
+	AgentDependencyListDependenciesKindChannelMainAgent AgentDependencyListDependenciesKind = "channel_main_agent"
+	AgentDependencyListDependenciesKindMailbox          AgentDependencyListDependenciesKind = "mailbox"
+	AgentDependencyListDependenciesKindPeopleRow        AgentDependencyListDependenciesKind = "people_row"
+	AgentDependencyListDependenciesKindPrivateSecret    AgentDependencyListDependenciesKind = "private_secret"
+	AgentDependencyListDependenciesKindRoom             AgentDependencyListDependenciesKind = "room"
+)
+
+// Valid indicates whether the value is a known member of the AgentDependencyListDependenciesKind enum.
+func (e AgentDependencyListDependenciesKind) Valid() bool {
+	switch e {
+	case AgentDependencyListDependenciesKindChannelMainAgent:
+		return true
+	case AgentDependencyListDependenciesKindMailbox:
+		return true
+	case AgentDependencyListDependenciesKindPeopleRow:
+		return true
+	case AgentDependencyListDependenciesKindPrivateSecret:
+		return true
+	case AgentDependencyListDependenciesKindRoom:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentFigure.
 const (
 	AgentFigureMan      AgentFigure = "Man"
@@ -5852,6 +5906,42 @@ func (e MailUnavailableErrorReason) Valid() bool {
 	}
 }
 
+// Defines values for MailboxStatus.
+const (
+	MailboxStatusDegraded MailboxStatus = "degraded"
+	MailboxStatusOk       MailboxStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MailboxStatus enum.
+func (e MailboxStatus) Valid() bool {
+	switch e {
+	case MailboxStatusDegraded:
+		return true
+	case MailboxStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailboxListResponseMailboxesStatus.
+const (
+	MailboxListResponseMailboxesStatusDegraded MailboxListResponseMailboxesStatus = "degraded"
+	MailboxListResponseMailboxesStatusOk       MailboxListResponseMailboxesStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MailboxListResponseMailboxesStatus enum.
+func (e MailboxListResponseMailboxesStatus) Valid() bool {
+	switch e {
+	case MailboxListResponseMailboxesStatusDegraded:
+		return true
+	case MailboxListResponseMailboxesStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MailboxNewMailSummaryWatcherState.
 const (
 	MailboxNewMailSummaryWatcherStateBackoff MailboxNewMailSummaryWatcherState = "backoff"
@@ -6197,6 +6287,24 @@ func (e MessageRole) Valid() bool {
 	case MessageRoleSystem:
 		return true
 	case MessageRoleUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageRoomRefRole.
+const (
+	MessageRoomRefRoleAnswer  MessageRoomRefRole = "answer"
+	MessageRoomRefRoleRequest MessageRoomRefRole = "request"
+)
+
+// Valid indicates whether the value is a known member of the MessageRoomRefRole enum.
+func (e MessageRoomRefRole) Valid() bool {
+	switch e {
+	case MessageRoomRefRoleAnswer:
+		return true
+	case MessageRoomRefRoleRequest:
 		return true
 	default:
 		return false
@@ -9242,6 +9350,69 @@ func (e RevisionEntryVerb) Valid() bool {
 	}
 }
 
+// Defines values for RoomKind.
+const (
+	RoomKindAdhoc RoomKind = "adhoc"
+	RoomKindSquad RoomKind = "squad"
+	RoomKindTeam  RoomKind = "team"
+)
+
+// Valid indicates whether the value is a known member of the RoomKind enum.
+func (e RoomKind) Valid() bool {
+	switch e {
+	case RoomKindAdhoc:
+		return true
+	case RoomKindSquad:
+		return true
+	case RoomKindTeam:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RoomCreateRequestKind.
+const (
+	RoomCreateRequestKindAdhoc RoomCreateRequestKind = "adhoc"
+	RoomCreateRequestKindSquad RoomCreateRequestKind = "squad"
+)
+
+// Valid indicates whether the value is a known member of the RoomCreateRequestKind enum.
+func (e RoomCreateRequestKind) Valid() bool {
+	switch e {
+	case RoomCreateRequestKindAdhoc:
+		return true
+	case RoomCreateRequestKindSquad:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RoomMembersUpdateRequestAction.
+const (
+	RoomMembersUpdateRequestActionAdd    RoomMembersUpdateRequestAction = "add"
+	RoomMembersUpdateRequestActionMute   RoomMembersUpdateRequestAction = "mute"
+	RoomMembersUpdateRequestActionRemove RoomMembersUpdateRequestAction = "remove"
+	RoomMembersUpdateRequestActionUnmute RoomMembersUpdateRequestAction = "unmute"
+)
+
+// Valid indicates whether the value is a known member of the RoomMembersUpdateRequestAction enum.
+func (e RoomMembersUpdateRequestAction) Valid() bool {
+	switch e {
+	case RoomMembersUpdateRequestActionAdd:
+		return true
+	case RoomMembersUpdateRequestActionMute:
+		return true
+	case RoomMembersUpdateRequestActionRemove:
+		return true
+	case RoomMembersUpdateRequestActionUnmute:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RunnerTestResponseReason.
 const (
 	RunnerTestResponseReasonEmpty           RunnerTestResponseReason = ""
@@ -9611,6 +9782,126 @@ func (e SearchProviderCheckResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for SecretNameEntryKind.
+const (
+	SecretNameEntryKindAgentPrivate      SecretNameEntryKind = "agent_private"
+	SecretNameEntryKindChannelCredential SecretNameEntryKind = "channel_credential"
+	SecretNameEntryKindMailboxPassword   SecretNameEntryKind = "mailbox_password"
+	SecretNameEntryKindMcpEnv            SecretNameEntryKind = "mcp_env"
+	SecretNameEntryKindProviderKey       SecretNameEntryKind = "provider_key"
+)
+
+// Valid indicates whether the value is a known member of the SecretNameEntryKind enum.
+func (e SecretNameEntryKind) Valid() bool {
+	switch e {
+	case SecretNameEntryKindAgentPrivate:
+		return true
+	case SecretNameEntryKindChannelCredential:
+		return true
+	case SecretNameEntryKindMailboxPassword:
+		return true
+	case SecretNameEntryKindMcpEnv:
+		return true
+	case SecretNameEntryKindProviderKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecretNameEntryRecipientKind.
+const (
+	SecretNameEntryRecipientKindAgentPrivate      SecretNameEntryRecipientKind = "agent_private"
+	SecretNameEntryRecipientKindChannelCredential SecretNameEntryRecipientKind = "channel_credential"
+	SecretNameEntryRecipientKindMailboxPassword   SecretNameEntryRecipientKind = "mailbox_password"
+	SecretNameEntryRecipientKindMcpEnv            SecretNameEntryRecipientKind = "mcp_env"
+	SecretNameEntryRecipientKindProviderKey       SecretNameEntryRecipientKind = "provider_key"
+)
+
+// Valid indicates whether the value is a known member of the SecretNameEntryRecipientKind enum.
+func (e SecretNameEntryRecipientKind) Valid() bool {
+	switch e {
+	case SecretNameEntryRecipientKindAgentPrivate:
+		return true
+	case SecretNameEntryRecipientKindChannelCredential:
+		return true
+	case SecretNameEntryRecipientKindMailboxPassword:
+		return true
+	case SecretNameEntryRecipientKindMcpEnv:
+		return true
+	case SecretNameEntryRecipientKindProviderKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecretNameEntryState.
+const (
+	SecretNameEntryStateSelected   SecretNameEntryState = "selected"
+	SecretNameEntryStateStored     SecretNameEntryState = "stored"
+	SecretNameEntryStateSuperseded SecretNameEntryState = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the SecretNameEntryState enum.
+func (e SecretNameEntryState) Valid() bool {
+	switch e {
+	case SecretNameEntryStateSelected:
+		return true
+	case SecretNameEntryStateStored:
+		return true
+	case SecretNameEntryStateSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecretRequestStateState.
+const (
+	SecretRequestStateStateCancelled   SecretRequestStateState = "cancelled"
+	SecretRequestStateStateInterrupted SecretRequestStateState = "interrupted"
+	SecretRequestStateStatePending     SecretRequestStateState = "pending"
+	SecretRequestStateStateRefused     SecretRequestStateState = "refused"
+	SecretRequestStateStateStopped     SecretRequestStateState = "stopped"
+	SecretRequestStateStateSubmitted   SecretRequestStateState = "submitted"
+)
+
+// Valid indicates whether the value is a known member of the SecretRequestStateState enum.
+func (e SecretRequestStateState) Valid() bool {
+	switch e {
+	case SecretRequestStateStateCancelled:
+		return true
+	case SecretRequestStateStateInterrupted:
+		return true
+	case SecretRequestStateStatePending:
+		return true
+	case SecretRequestStateStateRefused:
+		return true
+	case SecretRequestStateStateStopped:
+		return true
+	case SecretRequestStateStateSubmitted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecretSubmitRequestCancel.
+const (
+	SecretSubmitRequestCancelTrue SecretSubmitRequestCancel = true
+)
+
+// Valid indicates whether the value is a known member of the SecretSubmitRequestCancel enum.
+func (e SecretSubmitRequestCancel) Valid() bool {
+	switch e {
+	case SecretSubmitRequestCancelTrue:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionExecution.
 const (
 	SessionExecutionQueued  SessionExecution = "queued"
@@ -9929,6 +10220,24 @@ func (e SessionDetailMessagesRole) Valid() bool {
 	case SessionDetailMessagesRoleSystem:
 		return true
 	case SessionDetailMessagesRoleUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesRoomRefRole.
+const (
+	SessionDetailMessagesRoomRefRoleAnswer  SessionDetailMessagesRoomRefRole = "answer"
+	SessionDetailMessagesRoomRefRoleRequest SessionDetailMessagesRoomRefRole = "request"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesRoomRefRole enum.
+func (e SessionDetailMessagesRoomRefRole) Valid() bool {
+	switch e {
+	case SessionDetailMessagesRoomRefRoleAnswer:
+		return true
+	case SessionDetailMessagesRoomRefRoleRequest:
 		return true
 	default:
 		return false
@@ -14261,9 +14570,6 @@ type Agent struct {
 	// ContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 	ContextWindowSource *AgentContextWindowSource `json:"context_window_source,omitempty"`
 
-	// Default Whether this agent is the current global default that handles inbound messages with no more-specific routing rule. This is a COMPUTED value — the backend derives it by comparing the agent's id against the single default-agent setting each time it builds a response; it is never stored per-agent. At most one agent is default at a time. Main only — workers never default.
-	Default *bool `json:"default,omitempty"`
-
 	// DegradedReason Present iff the agent cannot run a turn because of its provider binding (ADR-067 FR-016/FR-031): "needs_provider" = the primary model's provider id is neither a catalog id nor a custom row (or fails exact match). Such an agent refuses turns with LLMError code needs_provider and makes zero upstream requests. When both this and needs_model apply, the "needs a provider" copy wins in the UI. Absent when the agent is healthy.
 	DegradedReason *AgentDegradedReason `json:"degraded_reason,omitempty"`
 
@@ -14763,6 +15069,39 @@ type AgentCreateRequestSubagent3pExecutorKind string
 // AgentCreateRequestSubagent3pType Discriminator. Must be exactly "subagent_3p" for this variant.
 type AgentCreateRequestSubagent3pType string
 
+// AgentDependency One thing that depends on an agent in one workspace (spec omnipus-system-agent K50, §6.19; FR-243). Landing 1 kinds: a channel connection whose main agent it is, a mailbox, a private secret, a room; `people_row` is filled from landing 2 (WU-14).
+type AgentDependency struct {
+	// Id Id of the dependent item (connection id, mailbox id, reference name, room id).
+	Id   string              `json:"id"`
+	Kind AgentDependencyKind `json:"kind"`
+
+	// Label Display label.
+	Label       string `json:"label"`
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// AgentDependencyKind defines model for AgentDependency.Kind.
+type AgentDependencyKind string
+
+// AgentDependencyList Everything that depends on an agent (spec omnipus-system-agent K50, §6.19; FR-243, FR-244). Returned by GET /api/v1/agents/{id}/dependencies, and as the 409 body when a delete is refused because the list is non-empty and `delete_everything` was not true.
+type AgentDependencyList struct {
+	AgentId string `json:"agent_id"`
+
+	// Dependencies Never null; empty when nothing depends on the agent.
+	Dependencies []struct {
+		// Id Id of the dependent item (connection id, mailbox id, reference name, room id).
+		Id   string                              `json:"id"`
+		Kind AgentDependencyListDependenciesKind `json:"kind"`
+
+		// Label Display label.
+		Label       string `json:"label"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"dependencies"`
+}
+
+// AgentDependencyListDependenciesKind defines model for AgentDependencyList.Dependencies.Kind.
+type AgentDependencyListDependenciesKind string
+
 // AgentFieldDescriptor defines model for AgentFieldDescriptor.
 type AgentFieldDescriptor struct {
 	Editable bool   `json:"editable"`
@@ -15049,9 +15388,6 @@ type AgentUpdateRequest struct {
 
 	// ContextWindowOverride Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.
 	ContextWindowOverride *int `json:"context_window_override,omitempty"`
-
-	// Default Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
-	Default *bool `json:"default,omitempty"`
 
 	// Description New description. Rejected on locked agents. Empty string removes it. For Subagent / subagent_3p, an empty string after trim is rejected 400 (description is required for workers per the routing contract).
 	Description *string `json:"description,omitempty"`
@@ -15771,10 +16107,10 @@ type ChannelEnabledResponse struct {
 
 // ChannelEntry A communication channel entry returned by GET /api/v1/channels.
 type ChannelEntry struct {
-	// Degraded True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential). The channel is NOT serving despite enabled=true.
+	// Degraded True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential) — the channel is NOT serving despite enabled=true — or when it dropped an inbound message it could not route (omnipus-system-agent FR-121, K15: unbound instance, missing or ineligible bound agent). A routing degradation is cleared when a valid binding is saved (FR-129).
 	Degraded *bool `json:"degraded,omitempty"`
 
-	// DegradedReason Human-readable reason the channel is degraded. Present only when degraded is true.
+	// DegradedReason Human-readable reason the channel is degraded. Present only when degraded is true. For a routing drop it is the drop reason, e.g. "bind this channel to an agent in a workspace".
 	DegradedReason *string `json:"degraded_reason,omitempty"`
 
 	// Description Short description of the channel.
@@ -15797,6 +16133,9 @@ type ChannelEntry struct {
 
 	// InstanceId The map key under which this instance is stored in config.json (currently equals the channel type in v0.1 cap-1). Included in responses so the SPA can address per-instance configure/enable/routing endpoints without hardcoding the key.
 	InstanceId *string `json:"instance_id,omitempty"`
+
+	// LastDroppedAt When this channel last dropped an inbound message it could not route (K15). Present only while the routing degradation is active.
+	LastDroppedAt *time.Time `json:"last_dropped_at,omitempty"`
 
 	// Name Human-readable channel name.
 	Name string `json:"name"`
@@ -15829,13 +16168,25 @@ type ChannelIdentity struct {
 // ChannelIdentityKind Routing kind for this channel instance.
 type ChannelIdentityKind string
 
-// ChannelRouting Routing configuration for a single communication channel. Controls which agent handles inbound messages arriving on this channel.
+// ChannelRouting Routing configuration for a single communication channel instance, as read back by GET and returned by PUT /channels/{id}/routing. Every channel is bound to a workspace and names that binding's main agent (omnipus-system-agent FR-127, K14); there is no global default agent and no unbound routing mode. An instance that has no binding yet is reported truthfully (FR-128): `bound` is false and both ids are empty strings — never an invented or legacy destination.
 type ChannelRouting struct {
-	// DefaultAgentId ID of the agent that handles this channel's inbound messages. Omitted or empty means fall back to the global default agent.
-	DefaultAgentId *string `json:"default_agent_id,omitempty"`
+	// Bound True when the instance is bound to a workspace and names a main agent. An unbound instance drops every inbound message loudly until bound.
+	Bound bool `json:"bound"`
 
-	// WorkspaceId Workspace this channel instance is bound to. Required (non-empty) for a bound instance; empty/omitted = unbound (legacy default routing).
-	WorkspaceId *string `json:"workspace_id,omitempty"`
+	// DefaultAgentId ID of the bound main agent that answers this channel's inbound messages. Empty string when `bound` is false. (Landing 1 keeps the historical key name; it no longer means any global-default fallback.)
+	DefaultAgentId string `json:"default_agent_id"`
+
+	// WorkspaceId Workspace this channel instance is bound to. Empty string when `bound` is false.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// ChannelRoutingUpdateRequest Body for PUT /channels/{id}/routing. Binds the channel instance to a workspace and names the main agent that answers it. Both fields are required and nonblank (omnipus-system-agent FR-127, K14); the legacy unbound mode is removed, so a request missing either is refused with 400 "bind this channel to an agent in a workspace" and changes nothing. Saving a valid binding clears the instance's routing `degraded` status (FR-129).
+type ChannelRoutingUpdateRequest struct {
+	// DefaultAgentId The bound main agent: a chat-capable member of the workspace's team (never a worker or system agent). Landing 1 keeps the historical key name.
+	DefaultAgentId string `json:"default_agent_id"`
+
+	// WorkspaceId Workspace to bind the channel instance to. Must exist and be active.
+	WorkspaceId string `json:"workspace_id"`
 }
 
 // ChannelTestResponse Response from POST /api/v1/channels/{id}/test. Returns whether required credentials are configured.
@@ -18448,7 +18799,7 @@ type GodModeUpdateResponse struct {
 	RestartRequired bool `json:"restart_required"`
 }
 
-// HealthResponse Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
+// HealthResponse Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
 type HealthResponse struct {
 	// AuditDegraded True when the operator asked for audit logging and it is not working, or when audit writes are being dropped. Does not change the HTTP status.
 	AuditDegraded *bool `json:"audit_degraded,omitempty"`
@@ -20312,12 +20663,21 @@ type Mailbox struct {
 	// SmtpPort SMTP server port. Defaults to 587 (STARTTLS); 465 selects implicit TLS.
 	SmtpPort *int `json:"smtp_port,omitempty"`
 
+	// Status #1277. Whether the mailbox can serve. "degraded" when it is enabled but cannot start — for example its password secret reference is missing; status_reason then names the cause. Optional: omitted by servers that do not report it.
+	Status *MailboxStatus `json:"status,omitempty"`
+
+	// StatusReason #1277. Human-readable reason for the status, safe to display — for example the missing secret reference. Present only when status is "degraded"; never contains a secret value.
+	StatusReason *string `json:"status_reason,omitempty"`
+
 	// Username The email address / login used for IMAP and SMTP authentication.
 	Username *string `json:"username,omitempty"`
 
 	// WorkspaceId ID of the workspace the mailbox surfaces in. Always present: a mailbox is addressed by its (agent, workspace) pair, so the server serializes this from the authoritative pair key — never from mutable state.
 	WorkspaceId string `json:"workspace_id"`
 }
+
+// MailboxStatus #1277. Whether the mailbox can serve. "degraded" when it is enabled but cannot start — for example its password secret reference is missing; status_reason then names the cause. Optional: omitted by servers that do not report it.
+type MailboxStatus string
 
 // MailboxCleanupRequest Request of the separately authorized Retry-cleanup operation (ADR-20261001 "Removal with incomplete cleanup" row; w5 spec §8 step 5 — W0 is the single publisher). Keyed by the opaque cleanup_intent returned with a removed_cleanup_pending outcome; deliberately carries nothing else — the intent is the only address, so the retry keeps working after the mailbox's config row is gone.
 type MailboxCleanupRequest struct {
@@ -20392,6 +20752,12 @@ type MailboxListResponse struct {
 		// SmtpPort SMTP server port. Defaults to 587 (STARTTLS); 465 selects implicit TLS.
 		SmtpPort *int `json:"smtp_port,omitempty"`
 
+		// Status #1277. Whether the mailbox can serve. "degraded" when it is enabled but cannot start — for example its password secret reference is missing; status_reason then names the cause. Optional: omitted by servers that do not report it.
+		Status *MailboxListResponseMailboxesStatus `json:"status,omitempty"`
+
+		// StatusReason #1277. Human-readable reason for the status, safe to display — for example the missing secret reference. Present only when status is "degraded"; never contains a secret value.
+		StatusReason *string `json:"status_reason,omitempty"`
+
 		// Username The email address / login used for IMAP and SMTP authentication.
 		Username *string `json:"username,omitempty"`
 
@@ -20399,6 +20765,9 @@ type MailboxListResponse struct {
 		WorkspaceId string `json:"workspace_id"`
 	} `json:"mailboxes"`
 }
+
+// MailboxListResponseMailboxesStatus #1277. Whether the mailbox can serve. "degraded" when it is enabled but cannot start — for example its password secret reference is missing; status_reason then names the cause. Optional: omitted by servers that do not report it.
+type MailboxListResponseMailboxesStatus string
 
 // MailboxNewMailSummary Watcher-driven badge state for one mailbox (GET /workspaces/{id}/mail/summary). Served from the watcher's saved state file — this response never dials IMAP (D29/R2-5, FR-033); the only reference metadata Omnipus stores for a mailbox is this UID/count/error-class state (D6). watcher_state ok never lies about blindness: last_success_at is null until a cycle has actually succeeded, and last_seen_uid makes UID advance observable (round-2 MAJ-019).
 type MailboxNewMailSummary struct {
@@ -20521,6 +20890,9 @@ type McpServer struct {
 
 	// Status Current connection status of the MCP server.
 	Status McpServerStatus `json:"status"`
+
+	// StatusReason Human-readable reason for the current status, safe to display — for example the missing secret reference that keeps an enabled server from starting (#1277). Present only when status is "error"; never contains a secret value.
+	StatusReason *string `json:"status_reason,omitempty"`
 
 	// ToolCount Number of tools exposed by this server.
 	ToolCount int `json:"tool_count"`
@@ -20877,6 +21249,21 @@ type Message struct {
 	// Role Author role. Absent on compaction entries.
 	Role *MessageRole `json:"role,omitempty"`
 
+	// RoomRef Reference from a main-session entry (or an approval) to the room (group chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215, FR-251). Display and navigation data only: it never grants access to the room. `role` says whether the entry is the room's request to this agent or this agent's answer into the room; a room pre-admission approval card (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomRef) — keep both copies in sync by hand.
+	RoomRef *struct {
+		// RequestId The room delivery id, which is also the receiver's request id (spec §6.11, FR-216).
+		RequestId string `json:"request_id"`
+
+		// Role `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
+		Role MessageRoomRefRole `json:"role"`
+
+		// RoomId Id of the room.
+		RoomId string `json:"room_id"`
+
+		// RoomName Display name of the room at the time the entry was written.
+		RoomName string `json:"room_name"`
+	} `json:"room_ref,omitempty"`
+
 	// Status Completion status of this message turn.
 	Status *MessageStatus `json:"status,omitempty"`
 
@@ -21193,6 +21580,9 @@ type MessageReplyToParticipantKind string
 
 // MessageRole Author role. Absent on compaction entries.
 type MessageRole string
+
+// MessageRoomRefRole `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
+type MessageRoomRefRole string
 
 // MessageStatus Completion status of this message turn.
 type MessageStatus string
@@ -23663,6 +24053,77 @@ type RevisionEntry struct {
 // RevisionEntryVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
 type RevisionEntryVerb string
 
+// Room A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}.
+type Room struct {
+	// AllocatedCostMicroUsd Allocated cost in micro-dollars (§6.14).
+	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
+
+	// AllocatedCostUnpriced True when at least one counted turn had an unknown price ("plus unpriced turns").
+	AllocatedCostUnpriced bool `json:"allocated_cost_unpriced"`
+
+	// Generation Durable pause generation; /pause increments it (§6.11).
+	Generation int64 `json:"generation"`
+
+	// Hidden Team room below two conversation agents: hidden, history kept.
+	Hidden bool     `json:"hidden"`
+	Id     string   `json:"id"`
+	Kind   RoomKind `json:"kind"`
+
+	// Members Member agent ids. Never null.
+	Members []string `json:"members"`
+
+	// Muted Muted member agent ids (all room kinds). Never null.
+	Muted []string `json:"muted"`
+	Name  string   `json:"name"`
+
+	// NeedsAttention Derived: true while any member state is awaiting_approval or waiting_on_user.
+	NeedsAttention bool `json:"needs_attention"`
+
+	// OriginSessionId The main chat the room was started from, when any.
+	OriginSessionId *string `json:"origin_session_id,omitempty"`
+	Paused          bool    `json:"paused"`
+
+	// ReadOnlyReason Present when the room is read-only, with the reason.
+	ReadOnlyReason *string `json:"read_only_reason,omitempty"`
+	WorkspaceId    string  `json:"workspace_id"`
+}
+
+// RoomKind defines model for Room.Kind.
+type RoomKind string
+
+// RoomCreateRequest Body of POST /api/v1/workspaces/{id}/rooms (spec omnipus-system-agent K24; FR-161, FR-172). Creates a squad or an ad-hoc room; the team room is never created through this route. Semantic rules enforced by the handler with inbound validation on and off: a squad needs a name; at least two distinct agents, all members of the workspace.
+type RoomCreateRequest struct {
+	AgentIds []string              `json:"agent_ids"`
+	Kind     RoomCreateRequestKind `json:"kind"`
+
+	// Name Required for a squad.
+	Name *string `json:"name,omitempty"`
+
+	// OriginSessionId The main chat the room is started from, when any.
+	OriginSessionId *string `json:"origin_session_id,omitempty"`
+}
+
+// RoomCreateRequestKind defines model for RoomCreateRequest.Kind.
+type RoomCreateRequestKind string
+
+// RoomMembersUpdateRequest Body of PATCH /api/v1/rooms/{id}/members (spec omnipus-system-agent K24; FR-204, FR-207). The team room accepts only mute and unmute; removing a member below two agents follows the two-agent rule (FR-204).
+type RoomMembersUpdateRequest struct {
+	Action   RoomMembersUpdateRequestAction `json:"action"`
+	AgentIds []string                       `json:"agent_ids"`
+}
+
+// RoomMembersUpdateRequestAction defines model for RoomMembersUpdateRequest.Action.
+type RoomMembersUpdateRequestAction string
+
+// RoomMessageRequest Body of POST /api/v1/rooms/{id}/messages (spec omnipus-system-agent K26; FR-166, §6.13). `mentions` come from the picker and are authoritative; typed text resolves only by §6.13's exact-name rule. The recorded entry arrives over the WebSocket as room_entry, carrying the same client_message_id.
+type RoomMessageRequest struct {
+	ClientMessageId string `json:"client_message_id"`
+
+	// Mentions Agent ids picked in the @-picker, or the reserved value `all`.
+	Mentions []string `json:"mentions"`
+	Text     string   `json:"text"`
+}
+
 // RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
 type RotateTokenResponse struct {
 	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
@@ -24198,6 +24659,85 @@ type SearchProviderCheckResponseProviderId string
 // SearchProviderCheckResponseStatus Normalized diagnostic outcome; a valid empty result is success.
 type SearchProviderCheckResponseStatus string
 
+// SecretNameEntry One stored secret version as listed by GET /api/v1/secrets (spec omnipus-system-agent K6; FR-073, FR-086, FR-241). Names and metadata only — never a value.
+type SecretNameEntry struct {
+	// AvailableInChannelTurns agent_private kind only (FR-241): whether the variable is injected into turns triggered by a channel person. Default false.
+	AvailableInChannelTurns *bool `json:"available_in_channel_turns,omitempty"`
+
+	// Consumers What uses this version (display labels). Never null.
+	Consumers []string            `json:"consumers"`
+	Kind      SecretNameEntryKind `json:"kind"`
+
+	// Owner A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
+	Owner *struct {
+		// AgentId The addressed (recipient) agent. Never the author.
+		AgentId string `json:"agent_id"`
+
+		// WorkspaceId Workspace of the addressed agent.
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"owner,omitempty"`
+
+	// Recipient Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+	Recipient struct {
+		// Kind Recipient kind.
+		Kind SecretNameEntryRecipientKind `json:"kind"`
+
+		// Lines Display lines, in order. Never null, never empty.
+		Lines []string `json:"lines"`
+	} `json:"recipient"`
+
+	// Reference Reference name of this version.
+	Reference string               `json:"reference"`
+	State     SecretNameEntryState `json:"state"`
+	Version   int64                `json:"version"`
+}
+
+// SecretNameEntryKind defines model for SecretNameEntry.Kind.
+type SecretNameEntryKind string
+
+// SecretNameEntryRecipientKind Recipient kind.
+type SecretNameEntryRecipientKind string
+
+// SecretNameEntryState defines model for SecretNameEntry.State.
+type SecretNameEntryState string
+
+// SecretOptionsUpdateRequest Body of PATCH /api/v1/secrets/{reference}/options (spec omnipus-system-agent K49; FR-241). Private kind only; authenticated web user only; audited.
+type SecretOptionsUpdateRequest struct {
+	// AvailableInChannelTurns Inject this private variable into channel-triggered turns.
+	AvailableInChannelTurns bool `json:"available_in_channel_turns"`
+}
+
+// SecretRequestState Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Absence is never read as success.
+type SecretRequestState struct {
+	// ReferenceNames Reference names the values were stored under. Present only when state is `submitted`.
+	ReferenceNames *[]string               `json:"reference_names,omitempty"`
+	RequestId      string                  `json:"request_id"`
+	State          SecretRequestStateState `json:"state"`
+	UpdatedAt      time.Time               `json:"updated_at"`
+}
+
+// SecretRequestStateState defines model for SecretRequestState.State.
+type SecretRequestStateState string
+
+// SecretSubmitRequest Body of POST /api/v1/secret-requests/{id}/submit (spec omnipus-system-agent K5; FR-062, FR-063). Exactly one of `values` or `cancel: true`. The only place secret values ever travel. Semantic rules enforced by the handler with inbound validation on AND off (§7.2): the keys of `values` must equal the request's field keys; each value is 4–16,384 bytes of UTF-8 without NUL; the whole body is at most 65,536 bytes (413). The schema's character limits are deliberately no stricter than those byte rules. Errors never echo a value.
+type SecretSubmitRequest struct {
+	// Cancel The person cancelled the card; nothing is stored.
+	Cancel *SecretSubmitRequestCancel `json:"cancel,omitempty"`
+
+	// Values Field key → typed value. Keys are the card's field keys (`^[a-z][a-z0-9_]{0,31}$`); the handler refuses any other key.
+	Values *map[string]string `json:"values,omitempty"`
+	union  json.RawMessage
+}
+
+// SecretSubmitRequestCancel The person cancelled the card; nothing is stored.
+type SecretSubmitRequestCancel bool
+
+// SecretSubmitRequest0 defines model for .
+type SecretSubmitRequest0 = interface{}
+
+// SecretSubmitRequest1 defines model for .
+type SecretSubmitRequest1 = interface{}
+
 // Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
 type Session struct {
 	// AgentId ID of the primary agent that owns this session.
@@ -24350,8 +24890,8 @@ type SessionType string
 
 // SessionCreateRequest Body for POST /sessions. Creates a new session for an agent.
 type SessionCreateRequest struct {
-	// AgentId Agent ID that will own this session. Defaults to "main" when omitted. Must reference an existing agent (400 if not found).
-	AgentId *string `json:"agent_id,omitempty"`
+	// AgentId Agent ID that will own this session. Required and nonblank — there is no default agent (omnipus-system-agent FR-122, K16); a missing or blank value is refused with 400 "an agent must be named". Must reference an existing chat-target agent (400 if not found). Omnipus has exactly one conversation, so naming Omnipus is refused with 409 carrying its main session id (FR-005).
+	AgentId string `json:"agent_id"`
 
 	// Type Session type. Defaults to "chat" when omitted. "main" is absent.
 	Type *SessionCreateRequestType `json:"type,omitempty"`
@@ -24515,6 +25055,21 @@ type SessionDetail struct {
 
 		// Role Author role. Absent on compaction entries.
 		Role *SessionDetailMessagesRole `json:"role,omitempty"`
+
+		// RoomRef Reference from a main-session entry (or an approval) to the room (group chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215, FR-251). Display and navigation data only: it never grants access to the room. `role` says whether the entry is the room's request to this agent or this agent's answer into the room; a room pre-admission approval card (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomRef) — keep both copies in sync by hand.
+		RoomRef *struct {
+			// RequestId The room delivery id, which is also the receiver's request id (spec §6.11, FR-216).
+			RequestId string `json:"request_id"`
+
+			// Role `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
+			Role SessionDetailMessagesRoomRefRole `json:"role"`
+
+			// RoomId Id of the room.
+			RoomId string `json:"room_id"`
+
+			// RoomName Display name of the room at the time the entry was written.
+			RoomName string `json:"room_name"`
+		} `json:"room_ref,omitempty"`
 
 		// Status Completion status of this message turn.
 		Status *SessionDetailMessagesStatus `json:"status,omitempty"`
@@ -24968,6 +25523,9 @@ type SessionDetailMessagesReplyToParticipantKind string
 
 // SessionDetailMessagesRole Author role. Absent on compaction entries.
 type SessionDetailMessagesRole string
+
+// SessionDetailMessagesRoomRefRole `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
+type SessionDetailMessagesRoomRefRole string
 
 // SessionDetailMessagesStatus Completion status of this message turn.
 type SessionDetailMessagesStatus string
@@ -28520,7 +29078,7 @@ type Workspace struct {
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
 
-	// SetupPending True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise. Server-set; ignored on input (readOnly).
+	// SetupPending True while this workspace's setup offer is pending. Set server-side when a workspace is created with an empty team; cleared server-side when the server posts the setup offer into Omnipus's main chat (omnipus-system-agent FR-047, K9), and set back to true if posting it fails. Absent/false otherwise. Server-set; ignored on input (readOnly).
 	SetupPending *bool `json:"setup_pending,omitempty"`
 
 	// Status Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
@@ -28783,11 +29341,20 @@ type bearerAuthContextKey string
 // DeleteAgentParams defines parameters for DeleteAgent.
 type DeleteAgentParams struct {
 	Revision ConfigurationRevision `form:"revision" json:"revision"`
+
+	// DeleteEverything Spec omnipus-system-agent K50, §6.19 (FR-243; landing 1, WU-20). Explicit, audited opt-in to delete the agent together with its dependencies (AgentDependencyList). Without it, a non-empty dependency list refuses the delete with 409.
+	DeleteEverything *bool `form:"delete_everything,omitempty" json:"delete_everything,omitempty"`
 }
 
 // ListAgentActivityRunsParams defines parameters for ListAgentActivityRuns.
 type ListAgentActivityRunsParams struct {
 	// WorkspaceId Restrict to runs of tasks in this workspace.
+	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+}
+
+// GetAgentDependenciesParams defines parameters for GetAgentDependencies.
+type GetAgentDependenciesParams struct {
+	// WorkspaceId Limit the list to one workspace.
 	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
@@ -29190,7 +29757,7 @@ type CreateChannelInstanceJSONRequestBody = ChannelCreateRequest
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
 
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
-type SetChannelRoutingJSONRequestBody = ChannelRouting
+type SetChannelRoutingJSONRequestBody = ChannelRoutingUpdateRequest
 
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
 type SetCredentialJSONRequestBody = CredentialSetRequest
@@ -29291,11 +29858,23 @@ type PollProviderSignInJSONRequestBody = SignInPollRequest
 // RestoreBackupJSONRequestBody defines body for RestoreBackup for application/json ContentType.
 type RestoreBackupJSONRequestBody = RestoreBackupRequest
 
+// UpdateRoomMembersJSONRequestBody defines body for UpdateRoomMembers for application/json ContentType.
+type UpdateRoomMembersJSONRequestBody = RoomMembersUpdateRequest
+
+// PostRoomMessageJSONRequestBody defines body for PostRoomMessage for application/json ContentType.
+type PostRoomMessageJSONRequestBody = RoomMessageRequest
+
 // CreateScheduleJSONRequestBody defines body for CreateSchedule for application/json ContentType.
 type CreateScheduleJSONRequestBody = ScheduleCreate
 
 // UpdateScheduleJSONRequestBody defines body for UpdateSchedule for application/json ContentType.
 type UpdateScheduleJSONRequestBody = ScheduleUpdate
+
+// SubmitSecretRequestJSONRequestBody defines body for SubmitSecretRequest for application/json ContentType.
+type SubmitSecretRequestJSONRequestBody = SecretSubmitRequest
+
+// UpdateSecretOptionsJSONRequestBody defines body for UpdateSecretOptions for application/json ContentType.
+type UpdateSecretOptionsJSONRequestBody = SecretOptionsUpdateRequest
 
 // UpdateAuditLogToggleJSONRequestBody defines body for UpdateAuditLogToggle for application/json ContentType.
 type UpdateAuditLogToggleJSONRequestBody = AuditLogToggleRequest
@@ -29407,6 +29986,9 @@ type CreateWorkspaceMountJSONRequestBody = WorkspaceMountCreateRequest
 
 // CreateWorkspacePlanJSONRequestBody defines body for CreateWorkspacePlan for application/json ContentType.
 type CreateWorkspacePlanJSONRequestBody = PlanCreateRequest
+
+// CreateRoomJSONRequestBody defines body for CreateRoom for application/json ContentType.
+type CreateRoomJSONRequestBody = RoomCreateRequest
 
 // Getter for additional properties for ChannelConfigureRequest. Returns the specified
 // element and whether it was found
@@ -31092,6 +31674,116 @@ func (t RecordWriteRequest) MarshalJSON() ([]byte, error) {
 
 func (t *RecordWriteRequest) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsSecretSubmitRequest0 returns the union data inside the SecretSubmitRequest as a SecretSubmitRequest0
+func (t SecretSubmitRequest) AsSecretSubmitRequest0() (SecretSubmitRequest0, error) {
+	var body SecretSubmitRequest0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSecretSubmitRequest0 overwrites any union data inside the SecretSubmitRequest as the provided SecretSubmitRequest0
+func (t *SecretSubmitRequest) FromSecretSubmitRequest0(v SecretSubmitRequest0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSecretSubmitRequest0 performs a merge with any union data inside the SecretSubmitRequest, using the provided SecretSubmitRequest0
+func (t *SecretSubmitRequest) MergeSecretSubmitRequest0(v SecretSubmitRequest0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSecretSubmitRequest1 returns the union data inside the SecretSubmitRequest as a SecretSubmitRequest1
+func (t SecretSubmitRequest) AsSecretSubmitRequest1() (SecretSubmitRequest1, error) {
+	var body SecretSubmitRequest1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSecretSubmitRequest1 overwrites any union data inside the SecretSubmitRequest as the provided SecretSubmitRequest1
+func (t *SecretSubmitRequest) FromSecretSubmitRequest1(v SecretSubmitRequest1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSecretSubmitRequest1 performs a merge with any union data inside the SecretSubmitRequest, using the provided SecretSubmitRequest1
+func (t *SecretSubmitRequest) MergeSecretSubmitRequest1(v SecretSubmitRequest1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SecretSubmitRequest) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	object := make(map[string]json.RawMessage)
+	if t.union != nil {
+		err = json.Unmarshal(b, &object)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if t.Cancel != nil {
+		object["cancel"], err = json.Marshal(t.Cancel)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'cancel': %w", err)
+		}
+	}
+
+	if t.Values != nil {
+		object["values"], err = json.Marshal(t.Values)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'values': %w", err)
+		}
+	}
+	b, err = json.Marshal(object)
+	return b, err
+}
+
+func (t *SecretSubmitRequest) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	if err != nil {
+		return err
+	}
+	object := make(map[string]json.RawMessage)
+	err = json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["cancel"]; found {
+		err = json.Unmarshal(raw, &t.Cancel)
+		if err != nil {
+			return fmt.Errorf("error reading 'cancel': %w", err)
+		}
+	}
+
+	if raw, found := object["values"]; found {
+		err = json.Unmarshal(raw, &t.Values)
+		if err != nil {
+			return fmt.Errorf("error reading 'values': %w", err)
+		}
+	}
+
 	return err
 }
 

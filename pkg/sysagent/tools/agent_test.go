@@ -1233,7 +1233,7 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 		t.Fatalf("test setup: expected %q to be registered immediately after create", agentID)
 	}
 	resolver := routing.NewRouteResolver(al.GetConfig())
-	route := resolver.ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "acct-1"})
+	route := resolver.ResolveRoute(boundTelegramRouteInput(agentID))
 	if route.AgentID != agentID {
 		t.Fatalf("test setup: expected the telegram binding to route to %q, got %q (matched_by=%s)",
 			agentID, route.AgentID, route.MatchedBy)
@@ -1268,10 +1268,9 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 	}
 
 	// UNROUTABLE, with NO restart: the same channel binding must no longer
-	// resolve to the deleted agent — it falls back to the default tier
-	// instead (pickAgentID's non-existent-agent branch).
+	// resolve to the deleted agent — the bound route drops (FR-121).
 	resolverAfter := routing.NewRouteResolver(al.GetConfig())
-	routeAfter := resolverAfter.ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "acct-1"})
+	routeAfter := resolverAfter.ResolveRoute(boundTelegramRouteInput(agentID))
 	if routeAfter.AgentID == agentID {
 		t.Error("BUG: the telegram binding still routes to the deleted agent — delete_agent did not hot-reload")
 	}

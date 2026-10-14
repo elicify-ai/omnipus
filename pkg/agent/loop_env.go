@@ -53,6 +53,9 @@ func (al *AgentLoop) wireEnvProviders(cfg *config.Config, registry *AgentRegistr
 	// Wire the per-turn working-directory injector for every agent in this registry.
 	wireWorkingDirInjectors(al, registry)
 
+	// Wire the per-turn mode note (FR-015) for every agent in this registry.
+	wireModeNoteInjectors(al, registry)
+
 	// Wire the per-turn, per-workspace project-shelf resolver for every agent
 	// in this registry (ADR-072 R1 fix — see wireProjectShelfResolvers).
 	wireProjectShelfResolvers(al, registry)
@@ -209,6 +212,35 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 	}
 }
 
+// omnipusGodModeNote is the one-line God Mode note Omnipus's per-turn context
+// carries while God Mode is active (omnipus-system-agent FR-015). PLACEHOLDER
+// wording until WU-9 wires the prometheus-authored note
+// (docs/internal/specs/omnipus-wu9-draft/core-prompt.md, omnipusGodModeNote).
+const omnipusGodModeNote = "God Mode is active: post the plan summary as an ordinary message and proceed without the Go question and without tool approvals; clarification questions and secret cards still appear."
+
+// wireModeNoteInjectors installs the per-turn mode-note callback: Omnipus gets
+// the God Mode note while GodModeActive reads true for the live config, and no
+// note otherwise; every other agent gets no mode note (the spec puts the note
+// in Omnipus's context only).
+func wireModeNoteInjectors(al *AgentLoop, registry *AgentRegistry) {
+	for _, agentID := range registry.ListAgentIDs() {
+		agentInst, ok := registry.GetAgent(agentID)
+		if !ok || agentInst == nil || agentInst.ContextBuilder == nil {
+			continue
+		}
+		if coreagent.CoreAgentID(agentID) != coreagent.IDOmnipus {
+			agentInst.ContextBuilder.WithModeNoteInjector(nil)
+			continue
+		}
+		agentInst.ContextBuilder.WithModeNoteInjector(func() string {
+			if GodModeActive(al.GetConfig()) {
+				return omnipusGodModeNote
+			}
+			return ""
+		})
+	}
+}
+
 // wireWorkingDirInjectors installs a per-turn working-directory context
 // callback on every agent's ContextBuilder in registry, so an agent whose
 // file tools are silently re-rooted to a Workspace's shared directory
@@ -240,9 +272,10 @@ func wireWorkingDirInjectors(al *AgentLoop, registry *AgentRegistry) {
 
 		id := agentID
 		agentInst.ContextBuilder.WithWorkingDirInjector(func(workspaceID string) string {
-			// Admin operates from its agent home, even if a workspace record
-			// claims membership. Keep context consistent with turn admission.
-			if coreagent.CoreAgentID(id) == coreagent.IDAdmin {
+			// Omnipus operates from its agent home although it is a member of
+			// the default workspace (L1 amendment §2.2 D4). Keep context
+			// consistent with turn admission.
+			if coreagent.CoreAgentID(id) == coreagent.IDOmnipus {
 				return ""
 			}
 			home := omnipusHome()

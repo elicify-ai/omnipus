@@ -27,7 +27,7 @@
 #      so the count is two. The pinned property is unchanged: a new site here
 #      silently changes when the wheel releases.)
 #   2. `bus.MessageBus.PublishInbound` is CALLED (never its own `func`
-#      definition in pkg/bus/bus.go) at EXACTLY NINE non-test sites in pkg/
+#      definition in pkg/bus/bus.go) at EXACTLY TEN non-test sites in pkg/
 #      (BROWSER-FR-029a's own text: the PublishInbound census is pinned, so a
 #      new publish site cannot appear un-classified). Verified today:
 #      pkg/agent/async_notifier.go, pkg/agent/loop.go (the goal-loop
@@ -36,7 +36,8 @@
 #      held-request re-publication shares through publishRequestWake, and the
 #      owner wake for an answer), pkg/agent/connector_egress.go (the
 #      main-connector refusal note), pkg/agent/request_reminder.go (the
-#      unanswered-request reminder), pkg/gateway/websocket_chat.go,
+#      unanswered-request reminder), pkg/agent/workspace_setup_offer.go (the
+#      server-initiated workspace-setup offer), pkg/gateway/websocket_chat.go,
 #      pkg/gateway/ws_ask_user.go, pkg/channels/base.go.
 #
 #      Security-lead ruling (OPSITE-connector_egress.md, u8-inbound-20261010):
@@ -59,7 +60,14 @@
 #      site — owner-wake marker, never OperatorPrompt. The held-request wake
 #      that used to be a tenth site now goes through
 #      address_router.go::publishRequestWake, the same function the admission
-#      uses, so the census is nine.
+#      uses, so the census was nine.
+#
+#      pkg/agent/workspace_setup_offer.go::PostWorkspaceSetupOffer
+#      (omnipus-system-agent FR-047, K9; WU-10, 2026-10-14) is a NON-operator,
+#      server-generated owner wake into Omnipus's main — owner-wake marker,
+#      never OperatorPrompt, never UserInitiated (pinned by
+#      pkg/agent/workspace_setup_offer_test.go). It brings the census to ten.
+#      Status: S1 security review waived by founder 2026-10-14.
 #
 # Per C-77: do NOT scan pkg/gateway/websocket.go's ADR-057 FR-089 "W5 audit
 # classification artefact" comment block for OperatorPrompt assignments. That
@@ -195,23 +203,23 @@ if [ "$op_count" -ne 2 ]; then
 fi
 
 echo ""
-echo "PublishInbound call sites: $pi_count (want exactly 9)"
+echo "PublishInbound call sites: $pi_count (want exactly 10)"
 if [ -n "$pi_hits" ]; then
   printf '%s\n' "$pi_hits" | sed 's/^/  /'
 fi
-if [ "$pi_count" -ne 9 ]; then
+if [ "$pi_count" -ne 10 ]; then
   fail=1
 fi
 
 echo ""
 if [ "$fail" -ne 0 ]; then
   echo "ERROR: BROWSER-FR-029/FR-029a's assignment partition is no longer exactly" >&2
-  echo "2 OperatorPrompt=true sites and 9 PublishInbound call sites (see counts" >&2
+  echo "2 OperatorPrompt=true sites and 10 PublishInbound call sites (see counts" >&2
   echo "above). This is the fail-closed browser-wheel release discriminator —" >&2
   echo "a new, un-classified site here silently changes when the wheel releases." >&2
   echo "See docs/internal/specs/browser-control-handover-spec.md FR-029/FR-029a." >&2
   exit 1
 fi
 
-echo "OK: exactly 2 OperatorPrompt=true sites and 9 PublishInbound call sites."
+echo "OK: exactly 2 OperatorPrompt=true sites and 10 PublishInbound call sites."
 exit 0

@@ -10,6 +10,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -23,8 +24,14 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 	if revision == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "revision is required", "Call get_agent and retry with its revision"))
 	}
+	if refusal := permissionFieldRefusal(args); refusal != nil {
+		return refusal
+	}
 	if err := rejectUnknownAgentFields(args, agentUpdateArgNames); err != nil {
 		return fieldErrorResult(err)
+	}
+	if name, ok := args["name"].(string); ok && coreagent.IsReservedAgentName(name) {
+		return reservedNameResult()
 	}
 	fields := suppliedAgentFields(args)
 	if len(fields) == 0 {
@@ -48,11 +55,6 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 		}
 		soul = &v
 	}
-	if _, present := args["default"]; present {
-		if err := requireDefaultWriter(t.deps); err != nil {
-			return fieldErrorResult(err)
-		}
-	}
 	known := knownToolPolicies(t.deps)
 	inv := t.deps.currentInventory()
 	result, mutateErr := store.MutateState(id, revision, func(a *config.AgentConfig) error {
@@ -71,14 +73,6 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 	}, soul)
 	if mutateErr != nil {
 		return t.mutateErrorResult(id, result, mutateErr)
-	}
-	if raw, present := args["default"]; present {
-		if want, ok := raw.(bool); ok {
-			if err := writeDefaultSingleton(t.deps, id, want); err != nil {
-				slog.Warn("sysagent: default singleton write failed", "id", id, "error", err)
-				return defaultSingletonPartialResult(id, result.Revision, fields)
-			}
-		}
 	}
 	activation, message := publishAgentActivation(t.deps, id)
 	if _, hasVoice := args["voice"]; hasVoice && message == "" {
@@ -126,6 +120,11 @@ func (t *AgentUpdateTool) mutateErrorResult(id string, result agentstore.Mutatio
 		}
 		return tools.ErrorResult(successJSON(payload))
 	}
+}
+
+// reservedNameResult is the FR-002 refusal in this package's error shape.
+func reservedNameResult() *tools.ToolResult {
+	return tools.ErrorResult(errorJSON("RESERVED_NAME", coreagent.ReservedNameRefusal, "Choose a different name"))
 }
 
 func fieldErrorResult(err error) *tools.ToolResult {

@@ -76,11 +76,11 @@ func newTestRestAPIWithNativeAndExternalCLIAgent(t *testing.T) *restAPI {
 			},
 			List: []config.AgentConfig{
 				{
-					ID:      nativeTestAgentID,
-					Name:    "Native Assignee",
-					Default: true,
-					Type:    config.AgentTypeCustom,
-					Home:    nativeWorkspace,
+					ID:   nativeTestAgentID,
+					Name: "Native Assignee",
+
+					Type: config.AgentTypeCustom,
+					Home: nativeWorkspace,
 				},
 				{
 					ID:   extCLITestAgentID,

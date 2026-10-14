@@ -1,0 +1,64 @@
+title: RoomEntry
+description: >
+  One entry of a room transcript (spec omnipus-system-agent K26; FR-166).
+  Group entries carry the authoring agent and the resolved addressees.
+  Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntry)
+  — keep both copies in sync by hand.
+type: object
+required:
+  - id
+  - room_id
+  - seq
+  - author
+  - text
+  - addressees
+  - after_pause
+  - deliveries
+  - timestamp
+additionalProperties: false
+properties:
+  id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  room_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: Position in the room transcript; strictly increasing.
+  client_message_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Echo of RoomMessageRequest.client_message_id for a person's entry.
+  author:
+    $ref: './RoomEntryAuthor.yaml'
+  text:
+    type: string
+    maxLength: 5242880
+  addressees:
+    type: array
+    maxItems: 256
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+    description: Resolved addressee agent ids. Never null.
+  after_pause:
+    type: boolean
+    description: >
+      True for an answer to work consumed before a /pause; such an answer
+      never forwards its mentions (§6.11).
+  deliveries:
+    type: array
+    maxItems: 256
+    items:
+      $ref: './RoomDeliveryState.yaml'
+    description: Per-member delivery states for this entry. Never null.
+  timestamp:
+    type: string
+    format: date-time

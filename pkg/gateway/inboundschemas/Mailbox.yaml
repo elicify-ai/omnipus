@@ -57,6 +57,26 @@ properties:
     description: >
       True when a mailbox password is present in the credential store (the
       mailbox can authenticate). The password value itself is never returned.
+  status:
+    type: string
+    enum:
+      - ok
+      - degraded
+    description: >
+      #1277. Whether the mailbox can serve. "degraded" when it is enabled but
+      cannot start — for example its password secret reference is missing;
+      status_reason then names the cause. Optional: omitted by servers that
+      do not report it.
+    example: "ok"
+  status_reason:
+    type: string
+    minLength: 1
+    maxLength: 1000
+    description: >
+      #1277. Human-readable reason for the status, safe to display — for
+      example the missing secret reference. Present only when status is
+      "degraded"; never contains a secret value.
+    example: "secret reference MAIL_MIA_SALES_PASSWORD is missing"
   signature_html:
     type: string
     maxLength: 16384

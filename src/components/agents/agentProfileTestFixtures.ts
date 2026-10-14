@@ -9,7 +9,9 @@ import type { Agent } from '@/lib/api'
 export const editable = (...names: string[]) => names.map((name) => ({ name, editable: true }))
 
 export const COMMON_EDITABLE_FIELDS = editable(
-  'name', 'description', 'color', 'icon', 'figure', 'role', 'default', 'model', 'provider',
+  // No 'default' — the field is off the wire (omnipus-system-agent K11/K12,
+  // bundle B1) and the server no longer describes it as editable.
+  'name', 'description', 'color', 'icon', 'figure', 'role', 'model', 'provider',
   'fallback_models', 'model_params', 'soul', 'memory_enabled', 'voice',
   'max_tool_iterations', 'context_window_override', 'skills',
   'tool_policy_changes', 'executor',

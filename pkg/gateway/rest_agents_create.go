@@ -270,6 +270,9 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 		jsonErr(pap.cra.w, http.StatusUnprocessableEntity, "name is required")
 		return true
 	}
+	if refuseReservedAgentName(pap.cra.w, pap.name) {
+		return true
+	}
 	if pap.createType == config.AgentTypeWorker && wireType == string(gen.AgentTypeSubagent3p) {
 		if executorIn == nil || executorIn.CliPath == nil || strings.TrimSpace(*executorIn.CliPath) == "" {
 			jsonErr(pap.cra.w, http.StatusBadRequest, "executor.cli_path is required for subagent_3p agents")
@@ -837,7 +840,7 @@ func (cra *restAPICreateAgent) publishResponse() {
 	// the plan engine, or rebuild every OTHER agent's instance. fastAgentUpsert
 	// re-registers just this one agent (registry.UpsertAgent + a fresh
 	// resolver/default-agent-override, see AgentLoop.UpsertAgentFast) so
-	// GetAgent/ResolveRoute/GetDefaultAgent all observe it the instant this
+	// GetAgent/ResolveRoute all observe it the instant this
 	// handler returns — closing the exact "201 followed by POST /tasks 400 on
 	// the agent we just created" split a bare cfg.Agents.List append used to
 	// leave open. It falls back to the slow, already-hardened full reload on

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { MagnifyingGlass, Plus, Star, Warning } from '@phosphor-icons/react'
+import { MagnifyingGlass, Plus, Warning } from '@phosphor-icons/react'
 import {
   Popover,
   PopoverContent,
@@ -154,9 +154,6 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
                     <span className="truncate text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
                       {a.name}
                     </span>
-                    {a.default && (
-                      <Star size={10} weight="fill" className="shrink-0 text-[var(--color-accent)]" />
-                    )}
                   </div>
                   <span className="block truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                     {roleLabel(a)}

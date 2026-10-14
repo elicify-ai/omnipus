@@ -176,6 +176,7 @@ func TestSessionWorker_Continue_UnrelatedActiveSession_MustNotStrandOwnQueuedFol
 		Content: "first message for B",
 		Peer:    bus.Peer{Kind: bus.PeerDirect, ID: "user-b"},
 	}
+	msgB = al.addressToPrimaryForTest(msgB) // no default agent: the fixture names its agent
 
 	target, err := al.buildContinuationTarget(msgB)
 	if err != nil {
@@ -189,7 +190,7 @@ func TestSessionWorker_Continue_UnrelatedActiveSession_MustNotStrandOwnQueuedFol
 	// drain tail starts (real precondition, run once here via a plain,
 	// non-blocking call — its own outcome is not asserted on; only the
 	// steering queue and activeTurnStates state afterward matter).
-	if _, _, err := al.processMessage(context.Background(), msgB); err != nil {
+	if _, _, err := al.processMessageAsPrimaryForTest(context.Background(), msgB); err != nil {
 		t.Fatalf("processMessage(msgB) unexpected error: %v", err)
 	}
 
@@ -274,7 +275,7 @@ func TestSessionWorker_Continue_UnrelatedActiveSession_MustNotStrandOwnQueuedFol
 // test for Bug 2 (design note, "A bug inside the confirmed bug"): Continue
 // dequeues the steering queue (dequeueSteeringMessagesForScopeWithFallback)
 // BEFORE checking whether agentForSession(sessionKey) returns nil. When the
-// registry has no agent to route to (registry.GetDefaultAgent() nil — the
+// registry has no agent to route to (no agent resolves — the
 // note's example: "the session's agent was deleted mid-turn"),
 // agentForSession returns nil and Continue returns an error — but the
 // just-dequeued message is sitting in a local variable that goes out of
@@ -301,12 +302,9 @@ func TestAgentLoop_Continue_NilAgent_MustNotDiscardDequeuedMessages(t *testing.T
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			// Deliberately NO agents registered at all: registry.GetDefaultAgent()
-			// then returns nil (registry.go's Priority-1/Priority-2 ladder both
-			// require at least one registered chat-target agent), so
-			// agentForSession(sessionKey) — which falls back to GetDefaultAgent()
-			// whenever the session key doesn't parse to a specific registered
-			// agent ID — returns nil for any session key. This is the
+			// Deliberately NO agents registered at all, so
+			// agentForSession(sessionKey) — which resolves only the agent the
+			// session key names — returns nil for any session key. This is the
 			// "session's agent was deleted mid-turn" scenario the design note
 			// names as agentForSession's one deterministic, permanent failure
 			// cause.
@@ -411,6 +409,7 @@ func setupPersistentContinueFailureFixture(t *testing.T) (*AgentLoop, *bus.Messa
 		Content: "first message",
 		Peer:    bus.Peer{Kind: bus.PeerDirect, ID: "user-a"},
 	}
+	msg = al.addressToPrimaryForTest(msg) // no default agent: the fixture names its agent
 
 	target, err := al.buildContinuationTarget(msg)
 	if err != nil {
@@ -780,6 +779,7 @@ func TestSessionWorker_DrainLoop_PostDequeueContinueFailure_MustNotSilentlyDropM
 		Content: "first message for the post-dequeue failure test",
 		Peer:    bus.Peer{Kind: bus.PeerDirect, ID: "user-d"},
 	}
+	msg = al.addressToPrimaryForTest(msg) // no default agent: the fixture names its agent
 
 	target, err := al.buildContinuationTarget(msg)
 	if err != nil {

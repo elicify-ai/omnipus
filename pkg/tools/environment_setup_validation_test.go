@@ -51,10 +51,10 @@ func envSetupValidationTool(t *testing.T) (*EnvironmentSetupTool, *validationFak
 	}
 	store := &validationFakeStore{}
 	tool := NewEnvironmentSetupTool(EnvironmentSetupToolDeps{
-		Home:         home,
-		AgentWorkDir: work,
-		Admin:        false,
-		Store:        store,
+		Home:           home,
+		AgentWorkDir:   work,
+		SetupAuthority: false,
+		Store:          store,
 	})
 	return tool, store, home
 }

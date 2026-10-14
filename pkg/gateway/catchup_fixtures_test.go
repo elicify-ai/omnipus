@@ -351,6 +351,8 @@ func sendMessage(t *testing.T, tab *fxTab, sessionID, content, clientID string) 
 	frame := map[string]any{"type": "message", "content": content, "client_message_id": clientID}
 	if sessionID != "" {
 		frame["session_id"] = sessionID
+	} else {
+		frame["agent_id"] = "mia" // a new chat names its agent (FR-122); the rig registers mia
 	}
 	tab.send(t, frame)
 }

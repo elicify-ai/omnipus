@@ -226,9 +226,9 @@ Opening an agent's main chat (see [Each agent's own chat, per workspace](workspa
 
 > This agent's main chat could not be prepared because session storage failed. Check disk space and permissions, then retry. Details are in the server log.
 
-It means the agent is entitled to a main chat in that workspace, but Omnipus could not create it, or could not trust the one it found. The message deliberately names no file, folder or id; the full cause is in the gateway log as an error-level line starting `rest: main session could not be prepared on open`, with the `workspace_id`, `agent_id` and the underlying error. (A missing chat for an agent that is *not* on the team, a worker, or Admin outside the default workspace is different: that stays a plain "session not found".)
+It means the agent is entitled to a main chat in that workspace, but Omnipus could not create it, or could not trust the one it found. The message deliberately names no file, folder or id; the full cause is in the gateway log as an error-level line starting `rest: main session could not be prepared on open`, with the `workspace_id`, `agent_id` and the underlying error. (A missing chat for an agent that is *not* on the team, a worker, or Omnipus outside the default workspace is different: that stays a plain "session not found".)
 
-**Why it can happen at startup too.** On every start Omnipus creates the main chats of the default workspace's team and of every saved workspace team, plus Admin's in the default workspace. A failure there does not stop the gateway. It is logged at error level — `rest: boot mains: ...`, naming the workspace (and the agent) — and the chat is tried again the next time someone opens it.
+**Why it can happen at startup too.** On every start Omnipus creates the main chats of the default workspace's team (the system agent Omnipus included) and of every saved workspace team. A failure there does not stop the gateway. It is logged at error level — `rest: boot mains: ...`, naming the workspace (and the agent) — and the chat is tried again the next time someone opens it.
 
 **What to do.**
 

@@ -903,24 +903,6 @@ func (a *restAPI) removeStoppedSession(store *session.UnifiedStore, id string) e
 	return nil
 }
 
-// firstChatTargetAgentID returns the ID of the first chat-target agent in the
-// config list, or "" when no such agent is configured. Used as a last-resort
-// fallback after GetDefaultAgent() — mirrors resolveDefaultAgentID in
-// pkg/routing/route.go. Workers are NOT chat targets, so they are skipped here:
-// a last-resort fallback must never land on a worker, which is invoked only via
-// delegation.
-func firstChatTargetAgentID(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	for _, ag := range cfg.Agents.List {
-		if ag.IsChatTarget() {
-			return ag.ID
-		}
-	}
-	return ""
-}
-
 // isWorkerAgentID reports whether agentID resolves to a worker agent in the config.
 // Returns false for an unknown agent ID (existence is validated separately by the
 // caller). Used by gateway session-binding chokepoints to reject a worker as a chat
@@ -936,25 +918,29 @@ func isWorkerAgentID(cfg *config.Config, agentID string) bool {
 func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	var req gen.SessionCreateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "SessionCreateRequest", &req, validateEnabled) {
+	if !decodeAndValidateStrict(w, r, "SessionCreateRequest", &req, validateEnabled) {
 		return
 	}
 
-	agentID := ""
-	if req.AgentId != nil {
-		agentID = *req.AgentId
-	}
+	// omnipus-system-agent FR-122 / K16: a session names its agent; there is
+	// no default agent to fall back to. Checked here, not only by the schema,
+	// so the rule holds with inbound validation off.
+	agentID := strings.TrimSpace(req.AgentId)
 	if agentID == "" {
-		if reg := a.agentLoop.GetRegistry(); reg != nil {
-			if def := reg.GetDefaultAgent(); def != nil {
-				agentID = def.ID
-			}
-		}
-		if agentID == "" {
-			// Fall back to the first chat-target agent (mirrors handleBoardTaskStart /
-			// resolveDefaultAgentID in pkg/routing/route.go).
-			agentID = firstChatTargetAgentID(a.agentLoop.GetConfig())
-		}
+		jsonErr(w, http.StatusBadRequest, agentMustBeNamed)
+		return
+	}
+	// CHECK F01: a case spelling of the system agent is the system agent for
+	// every guard below.
+	agentID = foldSystemAgentID(agentID)
+	// FR-005: Omnipus has exactly one conversation — its main chat in the
+	// default workspace. A second one is refused with that main's id.
+	if msg, _, err := omnipusSecondConversationRefusal(a.agentLoop.GetSessionStore(), a.homePath, agentID); err != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not check Omnipus's conversation", err)
+		return
+	} else if msg != "" {
+		jsonErr(w, http.StatusConflict, msg)
+		return
 	}
 	if err := validateEntityID(agentID); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid agent_id")
@@ -980,14 +966,15 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
 		return
 	}
-	// Navigation FR-038: Admin has no standalone, workspace-less session.
+	// omnipus-system-agent FR-003: Omnipus's chats live in the default
+	// workspace only.
 	reqWorkspaceID := ""
 	if req.WorkspaceId != nil {
 		reqWorkspaceID = *req.WorkspaceId
 	}
-	msg, adminFault := adminChatRefusal(a.homePath, agentID, reqWorkspaceID)
-	if adminFault != nil {
-		jsonServerFailure(w, http.StatusInternalServerError, "could not check where Admin's chat may live", adminFault)
+	msg, omnipusFault := omnipusChatRefusal(a.homePath, agentID, reqWorkspaceID)
+	if omnipusFault != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not check where Omnipus's chat may live", omnipusFault)
 		return
 	}
 	if msg != "" {

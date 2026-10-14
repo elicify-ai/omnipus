@@ -16,6 +16,16 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 			result[name] = policy
 		}
 	}
+	if id == IDOmnipus {
+		// Spec §6.5: Omnipus's EXACT supporting set rides the ceiling (allow,
+		// or ask for the ask-list tools); everything else — the role-wide
+		// grants below included — stays deny.
+		ceiling := config.DefaultConfig().Sandbox.ToolPolicies
+		for _, name := range omnipusSupportedTools {
+			grant(config.ToolPolicy(ceiling[name]), name)
+		}
+		return result
+	}
 	// create_email_draft (email-mail-view-spec §2.7 point 3): drafting is
 	// the safe mail path — it writes only a Drafts copy and can never
 	// send — so every role carries allow, including Admin, whose five
@@ -58,22 +68,6 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 	case IDJim:
 		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "send_file", "create_task", "update_task", "list_tasks", "list_jobs", "set_todos", "delegate", "create_plan", "execute_plan", "stop_plan", "find_skills", "list_skills")...)
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount", "browser_upload_file")
-	case IDAva:
-		grant(allow, append(commonWork, "AskUserQuestion", "set_goal", "search_web", "fetch_url", "list_agents", "get_agent", "get_agent_tools", "create_agent", "update_agent", "delete_agent", "list_models", "find_skills", "list_skills", "install_skill", "create_skill", "edit_skill", "remove_skill", "list_mcp_servers", "get_workspace", "list_workspaces", "update_workspace")...)
-		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount")
-	case IDAdmin:
-		grant(allow, "remember", "recall_memory", "run_retrospective", "recall_conversation", "AskUserQuestion", "set_goal", "goal_claim", "read_file", "write_file", "edit_file", "append_file", "list_directory", "grep", "list_mounts", "send_message", "answer_request", "add_mcp_server", "list_mcp_servers", "list_providers", "configure_provider", "test_provider", "list_models", "list_channels", "configure_channel", "enable_channel", "test_channel", "run_doctor", "get_usage")
-		grant(allow, "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list")
-		// environment_setup (ADR-090 ES-FR-01): Ask — explicit stored entry
-		// (deliberate posture). Admin's cross-workspace FILESYSTEM authority
-		// is a runtime authority fact, never a tool-policy change; the
-		// approval stays with the user.
-		//
-		// bash (re-pointed 2026-09-24, ADR-092): see IDMia's identical note
-		// above — the global ceiling shipped "ask", so Admin's intended
-		// bash posture is Ask too, listed explicitly rather than silently
-		// defaulting to it.
-		grant(ask, "request_mount", "remove_mcp_server", "disable_channel", "environment_setup", "bash")
 	case IDPlanner:
 		grant(allow, append(commonWork, "search_web", "fetch_url", "create_task", "update_task", "list_tasks", "delegate")...)
 		grant(ask, "send_email", "reply", "download_email_attachment", "request_mount")
@@ -95,7 +89,10 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 	if id == IDMia || id == IDJim || id == IDWorker {
 		grant(ask, "knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create")
 	}
-	if id == IDMia || id == IDJim || id == IDAva {
+	// Spec §6.5 (FR-007): the two chat-target main agents may ask for, list
+	// and read their own secrets and conversations; the worker tier may not.
+	if id == IDMia || id == IDJim {
+		grant(allow, "request_secret", "list_secrets", "read_conversation")
 		grant(allow, "browser_navigate", "browser_click", "browser_type", "browser_screenshot", "browser_get_text", "browser_wait", "browser_evaluate", "browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab", "browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot", "browser_handle_dialog", "browser_handover")
 		grant(ask, "browser_upload_file")
 	}
@@ -103,6 +100,9 @@ func ADR090RolePolicyInventory(id CoreAgentID) map[string]config.ToolPolicy {
 }
 
 func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
+	if id == IDOmnipus {
+		return omnipusSeedPolicies()
+	}
 	intended := ADR090RolePolicyInventory(id)
 	ceiling := config.DefaultConfig().Sandbox.ToolPolicies
 	result := make(map[string]config.ToolPolicy)
@@ -113,8 +113,8 @@ func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
 	}
 	// These entries communicate deliberate workflow posture even where it
 	// currently equals the ceiling. environment_setup (ADR-090 ES-FR-01,
-	// founder ruling 2026-09-18) rides this list so Mia, General Purpose
-	// and Admin PERSIST an explicit "ask" of their own — setup permission
+	// founder ruling 2026-09-18) rides this list so Mia and General Purpose
+	// PERSIST an explicit "ask" of their own — setup permission
 	// is set at both levels, so a later ceiling raise to allow leaves
 	// their stored ask (until the operator explicitly changes or removes
 	// it via the normal tool_policy edit paths). The deny roles are
@@ -124,4 +124,53 @@ func adr090SparseRolePolicies(id CoreAgentID) map[string]config.ToolPolicy {
 		result[name] = intended[name]
 	}
 	return result
+}
+
+// omnipusSupportedTools is Omnipus's exact supporting set, transcribed from
+// omnipus-system-agent spec §6.5. Every name rides the global ceiling (no
+// per-agent entry — Omnipus never carries a per-agent ask, FR-022); every
+// other static tool is an explicit per-agent deny (FR-007).
+var omnipusSupportedTools = []string{
+	"list_agents", "get_agent", "get_agent_tools", "read_agent_metadata",
+	"list_workspaces", "get_workspace", "list_models", "list_providers", "test_provider",
+	"list_mcp_servers", "list_channels", "test_channel", "list_skills", "find_skills",
+	"run_doctor", "get_usage", "list_secrets", "AskUserQuestion", "send_message",
+	"answer_request", "message_parent", "delegate", "Skill", "ToolSearch", "remember",
+	"recall_memory", "recall_conversation", "run_retrospective", "set_goal", "goal_claim",
+	"read_file", "write_file", "edit_file", "append_file", "list_directory", "grep",
+	"list_mounts", "knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list",
+	"search_web", "fetch_url", "create_agent", "update_agent", "delete_agent",
+	"update_workspace", "create_skill", "edit_skill", "remove_skill", "install_skill",
+	"add_mcp_server", "remove_mcp_server", "configure_provider", "enable_channel",
+	"disable_channel", "configure_channel", "connect_channel", "connect_mailbox",
+	"set_agent_permissions", "request_secret", "select_secret_version", "remove_secret",
+	"read_conversation", "list_mailboxes", "environment_setup", "bash",
+}
+
+// OmnipusSupportedTools returns a copy of Omnipus's supporting set (§6.5).
+func OmnipusSupportedTools() []string {
+	out := make([]string, len(omnipusSupportedTools))
+	copy(out, omnipusSupportedTools)
+	return out
+}
+
+// omnipusSeedPolicies returns Omnipus's sparse per-agent map: an explicit
+// deny for every static tool outside the supporting set and NO entry for any
+// supported tool, so each supported tool resolves to the global ceiling —
+// allow, or ask for the ask list (FR-020, FR-021) — and God Mode floors those
+// to allow (FR-023) while the denies stay. Validated against the static
+// catalog by denyAllThenOverride's key check.
+func omnipusSeedPolicies() map[string]config.ToolPolicy {
+	supported := make(map[string]config.ToolPolicy, len(omnipusSupportedTools))
+	for _, name := range omnipusSupportedTools {
+		supported[name] = config.ToolPolicyAllow
+	}
+	validateOverrideKeys(supported)
+	out := make(map[string]config.ToolPolicy)
+	for _, name := range allStaticToolNames {
+		if _, ok := supported[name]; !ok {
+			out[name] = config.ToolPolicyDeny
+		}
+	}
+	return out
 }

@@ -86,7 +86,7 @@ func TestRunTurn_CreateSkillAskPolicy_ApproverConsulted(t *testing.T) {
 			approver := &countingDenyApprover{reason: "user"}
 			al.SetToolApprover(approver)
 
-			_, err := al.ProcessDirect(context.Background(), "please create the uat-s67 skill", "test-session-uat-s67")
+			_, err := al.processDirectPrimaryForTest(context.Background(), "please create the uat-s67 skill", "test-session-uat-s67")
 			require.NoError(t, err)
 
 			assert.Equal(t, 1, approver.callCount(),
@@ -123,9 +123,8 @@ func TestRunTurn_AvaCreateSkillSeededAllow_RealSeed(t *testing.T) {
 	cfg.Sandbox.AuditLog = true
 
 	coreagent.SeedConfig(cfg)
-	// Route directly to Ava so this turn does not depend on the default-agent
-	// resolution ladder.
-	cfg.Agents.Defaults.DefaultAgentID = string(coreagent.IDAva)
+	// The turn runs as Omnipus — the skill author since Ava's retirement
+	// (omnipus-system-agent §6.5: create_skill rides the allow ceiling for it).
 
 	// create_skill is a search-only lazy tool under ADR-090 (the upfront set
 	// names `Skill`, not `create_skill`): on a compressed request it is
@@ -151,7 +150,7 @@ func TestRunTurn_AvaCreateSkillSeededAllow_RealSeed(t *testing.T) {
 	approver := &countingDenyApprover{reason: "user"}
 	al.SetToolApprover(approver)
 
-	_, err := al.ProcessDirect(context.Background(), "please create the uat-s67 skill", "test-session-uat-s67-ava")
+	_, err := al.ProcessDirectAs(context.Background(), string(coreagent.IDOmnipus), "please create the uat-s67 skill", "test-session-uat-s67-ava")
 	require.NoError(t, err)
 
 	assert.Zero(t, approver.callCount(),

@@ -171,47 +171,48 @@ func TestSessionCoreU1_WorkersAndSystemAgentsHaveNoMain(t *testing.T) {
 		"only the two eligible members have a main")
 }
 
-// FR-002 / BDD-01.1 Admin variant: Admin has a main in the DEFAULT workspace
-// only, shown through Session list/detail, with no fake team membership.
-func TestSessionCoreU1_AdminHasDefaultWorkspaceMainOnly(t *testing.T) {
+// FR-002 / BDD-01.1 Omnipus variant (omnipus-system-agent FR-003): Omnipus is
+// an ordinary member of the DEFAULT workspace only, so it owns a main there —
+// shown through Session list/detail and member_configs — and none elsewhere.
+func TestSessionCoreU1_OmnipusHasDefaultWorkspaceMainOnly(t *testing.T) {
 	env := u1NewEnv(t, false)
-	const wsDefault, wsOther = "01JU1ADMINDEFAULTWS0000004", "01JU1ADMINOTHERWS00000005"
-	env.seedWorkspace(t, wsDefault, true, "mia")
+	const wsDefault, wsOther = "01JU1OMNIDEFAULTWS00000004", "01JU1OMNIOTHERWS000000005"
+	env.seedWorkspace(t, wsDefault, true, "mia", "omnipus")
 	env.seedWorkspace(t, wsOther, false, "mia")
 
-	id := u1MainID(wsDefault, "admin")
+	id := u1MainID(wsDefault, "omnipus")
 	sess, code := env.getSession(t, id)
-	require.Equal(t, http.StatusOK, code, "Admin default-workspace main is reachable through Session detail")
+	require.Equal(t, http.StatusOK, code, "Omnipus default-workspace main is reachable through Session detail")
 	assert.Equal(t, "main", sess["type"])
-	assert.Equal(t, "admin", sess["agent_id"])
+	assert.Equal(t, "omnipus", sess["agent_id"])
 	assert.Equal(t, wsDefault, sess["workspace_id"])
 	assert.Equal(t, true, sess["protected"])
-	require.NotNil(t, u1Row(env.listSessions(t, ""), id), "Admin main is listed through Session list")
+	require.NotNil(t, u1Row(env.listSessions(t, ""), id), "Omnipus main is listed through Session list")
 
 	// Not outside the default workspace.
-	_, code = env.getSession(t, u1MainID(wsOther, "admin"))
-	assert.Equal(t, http.StatusNotFound, code, "no Admin main in a non-default workspace")
-	assert.Empty(t, u1Prefixed(env.storedSessions(t), u1MainID(wsOther, "admin")))
-	assert.Nil(t, u1Row(env.listSessions(t, ""), u1MainID(wsOther, "admin")))
+	_, code = env.getSession(t, u1MainID(wsOther, "omnipus"))
+	assert.Equal(t, http.StatusNotFound, code, "no Omnipus main in a non-default workspace")
+	assert.Empty(t, u1Prefixed(env.storedSessions(t), u1MainID(wsOther, "omnipus")))
+	assert.Nil(t, u1Row(env.listSessions(t, ""), u1MainID(wsOther, "omnipus")))
 
-	// No fake membership (control: passes at baseline).
-	for _, wsID := range []string{wsDefault, wsOther} {
-		w := env.getWorkspace(t, wsID)
-		team, _ := w["core_team"].([]any)
-		assert.NotContains(t, team, "admin", "Admin never appears as a team member")
-		assert.Nil(t, u1MemberConfig(w, "admin"), "no member_configs entry for Admin")
-	}
+	// Ordinary membership in the default workspace only.
+	wDefault := env.getWorkspace(t, wsDefault)
+	assert.NotNil(t, u1MemberConfig(wDefault, "omnipus"), "Omnipus has an ordinary member_configs entry in the default workspace")
+	wOther := env.getWorkspace(t, wsOther)
+	team, _ := wOther["core_team"].([]any)
+	assert.NotContains(t, team, "omnipus", "Omnipus never appears on a non-default team")
 }
 
-// FR-002/C-MAIN: the gateway BOOT must EAGERLY create Admin's main in the
-// default workspace — not merely leave it to a lazy GET. This drives the REAL
+// FR-002/C-MAIN: the gateway BOOT must EAGERLY create Omnipus's main in the
+// default workspace (it is a default-workspace member, FR-003) — not merely
+// leave it to a lazy GET. This drives the REAL
 // boot (gateway_boot.go::buildRESTAPI →
 // ensureBootMains) on a fresh home, then reads the sessions LIST
 // — a non-creating read (rest_sessions.go::listSessions never calls
 // resolveMainSessionForRead, so nothing is minted) — because a per-id GET would
 // lazily CREATE the main and mask a boot that no longer does (C1 CHECK survivor
-// m17: the lightweight Admin test passed when the eager boot call was removed).
-func TestSessionCoreU1_BootEagerlyCreatesAdminMainBeforeAnyLookup(t *testing.T) {
+// m17: the lightweight Admin-era test passed when the eager boot call was removed).
+func TestSessionCoreU1_BootEagerlyCreatesOmnipusMainBeforeAnyLookup(t *testing.T) {
 	gw := testutil.StartTestGateway(t, testutil.WithAllowEmpty())
 
 	// The default workspace the boot ensured.
@@ -223,9 +224,9 @@ func TestSessionCoreU1_BootEagerlyCreatesAdminMainBeforeAnyLookup(t *testing.T) 
 			wsID = w.ID
 		}
 	}
-	require.NotEmpty(t, wsID, "boot must ensure a default workspace for Admin's main to live in")
+	require.NotEmpty(t, wsID, "boot must ensure a default workspace for Omnipus's main to live in")
 
-	// Exactly Admin's main must ALREADY be stored — read through the
+	// Exactly Omnipus's main must ALREADY be stored — read through the
 	// non-creating list surface, so only an eager boot creation can explain it.
 	req, err := gw.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
 	require.NoError(t, err)
@@ -238,21 +239,21 @@ func TestSessionCoreU1_BootEagerlyCreatesAdminMainBeforeAnyLookup(t *testing.T) 
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&page))
 
-	adminMainID := u1MainID(wsID, "admin")
+	omnipusMainID := u1MainID(wsID, "omnipus")
 	rows := make([]string, 0, len(page.Sessions))
 	for _, s := range page.Sessions {
 		id, _ := s["id"].(string)
 		rows = append(rows, id)
 	}
-	require.Contains(t, rows, adminMainID,
-		"boot must eagerly create Admin's main (%s) in the default workspace before any lookup; listed: %v", adminMainID, rows)
+	require.Contains(t, rows, omnipusMainID,
+		"boot must eagerly create Omnipus's main (%s) in the default workspace before any lookup; listed: %v", omnipusMainID, rows)
 	for _, s := range page.Sessions {
-		if s["id"] != adminMainID {
+		if s["id"] != omnipusMainID {
 			continue
 		}
 		assert.Equal(t, "main", s["type"], "C-MAIN: Session.type=main")
-		assert.Equal(t, "admin", s["agent_id"], "Admin owns the main")
-		assert.Equal(t, wsID, s["workspace_id"], "Admin's main lives in the default workspace")
+		assert.Equal(t, "omnipus", s["agent_id"], "Omnipus owns the main")
+		assert.Equal(t, wsID, s["workspace_id"], "Omnipus's main lives in the default workspace")
 	}
 }
 

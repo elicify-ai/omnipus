@@ -54,23 +54,23 @@ func TestMailboxConfigurePolicyFill(t *testing.T) {
 			t.Fatalf("MC-26: explicit allow became %s", got["send_email"])
 		}
 	})
-	t.Run("seeded admin deny stays", func(t *testing.T) {
-		seed := coreagent.ADR090RolePolicyInventory(coreagent.IDAdmin)
+	// Admin is retired (omnipus-system-agent FR-008); Omnipus is the seeded
+	// role whose inventory denies every mail tool (§6.5 supporting set has
+	// none), so it carries this "seeded deny stays" check now.
+	t.Run("seeded omnipus deny stays", func(t *testing.T) {
+		seed := coreagent.ADR090RolePolicyInventory(coreagent.IDOmnipus)
 		before := map[string]config.ToolPolicy{}
 		for name, policy := range seed {
 			before[name] = policy
 		}
 		got := applyMailboxPolicyFill(t, before)
-		for _, name := range []string{"send_email", "reply", "read_inbox", "search_email", "read_message"} {
+		for _, name := range []string{"send_email", "reply", "read_inbox", "search_email", "read_message", "create_email_draft"} {
 			if seed[name] != config.ToolPolicyDeny {
-				t.Fatalf("test setup: Admin inventory %s = %s, want deny", name, seed[name])
+				t.Fatalf("test setup: Omnipus inventory %s = %s, want deny", name, seed[name])
 			}
 			if got[name] != config.ToolPolicyDeny {
-				t.Fatalf("MC-26: seeded Admin %s became %s, want deny", name, got[name])
+				t.Fatalf("MC-26: seeded Omnipus %s became %s, want deny", name, got[name])
 			}
-		}
-		if got["create_email_draft"] != config.ToolPolicyAllow {
-			t.Fatalf("FR-013: Admin create_email_draft = %s, want allow (the key is absent from the inventory)", got["create_email_draft"])
 		}
 	})
 	t.Run("effective policy allow after fill", func(t *testing.T) {

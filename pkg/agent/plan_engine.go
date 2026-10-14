@@ -1683,7 +1683,7 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 	// agent (dispatchPlanTurn pre-resolves precisely so a wake is never
 	// silently run by whichever agent happens to be default), and the notifier
 	// leg originally had no such guard: processSystemMessage used to fall back
-	// to GetDefaultAgent() when the named AsyncOriginAgentID did not resolve,
+	// to a default agent when the named AsyncOriginAgentID did not resolve,
 	// so a plan whose owner agent was deleted got its closing synthesis
 	// authored by an unrelated roster member, in that member's own persona.
 	// Since commit e830a4d2 (UAT E-3) processSystemMessage (loop.go) no longer
@@ -1771,7 +1771,7 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 func (pe *PlanEngine) ownerAgentResolves(agentID string) bool {
 	if agentID == "" {
 		// Nothing to resolve, and an empty AsyncOriginAgentID is exactly what
-		// sends processSystemMessage to GetDefaultAgent().
+		// makes processSystemMessage discard the message (FR-131).
 		return false
 	}
 	if pe.agentLoop == nil {

@@ -77,6 +77,14 @@ type AskUserQuestionFrame struct {
 	Type string              `json:"type"`
 }
 
+// AttachRoomFrame — Client → server (spec omnipus-system-agent K45; FR-201, FR-213, FR-217). Attach this connection to a room and catch up from after_seq. Carried on the existing hub connection without an agent session. The server answers with room_snapshot (entries after the cursor, in order), then live room_entry / room_member_state / room_meta frames, each with seq. Landing 1, WU-15 handles it; until then the server has no handler for this frame type.
+type AttachRoomFrame struct {
+	// Highest room seq the client already has; 0 for a first load.
+	AfterSeq int64  `json:"after_seq"`
+	RoomId   string `json:"room_id"`
+	Type     string `json:"type"`
+}
+
 // AttachSessionFrame — Client → server request to attach to a session and catch it up to the present. #823 catch-up redesign: since_seq/boot_id replace the retired timestamp cursor (`since`, removed). Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
 type AttachSessionFrame struct {
 	// Optional. True means this attach is an acknowledgement of what was shown. It does not choose the bound. Defaults to false. A failed, background, or reconnect attach does not write the seen mark. Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
@@ -542,6 +550,8 @@ type DoneFrame struct {
 	GoalId *string `json:"goal_id,omitempty"`
 	// #823 catch-up redesign. The id of the turn's last assistant message.
 	MessageId *string `json:"message_id,omitempty"`
+	// Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry.
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign), published only after the turn's transcript entry is durably persisted. Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/DoneFrame.yaml.
 	Seq       *int64     `json:"seq,omitempty"`
 	SessionId string     `json:"session_id"`
@@ -870,7 +880,7 @@ type MessageFrame struct {
 	Content         string  `json:"content"`
 	// Optional media:// refs for files the user attached to this message (e.g. images uploaded via POST /api/v1/upload). The server threads each ref into the LLM content array as a multimodal content block so the agent can see the attachment. Empty or omitted for text-only messages.
 	Media []string `json:"media,omitempty"`
-	// Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn to the chosen model, falling back to the agent's `model` config when absent; `workspace_id` — the active workspace this chat belongs to; and `workspace_setup_kickoff` (boolean) — a one-time marker that this message is the workspace setup kickoff for `metadata.workspace_id`.
+	// Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn to the chosen model, falling back to the agent's `model` config when absent; `workspace_id` — the active workspace this chat belongs to; and `workspace_setup_kickoff` (boolean) — a retired client kickoff marker that the server refuses (see the property below).
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Optional request to a peer agent: the {workspace_id, agent_id} pair the user @-addressed from the chat named by session_id. Valid only together with session_id; the server refuses it otherwise. Mirrors contracts/components/schemas/AgentAddress.yaml.
 	Recipient *struct {
@@ -879,6 +889,8 @@ type MessageFrame struct {
 	} `json:"recipient,omitempty"`
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
+	// Spec omnipus-system-agent K8 (FR-012). Optional target data naming the workflow (W1 / W18) and the target workspace the user picked on a screen. Data only, never an instruction.
+	WorkflowStart *WorkflowStart `json:"workflow_start,omitempty"`
 }
 
 // MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission; discarded (reason stopped_before_delivery) means Stop discarded the input before delivery (session-core FR-024); held means an @-recipient request was accepted but the recipient is stopped, so it waits until the recipient runs again (not a failure, not terminal). Emitted only when the client supplied client_message_id.
@@ -1051,7 +1063,9 @@ type ReplayMessageFrame struct {
 	ReplyToMessageId   *string          `json:"reply_to_message_id,omitempty"`
 	ReplyToParticipant *ChatParticipant `json:"reply_to_participant,omitempty"`
 	Role               string           `json:"role"`
-	SessionId          string           `json:"session_id"`
+	// Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry.
+	RoomRef   *RoomRef `json:"room_ref,omitempty"`
+	SessionId string   `json:"session_id"`
 	// Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence (for example the tool-iteration-limit notice) written after the turn's earlier narration was already persisted. Live, the gateway closes the narration bubble with done(<narration id>) before this entry arrives, so it is a separate message; the replay stream has no such boundary, so the SPA must start a new message for this frame instead of merging it into the preceding same-turn assistant entry. Absent on every other frame, including entries written before this field existed.
 	TerminalOutcome *bool   `json:"terminal_outcome,omitempty"`
 	Timestamp       *string `json:"timestamp,omitempty"`
@@ -1075,6 +1089,163 @@ type ReplayWarningFrame struct {
 // ReplayWarningStats — Diagnostic counters in a ReplayWarningFrame.
 type ReplayWarningStats struct {
 	DuplicateToolCallIdCount *int `json:"duplicate_tool_call_id_count,omitempty"`
+}
+
+// RoomDeliveryState — State of one (room message, member) delivery (spec omnipus-system-agent K27, §6.11; FR-169, FR-201, FR-213). request_id is the stable delivery id, which is also the receiver's request id. The values are exactly the §6.11 states; the UI labels are in the §6.11 table. Anything the server cannot prove after a restart is `unknown`, never `working`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomDeliveryState) — keep both copies in sync by hand.
+type RoomDeliveryState struct {
+	// The member agent.
+	AgentId string `json:"agent_id"`
+	// Optional reason, e.g. `rate_limit` or `removed`.
+	Reason    *string `json:"reason,omitempty"`
+	RequestId string  `json:"request_id"`
+	State     string  `json:"state"`
+}
+
+// RoomEntry — One entry of a room transcript (spec omnipus-system-agent K26; FR-166). Group entries carry the authoring agent and the resolved addressees. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntry) — keep both copies in sync by hand.
+type RoomEntry struct {
+	// Resolved addressee agent ids. Never null.
+	Addressees []string `json:"addressees"`
+	// True for an answer to work consumed before a /pause; such an answer never forwards its mentions (§6.11).
+	AfterPause bool            `json:"after_pause"`
+	Author     RoomEntryAuthor `json:"author"`
+	// Echo of RoomMessageRequest.client_message_id for a person's entry.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+	// Per-member delivery states for this entry. Never null.
+	Deliveries []RoomDeliveryState `json:"deliveries"`
+	Id         string              `json:"id"`
+	RoomId     string              `json:"room_id"`
+	// Position in the room transcript; strictly increasing.
+	Seq       int64  `json:"seq"`
+	Text      string `json:"text"`
+	Timestamp string `json:"timestamp"`
+}
+
+// RoomEntryAuthor — Author of a room entry (spec omnipus-system-agent K26): the person (kind `user`) or a member agent (kind `agent`, with agent_id). Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntryAuthor) — keep both copies in sync by hand.
+type RoomEntryAuthor struct {
+	// Present iff kind is `agent`.
+	AgentId *string `json:"agent_id,omitempty"`
+	Kind    string  `json:"kind"`
+}
+
+// RoomEntryFrame — Server → client (spec omnipus-system-agent K26, K45). A new room entry, live, after attach_room. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
+type RoomEntryFrame struct {
+	Entry  RoomEntry `json:"entry"`
+	RoomId string    `json:"room_id"`
+	// Room stream position of this frame.
+	Seq  int64  `json:"seq"`
+	Type string `json:"type"`
+}
+
+// RoomMemberStateFrame — Server → client (spec omnipus-system-agent K27, K45; FR-201, FR-213). A member's delivery state changed. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
+type RoomMemberStateFrame struct {
+	Delivery RoomDeliveryState `json:"delivery"`
+	RoomId   string            `json:"room_id"`
+	Seq      int64             `json:"seq"`
+	Type     string            `json:"type"`
+}
+
+// RoomMetaFrame — Server → client (spec omnipus-system-agent K45). The room's members, mutes, pause state, allocated cost or read-only state changed. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
+type RoomMetaFrame struct {
+	AllocatedCostMicroUsd int64    `json:"allocated_cost_micro_usd"`
+	AllocatedCostUnpriced bool     `json:"allocated_cost_unpriced"`
+	Generation            int64    `json:"generation"`
+	Members               []string `json:"members"`
+	Muted                 []string `json:"muted"`
+	Paused                bool     `json:"paused"`
+	ReadOnlyReason        *string  `json:"read_only_reason,omitempty"`
+	RoomId                string   `json:"room_id"`
+	Seq                   int64    `json:"seq"`
+	Type                  string   `json:"type"`
+}
+
+// RoomRef — Reference from a main-session entry (or an approval) to the room (group chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215, FR-251). Display and navigation data only: it never grants access to the room. `role` says whether the entry is the room's request to this agent or this agent's answer into the room; a room pre-admission approval card (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomRef) — keep both copies in sync by hand.
+type RoomRef struct {
+	// The room delivery id, which is also the receiver's request id (spec §6.11, FR-216).
+	RequestId string `json:"request_id"`
+	// `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
+	Role string `json:"role"`
+	// Id of the room.
+	RoomId string `json:"room_id"`
+	// Display name of the room at the time the entry was written.
+	RoomName string `json:"room_name"`
+}
+
+// RoomSnapshotFrame — Server → client (spec omnipus-system-agent K45, K26, K27). The answer to attach_room: the room entries after the cursor in order, the members, mutes, member states, pause state, generation and allocated cost. `complete` is false when the server could not serve every entry after the cursor. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
+type RoomSnapshotFrame struct {
+	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
+	AllocatedCostUnpriced bool  `json:"allocated_cost_unpriced"`
+	Complete              bool  `json:"complete"`
+	// Entries after the cursor, in seq order. Never null.
+	Entries    []RoomEntry `json:"entries"`
+	Generation int64       `json:"generation"`
+	// Current delivery states of outstanding requests. Never null.
+	MemberStates   []RoomDeliveryState `json:"member_states"`
+	Members        []string            `json:"members"`
+	Muted          []string            `json:"muted"`
+	Paused         bool                `json:"paused"`
+	ReadOnlyReason *string             `json:"read_only_reason,omitempty"`
+	RoomId         string              `json:"room_id"`
+	// Room stream position this snapshot is current to.
+	Seq  int64  `json:"seq"`
+	Type string `json:"type"`
+}
+
+// SecretRecipientDisplay — Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+type SecretRecipientDisplay struct {
+	// Recipient kind.
+	Kind string `json:"kind"`
+	// Display lines, in order. Never null, never empty.
+	Lines []string `json:"lines"`
+}
+
+// SecretRequestField — One field of a secret card (spec omnipus-system-agent K1; FR-061). The card holds 1–8 fields; the user types one value per field, sent only in the authenticated REST submit (SecretSubmitRequest.values, keyed by `key`). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRequestField) — keep both copies in sync by hand.
+type SecretRequestField struct {
+	// Field key; the submit's `values` map uses exactly these keys.
+	Key string `json:"key"`
+	// Field label shown on the card.
+	Label string `json:"label"`
+}
+
+// SecretRequestFrame — Server → client (spec omnipus-system-agent K1; FR-061, FR-078, FR-240). A secure secret card: an agent asks the person to type one or more secret values. The frame is value-free; values travel only in the authenticated REST submit (POST /api/v1/secret-requests/{id}/submit). Every field is server-derived from the request record — the request id is never authority by itself (§6.7). The card renders in the chat whose session id is `root_session_id` (or `session_id` when omitted), the same root-origin rule as approvals (L1-AMENDMENTS-20261013 §1.3, R7). THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-4 produces it.
+type SecretRequestFrame struct {
+	// The agent that asked.
+	ActingAgentId string `json:"acting_agent_id"`
+	// Display name of the agent that asked.
+	ActingAgentName string `json:"acting_agent_name"`
+	// The fields to fill, in order. Never null, never empty.
+	Fields []SecretRequestField `json:"fields"`
+	// Server-derived turn origin label (§6.18), e.g. "for group <name>" when the work came from a room. Omitted for a plain web turn.
+	OriginLabel *string `json:"origin_label,omitempty"`
+	// The owning (workspace, agent) pair — present only for the agent_private kind.
+	Owner *struct {
+		AgentId     string `json:"agent_id"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"owner,omitempty"`
+	// Why the agent needs the secret, in the agent's words.
+	Purpose   string                 `json:"purpose"`
+	Recipient SecretRecipientDisplay `json:"recipient"`
+	// Server-minted id of the secret request.
+	RequestId string `json:"request_id"`
+	// Server-derived root of the acting session's chain (the chat the card renders in). Omitted when equal to session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
+	// The acting session that asked for the secret.
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
+	// Workspace of the acting session, when it has one.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// SecretRequestResolvedFrame — Server → client (spec omnipus-system-agent K3; FR-074). Emitted once to every connected client when a secret request leaves the pending state. Value-free. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-4 produces it.
+type SecretRequestResolvedFrame struct {
+	// The request_id from the secret_request frame this resolves.
+	RequestId string `json:"request_id"`
+	// Root of the acting session's chain, so the root chat's card clears without a lookup. Omitted when equal to session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
+	// The acting session the request belonged to.
+	SessionId *string `json:"session_id,omitempty"`
+	// The terminal state the request reached.
+	State string `json:"state"`
+	Type  string `json:"type"`
 }
 
 // SessionModeUpdateFrame — Client → server. Set or clear this session's ADR-092 per-chat Auto-approve modifier — new, session-keyed state (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore, never written into config.json and never a chat_id key on any policy map (Hard Constraint #6). Auto is NOT a tool-policy value — it only has meaning for a tool currently resolved to "ask", and applies to every such tool, not only bash (see SandboxConfig.auto_approve for the full behavioural description). THE ONE EXCEPTION TO TIGHTEN-ONLY in this contract: unlike the global default (SandboxConfig.auto_approve), this frame may LOOSEN — turn Auto ON for this one chat even when the global default has it off — because a human is present in this session to accept that risk. It may also tighten (turn Auto off). Turning Auto on for a chat is deliberately a human-only action: the agent-facing `set_config` tool must never be able to send this frame or reach an equivalent effect (enforced server-side; this frame's shape — a session-scoped WS write, not a config.json path — structurally keeps it outside `set_config`'s reach in the first place). Inherits to a delegated subagent session exactly as approval grants do (ApprovalGrantStore.InheritFrom); clears with the session on restart.
@@ -1101,6 +1272,8 @@ type SessionSnapshotFrame struct {
 	HasEarlierMessages *bool `json:"has_earlier_messages,omitempty"`
 	// Why a snapshot was sent instead of an incremental catch-up. boot_mismatch is checked first and always wins over the other three reasons.
 	Reason *string `json:"reason,omitempty"`
+	// Spec omnipus-system-agent K4 (FR-079). Pending and recent terminal secret requests visible to this connection, so a reloaded secret card restores its true state. Always an array when present, never null; absence of a request is never read as success. Optional: an emit that carries no secret-request state omits it.
+	SecretRequests []SessionStateSecretRequest `json:"secret_requests,omitempty"`
 	// The session's high-water sequence number at snapshot time. Mirrored on the terminal catch_up_complete frame.
 	Seq       int64  `json:"seq"`
 	SessionId string `json:"session_id"`
@@ -1146,6 +1319,8 @@ type SessionStateFrame struct {
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING AskUserQuestion card (global registry cap 64) so a reconnecting SPA re-hydrates its card + composer lock. Optional (older gateways omit it); absent/empty means no pending sets.
 	PendingAsks []AskUserQuestionCard `json:"pending_asks,omitempty"`
+	// Spec omnipus-system-agent K4 (FR-079). Pending and recent terminal secret requests visible to this connection, so a reloaded secret card restores its true state. Always an array when present, never null; absence of a request is never read as success. Optional: an emit that carries no secret-request state omits it.
+	SecretRequests []SessionStateSecretRequest `json:"secret_requests,omitempty"`
 	// ADR-082 (review CR3) — the transcript session this snapshot describes; absent on the connection-open emit. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
@@ -1154,12 +1329,53 @@ type SessionStateFrame struct {
 
 // SessionStatePendingApproval — One pending approval entry in a SessionStateFrame.
 type SessionStatePendingApproval struct {
-	AgentId     string `json:"agent_id"`
-	ApprovalId  string `json:"approval_id"`
-	ExpiresInMs int    `json:"expires_in_ms"`
-	SessionId   string `json:"session_id"`
-	ToolName    string `json:"tool_name"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263; spec K7). Display name of the agent that made the call, named in the card header.
+	ActingAgentName *string `json:"acting_agent_name,omitempty"`
+	AgentId         string  `json:"agent_id"`
+	ApprovalId      string  `json:"approval_id"`
+	// Same value as ToolApprovalRequiredFrame.args — an object, never null. Optional until bundle B3 (WU-8). The snapshot reaches exactly the connections the live frame reaches (same audience rule).
+	Args        map[string]any `json:"args,omitempty"`
+	ExpiresInMs int            `json:"expires_in_ms"`
+	// Spec K7, §6.18. Server-derived turn origin, e.g. "while answering <person> on <connection>", "for group <name>", "asked by <Agent>". Omitted for a plain web turn.
+	OriginLabel *string `json:"origin_label,omitempty"`
+	// Spec K7, FR-251. Present on a room's pre-admission approval card (request id = delivery id).
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat whose session id equals this value renders the inline approval. Omitted when equal to session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
+	// Same value and rules as ToolApprovalRequiredFrame.segments.
+	Segments  []CommandSegmentInfo `json:"segments,omitempty"`
+	SessionId string               `json:"session_id"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete and approvable. Optional until bundle B3 (WU-8) makes it required.
+	ToolCallId *string `json:"tool_call_id,omitempty"`
+	ToolName   string  `json:"tool_name"`
+	// Same value as ToolApprovalRequiredFrame.turn_id. Optional until bundle B3 (WU-8).
+	TurnId *string `json:"turn_id,omitempty"`
 	// Same value and semantics as ToolApprovalRequiredFrame.workspace_id.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// SessionStateSecretRequest — One entry of the `secret_requests` list on SessionStateFrame and SessionSnapshotFrame (spec omnipus-system-agent K4; FR-074, FR-079): a pending request, or a recent terminal one (value-free; at most the last 32 terminal entries per session, §6.2), so a reloaded card restores its true state. Absence of an entry is never success. Same card fields as SecretRequestFrame plus `state`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.SessionStateSecretRequest) — keep both copies in sync by hand.
+type SessionStateSecretRequest struct {
+	ActingAgentId   string               `json:"acting_agent_id"`
+	ActingAgentName string               `json:"acting_agent_name"`
+	Fields          []SecretRequestField `json:"fields"`
+	OriginLabel     *string              `json:"origin_label,omitempty"`
+	// Present only for the agent_private kind.
+	Owner *struct {
+		AgentId     string `json:"agent_id"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"owner,omitempty"`
+	Purpose   string                 `json:"purpose"`
+	Recipient SecretRecipientDisplay `json:"recipient"`
+	// Reference names the submitted values were stored under. Present only when state is `submitted`.
+	ReferenceNames []string `json:"reference_names,omitempty"`
+	RequestId      string   `json:"request_id"`
+	// Same value and semantics as SecretRequestFrame.root_session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
+	SessionId     string  `json:"session_id"`
+	State         string  `json:"state"`
+	// When the request last changed state.
+	UpdatedAt   string  `json:"updated_at"`
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
@@ -1278,6 +1494,8 @@ type TokenFrame struct {
 	// Present only on a guest reply: the message_id of the admitted request this answer addresses.
 	ReplyToMessageId   *string          `json:"reply_to_message_id,omitempty"`
 	ReplyToParticipant *ChatParticipant `json:"reply_to_participant,omitempty"`
+	// Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry.
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy (e.g. a projection token inside a snapshot). Keep in sync by hand with contracts/components/schemas/TokenFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -1288,11 +1506,19 @@ type TokenFrame struct {
 
 // ToolApprovalRequiredFrame — Server → client tool approval needed (FR-011, FR-082). CRITICAL: args MUST be object (never null). Backend coerces nil → {}. SPA calls Object.keys(args) — null crashes at render time (Ava-chat bug). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type ToolApprovalRequiredFrame struct {
-	AgentId    string `json:"agent_id"`
-	ApprovalId string `json:"approval_id"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263; spec K7). Display name of the agent that made the call, named in the card header.
+	ActingAgentName *string `json:"acting_agent_name,omitempty"`
+	AgentId         string  `json:"agent_id"`
+	ApprovalId      string  `json:"approval_id"`
 	// Tool invocation arguments. Always object, never null. Required + object type so the Phase 4 contract test catches any nil regression.
 	Args        map[string]any `json:"args"`
 	ExpiresInMs int            `json:"expires_in_ms"`
+	// Spec K7, §6.18. Server-derived turn origin, e.g. "while answering <person> on <connection>", "for group <name>", "asked by <Agent>". Omitted for a plain web turn.
+	OriginLabel *string `json:"origin_label,omitempty"`
+	// Spec K7, FR-251. Present on a room's pre-admission approval card (request id = delivery id).
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat whose session id equals this value renders the inline approval. Omitted when equal to session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
 	// ADR-092 D3/D4 per-segment breakdown of a bash approval. Present on every tool_approval_required whose tool_name is "bash" and whose args carry a non-empty command string, built with the bash tool's own segment splitter and program resolution. A single, unchained command still has exactly one entry so the SPA has one rendering path. Absent for every other tool. Offer the "prefix" scope only when a segment's prefix_available is true.
 	Segments   []CommandSegmentInfo `json:"segments,omitempty"`
 	SessionId  string               `json:"session_id"`
@@ -1306,10 +1532,12 @@ type ToolApprovalRequiredFrame struct {
 
 // ToolApprovalResolvedFrame — Server → client. Emitted once, to every connected client, when a pending tool approval leaves the pending state for ANY reason (a decision from any tab, timeout, Stop/cancel, agent deletion, batch short-circuit, shutdown). The SPA drops the matching queue entry and remembers the id so a late snapshot cannot resurrect it. THIS is the GENERATING copy; components/schemas/ToolApprovalResolvedFrame.yaml exists for the Constraint #8 process and the inboundschemas sync — keep both in sync by hand.
 type ToolApprovalResolvedFrame struct {
-	ApprovalId string  `json:"approval_id"`
-	SessionId  *string `json:"session_id,omitempty"`
-	State      string  `json:"state"`
-	Type       string  `json:"type"`
+	ApprovalId string `json:"approval_id"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting session's chain (ParentSessionID walk, 16 hops, cycle guard): lets the root chat's card clear without a lookup. Omitted when equal to session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
+	SessionId     *string `json:"session_id,omitempty"`
+	State         string  `json:"state"`
+	Type          string  `json:"type"`
 }
 
 // ToolArgumentRefusal — ADR-066 D4 / spec FR-016 (T066-01 schema, T066-04 producer): structured tool-result payload returned INSTEAD of executing a tool call whose serialised arguments exceed the builtin success cap (ContextSettings.builtin_success_cap, 64,000 chars by default). The tool does not run, the turn is not fatal, and the model sees the refusal — naming the tool, the size it sent and the cap — so it can retry smaller. ADR-060 family member: inline schema with a const `error` discriminator, one exported *Code constant in pkg/tools/result.go, a single producer routed through marshalWithinBudget, and an entry in scripts/check-no-handwritten-wire-types.sh's KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS register. toolResult-channel (ADR-060 D2): the refusal IS the tool's result, so it passes the D4 choke point like any other result (US-5.AC3) and flows through ToolCallResultFrame.result live and ToolCall.Error on replay — hence its entry in ToolCallResultFrame.result's oneOf below and in pkg/gateway/tool_result_store.go's allow-list (derived from pkg/tools.AllStructuredFailureCodes()). The SPA detector is stream B5's.
@@ -1429,6 +1657,8 @@ type UserMessageFrame struct {
 	Content         string           `json:"content"`
 	Id              string           `json:"id"`
 	Participant     *ChatParticipant `json:"participant,omitempty"`
+	// Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry.
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -1441,6 +1671,10 @@ type WhatsAppPairingFrame struct {
 	ChannelId string  `json:"channel_id"`
 	Message   *string `json:"message,omitempty"`
 	Qr        *string `json:"qr,omitempty"`
+	// Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with the chat request that started it (QR pairing in chat, WU-7).
+	RequestId *string `json:"request_id,omitempty"`
+	// Spec K10. The chat session the pairing belongs to, when it was started from a chat.
+	SessionId *string `json:"session_id,omitempty"`
 	Status    string  `json:"status"`
 	Type      string  `json:"type"`
 }
@@ -1449,7 +1683,19 @@ type WhatsAppPairingFrame struct {
 type WhatsAppPairingSubscribeFrame struct {
 	Active    bool   `json:"active"`
 	ChannelId string `json:"channel_id"`
-	Type      string `json:"type"`
+	// Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with the chat request that started it (QR pairing in chat, WU-7).
+	RequestId *string `json:"request_id,omitempty"`
+	// Spec K10. The chat session the pairing belongs to, when it was started from a chat.
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+}
+
+// WorkflowStart — Optional target data on a MessageFrame that starts an Omnipus workflow from a screen (spec omnipus-system-agent K8; FR-012). Target data only — it names which workflow and which workspace the user picked; it is never an instruction and grants nothing. The server treats it as data for the Omnipus turn (landing 1, WU-10). Mirrored inline in contracts/asyncapi.yaml (components.schemas.WorkflowStart) — keep both copies in sync by hand.
+type WorkflowStart struct {
+	// The workspace the workflow targets.
+	TargetWorkspaceId string `json:"target_workspace_id"`
+	// W1 — create an agent in a workspace; W18 — set up a whole team.
+	Workflow string `json:"workflow"`
 }
 
 // WsFrameType — Enum of all WebSocket frame type discriminator strings.
@@ -1535,4 +1781,11 @@ const (
 	WsFrameTypeMailPanelObserver        WsFrameType = "mail_panel_observer"
 	WsFrameTypeMailPanelObserverAck     WsFrameType = "mail_panel_observer_ack"
 	WsFrameTypeMailPanelObserverError   WsFrameType = "mail_panel_observer_error"
+	WsFrameTypeSecretRequest            WsFrameType = "secret_request"
+	WsFrameTypeSecretRequestResolved    WsFrameType = "secret_request_resolved"
+	WsFrameTypeAttachRoom               WsFrameType = "attach_room"
+	WsFrameTypeRoomSnapshot             WsFrameType = "room_snapshot"
+	WsFrameTypeRoomEntry                WsFrameType = "room_entry"
+	WsFrameTypeRoomMemberState          WsFrameType = "room_member_state"
+	WsFrameTypeRoomMeta                 WsFrameType = "room_meta"
 )
