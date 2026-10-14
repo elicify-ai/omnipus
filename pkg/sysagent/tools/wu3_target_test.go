@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
@@ -49,7 +50,7 @@ func TestWU3UnknownTargetRefusesEverySetupWriteWithoutFallback(t *testing.T) {
 				before := wu3ReadFile(t, anchorPath)
 				ctx := tools.WithWorkspaceID(tools.WithAgentID(context.Background(), "omnipus"), "default")
 				var tool tools.Tool
-				args := map[string]any{"name": "crm", "content": validSkill("crm") + "\nMust not land.\n", "revision": revision, "confirm": true, "workspace_id": target}
+				args := map[string]any{"name": "crm", "content": validSkill("crm") + "\nMust not land.\n", "revision": revision, "workspace_id": target}
 				switch verb {
 				case "create_agent":
 					tool = systools.NewAgentCreateTool(d)
@@ -59,10 +60,13 @@ func TestWU3UnknownTargetRefusesEverySetupWriteWithoutFallback(t *testing.T) {
 					tool = systools.NewSkillCreateTool(d)
 					args["name"] = "new-skill"
 					args["content"] = validSkill("new-skill")
+					delete(args, "revision")
 				case "edit_skill":
 					tool = systools.NewSkillEditTool(d)
 				case "remove_skill":
 					tool = systools.NewSkillRemoveTool(d)
+					delete(args, "content")
+					args["confirm"] = true
 				}
 				result := tool.Execute(ctx, args)
 				assert.True(t, result.IsError, "invalid explicit target must be refused, not treated as omitted: %s", result.ForLLM)
@@ -70,6 +74,10 @@ func TestWU3UnknownTargetRefusesEverySetupWriteWithoutFallback(t *testing.T) {
 				assert.Equal(t, content, string(wu3ReadFile(t, filepath.Join(d.Home, "skills", "crm", "SKILL.md"))))
 				_, statErr := os.Stat(filepath.Join(d.Home, "skills", "new-skill"))
 				assert.ErrorIs(t, statErr, os.ErrNotExist)
+				agents, skipped, listErr := agentstore.New(d.Home).List()
+				require.NoError(t, listErr)
+				require.Empty(t, skipped, "an unreadable partial entity cannot hide a rejected-target write")
+				assert.Empty(t, agents, "invalid target must save no agent entity")
 				wu3Outcome(t, result, "failed: nothing saved")
 			})
 		}
