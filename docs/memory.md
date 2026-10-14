@@ -22,7 +22,7 @@ Every new session starts with the last recap and up to twenty recent saved notes
 ## How to save and recall a fact
 
 1. In a chat, tell the agent what to keep: "Remember that the staging server is called elm." The agent calls `remember`, and the tool call appears in the thread.
-2. The note lands in the shared room by default, where every agent in the workspace can recall it. Ask for a private note when only one agent should see it.
+2. Every `remember` call explicitly chooses **shared** or **private** memory; the tool has no room default. Ask for a shared note when the workspace team should recall it, or a private note for the agent alone. A shared choice outside a workspace is stored privately, and the tool explains that fallback.
 3. In any later conversation, ask about it. The agent searches with `recall_memory` and answers from saved notes and past retrospectives.
 4. For something said earlier in the same conversation, the agent uses `recall_conversation` instead. That tool never crosses into other conversations.
 
@@ -30,7 +30,7 @@ The two rooms:
 
 | Room | Who can read it | Good for |
 |---|---|---|
-| Shared (the default for saves) | Every agent in the workspace | Project decisions, conventions, references |
+| Shared (chosen explicitly) | Every agent in the workspace | Project decisions, conventions, references |
 | Private | One agent only | Personal working notes, individual lessons |
 
 ## The four memory tools
@@ -39,7 +39,7 @@ Omnipus provides these four memory tools. Which an agent can use depends on its 
 
 | Tool | What it does | Bounds |
 |---|---|---|
-| `remember` | Saves a note as a decision, reference, or lesson | Up to 4,096 characters; shared room by default |
+| `remember` | Saves a note as a decision, reference, or lesson | Up to 4,096 characters; every call chooses shared or private memory |
 | `recall_memory` | Keyword search over saved notes and past retrospectives | Both rooms by default; 20 results, at most 50 |
 | `recall_conversation` | Reads back earlier context from the current conversation | By keyword, turn numbers, time window, an addressed tool result, or an inclusive archive-line range |
 | `run_retrospective` | Records what went well and what to improve | Always the agent's private room |

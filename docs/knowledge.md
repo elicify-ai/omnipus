@@ -89,6 +89,6 @@ There is no import screen in the app.
 
 - [library](library.md) — the file tree a knowledge base lives in, and the Media tab for binary files.
 - [workspaces](workspaces.md) — where each knowledge base belongs, and who can reach it.
-- [agents](agents.md) — the four base agents and how they take notes on your behalf.
+- [agents](agents.md) — the built-in roster and the agents that take notes on your behalf.
 - [tools](tools.md) — the Allow, ask, and deny settings for each agent's knowledge tools.
 - [memory](memory.md) — what the team remembers; a different store from your knowledge bases.

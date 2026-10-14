@@ -18,7 +18,8 @@ The gateway listens on port `5000` by default. The web app, application programm
 | Process isolation | [Sandbox configuration](sandbox-config.md) and [sandbox limitations](sandbox-limitations.md) |
 | Tool backends | [Tools configuration](tools-configuration.md) |
 | Credentials and filtering | [Security considerations](security-considerations.md) |
-| Schema upgrades | [Configuration versioning](config-versioning.md) and [model-list migration](../migration/model-list-migration.md) |
+| Provider and model format | [Current provider and model configuration](../migration/model-list-migration.md) |
+| Configuration versions | [Configuration versioning](config-versioning.md) |
 
 Provider and model choices change over time. Use the live Providers screen for the available catalog and [Providers and models](../providers-and-models.md) for the user-facing explanation rather than copying a provider list into configuration documentation.
 
