@@ -404,18 +404,8 @@ func (al *AgentLoop) commitRoomRequest(ctx context.Context, a RoomRequestAdmissi
 // publishRoomRequestWake is the owner wake of a room request: the ordinary
 // request wake plus the no-join marker and the room id.
 func (al *AgentLoop) publishRoomRequestWake(ctx context.Context, c addressing.Capture) error {
-	return al.bus.PublishInbound(ctx, bus.InboundMessage{
-		Channel:           "webchat",
-		ChatID:            "request:" + c.RequestID,
-		Sender:            bus.SenderInfo{CanonicalID: "request:" + c.RequestID},
-		Content:           c.Text,
-		SessionID:         c.ReceiverSessionID,
-		TranscriptEntryID: c.RequestID,
-		Metadata: map[string]string{
-			"agent_id": c.Receiver.AgentID, "workspace_id": c.Receiver.WorkspaceID,
-			ownerWakeMetadataKey: "1", roomRequestMetadataKey: "1", roomIDMetadataKey: c.Source.RoomID,
-		},
-	})
+	return al.publishRequestWake(ctx, c.Receiver, c.RequestID, c.ReceiverSessionID, c.Text,
+		map[string]string{roomRequestMetadataKey: "1", roomIDMetadataKey: c.Source.RoomID})
 }
 
 // composeRoomRequestText is the server-composed envelope the member's model
