@@ -252,9 +252,7 @@ None of these ever shows a live approval card, even to an operator who happens t
 
 ### Approve a request
 
-An approval card appears **inside the chat it belongs to**, above the message box — for work a helper does for a chat, in that chat (an Omnipus helper's approvals appear in the Omnipus chat, whatever workspace you are in). The card names the agent that asks and, when the work did not start in the web app, where it came from (for example "while answering Anna on tg-1"); **Open run** opens the helper's own session. The card never takes the cursor when it appears, and pressing **Enter** or **Escape** in the message box never answers it — only a click on one of its buttons does. Nothing is approved for you: if nobody answers, the request expires after ten minutes and the agent is told nobody answered. When a card is waiting in a chat you are not looking at, a notice at the top of the screen says, for example, **1 approval waiting in Jim's chat in Sales**; **Go there** opens that chat. After a reload the card comes back complete when the server sends the full request.
-
-Read what the card says, then choose:
+When an approval card appears, read what it says, then choose:
 
 | Button | What it does |
 |---|---|
@@ -470,17 +468,6 @@ What closes it:
 A later release will remove the upgrade step entirely. From then on an old-format vault is refused outright, and this risk ends for everyone.
 
 If any entry cannot be opened during the upgrade, nothing is changed and the gateway does not start. The error names each entry at fault. See [troubleshooting](troubleshooting.md#credentials-stop-working-after-an-upgrade).
-
-## Secrets typed on a secure card
-
-When an agent needs a key, token or password, it asks for it on a **secure card** in the web chat instead of in the conversation. The card names the agent that asks, why it asks, and exactly where the value will be used — for example the provider endpoint, the connector command, the channel and field, or, for a variable of the agent's own, the workspace and the agent it belongs to. You type the value into the card's hidden fields and select **Save secret**.
-
-- **The value never enters the chat.** It goes straight from the card to an encrypted store; the agent continues with the stored name only. The card keeps the typed value only while it is on screen and drops it when it closes or finishes, and it never sends a value again on its own. If the answer to a save is lost, the card says **Submission unknown** and asks the server what happened instead of sending the value again.
-- **It can only be used where the card said.** A stored value is tied to the destination the card showed and is refused anywhere else.
-- **No password re-entry.** Saving on the card does not ask for your Omnipus password again; adding or removing a key under **Settings → Security** still does. The card can only save the values it asked for — it cannot write any other key or delete anything.
-- **Only in the web app.** An agent answering someone on a chat channel cannot raise a card; it is told to ask you to open the web app and ask it there.
-- **An agent's own variables.** A value stored for one agent in one workspace is given only to that agent's own commands in that workspace. The card says so in these words: "Never typed into the chat, never in tool arguments, hidden in output where possible; a command you let the agent run can still reveal it." Such a variable is not given to turns started by people on chat channels unless you tick **Available in channel conversations** for it in the agent's editor (**Tools** tab, **Private secrets**).
-- **Replacing a value** stores a new version. A connection keeps using the old one until an approved change switches it; an agent's own variable switches at once, and the old version stays listed until it is removed.
 
 ## How to review security activity
 

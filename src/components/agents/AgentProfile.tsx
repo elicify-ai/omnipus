@@ -38,6 +38,7 @@ import {
 import { DeleteAgentControl } from './DeleteAgentControl'
 import { classifyMutationFailure } from '@/lib/mutationOutcome'
 import { AgentPrivateSecrets } from './AgentPrivateSecrets'
+import { AGENT_PRIVATE_SECRETS_ENABLED } from '@/lib/featureSwitches'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ExecutorSelector } from './ExecutorSelector'
 import { AgentLookPicker, BehaviorFields, UploadMdButton } from './AgentFormFields'
@@ -1316,7 +1317,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // delegation-only and have no heartbeat concept.
   const showHeartbeatTab = editAgentWorkspaceId !== null && !isWorkerAgent
   // US-7: private variables belong to conversation agents (workers and system agents have none).
-  const showPrivateSecrets = !isWorkerAgent && !isSystemAgent
+  // Hidden until WU-4/5 (the /secrets server is not in L1 stage 1).
+  const showPrivateSecrets = AGENT_PRIVATE_SECRETS_ENABLED && !isWorkerAgent && !isSystemAgent
 
   // Operator decision (agent-types-field-matrix.md): locked core agents now
   // get editable Rate Limits + Execution knobs too, so the Advanced tab

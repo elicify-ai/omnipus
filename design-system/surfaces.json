@@ -2042,6 +2042,74 @@
       ]
     },
     {
+      "id": "src/components/agents/ToolApprovalModal.tsx#ToolApprovalModal",
+      "kind": "modal",
+      "source": "src/components/agents/ToolApprovalModal.tsx",
+      "symbol": "ToolApprovalModal",
+      "lane": 8,
+      "verification": [
+        {
+          "checkId": "surface:src-components-agents-toolapprovalmodal-tsx-toolapprovalmodal:unit",
+          "file": "tests/design-system/surfaces/src-components-agents-toolapprovalmodal-tsx-toolapprovalmodal.test.tsx",
+          "test": "src/components/agents/ToolApprovalModal.tsx#ToolApprovalModal surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-agents-toolapprovalmodal-tsx-toolapprovalmodal:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/agents/ToolApprovalModal.tsx#ToolApprovalModal surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-agents-toolapprovalmodal-tsx-toolapprovalmodal:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/agents/ToolApprovalModal.tsx#ToolApprovalModal surface interaction contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/agents/ToolApprovalModal.tsx#ToolApprovalModal"
+      }
+    },
+    {
+      "id": "src/components/agents/ToolApprovalModal.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/agents/ToolApprovalModal.tsx",
+      "symbol": "overlay:1",
+      "lane": 8,
+      "verification": [
+        {
+          "checkId": "surface:src-components-agents-toolapprovalmodal-tsx-dialog-1:unit",
+          "file": "tests/design-system/surfaces/src-components-agents-toolapprovalmodal-tsx-overlay-1.test.tsx",
+          "test": "src/components/agents/ToolApprovalModal.tsx#dialog:1 surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-agents-toolapprovalmodal-tsx-dialog-1:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/agents/ToolApprovalModal.tsx#dialog:1 surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-agents-toolapprovalmodal-tsx-dialog-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/agents/ToolApprovalModal.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/agents/ToolApprovalModal.tsx#overlay:1"
+      }
+    },
+    {
       "id": "src/components/agents/ToolsAndPermissions.tsx#tab:runtime",
       "kind": "tab",
       "source": "src/components/agents/ToolsAndPermissions.tsx",
@@ -6636,6 +6704,10 @@
     {
       "source": "src/components/agents/MCPServerPicker.tsx",
       "lane": 5
+    },
+    {
+      "source": "src/components/agents/ToolApprovalModal.tsx",
+      "lane": 8
     },
     {
       "source": "src/components/agents/ToolApprovalPanel.tsx",

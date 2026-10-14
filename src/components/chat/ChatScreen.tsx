@@ -88,6 +88,7 @@ import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import { MainChatAddParticipant } from './AddParticipant'
+import { INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED } from '@/lib/featureSwitches'
 import { RoomTrafficMessage } from './RoomTrafficEntry'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
@@ -3224,8 +3225,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         </div>
       )}
 
-      {/* FR-207: "Add participant" at the top-left of a member's main chat (absent for Omnipus). */}
-      <MainChatAddParticipant />
+      {/* FR-207: "Add participant" at the top-left of a member's main chat (absent for Omnipus) — hidden until WU-15 (stage 3), #1314. */}
+      {ROOMS_ENABLED && <MainChatAddParticipant />}
 
       {/* Above-feed kind. FeedKindLabel also keeps the old Task: line when no descriptor matches. */}
       <FeedKindLabel />
@@ -3283,8 +3284,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           <RestartInterruptedNotice />
 
           {/* Rate-limit indicator — shown above composer. Tool-approval requests
-              (including `bash`) are handled by the inline ToolApprovalPanel
-              (ADR-036 §3.4 retired the dedicated exec-only approval flow). */}
+              (including `bash`) are handled by the app-wide ToolApprovalModal
+              in L1 stage 1, the inline ToolApprovalPanel later (ADR-036 §3.4 retired the dedicated exec-only approval flow). */}
           {rateLimitEvent && (
             <div className="px-[var(--space-3)] space-y-[var(--space-2)] pb-[var(--space-2)]">
               <RateLimitIndicator
@@ -3356,9 +3357,9 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           <SecretRequestThreadTail />
 
           {/* Inline tool approvals rooted in this chat (#1263, L1 amendment
-              §1.2 R6): never focused on appearance, never resolved by the
-              composer's Enter or by Escape. */}
-          <ToolApprovalThreadTail />
+              §1.2 R6) — hidden until WU-8 (stage 2): founder design = card in
+              parent chat, no banner, menu-bar attention animation. */}
+          {INLINE_TOOL_APPROVALS_ENABLED && <ToolApprovalThreadTail />}
 
           {/* Composer — centered, ChatGPT-style floating layout. The context
               row and ActivityBar pills render bare on the shell (above /

@@ -19,6 +19,7 @@ import { AgentRowMenu } from './AgentRowMenu'
 import { invalidateWorkspaceRoster, setHiddenFromSidebar, surfaceActionError } from './agentRowActions'
 import { SidebarAgentIcon } from './SidebarAgentIcon'
 import { WorkspaceGroupChats } from './WorkspaceGroupChats'
+import { ROOMS_ENABLED } from '@/lib/featureSwitches'
 import { attentionCountLabel, useAttentionMotion } from './attentionCue'
 import { beginPairExtra } from './pairExtra'
 import { workspaceMains, type RosterState } from './workspaceRoster'
@@ -285,8 +286,8 @@ function WorkspaceBlock({
             </Button>
           </div>
         )}
-        {/* FR-174: Group chats under the agent rows. */}
-        {isExpanded && <WorkspaceGroupChats workspace={project} onOverlayClose={onOverlayClose} />}
+        {/* FR-174: Group chats under the agent rows — hidden until WU-15 (stage 3), #1314. */}
+        {isExpanded && ROOMS_ENABLED && <WorkspaceGroupChats workspace={project} onOverlayClose={onOverlayClose} />}
       </div>
     </div>
   )
