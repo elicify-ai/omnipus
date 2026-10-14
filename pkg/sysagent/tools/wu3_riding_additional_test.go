@@ -70,7 +70,7 @@ func TestWU3RetiredIconInputIsNeitherAdvertisedNorAccepted(t *testing.T) {
 // WU-2, but a correctly clamped write still has to signal its effective result.
 func TestWU3PermissionWriteReportsGlobalCeilingClamp(t *testing.T) {
 	d, cfg := wu3Deps(t)
-	id := wu3CreateAgent(t, d, cfg, "Clamp colleague")
+	id := wu3CreateAgent(t, d, cfg, "Policy subject")
 	cfg.Sandbox.ToolPolicies["read_file"] = "ask"
 	before := wu3AgentRead(t, d, id)
 	result := systools.NewAgentPermissionsTool(d).Execute(context.Background(), map[string]any{"id": id, "revision": before["revision"], "tool_policy_changes": map[string]any{"set": map[string]any{"read_file": "allow"}}})
