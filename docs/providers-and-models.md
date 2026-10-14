@@ -31,6 +31,8 @@ Use a fallback chain when an agent must keep working through temporary failures.
 5. Select **Continue**, then complete the connection step. The provider appears in your configured provider list.
 6. Choose a model in the **Default model** card, or open an agent and choose its model there.
 
+For device-code sign-in, Omnipus shows the provider's verification link and a short code. Open the link and approve the code with the provider; Omnipus then checks for completion. The sign-in API identifies this flow with `method: "device_code"`.
+
 For a custom endpoint, choose either the `openai-compatible` or `anthropic` protocol. Enter the exact model names that the endpoint accepts. Omnipus cannot discover a custom endpoint's catalog for you.
 
 ## Picking a model when two providers offer it

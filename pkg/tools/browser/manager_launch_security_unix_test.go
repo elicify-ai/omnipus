@@ -4,6 +4,7 @@ package browser
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,8 +23,9 @@ func TestLaunchSecurityPATHProbeRequiresTrust(t *testing.T) {
 			dir := t.TempDir()
 			bin := filepath.Join(dir, "google-chrome")
 			marker := filepath.Join(dir, "executed")
-			writeExecutable(t, bin, "#!/bin/sh\nprintf invoked > \"$OMNIPUS_PROBE_TEST_MARKER\"\nprintf 'Chromium 151.0.0.0\\n'\n")
-			t.Setenv("OMNIPUS_PROBE_TEST_MARKER", marker)
+			// FR-239 / WU-19 scrubs arbitrary gateway environment variables.
+			// Put the fixture's marker in the executable, not in its environment.
+			writeExecutable(t, bin, fmt.Sprintf("#!/bin/sh\nprintf invoked > %q\nprintf 'Chromium 151.0.0.0\\n'\n", marker))
 			t.Setenv("PATH", dir)
 			t.Setenv("OMNIPUS_BROWSER_FORCE_MANAGED", "")
 			pkgRoot := t.TempDir()

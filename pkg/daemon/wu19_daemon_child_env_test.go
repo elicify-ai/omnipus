@@ -128,8 +128,14 @@ func wu19SpawnDaemonSnapshot(t *testing.T, exe, home string) (wu19envprobe.Snaps
 	if err != nil {
 		t.Fatal(err)
 	}
+	reaped := false
 	t.Cleanup(func() {
 		// No test leaves a detached child behind after a failed assertion.
+		// Wait releases the process handle; killing it afterward is invalid
+		// on Linux and Windows (CI round 1; chief harness ruling Q2 A).
+		if reaped {
+			return
+		}
 		if killErr := process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrNotExist) && !errors.Is(killErr, os.ErrProcessDone) {
 			t.Errorf("daemon fixture cleanup kill failed: %v", killErr)
 		}
@@ -150,6 +156,7 @@ func wu19SpawnDaemonSnapshot(t *testing.T, exe, home string) (wu19envprobe.Snaps
 		t.Fatal(writeErr)
 	}
 	state, err := process.Wait()
+	reaped = err == nil
 	if err != nil || !state.Success() {
 		t.Fatalf("daemon child did not complete cleanly: state=%v err=%v", state, err)
 	}

@@ -126,8 +126,9 @@ func (s *entitlementStub) setStatus(code int) {
 }
 
 // entitlementCatalogJSON is a valid 2.0.0 document carrying one row per
-// protocol the endpoint dispatches on, plus the `cli` row that must be
-// refused. Every hosted `api` is https on a public host — FR-033 rejects a
+// protocol the endpoint dispatches on. WU-24 (PLAN-omnipus-L1-v2-20261013.md
+// §10, founder 2026-10-14) removed the CLI model-provider row, including its
+// trailing JSON separator. Every hosted `api` is https on a public host — FR-033 rejects a
 // document that points a hosted row at loopback — so the stub URL rides on
 // each CONFIG row's api_base instead (a regional host / self-hosted
 // gateway, which is exactly what resolveProviderRow prefers).
@@ -184,7 +185,7 @@ func entitlementCatalogJSON() []byte {
 				"protocol": "ollama", "tier": "standard",
 				"auth_methods": ["api_key"],
 				"models": []
-			},
+			}
 		]
 	}`)
 }

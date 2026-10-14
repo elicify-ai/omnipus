@@ -111,6 +111,8 @@ The same visual rules apply when an agent (for example Omnipus) creates or edits
 
 Check `persistence_status`, `activation_status` and any `publish_warning` before saying the agent is runnable. A saved-but-not-live agent needs a configuration reload or gateway restart. Main-chat creation is best-effort and is retried when opened. Report partial results as partial, rather than claiming setup is complete.
 
+When using `create_agent` or `update_agent`, a `context_window_override` must be a positive whole number that fits the server's integer storage. A string, fractional number, zero, negative value, or a number too large to store rejects the whole call without saving other changes. Sending `null` to `update_agent` clears the override.
+
 An incomplete or malformed agent create or update is rejected without saving. Request bodies over 1 MiB (1,048,576 bytes) return HTTP 413, even if their first part looks like complete JSON; a complete valid body at that limit is allowed. A rejected create adds no agent. A rejected update leaves the stored fields, display timestamp, and configuration revision unchanged.
 
 On API create requests, `skills`, `mcp_servers`, and `tool_policy_changes` must not be JSON `null`. Within those fields, `mcp_servers[].tools` and `tool_policy_changes.set` or `.remove` must not be `null` either. Differently capitalised or JSON-escaped keys, and repeated keys at either level, cannot hide a supplied null: the whole create is rejected with HTTP 400 and no agent is saved. Empty arrays and maps remain valid where allowed; omitting these optional fields keeps the server's create defaults. This does not change the intentional null-or-empty default rule for `figure`, `role`, and `color` described above.

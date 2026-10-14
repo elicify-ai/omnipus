@@ -480,6 +480,7 @@ func (a *restAPI) handleProviderSignInStart(w http.ResponseWriter, r *http.Reque
 	// The response IS the device-code shape since the vendor-CLI variant was
 	// deleted with the CLI-backed model providers (WU-24).
 	wire := gen.SignInStartResponse{
+		Method:          gen.SignInStartResponseMethodDeviceCode,
 		VerificationUrl: info.VerifyURL,
 		UserCode:        info.UserCode,
 		DeviceAuthId:    handle,
