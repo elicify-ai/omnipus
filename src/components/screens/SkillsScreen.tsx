@@ -326,6 +326,19 @@ export function SkillsScreen() {
                             {server.status}
                           </Badge>
                         </div>
+                        {/* #1277 — an errored server states why, on its own
+                            card: status_reason names the exact cause (e.g.
+                            the missing secret reference). Mirrors the
+                            ConnectorsScreen channel/mailbox degraded_reason
+                            line, without its truncate — the reason is the
+                            diagnostic the operator must read in full.
+                            Present only when status is "error"; never shown
+                            on a healthy card. */}
+                        {server.status === 'error' && server.status_reason && (
+                          <p className="mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                            {server.status_reason}
+                          </p>
+                        )}
                       </div>
                       <div className="flex items-center gap-[var(--space-2)] shrink-0">
                         <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">

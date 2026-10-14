@@ -816,7 +816,14 @@ function MailboxRow({ mailbox, agentNameById, workspaceNameById, onConfigure }: 
   // archived workspace) — never hide the row just because a name is unresolved.
   const agentName = agentNameById.get(mailbox.agent_id) ?? mailbox.agent_id
   const workspaceName = workspaceNameById.get(mailbox.workspace_id) ?? mailbox.workspace_id
-  const isActive = mailbox.enabled && mailbox.configured
+  // #1277 — the backend's `status` is authoritative over the local
+  // enabled+configured derivation: a mailbox it reports "degraded" is enabled
+  // but cannot start (e.g. its password secret reference is missing), so it
+  // must never render as Active. `status` is optional (omitted by servers
+  // that do not report it) — absent means no signal, and the historical
+  // enabled+configured badge stands.
+  const isDegraded = mailbox.status === 'degraded'
+  const isActive = mailbox.enabled && mailbox.configured && !isDegraded
   // The pair (agent_id, workspace_id) is the row's identity — an agent can
   // legitimately appear in two rows (a different mailbox per workspace), so
   // testids must key off both ids to avoid collisions.
@@ -840,12 +847,26 @@ function MailboxRow({ mailbox, agentNameById, workspaceNameById, onConfigure }: 
             <Badge variant="success" className="text-[length:var(--type-caption-size)]">
               Active
             </Badge>
+          ) : isDegraded ? (
+            <Badge variant="error" className="text-[length:var(--type-caption-size)]">
+              Degraded
+            </Badge>
           ) : (
             <Badge variant="muted" className="text-[length:var(--type-caption-size)]">
               Not configured
             </Badge>
           )}
         </div>
+        {/* #1277 — the status_reason names the exact cause (e.g. the missing
+            secret reference). Mirrors the channel rows' degraded_reason line,
+            without its truncate: this reason is the diagnostic the operator
+            must read in full, and clipping it could hide exactly the
+            reference name it exists to show. */}
+        {isDegraded && mailbox.status_reason && (
+          <p className="mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+            {mailbox.status_reason}
+          </p>
+        )}
         <p className="mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] truncate">
           {mailbox.username || 'No address set'}
           {workspaceName ? ` · ${workspaceName}` : ''}
