@@ -999,6 +999,13 @@ func (pe *PlanEngine) applyJudgeRoundOutcomeFor(planID string, snapshot *plan.Pl
 			return
 		}
 		pe.revertAbandonedJudgeRoundWithWorkLocked(current, result.Reason, work)
+		// Issue #1306 (team-lead Q4): the Judge concludes visibly — the
+		// owner (the requester's conversation) gets the same Not-verified
+		// conclusion with the members' results. Bounded: this branch runs
+		// once per actually-abandoned round below the bound, so at most
+		// MaxConsecutiveJudgeUnavailable-1 wakes per streak; at the bound
+		// the park wakes the supervisor instead. Never per tick.
+		pe.wakeOwner(current, buildJudgeUnavailableRetryHandover(result.Reason, work), "plan_judge_unavailable")
 		return
 	}
 
