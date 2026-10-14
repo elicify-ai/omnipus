@@ -276,6 +276,7 @@ export const PermissionDenied = z
     tool: z.string().min(1),
     reason: z.string().min(1),
     permanent: z.boolean(),
+    code: z.literal("protected_internal_file").optional(),
   })
   .strict();
 

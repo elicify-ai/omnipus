@@ -299,6 +299,7 @@ export interface PermissionDenied {
   tool: string;
   reason: string;
   permanent: boolean;
+  code?: "protected_internal_file";
 }
 
 export interface ToolAssemblyDuplicate {
