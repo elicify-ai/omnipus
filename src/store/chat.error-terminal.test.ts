@@ -504,11 +504,12 @@ describe('#1081 RC2 — narration cannot hide a terminal error', () => {
 
 // Issue #1306: a Judge that reaches its own check time limit gets its own
 // honest code, judge_time_limit — never the provider-timeout copy and never
-// the generic "unknown" fallback. Oracle: the copy literal from
-// contracts/components/schemas/LLMError.yaml (x-user-messages.judge_time_limit).
+// the generic "unknown" fallback. Oracle: the generated catalogue entry
+// (codeToDisplay.judge_time_limit, emitted from contracts/.../LLMError.yaml) —
+// read, never pasted (TestLLMErrorMessages_NoHandCopiesOutsideTheCatalogue) —
+// plus independent checks that it names the Judge's own time limit.
 describe('#1306 — judge_time_limit renders its own copy', () => {
-  const JUDGE_TIME_LIMIT_COPY =
-    'The Judge reached its own check time limit before it finished checking this work. Raise judge.timeout_sec in config.json if checks need longer, then check again.'
+  const JUDGE_TIME_LIMIT_COPY = codeToDisplay.judge_time_limit
 
   it('an error frame with judge_time_limit shows the Judge copy, not a generic or provider message', () => {
     const placeholder = streamingPlaceholder()
@@ -530,7 +531,10 @@ describe('#1306 — judge_time_limit renders its own copy', () => {
     const [bubble] = bucketMessages()
     expect(bubble.status).toBe('error')
     expect(bubble.errorCode).toBe('judge_time_limit')
+    expect(JUDGE_TIME_LIMIT_COPY, 'the catalogue must carry judge_time_limit copy').toBeTypeOf('string')
     expect(bubble.content).toBe(JUDGE_TIME_LIMIT_COPY)
+    expect(bubble.content).toContain('Judge')
+    expect(bubble.content).toContain('check time limit')
     expect(bubble.content).not.toBe(codeToDisplay.unknown)
     expect(bubble.content).not.toBe(codeToDisplay.turn_timed_out)
   })
