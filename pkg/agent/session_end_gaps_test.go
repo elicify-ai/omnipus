@@ -97,6 +97,7 @@ func TestRunRecap_AllCandidatesFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: give the fallback a carry-forward target.
 	if appendErr := store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "all candidates fail test",
@@ -238,6 +239,7 @@ func runRecapModelResolutionScenario(t *testing.T, agentID, agentName, defaultMo
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: carry-forward target so the recap completes.
 	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "tier resolution test",
@@ -432,6 +434,7 @@ func TestRunRecap_FallbackDistinctProvider_RoutesCorrectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: carry-forward target so the fallback completes.
 	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "distinct provider routing test",
@@ -521,6 +524,7 @@ func TestRunRecap_FallbackDistinctProvider_NoPoolEntryFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: carry-forward target so the fallback completes.
 	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "pool-miss graceful degradation test",

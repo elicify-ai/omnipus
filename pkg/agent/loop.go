@@ -521,7 +521,7 @@ type AgentLoop struct {
 	claimedCloseSessions sync.Map // sessionID (string) → true
 
 	// Session-end recap drain (#265). Recap goroutines (CloseSession → runRecap)
-	// write LAST_SESSION.md / retro files and emit audit entries in the
+	// write carry-forward summaries / retro files and emit audit entries in the
 	// background. Close() drains them (recapWG.Wait) BEFORE it tears down the
 	// registry, session stores, and audit logger they write through, so the
 	// recaps both complete and finish writing before shutdown returns — leaving
@@ -1378,14 +1378,7 @@ func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 			`{"type":"turn_canceled_restart","session_key":%q,"reason":"graceful_shutdown"}`,
 			sessionKey,
 		)
-		ts.agent.Sessions.AddMessage(sessionKey, "system", syntheticContent)
-		if err := ts.agent.Sessions.Save(sessionKey); err != nil {
-			logger.WarnCF("agent", "FR-048: failed to persist turn_canceled_restart on shutdown",
-				map[string]any{"session_key": sessionKey, "error": err.Error()})
-		} else {
-			logger.InfoCF("agent", "FR-048: turn_canceled_restart written on graceful shutdown",
-				map[string]any{"session_key": sessionKey})
-		}
+		al.writeTurnCancelledRestartMarker(ts, sessionKey, syntheticContent)
 
 		// Emit audit event (FR-048).
 		// CRIT-6 + typed-Decision/Event migration: route through audit.EmitEntry

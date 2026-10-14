@@ -21,8 +21,11 @@ package tools
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
 
 // noSandboxExtraReadOnlyCommands extends shell_path_guard.go's own
@@ -118,17 +121,62 @@ func isNoSandboxReadOnlySegment(seg string) bool {
 // anything (should not happen — even an empty string segments to one empty
 // segment, which isNoSandboxReadOnlySegment refuses via its empty-head
 // check) is conservatively NOT read-only.
+//
+// #1284 (amendment §2 D6): a segment is also not read-only when it names a
+// protected internal-file operand — a read-only allowlist command that names
+// any home path outside the allow-list is removed from the unprompted list,
+// so it asks. The check is the turn-free conservative form
+// (fspolicy.IsProtectedHomePath): no session-scoped upload knowledge, so an
+// upload operand asks rather than auto-runs — the ask is the protection's
+// visible face on Windows and other no-kernel hosts.
 func commandIsNoSandboxReadOnly(command string) bool {
 	segments := splitShellSegments(command)
 	if len(segments) == 0 {
 		return false
 	}
+	home := config.OmnipusHomeDir()
 	for _, seg := range segments {
 		if !isNoSandboxReadOnlySegment(seg) {
 			return false
 		}
+		if home != "" && segmentNamesProtectedHomeOperand(seg, home) {
+			return false
+		}
 	}
 	return true
+}
+
+// segmentNamesProtectedHomeOperand reports whether one command segment's
+// absolute-path candidates reach the protected home set. Same extraction and
+// expansion resolution as guardCommand's scan: `~`, `$HOME` and
+// `$OMNIPUS_HOME` prefixes are resolved, any other variable makes the
+// candidate unclassifiable and therefore NOT read-only (fail closed — an
+// operand the gate cannot see is not one it can vouch for).
+func segmentNamesProtectedHomeOperand(seg string, home string) bool {
+	for _, loc := range absolutePathPattern.FindAllStringSubmatchIndex(seg, -1) {
+		start, end := loc[2], loc[3]
+		if start < 0 || end < 0 {
+			continue
+		}
+		raw := seg[start:end]
+		if loc[0] >= 0 && loc[0] < start {
+			prefix, resolved, isExpansion := expandCandidatePrefix(seg[loc[0]:start])
+			if isExpansion {
+				if !resolved {
+					return true // unclassifiable dynamic operand — not auto-runnable
+				}
+				raw = filepath.Join(prefix, raw)
+			}
+		}
+		p, err := filepath.Abs(raw)
+		if err != nil {
+			continue
+		}
+		if fspolicy.IsProtectedHomePath(p, home) || fspolicy.CoversChildOnlySecretPath(p, home) {
+			return true
+		}
+	}
+	return false
 }
 
 // commandTriggersExistingPreflight is a non-prompting DRY RUN of D7

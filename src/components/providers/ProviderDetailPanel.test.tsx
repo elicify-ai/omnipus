@@ -4,20 +4,20 @@
  * `aria-pressed` groups with a locale-inferred region default, and the
  * auth-method control in the same step.
  *
- * Every company row here is built from the shared 190-entry catalog fixture
+ * Every company row here is built from the shared 188-entry catalog fixture
  * through `toCompanyRows` — the same function the picker uses — so a catalog
  * change reaches these tests instead of being papered over by hand-written
  * variants.
  *
  * One deliberate exception, called out because it looks like a fixture
- * disagreement: the fixture keeps `openai`, `openai-chatgpt` and `codex-cli` as
- * three single-variant companies ("so the `openai` API-key row stays one-click"
- * — its own header), while the served catalog is expected to group OpenAI's
- * rows under one company. The FR-006 pair is therefore exercised against a
- * LOCALLY regrouped copy of the fixture rows rather than by editing the shared
- * fixture, which several other suites pin as-is. The panel itself has no OpenAI
- * branch at all: it offers whatever sign-in variants the company it is handed
- * carries, which is the property that makes both groupings correct.
+ * disagreement: the fixture keeps `openai` and `openai-chatgpt` as two
+ * single-variant companies ("so the `openai` API-key row stays one-click" —
+ * its own header), while the served catalog groups OpenAI's rows under one
+ * company. The sign-in choice is therefore exercised against a LOCALLY
+ * regrouped copy of the fixture rows rather than by editing the shared
+ * fixture, which several other suites pin as-is. The panel itself has no
+ * OpenAI branch at all: it offers whatever sign-in variants the company it is
+ * handed carries, which is the property that makes both groupings correct.
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -27,6 +27,7 @@ import { CATALOG_PROVIDERS } from '@/test/fixtures/providersCatalog'
 import type { CatalogProvider } from '@/lib/api/generated/openapi-types'
 import { toCompanyRows, type PickerCompanyRow } from './provider-picker-model'
 import { ProviderDetailPanel } from './ProviderDetailPanel'
+import { signInHelperCopy } from './AuthMethodControl'
 
 function catalogRow(id: string): CatalogProvider {
   const row = CATALOG_PROVIDERS.find((p) => p.id === id)
@@ -44,7 +45,7 @@ function companyRowFor(providerId: string): PickerCompanyRow {
 
 /** The OpenAI family as one company — see the header note. */
 function openAiFamilyRow(): PickerCompanyRow {
-  const variants = ['openai', 'openai-chatgpt', 'codex-cli'].map((id) => ({
+  const variants = ['openai', 'openai-chatgpt'].map((id) => ({
     ...catalogRow(id),
     company: 'OpenAI',
   }))
@@ -244,7 +245,7 @@ describe('ProviderDetailPanel — auth method in the same step (FR-005, FR-028)'
     )
   })
 
-  it('persists openai-chatgpt when the OpenAI sign-in radios are untouched (DoD)', async () => {
+  it('persists openai-chatgpt when the OpenAI sign-in options are untouched (DoD)', async () => {
     const onConfirm = vi.fn()
     render(<ProviderDetailPanel company={openAiFamilyRow()} locale="en-US" onConfirm={onConfirm} />)
 
@@ -294,25 +295,25 @@ describe('ProviderDetailPanel — auth method in the same step (FR-005, FR-028)'
 describe('ProviderDetailPanel — defends against a dual api_key+sign_in row with a dedicated sibling (FR-006 F2)', () => {
   function openAiFamilyRowWithBuggyOpenAI(): PickerCompanyRow {
     const variants: CatalogProvider[] = [
-      { ...catalogRow('codex-cli'), company: 'OpenAI' },
       { ...catalogRow('openai'), company: 'OpenAI', auth_methods: ['api_key', 'sign_in'] },
       { ...catalogRow('openai-chatgpt'), company: 'OpenAI' },
     ]
     return toCompanyRows(variants)[0]
   }
 
-  it('renders exactly the FR-006 pair — the dual-purpose "openai" row never becomes a third radio', () => {
+  it('offers exactly the dedicated sign-in row — the dual-purpose "openai" row never becomes a sign-in option', () => {
     render(<ProviderDetailPanel company={openAiFamilyRowWithBuggyOpenAI()} locale="en-US" />)
 
-    const radiogroup = screen.getByTestId('provider-detail-panel-auth-signin-options')
-    const radios = within(radiogroup).getAllByRole('radio') as HTMLInputElement[]
-    expect(radios.map((r) => r.value)).toEqual(['openai-chatgpt', 'codex-cli'])
+    // One eligible sign-in variant means the choice is already made: no radio
+    // group renders, and the dual-purpose row appears nowhere in it.
+    expect(screen.queryByTestId('provider-detail-panel-auth-signin-options')).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument()
     expect(
       screen.queryByTestId('provider-detail-panel-auth-signin-option-openai'),
     ).not.toBeInTheDocument()
-
-    const checked = radios.find((r) => r.checked)
-    expect(checked?.value).toBe('openai-chatgpt')
+    // The one sign-in option announces itself through its FR-006 helper line
+    // (the single-option path shows the helper, not the row label).
+    expect(screen.getByText(signInHelperCopy(catalogRow('openai-chatgpt').id)!)).toBeInTheDocument()
   })
 
   it('still offers "openai" through the API-key segment — the row is excluded only from the sign-in radios', async () => {

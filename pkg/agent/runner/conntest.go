@@ -31,7 +31,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
@@ -93,9 +92,10 @@ var supportedCLIs = map[string]cliSpec{
 			if anyEnvSet("OPENAI_API_KEY") {
 				return true
 			}
-			// Reuse the existing Codex CLI credential reader (~/.codex/auth.json,
-			// overridable via CODEX_HOME).
-			tok, _, _, err := providers.ReadCodexCliCredentials()
+			// The Codex CLI's own saved login (~/.codex/auth.json, overridable
+			// via CODEX_HOME) — read via the runner-owned reader (codex_auth.go),
+			// the one surviving consumer after the WU-24 model-provider removal.
+			tok, _, _, err := ReadCodexCliCredentials()
 			return err == nil && tok != ""
 		},
 		loginHint: "run `codex login` or set OPENAI_API_KEY",

@@ -705,8 +705,10 @@ func TestContextBuilder_MemoryEnabled_DefaultTrueIncludesMemorySection(t *testin
 	dir := t.TempDir()
 	cb := NewContextBuilder(dir)
 	t.Cleanup(cb.Memory().Close)
-	if err := cb.Memory().WriteLastSession("## Last session\nSomething useful happened."); err != nil {
-		t.Fatalf("WriteLastSession: %v", err)
+	// WU-21 re-aim (#1197): seed a long-term memory instead of the removed
+	// last-session API; the FR-039 gating assertions are unchanged.
+	if err := cb.Memory().AppendLongTerm("Something useful happened.", "lesson_learned"); err != nil {
+		t.Fatalf("AppendLongTerm: %v", err)
 	}
 
 	prompt := cb.BuildSystemPrompt()
@@ -722,8 +724,10 @@ func TestContextBuilder_MemoryEnabled_FalseSuppressesMemorySection(t *testing.T)
 	dir := t.TempDir()
 	cb := NewContextBuilder(dir).WithMemoryEnabled(false)
 	t.Cleanup(cb.Memory().Close)
-	if err := cb.Memory().WriteLastSession("## Last session\nSomething useful happened."); err != nil {
-		t.Fatalf("WriteLastSession: %v", err)
+	// WU-21 re-aim (#1197): seed a long-term memory instead of the removed
+	// last-session API; the FR-039 gating assertions are unchanged.
+	if err := cb.Memory().AppendLongTerm("Something useful happened.", "lesson_learned"); err != nil {
+		t.Fatalf("AppendLongTerm: %v", err)
 	}
 
 	prompt := cb.BuildSystemPrompt()

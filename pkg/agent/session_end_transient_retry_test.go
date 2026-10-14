@@ -76,9 +76,40 @@ func (p *recapTransientProvider) Chat(
 
 func (p *recapTransientProvider) GetDefaultModel() string { return "recap-test-model" }
 
+// WU-21 re-aim (#1197): the recap pipeline now stores each summary under the
+// session's own (agent, workspace) pair path. Every fixture this file family
+// stamps its session into one shared test workspace so the recap has a
+// carry-forward target, and the observers below read that pair path instead of
+// the retired agent-wide last-session.md.
+const wu21ReaimWorkspace = "recap-ws"
+
+// wu21ReaimStampWorkspace stamps the shared test workspace onto the session's
+// meta — the value the recap resolves its carry-forward scope from.
+func wu21ReaimStampWorkspace(t *testing.T, store *session.UnifiedStore, sessionID string) {
+	t.Helper()
+	ws := wu21ReaimWorkspace
+	if err := store.SetMeta(sessionID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
+		t.Fatalf("re-aim: set session workspace: %v", err)
+	}
+}
+
+// wu21ReaimPairPath is the pair file a recap for agentID in the shared test
+// workspace writes (amendment §3.2(2)).
+func wu21ReaimPairPath(home, agentID string) string {
+	return filepath.Join(home, "workspaces", wu21ReaimWorkspace, ".omnipus", "carry-forward", agentID+".md")
+}
+
+// wu21ReaimHome derives $OMNIPUS_HOME from an agent home of the shape
+// <home>/agents/<id> — the shape every recap fixture in this family builds.
+func wu21ReaimHome(ag *AgentInstance) string {
+	return filepath.Dir(filepath.Dir(ag.Home))
+}
+
 // buildRecapTestLoop builds an AgentLoop + session store + agent instance
 // for recap integration tests. It returns the loop, the session ID, and the
-// agent instance. The session is pre-populated with one user transcript entry.
+// agent instance. The session is pre-populated with one user transcript entry
+// and stamped with the shared test workspace (WU-21 re-aim) so the recap has a
+// carry-forward target.
 func buildRecapTestLoop(
 	t *testing.T,
 	provider providers.LLMProvider,
@@ -119,6 +150,7 @@ func buildRecapTestLoop(
 		t.Fatalf("NewSession: %v", err)
 	}
 	sessionID = meta.ID
+	wu21ReaimStampWorkspace(t, store, sessionID)
 	if appendErr := store.AppendTranscript(sessionID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "transient retry test conversation",
@@ -131,14 +163,16 @@ func buildRecapTestLoop(
 	return al, sessionID, ag
 }
 
-// pollLastSession polls for last-session.md up to 5 seconds, returning its
-// content or failing the test if the deadline is exceeded.
+// pollLastSession polls for the agent's workspace-scoped carry-forward summary
+// up to 5 seconds, returning its content or failing the test if the deadline
+// is exceeded. (WU-21 re-aim: the pair path replaced the agent-wide
+// last-session.md; the assertions in the callers are unchanged.)
 func pollLastSession(t *testing.T, ag *AgentInstance, wantAbsent bool) []byte {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
+	carryForwardPath := wu21ReaimPairPath(wu21ReaimHome(ag), ag.ID)
 	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(lastSessionPath)
+		data, err := os.ReadFile(carryForwardPath)
 		if err == nil {
 			if wantAbsent {
 				// Caller wanted to confirm the file doesn't contain real content —
@@ -152,7 +186,7 @@ func pollLastSession(t *testing.T, ag *AgentInstance, wantAbsent bool) []byte {
 	if wantAbsent {
 		return nil // file never appeared, which is also a valid outcome for wantAbsent
 	}
-	t.Fatalf("last-session.md not produced within deadline; agent workspace=%s", ag.Home)
+	t.Fatalf("carry-forward summary not produced within deadline; path=%s", carryForwardPath)
 	return nil
 }
 
@@ -165,7 +199,7 @@ func pollLastSession(t *testing.T, ag *AgentInstance, wantAbsent bool) []byte {
 // BDD: Given a provider that returns "http2: response body closed" (transient) for
 // the first 2 calls, then returns a valid JSON recap on the 3rd call,
 // When runRecap is invoked via CloseSession,
-// Then last-session.md contains the summarized content (NOT the llm_error stub),
+// Then the carry-forward summary contains the summarized content (NOT the llm_error stub),
 // And the provider was called exactly 3 times (2 transient failures + 1 success).
 func TestRunRecap_TransientRetry_SucceedsAfterRetries(t *testing.T) {
 	// The canonical transient error that triggered the bug in e2e.
@@ -187,12 +221,12 @@ func TestRunRecap_TransientRetry_SucceedsAfterRetries(t *testing.T) {
 	// The real recap must appear, not the stub fallback.
 	if strings.Contains(content, "Fallback reason:") {
 		t.Errorf(
-			"last-session.md contains fallback stub — transient retry must have produced real recap; content:\n%s",
+			"carry-forward summary contains fallback stub — transient retry must have produced real recap; content:\n%s",
 			content,
 		)
 	}
 	if !strings.Contains(content, "shipped the feature") {
-		t.Errorf("last-session.md missing real recap content; content:\n%s", content)
+		t.Errorf("carry-forward summary missing real recap content; content:\n%s", content)
 	}
 
 	// Verify the provider was called more than once (retried).
@@ -208,7 +242,7 @@ func TestRunRecap_TransientRetry_SucceedsAfterRetries(t *testing.T) {
 //
 // BDD: Given a provider that fails once transiently then succeeds,
 // When runRecap is invoked,
-// Then last-session.md contains the real content,
+// Then the carry-forward summary contains the real content,
 // And the provider was called exactly 2 times.
 func TestRunRecap_TransientRetry_SucceedsAfterOneRetry(t *testing.T) {
 	transientErr := errors.New("http2: response body closed")
@@ -247,7 +281,7 @@ func TestRunRecap_TransientRetry_SucceedsAfterOneRetry(t *testing.T) {
 //
 // BDD: Given a provider that ALWAYS returns "http2: response body closed",
 // When runRecap is invoked and exhausts all transient retries across all candidates,
-// Then last-session.md is written with the stub fallback format
+// Then the carry-forward summary is written with the stub fallback format
 // ("Session ... Fallback reason: llm_error"),
 // And the goroutine does not panic or hang.
 func TestRunRecap_TransientRetry_StubAfterExhaustion(t *testing.T) {
@@ -265,7 +299,7 @@ func TestRunRecap_TransientRetry_StubAfterExhaustion(t *testing.T) {
 	if data == nil {
 		// If the file was never written, the recap ran but wrote nothing — that
 		// would be a separate bug. The stub MUST be written.
-		t.Fatalf("last-session.md was never written after transient exhaustion")
+		t.Fatalf("carry-forward summary was never written after transient exhaustion")
 	}
 	content := string(data)
 	if !strings.Contains(content, "Fallback reason:") {
@@ -286,7 +320,7 @@ func TestRunRecap_TransientRetry_StubAfterExhaustion(t *testing.T) {
 //
 // BDD: Given a provider that returns an unauthorized (401) error,
 // When runRecap is invoked,
-// Then last-session.md contains the stub fallback,
+// Then the carry-forward summary contains the stub fallback,
 // And the provider is called exactly ONCE per candidate (no retry).
 func TestRunRecap_NonTransientError_NoRetry(t *testing.T) {
 	// Non-transient: this must not trigger transient retry.
@@ -301,7 +335,7 @@ func TestRunRecap_NonTransientError_NoRetry(t *testing.T) {
 
 	data := pollLastSession(t, ag, true)
 	if data == nil {
-		t.Fatalf("last-session.md was never written after auth error")
+		t.Fatalf("carry-forward summary was never written after auth error")
 	}
 	if !strings.Contains(string(data), "Fallback reason:") {
 		t.Errorf("expected stub after non-transient auth error; content:\n%s", data)
@@ -328,7 +362,7 @@ func TestRunRecap_NonTransientError_NoRetry(t *testing.T) {
 //
 // BDD: Given a provider that returns a GOAWAY error once then succeeds,
 // When runRecap is invoked,
-// Then last-session.md contains real recap content (not the stub).
+// Then the carry-forward summary contains real recap content (not the stub).
 func TestRunRecap_GOAWAYTransient_SucceedsAfterRetry(t *testing.T) {
 	goawayErr := errors.New(
 		`http2: server sent GOAWAY and closed the connection; LastStreamID=5, ErrCode=INTERNAL_ERROR, debug=""`,

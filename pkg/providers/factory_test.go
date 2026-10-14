@@ -31,26 +31,3 @@ func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {
 		t.Fatalf("provider type = %T, want *HTTPProvider", provider)
 	}
 }
-
-func TestCreateProviderReturnsCodexCliProviderForCodexCode(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{
-		Provider: "codex-cli", Model: "gpt-5.4-codex",
-	}
-	cfg.Providers = []*config.ModelConfig{
-		{
-			Provider: "codex-cli",
-			Model:    "gpt-5.4-codex",
-			Home:     "/tmp/workspace",
-		},
-	}
-
-	provider, _, err := CreateProvider(cfg)
-	if err != nil {
-		t.Fatalf("CreateProvider() error = %v", err)
-	}
-
-	if _, ok := provider.(*CodexCliProvider); !ok {
-		t.Fatalf("provider type = %T, want *CodexCliProvider", provider)
-	}
-}

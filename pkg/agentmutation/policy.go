@@ -55,7 +55,7 @@ type FieldDescriptor struct {
 	Reason   string
 }
 
-var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "default", "voice", "type"}
+var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "voice", "type"}
 
 // FieldDescriptors reports which fields may be changed on agent.
 func FieldDescriptors(agent config.AgentConfig) []FieldDescriptor {

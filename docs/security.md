@@ -90,7 +90,7 @@ There is no mode badge in the chat header. The composer has one labelled **Auto*
 
 God Mode is Omnipus's strongest override. It is one switch for the whole gateway, not a per-agent or per-chat setting — turning it on applies to every agent and every conversation at once. Change it under **Settings**, **Gateway**, **Danger zone**.
 
-**In practice:** with God Mode on, an agent's shell commands can read or change any file your account can reach on this machine — not just the files inside its workspace, and, because God Mode turns off the kernel-level filesystem confinement for the shell specifically, that includes files elsewhere on your account (for example another agent's saved credentials) if your account has permission to read them. Shell commands can also talk to any address on the network, including ones a firewall or an internal service would otherwise block. Treat it the same as handing an agent an unrestricted terminal on your computer, for as long as it stays on.
+**In practice:** with God Mode on, an agent's shell commands can read or change any file your account can reach on this machine — except Omnipus's own files, which stay protected in every mode (see "Omnipus's own files are protected from every agent," below). Reads and writes anywhere on your account outside the data directory work as if no sandbox existed, and shell commands can talk to any address on the network, including ones a firewall or an internal service would otherwise block. The programs those shell commands start — and the runs of `environment_setup` — receive your full gateway environment, your saved provider API keys and mailbox passwords included. Treat it the same as handing an agent an unrestricted terminal on your computer — with one door welded shut — for as long as it stays on.
 
 #### Two switches, not one
 
@@ -107,9 +107,10 @@ The first time you turn God Mode on through this screen, on an installation that
 |---|---|
 | Tool policies | Every tool's global (installation-wide) policy is treated as Allow — no prompt from that policy, for any tool. |
 | Shell approval | God Mode removes the global shell approval requirement. A per-agent Ask can still require approval, and a per-agent Deny still blocks the tool. Operator deny rules and the surviving outside-workspace write guard also remain in force. |
-| Kernel filesystem confinement | Off for the shell's own commands: they can reach any file your account can, not just the workspace. |
+| Kernel filesystem confinement | Off for the shell's own commands — **except the floor**: reads and writes anywhere your account can reach, with Omnipus's own files still denied (the floor profile runs even here, on macOS and Linux). |
 | Kernel network-port controls | Off for the shell's own commands: they can bind or connect to any port, not just an allowed list. |
 | Outbound network filtering | The shell's commands are not filtered against the address block list that otherwise stops them reaching your internal network or cloud-metadata services. |
+| Programs the shell starts | Commands run by `bash` (foreground or background) and the runs of the `environment_setup` tool receive your full gateway environment — including saved provider API keys and mailbox passwords — instead of the usual child allowlist. The three gateway boot values (master key, key file, web token) are still withheld. Accepted risk (2026-10-14); see ["What child programs can see"](#what-child-programs-can-see). |
 | Per-command process limits | The extra process-count and memory limits normally placed on a shell command (and the platform equivalents on macOS and Windows) are not applied. |
 | After-run link check | Skipped. Normally, after each shell command, Omnipus looks for links the command left inside the workspace that point outside it, tells the agent, and writes the finding to the audit log. Under God Mode that check does not run. |
 | Auto-approve | Switched off outright, everywhere — there is nothing left for it to add. |
@@ -118,10 +119,12 @@ The first time you turn God Mode on through this screen, on an installation that
 
 | Protection | Still applies under God Mode |
 |---|---|
+| Omnipus's own files (the floor) | **Always.** Every agent-spawned child — a shell command in the foreground, a background command, an `environment_setup` install — runs under the floor profile: reads and writes anywhere, open network, and the data directory's protected set denied at the kernel level (macOS and Linux). The command-text check below backs it up on every platform. God Mode never lifts this; a command naming a protected file is refused outright with nothing to approve. |
 | An agent's own tool policy | A tool an agent has itself set to Ask still asks; one it has denied stays denied. An agent's own setting can only make a tool stricter than the global one, and God Mode does not remove that limit. |
 | Operator deny rules | A `deny` command rule still refuses a matching command outright — this is the one check God Mode does not turn off. |
 | The shell's outside-workspace write refusal | **Still fires.** God Mode removes only the prompt that would otherwise let you widen this refusal — not the refusal itself. A shell command that tries to write outside the workspace is refused outright, silently, with nothing to click. |
-| Other tools' own protected-path check | A write through `write_file` or a similar tool to one of Omnipus's own protected files — for example your account's `USER.md` profile — is refused outright, never prompted, never widenable. This check runs at the application level, independent of the kernel sandbox God Mode turns off, so it does not depend on whether the sandbox is on. It does not, by itself, protect the shell tool the same way — see "In practice," above. |
+| Other tools' own protected-path check | A path through `read_file`, `write_file`, `grep`, `bash` or any other host-path tool to one of Omnipus's own files is refused outright, never prompted, never widenable. This check runs at the application level, independent of the kernel sandbox God Mode turns off, and on macOS and Linux the kernel floor (first row) backs it up for spawned children. |
+| The gateway boot values | The master-key and key-file variables and the web token are never passed to the programs your `bash` commands or `environment_setup` runs start — God Mode or not. |
 | The syscall filter (Linux) | Installed once when the gateway starts and shared by every process it spawns afterward — there is no way to switch it off for one command, so it applies to a God-Mode shell command exactly as it does to any other. |
 | Audit logging | Every God-Mode call is still recorded. |
 | The prompt-injection guard | Unaffected. |
@@ -205,8 +208,25 @@ Auto-approve does not check what a command means. A command that deletes files i
 
 `read_file` (open one file), `list_directory` (list one folder) and `grep` (search many files by name and content) follow one rule. They reach any file your account can read, with these exceptions, which no tool policy or Auto-approve setting opens:
 
-- Omnipus's protected files: the master key, saved credentials, `config.json`, sign-in tokens, backups and a few other files Omnipus keeps for itself.
+- **Omnipus's own files — everything in the Omnipus data directory** (by default `~/.omnipus`), except the short allow-list below. This is one rule, not a list of file names: a file the gateway creates there tomorrow is protected today. See "Omnipus's own files are protected from every agent," below.
 - Other agents' own files and other workspaces.
+
+The allow-list — the only parts of the data directory an agent can still reach:
+
+| Part of the data directory | What agents may do |
+|---|---|
+| The agent's workspace (`workspaces/<id>/work`) and folders you mounted into it | Read and write, as configured |
+| `media/` (downloaded attachments and pictures) | Read only |
+| The current chat's uploaded files (`uploads/<this chat>/` and its parent chat's) | Read only |
+| Installed skills' helper files (scripts, templates — not `SKILL.md`/`AGENT.md`/`AGENTS.md`) | Read only, file tools only |
+
+Everything else inside the data directory — sessions and transcripts, tasks and plans, memory, agent definitions (`SOUL.md` and friends), the skill registry's instruction files, audit logs, gateway state, credentials, the master key, `config.json` — is refused to every file tool, hidden from search results, and denied to shell commands, in every permission mode. A refusal reads, for example: *"Command blocked: '…/sessions/private.txt' is inside Omnipus's protected internal files, which no agent command may read or change in any mode — God Mode included. This is never grantable; work inside the workspace and use the dedicated internal tools where one exists."* Both refusal producers — the file tools and the shell command check — mark this one refusal with a machine-readable tag (`"code": "protected_internal_file"` on the structured permission-denied payload), so a consumer can tell it apart from an ordinary workspace-scope denial without reading the sentence.
+
+**Two accepted risks and one boundary are worth knowing:**
+
+- **An operator's direct sandbox grant or a mount created outside Omnipus's checks can reopen an internal folder.** A `sandbox.allowed_paths` entry, or a mount added outside the normal mount checks, aimed **directly at an internal folder** reopens that folder in the kernel sandbox. This is an accepted configuration risk, not a grant an agent can create: `request_mount` refuses internal folders outright, even if you approve the request. `tools.allow_read_paths` and `tools.allow_write_paths` do **not** override protection for named internal files; file tools still refuse them. Aim sandbox grants and manually added mounts at work folders, not internal folders. Omnipus's own runtime and document access permissions are not covered by this accepted risk.
+- **Shell commands can disclose the NAMES of entries directly inside the data directory on macOS.** A shell command running inside Seatbelt, macOS's kernel sandbox, can list those names. Protected contents remain inaccessible. This is an accepted disclosure of names **under the kernel sandbox**, not a command running outside it. `list_directory` of the data-directory root is still refused, and Omnipus's command-text check may also refuse a shell command that names that root directly.
+- **Installed runtimes are readable and executable, never writable.** The toolchains Omnipus manages (`toolchains/`, and the document runtime) are readable and executable for agents — that is how an installed program or document tool runs at all — and stay read-only even under God Mode.
 
 **Where `grep` searches.** With no folder given, `grep` searches the agent's workspace and every folder mounted into it. Given a folder, it searches there instead: a path inside the workspace, a mounted folder's name, or an absolute path such as `/var/log` or `C:\Logs`. A path containing `..` works too, and reaches the same place it would for `read_file`. Matches inside the workspace are shown relative to it; everything else is shown as a full path that `read_file` can open. The search limits are unchanged, so a search of a whole disk stops at them and says it was cut short.
 
@@ -214,13 +234,13 @@ Auto-approve does not check what a command means. A command that deletes files i
 
 - Links (symlinks) it meets inside a folder are not followed. A link you name directly as the folder to search is followed, as `read_file` would.
 - The Linux system folders `/proc`, `/sys` and `/dev` are skipped, and device files, pipes and sockets are never read. They hold no user content, and some of them can hang a search. `read_file` of a file you name in those folders works as before.
-- Agent notes files such as `SOUL.md`, `HEARTBEAT.md`, `AGENT.md` and `MEMORY.md`, and the instruction files of installed skills (`SKILL.md`, `AGENT.md`, `AGENTS.md` in Omnipus's own skills folder), never show up in results, by name or by content. `read_file` refuses them too. `list_directory` still shows their names; this difference is deliberate. A skill's other files, such as its helper scripts, can be found.
+- Agent notes files such as `SOUL.md`, `HEARTBEAT.md`, `AGENT.md` and `MEMORY.md`, and the instruction files of installed skills (`SKILL.md`, `AGENT.md`, `AGENTS.md` in Omnipus's own skills folder), never show up in results, by name or by content. `read_file` refuses them too, and so does `list_directory` of the folder holding them. A skill's other files, such as its helper scripts, can be read and found.
 
 **Denying `read_file` alone does not stop an agent reading.** The policies for `read_file` and `grep` are separate, and `grep` returns the matching lines of any file it can reach (up to the usual limits and surrounding lines). A custom agent with `grep` allowed and `read_file` denied can still read that way. To confine what an agent reads, deny `read_file`, `grep` and `bash` for it.
 
 **The Judge reads only the work under review.** While the Judge reviews a goal or a plan step, `read_file`, `list_directory` and `grep` reach only the workspace under review and the folders mounted into it. Anything else is refused, and an extra reading path an operator adds in the configuration cannot widen it.
 
-**The Plan Supervisor is not limited this way.** It is allowed to use `grep`, and its `grep` follows the same rule as every other agent's. That means it can search outside the workspace, including Omnipus's own session transcripts, tasks, plans and memory files, which are not among the protected files. This is an accepted choice: all agents follow one rule, rather than the Plan Supervisor having a special limit.
+**The Plan Supervisor is not limited this way.** It is allowed to use `grep`, and its `grep` follows the same rule as every other agent's: it can search anywhere your account can read outside Omnipus's own files, which no agent's search reaches. This is an accepted choice: all agents follow one rule, rather than the Plan Supervisor having a special limit.
 
 **Personal secret folders outside Omnipus are not protected yet.** Folders such as `~/.ssh`, `~/.aws`, `~/.gnupg` and your browser profiles are not among Omnipus's protected files. With Auto-approve on, an agent whose reading tools are set to Ask can read and search them without a prompt, just as the shell could already read them. Protecting them for every tool is tracked in issue [#921](https://github.com/elicify-ai/omnipus/issues/921). Until then, if that matters for an agent, deny its reading tools and `bash`, or turn Auto-approve off.
 
@@ -252,7 +272,7 @@ None of these ever shows a live approval card, even to an operator who happens t
 
 ### Approve a request
 
-When an approval card appears, read what it says, then choose:
+When a tool needs your decision, Omnipus opens an approval pop-up over the app. It accepts pending approvals from every workspace and conversation, not only the workspace or chat you are viewing. Requests are shown one at a time; a count indicates when more are queued. Read the named agent, tool and arguments before choosing Approve Once, Deny, Always Allow or Cancel. Some tool-specific requests use more specific button labels.
 
 | Button | What it does |
 |---|---|
@@ -260,6 +280,8 @@ When an approval card appears, read what it says, then choose:
 | **Always Allow** | Runs the call and remembers it for the rest of this chat, so an identical call does not ask again. |
 | **Deny** | Refuses the call. |
 | **Cancel** | Closes the request without running it. |
+
+Escape, the close control or clicking outside an unexpired pop-up dismisses it locally and sends Deny; it never approves the request. After reconnecting, a request whose original details are unavailable offers Deny only.
 
 What **Always Allow** remembers lasts only for that chat and ends with it. Agents that this chat hands work to inherit it. Nobody else's chats are affected, and there is no list of remembered approvals to review. For most tools it remembers the exact call, with the same arguments. For a shell command it offers a choice; see "Command rules compared with one-time approvals" below.
 
@@ -431,6 +453,26 @@ You see the error in two places, until you fix the file and save it again:
 }
 ```
 
+## Omnipus's own files are protected from every agent
+
+Omnipus keeps its own state — sessions and transcripts, tasks and plans, memory, agent definitions, the skill registry, audit logs, gateway state, `config.json`, saved credentials and the master key — inside its data directory (`~/.omnipus`, or the folder `OMNIPUS_HOME` points at). That directory is **denied by default**: an agent can reach only the parts listed in the allow-list under "What reading, searching and listing can reach," above. Everything else in the data directory is refused to every tool an agent can call — reading, writing, editing, appending, listing, searching, sending, serving, mounting and uploading — and to every command agents run, in every permission mode, God Mode included. No approval can widen this; there is nothing to click.
+
+The protection is one rule, not a name list: anything the gateway creates inside the data directory is protected immediately, including files that do not exist yet. Access happens through Omnipus's dedicated tools instead — conversations through the app, skills through the Skill tool, agent definitions through the agent screens.
+
+### What each platform enforces
+
+| Platform | What enforces it |
+|---|---|
+| Linux (kernel 5.13+) | The per-command Landlock sandbox denies the protected set to every spawned command, and the file tools deny it in-process. |
+| macOS | Every spawned command runs under its Seatbelt profile with the protected set denied; the file tools deny it in-process. |
+| Windows | There is no kernel sandbox, so the command-text check and the file tools carry the protection: a command that names a protected file is refused, and the file tools refuse the paths. A command that builds a protected path at runtime (for example inside PowerShell from pieces) can evade the text check — a known gap, stated here rather than hidden; the file tools still refuse the paths themselves. |
+
+### Limits of the protection
+
+- **macOS:** a file the gateway creates in the data directory *after* a command started is not in that command's deny list, so a long-running command could reach it. The next command sees it denied. Omnipus names its lazily-created directories in the protected set, so this window is narrow in practice.
+- **Linux:** the floor that denies the protected set grants everything else individually, so a God-Mode command cannot create a new file *directly inside an ancestor folder of the data directory* (for example a new file directly in your home folder). Files inside folders it can already reach are unaffected. On macOS the same operation works.
+- **External command-line workers are not covered.** A worker delegated to Claude Code, Codex or OpenCode runs outside Omnipus's sandbox and file policy entirely (see the God Mode section's external-worker note). Delegating to one is a decision to trust that tool with your account — Omnipus's internal-file protection does not follow it.
+
 ## How to manage saved secrets
 
 1. Open **Settings**, then select **Security**.
@@ -492,19 +534,29 @@ The application establishes its own protections on every install: its backups an
 
 Message previews are metadata-only: opening a preview issues a permission token that stores no message content. Every time a preview renders — the message view, each inline image — Omnipus fetches that piece fresh from your mail server within that one request, through the same shared connection pool and rate budget as the rest of the panel; nothing is kept after the request, the response is marked no-store, and remote images load only from the addresses that fetch recorded, only when you chose **Load images**. Attachments you open are fetched piece-by-piece rather than as whole messages, previews are capped at 25 MiB (use **Download** for larger files), and every preview control — session limits, logout revocation, identical "not found" answers — is unchanged. Files you explicitly **Save** from mail become ordinary workspace files under the normal workspace rules; the temporary-preview restrictions end at the save.
 
+## What child programs can see
+
+When Omnipus starts another program — the managed browser, a process hook, a git command, a connected (MCP) server, a media transcoder, or any command an agent runs — that program does **not** receive Omnipus's environment. It starts from a fixed allowlist instead: the basics a program needs to run (`PATH`, `HOME`, `USER`, terminal type, language and locale settings, temp folder, proxy settings), your `XDG_*` folder settings, and anything you explicitly forward by naming it with an `OMNIPUS_CHILD_` prefix (for example `OMNIPUS_CHILD_MYTOOL_TOKEN`). Everything else — saved provider keys, mailbox passwords, the master key, any unrecognised name — is left out. If a feature needs to give a child one specific extra value, that value is named explicitly in the code that starts the child, never passed wholesale. One override exists — **God Mode** (third exception below).
+
+Three named exceptions:
+
+- **Gateway restart.** When the command line (`omnipus start`) or the desktop launcher starts the gateway in the background, the new gateway receives its own data-directory location and, if you started the current process with them, the master-key or key-file value and the web token — those are its own unlock and login values, and without them a headless restart could not open your saved credentials. No other value is forwarded.
+- **External CLI workers.** The external command-line workers (Claude Code, Codex, opencode runs inside an isolated workspace) also receive the provider login values their CLI needs — for example `ANTHROPIC_API_KEY` or `CODEX_HOME` — because their job is to authenticate to your model provider. This is the documented runner credential path; the general gateway secrets stay excluded there too.
+- **God Mode.** While God Mode is on (Settings → Gateway → Danger zone), the programs your agent's `bash` commands start — foreground or background — and the runs of the `environment_setup` tool receive your **full gateway environment** instead of the allowlist. That includes your saved provider API keys and mailbox passwords. This is an accepted risk (founder decision, 2026-10-14): God Mode means full trust, and its documentation says that God Mode programs see your keys. One limit survives even here: the three gateway boot values — the master-key and key-file variables and the web token — are still withheld from these programs. When God Mode is off, and for every other starter (browser, hooks, git, MCP servers, transcoders, the launcher), the allowlist is all a child ever gets.
+
 ## Limits and things to watch
 
 - Security controls reduce risk but do not make every agent action safe. Read approval details before allowing a request.
 - **Permissive** sandbox mode observes violations but does not stop them. **Off** removes operating-system protection.
 - Kernel-level protection varies by operating system and kernel capability. Trust the status shown on your Security screen for this installation.
 - On Linux, the kernel version decides which sandbox rights you get. Kernels 5.19 and newer give kernel-level file protection; 5.13–5.18 run application-level checks only and are not recommended. When Omnipus falls back, it reports the fallback on the Security screen and logs a `sandbox.degraded` warning. See [sandbox limitations](operations/sandbox-limitations.md).
-- The Open filesystem model allows agents to read anything your account can read, except protected Omnipus secret files.
+- The Open filesystem model allows agents to read anything your account can read, except Omnipus's own files and other agents' work (see "Omnipus's own files are protected from every agent," above).
 - Personal secret folders outside Omnipus, such as `~/.ssh` and `~/.aws`, are not protected from reading and searching yet (issue [#921](https://github.com/elicify-ai/omnipus/issues/921)). See "What reading, searching and listing can reach" above.
 - Secret filtering is best-effort and can be switched off. It only knows registered credential values. Rotate a secret if you think it was exposed.
 - Removing a credential is permanent. Services that refer to it may stop working.
 - Losing the master key makes the encrypted credential store permanently inaccessible.
 - Omnipus overwrites the master key in memory at shutdown and when a command finishes, best-effort only — nothing in this programming environment can guarantee that every copy of a value in memory is erased, so a memory dump taken while the key was in use may still contain it.
-- **God-mode**, under **Settings**, **Gateway**, is Omnipus's strongest override — it removes almost every permission prompt and most of the sandbox's protection for every agent at once, but never the shell's outside-workspace write refusal, an operator deny rule, or an agent's own stricter setting. See "God Mode," above, for exactly what changes, the two-switch (allowed vs. on) model, and what happens when you turn it on or off.
+- **God-mode**, under **Settings**, **Gateway**, is Omnipus's strongest override — it removes almost every permission prompt and most of the sandbox's protection for every agent at once, but never the shell's outside-workspace write refusal, an operator deny rule, an agent's own stricter setting, or the protection of Omnipus's own files. Under God Mode the programs your shell commands and `environment_setup` runs start see your full gateway environment — provider API keys and mailbox passwords included — though the gateway boot values stay withheld from them. See "God Mode," above, for exactly what changes, the two-switch (allowed vs. on) model, and what happens when you turn it on or off.
 
 ## Related pages
 

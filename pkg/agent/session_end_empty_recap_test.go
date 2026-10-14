@@ -5,12 +5,13 @@
 // session_end_empty_recap_test.go — regression tests for persistResponse
 // (session_end.go) when the recap model returns a JSON object that parses but
 // carries no usable recap text. Before the fix the empty string was written
-// verbatim to last-session.md, silently erasing the agent's continuity file.
+// verbatim to the continuity file, silently erasing the agent's summary.
 //
 // Expected behaviour (spec: the heuristic fallback path): a blank recap is a
-// degraded recap — last-session.md receives the non-empty fallback recap
-// (status line + carry-forward of recent user turns) and the retro is recorded
-// with Fallback=true and the reason "empty_recap" in its recap body.
+// degraded recap — the (agent, workspace) carry-forward summary receives the
+// non-empty fallback recap (status line + carry-forward of recent user turns)
+// and the retro is recorded with Fallback=true and the reason "empty_recap" in
+// its recap body. WU-21 re-aim (#1197): observers read the workspace pair file.
 //
 // session-core U12 port: this test originally drove the recap via
 // CloseSession(sid, "explicit"). FR-036 / DEL-08 retired the explicit trigger
@@ -48,7 +49,7 @@ func TestPersistResponse_EmptyRecap_FallsBackToHeuristic(t *testing.T) {
 				t.Fatal("agent has no memory store")
 			}
 
-			// The retro is appended after last-session.md, so wait for it.
+			// The retro is appended after the carry-forward summary, so wait for it.
 			var retros []Retro
 			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
@@ -74,13 +75,13 @@ func TestPersistResponse_EmptyRecap_FallsBackToHeuristic(t *testing.T) {
 
 			content := string(pollLastSession(t, ag, false))
 			if strings.TrimSpace(content) == "" {
-				t.Fatal("last-session.md is empty: continuity file was overwritten with nothing")
+				t.Fatal("carry-forward summary is empty: continuity file was overwritten with nothing")
 			}
 			if !strings.Contains(content, "Fallback reason: empty_recap.") {
-				t.Errorf("last-session.md missing fallback status line; content:\n%s", content)
+				t.Errorf("carry-forward summary missing fallback status line; content:\n%s", content)
 			}
 			if !strings.Contains(content, "transient retry test conversation") {
-				t.Errorf("last-session.md missing carry-forward of recent user turn; content:\n%s", content)
+				t.Errorf("carry-forward summary missing carry-forward of recent user turn; content:\n%s", content)
 			}
 		})
 	}

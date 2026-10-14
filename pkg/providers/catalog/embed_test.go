@@ -6,9 +6,9 @@ package catalog
 //	                                                tier set exact, byte-for-byte with
 //	                                                the committed file (US-2.AC5)
 //	T17 TestEmbeddedSnapshot_PopularTier          — popular set exact (FR-018, US-8.AC1)
-//	T18 TestEmbeddedSnapshot_LocalProvidersPresent — 11 local-file ids (US-2.AC4); no
-//	                                                custom row; cli_kind on every cli row
-//	                                                (FR-026)
+//	T18 TestEmbeddedSnapshot_LocalProvidersPresent — 9 local-file ids (US-2.AC4); no
+//	                                                custom row; no subprocess model
+//	                                                provider row (WU-24)
 //	T19 TestEmbeddedSnapshot_UnsupportedHaveReason — every unsupported row carries a
 //	                                                reason; azure = deployment-url
 //
@@ -120,9 +120,11 @@ func TestEmbeddedSnapshot_LocalProvidersPresent(t *testing.T) {
 	}
 
 	// US-2.AC4: the local-file providers appear with the registry shape.
+	// The subprocess model-provider rows (ids assembled from fragments below,
+	// per the WU-24 removal guard) are asserted ABSENT, never present.
 	for _, id := range []string{
-		"ollama", "vllm", "litellm", "lmstudio", "codex-cli", "openai-chatgpt",
-		"github-copilot", "shengsuanyun", "volcengine", "avian", "mimo",
+		"ollama", "vllm", "litellm", "lmstudio", "openai-chatgpt",
+		"shengsuanyun", "volcengine", "avian", "mimo",
 	} {
 		p, ok := byID[id]
 		if !ok {
@@ -134,19 +136,27 @@ func TestEmbeddedSnapshot_LocalProvidersPresent(t *testing.T) {
 		}
 	}
 
+	// WU-24 (founder 2026-10-14): no subprocess model provider is offered —
+	// not under either retired id, not under any other id. Assembled ids:
+	// this file must not itself spell them (scripts/check-no-cli-model-providers.sh).
+	retired := []string{"codex" + "-cli", "github" + "-copilot"}
+	for _, id := range retired {
+		if _, ok := byID[id]; ok {
+			t.Errorf("retired subprocess model provider %q is still in the snapshot", id)
+		}
+	}
+
 	for _, p := range doc.Providers {
 		// FR-026: the published snapshot never carries a custom row —
 		// custom is a factory case, not catalog data (FR-035).
 		if p.Custom {
 			t.Errorf("provider %q has custom: true in the published snapshot", p.ID)
 		}
-		// X-14: every protocol cli row names its CLI kind.
-		if p.Protocol == ProtocolCLI {
-			switch p.CLIKind {
-			case CLIKindCodex, CLIKindCopilot:
-			default:
-				t.Errorf("cli provider %q has cli_kind %q, want codex|copilot", p.ID, p.CLIKind)
-			}
+		// WU-24: the subprocess protocol value is gone from the closed set —
+		// a row can no longer declare it, and the parser now skips any feed
+		// row that still does (parse.go's unknown-protocol path).
+		if p.Protocol == Protocol("cli") {
+			t.Errorf("provider %q declares the retired subprocess protocol", p.ID)
 		}
 	}
 }

@@ -186,7 +186,6 @@ func TestAPIRateLimiters_ReadSizedClassification(t *testing.T) {
 		"cliValidateLimiter":         cliValidateLimiter,
 		"signInStartLimiter":         signInStartLimiter,
 		"signInPollLimiter":          signInPollLimiter,
-		"signInImportLimiter":        signInImportLimiter,
 		"signInSignOutLimiter":       signInSignOutLimiter,
 		"providerListAnonLimiter":    providerListAnonLimiter,
 		"providerConfigWriteLimiter": providerConfigWriteLimiter,

@@ -206,7 +206,7 @@ describe('TestRecommendedChipSelection', () => {
     expect(RECOMMENDED_CHIP_LABEL).toBe('Recommended for chat')
   })
 
-  it('no provider in the 190-entry fixture exceeds three chips', () => {
+  it('no provider in the 188-entry fixture exceeds three chips', () => {
     for (const provider of CATALOG_PROVIDERS) {
       expect(recommendedModelIds(provider.models).length).toBeLessThanOrEqual(MAX_RECOMMENDED_CHIPS)
     }

@@ -1583,7 +1583,7 @@ func (rc *runContextWithOptions) startBackgroundServices() {
 	startRetentionRetroSweepLoop(rc.ctx, rc.agentLoop, rc.agentLoop.GetConfig, 24*time.Hour)
 
 	// FR-032/FR-032a: Bootstrap recap pass — on gateway start, re-cap sessions
-	// that lack LAST_SESSION.md. Runs once in a goroutine.
+	// that lack a retro. Runs once in a goroutine.
 	go rc.agentLoop.BootstrapRecapPass(rc.ctx)
 
 	// ADR-053 Phase 2 on-ramp: start the SessionMessageChan kind-router

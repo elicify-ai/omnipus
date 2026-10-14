@@ -178,9 +178,9 @@ func TestOnboardingComplete_ApiKeyVariant_RejectsFieldsOffTheVariant(t *testing.
 //
 // Still-valid coverage kept, now for the real, onboarding-aware gate:
 //   - onboarding incomplete + unauthenticated + no bypass -> reachable
-//     (FR-050's pre-auth allowance; this codepath returns 200 for both
-//     routes under test since codex-cli is a cli_login provider with no
-//     external dependency).
+//     (FR-050's pre-auth allowance; the routes under test are
+//     openai-chatgpt's, whose device-code start/status answer 200 behind
+//     the in-test vendor stub with no external dependency).
 //   - onboarding incomplete OR complete + dev-mode bypass active -> still
 //     503 (RequireNotBypass gates on bypass unconditionally; FR-050 only
 //     ever affects the EARLIER "is a user authenticated" pre-check, never
@@ -195,12 +195,20 @@ func TestOnboardingComplete_ApiKeyVariant_RejectsFieldsOffTheVariant(t *testing.
 func TestProviderSignInRoutes_AuthGating(t *testing.T) {
 	withEdition(t, config.EditionHosted)
 	routes := []struct{ method, path string }{
-		{http.MethodPost, "/api/v1/providers/codex-cli/sign-in"},
-		{http.MethodGet, "/api/v1/providers/codex-cli/sign-in/status"},
+		{http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in"},
+		{http.MethodGet, "/api/v1/providers/openai-chatgpt/sign-in/status"},
 	}
 	for _, rt := range routes {
 		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
 			api, _ := newAuthMethodOnboardingAPI(t)
+			if rt.method == http.MethodPost {
+				// The device-code start talks to the vendor; point it at the
+				// in-test stub so "reachable" cannot depend on the network.
+				state := "pending"
+				vendor := httptest.NewServer(deviceCodeVendorMux(t, &state))
+				defer vendor.Close()
+				withDeviceCodeVendor(t, vendor)
+			}
 
 			// Onboarding incomplete, unauthenticated, no bypass -> reachable.
 			req := httptest.NewRequest(rt.method, rt.path, nil)

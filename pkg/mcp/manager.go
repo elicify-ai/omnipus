@@ -396,6 +396,22 @@ func buildStdioServerEnv(name string, cfg config.MCPServerConfig) ([]string, err
 	return env, nil
 }
 
+// newStdioServerCmd builds the exec.Cmd for a stdio MCP server child: argv
+// from the server config, environment from buildStdioServerEnv — the scrubbed
+// child allowlist (FR-239; an MCP server is third-party code) plus the
+// server's own declared env/envFile overrides. It is a separate function so
+// the constructor and the child-environment assignment live in one block.
+func newStdioServerCmd(name string, cfg config.MCPServerConfig) (*exec.Cmd, error) {
+	cmd := exec.Command(cfg.Command, cfg.Args...)
+
+	env, err := buildStdioServerEnv(name, cfg)
+	if err != nil {
+		return nil, err
+	}
+	cmd.Env = env
+	return cmd, nil
+}
+
 // ServerConnection represents a connection to an MCP server
 type ServerConnection struct {
 	Name    string
@@ -674,13 +690,10 @@ func (m *Manager) ConnectServer(
 		// Manager.Close, or (on a failed/timed-out handshake) the SDK's own
 		// Client.Connect error path, which calls ClientSession.Close on every
 		// failure branch after the transport connects successfully.
-		cmd := exec.Command(cfg.Command, cfg.Args...)
-
-		env, err := buildStdioServerEnv(name, cfg)
+		cmd, err := newStdioServerCmd(name, cfg)
 		if err != nil {
 			return err
 		}
-		cmd.Env = env
 
 		stdioTransport := newSandboxedCommandTransport(cmd)
 		stdioTransport.ingest = ingest

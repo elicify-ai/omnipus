@@ -7,13 +7,11 @@
 //
 //   - O6:  provider.signed_in / provider.signed_out audit entries must carry
 //     the authenticated actor (User) and the caller's source_ip, matching
-//     the pattern already used by auditCopilotProbe (rest_signin_copilot.go).
+//     the pattern the sign-in handlers already use.
 //   - O12: interval_seconds must never leave any producer above the
 //     contract's declared maximum of 30
 //     (contracts/components/schemas/SignInStartResponseDeviceCode.yaml,
 //     SignInPollResponse.yaml).
-//   - O18: importing a non-JWT codex-cli credential must not leave
-//     ExpiresAt zero — it must fall back to ReadCodexCliCredentials' own
 //     mtime+1h estimate.
 package gateway
 
@@ -23,8 +21,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -70,7 +66,7 @@ func doJSONAs(t *testing.T, api *restAPI, method, path, remoteAddr, username str
 // TestSignInPoll_SignedInAudit_RecordsActorAndSourceIP proves
 // handleProviderSignInPoll's "provider.signed_in" entry carries both the
 // authenticated actor and the caller's source_ip, matching
-// auditCopilotProbe's pattern (rest_signin_copilot.go).
+// The shared audit-entry pattern (actor, source_ip).
 func TestSignInPoll_SignedInAudit_RecordsActorAndSourceIP(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	auditDir := attachTestAuditor(t, api)
@@ -85,10 +81,7 @@ func TestSignInPoll_SignedInAudit_RecordsActorAndSourceIP(t *testing.T) {
 	require.Equal(t, http.StatusOK, startW.Code, startW.Body.String())
 	var startResp gen.SignInStartResponse
 	require.NoError(t, json.Unmarshal(startW.Body.Bytes(), &startResp))
-	deviceCode, err := startResp.AsSignInStartResponseDeviceCode()
-	require.NoError(t, err)
-
-	pollBody := gen.SignInPollRequest{DeviceAuthId: deviceCode.DeviceAuthId}
+	pollBody := gen.SignInPollRequest{DeviceAuthId: startResp.DeviceAuthId}
 	pollW := doJSONAs(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/poll",
 		"198.51.100.9:4242", "alice", pollBody)
 	require.Equal(t, http.StatusOK, pollW.Code, pollW.Body.String())
@@ -133,36 +126,6 @@ func TestSignOut_Audit_RecordsActorAndSourceIP(t *testing.T) {
 	assert.Equal(t, "203.0.113.42", details["source_ip"])
 }
 
-// TestSignInImport_Audit_RecordsActorAndSourceIP proves
-// handleProviderSignInImport's "provider.signed_in" (via codex_cli_import)
-// entry carries both the actor and source_ip.
-func TestSignInImport_Audit_RecordsActorAndSourceIP(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	auditDir := attachTestAuditor(t, api)
-
-	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
-	authPath := filepath.Join(codexHome, "auth.json")
-	require.NoError(t, os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"codex-tok","account_id":"codex-acc"}}`), 0o600))
-
-	w := doJSONAs(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/import",
-		"192.0.2.55:1111", "carol", nil)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-
-	entries := readAuditEntries(t, auditDir, "provider.signed_in")
-	require.NotEmpty(t, entries, "provider.signed_in must be recorded")
-	entry := entries[len(entries)-1]
-	assert.Equal(t, "carol", entry["user"])
-	details, ok := entry["details"].(map[string]any)
-	require.True(t, ok, "entry must carry a details object")
-	assert.Equal(t, "192.0.2.55", details["source_ip"])
-}
-
-// --- O12: interval_seconds clamped to the contract's maximum: 30 -----------
-
-// TestSignInStart_IntervalSeconds_ClampedToContractMax proves the start
-// response never emits a vendor-advertised interval above the contract's
-// declared maximum (SignInStartResponseDeviceCode.yaml: maximum: 30).
 func TestSignInStart_IntervalSeconds_ClampedToContractMax(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	// A standalone mux (not deviceCodeVendorMux, whose usercode pattern
@@ -182,9 +145,7 @@ func TestSignInStart_IntervalSeconds_ClampedToContractMax(t *testing.T) {
 
 	var resp gen.SignInStartResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	variant, err := resp.AsSignInStartResponseDeviceCode()
-	require.NoError(t, err)
-	assert.LessOrEqual(t, variant.IntervalSeconds, maxSignInIntervalSeconds,
+	assert.LessOrEqual(t, resp.IntervalSeconds, maxSignInIntervalSeconds,
 		"O12: a vendor-advertised interval above the contract's maximum:30 must be clamped")
 }
 
@@ -235,73 +196,4 @@ func TestWidenDeviceSessionInterval_ClampsToContractMax(t *testing.T) {
 	sess, found := api.getDeviceSession("h1")
 	require.True(t, found)
 	assert.LessOrEqual(t, sess.intervalSeconds, maxSignInIntervalSeconds)
-}
-
-// --- O18: codex-cli import must not leave ExpiresAt zero --------------------
-
-// TestSignInImport_NonJWTToken_UsesMtimeFallbackExpiry proves that importing
-// a codex-cli access token that is NOT a parseable JWT (so
-// jwtUnverifiedExpiry fails) still ends up with a non-zero ExpiresAt on the
-// stored credential — ReadCodexCliCredentials' own mtime+1h estimate —
-// instead of the permanent "signed in forever" zero value.
-func TestSignInImport_NonJWTToken_UsesMtimeFallbackExpiry(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
-	authPath := filepath.Join(codexHome, "auth.json")
-	// "not-a-jwt-token" has no "." separators, so jwtUnverifiedExpiry returns
-	// ok=false and the handler must fall back to the mtime-based estimate.
-	require.NoError(t, os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"not-a-jwt-token","account_id":"codex-acc"}}`), 0o600))
-
-	beforeCall := time.Now()
-	w := doJSON(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/import", nil)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-
-	store := credentials.NewStore(api.credentialsStorePath())
-	require.NoError(t, credentials.Unlock(store))
-	raw, getErr := store.Get(credentials.OAuthEntryName("openai"))
-	require.NoError(t, getErr)
-
-	var stored struct {
-		ExpiresAt time.Time `json:"expires_at"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(raw), &stored))
-
-	assert.False(t, stored.ExpiresAt.IsZero(),
-		"O18: a non-JWT import must not leave ExpiresAt zero — needsOAuthRefresh treats zero as 'never needs refresh'")
-	// ReadCodexCliCredentials' fallback is auth.json's mtime + 1h; the file
-	// was just written, so the expiry must land close to now+1h.
-	assert.WithinDuration(t, beforeCall.Add(time.Hour), stored.ExpiresAt, 2*time.Minute,
-		"expiry should be the auth.json mtime+1h fallback, not some other value")
-}
-
-// TestSignInImport_JWTToken_StillUsesJWTExpiry is a guard against a
-// regression where the mtime fallback is used unconditionally: a genuine
-// JWT's own exp claim must still win.
-func TestSignInImport_JWTToken_StillUsesJWTExpiry(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
-	authPath := filepath.Join(codexHome, "auth.json")
-
-	// A minimal unsigned JWT with exp far in the future (2099-01-01), so it
-	// is trivially distinguishable from the mtime+1h fallback.
-	// header: {"alg":"none"} / payload: {"exp":4070908800}
-	jwt := "eyJhbGciOiJub25lIn0.eyJleHAiOjQwNzA5MDg4MDB9.sig"
-	require.NoError(t, os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"`+jwt+`","account_id":"codex-acc"}}`), 0o600))
-
-	w := doJSON(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/import", nil)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-
-	store := credentials.NewStore(api.credentialsStorePath())
-	require.NoError(t, credentials.Unlock(store))
-	raw, getErr := store.Get(credentials.OAuthEntryName("openai"))
-	require.NoError(t, getErr)
-
-	var stored struct {
-		ExpiresAt time.Time `json:"expires_at"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(raw), &stored))
-	assert.Equal(t, int64(4070908800), stored.ExpiresAt.Unix(),
-		"a real JWT's own exp claim must still be used, not overridden by the mtime fallback")
 }

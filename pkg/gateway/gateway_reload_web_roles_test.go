@@ -41,6 +41,11 @@ const g1TavilyRef = "ADR096_G1_TAVILY_KEY"
 // migrate, and must register the write so the config watcher does not loop.
 func TestExecuteReload_DeferredWebSearchMigrationDecidesAfterInject(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("OMNIPUS_HOME", home)
+	t.Setenv("OMNIPUS_KEY_FILE", "")
+	previousStore := providers.DefaultCredentialStore
+	t.Cleanup(func() { providers.SetDefaultCredentialStore(previousStore) })
 	configPath := filepath.Join(home, "config.json")
 	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
 	t.Setenv(g1TavilyRef, "")
@@ -53,12 +58,12 @@ func TestExecuteReload_DeferredWebSearchMigrationDecidesAfterInject(t *testing.T
 		"tools": {"web": {"tavily": {"enabled": true, "api_key_ref": "`+g1TavilyRef+`"}}}
 	}`)
 
-	// Boot with the ref absent from the vault. Migration must defer (D11
-	// ambiguous-install guard). ResolveBundle then refuses the enabled ref;
-	// that fatal is ADR-004, and it must not have written role keys on the way.
-	bootCfg, _, _, bootErr := bootCredentials(home, configPath)
-	require.Error(t, bootErr, "an enabled Tavily ref missing from the vault is fatal at ResolveBundle")
-	require.Nil(t, bootCfg, "a fatal boot returns no config")
+	// #1277 founder decision 2026-10-12: missing integration keys degrade only that integration.
+	// Migration still defers (D11 ambiguous-install guard), without writing role keys.
+	bootCfg, _, bootStore, bootErr := bootCredentials(home, configPath)
+	require.NoError(t, bootErr, "one missing Tavily key must not abort the gateway")
+	require.False(t, bootCfg.Tools.Web.UsableSearchProvider("tavily"))
+	issue1277RequireSearchRefError(t, bootCfg, bootStore, g1TavilyRef)
 	assertWebRoleKeysAbsent(t, configPath)
 
 	store := credentials.NewStore(filepath.Join(home, "credentials.json"))

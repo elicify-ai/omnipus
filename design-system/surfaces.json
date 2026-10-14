@@ -3300,74 +3300,6 @@
       }
     },
     {
-      "id": "src/components/providers/ReSignInDialog.tsx#ReSignInDialog",
-      "kind": "modal",
-      "source": "src/components/providers/ReSignInDialog.tsx",
-      "symbol": "ReSignInDialog",
-      "lane": 6,
-      "verification": [
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-resignindialog:unit",
-          "file": "tests/design-system/surfaces/src-components-providers-resignindialog-tsx-resignindialog.test.tsx",
-          "test": "src/components/providers/ReSignInDialog.tsx#ReSignInDialog surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-resignindialog:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/providers/ReSignInDialog.tsx#ReSignInDialog surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-resignindialog:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/providers/ReSignInDialog.tsx#ReSignInDialog surface interaction contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/providers/ReSignInDialog.tsx#ReSignInDialog"
-      }
-    },
-    {
-      "id": "src/components/providers/ReSignInDialog.tsx#overlay:1",
-      "kind": "modal",
-      "source": "src/components/providers/ReSignInDialog.tsx",
-      "symbol": "overlay:1",
-      "lane": 6,
-      "verification": [
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-dialog-1:unit",
-          "file": "tests/design-system/surfaces/src-components-providers-resignindialog-tsx-overlay-1.test.tsx",
-          "test": "src/components/providers/ReSignInDialog.tsx#dialog:1 surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-dialog-1:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/providers/ReSignInDialog.tsx#dialog:1 surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-dialog-1:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/providers/ReSignInDialog.tsx#overlay:1 surface interaction contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/providers/ReSignInDialog.tsx#overlay:1"
-      }
-    },
-    {
       "id": "src/components/providers/SignInDialog.tsx#SignInDialog",
       "kind": "modal",
       "source": "src/components/providers/SignInDialog.tsx",
@@ -7655,10 +7587,6 @@
     },
     {
       "source": "src/components/providers/ProviderValidationBanner.tsx",
-      "lane": 6
-    },
-    {
-      "source": "src/components/providers/ReSignInDialog.tsx",
       "lane": 6
     },
     {

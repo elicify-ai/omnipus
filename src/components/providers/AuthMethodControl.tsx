@@ -17,16 +17,18 @@
 //
 //  2. FR-006 as amended 2026-08-23 (ADR-068 §8b decision 2) — where a vendor
 //     offers more than one sign-in provider, they are radio options in CATALOG
-//     ORDER and the FIRST is pre-selected. For OpenAI the catalog lists
-//     `openai-chatgpt` before `codex-cli`, so the in-app device-code login is
-//     the default and the CLI subprocess is the alternative. The withdrawn
-//     "relies on OpenAI's stated tolerance" caveat is not in this file, and
+//     ORDER and the FIRST is pre-selected. Since WU-24 (founder 2026-10-14:
+//     the CLI model providers are deleted outright) every company in the
+//     served catalog offers at most ONE sign-in row — OpenAI's is
+//     `openai-chatgpt`, the in-app device-code login — so the single-option
+//     path is the one real data exercises today. The withdrawn "relies on
+//     OpenAI's stated tolerance" caveat is not in this file, and
 //     `AuthMethodControl.test.tsx` asserts it appears nowhere in the rendered
 //     DOM.
 //
 // The *Sign in* button is a seam, not a flow: it calls `onSignIn` with the
-// selected provider id. T068-33's `SignInDialog` (device code / CLI login)
-// dropped into that callback with no change here — every caller that wants a
+// selected provider id. T068-33's `SignInDialog` (device code) dropped into
+// that callback with no change here — every caller that wants a
 // working sign-in supplies `onSignIn` and renders that dialog itself
 // (`ProviderDetailPanel` → `ProviderPicker` → onboarding step 3 and
 // Settings → Providers), so this file stays free of any transport concern.
@@ -49,8 +51,6 @@ export type AuthMethod = 'api_key' | 'sign_in'
  */
 export const SIGN_IN_HELPER_COPY: Readonly<Record<string, string>> = Object.freeze({
   'openai-chatgpt': "Uses your ChatGPT plan's included usage",
-  'codex-cli': 'Drives the official Codex app; sign in inside it',
-  'github-copilot': 'Billed to your Copilot subscription',
 })
 
 /** Helper line for a sign-in provider, or undefined when the spec names none. */

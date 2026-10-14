@@ -665,14 +665,19 @@ type wsStreamerFinalize struct {
 	transcriptAlreadyPersisted bool
 	producedModel              string
 	turnFailed                 bool
-	continuationContent        string
-	hasContinuation            bool
-	truncationReason           string
-	producerAgentID            string
-	turnID                     string
-	messageID                  string
-	parentSpawnCallID          string
-	shadow                     bool
+	// persistFailed records the LATE streamed-transcript write failure
+	// (#1178, amendment §4.1): the turn was healthy when prepareFinalize
+	// snapshotted turnFailed, but the terminal AppendTranscriptStrict failed
+	// afterwards. The done frame must report that failure truthfully.
+	persistFailed       bool
+	continuationContent string
+	hasContinuation     bool
+	truncationReason    string
+	producerAgentID     string
+	turnID              string
+	messageID           string
+	parentSpawnCallID   string
+	shadow              bool
 	// accumulated is the streamer's own text, read once under statsMu.
 	accumulated string
 	// pendingFinalContent is a new terminal outcome, not the already-saved narration.
@@ -701,13 +706,41 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// T's final transcript entry is in any transcript read taken after the
 	// bind", which is what lets the hub's active-turn projection forget the
 	// turn at done without leaving a hole in a later snapshot.
-	// persistTranscript is best-effort by design (a failed write must never
-	// suppress the done frame the client is waiting on — see
-	// wsTranscriptWriteFailures' doc comment), so its error is returned
-	// AFTER the done still went out, never used to skip it.
+	// persistTranscript is best-effort in one sense only: a failed write must
+	// never suppress the done frame the client is waiting on (see
+	// wsTranscriptWriteFailures' doc comment) and its error is returned AFTER
+	// the done went out. It is NOT a silent path any more (#1178, amendment
+	// §4.1): the failed save emits the existing could-not-save notice once,
+	// the done frame reports TurnFailed, and the error still returns to the
+	// caller.
 	persistErr := wsf.persistTranscript()
+	if persistErr != nil {
+		wsf.persistFailed = true
+		wsf.publishSaveFailureNotice()
+	}
 	wsf.publishDone()
 	return persistErr
+}
+
+// publishSaveFailureNotice shows the existing could-not-save notice exactly
+// once (#1178, amendment §4.1): one ErrorFrame through the session hub, so
+// the bound tab sees it live and a reconnecting tab reads it from the
+// retained journal. No new copy — agent.MessageNotSavedReply is the same
+// fixed text the turn loop shows for a refused save.
+func (wsf *wsStreamerFinalize) publishSaveFailureNotice() {
+	if wsf.shadow {
+		return
+	}
+	h := wsf.s.wsHandler()
+	if h == nil || wsf.s.sessionID == "" {
+		return
+	}
+	sid := wsf.s.sessionID
+	h.hubPublishFrame(wsf.s.sessionID, string(generated.WsFrameTypeError), generated.ErrorFrame{
+		Type:      string(generated.WsFrameTypeError),
+		Message:   agent.MessageNotSavedReply,
+		SessionId: &sid,
+	}, nil)
 }
 
 // publishDone publishes this turn's single done frame through the session
@@ -734,9 +767,11 @@ func (wsf *wsStreamerFinalize) publishDone() {
 			Cost:       &wsf.costF,
 			DurationMs: &wsf.durF,
 		}
-		if wsf.turnFailed {
-			tf := wsf.turnFailed
-			stats.TurnFailed = &tf
+		// #1178 (amendment §4.1): a late streamed-transcript write failure is
+		// a failed turn even though the turn was healthy before it — the done
+		// frame must say so, live and in the retained journal.
+		if failed := wsf.turnFailed || wsf.persistFailed; failed {
+			stats.TurnFailed = &failed
 		}
 		// ADR-087 D2 (finding #10): mirror the truncation annotation onto the
 		// live done frame too, so a turn cut off while the user is watching
@@ -1016,9 +1051,15 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 			// changes (loud vs. silently minting an orphan session directory) —
 			// so surface it as a counter increment (BDD-03) alongside the
 			// pre-existing WARN.
+			//
+			// #1178 (amendment §4.1): the failure is also RETURNED — a failed
+			// transcript write is a failed save, never a false success. The
+			// counter and WARN stay as operator detail; Finalize turns the
+			// error into the could-not-save notice and a failed done frame.
 			if err := wsf.s.agentStore.AppendTranscriptStrict(wsf.s.sessionID, entry); err != nil {
 				wsTranscriptWriteFailures.Add(1)
 				slog.Warn("ws: could not record streamed assistant message", "session_id", wsf.s.sessionID, "error", err)
+				return err
 			}
 		}
 	}

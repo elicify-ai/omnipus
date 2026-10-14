@@ -96,34 +96,6 @@
       ]
     },
     {
-      "id": "codex-cli",
-      "name": "Codex CLI",
-      "company": "Codex CLI",
-      "api": "codex",
-      "protocol": "cli",
-      "tier": "standard",
-      "auth_methods": [
-        "sign_in"
-      ],
-      "aliases": [],
-      "locality": "local",
-      "cli_kind": "codex",
-      "models": [
-        {
-          "id": "gpt-5-codex",
-          "name": "GPT-5 Codex",
-          "release_date": "2026-02-10",
-          "context_window": 400000,
-          "max_output_tokens": 128000,
-          "input_modalities": [
-            "text"
-          ],
-          "tool_call": true,
-          "status": "active"
-        }
-      ]
-    },
-    {
       "id": "anthropic",
       "name": "Anthropic",
       "company": "Anthropic",
@@ -854,36 +826,6 @@
         {
           "id": "us-gov-west-1",
           "group": ""
-        }
-      ]
-    },
-    {
-      "id": "github-copilot",
-      "name": "GitHub Copilot",
-      "company": "GitHub",
-      "api": "copilot",
-      "protocol": "cli",
-      "tier": "standard",
-      "auth_methods": [
-        "sign_in"
-      ],
-      "aliases": [
-        "copilot"
-      ],
-      "locality": "local",
-      "cli_kind": "copilot",
-      "models": [
-        {
-          "id": "gpt-5-copilot",
-          "name": "GPT-5 (Copilot)",
-          "release_date": "2026-02-10",
-          "context_window": 128000,
-          "max_output_tokens": 16384,
-          "input_modalities": [
-            "text"
-          ],
-          "tool_call": true,
-          "status": "active"
         }
       ]
     },

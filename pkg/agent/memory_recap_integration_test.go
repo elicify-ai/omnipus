@@ -40,15 +40,15 @@ import (
 //     CloseSession("idle") — session-core U12: FR-036 / DEL-08 retired the
 //     explicit trigger, so the recap is driven through the still-valid "idle"
 //     trigger; this triggers runRecap which calls the scripted provider and
-//     writes LAST_SESSION.md to the agent's private room.
-//  3. A NEW session is "started" for the SAME agent by calling BuildSystemPrompt
-//     on the agent's ContextBuilder (which reads last-session.md via
-//     GetMemoryContext at context.go:330).  The test asserts the recap text from
-//     LAST_SESSION.md is visible in the system prompt.
+//     writes the workspace's carry-forward summary (WU-21 re-aim #1197).
+//  3. A NEW session is "started" for the SAME agent in the SAME workspace by
+//     calling BuildSystemPromptForWorkspace on the agent's ContextBuilder
+//     (which reads the workspace's carry-forward file). The test asserts the
+//     recap text is visible in the system prompt.
 //
 // This proves the recap→inject wiring end-to-end: each half is tested in
-// isolation elsewhere, but the link (WriteLastSession → ReadLastSession →
-// GetMemoryContext → BuildSystemPrompt) has never been chained in a single test.
+// isolation elsewhere, but the link (WriteCarryForward → ReadCarryForward →
+// BuildSystemPromptForWorkspace) has never been chained in a single test.
 func TestIntegration_RecapThenInject(t *testing.T) {
 	// Traces to: memory-recap integration gap — recap→inject continuity.
 
@@ -91,11 +91,14 @@ func TestIntegration_RecapThenInject(t *testing.T) {
 	al.registry.mu.Unlock()
 
 	// Phase 1: seed a session transcript and close it so runRecap fires.
+	// WU-21 re-aim (#1197): the session carries a workspace, and the observers
+	// below read that workspace's pair file and the workspace-scoped prompt.
 	meta, err := store.NewSession(session.SessionTypeChat, "web", agentID)
 	if err != nil {
 		t.Fatalf("recapIT: NewSession: %v", err)
 	}
 	sessionID := meta.ID
+	wu21ReaimStampWorkspace(t, store, sessionID)
 	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "first session message",
@@ -107,12 +110,12 @@ func TestIntegration_RecapThenInject(t *testing.T) {
 
 	al.CloseSession(sessionID, "idle")
 
-	// Wait for LAST_SESSION.md to appear (recap goroutine writes it).
-	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
+	// Wait for the workspace's carry-forward summary to appear (recap goroutine writes it).
+	carryForwardPath := wu21ReaimPairPath(home, agentID)
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
 	for time.Now().Before(deadline) {
-		data, readErr := os.ReadFile(lastSessionPath)
+		data, readErr := os.ReadFile(carryForwardPath)
 		if readErr == nil {
 			lastSessionBytes = data
 			break
@@ -120,25 +123,25 @@ func TestIntegration_RecapThenInject(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if lastSessionBytes == nil {
-		t.Fatalf("recapIT: LAST_SESSION.md not written within 5s; provider calls=%d", script.callCount)
+		t.Fatalf("recapIT: carry-forward summary not written within 5s; provider calls=%d", script.callCount)
 	}
 
 	// --- differentiation: assert the recap text made it in, not just any content ---
 	if !strings.Contains(string(lastSessionBytes), recapText) {
-		t.Errorf("recapIT: LAST_SESSION.md does not contain recap sentinel %q; got:\n%s",
+		t.Errorf("recapIT: carry-forward summary does not contain recap sentinel %q; got:\n%s",
 			recapText, lastSessionBytes)
 	}
 
-	// Phase 2: simulate a NEW session for the same agent by building the system
-	// prompt via the agent's ContextBuilder.  GetMemoryContext (called at
-	// context.go:330) reads last-session.md and injects it under "# Memory".
-	// We do NOT call BuildMessages (which requires provider/session machinery);
-	// instead we call BuildSystemPrompt directly, which exercises the exact
-	// GetMemoryContext integration point we care about.
+	// Phase 2: simulate a NEW session for the same agent in the SAME workspace by
+	// building the workspace-scoped system prompt via the agent's ContextBuilder.
+	// Since WU-21 (#1197) the summary is workspace-scoped: it is rendered by
+	// BuildSystemPromptForWorkspace from the workspace's carry-forward file, and
+	// a no-workspace BuildSystemPrompt correctly gets no block.
 	//
-	// Invalidate the cache first so the fresh last-session.md is read from disk.
-	ag.ContextBuilder.InvalidateCache()
-	sysPrompt := ag.ContextBuilder.BuildSystemPrompt()
+	// Invalidate the workspace cache variant first so the fresh summary is read
+	// from disk rather than served from the per-workspace prompt cache.
+	ag.ContextBuilder.EvictWorkspacePrompt(wu21ReaimWorkspace)
+	sysPrompt := ag.ContextBuilder.BuildSystemPromptForWorkspace(wu21ReaimWorkspace)
 
 	// --- content test: the recap text must be visible in the next session's prompt ---
 	if !strings.Contains(sysPrompt, recapText) {
@@ -153,15 +156,16 @@ func TestIntegration_RecapThenInject(t *testing.T) {
 			recapIT_excerpt(sysPrompt, 800))
 	}
 
-	// Prove recap→inject wiring: if we erase last-session.md the next prompt must NOT contain the sentinel.
-	if err := os.Remove(lastSessionPath); err != nil {
-		t.Fatalf("recapIT: remove last-session.md: %v", err)
+	// Prove recap→inject wiring: if we erase the workspace's carry-forward file
+	// the next prompt must NOT contain the sentinel.
+	if err := os.Remove(carryForwardPath); err != nil {
+		t.Fatalf("recapIT: remove carry-forward summary: %v", err)
 	}
-	ag.ContextBuilder.InvalidateCache()
-	promptAfterErase := ag.ContextBuilder.BuildSystemPrompt()
+	ag.ContextBuilder.EvictWorkspacePrompt(wu21ReaimWorkspace)
+	promptAfterErase := ag.ContextBuilder.BuildSystemPromptForWorkspace(wu21ReaimWorkspace)
 	if strings.Contains(promptAfterErase, recapText) {
 		t.Errorf(
-			"recapIT: after erasing last-session.md the sentinel must be gone from the system prompt; still present",
+			"recapIT: after erasing the carry-forward summary the sentinel must be gone from the system prompt; still present",
 		)
 	}
 }
@@ -190,7 +194,7 @@ func recapIT_excerpt(s string, n int) string {
 //  3. Arms a SHORT-duration goroutine (100ms) via RegisterIdleTicker, which
 //     mirrors what resetIdleTicker would have done at a shorter timeout, and
 //     calls CloseSession("idle") asynchronously without using the seam.
-//  4. Waits for LAST_SESSION.md and a retro — proving the async goroutine→
+//  4. Waits for the carry-forward summary and a retro — proving the async goroutine→
 //     CloseSession→runRecap chain runs to completion.
 //
 // The gap being closed: the seam test exercises synchronous CloseSession; this
@@ -238,6 +242,7 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 		t.Fatalf("idleIT: NewSession: %v", err)
 	}
 	sessionID := meta.ID
+	wu21ReaimStampWorkspace(t, store, sessionID) // WU-21 re-aim: carry-forward target.
 	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "idle timer integration message",
@@ -289,12 +294,12 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 		t.Fatal("idleIT: claimedCloseSessions must contain sessionID after goroutine fires CloseSession")
 	}
 
-	// Step 5: Wait for LAST_SESSION.md to appear (proves runRecap completed).
-	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
+	// Step 5: Wait for the workspace's carry-forward summary (proves runRecap completed).
+	carryForwardPath := wu21ReaimPairPath(home, agentID)
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
 	for time.Now().Before(deadline) {
-		data, readErr := os.ReadFile(lastSessionPath)
+		data, readErr := os.ReadFile(carryForwardPath)
 		if readErr == nil {
 			lastSessionBytes = data
 			break
@@ -303,12 +308,12 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 	}
 	if lastSessionBytes == nil {
 		t.Fatalf(
-			"idleIT: LAST_SESSION.md not produced within 5s after goroutine fired CloseSession; provider calls=%d",
+			"idleIT: carry-forward summary not produced within 5s after goroutine fired CloseSession; provider calls=%d",
 			script.callCount,
 		)
 	}
 	if !strings.Contains(string(lastSessionBytes), recapText) {
-		t.Errorf("idleIT: LAST_SESSION.md missing recap sentinel %q; got:\n%s", recapText, lastSessionBytes)
+		t.Errorf("idleIT: carry-forward summary missing recap sentinel %q; got:\n%s", recapText, lastSessionBytes)
 	}
 
 	// Step 6: Verify a retro with trigger=idle was written.

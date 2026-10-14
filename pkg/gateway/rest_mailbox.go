@@ -206,18 +206,29 @@ func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID, workspaceID st
 	}
 
 	configured := false
+	var statusErr error
 	if strings.TrimSpace(mb.PasswordRef) != "" {
 		ok, err := a.credentialRefResolves(mb.PasswordRef)
-		if err != nil {
+		var entryAuth *credentials.EntryAuthError
+		switch {
+		case err == nil:
+			configured = ok
+		case errors.As(err, &entryAuth):
+			// #1277: one unreadable mailbox entry is that mailbox's degraded
+			// state, not a store fault — report the row with its ref-naming
+			// reason instead of failing the whole GET.
+			logsafeError("rest: mailbox credential check", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
+			statusErr = err
+		default:
 			logsafeError("rest: mailbox credential check", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
 			jsonErr(w, http.StatusInternalServerError,
 				"credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry")
 			return
 		}
-		configured = ok
 	}
 
-	jsonOK(w, mailboxToWire(agentID, workspaceID, mb, configured))
+	status, statusReason := mailboxStatusFor(mb.Enabled, configured, statusErr, mb.PasswordRef)
+	jsonOK(w, mailboxToWire(agentID, workspaceID, mb, configured, status, statusReason))
 }
 
 // restAPISetAgentMailbox carries the shared state of setAgentMailbox across its stages.
@@ -552,10 +563,16 @@ func (sm *restAPISetAgentMailbox) reloadAndPrepareResponse() {
 	}
 
 	configured := strings.TrimSpace(sm.persistedRef) != ""
+	var statusErr error
 	if configured {
 		ok, err := sm.a.credentialRefResolves(sm.persistedRef)
 		if err == nil {
 			configured = ok
+		} else {
+			// #1277: surface the unreadable entry as the saved mailbox's
+			// degraded status rather than failing the response — the write
+			// itself succeeded.
+			statusErr = err
 		}
 	}
 
@@ -582,7 +599,8 @@ func (sm *restAPISetAgentMailbox) reloadAndPrepareResponse() {
 	if sm.req.DraftsFolderName != nil {
 		out.DraftsFolderName = strings.TrimSpace(*sm.req.DraftsFolderName)
 	}
-	jsonOK(sm.w, mailboxToWire(sm.agentID, sm.workspaceID, out, configured))
+	status, statusReason := mailboxStatusFor(out.Enabled, configured, statusErr, sm.persistedRef)
+	jsonOK(sm.w, mailboxToWire(sm.agentID, sm.workspaceID, out, configured, status, statusReason))
 }
 
 // deleteAgentMailbox handles DELETE /api/v1/agents/{id}/mailboxes/{workspaceId}.
@@ -737,9 +755,30 @@ func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 		for _, wsID := range workspaceIDs {
 			mb := byWorkspace[wsID]
 			configured := false
+			var statusErr error
 			if strings.TrimSpace(mb.PasswordRef) != "" {
 				ok, err := a.credentialRefResolves(mb.PasswordRef)
-				if err != nil {
+				var entryAuth *credentials.EntryAuthError
+				switch {
+				case err == nil:
+					configured = ok
+				case errors.As(err, &entryAuth):
+					// #1277: one unreadable mailbox entry degrades its own row
+					// (status=degraded, reason naming the ref) — it must not
+					// hide the healthy siblings behind a whole-list 500.
+					logsafeError(
+						"rest: mailbox credential check",
+						"agent_id",
+						agentID,
+						"workspace_id",
+						wsID,
+						"error",
+						err,
+					)
+					statusErr = err
+				default:
+					// A true store fault (locked vault / I/O) is not one
+					// mailbox's state — keep failing the request.
 					logsafeError(
 						"rest: mailbox credential check",
 						"agent_id",
@@ -753,9 +792,9 @@ func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 						"credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry")
 					return
 				}
-				configured = ok
 			}
-			items = append(items, mailboxToWire(agentID, wsID, mb, configured))
+			status, statusReason := mailboxStatusFor(mb.Enabled, configured, statusErr, mb.PasswordRef)
+			items = append(items, mailboxToWire(agentID, wsID, mb, configured, status, statusReason))
 		}
 	}
 
@@ -846,8 +885,44 @@ func grantEmailToolAllows(homePath, agentID string) {
 	}
 }
 
+// mailboxStatusFor classifies one mailbox's #1277 wire status (founder
+// decision 2026-10-12) from the credential check the caller already ran:
+//
+//   - enabled + password resolving → "ok";
+//   - enabled but the password reference is missing or unreadable
+//     (storeErr carries the check's error) → "degraded" with a
+//     ref-naming, secret-free reason — one mailbox's broken secret is
+//     visible on its own row, never a whole-list failure;
+//   - disabled → both pointers nil (omitted): a switched-off mailbox is
+//     not an error state.
+//
+// reasons are capped to the contract's 1000-character bound and never
+// contain the secret value — only the reference NAME.
+func mailboxStatusFor(enabled, configured bool, storeErr error, ref string) (*gen.MailboxStatus, *string) {
+	if !enabled {
+		return nil, nil
+	}
+	degraded := gen.MailboxStatusDegraded
+	if storeErr == nil && configured {
+		ok := gen.MailboxStatusOk
+		return &ok, nil
+	}
+	reason := fmt.Sprintf(
+		"secret reference %q is missing from the credential store — set the mailbox password to restore it", ref)
+	if storeErr != nil {
+		reason = fmt.Sprintf(
+			"secret reference %q is unreadable (failed authentication) — re-enter the mailbox password", ref)
+	}
+	if runes := []rune(reason); len(runes) > 1000 {
+		reason = string(runes[:1000])
+	}
+	return &degraded, &reason
+}
+
 // mailboxToWire converts a stored MailboxConfig to the Mailbox wire type. The
-// password is never included — only the resolved `configured` flag.
+// password is never included — only the resolved `configured` flag plus the
+// #1277 status pair (status/status_reason; nil,nil omits both, the contract's
+// "server does not report it" shape for disabled mailboxes).
 //
 // agentID and workspaceID are the AUTHORITATIVE (agent, workspace) pair key —
 // the caller's map keys, not fields read off mb. mb.WorkspaceID is a mutable
@@ -857,12 +932,14 @@ func grantEmailToolAllows(homePath, agentID string) {
 // it here would let the wire response report a mailbox under the wrong
 // workspace. gen.Mailbox.WorkspaceId is a required (non-pointer) string, so
 // this also always serializes a value — never the omitted/null shape.
-func mailboxToWire(agentID, workspaceID string, mb config.MailboxConfig, configured bool) gen.Mailbox {
+func mailboxToWire(agentID, workspaceID string, mb config.MailboxConfig, configured bool, status *gen.MailboxStatus, statusReason *string) gen.Mailbox {
 	out := gen.Mailbox{
-		AgentId:     agentID,
-		WorkspaceId: workspaceID,
-		Enabled:     mb.Enabled,
-		Configured:  configured,
+		AgentId:      agentID,
+		WorkspaceId:  workspaceID,
+		Enabled:      mb.Enabled,
+		Configured:   configured,
+		Status:       status,
+		StatusReason: statusReason,
 	}
 	if mb.IMAPHost != "" {
 		v := mb.IMAPHost

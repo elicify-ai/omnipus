@@ -61,15 +61,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
 	"runtime"
-	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/childenv"
 )
 
 // restrictAuditHook is the package-level audit emitter for B1.2(d)
@@ -188,239 +187,44 @@ func emitRestrictFailure(callsite string, err error) {
 	})
 }
 
-// allowedChildEnvKeys is the EXPLICIT ALLOWLIST of environment variable names
-// that may be inherited by a hardened-exec child process. Any key not present
-// here (and not matched by allowedChildEnvPrefixes) is stripped before the
-// child sees the environment.
-//
-// Threat model (#155 item 3): the previous implementation maintained a
-// 3-key denylist (OMNIPUS_MASTER_KEY, OMNIPUS_KEY_FILE, OMNIPUS_BEARER_TOKEN).
-// That model fails open: any newly-introduced sensitive env var (a future
-// API key, an upstream provider token, a third-party secret loaded by a
-// dependency) leaks to children until someone remembers to add it to the
-// denylist. The allowlist inverts the default — unknown keys are stripped,
-// new sensitive keys are safe by default.
-//
-// The allowlist covers exactly what a generic build/run child needs to find
-// libraries, locate the user's home, render localized output, and write to
-// a scratch directory:
-//
-//	PATH    — required to locate executables (npm, node, python, sh, ...)
-//	HOME    — npm/pip/cargo write per-user caches under here; node uses it for
-//	          ~/.npmrc; many tools blow up if HOME is unset
-//	USER    — git, ssh, and many CLI tools query it for default user
-//	LOGNAME — equivalent to USER on systemd-managed Linux distros
-//	SHELL   — npm spawns scripts via $SHELL; subprocess shells use it
-//	TZ      — controls log timestamp rendering and date-sensitive build steps
-//	LANG    — UTF-8 locale required for non-ASCII filenames in builds
-//	TMPDIR  — Go's ioutil.TempFile and many test runners honor this
-//	TERM    — terminal capability detection; npm/yarn use it for color output
-//
-// The two prefix-allowlists cover broad families:
-//
-//	LC_*  — C locale family (LC_ALL, LC_CTYPE, LC_NUMERIC, ...) — required
-//	        for correct sorting, formatting, and case-insensitive filename
-//	        comparison in build tools.
-//	XDG_* — XDG Base Directory spec (XDG_CONFIG_HOME, XDG_CACHE_HOME, ...) —
-//	        per-user dirs that respectful CLI tools use instead of fixed
-//	        ~/.config / ~/.cache; passing through keeps user dotfile setups
-//	        working in builds.
-//
-// And one operator escape hatch:
-//
-//	OMNIPUS_CHILD_*  — narrow, namespaced pass-through for callers that
-//	                   intentionally want to forward a value to a child.
-//	                   Operators wanting to pass FOO=bar to a child must
-//	                   rename it to OMNIPUS_CHILD_FOO=bar at the gateway
-//	                   layer. The rename is the trust boundary — it's loud
-//	                   and grep-able, so a future audit can find every
-//	                   intentional pass-through with one search.
-//
-// Build with care: anything you add here is information that reaches every
-// child process for the rest of the gateway's life. If a key contains a
-// secret, do NOT add it; use the OMNIPUS_CHILD_* rename pattern instead.
-var allowedChildEnvKeys = map[string]struct{}{
-	"PATH":    {},
-	"HOME":    {},
-	"USER":    {},
-	"LOGNAME": {},
-	"SHELL":   {},
-	"TZ":      {},
-	"LANG":    {},
-	"TMPDIR":  {},
-	"TERM":    {},
-	// Standard proxy variables. Forwarded so operator-set or
-	// EgressProxy-injected proxies route child traffic correctly. Values
-	// are operator-controlled (egress proxy address) or operator-inherited
-	// from the parent, never secrets. Required by TestExecProxy_*.
-	"HTTP_PROXY":  {},
-	"HTTPS_PROXY": {},
-	"NO_PROXY":    {},
-	"http_proxy":  {},
-	"https_proxy": {},
-	"no_proxy":    {},
-}
-
-// allowedChildEnvPrefixes are key prefixes whose entire family is allowed.
-// See allowedChildEnvKeys for the rationale on each prefix.
-var allowedChildEnvPrefixes = []string{
-	"LC_",
-	"XDG_",
-	"OMNIPUS_CHILD_",
-}
-
 // isAllowedChildEnvKey reports whether name passes the allowlist for the
-// hardened-exec child environment. Used by filterChildEnv on every entry of
-// os.Environ() and in tests that exercise the boundary directly.
+// hardened-exec child environment. The allowlist itself lives in
+// pkg/childenv (a leaf package) so pkg/security's exec proxy can apply the
+// same closed set without an import cycle — pkg/sandbox's egress proxy
+// imports pkg/security for its SSRF checker, so the reverse edge cannot
+// exist. See the childenv package comment.
 func isAllowedChildEnvKey(name string) bool {
-	if _, ok := allowedChildEnvKeys[name]; ok {
-		return true
-	}
-	for _, prefix := range allowedChildEnvPrefixes {
-		if strings.HasPrefix(name, prefix) {
-			return true
-		}
-	}
-	return false
+	return childenv.AllowedKey(name)
 }
 
 // ScrubGatewayEnv returns a copy of os.Environ() filtered through the child
-// process allowlist (see allowedChildEnvKeys). It is exported so callers
-// outside this package (e.g. pkg/tools's bash, in shell.go) can apply the
-// same filter regardless of whether the kernel sandbox is active.
+// process allowlist (see pkg/childenv). It is exported so callers outside
+// this package (e.g. pkg/tools's bash, in shell.go) can apply the same filter
+// regardless of whether the kernel sandbox is active, and it is the function
+// every FR-239 spawn site must start its child environment from.
 //
 // Naming: the public function name is preserved across the #155 item-3
 // rework (denylist → allowlist) so callers do not need to change. Internally
-// the implementation is filterChildEnv — that name better reflects the new
+// the implementation is childenv.Filter — that name better reflects the
 // semantics.
 //
-// Closes pentest item 3 (#155).
+// Closes pentest item 3 (#155); FR-239 extends its reach to every spawn site.
 func ScrubGatewayEnv() []string {
-	return filterChildEnv()
-}
-
-// runnerCredentialEnvKeys is the SEPARATE, security-sensitive allowlist of
-// credential / config-home environment variable names that an EXTERNAL-AGENT
-// CLI RUNNER child (Claude Code, Codex, opencode — Spec-4 FR-5.3) is permitted
-// to inherit, ON TOP OF the generic allowedChildEnvKeys set.
-//
-// Threat model (Spec-4 FR-5.3, security-sensitive):
-//
-//	These keys CARRY SECRETS (API keys, OAuth bearer tokens). They are
-//	DELIBERATELY ABSENT from the generic allowedChildEnvKeys allowlist because
-//	the generic allowlist feeds EVERY hardened-exec child — every
-//	`bash` (ADR-036 merge of the former exec/workspace_shell/workspace_shell_bg),
-//	`web_serve`, and `build_static` subprocess. Leaking an
-//	Anthropic / OpenAI key into an arbitrary build script is exactly the
-//	fail-open class the #155 allowlist rework closed.
-//
-//	The external-CLI runner is the ONE caller that legitimately needs these:
-//	the CLI authenticates to its upstream model provider on the operator's
-//	behalf. The runner's dispatch site
-//	(pkg/agent/external_dispatch.go::runExternalCLISubTurn) sets
-//	RunOptions.Env = ScrubGatewayEnvForRunner() (below), which unions THIS
-//	narrow set with the generic allowlist; the driver then uses that slice as
-//	the COMPLETE child env (runner.buildChildEnv) with NO os.Environ() fallback.
-//	No other spawn path sees these keys, and the gateway secrets (e.g.
-//	OMNIPUS_MASTER_KEY) never reach the child.
-//
-// Each key is grounded in the respective CLI's documented auth contract:
-//
-//	ANTHROPIC_API_KEY    — Claude Code + opencode (Anthropic mode): the
-//	                       sk-ant-api03 model key. Without it the CLI 403s.
-//	ANTHROPIC_AUTH_TOKEN — Claude Code: OAuth / corporate-proxy bearer token.
-//	ANTHROPIC_BASE_URL   — Claude Code + opencode: provider endpoint override
-//	                       (not itself a secret, but auth is meaningless if the
-//	                       child can't reach the configured endpoint).
-//	CLAUDE_CONFIG_DIR    — Claude Code: config-dir override; the OAuth creds
-//	                       live as files under it (default ~/.claude, reached
-//	                       via HOME, already allowlisted). Passed through so an
-//	                       operator-isolated config dir resolves in the child.
-//	OPENAI_API_KEY       — Codex + opencode: the OpenAI model key. NOTE: as of
-//	                       this writing, `codex exec`'s own auth-resolution
-//	                       path (codex-rs/login/src/auth/manager.rs::
-//	                       load_auth) never reads this var for the default
-//	                       provider — implicit OPENAI_API_KEY login was
-//	                       deliberately removed (an OpenAI engineer confirmed
-//	                       on github.com/openai/codex#5212 it will not come
-//	                       back). Left allowlisted regardless: opencode's
-//	                       Codex-compatible mode and other tooling may still
-//	                       consult it, and forwarding it is not itself unsafe.
-//	OPENAI_BASE_URL      — Codex + opencode: provider endpoint override.
-//	CODEX_HOME           — Codex: override for ~/.codex (holds auth.json).
-//	                       Default ~/.codex is reached via HOME; this honors a
-//	                       custom location. See providers.CodexHomeEnvVar.
-//	CODEX_API_KEY        — Codex: the env var `codex exec` actually checks
-//	                       first for non-interactive auth (load_auth, gated by
-//	                       `enable_codex_api_key_env: true`, which `codex exec`
-//	                       sets). Source-grounded against codex-rs/login/src/
-//	                       auth/manager.rs on the openai/codex main branch —
-//	                       NOT documented end-user-facing behavior, but the
-//	                       actual code path this runner's headless spawns hit.
-//	CODEX_ACCESS_TOKEN   — Codex: the env var load_auth checks next, before
-//	                       falling back to a persisted `auth.json`/keyring from
-//	                       a prior `codex login`. Same source grounding as
-//	                       CODEX_API_KEY above.
-//	CLAUDE_CODE_OAUTH_TOKEN — Claude Code: subscription/OAuth headless-auth
-//	                       token, minted once via `claude setup-token` and
-//	                       exported for unattended use — documented, standard
-//	                       Claude Code behavior (distinct from ANTHROPIC_API_KEY,
-//	                       a raw model API key; this is a subscription-backed
-//	                       OAuth bearer). Empirically confirmed: with only this
-//	                       var set (ANTHROPIC_* absent), `claude auth status`
-//	                       reports {"loggedIn":true,"authMethod":"oauth_token"}.
-//	                       Without it in this allowlist, an operator whose
-//	                       Claude Code auth is subscription/OAuth-token-based
-//	                       (rather than a raw API key) would have every
-//	                       external-CLI runner child silently fail with
-//	                       "Not logged in" even though the operator's own
-//	                       interactive `claude` sessions work fine — the exact
-//	                       gap this entry closes.
-//
-// DO NOT add a key here unless an external-CLI runner provably needs it to
-// authenticate. Anything added is a secret that reaches every external-CLI
-// child for the life of the gateway. This set is intentionally exact — not a
-// prefix family — so a future audit can enumerate every leak path by reading
-// this map.
-var runnerCredentialEnvKeys = map[string]struct{}{
-	"ANTHROPIC_API_KEY":       {},
-	"ANTHROPIC_AUTH_TOKEN":    {},
-	"ANTHROPIC_BASE_URL":      {},
-	"CLAUDE_CONFIG_DIR":       {},
-	"CLAUDE_CODE_OAUTH_TOKEN": {},
-	"OPENAI_API_KEY":          {},
-	"OPENAI_BASE_URL":         {},
-	"CODEX_HOME":              {},
-	"CODEX_API_KEY":           {},
-	"CODEX_ACCESS_TOKEN":      {},
+	return childenv.Filter()
 }
 
 // RunnerCredentialEnvKeys returns a sorted snapshot of the external-CLI runner
-// credential-env allowlist (see runnerCredentialEnvKeys). Exported for the
-// runner package's tests and for audit tooling that needs to enumerate the
+// credential-env allowlist (see childenv.RunnerCredentialKeys). Exported for
+// the runner package's tests and for audit tooling that needs to enumerate the
 // exact secret-bearing keys that may reach a runner child. The returned slice
 // is a copy; mutating it does not affect the allowlist.
 func RunnerCredentialEnvKeys() []string {
-	out := make([]string, 0, len(runnerCredentialEnvKeys))
-	for k := range runnerCredentialEnvKeys {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// isRunnerCredentialEnvKey reports whether name is in the external-CLI runner
-// credential allowlist. It is NOT consulted by the generic isAllowedChildEnvKey
-// path — only by filterChildEnvForRunner — so these secret-bearing keys never
-// leak into a generic bash / build child.
-func isRunnerCredentialEnvKey(name string) bool {
-	_, ok := runnerCredentialEnvKeys[name]
-	return ok
+	return childenv.RunnerCredentialKeys()
 }
 
 // ScrubGatewayEnvForRunner returns os.Environ() filtered through the UNION of
-// the generic child allowlist (allowedChildEnvKeys + prefixes) AND the
-// external-CLI runner credential allowlist (runnerCredentialEnvKeys).
+// the generic child allowlist AND the external-CLI runner credential
+// allowlist (both defined in pkg/childenv).
 //
 // This is the ONLY function that lets credential-bearing env vars through. It
 // is reserved for the Spec-4 external-agent CLI runner spawn path (FR-5.3 —
@@ -432,47 +236,7 @@ func isRunnerCredentialEnvKey(name string) bool {
 // external CLI's own kernel sandbox; the credential env is what lets the CLI
 // authenticate to its model provider from inside that confinement.
 func ScrubGatewayEnvForRunner() []string {
-	return filterChildEnvForRunner()
-}
-
-// filterChildEnvForRunner is filterChildEnv with the runner credential keys
-// additionally permitted. Same drop rules for malformed entries.
-func filterChildEnvForRunner() []string {
-	parent := os.Environ()
-	out := make([]string, 0, len(parent))
-	for _, kv := range parent {
-		eq := strings.IndexByte(kv, '=')
-		if eq <= 0 {
-			continue
-		}
-		key := kv[:eq]
-		if !isAllowedChildEnvKey(key) && !isRunnerCredentialEnvKey(key) {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
-}
-
-// filterChildEnv returns os.Environ() filtered through the child process
-// allowlist. Entries with empty values pass through (a present-but-empty
-// key like LANG="" is part of legitimate user config). Malformed entries
-// (no '=', or '=' at index 0) are dropped — those are kernel-injected
-// curiosities like `BASH_FUNC_foo%%=...` that no child needs.
-func filterChildEnv() []string {
-	parent := os.Environ()
-	out := make([]string, 0, len(parent))
-	for _, kv := range parent {
-		eq := strings.IndexByte(kv, '=')
-		if eq <= 0 {
-			continue
-		}
-		if !isAllowedChildEnvKey(kv[:eq]) {
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
+	return childenv.FilterForRunner()
 }
 
 // Limits describes resource caps and environment hints for a hardened child.
@@ -890,12 +654,12 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 // arg, which silently broke commands like `npm run dev` that depend on
 // node_modules/.bin being on PATH.
 func mergeEnv(env []string, lim Limits) []string {
-	gateway := filterChildEnv()
+	gateway := childenv.Filter()
 	// CodeQL go/allocation-size-overflow flags the implicit int sum
 	// len(gateway)+len(env)+6 as potentially overflowing. Per-process env
 	// count is bounded by the kernel (NCARGS = 128 KiB total on Linux), so
 	// the sum is always small in practice — but bound it explicitly so the
-	// allocation hint is safe even if filterChildEnv() ever misbehaves and
+	// allocation hint is safe even if childenv.Filter() ever misbehaves and
 	// hands back something pathological.
 	const maxMergedEnvHint = 1 << 16
 	capHint := len(gateway) + len(env) + 6
@@ -1024,6 +788,23 @@ func ApplyChildHardening(cmd *exec.Cmd, lim Limits) error {
 // ApplyChildHardening for the contract.
 func ApplyChildPostStartHardening(cmd *exec.Cmd, lim Limits) error {
 	return applyPostStartHardening(cmd, lim)
+}
+
+// ApplyChildKernelPolicy applies ONLY the per-turn kernel policy to a child
+// that is otherwise running unconfined — the God Mode floor's application
+// hook (amendment §2 D7): macOS renders it into the child's Seatbelt profile;
+// on Linux it is a no-op here, because the floor reaches the child through
+// StartLockedWithPolicy's per-thread restriction before the fork; on Windows
+// there is no backend and it is a no-op. A nil policy is a no-op.
+//
+// This deliberately does NOT apply the rest of ApplyChildHardening (process
+// groups, Pdeathsig, resource limits): God Mode keeps its documented meaning
+// of no hardening, and the floor is the one piece it must still carry.
+func ApplyChildKernelPolicy(cmd *exec.Cmd, policy *SandboxPolicy) error {
+	if cmd == nil || policy == nil {
+		return nil
+	}
+	return applyKernelPolicyOnly(cmd, policy)
 }
 
 // StderrTail returns the last n bytes of stderr (or all of it when shorter).

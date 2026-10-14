@@ -205,91 +205,27 @@ func TestGatewayBoot_OnlyBrokenProviderStillBoots(t *testing.T) {
 	requireSlogRecord(t, logBuf, "ERROR", "openrouter", staleRef)
 }
 
-// TestGatewayBoot_WrongMasterKeyProviderCredentialIsFatal is the D1 review
-// regression (2026-08-15): a *credentials.CredentialRefError is NOT, by
-// itself, a safe signal to degrade the referencing provider and keep booting.
-// When the ref IS present in the store but fails to decrypt — a wrong or
-// rotated master key, or a corrupted store entry — credentials.Store.Get
-// returns a *credentials.EntryAuthError, not a *credentials.NotFoundError.
-// (It unwraps to credentials.ErrWrongKey; only *NotFoundError degrades.)
-// UnlockWithKey performs no verification against the stored data, so a stale
-// master.key unlocks cleanly (IsLocked() is false) and EVERY credential in
-// the store is equally unreadable — this is store-wide, exactly like the
-// bare ErrStoreLocked case, even though InjectFromConfig's per-ref loop
-// attributes the failure to just the one provider it happened to be
-// resolving. Before this fix, reportInjectionErrors degraded ANY
-// *CredentialRefError regardless of its cause, so this scenario booted
-// successfully with a single ERROR log line — "BOOT SURVIVED a wrong master
-// key" per the review's live evidence.
+// #1277 founder decision 2026-10-12: the whole store under a wrong master key stays fatal.
+// Unlike the old single-corrupted-entry fixture, this seals real entries with
+// fixedHexKey first, then selects a genuinely different master key for boot.
 func TestGatewayBoot_WrongMasterKeyProviderCredentialIsFatal(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
-
-	const ref = "DEGRADED_TEST_WRONGKEY_PROVIDER_KEY"
-	t.Setenv(ref, "")
-
-	credsPath := filepath.Join(tmpDir, "credentials.json")
-	// writeCorruptedCredentialsFile (boot_order_test.go) seeds an entry whose
-	// nonce/ciphertext are random bytes, not a real seal under fixedHexKey —
-	// GCM tag authentication fails regardless of which key decrypts it,
-	// simulating both "wrong master key" and "corrupted store entry" at once
-	// (Store.Get cannot and does not distinguish the two — the tag is one bit
-	// for all causes — and reports both as *EntryAuthError).
-	writeCorruptedCredentialsFile(t, credsPath, ref)
-
-	configPath := filepath.Join(tmpDir, "config.json")
-	writeBootTestFile(t, configPath, `{
-		"version": 1,
-		"providers": [
-			{
-				"model_name": "openrouter-auto",
-				"model": "openrouter/z-ai/glm-5-turbo",
-				"provider": "openrouter",
-				"api_base": "https://openrouter.ai/api/v1",
-				"api_key_ref": "`+ref+`"
-			}
-		],
-		"gateway": { "host": "127.0.0.1", "port": 19985 }
-	}`)
-
+	f := newIssue1277Fixture(t)
+	t.Setenv("OMNIPUS_MASTER_KEY", strings.Repeat("ff", 32))
 	logBuf := captureSlogJSON(t)
-
-	err := bootCredentialsError(tmpDir, configPath)
+	err := bootCredentialsError(f.home, f.configPath)
 	if err == nil {
-		t.Fatal(
-			"bootCredentials must FAIL when a provider's credential ref is present in the store but " +
-				"fails to decrypt (wrong master key / corrupted entry) — this is store-wide, not scoped " +
-				"to one provider, and must not be degraded like a simple missing ref",
-		)
+		t.Fatal("boot must fail for a whole-store wrong master key, never degrade it as one missing provider ref")
 	}
-	// The decrypt failure's own text must survive into the returned error so
-	// the operator sees the real cause, not a generic "injection failed". The
-	// store now carries this as a *credentials.EntryAuthError, which names the
-	// entry and lists the causes (edited, moved from another entry, or a
-	// different master key) rather than asserting the key as the only one —
-	// it still unwraps to ErrWrongKey, so the fatal classification below is
-	// unchanged.
-	if !strings.Contains(err.Error(), "failed authentication") {
-		t.Errorf("error must surface the entry-authentication cause; got: %q", err.Error())
+	if !strings.Contains(err.Error(), "failed authentication") || !strings.Contains(err.Error(), "master key") {
+		t.Errorf("fatal error must carry the entry-authentication/master-key cause, got %q", err.Error())
 	}
-	if !strings.Contains(err.Error(), "master key") {
-		t.Errorf("error must name a wrong/different master key among the causes; got: %q", err.Error())
+	if !strings.Contains(err.Error(), issue1277ProviderRef) {
+		t.Errorf("fatal error must identify the affected provider ref, got %q", err.Error())
 	}
-	if !strings.Contains(err.Error(), ref) {
-		t.Errorf("error must mention the failing ref %s; got: %q", ref, err.Error())
-	}
-
-	// Loud at ERROR, naming the provider and the ref, and explicitly NOT
-	// worded as the scoped "credential unusable ... rest of the system
-	// continues" message the NotFoundError-degrade branch emits — that
-	// message would be a lie here.
-	requireSlogRecord(t, logBuf, "ERROR", "openrouter", ref)
+	requireSlogRecord(t, logBuf, "ERROR", "qa1277", issue1277ProviderRef)
 	for _, line := range strings.Split(logBuf.String(), "\n") {
 		if strings.Contains(line, "rest of the system continues") {
-			t.Errorf(
-				"a store-wide decrypt failure must not be logged with the scoped-degrade wording; got line: %s",
-				line,
-			)
+			t.Errorf("whole-store failure must not be described as a scoped degradation: %s", line)
 		}
 	}
 }

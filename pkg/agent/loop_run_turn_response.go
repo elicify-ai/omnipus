@@ -869,7 +869,17 @@ func (rt *agentLoopRunTurn) spawnReasoningPublish(reasoningContent, channel, cha
 
 // recordToolCalls normalizes and records tool calls before execution begins.
 func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
-	rr.rq.ri.rf.rt.al.flushContinuationAccumulator(rr.rq.ri.rf.rt.ts, &rr.continuationChain)
+	// #1178 (amendment §4.2): a failed continuation flush is a failed turn —
+	// no new tool round is admitted and the following tool-call message is
+	// never installed. The wrap, markTurnFailed, notice event and classified
+	// transcript error happen here (the direct caller gets the truthful
+	// error); dispatchToolCalls recognizes this handled failure and ends the
+	// turn without re-reporting it.
+	if flushErr := rr.rq.ri.rf.rt.al.flushContinuationAccumulator(rr.rq.ri.rf.rt.ts, &rr.continuationChain); flushErr != nil {
+		notSaved := &messageNotSavedError{role: "assistant", cause: flushErr}
+		rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rr.rq.ri.rf.rt.ts, notSaved)
+		return notSaved
+	}
 	if isTruncatedFinishReason(rr.rq.ri.rf.response.FinishReason) {
 		rr.rq.ri.rf.rt.ts.markContinuationPending()
 	} else {

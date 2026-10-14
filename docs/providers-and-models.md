@@ -6,7 +6,7 @@ Providers connect Omnipus to the services that run its models. This page helps y
 
 A provider supplies access to one or more models. Omnipus ships with a catalog of supported providers and their known models. The live catalog appears when you open **Settings → Providers**, select **Connect a provider**, and choose a provider.
 
-The catalog includes cloud services, local model servers, command-line providers, and custom endpoints. These are the main choices.
+The catalog includes cloud services, local model servers, and custom endpoints. These are the main choices.
 
 | Provider choice | How you connect | What to expect |
 |---|---|---|
@@ -14,7 +14,6 @@ The catalog includes cloud services, local model servers, command-line providers
 | ChatGPT (subscription) | Use **Sign in** with your OpenAI account | Uses your ChatGPT plan; this is where OpenAI sign-in lives |
 | Other catalog providers | Search under **All providers** and enter the requested credential | Unsupported entries are disabled with a reason |
 | Ollama and other local providers | Select the local provider and confirm its endpoint | Omnipus asks the local server which models are installed |
-| Command-line providers | Use **Sign in** with the provider's command-line tool | Omnipus uses that tool's signed-in session |
 | Custom endpoint | Choose **Custom endpoint** and provide an ID, base URL, protocol, and API key | You add model names yourself when no live list is available |
 
 ## When you would use it
@@ -28,7 +27,7 @@ Use a fallback chain when an agent must keep working through temporary failures.
 1. Open **Settings**, then select **Providers**.
 2. Select **Connect a provider**. You see popular choices, recent choices, search, **All providers**, and **Custom endpoint**.
 3. Choose a provider. If it has variants, choose the plan, region, and authentication method shown.
-4. Enter the API key, or select **Sign in** when the provider offers it. Sign-in is offered only where Omnipus can actually sign you in. For OpenAI, that is the **ChatGPT (subscription)** provider (or **Codex CLI**); the plain **OpenAI** provider takes an API key only.
+4. Enter the API key, or select **Sign in** when the provider offers it. Sign-in is offered only where Omnipus can actually sign you in. For OpenAI, that is the **ChatGPT (subscription)** provider; the plain **OpenAI** provider takes an API key only.
 5. Select **Continue**, then complete the connection step. The provider appears in your configured provider list.
 6. Choose a model in the **Default model** card, or open an agent and choose its model there.
 

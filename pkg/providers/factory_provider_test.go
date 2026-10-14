@@ -55,7 +55,6 @@ func TestCreateProviderFromConfig_ProtocolDispatch(t *testing.T) {
 	const (
 		httpKind      = "http"
 		anthropicKind = "anthropic"
-		cliKind       = "cli"
 	)
 
 	tests := []struct {
@@ -130,11 +129,6 @@ func TestCreateProviderFromConfig_ProtocolDispatch(t *testing.T) {
 			wantURL:  "http://localhost:11434/v1",
 		},
 		{
-			name:     "a cli row dispatches on its cli_kind",
-			cfg:      config.ModelConfig{Provider: "codex-cli", Model: "gpt-5.4-codex"},
-			wantKind: cliKind,
-		},
-		{
 			name:    "DS-3.9 a tier-unsupported row names the catalog's reason",
 			cfg:     config.ModelConfig{Provider: "cloud-iam-example", Model: "anthropic.claude-opus-4"},
 			wantErr: "cloud-iam",
@@ -179,10 +173,6 @@ func TestCreateProviderFromConfig_ProtocolDispatch(t *testing.T) {
 				}
 				if got.APIBase() != tt.wantURL {
 					t.Errorf("base URL = %q, want %q", got.APIBase(), tt.wantURL)
-				}
-			case cliKind:
-				if _, ok := p.(*CodexCliProvider); !ok {
-					t.Fatalf("provider = %T, want *CodexCliProvider", p)
 				}
 			}
 		})
@@ -482,12 +472,5 @@ func TestCreateProviderFromConfig_BedrockDefaultBuild(t *testing.T) {
 	// trimmed stand-in with no profiles for this model.
 	if want := "us.anthropic.claude-opus-4-6-v1"; modelID != want {
 		t.Fatalf("modelID = %q, want %q (us-east-1 is group us; the catalog lists a us profile)", modelID, want)
-	}
-}
-
-// TestNewCliProviderForKind_UnknownKind keeps the kind switch honest.
-func TestNewCliProviderForKind_UnknownKind(t *testing.T) {
-	if _, err := NewCliProviderForKind("nope", "/tmp", ""); err == nil {
-		t.Error("unknown cli_kind: want an error naming the accepted kinds")
 	}
 }

@@ -348,8 +348,10 @@ func (t *RememberTool) logAudit(agentID, sessionID, outcome, category, content s
 }
 
 // RecallMemoryTool searches long-term memory and retrospectives (past
-// reflections). LAST_SESSION.md is not searched here — it is auto-injected into
-// every session's system prompt, so it is always already in context.
+// reflections). The carry-forward summary (the end-of-chat recap,
+// workspaces/<ws>/.omnipus/carry-forward/<agent>.md) is not searched here — it
+// is auto-injected into the workspace's own session prompts, so it is always
+// already in context there.
 // FR-014: not audited (read-side stays clean).
 //
 // Asks for MemorySearcher only — the narrower of the two interfaces. This is

@@ -18,46 +18,14 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
-// NewCliProviderForKind returns the subprocess driver named by a catalog row's
-// `cli_kind` (ADR-068 FR-003, X-14): `codex` -> CodexCliProvider,
-// `copilot` -> CopilotCliProvider. cliPath is an explicit override for the
-// Copilot binary name/path; empty means the vendor's default binary name on
-// PATH. It is NOT a catalog row field — catalog.Provider (pkg/providers/
-// catalog/document.go) carries no `cli_path`, nothing parses one out of the
-// catalog document, and both call sites (CreateProviderFromConfig below,
-// and the onboarding probe in pkg/gateway/rest_onboarding.go) pass ""
-// unconditionally today, so there is currently no way to steer this. Do not
-// confuse it with the unrelated, functioning
-// config.ExecutorConfig.CLIPath used by subagent_3p external-CLI dispatch
-// (pkg/agent/runner) — same name, different mechanism.
-//
-// It is the ONE place a kind maps to a constructor; `case ProtocolCLI` in
-// CreateProviderFromConfig calls it with the row's own kind and never with a
-// provider id.
-func NewCliProviderForKind(kind, workspace, cliPath string) (LLMProvider, error) {
-	if workspace == "" {
-		workspace = "."
-	}
-	switch kind {
-	case catalog.CLIKindCodex:
-		return NewCodexCliProvider(workspace), nil
-	case catalog.CLIKindCopilot:
-		return NewCopilotCliProviderWithCommand(cliPath, workspace), nil
-	default:
-		return nil, fmt.Errorf("unknown cli_kind %q (want %s|%s)",
-			kind, catalog.CLIKindCodex, catalog.CLIKindCopilot)
-	}
-}
-
 // resolvedRow is everything the dispatch below needs, already decided: which
-// wire protocol to speak, at which base URL, and (for a subprocess row) which
-// CLI. It is produced by resolveRow — the only function that knows the
+// wire protocol to speak, at which base URL. It is produced by resolveRow —
+// the only function that knows the
 // difference between a catalog row and an operator-typed custom row, so the
 // dispatch itself never asks "who is this provider?" again.
 type resolvedRow struct {
 	protocol catalog.Protocol
 	api      string
-	cliKind  string
 	// locality is the catalog's FR-039 classification. It is the ONLY thing
 	// that decides whether a row may be constructed without a credential: a
 	// local runtime (Ollama, vLLM, LM Studio, a custom row on a private
@@ -132,7 +100,6 @@ func resolveRow(cfg *config.ModelConfig) (resolvedRow, error) {
 	return resolvedRow{
 		protocol: ep.Protocol,
 		api:      ep.API,
-		cliKind:  row.CLIKind,
 		locality: row.Locality,
 	}, nil
 }
@@ -210,8 +177,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		// ADR-068 §8b (T068-32/T068-14): openai-chatgpt is an
 		// openai-compatible row whose credential is Omnipus's OWN stored
 		// device-code OAuth token, not an API key — so it is handled here,
-		// ahead of requireKey, rather than as a protocol of its own. The
-		// vendor file ~/.codex/auth.json stays codex-cli's and read-only.
+		// ahead of requireKey, rather than as a protocol of its own.
 		// DefaultCredentialStore is wired once at gateway boot
 		// (pkg/gateway/gateway.go); a nil store means a test or CLI path
 		// never called SetDefaultCredentialStore, and we fail closed with a
@@ -309,13 +275,6 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			return nil, "", err
 		}
 		return p, resolvedModelID, nil
-
-	case catalog.ProtocolCLI:
-		p, err := NewCliProviderForKind(row.cliKind, cfg.Home, "")
-		if err != nil {
-			return nil, "", err
-		}
-		return p, modelID, nil
 
 	default:
 		return nil, "", fmt.Errorf("provider %q declares no usable protocol", cfg.Provider)

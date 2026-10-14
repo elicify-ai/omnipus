@@ -462,9 +462,15 @@ func sameContinuationChainMessage(a, b providers.Message) bool {
 // Written here rather than as a turnState method because pkg/agent/turn.go is
 // owned by a concurrent work item in this wave; the field access is
 // mutex-guarded exactly as turn.go's own accessors do it.
-func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationChain *[]providers.Message) {
+//
+// #1178 (amendment §4.2): the flush's model-window append returns its error.
+// The accumulator is already cleared and the transcript entry already written
+// when the append runs, so a failure is reported to the consumer
+// (recordToolCalls) instead of being logged away — a turn whose window write
+// failed must not continue into the following tool round.
+func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationChain *[]providers.Message) error {
 	if ts == nil {
-		return
+		return nil
 	}
 	ts.mu.Lock()
 	pending := ts.continuationAccum
@@ -474,12 +480,15 @@ func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationCha
 		*continuationChain = nil
 	}
 	if pending == "" {
-		return
+		return nil
 	}
 	ts.appendIntermediateAssistantTranscript(pending)
 	if !ts.opts.NoHistory && ts.agent != nil && ts.agent.Sessions != nil {
-		ts.agent.Sessions.AddMessage(ts.sessionKey, "assistant", pending)
+		if err := ts.agent.Sessions.AddMessage(ts.sessionKey, "assistant", pending); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // preserveTruncatedAccumulator implements ADR-087 D6.8: every terminal exit

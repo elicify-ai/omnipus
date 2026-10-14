@@ -70,52 +70,300 @@ import (
 // deny the root wholesale (which locks the agent out of its own home — loud,
 // and the correct direction) or to refuse the spawn. Never fall back to
 // DeniedPathsFor's re-admission, which is the wider answer.
-func KernelDeniedPathsFor(home, workDir string) ([]string, error) {
+func KernelDeniedPathsFor(home, workDir string, extraAllowed ...string) ([]string, error) {
 	if home == "" {
 		return nil, nil
 	}
-	denied := DeniedPathsFor(home, workDir)
-	if workDir == "" {
-		// Nothing was re-admitted, so there is nothing to refine.
-		return denied, nil
+	branches := make([]KernelBranch, 0, 1+len(extraAllowed))
+	if workDir != "" {
+		branches = append(branches, KernelBranch{Path: workDir, Writable: true})
 	}
-
-	cleanHome := filepath.Clean(home)
-	cleanWork := filepath.Clean(workDir)
-
-	seen := make(map[string]struct{}, len(denied))
-	for _, p := range denied {
-		seen[p] = struct{}{}
-	}
-
-	for _, name := range SecretEntriesPerTurn {
-		root := filepath.Join(cleanHome, name)
-		if !isProperDescendant(cleanWork, root) {
-			// Not re-admitted — DeniedPathsFor already denied the whole root.
+	for _, extra := range extraAllowed {
+		if extra == "" {
 			continue
 		}
-		// isProperDescendant answers by filesystem IDENTITY; the chain walk
-		// below is LEXICAL. Re-anchor the root into the spelling that is a
-		// lexical ancestor of the work dir before walking. See chainRootFor.
-		chainRoot, err := chainRootFor(root, cleanWork)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"fspolicy: cannot anchor %q against work dir %q: %w", root, cleanWork, err)
-		}
-		siblings, err := siblingsOutsideOwnBranch(chainRoot, cleanWork)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"fspolicy: cannot enumerate %q to separate the caller's own tree from the others: %w", root, err)
-		}
-		for _, p := range siblings {
-			if _, dup := seen[p]; dup {
-				continue
-			}
-			seen[p] = struct{}{}
-			denied = append(denied, p)
+		branches = append(branches, KernelBranch{Path: extra, Writable: true})
+	}
+	denied, _, err := KernelDenyEnumeration(home, workDir, branches)
+	return denied, err
+}
+
+// runtimeAllowanceOverridesInventory reports whether a Runtime-marked branch
+// must be dropped because it would reopen protected inventory: it sits at or
+// under a named protected entry, covers one, covers the home itself, or
+// matches a protected home-root prefix. The authorized runtime shapes — the
+// published shared generations and workspace env roots under
+// <home>/toolchains/, the managed document prefix under
+// <home>/toolchains/documents/, and the per-worker cache under
+// <home>/cache/documents/ (the one shape that refines a NAMED node, cache/)
+// — are exempt, so amendment §2 A5/A6 reachability is preserved while a
+// synthetic AllowRoot at sessions/, credentials.json, entities/, an agent
+// home, or the home itself is dropped before it can shadow anything.
+func runtimeAllowanceOverridesInventory(home, rawPath string) bool {
+	clean := filepath.Clean(rawPath)
+	if clean == "" || clean == "." || !filepath.IsAbs(clean) {
+		return true // unusable input: drop rather than guess
+	}
+	if CoversForDeny(filepath.Join(home, "toolchains"), clean) {
+		return false
+	}
+	if CoversForDeny(filepath.Join(home, "cache", "documents"), clean) {
+		return false
+	}
+	if CoversForDeny(clean, home) {
+		return true // the home, or an ancestor of it: shadows every named entry
+	}
+	if !CoversForDeny(home, clean) {
+		return false // outside the home: the enumeration ignores it anyway
+	}
+	overlaps := func(root, p string) bool {
+		return CoversForDeny(root, p) || CoversForDeny(p, root)
+	}
+	if dir := filepath.Dir(clean); SameLocationForDeny(dir, home) &&
+		(hasSecretBackupPrefix(filepath.Base(clean)) || hasProtectedInventoryPrefix(filepath.Base(clean))) {
+		return true
+	}
+	for _, name := range ProtectedInventoryNames {
+		if overlaps(filepath.Join(home, name), clean) {
+			return true
 		}
 	}
-	return denied, nil
+	for _, name := range SecretEntriesAlwaysPathOnly {
+		if overlaps(filepath.Join(home, name), clean) {
+			return true
+		}
+	}
+	for _, name := range SecretEntriesPerTurn {
+		if overlaps(filepath.Join(home, name), clean) {
+			return true
+		}
+	}
+	return false
+}
+
+// KernelBranch is one allowed branch of the kernel enumeration: a path under
+// $OMNIPUS_HOME whose subtree stays reachable for the child, and the access
+// class it keeps. Writable=false marks a read/execute-only branch — the
+// enumeration reports it in the write-denied list so the kernel layer can
+// withhold write (Landlock: the branch rule carries no write right; Seatbelt:
+// an explicit write deny).
+type KernelBranch struct {
+	Path     string
+	Writable bool
+
+	// Runtime marks a branch that arrived as internal runtime input
+	// (amendment §2 A5/A6 — TurnPolicyInput.AllowRoots: published shared
+	// generations, the document runtime prefix, the worker's document
+	// cache). Runtime input is NOT the founder-accepted operator/mount
+	// channel: a Runtime branch at or above a protected-inventory node is
+	// dropped by the enumeration instead of re-admitting it, so a synthetic
+	// AllowRoot pointing at sessions/ or credentials.json can never reopen
+	// them. Only the documented runtime shapes (under toolchains/ and
+	// cache/documents/) may refine a named node such as cache/.
+	Runtime bool
+}
+
+// KernelDenyEnumeration is the generalised per-spawn deny set (amendment §2
+// D5): children of $OMNIPUS_HOME outside every allowed branch are denied,
+// recursively down to the branch roots, with the named protected inventory
+// (ProtectedInventoryNames) always denied on top. It replaces the old
+// per-turn-root refinement for every per-turn caller.
+//
+// The workDir and every extra branch keep their subtrees reachable: the walk
+// descends only along chains to branch roots, denies every entry it meets
+// that is not on such a chain and not itself a branch root, and stops at
+// branch roots (their own grant rules govern their interiors; deeper named
+// denials, e.g. agents/<id>/.omnipus inside an agent-home-rooted turn, come
+// from the named inventory, which is evaluated independently of the walk).
+//
+// Named inventory entries are denied whether or not they exist on disk, so a
+// lazily-created home entry (logs/, backups/) is covered before its first
+// write. Entries the gateway creates AFTER this enumeration are covered on
+// Linux by the grant shape (the home itself is never granted, so a new entry
+// carries no grant) and remain the documented macOS post-spawn residual.
+//
+// writeDenied carries the read-only branch roots (media, the session-scoped
+// upload dirs, read-only runtime/document allowances): subtrees that stay
+// readable but must never gain a write right. macOS renders them as explicit
+// write denies; on Linux the branch's own rule simply carries no write bit,
+// and the enumeration never grants them wholesale from an ancestor rule.
+//
+// Enumeration failure (a chain directory that cannot be listed) returns an
+// error and the caller must fail closed — the same contract
+// KernelDeniedPathsFor has always had (FR-4.5c).
+func KernelDenyEnumeration(home, workDir string, branches []KernelBranch) (denied, writeDenied []string, err error) {
+	if home == "" {
+		return nil, nil, nil
+	}
+	cleanHome := filepath.Clean(home)
+
+	// Normalise the branch set: absolute, cleaned, and anchored under the
+	// home (branches outside the home are none of this enumeration's
+	// business — /tmp, workspace mounts elsewhere and operator paths are
+	// governed by their own grant rules).
+	branchRoots := make([]string, 0, len(branches)+1)
+	branchWritable := make(map[string]bool, len(branches)+1)
+	addBranch := func(path string, writable bool) {
+		clean := filepath.Clean(path)
+		if clean == "" || clean == "." || !filepath.IsAbs(clean) {
+			return
+		}
+		if !CoversForDeny(cleanHome, clean) {
+			return
+		}
+		if _, dup := branchWritable[clean]; dup {
+			// Writable wins: the widest explicit grant for one root governs.
+			branchWritable[clean] = branchWritable[clean] || writable
+			return
+		}
+		branchRoots = append(branchRoots, clean)
+		branchWritable[clean] = writable
+	}
+	if workDir != "" {
+		addBranch(workDir, true)
+	}
+	for _, b := range branches {
+		if b.Runtime && runtimeAllowanceOverridesInventory(cleanHome, b.Path) {
+			// Amendment §2 (chief ruling, fix round 1): internal runtime
+			// input is not the accepted operator/mount channel. A runtime
+			// AllowRoot at, above, or covering a protected-inventory node is
+			// dropped outright — it never skips the named deny, never seeds
+			// the walk, and never shadows a subtree. The permitted runtime
+			// shapes (under toolchains/ and cache/documents/) are unaffected,
+			// so A5/A6 reachability is preserved.
+			continue
+		}
+		addBranch(b.Path, b.Writable)
+	}
+
+	isBranchRoot := func(p string) bool {
+		_, ok := branchWritable[p]
+		return ok
+	}
+	underBranchRoot := func(p string) bool {
+		for _, root := range branchRoots {
+			if CoversForDeny(root, p) {
+				return true
+			}
+		}
+		return false
+	}
+	onChainToBranch := func(p string) bool {
+		for _, root := range branchRoots {
+			if !SameLocationForDeny(p, root) && CoversForDeny(p, root) {
+				return true
+			}
+		}
+		return false
+	}
+	// branchAtOrUnder reports whether any branch root IS p or lives beneath
+	// it — the condition under which a wholesale named deny would shadow a
+	// branch (see the named-inventory loop).
+	branchAtOrUnder := func(p string) bool {
+		for _, root := range branchRoots {
+			if CoversForDeny(p, root) {
+				return true
+			}
+		}
+		return false
+	}
+
+	seen := make(map[string]struct{}, 64)
+	addDenied := func(p string) {
+		if _, dup := seen[p]; dup {
+			return
+		}
+		seen[p] = struct{}{}
+		denied = append(denied, p)
+	}
+
+	// 1. The named inventory, always — except an entry that IS a branch root
+	// or has a branch root beneath it: a branch re-admits its own subtree, so
+	// a named ANCESTOR of one (cache/ over a document-cache branch) is not
+	// denied wholesale here — the walk below refines it to the precise deny
+	// set (the branch's chain stays traversable, everything else under the
+	// named entry is denied entry by entry).
+	//
+	// SecretEntriesAlwaysPathOnly joins the named set even though it is not a
+	// ProtectedInventoryName: the kernel keeps the whole-directory skills
+	// deny for children (ADR-072 D10.3, accepted gap) and must deny it
+	// whether or not the registry exists on disk yet — a skill installed
+	// after this enumeration is covered by the deny entry, not by the walk.
+	// SecretEntriesPerTurn (agents/, workspaces/) joins for the same
+	// existence-independent reason: another agent's home and another
+	// workspace's tree are denied by NAME on every non-own turn, even on a
+	// fresh install where the directory does not exist yet — the walk can
+	// only deny what is on disk. The loop's branch skip keeps the caller's
+	// OWN root out (a branch beneath it re-admits it, and the walk refines).
+	for _, name := range append(append(append([]string{}, ProtectedInventoryNames...), SecretEntriesAlwaysPathOnly...), SecretEntriesPerTurn...) {
+		p := filepath.Clean(filepath.Join(cleanHome, name))
+		if branchAtOrUnder(p) {
+			continue
+		}
+		addDenied(p)
+	}
+
+	// 1b. D4 agent-home-internal entries inside an allowed branch: an
+	// agent-home-rooted turn re-admits its own home, but .omnipus/**,
+	// memory/, sessions/, skills/ and the definition files stay protected —
+	// the same list the app predicate's own-tree narrowing uses, so both
+	// layers answer identically.
+	for _, root := range branchRoots {
+		if !isAgentHomeRoot(cleanHome, root) {
+			continue
+		}
+		for _, name := range AgentHomeInternalDirs {
+			addDenied(filepath.Join(root, name))
+		}
+		for _, name := range AgentHomeInternalFiles {
+			addDenied(filepath.Join(root, name))
+		}
+	}
+
+	// 2. The recursive walk from the home down the chains to the branch
+	// roots. The walk is LEXICAL (readdir names), while branch membership is
+	// judged by path containment; EffectiveFSPolicy realpaths both the home
+	// and the work dir, so the two spellings agree in every production shape.
+	var walk func(dir string) error
+	walk = func(dir string) error {
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			if errors.Is(readErr, os.ErrNotExist) {
+				return nil // nothing to enumerate inside an absent directory
+			}
+			return fmt.Errorf("fspolicy: cannot enumerate %q to build the protected deny set: %w", dir, readErr)
+		}
+		for _, e := range entries {
+			full := filepath.Clean(filepath.Join(dir, e.Name()))
+			if isBranchRoot(full) {
+				continue // granted by the branch's own rules
+			}
+			if underBranchRoot(full) {
+				// Inside a deeper branch: its grant rules govern; the named
+				// inventory above carried the interior denials.
+				continue
+			}
+			if onChainToBranch(full) {
+				if err := walk(full); err != nil {
+					return err
+				}
+				continue
+			}
+			addDenied(full) // default-deny subtree
+		}
+		return nil
+	}
+	if err := walk(cleanHome); err != nil {
+		return nil, nil, err
+	}
+
+	// 3. Read-only branch roots: readable, never writable.
+	for _, root := range branchRoots {
+		if !branchWritable[root] {
+			writeDenied = append(writeDenied, root)
+		}
+	}
+	return denied, writeDenied, nil
 }
 
 // KernelDeniedNodesFor returns the DIRECTORY NODES a turn must not WRITE to,
@@ -199,41 +447,62 @@ func KernelDeniedPathsFor(home, workDir string) ([]string, error) {
 //
 // Pure: unlike KernelDeniedPathsFor this needs no listing, because the chain is
 // derivable from the work-dir path alone.
-func KernelDeniedNodesFor(home, workDir string) []string {
-	if home == "" || workDir == "" {
+func KernelDeniedNodesFor(home, workDir string, extraBranchRoots ...string) []string {
+	if home == "" {
 		return nil
 	}
 	cleanHome := filepath.Clean(home)
-	cleanWork := filepath.Clean(workDir)
 
-	var out []string
-	for _, name := range SecretEntriesPerTurn {
-		root := filepath.Join(cleanHome, name)
-		if !isProperDescendant(cleanWork, root) {
-			// Not re-admitted: the whole subtree is denied already, and a node
-			// deny on top would be redundant.
+	// The home itself is a denied node (amendment §2 D5): reachable — every
+	// branch lives underneath it — but never granted, so its directory entry
+	// cannot be renamed and a Linux child is never handed the home wholesale.
+	out := []string{cleanHome}
+
+	// Chain nodes for each allowed branch: every directory from the home down
+	// to (but excluding) the branch root. For the work-dir branch this is the
+	// list this function has always produced; the extra branch roots (runtime
+	// and document allowances) add their own chains, so an ancestor such as
+	// toolchains/ is enumerated and never granted wholesale — without that, a
+	// parent-rule explosion would hand a read-only generation write access.
+	roots := make([]string, 0, 1+len(extraBranchRoots))
+	if workDir != "" {
+		roots = append(roots, filepath.Clean(workDir))
+	}
+	for _, extra := range extraBranchRoots {
+		if extra != "" {
+			roots = append(roots, filepath.Clean(extra))
+		}
+	}
+
+	seen := make(map[string]struct{}, len(out)+len(roots)*4)
+	for _, p := range out {
+		seen[p] = struct{}{}
+	}
+	for _, branchRoot := range roots {
+		if !CoversForDeny(cleanHome, branchRoot) || SameLocationForDeny(branchRoot, cleanHome) {
+			// Not under the home (or the home itself): no chain to record.
 			continue
 		}
-		// Same identity-vs-lexical hazard as KernelDeniedPathsFor: re-anchor
-		// before computing a relative chain. This function has no error
-		// return, so an unanchorable root degrades to denying writes on the
-		// root NODE alone — narrower than the full chain, and never the
-		// upward walk that a `..`-bearing relative path would produce.
-		chainRoot, anchorErr := chainRootFor(root, cleanWork)
-		if anchorErr != nil {
-			out = append(out, root)
-			continue
-		}
-		components, relErr := descendingComponents(chainRoot, cleanWork)
+		rel, relErr := filepath.Rel(cleanHome, branchRoot)
 		if relErr != nil {
-			out = append(out, chainRoot)
 			continue
 		}
-		current := chainRoot
-		out = append(out, current)
-		// The final component IS the work dir, which must stay operable.
-		for i := 0; i < len(components)-1; i++ {
-			current = filepath.Join(current, components[i])
+		// The same identity-vs-lexical hazard chainRootFor documents: a
+		// relative chain containing ".." would ASCEND out of the home. Skip
+		// the branch rather than emit upward denies — the home node deny
+		// above already covers the worst case.
+		if strings.HasPrefix(filepath.Clean(rel), "..") {
+			continue
+		}
+		parts := splitPathComponents(rel)
+		// parts' last component IS the branch root, which must stay operable.
+		current := cleanHome
+		for i := 0; i < len(parts)-1; i++ {
+			current = filepath.Join(current, parts[i])
+			if _, dup := seen[current]; dup {
+				continue
+			}
+			seen[current] = struct{}{}
 			out = append(out, current)
 		}
 	}
@@ -331,49 +600,6 @@ func descendingComponents(root, workDir string) ([]string, error) {
 		}
 	}
 	return components, nil
-}
-
-// siblingsOutsideOwnBranch returns every entry under root that is NOT on the
-// path from root down to workDir.
-//
-// It walks one directory level at a time rather than recursing: once an entry is
-// off the chain, denying that entry covers its whole subtree, so there is
-// nothing below it worth visiting. The walk therefore costs one ReadDir per
-// component of the work dir's path below root — two, for both shapes the
-// product actually produces.
-//
-// workDir MUST be a proper descendant of root; the caller checks that.
-func siblingsOutsideOwnBranch(root, workDir string) ([]string, error) {
-	// descendingComponents, not a bare filepath.Rel: a chain containing ".."
-	// makes this loop ReadDir its way UP to "/" and deny every entry of every
-	// directory on the way. See chainRootFor for the measured consequences.
-	components, err := descendingComponents(root, workDir)
-	if err != nil {
-		return nil, err
-	}
-
-	var out []string
-	current := root
-	for _, onChain := range components {
-		entries, readErr := os.ReadDir(current)
-		if readErr != nil {
-			// A chain component that does not exist yet (a workspace whose
-			// work/ dir is created lazily) is not an error: there are no
-			// siblings to deny inside a directory that is not there.
-			if errors.Is(readErr, os.ErrNotExist) {
-				return out, nil
-			}
-			return nil, fmt.Errorf("list %q: %w", current, readErr)
-		}
-		for _, e := range entries {
-			if e.Name() == onChain {
-				continue
-			}
-			out = append(out, filepath.Join(current, e.Name()))
-		}
-		current = filepath.Join(current, onChain)
-	}
-	return out, nil
 }
 
 // splitPathComponents splits a cleaned relative path into its components.

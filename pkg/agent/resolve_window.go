@@ -42,9 +42,11 @@ import (
 // is built with window 0 and runTurn refuses the turn with
 // context_window_unknown until the operator sets an override (FR-007/008).
 //
-// Exempt: a row whose cli_kind names a subprocess driver manages its own
-// context. Window 0, no source, every budget check skipped (FR-005). The
-// decision is by the field, never by a provider id.
+// Exempt: an external-CLI WORKER (subagent_3p) manages its own context.
+// Window 0, no source, every budget check skipped (FR-005). The decision is
+// by the agent's executor field, never by a provider id. The former
+// catalog-row subprocess exemption was deleted with the CLI-backed model
+// providers (WU-24, founder 2026-10-14).
 //
 // D8 is NOT adopted: nothing here learns a window from provider error text.
 
@@ -137,10 +139,9 @@ func liveWindowLookup() LiveWindowLookup {
 
 // windowRow is what the resolver needs to know about the provider behind a
 // (provider, model) pair: whether it exists at all, how ADR-067 classifies
-// it, whether it is a subprocess driver, and its base URL for the live key.
+// it, and its base URL for the live key.
 type windowRow struct {
 	known    bool
-	exempt   bool
 	locality catalog.Locality
 	baseURL  string
 }
@@ -154,7 +155,6 @@ func lookupWindowRow(cfg *config.Config, provider string) windowRow {
 	if p, ok := windowCatalog().Provider(provider); ok {
 		return windowRow{
 			known:    true,
-			exempt:   p.CLIKind != "", // a cli_kind is present iff the row is a subprocess driver (X-14)
 			locality: p.Locality,
 			baseURL:  p.API,
 		}
@@ -186,17 +186,13 @@ func ResolveWindow(cfg *config.Config, provider, model, agentID string) WindowRe
 	model = strings.TrimSpace(model)
 
 	// A subagent_3p agent (external-CLI executor) runs on its own engine:
-	// its CLI manages its own context, exactly like a cli_kind row below
-	// (provider hotfix H4). Keyed by the agent's executor, never by an id.
+	// its CLI manages its own context (provider hotfix H4). Keyed by the
+	// agent's executor, never by an id.
 	if agentID != "" && cfg.IsExternalCLIWorkerID(agentID) {
 		return WindowResolution{Exempt: true}
 	}
 
 	row := lookupWindowRow(cfg, provider)
-
-	if row.exempt {
-		return WindowResolution{Exempt: true}
-	}
 
 	// Capability: the live-or-catalog value. 0 = nobody knows. Rung 4's
 	// Lookup never blocks: a cold cache answers (0, false) now and the live

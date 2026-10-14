@@ -193,6 +193,16 @@ var (
 // doc comment for why "not provably a read" must mean "treat as a write",
 // never the other way round.
 func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string, pathGrantsArg ...[]fspolicy.PathGrant) string {
+	msg, _ := t.guardCommandClassified(ctx, command, cwd, pathGrantsArg...)
+	return msg
+}
+
+// guardCommandClassified is guardCommand plus one bit: whether the refusal
+// came from the #1284 protected-internal-file leg — the one guard outcome
+// with a structured wire marker (PermissionDenied, code
+// protected_internal_file). Same legs, same order, one body: guardCommand
+// delegates here and drops the bit, so the two cannot drift.
+func (t *ExecTool) guardCommandClassified(ctx context.Context, command, cwd string, pathGrantsArg ...[]fspolicy.PathGrant) (string, bool) {
 	var pathGrants []fspolicy.PathGrant
 	if len(pathGrantsArg) > 0 {
 		pathGrants = pathGrantsArg[0]
@@ -202,21 +212,35 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string, pathGr
 	// not disableable — ADR-092 D2's removal inventory names this guard a
 	// survivor, unlike the regex baseline it used to sit beside.
 	if msg := substitutionGuard(command); msg != "" {
-		return msg
+		return msg, false
+	}
+
+	// #1284 protected-internal-file leg (amendment §2 D6): UNCONDITIONAL — it
+	// runs in front of the restrictToWorkspace early return, exactly beside
+	// substitutionGuard, because the internal files are protected from every
+	// agent in every mode (God Mode included) and are never grantable. It
+	// resolves each operand the command text names to a path and asks the ONE
+	// predicate (IsCarveOut, via inTurnSecretSet) — identity-based, not a
+	// regex over names, so it does not reintroduce the retired command-text
+	// block list (scripts/check-no-shell-deny-patterns.sh's banned symbols
+	// appear nowhere here). A command naming a protected path is refused
+	// outright: never prompted, never widened.
+	if msg, protected := t.guardProtectedOperands(ctx, command); protected {
+		return msg, true
 	}
 
 	if !t.restrictToWorkspace {
-		return ""
+		return "", false
 	}
 
 	cmd := strings.TrimSpace(command)
 	if strings.Contains(cmd, "..\\") || strings.Contains(cmd, "../") {
-		return "Command blocked by safety guard (path traversal detected)"
+		return "Command blocked by safety guard (path traversal detected)", false
 	}
 
 	cwdPath, err := filepath.Abs(cwd)
 	if err != nil {
-		return "cannot resolve working directory"
+		return "cannot resolve working directory", false
 	}
 
 	// ADR-063 alignment: the command-TEXT scan below must honor the SAME
@@ -387,7 +411,7 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string, pathGr
 		if strings.Contains(raw, ":") && colonPathListPattern.MatchString(raw) {
 			for _, seg := range strings.Split(raw, ":") {
 				if msg := t.checkPathSegment(seg, cwdPath, mountRoots, turnPolicy, readPolicyOK, use, expansionDerived); msg != "" {
-					return msg
+					return msg, false
 				}
 			}
 			continue
@@ -408,11 +432,86 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string, pathGr
 		}
 
 		if msg := t.checkPathSegment(raw, cwdPath, mountRoots, turnPolicy, readPolicyOK, use, expansionDerived); msg != "" {
-			return msg
+			return msg, false
 		}
 	}
 
-	return ""
+	return "", false
+}
+
+// guardProtectedOperands scans the command TEXT for absolute-path candidates
+// (the same extraction, boundary and expansion-resolution machinery the
+// workspace scan below uses) and refuses any candidate that lands on the
+// #1284 protected internal files. It is the unconditional leg of
+// guardCommand: restrictToWorkspace=false and God Mode never skip it, and no
+// approval can widen it (the protected set is never grantable).
+//
+// A candidate whose expansion prefix cannot be resolved (a shell variable
+// whose value this process does not know) is not classified — the same
+// documented dynamic-path residual the Windows story has; on platforms with a
+// kernel backend the floor profile still confines the child by real path.
+// guardProtectedOperands scans the command TEXT for absolute-path candidates
+// (the same extraction, boundary and expansion-resolution machinery the
+// workspace scan below uses) and reports whether any candidate lands on the
+// #1284 protected internal files. The second return is the refusal message.
+// It is the unconditional leg of guardCommand: restrictToWorkspace=false and
+// God Mode never skip it, and no approval can widen it (the protected set is
+// never grantable).
+//
+// A candidate whose expansion prefix cannot be resolved (a shell variable
+// whose value this process does not know) is not classified — the same
+// documented dynamic-path residual the Windows story has; on platforms with a
+// kernel backend the floor profile still confines the child by real path.
+func (t *ExecTool) guardProtectedOperands(ctx context.Context, command string) (string, bool) {
+	home := config.OmnipusHomeDir()
+	if home == "" {
+		return "", false
+	}
+	turnPolicy, policyOK := fspolicy.FSPolicy{}, false
+	if authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace); err == nil {
+		turnPolicy, policyOK = authored, true
+	}
+
+	cmd := strings.TrimSpace(command)
+	for _, loc := range absolutePathPattern.FindAllStringSubmatchIndex(cmd, -1) {
+		start, end := loc[2], loc[3]
+		if start < 0 || end < 0 {
+			continue
+		}
+		raw := cmd[start:end]
+		if loc[0] >= 0 && loc[0] < start {
+			if prefix, resolved, isExpansion := expandCandidatePrefix(cmd[loc[0]:start]); isExpansion {
+				if !resolved {
+					continue // unclassifiable dynamic path — documented residual
+				}
+				raw = filepath.Join(prefix, raw)
+			}
+		}
+		p, err := filepath.Abs(raw)
+		if err != nil {
+			continue
+		}
+		if t.operandIsProtected(p, turnPolicy, policyOK, home) {
+			return ProtectedInternalFileMessage(p), true
+		}
+	}
+	return "", false
+}
+
+// operandIsProtected asks the ONE predicate about a resolved operand. With a
+// turn policy it is exactly inTurnSecretSet (IsCarveOut plus the child-only
+// skills deny). Without one it fails closed toward the protected set using
+// the turn-free conservative form — a missing turn policy must not turn the
+// unconditional leg off.
+func (t *ExecTool) operandIsProtected(p string, policy fspolicy.FSPolicy, policyOK bool, home string) bool {
+	if policyOK {
+		return t.inTurnSecretSet(p, policy)
+	}
+	protected := fspolicy.IsProtectedHomePath(p, home) || fspolicy.CoversChildOnlySecretPath(p, home)
+	if resolved, err := resolvePathAgainstExistingAncestor(p); err == nil && resolved != p {
+		protected = protected || fspolicy.IsProtectedHomePath(resolved, home) || fspolicy.CoversChildOnlySecretPath(resolved, home)
+	}
+	return protected
 }
 
 // pathUseVerdict is what the classifier can say about one absolute-path

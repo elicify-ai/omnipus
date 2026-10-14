@@ -132,11 +132,11 @@ describe('ProviderPicker — Popular tiles and the collapsed list', () => {
     )
   })
 
-  it('shows "All providers (178)" collapsed, with the list hidden', () => {
+  it('shows "All providers (176)" collapsed, with the list hidden', () => {
     renderPicker()
     const toggle = screen.getByTestId('picker-all-toggle')
-    // 190 catalog entries minus the 12 popular ones.
-    expect(toggle).toHaveTextContent('All providers (178)')
+    // 188 catalog entries minus the 12 popular ones (WU-24 removed two).
+    expect(toggle).toHaveTextContent('All providers (176)')
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryAllByTestId(/^picker-row-/)).toHaveLength(0)
   })

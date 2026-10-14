@@ -105,7 +105,7 @@ func PermissionDeniedResult(toolName string, classErr error, detail string) *Too
 		reason = classErr.Error()
 	}
 
-	encoded, err := PermissionDeniedPayload(toolName, message, reason, true)
+	encoded, err := PermissionDeniedPayload(toolName, message, reason, true, protectedCodeFor(classErr))
 	if err != nil {
 		// Fall back to a plain text error if marshaling somehow fails —
 		// prose the caller can still read is better than nothing. reason
@@ -125,4 +125,45 @@ func PermissionDeniedResult(toolName string, classErr error, detail string) *Too
 		ForLLM:  string(encoded),
 		IsError: true,
 	}).WithError(classErr)
+}
+
+// protectedCodeFor maps a filesystem-resolution sentinel to PermissionDenied's
+// optional `code` marker (#1284 fix round 1): exactly the protected-internal
+// -file value for ErrCarveOut — the refusal that is never grantable in any
+// permission mode — and no marker for every other denial class.
+func protectedCodeFor(classErr error) string {
+	if errors.Is(classErr, ErrCarveOut) {
+		return ProtectedInternalFileCode
+	}
+	return ""
+}
+
+// ProtectedInternalFileMessage is the one refusal text bash's protected-
+// operand leg returns (guardCommandClassified's classified outcome), shared
+// with ProtectedInternalFileResult so the plain-string guard callers and the
+// structured tool-result producer always say the same thing.
+func ProtectedInternalFileMessage(path string) string {
+	return fmt.Sprintf(
+		"Command blocked: %q is inside Omnipus's protected internal files, which no agent command may "+
+			"read or change in any mode — God Mode included. This is never grantable; work inside the "+
+			"workspace and use the dedicated internal tools where one exists.", path)
+}
+
+// ProtectedInternalFileResult is the structured tool result for bash's
+// protected-internal-file refusal (#1284 fix round 1, chief Q1 A): the SAME
+// PermissionDenied wire shape the file tools emit, carrying code
+// protected_internal_file so a consumer never parses prose to recognise the
+// never-grantable refusal. permanent is always true — no mode, grant, or
+// approval can reopen the protected set within the turn or any other one.
+func ProtectedInternalFileResult(toolName, reason string) *ToolResult {
+	encoded, err := PermissionDeniedPayload(toolName, "", reason, true, ProtectedInternalFileCode)
+	if err != nil {
+		warnStructuredFailureMarshalError("ProtectedInternalFileResult", toolName, ProtectedInternalFileCode, err)
+		return ErrorResult(reason)
+	}
+	return &ToolResult{
+		ForLLM:  string(encoded),
+		IsError: true,
+		Err:     fmt.Errorf("%w: %s", ErrCarveOut, reason),
+	}
 }

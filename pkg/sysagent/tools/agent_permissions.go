@@ -36,11 +36,13 @@ func (t *AgentPermissionsTool) Name() string                 { return "set_agent
 func (t *AgentPermissionsTool) Scope() tools.ToolScope       { return tools.ScopeCore }
 func (t *AgentPermissionsTool) Category() tools.ToolCategory { return tools.CategoryAgents }
 
-// Description is PLACEHOLDER text until prometheus authors the tool copy
-// (WU-9 wiring).
+// Description documents the FR-024 permission split and the tool's inputs.
 func (t *AgentPermissionsTool) Description() string {
-	return "Change an existing agent's per-agent tool policies and connector assignments, using the revision returned by get_agent. " +
-		"Send tool_policy_changes, mcp_servers, or both; nothing else. Every change asks the user for approval."
+	return "Change an existing agent's per-agent tool policies and connector (MCP) assignments. This is the only agent-tool path for those changes — update_agent refuses both. The shipped policy asks the user for approval before it runs; Omnipus skips approvals in God Mode. " +
+		"Send id, revision (the opaque revision returned by get_agent), and at least one of tool_policy_changes or mcp_servers. A stale revision or any other input field is refused; re-read the agent before retrying a stale write. " +
+		"tool_policy_changes is a sparse patch: set maps tool names to allow|ask|deny, and remove lists per-agent override names to delete. Unknown tools and invalid policy values are rejected; per-agent policies cannot widen the global tool policy. " +
+		"mcp_servers replaces the full connector-assignment list; [] clears all bindings. Each entry is {id, tools?}: omitted tools grants all tools of that assigned server, an empty tools list grants none. Unknown servers or unknown/unavailable tool names are rejected. " +
+		"External CLI workers reject these capability fields; Judge and Plan Supervisor keep fixed capabilities. Omnipus refuses any per-agent ask as a whole — use deny, or set ask on the global tool policy."
 }
 
 func (t *AgentPermissionsTool) Parameters() map[string]any {

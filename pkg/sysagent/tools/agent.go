@@ -21,10 +21,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
 	"github.com/elicify-ai/omnipus/pkg/entity"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/validation"
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -95,7 +97,7 @@ func NewAgentCreateTool(d *Deps) *AgentCreateTool { return &AgentCreateTool{deps
 func (t *AgentCreateTool) Name() string           { return "create_agent" }
 func (t *AgentCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentCreateTool) Description() string {
-	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul and model are required. color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
+	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague) and 'Subagent' (native delegation-only worker) require soul; 'subagent_3p' is a delegation-only worker on an external CLI — it takes no soul, requires cli, and its cli_path is optional (empty means the CLI's default binary on PATH). name, description and model are required; soul is required for native agents ('Main'/'Subagent') and must be omitted for 'subagent_3p' (an external CLI worker has no soul; supplying one is refused). A set cli_path must name an executable file this machine can run for the current user (an existing regular file with execute access on Unix; a PATHEXT-admitted extension on Windows); leave it empty to use the CLI's default binary on PATH. color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
 }
 
 func (t *AgentCreateTool) Parameters() map[string]any {
@@ -109,19 +111,25 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"description": "One-line description of the agent's purpose",
 			},
 			"soul": map[string]any{
-				"type":        "string",
-				"description": "The agent's personality, role, and behavioral instructions (written to SOUL.md)",
+				"type": "string",
+				"description": "The agent's personality, role, and behavioral instructions (written to SOUL.md). " +
+					"REQUIRED for native agents ('Main'/'Subagent'); NOT supported for 'subagent_3p' — an external " +
+					"CLI worker has no native soul, and supplying one is refused.",
 			},
 			"model": map[string]any{
 				"type":        "string",
 				"description": "Primary LLM model slug (e.g. 'z-ai/glm-5v-turbo')",
 			},
-			"color": map[string]any{"type": "string", "description": "Avatar color, optional (default Pewter #8E9196): one of the palette hex values (e.g. '#6E8BA8')"},
+			"color": map[string]any{"type": "string", "description": "Avatar color, optional: one of the ten palette hex values #4F8A80, #5E6973, #6E8BA8, #7A8C9E, #7B7290, #8E9196, #9C8A5B, #A97142, #B76E79, #CDBA96 (letter-case is normalized). Omitted, null or empty creates the agent with the default Pewter #8E9196; any other value is rejected."},
+			// Visual identity figure/role (#1303): the same catalogs the SPA
+			// agent editor and REST create use; helpers in agent_visuals.go.
+			"figure": figureCreateProperty(),
+			"role":   roleCreateProperty(),
 			// Optional — agent type + external-CLI worker runtime.
 			"agent_type": map[string]any{
 				"type":        "string",
 				"enum":        []any{"Main", "Subagent", "subagent_3p"},
-				"description": "Agent type. 'Main' (default) = native chat colleague on the Omnipus engine. 'Subagent' = native delegation-only worker. 'subagent_3p' = delegation-only worker that runs on an EXTERNAL CLI (requires cli + cli_path).",
+				"description": "Agent type. 'Main' (default) = native chat colleague on the Omnipus engine; 'Subagent' = native delegation-only worker — both native types require soul. 'subagent_3p' = delegation-only worker on an EXTERNAL CLI: requires cli, while cli_path is optional (leave it empty to use the CLI's default binary on PATH; set it only for a wrapper or a non-standard install location).",
 			},
 			"cli": map[string]any{
 				"type":        "string",
@@ -130,7 +138,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"cli_path": map[string]any{
 				"type":        "string",
-				"description": "Optional. Absolute path to the external CLI binary. Leave EMPTY to use the CLI's default binary on $PATH (claude / codex / opencode). Set it only when this machine invokes the CLI via a wrapper or a non-standard path — and derive the real path on this system, never hardcode a guess.",
+				"description": "Optional. Absolute path to the external CLI binary. Leave EMPTY to use the CLI's default binary on $PATH (claude / codex / opencode). Set it only when this machine invokes the CLI via a wrapper or a non-standard path — and derive the real path on this system, never hardcode a guess. When set, it must name an existing regular file this machine can execute for the current user (Unix: the user holds execute access; Windows: the extension is in PATHEXT); a missing path, a directory, or a non-executable file is refused.",
 			},
 			"provider": map[string]any{
 				"type":        "string",
@@ -161,7 +169,12 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"model_params": modelParamsParameters(),
 		},
-		"required": []string{"name", "description", "soul", "model"},
+		// soul is deliberately NOT in the schema required list: it is required
+		// for native agents ('Main'/'Subagent') only. External CLI workers
+		// ('subagent_3p') have no native soul — validate() enforces the
+		// conditional requirement, and the store refuses a supplied external
+		// soul as an unsupported field (issue #1274, chief ruling Q1 B).
+		"required": []string{"name", "description", "model"},
 	}
 }
 
@@ -175,6 +188,8 @@ type agentCreateToolExecute struct {
 	soul            string
 	model           string
 	color           string
+	figure          string
+	role            string
 	agentType       string
 	execCLI         string
 	execCLIPath     string
@@ -235,8 +250,24 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 			errorJSON("INVALID_INPUT", "description is required", "Provide a one-line description"),
 		), true
 	}
+	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
+	// Resolved BEFORE the soul check: soul is required for native agents only —
+	// an external CLI worker ('subagent_3p') has no native soul, and supplying
+	// one stays an unsupported-field refusal (agentmutation.ValidateFields,
+	// issue #1274, chief ruling Q1 B).
+	ac.agentType, _ = ac.args["agent_type"].(string)
+	if ac.agentType == "" {
+		ac.agentType = "Main"
+	}
+	switch ac.agentType {
+	case "Main", "Subagent", "subagent_3p":
+	default:
+		return tools.ErrorResult(errorJSON("INVALID_INPUT",
+			"agent_type must be one of Main, Subagent, subagent_3p",
+			"Use 'subagent_3p' for an external CLI worker")), true
+	}
 	ac.soul, _ = ac.args["soul"].(string)
-	if strings.TrimSpace(ac.soul) == "" {
+	if ac.agentType != "subagent_3p" && strings.TrimSpace(ac.soul) == "" {
 		return tools.ErrorResult(
 			errorJSON(
 				"INVALID_INPUT",
@@ -262,19 +293,21 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	// so an explicit empty colour cannot overwrite the default.
 	ac.args["color"] = ac.color
 
-	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
-	ac.agentType, _ = ac.args["agent_type"].(string)
-	if ac.agentType == "" {
-		ac.agentType = "Main"
+	// Visual identity figure/role (#1303, chief Q1 A 2026-10-14): omitted, null
+	// (NormalizeArgs renders it "") or empty select the shipped default —
+	// exactly like REST create — and any other non-catalog value is refused
+	// with the full choice list, before any write. Same catalog and
+	// canonicalizers as the color argument above.
+	figure, figureStop := resolveCreateVisual(ac.args, "figure", coreagent.DefaultFigure)
+	if figureStop != nil {
+		return figureStop, true
 	}
-
-	switch ac.agentType {
-	case "Main", "Subagent", "subagent_3p":
-	default:
-		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			"agent_type must be one of Main, Subagent, subagent_3p",
-			"Use 'subagent_3p' for an external CLI worker")), true
+	ac.figure = figure
+	role, roleStop := resolveCreateVisual(ac.args, "role", coreagent.DefaultRole)
+	if roleStop != nil {
+		return roleStop, true
 	}
+	ac.role = role
 	if ac.agentType == "subagent_3p" {
 		ac.execCLI, _ = ac.args["cli"].(string)
 		switch ac.execCLI {
@@ -286,8 +319,16 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 		}
 		// cli_path is OPTIONAL: when empty the driver invokes the CLI's default
 		// binary name on $PATH (claude / codex / opencode). Set it only when this
-		// machine uses a wrapper or a non-standard binary path.
+		// machine uses a wrapper or a non-standard binary path — and then it must
+		// name an executable file, refused with the path in the reason otherwise
+		// (issue #1274): a bad path must fail here, before any entity, workspace
+		// or config write, not at the worker's first delegated run.
 		ac.execCLIPath, _ = ac.args["cli_path"].(string)
+		if strings.TrimSpace(ac.execCLIPath) != "" {
+			if err := validateExternalCLIPath(ac.execCLIPath); err != nil {
+				return fieldErrorResult(err), true
+			}
+		}
 	}
 
 	if err := rejectUnknownAgentFields(ac.args, agentCreateArgNames); err != nil {
@@ -334,6 +375,29 @@ func refuseManagementGrants(args map[string]any) (*tools.ToolResult, bool) {
 	return nil, false
 }
 
+// validateExternalCLIPath refuses a supplied cli_path the current user could
+// not execute: a missing path, a path that is not a regular file (e.g. a
+// directory), or a file the platform would not run — on Unix faccessat
+// (AT_EACCESS, X_OK) for the effective user, on Windows a PATHEXT-admitted
+// extension (issue #1274, fix round 1). The refusal names cli_path, the exact
+// supplied path and the specific fault so the model can correct it. Symlinks
+// are resolved by os.Stat, matching what the driver would exec. An empty path
+// is the caller's "use the CLI's default binary on PATH" request and never
+// reaches this check.
+func validateExternalCLIPath(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fieldErr("cli_path", fmt.Sprintf("%q does not exist: set cli_path to an existing executable CLI binary, or leave it empty to use the CLI's default binary on PATH (stat: %v)", path, err))
+	}
+	if !fi.Mode().IsRegular() {
+		return fieldErr("cli_path", fmt.Sprintf("%q is a directory, not a regular file: point cli_path at the CLI executable itself, or leave it empty to use the CLI's default binary on PATH", path))
+	}
+	if err := currentUserCanExecute(path); err != nil {
+		return fieldErr("cli_path", fmt.Sprintf("%q is not executable: %v. Point cli_path at a file this machine can execute, or leave it empty to use the CLI's default binary on PATH", path, err))
+	}
+	return nil
+}
+
 // prepareConfig builds the persisted agent configuration from required and optional arguments.
 func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	// ADR-054 D2/§11 checklist item 6: agents are per-entity records under
@@ -348,6 +412,8 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 		Name:        ac.name,
 		Description: ac.description,
 		Color:       ac.color,
+		Figure:      ac.figure, // resolved default or canonical catalog value (#1303)
+		Role:        ac.role,
 		Model:       &config.AgentModelConfig{Primary: ac.model},
 	}
 	// Agent type / runtime (W4). Subagent + subagent_3p persist as worker;
@@ -866,7 +932,7 @@ func NewAgentUpdateTool(d *Deps) *AgentUpdateTool { return &AgentUpdateTool{deps
 func (t *AgentUpdateTool) Name() string           { return "update_agent" }
 func (t *AgentUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentUpdateTool) Description() string {
-	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Ava, Admin, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their tool policies, installed connector assignments, and skills are editable. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type."
+	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Omnipus, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their skills are editable. An existing agent's per-agent tool policies and connector (MCP) assignments are changed with set_agent_permissions, never update_agent. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type."
 }
 
 func (t *AgentUpdateTool) Parameters() map[string]any {
@@ -887,7 +953,11 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model. Empty string clears an existing pin (falls back to default-provider resolution).",
 			},
-			"color": map[string]any{"type": "string"},
+			"color": map[string]any{"type": "string", "description": "New avatar color: one of the ten palette hex values #4F8A80, #5E6973, #6E8BA8, #7A8C9E, #7B7290, #8E9196, #9C8A5B, #A97142, #B76E79, #CDBA96 (letter-case is normalized). Omitted leaves the stored color unchanged; null or empty is refused."},
+			// Visual identity figure/role (#1303): same catalogs as create;
+			// helpers in agent_visuals.go.
+			"figure": figureUpdateProperty(),
+			"role":   roleUpdateProperty(),
 			// #904 D15: JSON null clears the own value ("use the global
 			// limit"), so the schema admits null; 1..1000 bound structurally.
 			"max_tool_iterations": map[string]any{
@@ -902,7 +972,11 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
 			},
-			"context_window_override": map[string]any{"type": "integer", "description": "Positive token override. JSON null clears the override."},
+			// Like max_tool_iterations above: the schema admits JSON null so the
+			// documented null clear reaches Execute through the registry's type
+			// check (CHECK F1) — the tool's own validator
+			// (applyContextWindow/jsonInt) still refuses non-integers.
+			"context_window_override": map[string]any{"type": []string{"integer", "null"}, "description": "Positive token override. JSON null clears the override."},
 			"model_params":            modelParamsParameters(),
 		},
 		"required": []string{"id", "revision"},
@@ -930,9 +1004,8 @@ func (t *AgentDeleteTool) Description() string {
 		"in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself " +
 		"survives); tasks it merely created keep that historical attribution. This agent is also removed from " +
 		"every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from " +
-		"each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Ava, Admin, Planner, Researcher, General Purpose, Judge, and Plan Supervisor), the currently " +
-		"configured default agent, and an agent that owns at least one active (running) Plan cannot be deleted " +
-		"— set another agent as default first (Agents screen ★), or stop/reassign the Plan(s), before retrying. " +
+		"each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Omnipus, Planner, Researcher, General Purpose, Judge, and Plan Supervisor) cannot be deleted. " +
+		"An agent that owns at least one active (running) Plan cannot be deleted — stop/reassign the Plan(s) before retrying. " +
 		"A step that fails partway through is reported in the response rather than " +
 		"silently swallowed — check for a warning field before assuming the cascade fully completed." +
 		"\nParameters: id (required), revision (required, from get_agent), confirm (bool, must be true)."
@@ -1230,6 +1303,16 @@ func RunAgentDeleteCascade(omnipusHome, agentID, revision string, sessions Agent
 	res.WorkspacesUpdated, res.EdgesRemoved, w = cascadeCleanAgentWorkspaceReferences(omnipusHome, agentID)
 	res.Warnings = append(res.Warnings, w...)
 
+	// Step 2b (WU-21 / #1197, amendment §3.2(6)): the agent's end-of-chat
+	// summaries are workspace-owned files — one per (agent, workspace) pair —
+	// so delete_agent removes this agent's pair file in EVERY workspace.
+	// Other agents' files, and workspaces the agent merely left (membership
+	// removal), stay untouched. A failure is an FR-037 warning that keeps the
+	// record visible for retry, never a recursive erase of an unexpected
+	// directory and never a claimed success.
+	w = cascadeDeleteAgentCarryForwardFiles(omnipusHome, agentID)
+	res.Warnings = append(res.Warnings, w...)
+
 	// FR-037: if any owned-data cleanup step failed, STOP — the record must
 	// remain VISIBLE so the same Delete can retry, and the result must say the
 	// agent is only partly deleted rather than claim success.
@@ -1244,6 +1327,64 @@ func RunAgentDeleteCascade(omnipusHome, agentID, revision string, sessions Agent
 	// this resource.
 	res.Deletion, res.DeletionErr = agentstore.New(omnipusHome).DeleteState(agentID, revision)
 	return res
+}
+
+// cascadeDeleteAgentCarryForwardFiles removes this agent's end-of-chat summary
+// file — workspaces/<id>/.omnipus/carry-forward/<agentID>.md — in every
+// workspace under $OMNIPUS_HOME (WU-21 / #1197, amendment §3.2(6)). It returns
+// one warning per failure (an FR-037 cleanup failure: the caller keeps the
+// entity record for retry) and none when there was nothing to remove.
+// Enumeration is done with per-workspace ReadDir, not filepath.Glob: Glob
+// silently skips subtrees it cannot read, so a permission-denied carry-forward
+// directory would be indistinguishable from an empty one and the agent record
+// would be deleted while its summary survived. A subtree that cannot be
+// scanned is therefore a warning naming the owning workspace, never a silent
+// skip; a workspace with no carry-forward room yet is the normal empty case.
+// Each warning labels the owning workspace id, so the diagnostic names the
+// owner and not merely a path buried in wrapped OS error text.
+// Membership-only removal never reaches this function.
+func cascadeDeleteAgentCarryForwardFiles(omnipusHome, agentID string) []string {
+	if err := validation.EntityID(agentID); err != nil {
+		return []string{fmt.Sprintf("carry-forward cleanup skipped: invalid agent id: %v", err)}
+	}
+	workspacesDir := filepath.Join(omnipusHome, memrooms.WorkspacesDirName)
+	entries, err := os.ReadDir(workspacesDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // no workspaces exist, so no workspace-owned summary can.
+		}
+		return []string{fmt.Sprintf("carry-forward cleanup failed: cannot enumerate workspaces: %v", err)}
+	}
+	var warnings []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue // workspace records (workspaces/<id>.json) are not rooms.
+		}
+		workspaceID := entry.Name()
+		carryForwardDir := filepath.Join(workspacesDir, workspaceID, memrooms.OmnipusRoomDir, "carry-forward")
+		files, err := os.ReadDir(carryForwardDir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue // this workspace holds no carry-forward room yet.
+			}
+			// An unscannable subtree is a cleanup failure, never evidence of
+			// an empty directory: report it instead of silently skipping the
+			// agent's owned data there.
+			warnings = append(warnings, fmt.Sprintf("carry-forward cleanup failed for workspace %q: cannot enumerate: %v", workspaceID, err))
+			continue
+		}
+		for _, file := range files {
+			if file.Name() != agentID+".md" {
+				continue // only this agent's own summary; siblings stay.
+			}
+			// os.Remove deliberately refuses a directory: a non-file at the
+			// pair path is reported, never recursively erased.
+			if rmErr := os.Remove(filepath.Join(carryForwardDir, file.Name())); rmErr != nil {
+				warnings = append(warnings, fmt.Sprintf("carry-forward cleanup failed for workspace %q: remove %s: %v", workspaceID, file.Name(), rmErr))
+			}
+		}
+	}
+	return warnings
 }
 
 // deleteAndCascade runs the shared cleanup-first, record-last cascade

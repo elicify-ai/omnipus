@@ -702,6 +702,19 @@ func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoop
 func (cn *agentLoopRunTurnConductorRunIterations) dispatchToolCalls() agentLoopRunTurnConductorRunIterationsFlow {
 	if err := cn.rc.rx.rr.recordToolCalls(); err != nil {
 		rt := cn.rc.rx.rr.rq.ri.rf.rt
+		// #1178 (amendment §4.2): recordToolCalls already wrapped, marked the
+		// turn failed, emitted the could-not-save notice and classified the
+		// transcript error for a failed continuation flush — running it
+		// through contextWindowTurnExit again would double-report. End the
+		// turn on the handled failure as-is.
+		var notSaved *messageNotSavedError
+		if errors.As(err, &notSaved) {
+			cn.rc.ret0 = turnResult{status: TurnEndStatusError}
+			cn.rc.ret1 = err
+			cn.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+			cn.ret0 = agentLoopRunTurnConductorReturn
+			return agentLoopRunTurnConductorRunIterationsReturn
+		}
 		var status TurnEndStatus
 		cn.rc.ret0, status, cn.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
 		cn.rc.rx.rr.rq.ri.turnStatus = status

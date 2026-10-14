@@ -98,9 +98,9 @@ func TestADR090_FreshSkillAssignmentsAndExplicitEmptySelectionsPersist(t *testin
 	wantSkills := map[string][]string{
 		"mia": {"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
 		"jim": {"interview", "orchestrate", "plan", "define-goal"},
-		// Omnipus ships no fresh skill assignment until WU-9 grants its
-		// workflow skills (FR-010); the retired Ava/Admin skills are gone.
-		"omnipus":        nil,
+		// Chief ruling 2026-10-14, FR-008: Omnipus receives the former setup
+		// skill union until WU-9 replaces it with dedicated workflows (FR-010).
+		"omnipus":        {"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team", "mcp-install", "provider-setup", "channel-setup", "doctor"},
 		"planner":        {"plan", "define-goal"},
 		"researcher":     {"deep-research"},
 		"worker":         {"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},

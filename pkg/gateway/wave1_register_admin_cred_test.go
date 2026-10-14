@@ -1,7 +1,7 @@
 // Package gateway — Wave 1 tests for API key credential store integration.
 //
-// These tests cover API key credential store — backward compat with plaintext
-// api_key, new onboarding creates api_key_ref when credentials store available,
+// These tests cover API key credential storage — onboarding creates
+// api_key_ref when the credential store is available,
 // provider PUT stores api_key_ref when credentials store available, provider GET
 // resolves api_key_ref from credentials store.
 //
@@ -183,103 +183,6 @@ func readConfigMap(t *testing.T, dir string) map[string]any {
 }
 
 // --- API key credential store integration ---
-
-// TestProviders_BackwardCompatPlaintextAPIKey verifies that a config with an old-style
-// plaintext api_key field (not api_key_ref) is still served by GET /api/v1/providers.
-//
-// BDD: Given config.json has a provider entry with the legacy "api_key" field
-// AND the corresponding env-var (OPENAI_API_KEY, populated by InjectFromConfig at boot)
-// is set to the plaintext value,
-// When GET /api/v1/providers is called,
-// Then 200 with the provider listed as "connected" (backward compat — old installs work).
-//
-// FR-104: Connected status requires that the key resolves to a non-empty value.
-// In the old-format path, InjectFromConfig writes the plaintext to the env var
-// referenced by APIKeyRef; this test simulates that injection.
-//
-// Traces to: pkg/gateway/rest.go — HandleProviders GET (backward compat)
-func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
-	withEdition(t, config.EditionHosted)
-	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
-	t.Setenv("OMNIPUS_MASTER_KEY", "")
-	t.Setenv("OMNIPUS_KEY_FILE", "")
-	// Simulate InjectFromConfig injecting the plaintext api_key into the env var
-	// referenced by the ModelConfig.APIKeyRef field ("OPENAI_API_KEY").
-	// On a real deployment, this injection happens at boot via credentials.InjectFromConfig.
-	t.Setenv("OPENAI_API_KEY", "sk-oldformat-plaintext")
-	tmpDir := t.TempDir()
-
-	// Old-format config: provider entry uses plaintext api_key (not api_key_ref).
-	oldConfig := map[string]any{
-		"agents": map[string]any{
-			"defaults": map[string]any{"model_name": "openai"},
-			"list":     []any{},
-		},
-		"providers": []any{
-			map[string]any{
-				"model_name": "openai",
-				"provider":   "openai",
-				"model":      "gpt-4o",
-				"api_key":    "sk-oldformat-plaintext",
-			},
-		},
-	}
-	data, err := json.Marshal(oldConfig)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(tmpDir+"/config.json", data, 0o600))
-
-	// Build config struct reflecting the old plaintext key migrated to env-var injection.
-	// APIKeyRef points at the env var that InjectFromConfig would have populated.
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:         tmpDir,
-				DefaultModel: config.DefaultModel{Provider: "openai", Model: "gpt-4o"},
-				MaxTokens:    4096,
-			},
-		},
-		Providers: []*config.ModelConfig{
-			{Name: "openai", Provider: "openai", Model: "gpt-4o", APIKeyRef: "OPENAI_API_KEY"},
-		},
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	api := &restAPI{
-		agentLoop:     al,
-		allowedOrigin: "http://localhost:3000",
-		onboardingMgr: onboarding.NewManager(tmpDir),
-		homePath:      tmpDir,
-		taskStore:     task.New(tmpDir + "/tasks"),
-	}
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
-	r.URL.Path = "/api/v1/providers"
-	api.HandleProviders(w, isolateRateLimit(t, r))
-
-	require.Equal(t, http.StatusOK, w.Code, "GET /providers must return 200 for old plaintext api_key config")
-	var providers []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &providers))
-	require.NotEmpty(t, providers, "providers list must not be empty for old plaintext api_key config")
-
-	// The openai provider must be present in the response.
-	found := false
-	for _, p := range providers {
-		if id, ok := p["id"].(string); ok && id == "openai" {
-			found = true
-			// FR-104: key resolved via env var injection → connected.
-			assert.Equal(t, "connected", p["status"],
-				"openai provider must have status='connected' when env var holds the plaintext api_key")
-			break
-		}
-	}
-	assert.True(
-		t,
-		found,
-		"openai provider must be present in GET /providers response with old plaintext api_key config",
-	)
-}
 
 // TestOnboarding_CreatesAPIKeyRef verifies that HandleCompleteOnboarding stores
 // the API key in the encrypted credentials store (api_key_ref) when OMNIPUS_MASTER_KEY

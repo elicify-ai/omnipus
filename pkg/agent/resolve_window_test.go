@@ -27,8 +27,8 @@ import (
 // T067-02 is merged, so the catalog rung is driven by the real parser, not
 // faked — spec X-27). Rows: openrouter / z-ai/glm-5.2 (1,048,576), ollama
 // (local, no models), lmstudio (local by id), vllm (local by id, no window),
-// codex-cli (protocol cli, cli_kind codex — the subprocess driver),
-// openai-chatgpt (HTTP transport, cloud, a real window).
+// openai-chatgpt (HTTP transport, cloud, a real window). The subprocess
+// model-provider row the fixture once carried is gone (WU-24).
 // ---------------------------------------------------------------------------
 
 func windowTestProvider(id, protocol, api string, extra map[string]any, models ...map[string]any) map[string]any {
@@ -86,9 +86,7 @@ func windowTestCatalogDoc(t *testing.T, glmWindow int) []byte {
 			windowTestProvider("lmstudio", "openai-compatible", "http://127.0.0.1:1234/v1", nil,
 				windowTestModel("qwen3-8b", 32768)),
 			windowTestProvider("vllm", "openai-compatible", "http://localhost:8000/v1", nil),
-			windowTestProvider("codex-cli", "cli", "", map[string]any{"cli_kind": "codex"},
-				windowTestModel("gpt-5-codex", 400000)),
-			windowTestProvider("openai-chatgpt", "openai-compatible", "https://chatgpt.com/backend-api/codex", map[string]any{"token_source": "codex-auth-json"},
+			windowTestProvider("openai-chatgpt", "openai-compatible", "https://chatgpt.com/backend-api/codex", nil,
 				windowTestModel("gpt-5.4", 272000)),
 		},
 	}
@@ -330,54 +328,11 @@ func TestResolveContextWindow_ClampAllRungs(t *testing.T) {
 	})
 }
 
-// TestResolveContextWindow_ExemptByCliDriver — spec test 3 (B-05; FR-005).
-// DS-4 rows 14 and 14b: exempt by the row's cli_kind FIELD (a subprocess
-// driver), never by id; openai-chatgpt is an HTTP transport and stays cloud.
-func TestResolveContextWindow_ExemptByCliDriver(t *testing.T) {
-	installWindowTestCatalog(t, 1_048_576)
-	installLiveWindowStub(t, nil)
-
-	t.Run("DS-4 #14 subprocess cli row → window 0, exempt, no source", func(t *testing.T) {
-		cfg := windowTestConfig()
-		// Overrides on an exempt row must not resurrect a window — the
-		// provider manages its own context.
-		cfg.Agents.List[0].ContextWindowOverride = intPtr(100_000)
-		cfg.Context.DefaultContextWindow = intPtr(150_000)
-		got := ResolveWindow(cfg, "codex-cli", "gpt-5-codex", "mia")
-		assert.Equal(t, 0, got.Window)
-		assert.True(t, got.Exempt)
-		assert.Equal(t, WindowSource(""), got.Source)
-		assert.False(t, got.Unknown)
-	})
-
-	t.Run("DS-4 #14b openai-chatgpt is cloud: catalog value", func(t *testing.T) {
-		cfg := windowTestConfig()
-		got := ResolveWindow(cfg, "openai-chatgpt", "gpt-5.4", "mia")
-		assert.Equal(t, 272_000, got.Window)
-		assert.Equal(t, WindowSourceCatalog, got.Source)
-		assert.False(t, got.Exempt)
-	})
-
-	t.Run("exemption is by field: no provider-id literal in the resolver", func(t *testing.T) {
-		src := readOwnedFileForTest(t, "resolve_window.go")
-		// The fourth id is assembled, not written whole: it names a provider
-		// ADR-068 §2.4 deleted, and scripts/check-no-removed-providers.sh
-		// fails the build on any occurrence of it under pkg/ ("no trace" is a
-		// property of the SOURCE). The assertion is unchanged — the same id is
-		// still searched for in resolve_window.go.
-		removedCLIID := `"` + "claude" + `-cli"`
-		for _, literal := range []string{`"codex-cli"`, `"codex"`, `"copilot"`, removedCLIID, `"openai-chatgpt"`} {
-			assert.NotContains(t, src, literal,
-				"resolve_window.go must decide exemption by the catalog row's cli_kind field, never by id %s", literal)
-		}
-		assert.Contains(t, src, "CLIKind", "exemption must read the row's cli_kind field")
-	})
-}
-
-// TestResolveWindow_NoAgent — spec test 3c (B-04b, B-04c; FR-001 / US-1.AC9,
-// AC10). Without an agent id rungs 2–6 apply; an exempt provider returns 0
-// with no source; an override for a provider that no longer exists is
-// ignored.
+// TestResolveWindow_NoAgent — spec test 3c (B-04b, B-04c; FR-001 /
+// US-1.AC9, AC10). Without an agent id rungs 2–6 apply; an override for a
+// provider that no longer exists is ignored. (The exempt catalog row
+// B-04b once also covered died with the subprocess model providers, WU-24;
+// the surviving external-CLI worker exemption needs an agent id.)
 func TestResolveWindow_NoAgent(t *testing.T) {
 	installWindowTestCatalog(t, 1_048_576)
 	installLiveWindowStub(t, nil)
@@ -412,14 +367,6 @@ func TestResolveWindow_NoAgent(t *testing.T) {
 		got = ResolveWindow(cfg, "openrouter", "z-ai/glm-5.2", "")
 		assert.Equal(t, 150_000, got.Window)
 		assert.Equal(t, WindowSourceOperator, got.Source)
-	})
-
-	t.Run("B-04b exempt provider → 0, no source", func(t *testing.T) {
-		cfg := windowTestConfig()
-		got := ResolveWindow(cfg, "codex-cli", "gpt-5-codex", "")
-		assert.Equal(t, 0, got.Window)
-		assert.True(t, got.Exempt)
-		assert.Equal(t, WindowSource(""), got.Source)
 	})
 
 	t.Run("B-04c dead override for a deleted provider is ignored", func(t *testing.T) {

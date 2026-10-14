@@ -36,6 +36,7 @@ import (
 	"github.com/chromedp/chromedp"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/cdppipe"
 )
 
@@ -266,7 +267,10 @@ func chromeMajorVersion(ctx context.Context, path string) string {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, chromiumProbeTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(probeCtx, path, "--version").Output()
+	// FR-239: the version probe child starts from the closed child allowlist.
+	versionCmd := exec.CommandContext(probeCtx, path, "--version")
+	versionCmd.Env = sandbox.ScrubGatewayEnv()
+	out, err := versionCmd.Output()
 	major := ""
 	if err == nil {
 		major = chromeMajorFromVersionOutput(string(out))
