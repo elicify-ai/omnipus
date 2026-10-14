@@ -40,8 +40,9 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 vi.mock('@/components/chat/composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('@/components/chat/composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
-class ResizeObserverStub { observe() {} unobserve() {} disconnect() {} }
-if (typeof globalThis.ResizeObserver === 'undefined') vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+// jsdom has no measured viewport. Exercise ChatScreen's REAL no-observer
+// fallback renderer rather than enable virtualization with a no-op observer.
+vi.stubGlobal('ResizeObserver', undefined)
 if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = function () {}
 
 let caseNumber = 0
