@@ -932,7 +932,7 @@ func NewAgentUpdateTool(d *Deps) *AgentUpdateTool { return &AgentUpdateTool{deps
 func (t *AgentUpdateTool) Name() string           { return "update_agent" }
 func (t *AgentUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentUpdateTool) Description() string {
-	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Ava, Admin, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their tool policies, installed connector assignments, and skills are editable. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type."
+	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Omnipus, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their skills are editable. An existing agent's per-agent tool policies and connector (MCP) assignments are changed with set_agent_permissions, never update_agent. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type."
 }
 
 func (t *AgentUpdateTool) Parameters() map[string]any {
@@ -1004,9 +1004,8 @@ func (t *AgentDeleteTool) Description() string {
 		"in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself " +
 		"survives); tasks it merely created keep that historical attribution. This agent is also removed from " +
 		"every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from " +
-		"each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Ava, Admin, Planner, Researcher, General Purpose, Judge, and Plan Supervisor), the currently " +
-		"configured default agent, and an agent that owns at least one active (running) Plan cannot be deleted " +
-		"— set another agent as default first (Agents screen ★), or stop/reassign the Plan(s), before retrying. " +
+		"each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Omnipus, Planner, Researcher, General Purpose, Judge, and Plan Supervisor) cannot be deleted. " +
+		"An agent that owns at least one active (running) Plan cannot be deleted — stop/reassign the Plan(s) before retrying. " +
 		"A step that fails partway through is reported in the response rather than " +
 		"silently swallowed — check for a warning field before assuming the cascade fully completed." +
 		"\nParameters: id (required), revision (required, from get_agent), confirm (bool, must be true)."
