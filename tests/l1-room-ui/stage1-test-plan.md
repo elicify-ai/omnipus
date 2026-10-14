@@ -81,6 +81,6 @@ The executed pack is now 14 existing files plus the real-shell file and guard fi
 
 ## Deliberate gaps
 
-No backend endpoint reachability/security claims, live-browser layout or visual claims, approval timeout/rule-editor behaviour, broader rooms/private-secret functionality, complete frontend suite, Go suite, user-facing documentation changes or independent CHECK verdict. Those are outside this test-authoring dispatch. The preserved legacy tests retain their own error/boundary cases.
+No backend endpoint reachability/security claims, live-browser layout or visual claims, server-side approval-timeout adjudication or rule-editor behaviour, broader rooms/private-secret functionality, complete frontend suite, Go suite, user-facing documentation changes or independent CHECK verdict. Release-modal UI expiry is covered; the gateway timeout event is supplied at the socket boundary. Those are outside this test-authoring dispatch. The preserved legacy tests retain their own error/boundary cases.
 
 Execution logs: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/ . These are local evidence artifacts, not production edits.
