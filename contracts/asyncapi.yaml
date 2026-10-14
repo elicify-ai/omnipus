@@ -3899,6 +3899,19 @@ components:
             against the same effective scope fails identically on retry.
 
             '
+        code:
+          type: string
+          enum:
+          - protected_internal_file
+          description: 'Optional machine-readable marker, added by #1284 fix round 1. Present with exactly this
+            value when the refusal is Omnipus''s protected-internal-file denial: the path is inside the Omnipus data
+            directory''s protected set (sessions, transcripts, tasks, memory, agent definitions, credentials, the
+            master key, audit and gateway state) and is never grantable in any permission mode — God Mode included —
+            so the consumer can distinguish it from an ordinary workspace-scope denial without parsing the reason
+            text. Absent for every other permission denial. Set by the filesystem-scope producer (ResolvePath''s
+            carve-out refusal) and by bash''s protected-operand command check.
+
+            '
     ToolAssemblyDuplicate:
       title: ToolAssemblyDuplicate
       description: 'Structured payload emitted (as message content, role="system", with no ToolCallID) when
