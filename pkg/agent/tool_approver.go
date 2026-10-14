@@ -24,6 +24,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
@@ -35,6 +36,12 @@ type PolicyApprovalReq struct {
 	AgentID    string
 	SessionID  string
 	TurnID     string
+	// RoomRef and OriginLabel are set only on a room's pre-admission card
+	// (omnipus-system-agent FR-251, K7): the card is raised in the
+	// RECEIVER's main chat, names the group ("for group <name>") and carries
+	// the room delivery id as request id. Empty for every other approval.
+	RoomRef     *generated.RoomRef
+	OriginLabel string
 }
 
 // PolicyApprover is implemented by the gateway to wire the central approval

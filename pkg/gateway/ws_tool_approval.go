@@ -122,6 +122,7 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 	if ws := h.approvalWorkspaceID(entry.SessionID); ws != "" {
 		frame.WorkspaceId = &ws
 	}
+	frame.RoomRef, frame.OriginLabel = approvalRoomFields(entry)
 	frame.Segments = h.bashApprovalSegments(entry)
 	raw, err := json.Marshal(frame)
 	if err != nil {
@@ -252,6 +253,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 			if ws := h.approvalWorkspaceID(e.SessionID); ws != "" {
 				entry.WorkspaceId = &ws
 			}
+			entry.RoomRef, entry.OriginLabel = approvalRoomFields(e)
 			pendingApprovals = append(pendingApprovals, entry)
 		}
 	}
@@ -334,4 +336,20 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 	}
 	slog.Debug("ws: session_state built", "user_id", wc.userID, "pending", len(pendingApprovals))
 	return raw
+}
+
+// approvalRoomFields projects a group chat's pre-admission card fields
+// (FR-251, K7): the room reference and the "for group <name>" origin label.
+// Both are absent on every other approval.
+func approvalRoomFields(e *approvalEntry) (*generated.RoomRef, *string) {
+	if e == nil || e.RoomRef == nil {
+		return nil, nil
+	}
+	ref := *e.RoomRef
+	var label *string
+	if e.OriginLabel != "" {
+		l := e.OriginLabel
+		label = &l
+	}
+	return &ref, label
 }

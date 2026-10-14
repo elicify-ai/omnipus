@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // ApprovalState is the lifecycle state of a single tool-approval request.
@@ -130,6 +132,12 @@ type approvalEntry struct {
 	CreatedAt time.Time
 	ExpiresAt time.Time
 
+	// RoomRef and OriginLabel are set only on a group chat's pre-admission
+	// card (omnipus-system-agent FR-251, K7): raised in the member's main
+	// chat, labelled "for group <name>". Immutable after creation.
+	RoomRef     *generated.RoomRef
+	OriginLabel string
+
 	// Mutable — protected by the registry's mu.
 	state ApprovalState
 
@@ -139,6 +147,12 @@ type approvalEntry struct {
 
 	// timer fires after the configured timeout and transitions pending→denied_timeout.
 	timer *time.Timer
+}
+
+// approvalExtras are the optional, room-only fields of a new approval.
+type approvalExtras struct {
+	RoomRef     *generated.RoomRef
+	OriginLabel string
 }
 
 // ApprovalOutcome is the result delivered to the blocked agent loop goroutine.
@@ -403,7 +417,12 @@ func (r *approvalRegistryV2) requestApproval(
 	toolCallID, toolName string,
 	args map[string]any,
 	agentID, actingSessionID, turnID string,
+	extras ...approvalExtras,
 ) (*approvalEntry, bool) {
+	var extra approvalExtras
+	if len(extras) > 0 {
+		extra = extras[0]
+	}
 	if turnID == "" {
 		// Defense in depth (D-03, ADR-092, 2026-09-24 UAT tester t5): fail
 		// CLOSED, unlike the actingSessionID=="" branch below, which still
@@ -441,8 +460,9 @@ func (r *approvalRegistryV2) requestApproval(
 			SessionID:  actingSessionID,
 			TurnID:     turnID,
 			CreatedAt:  time.Now(),
-			state:      ApprovalStateDeniedMissingTurnID,
-			resultCh:   make(chan ApprovalOutcome, 1),
+			RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel,
+			state:    ApprovalStateDeniedMissingTurnID,
+			resultCh: make(chan ApprovalOutcome, 1),
 		}
 		synthetic.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonMissingTurnID}
 		return synthetic, false
@@ -480,8 +500,9 @@ func (r *approvalRegistryV2) requestApproval(
 			SessionID:  actingSessionID,
 			TurnID:     turnID,
 			CreatedAt:  time.Now(),
-			state:      ApprovalStateDeniedSaturated,
-			resultCh:   make(chan ApprovalOutcome, 1),
+			RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel,
+			state:    ApprovalStateDeniedSaturated,
+			resultCh: make(chan ApprovalOutcome, 1),
 		}
 		// Pre-deliver the outcome so the caller can receive without blocking.
 		synthetic.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonSaturated}
@@ -500,8 +521,9 @@ func (r *approvalRegistryV2) requestApproval(
 		TurnID:     turnID,
 		CreatedAt:  now,
 		ExpiresAt:  expiresAt,
-		state:      ApprovalStatePending,
-		resultCh:   make(chan ApprovalOutcome, 1),
+		RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel,
+		state:    ApprovalStatePending,
+		resultCh: make(chan ApprovalOutcome, 1),
 	}
 
 	// Arm the timeout timer (FR-016, SC-006: default gateway.go::defaultToolApprovalTimeout).

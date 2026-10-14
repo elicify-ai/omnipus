@@ -288,6 +288,10 @@ func (al *AgentLoop) claimWakeSlot(requestID string) bool {
 func (al *AgentLoop) publishHeldRequestWake(c addressing.Capture) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if c.Source.Kind == addressing.SourceRoom {
+		// A held room request keeps its no-join marker and room id.
+		return al.publishRoomRequestWake(ctx, c)
+	}
 	return al.publishRequestWake(ctx, c.Receiver, c.RequestID, c.ReceiverSessionID, c.Text)
 }
 

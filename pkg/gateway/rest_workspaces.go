@@ -733,6 +733,12 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /api/v1/workspaces/{id}/rooms — the workspace's group chats (K23, K24).
+	if segs := strings.Split(strings.TrimPrefix(rest, "/"), "/"); len(segs) == 2 && segs[1] == "rooms" {
+		a.handleWorkspaceRooms(w, r, segs[0])
+		return
+	}
+
 	// /api/v1/workspaces/{id}/mounts[/{name}] — the mount lifecycle (FR-7.1/
 	// FR-7.3, ADR-063 D4). Same second-path-segment dispatch as /media above
 	// (not suffix matching — /mounts/{name} has a trailing segment).
@@ -1528,6 +1534,11 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 		logsafeError("rest: update workspace: write", "id", rw.id, "error", err)
 		jsonErr(rw.w, http.StatusInternalServerError, "internal server error")
 		return
+	}
+	// FR-160/FR-162: the workspace's group chats follow its team now (every
+	// room read reconciles again, so a failure here only delays it).
+	if hub := rw.a.rooms.Load(); hub != nil && hub.svc != nil {
+		hub.svc.SyncWorkspace(rw.id)
 	}
 	if rw.delegationChanged {
 		rw.changedFields = append(rw.changedFields, "delegation")

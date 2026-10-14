@@ -300,7 +300,10 @@ func (w *sessionWorker) enqueueOrRetry(msg bus.InboundMessage) (handled, retry b
 // (and drained) or sees inTurn=false (and goes to the inbox) — never in
 // between.
 func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
-	if msg.Channel == "system" {
+	// A group-chat room request is never steered into a running turn
+	// (omnipus-system-agent FR-214, the no-join intake): it waits in the
+	// inbox and runs as its own turn once the current one settles.
+	if msg.Channel == "system" || isRoomRequestWake(msg) {
 		return false
 	}
 	w.steerMu.Lock()
@@ -677,6 +680,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 
 	response, agent, err := al.processMessage(ctx, msg)
 	activeAgent = agent
+	al.roomTurnEnded(msg, err)
 	if err != nil {
 		// ADR-051 §RD5: never surface raw err text in the assistant-facing
 		// reply. Route through the classifier so provider-originated body /

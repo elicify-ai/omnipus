@@ -171,6 +171,9 @@ func (s *askUserCardSink) EmitCard(set *askuser.PendingSet) {
 		delay = s.delayFn()
 	}
 	s.h.broadcastAskUserCard(toAskUserCard(set, delay))
+	// A pending question while the member works on a group-chat request
+	// shows the room "waiting for you" (FR-169).
+	s.h.roomCard(set.TranscriptSessionID, "ask:"+set.CardID, set.Status == askuser.StatusPending)
 }
 
 // askUserResumeDispatcher publishes the §0.2 resume message as a

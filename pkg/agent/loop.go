@@ -130,6 +130,9 @@ type AgentLoop struct {
 	// (address_router.go).
 	addressDeps   atomic.Pointer[AddressDeps]
 	requestLedger atomic.Pointer[ledgerHolder]
+	// roomRuntime / roomWriter back group-chat rooms (room_request.go).
+	roomRuntime atomic.Pointer[RoomRuntime]
+	roomWriter  atomic.Pointer[RoomReceiverWriter]
 	// mirrorFailHook is a test seam run just before the connector-reply mirror
 	// append (nil in production).
 	mirrorFailHook func()
@@ -668,7 +671,9 @@ func (al *AgentLoop) debitLLMUsage(ts *turnState, llmModel string, usage *provid
 		return
 	}
 	ts.SetLastUsage(usage)
-	ts.AddTurnStats(int64(usage.TotalTokens), estimateLLMCallCost(llmModel, usage))
+	cost := estimateLLMCallCost(llmModel, usage)
+	ts.AddTurnStats(int64(usage.TotalTokens), cost)
+	ts.opts.roomCost.addCost(ts.turnID, cost)
 	ts.AddTurnCacheStats(usage.CacheReadTokens, usage.CacheWriteTokens)
 	ts.AddTurnIOStats(usage.PromptTokens, usage.CompletionTokens)
 }

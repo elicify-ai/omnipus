@@ -470,6 +470,8 @@ func (r AddressRouter) Reply(ctx context.Context, req tools.ReplyRequest) (tools
 		receipt, err = al.replyViaConnector(ctx, capture, responder, req)
 	case addressing.SourceConversation:
 		receipt, err = al.replyIntoConversation(capture, responder, req)
+	case addressing.SourceRoom:
+		receipt, err = al.replyIntoRoom(ctx, capture, responder, req)
 	default:
 		return tools.ReplyReceipt{}, fmt.Errorf("%w", addressing.ErrUnusableCorrelation)
 	}

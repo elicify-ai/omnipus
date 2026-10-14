@@ -49,6 +49,7 @@ func (h *WSHandler) writePump(wc *wsConn, chatID string) {
 		}
 		h.unbindConnHubLocked(wc)
 		h.mu.Unlock()
+		h.rooms.unsubscribeAll(wc) // the dead connection leaves every group chat
 	}()
 
 	for {

@@ -169,7 +169,16 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	if directOwner {
 		ctx, entry = ordinaryExecutionContext(ctx)
 	}
+	// A group-chat room request re-checks its room under the room lock before
+	// it is dequeued into a turn (FR-217): a request cancelled by /pause, a
+	// member removal or a room deletion never runs.
+	room, proceed := al.gateRoomRequest(msg)
+	if !proceed {
+		return "", agent, nil
+	}
+	opts.roomCost = room.meter()
 	preparation, prepErr := al.prepareOrdinaryExecution(ctx, msg, opts)
+	room.prepared(prepErr)
 	if errors.Is(prepErr, errOwnerWakeRetained) {
 		// F8: the chat was stopped; the answer stays in its transcript and the
 		// owner is not run. Nothing is reported - a Stop is not a failure.
@@ -196,5 +205,6 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	}
 	resp, runErr = al.runAgentLoop(ctx, agent, opts)
 	d.recordTurnOutcome(runErr)
+	room.reportCost(msg.SessionID)
 	return resp, agent, runErr
 }

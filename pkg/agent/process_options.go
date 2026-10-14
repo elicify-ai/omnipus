@@ -152,4 +152,10 @@ type processOptions struct {
 	// executionDisposition carries canonical admission ownership separately
 	// from routing, transcript containment and delegate tool authority.
 	executionDisposition *executionDisposition
+
+	// roomCost is set only for the ordinary turn that consumes a group-chat
+	// room request (room_request.go): it accumulates the turn's billed cost and
+	// the inputs the turn consumed, so the room's allocated cost can be
+	// computed (omnipus-system-agent §6.14). Nil for every other turn.
+	roomCost *roomCostMeter
 }
