@@ -1080,6 +1080,14 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 	}
 
 	if fspolicy.IsCarveOut(realAbs, rp.policy) {
+		// #1284 adds instruction files to the predicate without retiring
+		// D10.3's helpful redirect. This refines the refusal, never admits it.
+		if rp.op == FSOpRead || rp.op == FSOpList || rp.op == FSOpSend {
+			if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched &&
+				shelf == skillShelfRegistry && isSkillInstructionFile(rp.rawPath, realAbs) {
+				return nil, skillsGateDenialError(rp.rawPath)
+			}
+		}
 		return nil, ErrCarveOut
 	}
 
@@ -1114,12 +1122,10 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 		switch rp.op {
 		case FSOpRead, FSOpList, FSOpSend:
 			if shelf == skillShelfRegistry {
-				// A LIST inside the installed registry discloses instruction-
-				// file names wholesale (#1284 T-FT: list_directory on a
-				// directory holding gated files is itself a disclosure), so
-				// the whole list op is refused — helper files stay readable
-				// individually, by exact path.
-				if rp.op == FSOpList {
+				// A raw listing discloses instruction-file names. grep instead
+				// filters every visited entry through grepGateFS/carveOutFS,
+				// so its A7 helper-file search can walk without disclosing them.
+				if rp.op == FSOpList && rp.toolName != "grep" {
 					return nil, skillsRegistryListDenialError(rp.rawPath)
 				}
 				if isSkillInstructionFile(rp.rawPath, realAbs) {

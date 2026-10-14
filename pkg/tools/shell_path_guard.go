@@ -225,8 +225,8 @@ func (t *ExecTool) guardCommandClassified(ctx context.Context, command, cwd stri
 	// block list (scripts/check-no-shell-deny-patterns.sh's banned symbols
 	// appear nowhere here). A command naming a protected path is refused
 	// outright: never prompted, never widened.
-	if msg, protected := t.guardProtectedOperands(ctx, command); protected {
-		return msg, true
+	if msg, protected := t.guardProtectedOperands(ctx, command); msg != "" {
+		return msg, protected
 	}
 
 	if !t.restrictToWorkspace {
@@ -492,6 +492,18 @@ func (t *ExecTool) guardProtectedOperands(ctx context.Context, command string) (
 			continue
 		}
 		if t.operandIsProtected(p, turnPolicy, policyOK, home) {
+			resolved := p
+			if real, resolveErr := resolvePathAgainstExistingAncestor(p); resolveErr == nil {
+				resolved = real
+			}
+			// D2 retains the existing cross-agent/workspace protection. Do
+			// not relabel that refusal as a newly named internal-file denial;
+			// keep its safety-guard message while still refusing in every mode.
+			if policyOK && !fspolicy.InventoryGuarded(turnPolicy, resolved) &&
+				(fspolicy.CoversForDeny(filepath.Join(home, "agents"), resolved) ||
+					fspolicy.CoversForDeny(filepath.Join(home, "workspaces"), resolved)) {
+				return outsideWorkDirRefusal(p, turnPolicy.WorkDir, newPathUseClassifier(cmd).classify(start), false), false
+			}
 			return ProtectedInternalFileMessage(p), true
 		}
 	}

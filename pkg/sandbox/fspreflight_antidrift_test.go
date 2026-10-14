@@ -154,11 +154,13 @@ func fixedTestPolicy(t *testing.T) (home string, policy fspolicy.FSPolicy, allow
 	if err := os.MkdirAll(filepath.Join(rawHome, "agents", "victim"), 0o755); err != nil {
 		t.Fatalf("mkdir victim home: %v", err)
 	}
-	allowedRoot = filepath.Join(rawHome, "mount1")
+	// L1-AMENDMENTS-20261013.md §2 D1 / §2.4 retires grants to an
+	// unlisted home location. Ordinary grant controls now live outside home.
+	allowedRoot = filepath.Join(t.TempDir(), "mount1")
 	if err := os.MkdirAll(allowedRoot, 0o755); err != nil {
 		t.Fatalf("mkdir allowedRoot: %v", err)
 	}
-	grantDir := filepath.Join(rawHome, "granted")
+	grantDir := filepath.Join(t.TempDir(), "granted")
 	if err := os.MkdirAll(grantDir, 0o755); err != nil {
 		t.Fatalf("mkdir grantDir: %v", err)
 	}
@@ -167,6 +169,13 @@ func fixedTestPolicy(t *testing.T) (home string, policy fspolicy.FSPolicy, allow
 	base, err := fspolicy.EffectiveFSPolicy(context.Background(), workDir, "", true, rawHome, "self", "")
 	if err != nil {
 		t.Fatalf("EffectiveFSPolicy: %v", err)
+	}
+	// Amendment §2 D7 / T-L L3: Landlock must enumerate an agent-home
+	// root around its protected interior, so new direct entries cannot be
+	// granted. This matrix tests writing an existing ordinary direct file;
+	// the non-skip Linux agent-home probe separately pins the creation limit.
+	if err := os.WriteFile(filepath.Join(base.WorkDir, "f.txt"), []byte("before"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	base.AllowedRoots = []string{allowedRoot}
 	base.PathGrants = []fspolicy.PathGrant{
@@ -225,7 +234,7 @@ func TestAntiDrift_Level1_PathGrantMatrix(t *testing.T) {
 		{"AllowedRoots write is contained", filepath.Join(allowedRoot, "f.txt"), writeAccess},
 		{"PathGrants exact path, write, is contained", grantPath, writeAccess},
 		{"PathGrants exact path, read+write (within granted access), is contained", grantPath, readWriteAccess},
-		{"outside path, no grant, write escalates", filepath.Join(home, "outside", "f.txt"), writeAccess},
+		{"unlisted home path, no grant, write is refused (WU-23 D1)", filepath.Join(home, "outside", "f.txt"), writeAccess},
 		{"master.key write is refused, never escalated", filepath.Join(home, "master.key"), writeAccess},
 		{"credentials.json write is refused, never escalated", filepath.Join(home, "credentials.json"), writeAccess},
 		{"another agent's home write is refused (cross-agent carve-out)", filepath.Join(home, "agents", "victim", "SOUL.md"), writeAccess},
@@ -234,6 +243,9 @@ func TestAntiDrift_Level1_PathGrantMatrix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			verdict := tools.EvaluateFSPreflight(policy, tc.path, tc.access, false)
+			if tc.path == filepath.Join(home, "outside", "f.txt") && !verdict.Refused {
+				t.Fatal("WU-23 D1: unlisted home paths must be refused, never escalated")
+			}
 			kernelGrants := kernelRulesGrant(t, kernel, tc.path, tc.access)
 			if !verdictAgreesWithKernel(verdict, kernelGrants) {
 				t.Fatalf("DRIFT: pre-flight verdict %+v disagrees with kernel rendering (kernelGrants=%v) for path %q access %d",
