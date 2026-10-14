@@ -301,10 +301,9 @@ func (s *Service) runCommand(r *room, ws Workspace, text string, req generated.R
 	case "/mute", "/unmute":
 		err = s.muteCommand(r, ws, cmd == "/mute", text, req.Mentions, principal)
 	case "/members", "/help":
-		// Accepted. Their visible answer has no wire carrier yet (a room entry
-		// is authored by the user or a member agent only): the header already
-		// shows members, states and mutes. Reported to the chief as a
-		// contract question.
+		// Accepted and a no-op on the server (architect ruling, 2026-10-14):
+		// nothing is recorded or published; the SPA renders the list as a
+		// local notice from the room data it already holds.
 	default:
 		return unprocessable(textRoomsDontSteer, s.steerTargets(r, ws, text, req.Mentions))
 	}

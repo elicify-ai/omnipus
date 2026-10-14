@@ -292,3 +292,38 @@ func TestRoomsREST_StorageFaultIs500OnEveryRoute(t *testing.T) {
 		t.Fatalf("getRoom over an unreadable room: %d %q, want 500", w.Code, w.Body.String())
 	}
 }
+
+// /members and /help are accepted (202) and change nothing on the server:
+// no entry, no state, no stream position (architect ruling on Q1).
+func TestRoomsREST_MembersAndHelpAreServerNoOps(t *testing.T) {
+	rh := newRoomsHarness(t)
+	w := rh.do(http.MethodPost, "/api/v1/workspaces/sales/rooms", `{"kind":"adhoc","agent_ids":["mia","jim"]}`, rh.api.HandleWorkspaces)
+	var room generated.Room
+	_ = json.Unmarshal(w.Body.Bytes(), &room)
+	snapshot := func() generated.RoomSnapshotFrame {
+		var s generated.RoomSnapshotFrame
+		if err := rh.hub.svc.Attach(room.Id, 0, func(f generated.RoomSnapshotFrame) { s = f }); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	before := snapshot()
+	for i, cmd := range []string{"/members", "/help"} {
+		body := `{"client_message_id":"cmd-` + string(rune('a'+i)) + `","text":"` + cmd + `","mentions":[]}`
+		w := rh.do(http.MethodPost, "/api/v1/rooms/"+room.Id+"/messages", body, rh.api.HandleRooms)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("%s: %d %s, want 202", cmd, w.Code, w.Body.String())
+		}
+	}
+	after := snapshot()
+	if after.Seq != before.Seq || len(after.Entries) != len(before.Entries) {
+		t.Fatalf("seq %d -> %d, entries %d -> %d; /members and /help must change nothing",
+			before.Seq, after.Seq, len(before.Entries), len(after.Entries))
+	}
+	// Positive control: an ordinary message does move the stream.
+	rh.do(http.MethodPost, "/api/v1/rooms/"+room.Id+"/messages", `{"client_message_id":"m1","text":"status?","mentions":[]}`, rh.api.HandleRooms)
+	rh.hub.svc.WaitIdleForTest()
+	if s := snapshot(); s.Seq == after.Seq || len(s.Entries) != len(after.Entries)+1 {
+		t.Fatalf("control message did not move the stream: seq %d entries %d", s.Seq, len(s.Entries))
+	}
+}
