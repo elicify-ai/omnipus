@@ -35,10 +35,16 @@ type roomsHarness struct {
 func newRoomsHarness(t *testing.T) *roomsHarness {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	// Never the real ~/.omnipus, never the package directory.
+	testHome := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", testHome)
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
+			Defaults: config.AgentDefaults{
+				Home:         filepath.Join(testHome, "workspace"),
+				DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096,
+			},
 			List: []config.AgentConfig{
 				{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom},
 				{ID: "jim", Name: "Jim", Type: config.AgentTypeCustom},
