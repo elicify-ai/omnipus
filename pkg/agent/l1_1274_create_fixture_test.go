@@ -208,9 +208,15 @@ func l11274Executable(t *testing.T, home, cli string, executable bool) string {
 	}
 	// CHECK F02: Windows LookPath accepts an existing .txt file. It is not
 	// a negative executable oracle: return the data fixture to the product.
-	if executable {
-		if _, err := exec.LookPath(path); err != nil {
-			t.Fatalf("SETUP: positive executable-path instrument: %v", err)
+	if executable || runtime.GOOS != "windows" {
+		// Chief Q1 A / re-CHECK R01: restore the original assertion exactly
+		// on Unix. Windows alone is exempt from the negative lookup check.
+		if executable {
+			if _, err := exec.LookPath(path); err != nil {
+				t.Fatalf("SETUP: positive executable-path instrument: %v", err)
+			}
+		} else if _, err := exec.LookPath(path); err == nil {
+			t.Fatalf("SETUP: non-executable fixture %q unexpectedly passes executable lookup", path)
 		}
 	}
 	return path
