@@ -27,10 +27,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
 // goldenAskList is a literal, reviewable copy of the 27 catalog tool names
@@ -148,18 +149,98 @@ func checkNoStaleEntries(catalogNames []string, table map[string]tools.AutoAppro
 	return errs
 }
 
-// classifiedNames is the set a table entry may legitimately name: every tool
-// in the builtin catalog PLUS the static catalog names classified ahead of
-// their implementation (coreagent.AllStaticToolNames — omnipus-system-agent
-// §6.5 requires a new tool's Auto entry in the same change as its catalogue,
-// ceiling and role entries). A name in neither is stale.
+// pendingBuiltinClassificationNames is the explicit future-tool inventory in
+// omnipus-system-agent-spec §6.5 / §15: WU-4/5/6/7 and landing 2. These names
+// may be classified before implementation, but may NOT excuse a catalogue
+// entry with no implementation. In particular, the implemented FR-024 tool
+// set_agent_permissions is not an exception. Never union all static names.
+var pendingBuiltinClassificationNames = []string{
+	"request_secret", "list_secrets", "remove_secret", "select_secret_version",
+	"connect_channel", "connect_mailbox", "read_conversation", "list_mailboxes",
+}
+
 func classifiedNames(t *testing.T) []string {
 	t.Helper()
-	return append(catalogToolNames(t), coreagent.AllStaticToolNames()...)
+	return append(catalogToolNames(t), pendingBuiltinClassificationNames...)
+}
+
+// implementedBuiltinToolNames deliberately reads the EXECUTABLE registries,
+// not buildCentralBuiltinRegistry, any metadata factory, the static-name list
+// or the Auto table. NewAgentInstance/registerSharedTools and WireSysagentDeps
+// populate these independently of the central catalogue (§6.5). Union every
+// native role so role-specific registration is covered without policy filtering.
+func implementedBuiltinToolNames(t *testing.T) []string {
+	t.Helper()
+	api := l1WU2WiredPermissionAPI(t)
+	// gateway_boot::setupAndStartServices supplies serve_web after loop
+	// construction. Run its real registration path, not a metadata substitute.
+	served := agent.NewServedSubdirs()
+	t.Cleanup(served.Stop)
+	api.agentLoop.WireTier13Deps(agent.Tier13Deps{ServedSubdirs: served})
+	api.agentLoop.WireSysagentDeps(&systools.Deps{})
+	registry := api.agentLoop.GetRegistry()
+	if _, ok := registry.GetAgent("omnipus"); !ok {
+		t.Fatal("implementation census has no Omnipus native agent")
+	}
+	implemented := make(map[string]bool)
+	for _, id := range registry.ListAgentIDs() {
+		instance, ok := registry.GetAgent(id)
+		if !ok || instance == nil || instance.Tools == nil {
+			t.Fatalf("implementation census has no executable registry for agent %q", id)
+		}
+		for _, name := range instance.Tools.List() {
+			implemented[name] = true
+		}
+	}
+	// FR-029: browser_upload_file has a concrete implementation but is held
+	// out of RegisterTools. Construct that type directly; do NOT read its name
+	// from BrowserBuiltinMetadata, which is part of the catalogue under test.
+	heldUpload := &browser.UploadFileTool{}
+	implemented[heldUpload.Name()] = true
+	// §6.5 names these independent family controls. An empty/partial census
+	// is a broken instrument, not evidence that the catalogue is complete.
+	for _, name := range []string{"create_agent", "set_agent_permissions", "write_file", "grep", "knowledge_read", "ToolSearch"} {
+		if !implemented[name] {
+			t.Fatalf("implementation census is missing required control %q", name)
+		}
+	}
+	names := make([]string, 0, len(implemented))
+	for name := range implemented {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func checkCatalogImplementations(catalogNames, implementedNames []string) []string {
+	catalog := make(map[string]bool, len(catalogNames))
+	for _, name := range catalogNames {
+		catalog[name] = true
+	}
+	implemented := make(map[string]bool, len(implementedNames))
+	var errs []string
+	for _, name := range implementedNames {
+		implemented[name] = true
+		if !catalog[name] {
+			errs = append(errs, "implemented tool \""+name+"\" is missing from the central builtin catalogue")
+		}
+	}
+	for _, name := range catalogNames {
+		if !implemented[name] {
+			errs = append(errs, "central builtin catalogue entry \""+name+"\" has no independent implementation")
+		}
+	}
+	sort.Strings(errs)
+	return errs
 }
 
 func TestAutoApproveClassification_NoStaleTableEntries(t *testing.T) {
-	names := classifiedNames(t)
+	catalogNames := catalogToolNames(t)
+	implementedNames := implementedBuiltinToolNames(t)
+	if errs := checkCatalogImplementations(catalogNames, implementedNames); len(errs) > 0 {
+		t.Errorf("builtin catalogue/implementation mismatch:\n%s", strings.Join(errs, "\n"))
+	}
+	names := append(catalogNames, pendingBuiltinClassificationNames...)
 	table := tools.AutoApproveClassTable()
 	if errs := checkNoStaleEntries(names, table); len(errs) > 0 {
 		t.Errorf("stale classification table entries:\n%s", strings.Join(errs, "\n"))
