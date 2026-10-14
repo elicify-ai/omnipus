@@ -92,8 +92,11 @@ func (s *FileStore) ModTime() (time.Time, error) {
 //
 // Boot performs no network I/O; the startup pull and the 24 h ticker are
 // the gateway's (T067-07), via Refresh.
-func Boot(ctx context.Context, embedded []byte, puller Puller, store Store, log Logger) *Catalog {
+func Boot(ctx context.Context, embedded []byte, puller Puller, store Store, log Logger, opts ...Option) *Catalog {
 	c := New()
+	for _, opt := range opts {
+		opt(c)
+	}
 	c.puller = puller
 	c.store = store
 	c.log = log

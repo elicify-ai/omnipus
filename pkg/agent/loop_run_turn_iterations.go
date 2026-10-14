@@ -659,8 +659,12 @@ func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoop
 		if strings.TrimSpace(cn.responseContent) == "" {
 			cn.responseContent = defaultResponse
 			cn.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+			// H5: one line carrying what actually came back (shape only,
+			// no content) so the next empty-answer defect is diagnosable.
+			rt := cn.rc.rx.rr.rq.ri.rf.rt
 			logger.WarnCF("agent", "LLM returned empty response after retry; using fallback message",
-				map[string]any{"agent_id": cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID, "iteration": cn.rc.rx.rr.rq.ri.rf.rt.iteration})
+				emptyAnswerLogFields(rt.ts.agent.ID, rt.iteration, rt.ts.lastProducedProvider,
+					rt.ts.lastProducedModel, rt.llmModel, cn.rc.rx.rr.rq.ri.rf.response))
 		}
 		// ADR-087 D6.10: this round did not go through
 		// evaluateTruncatedSuccess (it was not itself truncated, or it

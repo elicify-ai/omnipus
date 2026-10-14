@@ -165,6 +165,7 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 			// that tell the frontend the response is complete mid-turn.
 			rt.ts.setLastStreamer(streamer)
 			rt.ts.setLastProducedModel(model)
+			rt.ts.setLastProducedProvider(providerName)
 			// FR-013: also push to the streamer so Finalize stamps the
 			// per-turn Model field on the streamed assistant entry.
 			rt.ts.markLastStreamerProducedModel(model)
@@ -172,5 +173,6 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 		}
 	}
 	rt.ts.setLastProducedModel(model)
+	rt.ts.setLastProducedProvider(providerName)
 	return p.Chat(ctx, messagesForCall, toolDefsForCall, model, rt.llmOpts)
 }

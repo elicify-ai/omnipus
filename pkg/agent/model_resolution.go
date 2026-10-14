@@ -112,28 +112,58 @@ func resolveModelPair(cfg *config.Config, provider, model string) (*config.Model
 		return nil, false
 	}
 
-	// Rule 2 — a bare model id, offered by exactly one provider.
+	// Rule 2 — a bare model id, offered by exactly one provider. Two
+	// different providers offering it is ambiguous — rule 3.
+	match, offering := bareModelOffers(cfg, model)
+	if match == nil || len(offering) != 1 {
+		return nil, false
+	}
+	return match, true
+}
+
+// bareModelOffers walks rule 2 for a bare model id: the FIRST configured,
+// non-degraded row that offers it, and the DISTINCT provider ids (config
+// order) of every row that does. Several rows of one provider (multi-key
+// load balancing) count once.
+func bareModelOffers(cfg *config.Config, model string) (*config.ModelConfig, []string) {
 	var match *config.ModelConfig
-	matchedProvider := ""
+	var offering []string
 	for i := range cfg.Providers {
 		mc := cfg.Providers[i]
 		if mc == nil || !providerConfigured(mc) || !providerOffers(mc, model) {
 			continue
 		}
-		id := strings.TrimSpace(mc.Provider)
-		if match != nil && id != matchedProvider {
-			// Two different providers offer it — ambiguous, rule 3.
-			return nil, false
-		}
 		if match == nil {
 			match = mc
-			matchedProvider = id
+		}
+		id := strings.TrimSpace(mc.Provider)
+		seen := false
+		for _, o := range offering {
+			if o == id {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			offering = append(offering, id)
 		}
 	}
-	if match == nil {
-		return nil, false
-	}
-	return match, true
+	return match, offering
+}
+
+// AmbiguousModelError is the FR-040 rule-2 miss for a bare model id that
+// several configured providers offer (provider hotfix H2). It names the
+// providers so the operator can pick one, instead of the old
+// `not found in model_list or providers`, which claimed the model existed
+// nowhere when it actually existed in two places.
+type AmbiguousModelError struct {
+	Model     string
+	Providers []string
+}
+
+func (e *AmbiguousModelError) Error() string {
+	return fmt.Sprintf("model %q is offered by several providers (%s); choose the provider",
+		e.Model, strings.Join(e.Providers, ", "))
 }
 
 // ResolveModelCfg resolves a model reference to a *config.ModelConfig ready
@@ -164,6 +194,11 @@ func ResolveModelPairCfg(
 	}
 	mc, ok := resolveModelPair(cfg, provider, raw)
 	if !ok {
+		if strings.TrimSpace(provider) == "" {
+			if _, offering := bareModelOffers(cfg, raw); len(offering) > 1 {
+				return nil, &AmbiguousModelError{Model: raw, Providers: offering}
+			}
+		}
 		return nil, fmt.Errorf("model %q not found in model_list or providers", raw)
 	}
 	clone := cloneWithWorkspace(mc, workspace)

@@ -779,9 +779,11 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 	// refused — that is a catalog gap, not an operator error.
 	if ro.provider.AuthMethod == config.AuthMethodSignIn {
 		row, known := providers.CatalogProvider(ro.provider.ID)
-		if known && len(row.AuthMethods) > 0 &&
-			!catalogOffersAuth(row.AuthMethods, gen.ProbeProviderRequestAuthSignIn) {
-			jsonErrField(ro.w, http.StatusBadRequest, onboardingSignInUnsupportedMsg, "id")
+		if known && len(row.AuthMethods) > 0 && !rowOffersSignIn(row) {
+			// Provider hotfix H1: a declared `sign_in` with no mechanism
+			// (the plain `openai` row) is refused like an undeclared one,
+			// pointing at the row that can sign in when there is one.
+			jsonErrField(ro.w, http.StatusBadRequest, ro.a.signInRefusalMsg(ro.provider.ID), "id")
 			return true
 		}
 	} else if ro.provider.APIKey == "" {

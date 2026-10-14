@@ -270,7 +270,9 @@ func (a *restAPI) providerConfiguredAndUsable(cfg *config.Config, id string) boo
 // sets window_unknown true (X-08).
 func defaultModelResponse(cfg *config.Config, pair config.DefaultModel) gen.DefaultModel {
 	out := gen.DefaultModel{Provider: pair.Provider, Model: pair.Model}
-	res := agent.ResolveWindow(cfg, pair.Provider, pair.Model, "")
+	// H4: a legacy provider-less pair is keyed by the provider it runs on.
+	windowProvider, windowModel := agent.RuntimeWindowPair(cfg, pair.Provider, pair.Model)
+	res := agent.ResolveWindow(cfg, windowProvider, windowModel, "")
 	switch {
 	case res.Exempt:
 		zero := 0

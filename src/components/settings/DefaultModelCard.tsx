@@ -202,6 +202,11 @@ export function DefaultModelCard({
           <ModelSelector
             models={[]}
             value={defaultModel?.model ?? ''}
+            // H6: the saved pair's provider narrows the check to that
+            // provider's row (a model served by two providers must not show
+            // chosen under both). Undefined while no default exists — the
+            // value is '' then anyway.
+            valueProvider={defaultModel?.provider}
             constrainToCatalog
             catalogGroups={groups}
             filterProviders={{

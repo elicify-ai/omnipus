@@ -354,7 +354,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // agent's `model` config. The composer writes here on picker
     // change; the runtime reads here in onNew and clears it.
     nextModel: null,
-    setNextModel: (model) => set({ nextModel: model }),
+    // H6 (provider hotfix 2026-10-13): provider row the nextModel pick was
+    // made under — the picker's (provider, model) selection identity. null
+    // = seeded, not picked; see the twin comment on the ChatStore type.
+    nextModelProvider: null,
+    setNextModel: (model, provider) => set({ nextModel: model, nextModelProvider: provider ?? null }),
 
     setReplaying: (value) => {
       const sid = getActiveSid()

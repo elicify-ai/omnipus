@@ -141,7 +141,7 @@ Tool use is catalog data. Omnipus sends tools with every request, so models mark
 | Ofox (`ofox`) | API key | Unknown (not in catalog) |
 | Ollama (`ollama`) | API key | Unknown (not in catalog) |
 | Ollama Cloud (`ollama-cloud`) | API key | Unknown (not in catalog) |
-| OpenAI (`openai`) | API key, sign in | Unknown (not in catalog) |
+| OpenAI (`openai`) | API key | Unknown (not in catalog) |
 | ChatGPT (subscription) (`openai-chatgpt`) | sign in | Unknown (not in catalog) |
 | OpenCode Zen (`opencode`) | API key | Unknown (not in catalog) |
 | OpenCode Go (`opencode-go`) | API key | Unknown (not in catalog) |

@@ -943,8 +943,25 @@ export interface ChatStore {
    * history or the agent's `model` config (per spec §18 Q3).
    */
   nextModel: string | null
-  /** Set the next-turn model override (called by the composer). */
-  setNextModel: (model: string | null) => void
+  /**
+   * H6 (provider hotfix 2026-10-13): the provider id `nextModel` was picked
+   * under — the ModelSelector's (provider, model) selection identity, so the
+   * picker shows the check on ONLY the picked provider's row when two
+   * providers serve the same model slug. null = the value was seeded from
+   * transcript/agent-default, not picked; the picker then derives the
+   * display provider via the first-provider lookup. Today this is consumed
+   * by the DISPLAY only — `MessageFrame.metadata` has no provider sibling
+   * for `model_name` on the wire; if the contract gains one
+   * (`metadata.provider`), this is the value to send with it.
+   */
+  nextModelProvider: string | null
+  /**
+   * Set the next-turn model override (called by the composer). `provider`
+   * records which provider row the pick was made under (H6 pair identity);
+   * omitted → null — the seed path (transcript/agent default) carries no
+   * provider.
+   */
+  setNextModel: (model: string | null, provider?: string | null) => void
 
   // ── Actions that operate on the foreground session ───────────────────────────
   setReplaying: (value: boolean) => void

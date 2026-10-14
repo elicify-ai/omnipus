@@ -319,6 +319,24 @@ func parseResponse(apiResp *responses.Response) (*protocoltypes.LLMResponse, err
 		}
 	}
 
+	// A response the provider cut off under its content policy is a
+	// refusal, not a token-cap cutoff (provider hotfix H5 review, silent-
+	// failure F3). Reported as "length" it would send any partial output it
+	// carries — including output recovered from streamed items — into the
+	// agent's truncation auto-continuation, asking the provider to keep
+	// writing what it just refused. It surfaces instead as the content-
+	// policy stream error every other provider refusal uses: non-retriable,
+	// never a fallback, and the curated content-policy message for the user.
+	// Checked after the output loop so a malformed tool call still reports
+	// as the tool-argument refusal it is (ADR-087).
+	if apiResp.Status == "incomplete" && apiResp.IncompleteDetails.Reason == "content_filter" {
+		return nil, &common.StreamProviderError{
+			Code:    "content_filter",
+			Message: "the provider stopped this response under its content policy",
+			Usage:   usage,
+		}
+	}
+
 	finishReason := "stop"
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
