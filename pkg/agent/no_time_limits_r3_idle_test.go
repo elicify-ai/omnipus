@@ -159,6 +159,15 @@ func TestR3IdleExpiry_RealQueuedHelperAndParentStayActiveUntilQueueIsGone(t *tes
 	parent := h.newSession(t, "", "waiting-parent", true)
 	queued := h.newSession(t, parent.SessionID, "queued-helper", true)
 	h.dispatch(t, queued, steer.DispatchQueued)
+	// Settle the parent's OWN undispatched launch. Stop is session-only, so
+	// the queued child survives: now descendants are genuinely its only work.
+	if _, err := h.al.StopSession(context.Background(), StopRequest{SessionID: parent.SessionID,
+		By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "tester"}, Channel: "webchat"}); err != nil {
+		t.Fatalf("SETUP settle parent's own admission: %v", err)
+	}
+	if rec, err := h.al.GetSessionLifecycleStore().Load(parent.SessionID); err != nil || rec.State != session.LifecycleStopped {
+		t.Fatalf("SETUP parent must have no own queued admission: record=%+v err=%v", rec, err)
+	}
 	childGoal := h.ageGoal(t, queued.SessionID)
 	parentGoal := h.ageGoal(t, parent.SessionID)
 	if _, live := h.al.activeTurnStates.Load(queued.SessionID); live {
@@ -188,6 +197,33 @@ func TestR3IdleExpiry_RealQueuedHelperAndParentStayActiveUntilQueueIsGone(t *tes
 	h.sweep()
 	r3GoalState(t, childGoal, generated.GoalStateExpired, "G1 idle helper after its queue and work were gone")
 	r3GoalState(t, parentGoal, generated.GoalStateExpired, "G1 idle parent after its only queued descendant finished")
+	t.Run("cascade_stopped_descendants_do_not_protect_parent", r3IdleCascadeStoppedDescendantControl)
+}
+
+func r3IdleCascadeStoppedDescendantControl(t *testing.T) {
+	h := newR3IdleHarness(t)
+	busyRoot := h.newSession(t, "", "cascade-busy-root", false)
+	busy := h.newSession(t, busyRoot.SessionID, "cascade-slot-holder", false)
+	h.dispatch(t, busy, steer.DispatchRunning)
+	h.assertOwnRunningIdentity(t, busy.SessionID, busyRoot.SessionID)
+	parent := h.newSession(t, "", "cascade-parent", true)
+	child := h.newSession(t, parent.SessionID, "cascade-queued-child", true)
+	h.dispatch(t, child, steer.DispatchQueued)
+	if _, err := h.al.StopSession(context.Background(), StopRequest{SessionID: parent.SessionID, Tree: true,
+		By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "tester"}, Channel: "webchat"}); err != nil {
+		t.Fatalf("CONTROL Stop whole tree: %v", err)
+	}
+	for _, sid := range []string{parent.SessionID, child.SessionID} {
+		if rec, err := h.al.GetSessionLifecycleStore().Load(sid); err != nil || rec.State != session.LifecycleStopped {
+			t.Fatalf("CONTROL cascade target must be stopped: record=%+v err=%v", rec, err)
+		}
+	}
+	if h.al.steerAdmission().queueLen() != 0 {
+		t.Fatal("CONTROL cascade did not remove the child's queued admission")
+	}
+	gid := h.ageGoal(t, parent.SessionID)
+	h.sweep()
+	r3GoalState(t, gid, generated.GoalStateExpired, "G1 cascade-stopped descendants must not protect the idle parent")
 }
 
 func TestR3IdleExpiry_SiblingWorkDoesNotProtectTheWrongHelperGoal(t *testing.T) {

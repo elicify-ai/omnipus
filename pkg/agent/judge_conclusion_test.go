@@ -326,15 +326,27 @@ func TestJudgeUnavailable_ConclusionSaveFailureIsVisibleAndStillDurable(t *testi
 		agentInst: agentInst, sessionID: sid, claimText: "RESULT-1306-SAVE all tests pass",
 	})
 
-	errs := goalConclusionErrors(sub)
-	found := false
-	for _, m := range errs {
-		if strings.Contains(m, "could not be saved") && strings.Contains(m, "disk full") {
-			found = true
-		}
+	// Accepted architect R2-3 safe-text decision: ordinary Message is
+	// catalogue-only; the same specific cause survives in internal/Verbose Detail.
+	payloads := r3DrainConclusionPayloads(sub)
+	if len(payloads) == 0 {
+		t.Fatal("a failed conclusion save was not raised visibly; no goal_conclusion payload")
 	}
-	if !found {
-		t.Fatalf("a failed conclusion save was not raised visibly; goal_conclusion errors = %q", errs)
+	for _, p := range payloads {
+		wire := WireLLMError(p)
+		if p.Code != r3ConclusionFailedCode || wire.Code != r3ConclusionFailedCode {
+			t.Errorf("save-failure payload/wire Code=%q/%q, want judge_conclusion_failed", p.Code, wire.Code)
+		}
+		if want := r3ConclusionCatalogueCopy(t); p.Message != want || wire.Message != want {
+			t.Errorf("save-failure Message must be catalogue-only: payload=%q wire=%q want=%q", p.Message, wire.Message, want)
+		}
+		detail := r3InternalConclusionDetail(t, p)
+		if !strings.Contains(detail, "could not be saved") || !strings.Contains(detail, "disk full") {
+			t.Errorf("save-failure payload Detail=%q, want both could not be saved and disk full", detail)
+		}
+		if wire.Detail == nil || !strings.Contains(*wire.Detail, "could not be saved") || !strings.Contains(*wire.Detail, "disk full") {
+			t.Errorf("save-failure WireLLMError Detail=%v, want the same specific cause", wire.Detail)
+		}
 	}
 	g := mustActiveGoalForSession(t, sid)
 	if g == nil || !strings.Contains(g.LatestReason, "Not verified") || !strings.Contains(g.LatestReason, "RESULT-1306-SAVE") {
