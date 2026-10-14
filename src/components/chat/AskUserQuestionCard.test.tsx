@@ -2,6 +2,9 @@
 // (component half): tabs/advance/badge/underline/countdown/collapsed/
 // composer-lock note/hostile-markdown inertness, plus the client-fired
 // 5-minute grace auto-submit (US-3 S3).
+// Amended for #1066 Required behavior 4 / CHECK F1: single-choice selection
+// no longer advances by itself. Explicit confirmation replaces only that
+// superseded interaction; answer/frame/free-text/grace/negative oracles stay.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
@@ -66,22 +69,25 @@ describe('AskUserQuestionCard — pending card', () => {
     expect(screen.getByTestId('ask-user-submit')).toBeDisabled()
   })
 
-  it('selecting answers marks the tab, auto-advances, and enables Answer only when all are answered', () => {
+  it('selecting answers marks the tab, explicit confirmation advances, and Answer enables only when all are answered', () => {
     vi.useFakeTimers()
     try {
       render(<AskUserQuestionCard card={makeCard()} />)
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0])
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
-      // Auto-advanced to the second (unanswered) question.
+      // #1066: selection alone remains on Scope even after pending callbacks.
+      expect(screen.getByText('Which emails should this goal cover?')).toBeInTheDocument()
+      expect(screen.queryByText('Draft or send directly?')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /^(next|confirm|continue)(?: question| selection| answer)?$/i }))
       expect(screen.getByText('Draft or send directly?')).toBeInTheDocument()
       expect(screen.getByTestId('ask-user-progress')).toHaveTextContent('1 / 2 answered')
       expect(screen.getByTestId('ask-user-submit')).toBeDisabled()
 
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0])
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
       expect(screen.getByTestId('ask-user-progress')).toHaveTextContent('2 / 2 answered')
       expect(screen.getByTestId('ask-user-submit')).toBeEnabled()
@@ -189,14 +195,16 @@ describe('AskUserQuestionCard — pending card', () => {
     vi.useFakeTimers()
     try {
       render(<AskUserQuestionCard card={makeCard()} />)
-      // Answer both questions (auto-advance between them).
+      // #1066: answer both questions with explicit confirmation between them.
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0]) // Scope: Only unanswered
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
+      expect(screen.getByText('Which emails should this goal cover?')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /^(next|confirm|continue)(?: question| selection| answer)?$/i }))
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0]) // Sending: Draft only
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
       expect(screen.getByTestId('ask-user-progress')).toHaveTextContent('2 / 2 answered')
 
@@ -230,11 +238,13 @@ describe('AskUserQuestionCard — pending card', () => {
       render(<AskUserQuestionCard card={makeCard()} />)
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0])
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
+      expect(screen.getByText('Which emails should this goal cover?')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /^(next|confirm|continue)(?: question| selection| answer)?$/i }))
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0])
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
 
       // EDIT the second question's answer into free text.

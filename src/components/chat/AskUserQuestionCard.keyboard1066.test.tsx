@@ -2,7 +2,7 @@
 // Also spec FR-109 / BDD-12.14 keyboard-first journeys. The real card,
 // catalogued controls and answer store run; only socket.send is doubled.
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { AskUserQuestionCard as AskCard, AskUserAnswerFrame } from '@/lib/api/generated/asyncapi-types'
 import { AskUserQuestionCard } from './AskUserQuestionCard'
@@ -33,6 +33,17 @@ afterEach(() => {
 })
 function next() { return screen.getByRole('button', { name: /^(next|confirm|continue)(?: question| selection| answer)?$/i }) }
 function finalSubmit() { return screen.getByRole('button', { name: /^(answer|submit|confirm)(?: answers| all| card)?$/i }) }
+// Synchronous browser-key activation adapter for the fake-clock predicate.
+// jsdom does not perform a key's native click default; send that detail=0
+// click only when neither key event was prevented. Full keyboard journeys
+// above/below still use the real user-event driver and real catalogued controls.
+function activateKey(control: HTMLElement, key: ' ' | 'Enter') {
+  control.focus()
+  const code = key === ' ' ? 'Space' : 'Enter'
+  const down = fireEvent.keyDown(control, { key, code })
+  const up = fireEvent.keyUp(control, { key, code })
+  if (down && up) fireEvent.click(control, { detail: 0 })
+}
 function expectCompleteAnswer() {
   const expected: AskUserAnswerFrame = {
     type: 'ask_user_answer', card_id: MULTI.card_id, session_id: MULTI.session_id,
@@ -97,18 +108,34 @@ describe('#1066 keyboard-first per-question confirmation', () => {
     await user.click(finalSubmit())
     expectCompleteAnswer()
   })
-  it('#1066 Required behavior 4 single-choice questions also expose confirmation before advancing', async () => {
-    const user = userEvent.setup()
-    const single: AskCard = { ...MULTI, questions: [{ ...MULTI.questions[0], multi_select: false }, MULTI.questions[1]] }
-    render(<AskUserQuestionCard card={single} />)
-    expect(next()).toBeVisible()
-    screen.getByRole('button', { name: /^sales$/i }).focus()
-    await user.keyboard(' ')
-    next().focus()
-    await user.keyboard('{Enter}')
-    expect(screen.getByText('How should we continue?')).toBeVisible()
-    expect(send.mock.calls).toEqual([])
-  })
+  // #1066 Required behavior 4 / CHECK F1: selection is NOT confirmation.
+  // Drain scheduled callbacks before confirming so a delayed auto-advance dies.
+  // This is the calibrated C03-v2 predicate, not an elapsed-time assertion.
+  it.each(['pointer', 'keyboard'] as const)(
+    '#1066 Required behavior 4 single-choice %s selection stays put until explicit confirmation', (input) => {
+      vi.useFakeTimers()
+      try {
+        const single: AskCard = { ...MULTI, questions: [{ ...MULTI.questions[0], multi_select: false }, MULTI.questions[1]] }
+        render(<AskUserQuestionCard card={single} />)
+        expect(next()).toBeVisible()
+        const sales = screen.getByRole('button', { name: /^sales$/i })
+        if (input === 'pointer') fireEvent.click(sales)
+        else activateKey(sales, ' ')
+        expect(sales).toHaveAttribute('aria-pressed', 'true')
+        act(() => { vi.runOnlyPendingTimers() })
+        expect(screen.getByText('Which areas should the agent cover?')).toBeVisible()
+        expect(screen.queryByText('How should we continue?')).not.toBeInTheDocument()
+        expect(next()).toBeEnabled()
+        expect(send.mock.calls).toEqual([])
+        if (input === 'pointer') fireEvent.click(next())
+        else activateKey(next(), 'Enter')
+        expect(screen.getByText('How should we continue?')).toBeVisible()
+        expect(send.mock.calls).toEqual([])
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
   it('#1066 negative case deselecting the last multi choice disables confirm and sends nothing', async () => {
     const user = userEvent.setup()
     render(<AskUserQuestionCard card={MULTI} />)
