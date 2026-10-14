@@ -215,7 +215,14 @@ Leave the field blank and live available memory governs each new turn, reported 
 
 ### How long a child may run
 
-`performance.delegation_timeout_minutes` caps how long a delegated session may run across its whole life — a follow-up that wakes the child does not restart the clock. The default is **30 minutes**. A delegating agent can override that for one call with `timeout_seconds`; leaving that at zero uses the default.
+There is no time limit. A delegated session — like a task, a scheduled run, a plan's supervision turn or an external CLI worker — runs until it finishes or someone stops it: **Stop** in the chat, `delegate` with `action: "stop_all"`, or stopping the task or plan. Long work is never cut off part-way by a timer.
+
+Older versions capped a delegated session at 30 minutes. An install that still has `performance.delegation_timeout_minutes`, `agents.defaults.timeout_seconds` or `schedules.run_timeout_seconds` in its `config.json`, or a `timeout_seconds` in an agent's settings file, keeps working: the values are ignored, and each is dropped the next time its file is saved. A `timeout_seconds` that an agent still passes to `delegate` is accepted and ignored.
+
+Two limits stay, because they protect against a broken connection or command rather than limiting work:
+
+- each request to a model provider has its own request timeout (`request_timeout` on the model, 120 seconds when unset); a provider that stops answering is retried or reported as **The model provider didn't answer this request in time** — the turn itself is not stopped by a clock;
+- a shell command run by an agent has its own `timeout_seconds` (default 300 seconds), and the environment-setup tool has its own job timeout.
 
 ### Which new agents get a self-line
 

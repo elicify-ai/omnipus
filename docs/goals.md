@@ -63,7 +63,7 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 |---|---|---|
 | active | Work is under way | Steer by chatting |
 | waiting on you | Paused, waiting for you | Reply in chat |
-| judge unavailable | Judging is paused because the Judge cannot run | Wait for the Judge to become available |
+| judge unavailable | Judging is paused because the Judge cannot run | Wait for the Judge to become available; if it still cannot run, you get a **Not verified** conclusion (see below) |
 | re-planning | A plan needs your correction before work continues | Review the request and reply |
 | judging | The Judge is reading the work | Wait |
 | verifying elsewhere | Another judgment of the same work is already running | Wait for that verdict |
@@ -94,6 +94,11 @@ A goal ends one of four ways — met, tries exhausted, expired, cleared by you �
 - On a task, tries bound the work inside one run; attempts bound how many runs the task gets. The task card shows both, for example "attempt 1 of 3 · try 5 of 20".
 - Unproven counts as unmet. Finished work can be sent back when the Judge could not verify it; the reason names the evidence that was missing.
 - Verdict speed follows the Judge's model — a fast one keeps verdicts quick.
+- The work itself has no time limit; the Judge's check does. When the Judge cannot finish its check after its retries, the check always ends with a visible conclusion — never silence. It says **Not verified — the check could not complete** with the reason, and carries the work result so nothing is lost:
+  - in a chat goal, the conclusion is added to the chat and the goal stays active, so the agent can claim completion again later;
+  - for a helper working on a goal, its parent agent receives the conclusion together with the helper's result;
+  - for a task, the task ends **Failed** with the conclusion and the worker's result in its result text, and no attempt is used; re-run it once the Judge is available;
+  - for a plan, the plan's handover explains that the plan judge could not finish the round, and the plan retries or parks for a correction.
 - Ending a goal never erases it, but goal records are swept by the same retention rule as sessions. Keep what you need somewhere durable.
 
 ## Related pages

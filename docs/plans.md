@@ -96,6 +96,7 @@ After a correction the plan returns to running. The plan fails when its configur
 - **Run slots follow the install-wide active-loop cap**—16 by default—shared by plans, conversation goals and recurring loops. A plan can wait at Approved and stays stoppable there.
 - **Bounds are per plan** — the judge-round ceiling and idle-expiry days, defaulting to 20 rounds and 7 days. A plan idle that long ends failed.
 - **A running plan can pause.** If its owner agent is disabled, the plan pauses and the tile shows the reason.
+- **Plan work has no time limit.** Member tasks and the supervisor's review run until they finish or you press Stop. A supervision attempt counts as having produced nothing only after the supervisor's turn has ended and the grace period has passed (`planning.supervision_turn_timeout_seconds`, 600 seconds by default, or the plan's own override) — a review that is still working is never cut off.
 - **A running plan cannot be deleted.** The Clear action in a tile's menu works only on plans that are not running.
 - **Agent-driven plan execution is permission-gated.** On a fresh install, Jim is allowed to execute and stop plans. Mia, Ava and Admin are denied those tools by their shipped role policies. Operators can configure supported per-agent permissions. [Tools](tools.md) explains the per-agent settings.
 

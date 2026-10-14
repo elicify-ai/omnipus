@@ -235,7 +235,7 @@ A main chat's title is always **<Agent name> - Main Session** — for example **
 | **Queued** | It is queued, not executing. |
 | **Done** | Its lifecycle record says it finished. If no lifecycle status is available, an archived chat also shows Done. |
 | **Failed** | It failed. |
-| **Stopped** | It was stopped. The cause is included when known, for example **Stopped · timeout**. |
+| **Stopped** | It was stopped. The cause is included when known, for example **Stopped · cascade** when a Stop all above it reached it. Work has no time limit, so current versions never stop a session on a timer; a session that an older version stopped for its time limit still shows **Stopped · timeout**. |
 | **Interrupted** | A server restart cut the turn off. This takes priority over an old queued or running record. |
 | **Unavailable** | No usable lifecycle or queued status is available, and the chat is not archived. An active chat without that information is not labelled Working. |
 
