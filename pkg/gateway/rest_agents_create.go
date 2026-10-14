@@ -716,9 +716,7 @@ func (cra *restAPICreateAgent) buildToolConfig() bool {
 	// baseline — that is not a caller gap, and subagent_3p has no tools_cfg on
 	// the wire at all.
 	if cra.toolsCfgIn != nil && cra.toolsCfgIn.BuiltinPolicies != nil {
-		if defects := config.ValidateSubmittedToolPolicyMap(
-			cra.toolsCfgIn.BuiltinPolicies, buildKnownBuiltinToolNames(),
-		); !defects.Empty() {
+		if defects := validateSubmittedBuiltinToolPolicyMap(cra.toolsCfgIn.BuiltinPolicies); !defects.Empty() {
 			jsonErr(cra.w, http.StatusBadRequest,
 				"tools_cfg.builtin.policies "+defects.String())
 			return true

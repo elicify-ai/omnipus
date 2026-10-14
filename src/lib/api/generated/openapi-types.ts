@@ -8781,7 +8781,7 @@ export interface components {
             /** @description Controls builtin tool visibility for this agent. */
             builtin?: {
                 /**
-                 * @description Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+                 * @description Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every implemented static builtin listed by GET /api/v1/tools as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved on replacement, never newly seeded. Wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
                  * @example {
                  *       "bash": "deny",
                  *       "remember": "allow"
@@ -8818,16 +8818,16 @@ export interface components {
         };
         /**
          * AgentToolsUpdateRequest
-         * @description Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. Only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
+         * @description Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. For supplied tools, only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Existing policies for declared future tools omitted from the request are preserved, never newly seeded. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
          */
         AgentToolsUpdateRequest: {
             revision: components["schemas"]["ConfigurationRevision"];
-            /** @description Stored local override keys; an empty list removes all local overrides. */
+            /** @description Stored local override keys for supplied tools; an empty list removes their local overrides. Existing policies for omitted, declared future tool names are preserved. */
             override_names: string[];
             config?: components["schemas"]["AgentToolsCfg"];
             /** @description Builtin tool policy configuration for this agent. */
             builtin?: {
-                /** @description Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone. */
+                /** @description Complete per-tool policy map. Every implemented static builtin tool listed by GET /api/v1/tools MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved, never newly seeded. This is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone. */
                 policies: {
                     [key: string]: "allow" | "ask" | "deny";
                 };

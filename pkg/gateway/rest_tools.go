@@ -275,9 +275,7 @@ func (rau *restAPIUpdateAgentTools) normalizeBuiltinPolicies() bool {
 	// This also gives the documented 400 for the legacy mode="explicit" +
 	// visible[] shape sent alone, exactly as
 	// contracts/components/schemas/AgentToolsUpdateRequest.yaml describes.
-	if defects := config.ValidateSubmittedToolPolicyMap(
-		rau.builtinPolicies, buildKnownBuiltinToolNames(),
-	); !defects.Empty() {
+	if defects := validateSubmittedBuiltinToolPolicyMap(rau.builtinPolicies); !defects.Empty() {
 		jsonErr(rau.w, http.StatusBadRequest, "builtin.policies "+defects.String())
 		return true
 	}
@@ -348,7 +346,7 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 	for name, policy := range rau.builtinPolicies {
 		complete[name] = config.ToolPolicy(policy)
 	}
-	known := buildKnownBuiltinToolNames()
+	known := submittedBuiltinToolPolicyNames(rau.builtinPolicies)
 	ceiling := make(map[string]config.ToolPolicy, len(known))
 	for name := range known {
 		policy := config.ToolPolicy(rau.cfg.Sandbox.ToolPolicies[name])
@@ -379,6 +377,7 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 		if agentRec.Tools == nil {
 			agentRec.Tools = &config.AgentToolsCfg{}
 		}
+		retainReservedBuiltinToolPolicies(overrides, agentRec.Tools.Builtin.Policies, rau.builtinPolicies)
 		agentRec.Tools.Builtin.Policies = overrides
 		if rau.mcpSpecified {
 			servers := make([]config.AgentMCPServerBinding, 0, len(rau.mcpServers))

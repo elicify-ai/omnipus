@@ -620,9 +620,7 @@ func (uf *restAPIUpdateAgentFlow) preparePersistence() bool {
 	// seeded global map covers the whole catalog. Reproduced live (UAT
 	// 2026-09-02, batch 4 S83): a PUT omitting `stop_plan` returned 200.
 	if uf.ru.req.ToolsCfg != nil && uf.ru.req.ToolsCfg.Builtin != nil {
-		if defects := config.ValidateSubmittedToolPolicyMap(
-			uf.ru.req.ToolsCfg.Builtin.Policies, buildKnownBuiltinToolNames(),
-		); !defects.Empty() {
+		if defects := validateSubmittedBuiltinToolPolicyMap(uf.ru.req.ToolsCfg.Builtin.Policies); !defects.Empty() {
 			jsonErr(uf.w, http.StatusBadRequest,
 				"tools_cfg.builtin.policies "+defects.String())
 			return true
@@ -1124,6 +1122,10 @@ func (rp *restAPIUpdateAgentPersistAgent) updateToolsConfig(agentRec *config.Age
 		if rp.ru.req.ToolsCfg.Builtin != nil {
 			newTools.Builtin = config.AgentBuiltinToolsCfg{
 				Policies: agentToolPolicyMapFromWire(rp.ru.req.ToolsCfg.Builtin.Policies),
+			}
+			if agentRec.Tools != nil {
+				retainReservedBuiltinToolPolicies(newTools.Builtin.Policies,
+					agentRec.Tools.Builtin.Policies, rp.ru.req.ToolsCfg.Builtin.Policies)
 			}
 		} else if agentRec.Tools != nil {
 			// req.ToolsCfg is present (e.g. it only touches mcp) but
