@@ -578,6 +578,41 @@ func (al *AgentLoop) reconcileLocked(ctx context.Context) error {
 	return nil
 }
 
+// registerLiveMCPTools registers every live MCP connection's tools on the
+// live registry — the same re-heal reconcileLocked's final pass performs,
+// without connecting or disconnecting anything. UpsertAgentFast calls it
+// right after publishing a rebuilt AgentInstance, whose tool registry holds
+// no MCP tools (#1296). It takes al.mcp.initMu for this step only, so it
+// serializes with ReconcileMCP: a reconcile that ran before it is already
+// reflected in the manager's live set, and one that runs after it sees the
+// published registry. Tools already present on an agent are skipped by
+// registerServerTools. Callers MUST NOT hold al.mu or al.mcp.initMu.
+func (al *AgentLoop) registerLiveMCPTools() {
+	al.mcp.initMu.Lock()
+	defer al.mcp.initMu.Unlock()
+	if al.mcp.isClosed() {
+		return
+	}
+	mgr := al.mcp.getManager()
+	if mgr == nil {
+		return
+	}
+	// Deep-copy the Servers map under al.mu.RLock: the sysagent MCP tools
+	// mutate al.cfg's map in place under al.mu (see reconcileLocked).
+	al.mu.RLock()
+	mcpCfg := al.cfg.Tools.MCP
+	servers := make(map[string]config.MCPServerConfig, len(mcpCfg.Servers))
+	for name, serverCfg := range mcpCfg.Servers {
+		servers[name] = serverCfg
+	}
+	mcpCfg.Servers = servers
+	al.mu.RUnlock()
+	registry := al.GetRegistry()
+	for name, conn := range mgr.GetServers() {
+		al.registerServerTools(mgr, registry, name, conn, mcpCfg)
+	}
+}
+
 // MCPServerStatus reports live status for one configured server.
 // status is one of "connected" (present in the live manager), "error" (not
 // live, but ReconcileMCP recorded a connect failure for it), or
