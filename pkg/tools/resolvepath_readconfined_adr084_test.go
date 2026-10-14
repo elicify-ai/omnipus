@@ -282,6 +282,17 @@ func TestResolvePath_ReadConfinedRefusesListAndSendToo(t *testing.T) {
 			t.Fatal("listing the own work dir returned no entries; the fixture writes one file into it")
 		}
 	})
+	// #1284 inventory denials must not mask the independent ADR-084 posture.
+	// These paths lie completely outside the internal-file inventory.
+	for _, confined := range []bool{false, true} {
+		name := "unconfined_external_controls"
+		if confined {
+			name = "confined_external_detector"
+		}
+		t.Run(name, func(t *testing.T) {
+			wu23R1ReadConfinedDetector(t, ctx, readConfinedPolicy(t, tr, confined), tr, confined)
+		})
+	}
 }
 
 // TestWithReadConfined_CtxSeamSetByDispatchNotByTool pins JUDGE-FR-060b's
@@ -347,14 +358,18 @@ func TestWithReadConfined_CtxSeamSetByDispatchNotByTool(t *testing.T) {
 			t.Fatal("ResolveTurnFSPolicy did not carry the engine-set posture onto the policy — FR-060's mechanism has no input")
 		}
 
-		// Effective reach, not a field value (JUDGE-FR-061's standard): the
-		// policy this seam produced must actually refuse the read. The
-		// transcript is #1284 protected inventory now, so the refusal is
-		// ErrCarveOut regardless of posture; the seam's own out-of-workdir
-		// shape is pinned by the ErrOutsideScope rows above.
-		if _, resolveErr := ResolvePath(ctx, policy, "read_file", "", FSOpRead, tr.sessionsFile); resolveErr == nil {
-			t.Fatal("a policy built through the ctx seam did not refuse an out-of-workdir read")
+		// Keep the specific amended inventory error, not any non-nil error.
+		// CHECK M15 substitutes ErrPathInvalid and must die in THIS detector.
+		handle, resolveErr := ResolvePath(ctx, policy, "read_file", "", FSOpRead, tr.sessionsFile)
+		if handle != nil {
+			handle.Close()
 		}
+		if !errors.Is(resolveErr, ErrCarveOut) {
+			t.Fatalf("context-seam inventory refusal=%v want ErrCarveOut", resolveErr)
+		}
+		// Independently exercise context-derived READ/LIST/SEND confinement;
+		// sessions alone cannot detect a missing ReadConfined branch (M14).
+		wu23R1ReadConfinedDetector(t, ctx, policy, tr, true)
 	})
 
 	t.Run("the posture does not travel through the ctx fspolicy discards", func(t *testing.T) {
