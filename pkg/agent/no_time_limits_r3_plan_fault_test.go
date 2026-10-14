@@ -11,6 +11,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,6 +229,7 @@ func r3PersistentMemberReadFault(t *testing.T) {
 		if err != nil || p.PlanPhase != plan.PhaseDispatching || p.JudgeRounds != 0 {
 			t.Fatalf("G3 below-bound input failure should retry without a round debit: plan=%+v err=%v", p, err)
 		}
+		r3AssertUnreadableMemberConclusion(t, h, p)
 		if _, err := h.tasks.List(task.Filter{PlanID: h.p.ID}); err == nil || !strings.Contains(err.Error(), "task: list dir") {
 			t.Fatalf("SETUP member fault must persist: err=%v", err)
 		}
@@ -243,6 +245,9 @@ func r3PersistentMemberReadFault(t *testing.T) {
 		!strings.Contains(parked.HandoverText, "member tasks could not be listed") ||
 		parked.Supervision == nil || parked.Supervision.WakeAt == "" {
 		t.Errorf("G3 persistent member fault did not reach the visible bounded park: plan=%+v err=%v", parked, err)
+	}
+	if err == nil {
+		r3AssertUnreadableMemberConclusion(t, h, parked)
 	}
 	if n := h.judge.callCount(); n != 0 {
 		t.Errorf("G3 member-input fault called the provider %d times, want 0", n)
@@ -261,7 +266,54 @@ func r3PersistentMemberReadFault(t *testing.T) {
 	}
 }
 
+func r3AssertUnreadableMemberConclusion(t *testing.T, h *r3PlanHarness, p *plan.Plan) {
+	t.Helper()
+	// Accepted Q3 A: missing member inputs cannot invent a result. The
+	// conclusion labels it Not verified and explicitly names unreadable members.
+	if !strings.Contains(p.HandoverText, "Not verified") ||
+		!strings.Contains(p.HandoverText, "member tasks could not be listed") {
+		t.Errorf("G3 unreadable-member conclusion must explicitly say Not verified and name the unreadable inputs: %q", p.HandoverText)
+	}
+}
+
+func r3PlanOwnerWakeTexts(h *r3PlanHarness) []string {
+	var texts []string
+	for {
+		select {
+		case msg, ok := <-h.al.bus.InboundChan():
+			if !ok {
+				return texts
+			}
+			if msg.AsyncTranscriptSessionID == h.owner && msg.AsyncOriginAgentID == h.p.OwnerAgentID {
+				texts = append(texts, msg.Content)
+			}
+		default:
+			return texts
+		}
+	}
+}
+
 func TestR3PlanJudge_PersistentInputFaultIsReportedReleasedAndRecoverable(t *testing.T) {
 	t.Run("plan_unreadable_through_outcome", r3PersistentPlanReadFault)
 	t.Run("member_fault_reaches_bounded_park", r3PersistentMemberReadFault)
+}
+
+// Accepted Q3 A: even a below-bound unavailable round concludes, and the
+// members' real work result is carried BOTH in handover and the owner wake.
+func TestR3PlanJudge_UnavailableRoundWakesOwnerWithResultBearingConclusion(t *testing.T) {
+	noJudgeWait(t)
+	h := newR3PlanHarness(t)
+	h.judge.chatFn = func(int) (*providers.LLMResponse, error) {
+		return nil, errors.New("simulated judge outage")
+	}
+	h.pe.processPlan(context.Background(), h.p.ID)
+	h.pe.judgeWG.Wait()
+	h.pe.wakeWG.Wait()
+	p, err := h.plans.Get(h.p.ID)
+	if err != nil || p.JudgeRounds != 0 || p.State != plan.StateRunning {
+		t.Fatalf("G3 unavailable plan status=%+v err=%v, want running/no round consumed", p, err)
+	}
+	r3AssertResultBearingConclusion(t, []string{p.HandoverText}, h.member.Result, "G3 Q3-A unavailable plan handover")
+	r3AssertResultBearingConclusion(t, r3PlanOwnerWakeTexts(h), h.member.Result, "G3 Q3-A unavailable plan owner wake")
+	h.assertRoundReleased(t)
 }
