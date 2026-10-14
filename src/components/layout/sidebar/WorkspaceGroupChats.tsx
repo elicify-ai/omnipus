@@ -15,6 +15,7 @@ import { Plus, UsersThree } from '@phosphor-icons/react'
 import type { Room } from '@/lib/api/generated/openapi-types'
 import type { Workspace } from '@/lib/api'
 import { fetchWorkspaceRooms, roomsQueryKeys } from '@/lib/api/rooms'
+import { queryClient } from '@/lib/queryClient'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { IconButton } from '@/components/ui/icon-button'
@@ -54,7 +55,8 @@ function RoomRow({ room, onOverlayClose }: { room: Room; onOverlayClose: () => v
 
 export function WorkspaceGroupChats({ workspace, onOverlayClose }: { workspace: Workspace; onOverlayClose: () => void }) {
   const [dialog, setDialog] = useState<'squad' | 'adhoc' | null>(null)
-  const roomsQuery = useQuery({ queryKey: roomsQueryKeys.list(workspace.id), queryFn: () => fetchWorkspaceRooms(workspace.id) })
+  // The app's one client, passed explicitly: WorkspaceAgentList is props-driven and renders without a provider.
+  const roomsQuery = useQuery({ queryKey: roomsQueryKeys.list(workspace.id), queryFn: () => fetchWorkspaceRooms(workspace.id) }, queryClient)
   const rooms = sidebarRooms(roomsQuery.data ?? [])
   return (
     <div data-testid={`group-chats-${workspace.id}`} className="mt-[var(--space-2)] flex flex-col">
