@@ -51,7 +51,7 @@ Source: team-lead accepts the chief's stage-1 requirements, 2026-10-14.
 
 The other ten retargeted files (seven session-module mock completions, two first-send fixtures, and the exact client-frame set) have no feature-switch-gated UI mount. They remain unchanged by this follow-up. The unreachability suite and its support must retain the real module; no feature-switch mock is permitted there.
 
-The switch module was introduced at ca09d06f9 already carrying all three false values; its prior absence would be a collection error, not qualified behavioural RED. Record current guard execution honestly and defer its three mutation probes to fresh CHECK. Historical 9/9 behavioural RED for (a)–(f) remains valid. Re-run the final fifteen test files individually and serially, plus typecheck, budget and preservation/discovery checks; save fresh logs without overwriting the earlier receipts.
+The switch module was introduced at ca09d06f9 already carrying all three false values; its prior absence would be a collection error, not qualified behavioural RED. Record current guard execution honestly and defer its three mutation probes to fresh CHECK. Historical 9/9 behavioural RED for (a)–(f) remains valid. After the additional RoomTrafficEntry retarget, re-run the final sixteen test files individually and serially, plus typecheck, budget and preservation/discovery checks; save fresh logs without overwriting the earlier receipts.
 
 ## Additional accepted room/secret mounts and release-modal coverage
 
@@ -67,11 +67,17 @@ Source: team-lead follow-up during resume, 2026-10-14. Production gates are comi
 
 Expiry safety derives from the requested release approval flow, ADR-092 D4's no-auto-submit/timeout denial, and the generating ToolApprovalResolvedFrame contract, which explicitly requires dropping the matching queue entry on denied_timeout. Test time is controlled at the clock edge; no sleep/elapsed-time assertion or increased timeout. Rendered expiry copy is not an oracle.
 
-Existing mount discovery found one additional gated carrier pack: RoomTrafficEntry.test.tsx renders through real ChatThread in six cases. Retarget that file with ROOMS_ENABLED mocked ON, retain every original oracle, and add visibility to its shared collapsed-toggle control. SecretRequestCard behaviour/security/state packs mount the card/tail directly, not via ChatScreen/ChatThread; do not add unnecessary switch mocks there. Existing ToolApprovalModal-named files render the inline panel and do not establish shipped-modal coverage.
+Existing mount discovery found one additional gated carrier pack: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/chat/RoomTrafficEntry.test.tsx renders through real ChatThread in six cases. Retarget that file with ROOMS_ENABLED mocked ON, retain every original oracle, and add visibility to its shared collapsed-toggle control. SecretRequestCard behaviour/security/state packs mount the card/tail directly, not via ChatScreen/ChatThread; do not add unnecessary switch mocks there. Existing ToolApprovalModal-named files render the inline panel and do not establish shipped-modal coverage.
 
 ## RED / CHECK boundary
 
 RED proves a failure only on an actual historical pre-change implementation, with an expected-versus-actual behavioural failure. A current-head pass does not establish RED. No production mutations will be performed by this writer. GREEN verification, mutation execution and the skill's Proof-of-failability checklist are deferred to a fresh CHECK instance. The ledger will distinguish observed results, qualified RED evidence, and unverified claims.
+
+## Accepted production integration and completion record
+
+Team-lead required merging UI head e4c84116b36637810c59961e90def0f83dee0370 from its work branch. The tests-only follow-up was preserved first as ec17f7f4e9627a9f70357d31a279ab318aacece6. The conflict-free merge produced tested commit 0da2c2a52d17da9e7ce04c064bff1aa03115171c. Production was inherited unchanged, not edited by QA.
+
+The executed pack is now 14 existing files plus the real-shell file and guard file: 16 serial file runs, 290 collected / 290 successful, all raw exits=0. New cases are 18 behaviours plus 3 constant guards. All 18 behaviours have historical RED; the six added room/secret cases also fail immediately before e4c84116b. Guard mutation proof remains deferred. The full ledger and source-bound receipts are at /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/stage1-retarget-ledger.md and /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/stage1-execution-receipt.json.
 
 ## Deliberate gaps
 

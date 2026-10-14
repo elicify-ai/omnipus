@@ -1,110 +1,159 @@
-# L1 UI stage 1 — RED pack and before/after ledger
+# L1 UI stage 1 — final RED pack and before/after ledger
 
-**Follow-up in progress:** accepted requirements (g)/(h) and room/secret traffic plus release-modal queue/expiry coverage are now in the tests-only pack. Three real-module switch guards were added. Every original oracle remains; five visible-mount assertions strengthen the enabled-feature tests. The extended real-shell file has 18 cases: its pre-hardening run on ca09d06f9 has 6 expected behavioural failures (four room-traffic variants, two secret carriers) and 12 successes; unchanged historical production 08a204c98 fails all 18 for their specified behavioural difference. The three constant guards have no qualified historical RED and await fresh CHECK mutation proof. The accepted UI hardening head e4c84116b will be merged next and final execution receipts refreshed before push. **Independent GREEN verification, production mutation probes and the Proof-of-failability checklist remain deferred to fresh CHECK.**
+**Bottom line:** all accepted follow-ups are included. The final pack has **14 retargeted existing files and 21 new cases** (18 real-shell behaviours plus 3 shipped-value guards). All **290 cases in 16 files** have successful, serial, one-file execution receipts on the requested UI head. **629 original assertion expressions and all original case declarations remain**, with five stronger visibility assertions added. The original nine real-shell acceptance oracles also remain unchanged. Independent GREEN verification, production mutations and the skill's Proof-of-failability checklist are **deferred to a fresh CHECK instance**, not claimed as completed.
 
-The sections below preserve the original 8eafc5ac4 pack's before/after evidence until the final merged-head ledger update. Its 269/269 count is historical, not the extended pack's current result.
+## Accepted scope and tested states
 
-## Specification and source states
-
-| Item | Source |
+| Item | Evidence/source |
 |---|---|
-| Stage-1 expectations | Team-lead dispatch on 2026-10-14: founder decided unserved features HIDDEN and approvals use the RELEASE pop-up; Q1 A clarified RED/CHECK responsibilities |
-| Additional fixture repairs | Team-lead supplemental dispatch: first-send agent selection in two store packs; exact client-frame contract set includes attach_room |
-| Production under test | ca09d06f9d34bbcc63f158dc63d06973b9bb62f3 |
-| Unchanged historical RED baseline | 08a204c98ab043f8f2494a5e042bb675eb4e17f3 — the immediate parent of the stage-1 production change, not an invented mutant |
-| Retarget/fixture commit | 75d4ab0e194e6f09106ee0987ce352428113c682 |
-| Test plan | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/stage1-test-plan.md |
-| Machine-readable evidence | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/stage1-execution-receipt.json — exact commands in raw logs, exits, case counts, named failures and SHA-256 hashes of logs and executed source |
-| Raw saved execution artifacts | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/ — retained locally; every exact file location is in the machine-readable receipt |
+| Acceptance source | Team-lead dispatch and accepted follow-ups: founder decision 2026-10-14, stage 1 hides unserved features and uses the release pop-up; (g) real-module false-value guards; (h) visible enabled mounts; added room_ref / secret live/snapshot absence; release-modal queue and expiry |
+| Original UI head | ca09d06f9d34bbcc63f158dc63d06973b9bb62f3 |
+| Required UI hardening head | e4c84116b36637810c59961e90def0f83dee0370 — merged explicitly at team-lead's request, with candidate server 45f2659a0, catalog fix, four room-traffic gates, secret-tail gate and docs |
+| Tests-only follow-up commit | ec17f7f4e9627a9f70357d31a279ab318aacece6 — preserved before production integration |
+| Exact executed merge commit | 0da2c2a52d17da9e7ce04c064bff1aa03115171c; later commit changes evidence documents only, not executed code |
+| Historical behavioural RED | Unchanged production 08a204c98ab043f8f2494a5e042bb675eb4e17f3: **18/18 named behavioural failures**, no collection/unhandled errors |
+| Immediate pre-hardening RED | ca09d06f9: **6 failed / 12 passed** in the extended shell file — four visible room-traffic variants and two visible secret-card carriers. All six pass after the accepted hardening merge. No assertions were adapted. |
+| Real constant guards | 3/3 current executions; no qualified historical RED because the real module was introduced already false. Its absence before introduction is not behavioural RED. Three isolated switch mutants are assigned to CHECK. |
+| Mutation ownership | No production mutants performed by RED. The two scratch checkouts hold actual unchanged historical/stock commits, not invented implementation variants. |
 
-## Existing tests: before → after
+## Artifacts
 
-Every before run used the original test file on production ca09d06f9. Each after run used the same production with only the listed test-fixture change. Each file ran individually and serially with verbose collection and an unpiped raw exit. All assertion call expressions and test/describe declarations are unchanged; **610 assertion expressions preserved**. The sole expected-data change is adding the independently specified attach_room discriminator to the exact expected set, not changing its equality matcher.
-
-| File | Before receipt (exit=1) | Test-only retarget | After receipt (exit=0) |
-|---|---|---|---|
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx | 7 failed / 10 passed; Group chats absent | Partial feature-switch mock, ROOMS_ENABLED=true; all 7 original room-section oracles retained, other 10 cases unchanged | 17/17 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/chat/AddParticipant.test.tsx | 1 failed / 8 passed; real header Add participant absent | ROOMS_ENABLED=true in the test configuration; header case and all its assertions retained | 9/9 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/AppShell.test.tsx | 1 failed / 28 passed; cross-workspace banner absent | INLINE_TOOL_APPROVALS_ENABLED=true in the test configuration; coexistence oracle retained | 29/29 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.test.tsx | Collection failure: missing registerChatSetReplaying; no cases executed | Spread importOriginal for session module, preserving the mocked hook/static actions | 35/35 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.focus-trap.test.tsx | Same collection failure | Same importOriginal completion; existing mock hook unchanged | 6/6 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.kb5.test.tsx | Same collection failure | Same importOriginal completion; existing mock hook unchanged | 4/4 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.m5.test.tsx | Same collection failure | Same importOriginal completion; existing mock hook unchanged | 18/18 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.panelGuard.test.tsx | Same collection failure | Same importOriginal completion; existing hook/static unchanged | 2/2 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.panelGuard.matrix.test.tsx | Same collection failure | Same importOriginal completion; existing hook/static unchanged | 2/2 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.shortcuts.editor.test.tsx | Same collection failure | Same importOriginal completion; existing hook/static unchanged | 9/9 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/store/chat.sessionModeUpdate.test.ts | 3 failed / 16 passed; no first-send frame without an owner | First-send fixture selects Mia/core; all Auto-approve assertions unchanged | 19/19 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/store/chat.recipient-send.test.ts | 1 failed / 27 passed; minting payload undefined | Only the minting case selects Jim/core; all recipient/content/session assertions unchanged | 28/28 |
-| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/lib/ws.test.ts | 1 failed / 81 passed; exact set lacked attach_room | Add attach_room, sourced from /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/contracts/asyncapi.yaml::operations.sendAttachRoom and components.schemas.AttachRoomFrame.type.const; exact equality unchanged | 82/82 |
-| **Total existing pack** | 14 behavioural failures plus 7 collection failures (collection failures are NOT behavioural RED) | No assertion weakening, skipping, deletion, timeout widening or production changes | **260/260** |
-
-## New cases and exact mutants assigned to fresh CHECK
-
-Acceptance file: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/AppShell.stage1.test.tsx . Support: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/stage1-harness.tsx . The harness imports the **actual complete production route tree**, not a test redirect or test-only AppShell substitute. Switches are unmocked. No production component, hook, store or API client is mocked/spied. The doubles are HTTP/WebSocket and missing browser capabilities only.
-
-| Case | Oracle from dispatch | Historical RED on 08a204c98 | Exact CHECK mutant (not run by RED) |
-|---|---|---|---|
-| S1-a1 | Expanded populated workspace has no Group chats and sends zero room-collection reads | Group chats span existed; expected null | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/lib/featureSwitches.ts::ROOMS_ENABLED: false → true |
-| S1-a2 | Member main chat has no Add participant and no room reads | Add participant button existed; expected null | Same ROOMS_ENABLED: false → true |
-| S1-a3 | Real direct room route redirects to workspace chat, sends no room REST requests or attach_room | Actual path /workspaces/sales/rooms/launch instead of /workspaces/sales/chat | Same ROOMS_ENABLED: false → true; additional narrow probe: remove disabled-room beforeLoad redirect in /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/routes/_app/workspaces.$workspaceId.rooms.$roomId.tsx::Route |
-| S1-b | Real sidebar Edit opens shell-owned conversation-agent profile; Tools has no Private secrets and no GET secrets | Private secrets heading existed; expected null | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/lib/featureSwitches.ts::AGENT_PRIVATE_SECRETS_ENABLED: false → true |
-| S1-c Approve Once | Settings stays open, active-chat approval is visible; exact POST action allow_once, credentials include, then modal resolves | No Tool Approval Required dialog although frame entered real queue | Remove the `!INLINE_TOOL_APPROVALS_ENABLED && <ToolApprovalModal />` mount from /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/AppShell.tsx::AppShell |
-| S1-c Deny | Same Settings reachability; exact POST action deny | Same missing dialog after real queue receipt | Same AppShell modal-mount removal |
-| S1-d | Child session, root_session_id absent; parent main remains open; live incoming approval opens modal without Go there navigation | Same missing dialog after real queue receipt | Same AppShell modal-mount removal; additional targeted probe: change `const visible = queue` to `const visible = queue.filter((entry) => entry.sessionId === useSessionStore.getState().activeSessionId)` in /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/agents/ToolApprovalModal.tsx::ToolApprovalModal |
-| S1-e | Exactly one approval surface: one dialog, one Approve Once button including hidden nodes, no inline card/tail, no banner | Missing modal despite own-chat pending approval | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/lib/featureSwitches.ts::INLINE_TOOL_APPROVALS_ENABLED: false → true |
-| S1-f | Marketing approval is actionable in modal while Sales and Mia main remain active | Missing modal after other-workspace frame entered queue | Same AppShell modal-mount removal; additional targeted probe: import useWorkspacesStore and change `const visible = queue` to `const visible = queue.filter((entry) => entry.workspaceId === useWorkspacesStore.getState().activeWorkspaceId)` in /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/agents/ToolApprovalModal.tsx::ToolApprovalModal |
-
-All nine final cases failed for the required behavioural difference, with no collection errors. Current-head execution collected all nine successfully with exit=0. Mutation execution, mutation-kill claims, green verification and the Proof-of-failability checklist are **deferred to CHECK**, not met by these receipts.
-
-## Positive controls / authoring corrections
-
-| Control or correction | Evidence / result |
+| Artifact | Absolute path |
 |---|---|
-| Forbidden-request recorder can see real traffic | Historical source issues room/secrets traffic; current tests also require successful real agents/workspaces/tools reads. Every request is recorded before HTTP response handling. Unknown requests fail afterEach, never default to an empty success. |
-| WebSocket instrumentation is live | Each mounted shell creates one real WsConnection with a browser-edge TestSocket. Main cases assert actual attach_session output. Incoming approval frames use generated validation, real parser and real provider dispatcher before asserting exact queue id and modal content. |
-| The main-only branch is genuinely exercised | Connection-open reattach clears attachedSessionType. The harness therefore selects Mia through the real sidebar after opening the socket and asserts main type, avoiding a vacuous Add participant absence assertion. |
-| Duplicate responsive profile DOM is scoped correctly | Profile Basics/Tools are queried through accessible tabpanels, not an ambiguous test id matching both desktop and hidden phone copies. |
-| Assertion-preservation instrument can detect weakening | Its in-memory controls detect toEqual→toBeTruthy and it→it.skip before comparing all 13 files. No production mutation. |
-| Draft request-body correction | Initial planning draft incorrectly said approved=true/false. Corrected before assertions to the independently read ToolApprovalActionRequest contract action=allow_once/deny. |
-| Typecheck correction | First typecheck caught unsupported exact options on role queries. Removed unused options; the library's role matcher uses exact accessible-name equality. No oracle widened. Importing the complete route tree in the separate tests project also needed the actual application router type registration; a type-only import from the production main module fixes this without executing it or editing production. |
-| Historical attempt 1 | Not counted as all-nine RED proof: it exposed main-type and duplicate profile setup errors alongside valid feature failures. Attempts 2 and final provide 9/9 behavioural RED; final receipt hashes bind to the executed final source. |
+| Plan and case derivation | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/stage1-test-plan.md |
+| Source-bound serial receipts, exits, named RED failures and log hashes | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/stage1-execution-receipt.json |
+| Enabled-mount calibration and visible assertions | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/stage1-enabled-mount-receipt.json |
+| Oracle-preservation instrument | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/verify-stage1-retargeting.mjs |
+| Shipped guards | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/lib/featureSwitches.stage1.test.ts |
+| Real-shell acceptance | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/AppShell.stage1.test.tsx |
+| Application support | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/stage1-harness.tsx |
+| Raw execution artifacts (local, retained) | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/ |
 
-## Gates and limits
+## Existing files: original oracles retained
 
-| Gate | Saved receipt | Observed result |
+Original before-runs were captured before editing. Every final after-run is on merge commit 0da2c2a52, which includes UI head e4c84116b. The exact saved command, raw exit, case count and hash for each run are in the execution receipt. Seven collection failures are explicitly **not** counted as behavioural RED.
+
+| File | Original before receipt | Test-only retarget | Final after, exit=0 |
+|---|---|---|---|
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx | exit=1; 7 failed / 10 passed | ROOMS_ENABLED mocked ON; every original oracle retained; shared group helper and second-workspace group require visibility | 17/17 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/chat/AddParticipant.test.tsx | exit=1; 1 failed / 8 passed | ROOMS_ENABLED mocked ON; original real-header visible Add participant assertion retained exactly | 9/9 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/AppShell.test.tsx | exit=1; 1 failed / 28 passed | INLINE_TOOL_APPROVALS_ENABLED mocked ON; original coexistence/order assertions retained; both banners additionally require visibility | 29/29 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.test.tsx | exit=1; collection error: missing registerChatSetReplaying | importOriginal session-module completion; original mocked hook/static actions retained | 35/35 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.focus-trap.test.tsx | Same collection error | Same completion, no assertion change | 6/6 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.kb5.test.tsx | Same collection error | Same completion, no assertion change | 4/4 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.m5.test.tsx | Same collection error | Same completion, no assertion change | 18/18 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.panelGuard.test.tsx | Same collection error | Same completion, no assertion change | 2/2 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.panelGuard.matrix.test.tsx | Same collection error | Same completion, no assertion change | 2/2 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.shortcuts.editor.test.tsx | Same collection error | Same completion, no assertion change | 9/9 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/store/chat.sessionModeUpdate.test.ts | exit=1; 3 failed / 16 passed | Select Mia/core in the first-send fixture; Auto-approve assertions unchanged | 19/19 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/store/chat.recipient-send.test.ts | exit=1; 1 failed / 27 passed | Only the minting case selects Jim/core; all recipient/content/session assertions unchanged | 28/28 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/lib/ws.test.ts | exit=1; 1 failed / 81 passed | Exact expected client set adds only attach_room, from /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/contracts/asyncapi.yaml::operations.sendAttachRoom and AttachRoomFrame.type.const; equality assertion unchanged | 82/82 |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/chat/RoomTrafficEntry.test.tsx | ca09 original exit=0, 9/9; stock e4c84116b unretargeted exit=1, 6 failed / 3 passed | ROOMS_ENABLED mocked ON; all 6 real ChatThread live/REST/replay/ordinary-neighbour carrier cases retain their original oracle; shared toggle additionally requires visibility | 9/9 |
+| **Existing total** | Baseline evidence preserved, including harness errors rather than concealed skips | **629 original assertion expressions retained + 5 visibility assertions** | **269/269** |
+
+### Follow-up (h): visible enabled mounts, not vacuous presence
+
+| Gated retarget | ON configuration | Visible positive mount | Unchanged stock e4c84116b with real OFF switches |
+|---|---|---|---|
+| Seven workspace Group chats cases | ROOMS_ENABLED=true | Shared showSidebar requires group.toBeVisible; the second-workspace section also requires visibility | All 7 fail because the group is absent |
+| Real ChatScreen header case | ROOMS_ENABLED=true | Existing Add participant.toBeVisible is unchanged | The header case fails because the button is absent |
+| Approval-banner coexistence case | INLINE_TOOL_APPROVALS_ENABLED=true | Original presence/order plus connectionBanner.toBeVisible and approvalBanner.toBeVisible | The coexistence case fails because the approval banner is absent |
+| Six RoomTrafficEntry carrier cases | ROOMS_ENABLED=true | All call expectCollapsed, now also toggle.toBeVisible; direct component cases remain covered too | All 6 carriers fail at missing room-traffic-toggle; the 3 direct-component cases still pass |
+
+These 15 stock OFF failures and their final ON receipts calibrate the original oracles without mutating production. The other ten retargets are import/owner/contract repairs, not feature-gated UI mount tests, so no unrelated switch mock was added. SecretRequestCard behaviour/security/state packs mount card/tail directly, not through ChatScreen/ChatThread; they did not require retargeting. A search control found the known real ChatThread carriers, so an empty search for another gated carrier pack was not trusted blindly.
+
+## New cases and exact fresh CHECK mutants
+
+The real-shell acceptance and its support contain **no feature-switch/module mocks or application spies**. Real routes, AppShell, ChatScreen, profile, modal, stores, generated HTTP clients and socket parser/dispatcher execute. The guard statically imports the real feature-switch module. The doubles are browser/network/clock edges only.
+
+Mutation target aliases (all absolute):
+
+| Alias | Target |
+|---|---|
+| Switches | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/lib/featureSwitches.ts |
+| Modal host | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/AppShell.tsx::AppShell |
+| Modal queue/expiry | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/agents/ToolApprovalModal.tsx::ToolApprovalModal / ToolApprovalCard |
+| Room mounts | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/chat/ChatScreen.tsx::PlainMessageList / VirtualizedMessageList |
+| Secret mount | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/chat/ChatScreen.tsx::ChatScreen |
+
+| New case | Frozen oracle | Exact mutant for fresh CHECK (not executed by RED) |
 |---|---|---|
-| Dependency install | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/npm-ci.log | npm ci exit=0; 1144 packages added |
-| Assertion preservation | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/assertion-preservation.log | node preservation instrument exit=0; 610 assertion expressions and all case declarations unchanged; exact frame set = old + attach_room |
-| Historical final new-file RED | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/stage1-historical-final.log | One-file Vitest exit=1; 9/9 named behavioural failures |
-| Historical production integrity | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/historical-integrity.log | git diff --exit-code exit=0; no tracked production diff in historical checkout |
-| Current final new-file receipt | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/stage1-current-final.log | One-file Vitest exit=0; 9/9 collected |
-| Typecheck, actual project references | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/typecheck-after-harness-registration.log | npm run typecheck → tsc -b --noEmit; exit=0 |
-| Function-budget instrument | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/function-budget-selfcheck.log | exit=0; provably fails on offenders, passes clean/grandfathered fixtures |
-| Function budget | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/function-budget.log | exit=0; no FAIL; warn-only output, grandfathered 70 functions / 72 components over 240 |
-| Design-system locks | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/design-system-locks.log | npm run lint:design-system-locks exit=0; PASS (0 errors) |
-| CI discovery coverage | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/coverage-discovery.log | discovery guard exit=0; all 1106 SPA test files covered by 29 patterns, with one warning about an empty design-system pattern; new file covered |
-| Touched-file lint | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/targeted-lint.log | eslint on the 14 touched test files plus harness/instrument only; exit=0 |
-| Full suite / independent audit / live UAT | Not run by this RED writer | UNVERIFIED / deferred; no full local Go or frontend suite, no production mutation |
+| S1-a1 expanded workspace | Populated member controls visible, no Group chats, no room REST reads | Switches: ROOMS_ENABLED=false → true |
+| S1-a2 member main header | Main context genuinely active, no Add participant, no room reads | Switches: ROOMS_ENABLED=false → true |
+| S1-a3 direct room URL | Actual beforeLoad redirects to workspace chat; no room REST or attach_room | Switches: ROOMS_ENABLED=false → true; alternatively remove disabled-room Route.beforeLoad redirect |
+| S1-b profile Tools | Sidebar Edit opens shell-owned profile; Tools loads, no Private secrets or GET secrets | Switches: AGENT_PRIVATE_SECRETS_ENABLED=false → true |
+| S1-c Approve Once on Settings | Current-chat approval shown globally; exact POST action allow_once; no navigation | Modal host: delete its conditional ToolApprovalModal mount |
+| S1-c Deny on Settings | Exact POST action deny; no navigation | Modal host: delete its conditional ToolApprovalModal mount |
+| S1-d child without root id | Incoming child approval actionable with parent main unchanged; no Go there detour | Modal host: delete modal mount; narrower: visible queue filtered by entry.sessionId === useSessionStore.getState().activeSessionId |
+| S1-e own-chat single display | One modal and one Approve Once button including hidden nodes; no inline panel/tail/banner | Switches: INLINE_TOOL_APPROVALS_ENABLED=false → true |
+| S1-f other workspace | Marketing approval actionable while Sales/main remain active | Modal host: delete modal mount; narrower: import useWorkspacesStore and filter visible queue by entry.workspaceId === its activeWorkspaceId |
+| S1-a traffic plain request | Actual wire room_ref retained; ordinary row visible; no room entry/toggle/link | Switches: ROOMS_ENABLED=false → true; narrower: remove check at PlainMessageList room mount |
+| S1-a traffic virtual request | Same oracle through real measured virtualized historical rows | Switches: ROOMS_ENABLED=false → true; narrower: remove check in rowForMessage |
+| S1-a traffic streaming answer | Real token frame carries room_ref; no room entry in streaming slot | Switches: ROOMS_ENABLED=false → true; narrower: remove check at streaming RoomTrafficMessage mount |
+| S1-a traffic completed answer | Real token/done transitions keep room_ref without a room entry | Switches: ROOMS_ENABLED=false → true; narrower: remove historical-row check |
+| S1-b live secret_request | Exact pending record arrives in real store; no card/tail/value field/secret request | Switches: AGENT_PRIVATE_SECRETS_ENABLED=false → true; narrower: remove SecretRequestThreadTail mount guard |
+| S1-b session_state.secret_requests | Same absence after real reconnect-style snapshot; exact pending payload retained | Same AGENT_PRIVATE_SECRETS_ENABLED false → true, or secret-tail guard removal |
+| S1-q three-entry queue | Parent/child/other-workspace queue is shown in arrival order; approve/deny/approve produce exact 3 POSTs, no navigation or lost request | Modal host: delete modal mount; narrower: filter visible queue by active session, losing child/other-workspace |
+| S1-exp deadline | Actions available at deadline−1, absent at deadline; no automatic POST; denied_timeout removes head and promotes next | Modal host: delete modal mount; narrower: force ToolApprovalCard's hasExpired=false |
+| S1-exp zero lifetime | Contract-minimum expires_in_ms=0 is non-actionable on arrival; dismiss removes notice without POST | Modal host: delete modal mount; narrower: force hasExpired=false. Dismiss follows agreed release UI; non-actionability/no automatic submission are the safety oracles. |
+| S1-g rooms guard | REAL ROOMS_ENABLED is exactly false, founder stage-1 decision 2026-10-14 cited in test | Switches: ROOMS_ENABLED=false → true |
+| S1-g secrets guard | REAL AGENT_PRIVATE_SECRETS_ENABLED is exactly false | Switches: AGENT_PRIVATE_SECRETS_ENABLED=false → true |
+| S1-g approvals guard | REAL INLINE_TOOL_APPROVALS_ENABLED is exactly false | Switches: INLINE_TOOL_APPROVALS_ENABLED=false → true |
 
-### Scope and incidental notes
+The 18 behavioural cases have actual historical RED on unchanged 08a204c98. The six added room/secret cases also have immediate pre-fix RED on ca09d06f9 and successful final execution after e4c84116b. The three constant guards do not have qualified historical RED: **UNVERIFIED failability pending the explicitly assigned independent mutations**. No constant was changed by RED to manufacture a failure.
 
-GitNexus status reported this worktree unindexed. The impact attempt and pre-commit detect-changes resolved a sibling index 3925 commits stale, returned UNKNOWN / no changes, and are **not trusted scope proof**. Caller searches, assertion-tree comparison and the reviewed Git diff are the fallback. Blast-radius assessment is **Inferred (high confidence): test fixtures/test support only, no production caller or execution-flow edits**.
+## Instrument controls and authoring corrections
 
-The existing runtime diagnostics appear on both unchanged historical production and current production: route-generator warnings about authValidation helper/test files; Web Worker unavailable in jsdom, so real parsing falls back inline; and the skills API client reports no generated response validator. No console suppression or lint disable was added. npm ci reports **5 low-severity dependency advisories**; no remediation attempted in this tests-only task. The stale comment above ToolApprovalModal still describes active-workspace scoping while its actual visible queue is app-wide; reported as a documentation note, not changed.
+| Control/correction | What is established |
+|---|---|
+| Oracle-preservation instrument | In-memory weakening/suppression controls are detected before comparing all 14 existing packs. It permits exactly the five required added visibility assertions, rejects their absence/duplication, then compares every original assertion/case in order. The original 9-case shell pack is an unchanged prefix. |
+| Real browser/socket/store inputs | One real WsConnection per shell. Generated frame validation is live; exact room_ref or secret payload must arrive in real stores. Ordinary message visibility proves the transcript actually draws rows. Main cases require real attach_session and real sidebar member selection. |
+| Browser edge corrections | Initial catch-up sequence 0 was invalid; corrected to contract-minimum 1. jsdom's interval-backed animation frame stalled under controlled expiry intervals; frame delivery now uses a real browser-timeout edge. Missing Element.scrollTo and zero viewport measurements were supplied at browser edges only, with prototype restoration. These setup failures/unhandled errors are excluded from RED proof. |
+| Expiry | Only Date/interval clocks are controlled, no application helper mocked. Deadline−1/deadline and zero-lifetime cases prove absence of actionable controls and no automatic POST; real denied_timeout frame advances the queue. |
+| Approval container discovery | ToolApprovalModal-named legacy files actually load the inline ToolApprovalPanel; their success was not counted as shipped-modal coverage. The real-shell pack directly covers the restored release dialog. |
+| Earlier corrections | Draft approved booleans were corrected to independent contract action values before assertions. Unsupported role-query exact options and missing production router type registration in the separate tests project were fixed only in test support. No tolerance widened or production fixed by QA. |
 
-Code correct and tested: **not a delivery verdict**; RED pack and execution receipts supplied, independent CHECK required.
-Reachable by a user/agent: **real-shell acceptance cases supplied** for the stage-1 hidden entry points and globally actionable modal; live browser/UAT not claimed.
+## Final gates
 
-Skills: omnipus-shared-rules, elicify-test-writing, omnipus-design-system, gitnexus-impact-analysis, jev-use:jev-use, github-cli, commit-messages.
+Every command has a saved log with its raw exit, and every executed source/log hash is bound in the execution receipt. Final code remains byte-identical to the tested merge commit; final evidence-only commit is not a new executable state.
+
+| Gate | Exact receipt / result |
+|---|---|
+| All touched files, original 10, 3 stale fixtures, RoomTrafficEntry, guard and shell | 16 individual serial Vitest commands: all exit=0, **290/290**, in the committed execution receipt |
+| Historical behavioural RED | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/extended-historical-final.log — exit=1, 18 failed (18) |
+| Historical integrity | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/extended-historical-integrity.log — git diff --exit-code exit=0 |
+| Immediate pre-hardening RED | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/final-extended-AppShell.stage1.test.tsx.log — exit=1, 6 failed / 12 passed |
+| Enabled visible-mount calibration | Four stock-OFF commands, all exit=1 for expected missing gated UI (7/1/1/6 cases), production unchanged; final ON runs all exit=0. Source-bound enabled-mount receipt captures exact commands/hashes. |
+| Preservation | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-preservation.log — exit=0, 629 original assertions retained + 5 visible additions |
+| Typecheck | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-typecheck.log — npm run typecheck / tsc -b --noEmit, exit=0 |
+| Targeted lint | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-lint.log — touched follow-up code/support only, exit=0 |
+| Design-system locks | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-design-system.log — exit=0, PASS (0 errors) |
+| Function instrument/gate | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-function-selfcheck.log and /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-function-budget.log — both exit=0, no FAIL, warnings retained |
+| CI discovery | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-discovery.log — exit=0, all 1111 SPA files covered by 29 patterns; one warning about an empty design-system pattern retained |
+| Completed CI, whole local suite, Go suite, live UAT, independent CHECK | Not claimed; no whole local suite or production mutation was run by this RED writer |
+
+## Scope and outstanding notes
+
+Relative to accepted UI head e4c84116b, QA changes are **test files/test support/evidence only**. All production changes are inherited unchanged from the explicitly requested merge; no manual production conflict resolution or production fix occurred. The patch was not landed on the integration branch or main. No new user-visible product behaviour was authored by QA, so no additional user-facing documentation draft is required; matching UI hardening docs are inherited from the implementing lead and remain for independent docs verification.
+
+GitNexus reported this checkout unindexed and resolved stale sibling-index results on impact/detect attempts. These results were not trusted as scope proof. Caller searches, reviewed Git diffs, source-hash checks and strict assertion preservation are the fallback; impact assessment is **Inferred (high confidence): test-only edits**.
+
+Runtime diagnostics remain unsuppressed: route-helper discovery warnings, unavailable Web Worker in jsdom (real parsing falls back inline), and skills/commands API clients reporting missing response validators. The original installation reported 5 low-severity dependency advisories, and the prior push reported 40 default-branch advisories (17 high, 19 moderate, 4 low). No security audit/remediation is claimed; dispatcher follow-up is needed, not silently deferred. The stale modal scope comment is an incidental documentation note, not changed by QA.
+
+Code correct and tested: **RED pack and local execution receipts supplied; independent CHECK and wider CI remain outstanding**.
+Reachable by a user/agent: **actual-shell reachability/unreachability exercised with process-edge doubles; live browser/UAT not claimed**.
+
+Skills: omnipus-shared-rules, elicify-test-writing, omnipus-design-system, gitnexus-impact-analysis, github-cli, commit-messages; jev-use:jev-use loaded earlier in the same task.
 
 ## Evidence table
 
 | Claim | Evidence | Certainty |
 |---|---|---|
-| Existing oracles retained across 13 files | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/verify-stage1-retargeting.mjs::snapshot; instrument exit=0, all 13 comparisons unchanged; raw before/after receipt hashes in committed JSON | Verified (high) |
-| New final tests have actual pre-change behavioural RED | Historical final single-file command, exit=1, Tests 9 failed (9); unchanged production SHA 08a204c98 and integrity exit=0 | Verified (high) |
-| Current execution covers the entire touched test-file pack | 13 after receipts plus final acceptance receipt, all exit=0; machine-readable count validates 14 files / 269 cases | Verified (high); independent GREEN deferred |
-| Typecheck and size/design/discovery instruments ran meaningfully | Gate receipts above; typecheck caught actual authoring errors before correction; budget selfcheck detects offenders; all final raw exits=0 | Verified (high) |
-| Impact is limited to tests, not an indexed graph claim | Unindexed/stale-index receipts; caller fallback, assertion comparison and tests-only Git diff | Inferred (high), not a valid GitNexus graph result |
-| CHECK mutation outcomes | No production mutants executed by this RED writer; exact probes specified per case | Unknown; deferred to fresh CHECK |
-| **Self-check** | Re-read the retarget diff and final test/harness boundary against dispatch (a)–(f); re-ran final new-file historical RED and current receipt, typecheck, preservation control, budget selfcheck/gate, design locks and discovery. Final test source hashes are captured in the execution receipt; no assertion weakening or production edits. | Verified (high); independent audit and live UAT remain unclaimed |
+| Every requested follow-up included | Real-module guard file, complete 21-case mutant table above, strict original-oracle comparison and source-bound receipts | Verified (high) |
+| Original oracles preserved; visible ON mounts discriminating | Preservation command exit=0, 629 retained / 5 added; stock-OFF 15 expected failures vs final enabled runs; original 9 shell cases unchanged | Verified (high) |
+| Behavioural RED before accepted hardening | Unchanged historical SHA 08a204c98, exit=1, 18/18 named failures; ca09 pre-hardening exit=1, 6/18 expected failures; integrity checks exit=0 | Verified (high) |
+| Final execution covers exact merged head | Merge commit 0da2c2a52 with e4c84116b ancestor; 16 serial commands exit=0, 290/290; executable source hashes captured | Verified (high); independent GREEN deferred |
+| Type, design, discovery and budget checks ran meaningfully | Seven final gate receipts all exit=0; typecheck previously detected real authoring errors; budget selfcheck detects offenders | Verified (high) |
+| Production changes are inherited, not QA-authored fixes | Accepted e4c84116b merge; Git delta from that head contains only test/support/evidence files; no manual conflicts | Verified (high) |
+| Independent failability/mutation verdict | No production mutants run; 3 guard historical RED claims expressly UNVERIFIED; exact probes assigned to fresh CHECK | Unknown / deferred to CHECK |
+| **Self-check** | Reviewed final test/support and ledger diffs against all dispatch rows; re-ran all 16 files after integration, final gates, historical RED and enabled-mount calibration; source/log hashes and tests-only scope verified before final commit/push. No assertions weakened or production edited to pass tests. | Verified (high); independent audit/CI/UAT remain unclaimed |
