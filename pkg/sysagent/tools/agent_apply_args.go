@@ -7,6 +7,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -22,6 +23,7 @@ var agentUpdateArgNames = map[string]struct{}{
 	"max_tool_iterations": {}, "skills": {},
 	"memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
+	"heartbeat": {}, "agent_md": {}, // metadata files (#1064), written beside the record
 }
 
 // permissionFieldNames are the capability fields only set_agent_permissions
@@ -49,6 +51,7 @@ var agentCreateArgNames = map[string]struct{}{
 	"heartbeat": {}, "max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
 	"tool_policy_changes": {}, "memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
+	workspaceIDParam: {}, // destination workspace (FR-040), not an agent field
 }
 
 func rejectUnknownAgentFields(args map[string]any, allowed map[string]struct{}) error {
@@ -63,7 +66,8 @@ func rejectUnknownAgentFields(args map[string]any, allowed map[string]struct{}) 
 func mutationFieldNames(args map[string]any) []string {
 	fields := make([]string, 0, len(args))
 	for name := range args {
-		if name == "id" || name == "revision" || name == "agent_type" || name == "cli" || name == "cli_path" || name == "heartbeat" {
+		if name == "id" || name == "revision" || name == "agent_type" || name == "cli" || name == "cli_path" ||
+			name == "heartbeat" || name == "agent_md" || name == workspaceIDParam {
 			continue
 		}
 		fields = append(fields, name)
@@ -91,6 +95,9 @@ func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any, defau
 	if err := applyOptionalString(args, "name", func(v string) error {
 		if strings.TrimSpace(v) == "" {
 			return fieldErr("name", "name must be nonblank")
+		}
+		if coreagent.AgentNameTooLong(v) {
+			return fieldErr("name", coreagent.AgentNameTooLongRefusal)
 		}
 		a.Name = v
 		return nil

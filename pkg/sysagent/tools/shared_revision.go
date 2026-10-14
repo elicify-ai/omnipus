@@ -255,8 +255,11 @@ type revisionConflictError struct {
 }
 
 func (e *revisionConflictError) Error() string {
+	label := map[sharedResourceKind]string{
+		sharedProvider: "provider", sharedMCPServer: "MCP server", sharedChannel: "channel",
+	}[e.Kind]
 	return fmt.Sprintf("%s %q changed since it was read: expected revision %q, current revision %q",
-		e.Kind, e.ID, e.Expected, e.Current)
+		label, e.ID, e.Expected, e.Current)
 }
 
 // withSharedResourceWrite runs write while holding the gateway config write
@@ -296,7 +299,8 @@ func expectedRevisionArg(args map[string]any, readTool string) (string, *tools.T
 	return v, nil
 }
 
-// revisionConflictResult renders a refused shared-resource write. It names the
+// revisionConflictResult renders a refused shared-resource write with the
+// agent/skill convention's code, CONFLICT (chief ruling 2026-10-14). It names the
 // current token so the caller can re-read, re-plan and confirm again.
 func revisionConflictResult(err error, readTool string) (*tools.ToolResult, bool) {
 	var rc *revisionConflictError
@@ -306,7 +310,7 @@ func revisionConflictResult(err error, readTool string) (*tools.ToolResult, bool
 	b, _ := json.MarshalIndent(map[string]any{
 		"success": false,
 		"error": map[string]any{
-			"code":              "REVISION_CONFLICT",
+			"code":              "CONFLICT",
 			"message":           rc.Error() + "; nothing was saved",
 			"current_revision":  rc.Current,
 			"expected_revision": rc.Expected,

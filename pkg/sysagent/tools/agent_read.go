@@ -223,7 +223,8 @@ func wireAgentType(a config.AgentConfig) string {
 }
 
 func editableDescriptors(a config.AgentConfig) []map[string]any {
-	descriptors := agentmutation.FieldDescriptors(a)
+	// update_agent also writes HEARTBEAT.md and AGENT.md (#1064).
+	descriptors := append(agentmutation.FieldDescriptors(a), agentmutation.MetadataFileDescriptors(a)...)
 	out := make([]map[string]any, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		editable, reason := descriptor.Editable, descriptor.Reason

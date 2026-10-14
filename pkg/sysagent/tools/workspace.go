@@ -18,6 +18,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -129,7 +130,58 @@ func workspaceMutationError(id, stage, persistence, revision string, changed []s
 	if revision != "" {
 		payload["revision"] = revision
 	}
-	return tools.ErrorResult(successJSON(payload))
+	if persistence == "none" {
+		return tools.ErrorResult(successJSON(payload))
+	}
+	return changeErrorWithOutcome(payload, partlySaved(
+		fmt.Sprintf("the workspace was partly saved: the %s step failed", stage), "workspace state re-read from disk",
+		[]string{"step " + stage}))
+}
+
+// workspaceView is the one canonical workspace object every workspace tool
+// result uses (#1057 F6): every field present, lists never null.
+func workspaceView(w workspace, edges []workspacepkg.DelegationEdge, revision string, taskCount int) map[string]any {
+	team := w.CoreTeam
+	if team == nil {
+		team = []string{}
+	}
+	if edges == nil {
+		edges = []workspacepkg.DelegationEdge{}
+	}
+	return map[string]any{
+		"id": w.ID, "name": w.Name, "description": w.Description,
+		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
+		"is_default": w.IsDefault, "core_team": team, "delegation": edges,
+		"revision": revision, "task_count": taskCount,
+		"created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
+	}
+}
+
+// firstUnknownTeamMember returns the first id in ids that names no agent
+// (#1057 F2): neither the live roster nor the agent entity store knows it.
+// "" when every id resolves. An unreadable live roster falls back to the
+// entity store alone — the store is the agents' durable record.
+func firstUnknownTeamMember(d *Deps, ids []string) string {
+	live := configAgentPresenceSet(d)
+	for _, id := range ids {
+		if live[id] {
+			continue
+		}
+		if d != nil && strings.TrimSpace(d.Home) != "" && validateID(id) == nil {
+			if _, err := os.Stat(filepath.Join(agentstore.New(d.Home).Dir(), id+".json")); err == nil {
+				continue
+			}
+		}
+		return id
+	}
+	return ""
+}
+
+// unknownTeamMemberResult is the refusal for a core_team entry that names no agent.
+func unknownTeamMemberResult(id string) *tools.ToolResult {
+	return tools.ErrorResult(errorJSON("INVALID_INPUT",
+		fmt.Sprintf("core_team names %q, which is not an agent", id),
+		"Use agent ids from list_agents"))
 }
 
 // sanitizeCoreTeam deduplicates (case-sensitive) the raw entries. Empty strings
@@ -286,9 +338,10 @@ func (t *WorkspaceCreateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	name, _ := args["name"].(string)
-	if name == "" {
+	if strings.TrimSpace(name) == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
 	if len(name) > 200 {
@@ -329,6 +382,9 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	// one, so Omnipus cannot be on its team.
 	if coreagent.OmnipusMembershipRefusal(false, nil, w.CoreTeam) {
 		return omnipusMembershipError()
+	}
+	if unknown := firstUnknownTeamMember(t.deps, w.CoreTeam); unknown != "" {
+		return unknownTeamMemberResult(unknown)
 	}
 	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
 	if delegationErr != nil {
@@ -394,16 +450,78 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 			delegationSeedNote = seededEdgesSummary(seeded, w.CoreTeam)
 		}
 	}
-	resp := map[string]any{
-		"id": w.ID, "name": w.Name, "description": w.Description,
-		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
-		"core_team":  w.CoreTeam,
-		"task_count": 0, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
+	return workspaceWrittenResult(t.deps.Home, w.ID, workspaceWrite{
+		changed: []string{"workspace"}, seedNote: delegationSeedNote, ceiling: workspaceDelegationDepthCeiling(t.deps),
+	})
+}
+
+// workspaceWrite describes one completed workspace write for its read-back.
+type workspaceWrite struct {
+	changed     []string
+	seedNote    string
+	setupNote   string
+	beforeEdges []workspacepkg.DelegationEdge // the graph before this call (nil on create)
+	ceiling     int
+}
+
+// workspaceWrittenResult re-reads a just-written workspace and renders the
+// canonical object with its new revision (#1057 F4) and the FR-032 verdict:
+// the saved graph must be valid (every edge passes the shared validation, no
+// cycle) and every edge this call added must join two current core-team
+// members. A read-back failure or a graph problem is "saved but not working".
+// The caller holds workspacepkg.LockID(id).
+func workspaceWrittenResult(home, id string, wr workspaceWrite) *tools.ToolResult {
+	const scope = "workspace record and delegation graph re-read from disk; graph validity and new edges' membership checked"
+	notTested := []string{"a delegation between the members"}
+	state, err := workspacepkg.ReadStateLocked(home, id)
+	if err != nil {
+		return changeSuccess(map[string]any{"id": id, "changed_fields": wr.changed},
+			savedNotWorking("the saved workspace could not be read back: "+err.Error(), scope, notTested...))
 	}
-	if delegationSeedNote != "" {
-		resp["delegation_seeded"] = delegationSeedNote
+	resp := workspaceView(state.Workspace, state.Delegation, state.Revision, computeWorkspaceTaskCount(home, id))
+	resp["changed_fields"] = wr.changed
+	if wr.seedNote != "" {
+		resp["delegation_seeded"] = wr.seedNote
 	}
-	return tools.NewToolResult(successJSON(resp))
+	if wr.setupNote != "" {
+		resp["setup_completed"] = wr.setupNote
+	}
+	if problems := workspaceGraphProblems(state, wr.beforeEdges, wr.ceiling); len(problems) > 0 {
+		return changeSuccess(resp, savedNotWorking("the saved delegation graph is not valid: "+
+			strings.Join(problems, "; "), scope, notTested...))
+	}
+	return changeSuccess(resp, working(scope, notTested...))
+}
+
+// workspaceGraphProblems checks a saved state's delegation graph (FR-032 /
+// OSA-4): every edge passes the shared validation against the runtime team
+// set, the graph has no cycle, and every edge not in before joins two current
+// core-team members. One line per problem.
+func workspaceGraphProblems(state workspacepkg.State, before []workspacepkg.DelegationEdge, ceiling int) []string {
+	runtimeTeam := state.Team()
+	members := workspacepkg.TeamSet(state.Workspace.CoreTeam, nil)
+	existed := make(map[string]bool, len(before))
+	for _, e := range before {
+		existed[e.FromAgent+"\x00"+e.ToAgent] = true
+	}
+	var problems []string
+	for _, e := range state.Delegation {
+		if err := e.Validate(runtimeTeam, ceiling); err != nil {
+			problems = append(problems, fmt.Sprintf("edge %s → %s: %v", e.FromAgent, e.ToAgent, err))
+			continue
+		}
+		if existed[e.FromAgent+"\x00"+e.ToAgent] {
+			continue
+		}
+		if !members[strings.TrimSpace(e.FromAgent)] || !members[strings.TrimSpace(e.ToAgent)] {
+			problems = append(problems, fmt.Sprintf("new edge %s → %s joins an agent that is not on the core team",
+				e.FromAgent, e.ToAgent))
+		}
+	}
+	if delegationHasCycle(state.Delegation) {
+		problems = append(problems, "the delegation graph contains a cycle")
+	}
+	return problems
 }
 
 // ---- system.workspace.update ----
@@ -450,7 +568,22 @@ func (t *WorkspaceUpdateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+// workspaceUpdate carries update_workspace's state across its stages.
+type workspaceUpdate struct {
+	t                 *WorkspaceUpdateTool
+	args              map[string]any
+	id                string
+	state             workspacepkg.State
+	w                 workspace
+	oldTeam           []string
+	coreTeamChanged   bool
+	pendingDelegation []workspacepkg.DelegationEdge
+	seedNote          string
+	setupNote         string
+}
+
+func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	id, _ := args["id"].(string)
 	revision, _ := args["revision"].(string)
 	if id == "" {
@@ -460,10 +593,8 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 	// Serialize the full load-modify-write cycle against this workspace ID
 	// (workspace.LockID) so a racing gateway PUT/DELETE/delegation-PUT, the WS
 	// setup-kickoff consumer, or another concurrent tool call cannot
-	// interleave with this update. workspace.LockID's own doc comment names
-	// this tool's create/update/delete paths as required callers; this was a
-	// gap left over from an earlier fix that wired the lock into every
-	// gateway workspace writer but not this tool.
+	// interleave with this update (workspace.LockID names this tool's
+	// create/update/delete paths as required callers).
 	unlock := workspacepkg.LockID(id)
 	defer unlock()
 
@@ -471,226 +602,180 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 	if err != nil {
 		return workspaceRevisionError(id, err)
 	}
-	w := state.Workspace
+	u := &workspaceUpdate{t: t, args: args, id: id, state: state, w: state.Workspace,
+		oldTeam: append([]string(nil), state.Workspace.CoreTeam...)}
+	if r := u.applyFieldsAndTeam(); r != nil {
+		return r
+	}
+	if r := u.planDelegation(); r != nil {
+		return r
+	}
+	return u.commit()
+}
 
-	// Snapshot the pre-update core team so a core_team change below can be
-	// diffed for newly added members — see the delegation-edge auto-seed
-	// block after the field-update section.
-	oldTeam := append([]string(nil), w.CoreTeam...)
-	coreTeamChanged, fieldError := updateWorkspaceFields(&w, args)
+// applyFieldsAndTeam applies the record fields and checks a core_team change
+// against every membership rule, before any write.
+func (u *workspaceUpdate) applyFieldsAndTeam() *tools.ToolResult {
+	var fieldError *tools.ToolResult
+	u.coreTeamChanged, fieldError = updateWorkspaceFields(&u.w, u.args)
 	if fieldError != nil {
 		return fieldError
 	}
+	if !u.coreTeamChanged {
+		return nil
+	}
+	added := teamDiffAdded(u.oldTeam, u.w.CoreTeam)
 	// ADR-090 FR-006 — reject INTRODUCING an excluded roster identity (Admin,
-	// hidden System Agents) before any write. Deliberately the DELTA rule the
-	// REST PUT applies (loadAndValidateTeam / ADR-054 D6 rule 1): only
-	// newly added members are validated, so an update whose team merely
-	// still contains a (forged, pre-existing) excluded entry is not wedged —
-	// it can heal the record by omitting it, which a whole-list check here
-	// would have made impossible without hand-editing the JSON.
-	if coreTeamChanged {
-		if excluded := firstExcludedTeamMember(teamDiffAdded(oldTeam, w.CoreTeam)); excluded != "" {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", excludedTeamMemberMessage(excluded),
-				"Remove the excluded role from core_team — ADR-090 bars it from workspace teams"))
-		}
-		// omnipus-system-agent FR-003: Omnipus belongs to the default
-		// workspace only — refused before any write, ahead of the generic
-		// built-in rule so the message names the real boundary.
-		if coreagent.OmnipusMembershipRefusal(w.IsDefault, oldTeam, w.CoreTeam) {
-			return omnipusMembershipError()
-		}
-		// D8 (founder ruling 2026-10-11, gate round 1 S1): the SAME built-in
-		// roster rule the REST PUT enforces, from the SAME pkg/workspace
-		// helper — built-ins cannot leave the default workspace by ANY
-		// writer, because ensureBuiltinRosterPresent re-adds them at the next
-		// boot. The refusal precedes every effect of this call: nothing is
-		// written and no delegation edge is seeded.
-		if w.IsDefault && len(teamDiffAdded(w.CoreTeam, oldTeam)) > 0 && !liveConfigAvailable(t.deps) {
-			// An unreadable roster is not an empty one: fail closed rather than
-			// let a removal through that cannot be checked (S2-18).
-			return tools.ErrorResult(errorJSON("NOT_AVAILABLE",
-				"the live configuration is unavailable, so a team removal from the default workspace cannot be checked",
-				"Retry once the gateway configuration is loaded"))
-		}
-		if err := workspacepkg.RefuseBuiltinRemoval(w.IsDefault, oldTeam, w.CoreTeam, configAgentIDs(t.deps)); err != nil {
-			return tools.ErrorResult(errorJSON(strings.ToUpper(workspacepkg.BuiltinRemovalCode),
-				workspacepkg.BuiltinRemovalMessage,
-				"Built-in roster members rejoin the default workspace at every boot; remove them from other workspaces instead"))
-		}
-		// Removal cleanup (gate round 1 S6): the members this call drops are
-		// garbage-collected out of member_configs — hidden_from_sidebar
-		// included — so re-adding an agent starts visible, exactly as the
-		// REST PUT's GC does.
-		if pruned, removed := workspacepkg.GCMemberConfigs(w.CoreTeam, w.MemberConfigs); len(removed) > 0 {
-			w.MemberConfigs = pruned
-		}
+	// hidden System Agents) before any write. The DELTA rule the REST PUT
+	// applies: only newly added members are validated, so a record that still
+	// carries a forged pre-existing entry can be healed by omitting it.
+	if excluded := firstExcludedTeamMember(added); excluded != "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", excludedTeamMemberMessage(excluded),
+			"Remove the excluded role from core_team — ADR-090 bars it from workspace teams"))
 	}
-	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
-	if delegationErr != nil {
-		return tools.ErrorResult(errorJSON("INVALID_DELEGATION_EDGE", delegationErr.Error(), "Send a complete valid graph using current team members"))
+	// #1057 F2: a newly added member must name a real agent.
+	if unknown := firstUnknownTeamMember(u.t.deps, added); unknown != "" {
+		return unknownTeamMemberResult(unknown)
 	}
+	// omnipus-system-agent FR-003: Omnipus belongs to the default workspace
+	// only — refused before any write, ahead of the generic built-in rule.
+	if coreagent.OmnipusMembershipRefusal(u.w.IsDefault, u.oldTeam, u.w.CoreTeam) {
+		return omnipusMembershipError()
+	}
+	// D8 (founder ruling 2026-10-11): built-ins cannot leave the default
+	// workspace by ANY writer (ensureBuiltinRosterPresent re-adds them at the
+	// next boot). An unreadable roster is not an empty one: fail closed.
+	if u.w.IsDefault && len(teamDiffAdded(u.w.CoreTeam, u.oldTeam)) > 0 && !liveConfigAvailable(u.t.deps) {
+		return tools.ErrorResult(errorJSON("NOT_AVAILABLE",
+			"the live configuration is unavailable, so a team removal from the default workspace cannot be checked",
+			"Retry once the gateway configuration is loaded"))
+	}
+	if err := workspacepkg.RefuseBuiltinRemoval(u.w.IsDefault, u.oldTeam, u.w.CoreTeam, configAgentIDs(u.t.deps)); err != nil {
+		return tools.ErrorResult(errorJSON(strings.ToUpper(workspacepkg.BuiltinRemovalCode),
+			workspacepkg.BuiltinRemovalMessage,
+			"Built-in roster members rejoin the default workspace at every boot; remove them from other workspaces instead"))
+	}
+	// Removal cleanup (gate round 1 S6): dropped members are garbage-collected
+	// out of member_configs, exactly as the REST PUT's GC does.
+	if pruned, removed := workspacepkg.GCMemberConfigs(u.w.CoreTeam, u.w.MemberConfigs); len(removed) > 0 {
+		u.w.MemberConfigs = pruned
+	}
+	return nil
+}
 
-	// Auto-seed default delegation edges for newly added core_team members
-	// (closes an ADR-037 gap). Per ADR-037 the per-workspace Delegation[] edge
-	// graph is the SOLE runtime delegation authority and is fail-closed (no
-	// edge ⇒ deny). Default edges used to be seeded ONLY at workspace
-	// creation (pkg/gateway's defaultWorkspaceDelegationEdges); this tool had
-	// no way to grow the graph at all, so a workspace whose team Ava (or an
-	// operator) builds up entirely through update_workspace — the normal
-	// workspace-setup-interview flow — ended up with ZERO delegation edges:
-	// every worker-type specialist she added became permanently unreachable
-	// by delegation. Only NEWLY ADDED members are considered — edges wholly
-	// among pre-existing members are never re-added, so a deliberate prior
-	// removal (via the Team tab's delegation PUT) is never silently
-	// resurrected by a later, unrelated core_team edit.
-	//
-	// The edge list is read from and written to the DELEGATION STORE
-	// (entities/delegation/<id>.json), never the workspace record — an
-	// authorization must not live in a file the constrained principal can
-	// write. See pkg/workspace/delegationstore.go. pendingDelegation is nil
-	// unless this call actually seeds an edge; a plain rename never touches
-	// the store at all.
-	var delegationSeedNote string
-	var pendingDelegation []workspacepkg.DelegationEdge
-	if delegationPresent {
+// planDelegation computes the delegation graph this call writes (nil when it
+// writes none), clears SetupPending when a team is installed, and validates
+// every edge it would persist — all before any write.
+func (u *workspaceUpdate) planDelegation() *tools.ToolResult {
+	d := u.t.deps
+	ceiling := workspaceDelegationDepthCeiling(d)
+	explicit, present, err := parseWorkspaceDelegationArg(u.args, u.w.CoreTeam, ceiling)
+	if err != nil {
+		return tools.ErrorResult(errorJSON("INVALID_DELEGATION_EDGE", err.Error(), "Send a complete valid graph using current team members"))
+	}
+	added := teamDiffAdded(u.oldTeam, u.w.CoreTeam)
+	switch {
+	case present:
 		// An explicit complete graph replaces the stored one verbatim, but
-		// every member THIS call introduces still gets its ordinary
-		// self-edge (session-core FR-014/015/016, founder ruling 2026-10-10).
-		pendingDelegation = explicitDelegation
-		if coreTeamChanged {
-			added := teamDiffAdded(oldTeam, w.CoreTeam)
+		// every member THIS call introduces still gets its ordinary self-edge
+		// (session-core FR-014/015/016, founder ruling 2026-10-10).
+		u.pendingDelegation = explicit
+		if u.coreTeamChanged {
 			var selfSeeded []workspacepkg.DelegationEdge
-			pendingDelegation, selfSeeded = withNewMemberSelfEdges(explicitDelegation, added,
-				workspaceDelegationDepthCeiling(t.deps), configAgentPresenceSet(t.deps), selfEdgeExcludedAgentIDs(t.deps))
-			delegationSeedNote = seededEdgesSummary(selfSeeded, added)
+			u.pendingDelegation, selfSeeded = withNewMemberSelfEdges(explicit, added, ceiling,
+				configAgentPresenceSet(d), selfEdgeExcludedAgentIDs(d))
+			u.seedNote = seededEdgesSummary(selfSeeded, added)
 		}
-	} else if coreTeamChanged {
-		added := teamDiffAdded(oldTeam, w.CoreTeam)
-		if len(added) > 0 {
-			existing, storeOK := workspacepkg.LoadDelegation(t.deps.Home, id)
-			if !storeOK {
-				// FAIL CLOSED: seeding on top of an edge list we could not read
-				// would silently drop the operator's real graph and replace it
-				// with defaults. LoadDelegation already logged the reason.
-				return tools.ErrorResult(errorJSON("DELEGATION_STORE_UNREADABLE",
-					"workspace delegation record is unreadable — refusing to seed delegation edges over it",
-					"Inspect (or remove) $OMNIPUS_HOME/entities/delegation/"+id+".json, then re-save the graph from the Team tab"))
-			}
-			ceiling := workspaceDelegationDepthCeiling(t.deps)
-			configPresent := configAgentPresenceSet(t.deps)
-			seeded := seedDelegationEdgesForNewMembers(w.CoreTeam, added, existing, ceiling, configPresent, selfEdgeExcludedAgentIDs(t.deps))
-			if len(seeded) > 0 {
-				pendingDelegation = append(append([]workspacepkg.DelegationEdge(nil), existing...), seeded...)
-				delegationSeedNote = seededEdgesSummary(seeded, added)
-			}
+	case u.coreTeamChanged && len(added) > 0:
+		// Auto-seed default edges for NEWLY added members only (ADR-037: the
+		// per-workspace graph is the sole, fail-closed delegation authority),
+		// read from and written to the delegation store, never the record.
+		existing, storeOK := workspacepkg.LoadDelegation(d.Home, u.id)
+		if !storeOK {
+			// FAIL CLOSED: seeding over an unreadable edge list would drop the
+			// operator's real graph.
+			return tools.ErrorResult(errorJSON("DELEGATION_STORE_UNREADABLE",
+				"workspace delegation record is unreadable — refusing to seed delegation edges over it",
+				"Inspect (or remove) $OMNIPUS_HOME/entities/delegation/"+u.id+".json, then re-save the graph from the Team tab"))
+		}
+		seeded := seedDelegationEdgesForNewMembers(u.w.CoreTeam, added, existing, ceiling, configAgentPresenceSet(d), selfEdgeExcludedAgentIDs(d))
+		if len(seeded) > 0 {
+			u.pendingDelegation = append(append([]workspacepkg.DelegationEdge(nil), existing...), seeded...)
+			u.seedNote = seededEdgesSummary(seeded, added)
 		}
 	}
-
-	// Clear SetupPending when this update installs a non-empty team (fix
-	// wave, final-gate consensus finding #2). Scenario: a workspace is
-	// created via REST with SetupPending left true (the normal "Ava will
-	// interview the user on first open" flow — see rest_workspaces.go's
-	// handleWorkspaceCreate), but before the user ever opens that
-	// workspace's chat the user instead asks Ava, in a DIFFERENT chat, to
-	// staff it directly via this tool. If SetupPending survived that,
-	// first-open would still fire the setup-kickoff interview later —
-	// possibly greeting the user as whichever agent leads core_team[0]
-	// (not necessarily Ava, and not necessarily chat-eligible at all) —
-	// over a team that has already been built. Installing a team through
-	// this tool call IS the setup completing, so it must clear the flag
-	// itself; nothing else observes "team assembled via update_workspace"
-	// to clear it on this tool's behalf.
-	//
-	// Gated on coreTeamChanged (never fires on a core_team-less update —
-	// e.g. a plain rename must never touch the flag) and on the update
-	// actually producing a non-empty team (an update that clears core_team
-	// to empty is not "setup", it's un-staffing — SetupPending should stay
-	// as-is so a later real staffing attempt, tool or first-open, still
-	// gets a chance to run). A no-op (flag already false) leaves
-	// setupCompletedNote empty, so the response note only appears when this
-	// call is the one that actually flipped it.
-	var setupCompletedNote string
-	if coreTeamChanged && len(w.CoreTeam) > 0 && w.SetupPending {
-		w.SetupPending = false
-		setupCompletedNote = "workspace setup marked complete"
+	// Installing a non-empty team through this tool IS the setup completing,
+	// so it clears SetupPending itself (fix wave finding #2); a plain rename or
+	// an un-staffing never touches the flag.
+	if u.coreTeamChanged && len(u.w.CoreTeam) > 0 && u.w.SetupPending {
+		u.w.SetupPending = false
+		u.setupNote = "workspace setup marked complete"
 	}
-
-	// Defensive delegation-edge validation (security boundary — fail closed).
-	//
-	// update_workspace still does NOT expose a general `delegation` arg —
-	// the ONLY way this tool can add an edge is the auto-seed block above,
-	// and every candidate edge it appends has already been individually
-	// validated (and dropped + logged on failure, never escalated to an
-	// update-aborting error). But the moment this call persists an edge list
-	// it becomes a write surface — a corrupted on-disk edge being rewritten
-	// here, or a future `delegation` arg, could otherwise launder an invalid
-	// edge that is then TRUSTED at runtime (the per-workspace graph is the
-	// sole delegation authority). So re-validate EVERY edge (pre-existing and
-	// auto-seeded alike) against the shared workspace.DelegationEdge.Validate
-	// authority before committing, using the same team set (core_team ∪
-	// existing-edge endpoints) and depth ceiling the gateway PUT handler
-	// enforces. Any invalid edge aborts the whole write — we never persist an
-	// unvalidated edge. This whole-graph pass is a second, broader safety net
-	// on top of the auto-seed's own per-candidate validation (which uses a
-	// narrower, newTeam-only team set) — it is expected to be a no-op
-	// immediately after a clean auto-seed, and exists to catch a corrupted
-	// on-disk edge from another writer.
-	//
-	// It runs only when this call is actually about to WRITE the store. An
-	// update that seeds nothing leaves the delegation record untouched, so
-	// there is no write surface to guard and no reason to fail an unrelated
-	// rename over a graph this call never rewrites.
-	if pendingDelegation != nil {
-		team := workspaceDelegationTeamSet(w, pendingDelegation)
-		ceiling := workspaceDelegationDepthCeiling(t.deps)
-		for i := range pendingDelegation {
-			if err := pendingDelegation[i].Validate(team, ceiling); err != nil {
+	// Defensive whole-graph validation before the store is rewritten (security
+	// boundary — fail closed): a corrupted on-disk edge from another writer is
+	// never laundered by this write.
+	if u.pendingDelegation != nil {
+		team := workspaceDelegationTeamSet(u.w, u.pendingDelegation)
+		for i := range u.pendingDelegation {
+			if err := u.pendingDelegation[i].Validate(team, ceiling); err != nil {
 				return tools.ErrorResult(errorJSON("INVALID_DELEGATION_EDGE", err.Error(),
 					"Fix the workspace delegation graph via the Team tab or the delegation API"))
 			}
 		}
 	}
+	return nil
+}
 
-	w.UpdatedAt = nowISO()
-	if err := writeEntity(workspacesDir(t.deps.Home), id, w); err != nil {
+// commit writes the record (then the delegation store) and renders the
+// read-back. A semantically empty update writes nothing and keeps the
+// revision (#1057 F5).
+func (u *workspaceUpdate) commit() *tools.ToolResult {
+	home := u.t.deps.Home
+	changed := workspaceChangedFields(u.state.Workspace, u.w)
+	if u.pendingDelegation != nil {
+		changed = append(changed, "delegation")
+	}
+	if len(changed) == 0 {
+		resp := workspaceView(u.state.Workspace, u.state.Delegation, u.state.Revision, computeWorkspaceTaskCount(home, u.id))
+		resp["changed"] = false
+		resp["changed_fields"] = []string{}
+		return changeSuccess(resp, working("no field differs from the saved workspace; nothing was written"))
+	}
+	u.w.UpdatedAt = nowISO()
+	if err := writeEntity(workspacesDir(home), u.id, u.w); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
-	// Persist seeded edges AFTER the record, so a failed record write can never
-	// leave the store authorizing agents the record does not list on the team.
-	// workspacepkg.LockID(id) is held for this whole function, which is
-	// SaveDelegation's stated caller contract.
-	if pendingDelegation != nil {
-		if err := saveWorkspaceDelegation(t.deps.Home, id, pendingDelegation); err != nil {
-			slog.Error("sysagent: update_workspace: delegation save failed after workspace write", "workspace_id", id, "error", err)
-			actual, readErr := workspacepkg.ReadStateLocked(t.deps.Home, id)
+	// Persist edges AFTER the record, so a failed record write can never leave
+	// the store authorizing agents the record does not list on the team.
+	if u.pendingDelegation != nil {
+		if err := saveWorkspaceDelegation(home, u.id, u.pendingDelegation); err != nil {
+			slog.Error("sysagent: update_workspace: delegation save failed after workspace write", "workspace_id", u.id, "error", err)
+			actual, readErr := workspacepkg.ReadStateLocked(home, u.id)
 			if readErr != nil {
-				slog.Error("sysagent: update_workspace: failed to read partial state", "workspace_id", id, "error", readErr)
-				return workspaceMutationError(id, "save_delegation", "partial", "", workspaceChangedFields(state.Workspace, w), map[string]any{"exists": true, "state_read_failed": true})
+				slog.Error("sysagent: update_workspace: failed to read partial state", "workspace_id", u.id, "error", readErr)
+				return workspaceMutationError(u.id, "save_delegation", "partial", "", workspaceChangedFields(u.state.Workspace, u.w), map[string]any{"exists": true, "state_read_failed": true})
 			}
-			return workspaceMutationError(id, "save_delegation", "partial", actual.Revision, workspaceChangedFields(state.Workspace, actual.Workspace), workspaceActualState(actual))
+			return workspaceMutationError(u.id, "save_delegation", "partial", actual.Revision, workspaceChangedFields(u.state.Workspace, actual.Workspace), workspaceActualState(actual))
 		}
 	}
-	tc := computeWorkspaceTaskCount(t.deps.Home, id)
-	resp := map[string]any{
-		"id": w.ID, "name": w.Name, "description": w.Description,
-		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
-		"core_team":  w.CoreTeam,
-		"task_count": tc, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
-	}
-	if delegationSeedNote != "" {
-		resp["delegation_seeded"] = delegationSeedNote
-	}
-	if setupCompletedNote != "" {
-		resp["setup_completed"] = setupCompletedNote
-	}
-	return tools.NewToolResult(successJSON(resp))
+	return workspaceWrittenResult(home, u.id, workspaceWrite{
+		changed: changed, seedNote: u.seedNote, setupNote: u.setupNote,
+		beforeEdges: u.state.Delegation, ceiling: workspaceDelegationDepthCeiling(u.t.deps),
+	})
 }
 
 // updateWorkspaceFields applies optional record fields in input order.
 func updateWorkspaceFields(w *workspacepkg.Workspace, args map[string]any) (bool, *tools.ToolResult) {
 	coreTeamChanged := false
 
-	if v, ok := args["name"].(string); ok && v != "" {
+	if raw, present := args["name"]; present {
+		v, ok := raw.(string)
+		// #1057 F1: an explicit empty or whitespace name is refused like on
+		// create; omitting name leaves it unchanged.
+		if !ok || strings.TrimSpace(v) == "" {
+			return false, tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required",
+				"Omit name to keep the current one, or give a non-empty name"))
+		}
 		if len(v) > 200 {
 			return false, tools.ErrorResult(errorJSON("INVALID_INPUT", "name exceeds 200 characters", ""))
 		}
@@ -797,35 +882,8 @@ func parseWorkspaceDelegationArg(args map[string]any, teamIDs []string, ceiling 
 			edges = append(edges, edge)
 		}
 	}
-	adj := make(map[string][]string)
-	for _, edge := range edges {
-		if edge.FromAgent != edge.ToAgent {
-			adj[edge.FromAgent] = append(adj[edge.FromAgent], edge.ToAgent)
-		}
-	}
-	visiting, visited := map[string]bool{}, map[string]bool{}
-	var cycle func(string) bool
-	cycle = func(node string) bool {
-		if visiting[node] {
-			return true
-		}
-		if visited[node] {
-			return false
-		}
-		visiting[node] = true
-		for _, next := range adj[node] {
-			if cycle(next) {
-				return true
-			}
-		}
-		visiting[node] = false
-		visited[node] = true
-		return false
-	}
-	for node := range adj {
-		if cycle(node) {
-			return nil, true, errors.New("delegation graph contains a cycle")
-		}
+	if delegationHasCycle(edges) {
+		return nil, true, errors.New("delegation graph contains a cycle")
 	}
 	return edges, true, nil
 }
@@ -1137,6 +1195,42 @@ func withNewMemberSelfEdges(
 // roster, matching this codebase's "no default-policy fallback" convention
 // (CLAUDE.md Hard Constraint #6): presence is explicit, seeded data, never a
 // permissive code branch.
+// delegationHasCycle reports whether the graph has a cycle between distinct
+// agents (a self-row is not a cycle).
+func delegationHasCycle(edges []workspacepkg.DelegationEdge) bool {
+	adj := make(map[string][]string)
+	for _, edge := range edges {
+		if edge.FromAgent != edge.ToAgent {
+			adj[edge.FromAgent] = append(adj[edge.FromAgent], edge.ToAgent)
+		}
+	}
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var cycle func(string) bool
+	cycle = func(node string) bool {
+		if visiting[node] {
+			return true
+		}
+		if visited[node] {
+			return false
+		}
+		visiting[node] = true
+		for _, next := range adj[node] {
+			if cycle(next) {
+				return true
+			}
+		}
+		visiting[node] = false
+		visited[node] = true
+		return false
+	}
+	for node := range adj {
+		if cycle(node) {
+			return true
+		}
+	}
+	return false
+}
+
 func configAgentPresenceSet(d *Deps) map[string]bool {
 	present := make(map[string]bool)
 	if d == nil || d.GetCfg == nil {
@@ -1263,7 +1357,8 @@ func (t *WorkspaceDeleteTool) Parameters() map[string]any {
 	}
 }
 
-func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	id, _ := args["id"].(string)
 	revision, _ := args["revision"].(string)
 	confirm, _ := args["confirm"].(bool)
@@ -1305,6 +1400,7 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", "could not list tasks for cascade delete: "+err.Error(), ""))
 	}
 	tasksDeleted := 0
+	var cleanupFailures []string
 	for _, tk := range tasks {
 		if !isValidTaskStatus(string(tk.Status)) {
 			continue
@@ -1313,6 +1409,7 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 			if err := deleteEntity(tasksDir(t.deps.Home), tk.ID); err != nil {
 				slog.Warn("sysagent: workspace cascade delete: failed to delete task",
 					"workspace_id", id, "task_id", tk.ID, "error", err)
+				cleanupFailures = append(cleanupFailures, "task "+tk.ID)
 			} else {
 				tasksDeleted++
 			}
@@ -1323,6 +1420,15 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 	// still under the lock.
 	if err := deleteEntity(workspacesDir(t.deps.Home), id); err != nil {
 		unlock()
+		if tasksDeleted > 0 {
+			return changeErrorWithOutcome(map[string]any{
+				"success":       false,
+				"error":         map[string]any{"code": "SAVE_FAILED", "message": err.Error()},
+				"id":            id,
+				"tasks_deleted": tasksDeleted,
+			}, partlySaved(fmt.Sprintf("%d task(s) were deleted but the workspace record was not: %v", tasksDeleted, err),
+				"", []string{"workspace record deletion"}))
+		}
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
 
@@ -1340,6 +1446,7 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 	if err := workspacepkg.DeleteMountStore(t.deps.Home, id); err != nil {
 		slog.Warn("sysagent: workspace cascade delete: failed to remove mount store",
 			"workspace_id", id, "error", err)
+		cleanupFailures = append(cleanupFailures, "mount store")
 	}
 
 	// Step 3b: best-effort cascade of the delegation store. Delegation edges
@@ -1351,6 +1458,7 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 	if err := workspacepkg.DeleteDelegationStore(t.deps.Home, id); err != nil {
 		slog.Warn("sysagent: workspace cascade delete: failed to remove delegation store",
 			"workspace_id", id, "error", err)
+		cleanupFailures = append(cleanupFailures, "delegation store")
 	}
 
 	// Step 4: best-effort cascade of per-workspace directory (AGENT.md / memory room).
@@ -1359,11 +1467,19 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 	if err := os.RemoveAll(wsDir); err != nil {
 		slog.Warn("sysagent: workspace cascade delete: failed to remove workspace dir",
 			"workspace_id", id, "dir", wsDir, "error", err)
+		cleanupFailures = append(cleanupFailures, "workspace folder")
 	}
 
-	return tools.NewToolResult(successJSON(map[string]any{
+	resp := map[string]any{
 		"id": id, "deleted": true, "tasks_deleted": tasksDeleted,
-	}))
+		"changed_fields": []string{"workspace"},
+	}
+	const scope = "workspace record deleted; its tasks, mount store, delegation store and folder removed"
+	if len(cleanupFailures) > 0 {
+		return changeSuccess(resp, partlySaved("the workspace is deleted but some of its data could not be removed",
+			scope, cleanupFailures))
+	}
+	return changeSuccess(resp, working(scope))
 }
 
 // ---- system.workspace.list ----
@@ -1455,18 +1571,21 @@ func (t *WorkspaceListTool) Execute(_ context.Context, args map[string]any) *too
 	type workspaceResponse struct {
 		ID          string   `json:"id"`
 		Name        string   `json:"name"`
-		Description string   `json:"description,omitempty"`
+		Description string   `json:"description"`
 		Status      string   `json:"status"`
 		Pinned      bool     `json:"pinned"`
 		PinOrder    int      `json:"pin_order"`
 		IsDefault   bool     `json:"is_default"`
-		CoreTeam    []string `json:"core_team,omitempty"`
+		CoreTeam    []string `json:"core_team"`
 		TaskCount   int      `json:"task_count"`
 		CreatedAt   string   `json:"created_at"`
 		UpdatedAt   string   `json:"updated_at"`
 	}
 	resp := make([]workspaceResponse, 0, len(workspaces))
 	for _, w := range workspaces {
+		if w.CoreTeam == nil {
+			w.CoreTeam = []string{} // #1057 F6: lists are never null
+		}
 		resp = append(resp, workspaceResponse{
 			ID:          w.ID,
 			Name:        w.Name,
@@ -1529,13 +1648,6 @@ func (t *WorkspaceGetTool) Execute(_ context.Context, args map[string]any) *tool
 	if err != nil {
 		return workspaceReadError(id, err)
 	}
-	w := state.Workspace
-	tc := computeWorkspaceTaskCount(t.deps.Home, id)
-	return tools.NewToolResult(successJSON(map[string]any{
-		"id": w.ID, "name": w.Name, "description": w.Description,
-		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
-		"is_default": w.IsDefault, "core_team": w.CoreTeam,
-		"task_count": tc, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
-		"revision": state.Revision, "delegation": state.Delegation,
-	}))
+	return tools.NewToolResult(successJSON(workspaceView(state.Workspace, state.Delegation, state.Revision,
+		computeWorkspaceTaskCount(t.deps.Home, id))))
 }

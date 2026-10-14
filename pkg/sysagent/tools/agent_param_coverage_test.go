@@ -59,6 +59,7 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 		"skills": true, "mcp_servers": true, "tool_policy_changes": true,
 		"memory_enabled": true, "voice": true,
 		"context_window_override": true, "model_params": true,
+		"workspace_id": true, // resolveTargetWorkspace in validate (FR-040)
 	}
 
 	for name := range declared {
@@ -107,6 +108,7 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 		"max_tool_iterations": true,
 		"memory_enabled":      true, "voice": true,
 		"context_window_override": true, "model_params": true,
+		"heartbeat": true, "agent_md": true, // agentMetadataWrites (#1064)
 	}
 
 	for name := range declared {

@@ -59,7 +59,8 @@ func (t *AgentPermissionsTool) Parameters() map[string]any {
 	}
 }
 
-func (t *AgentPermissionsTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *AgentPermissionsTool) Execute(_ context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	id, _ := args["id"].(string)
 	revision, _ := args["revision"].(string)
 	if err := validateID(id); err != nil {
@@ -114,14 +115,14 @@ func (t *AgentPermissionsTool) Execute(_ context.Context, args map[string]any) *
 		return (&AgentUpdateTool{deps: t.deps}).mutateErrorResult(id, result, mutateErr)
 	}
 	activation, message := publishAgentActivation(t.deps, id)
-	return tools.NewToolResult(successJSON(map[string]any{
+	return changeSuccess(map[string]any{
 		"id":                 id,
 		"revision":           result.Revision,
 		"persistence_status": agentstore.PersistenceComplete,
 		"activation_status":  activation,
 		"changed_fields":     fields,
 		"message":            message,
-	}))
+	}, updateVerdict(activation, message))
 }
 
 var _ tools.Tool = (*AgentPermissionsTool)(nil)
