@@ -55,7 +55,7 @@ func WithCurrentRevisionForTest(tool tools.Tool, args map[string]any) map[string
 // is keyed by a known id, or that must plant a fault at the new agent's
 // paths, knows the id in advance. Production ids are random UUIDs and never
 // depend on the name. Not safe with t.Parallel.
-func SetAgentIDGeneratorForTest(t interface{ Cleanup(func()) }, gen func(name string) string) {
+func SetAgentIDGeneratorForTest(t interface{ Cleanup(fn func()) }, gen func(name string) string) {
 	prev := newAgentID
 	newAgentID = gen
 	t.Cleanup(func() { newAgentID = prev })
@@ -66,7 +66,7 @@ func SetAgentIDGeneratorForTest(t interface{ Cleanup(func()) }, gen func(name st
 // 2026-10-14): the lowercase name with runs of other characters turned into
 // single hyphens. Test fixtures only — production never derives an id from a
 // name. Tests OF the id rule do not call this.
-func UseNameKeyedAgentIDsForTest(t interface{ Cleanup(func()) }) {
+func UseNameKeyedAgentIDsForTest(t interface{ Cleanup(fn func()) }) {
 	SetAgentIDGeneratorForTest(t, func(name string) string {
 		var b strings.Builder
 		hyphen := false

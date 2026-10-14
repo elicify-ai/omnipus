@@ -75,7 +75,8 @@ func TestWU3CreateAgent_WorkspaceIDTarget(t *testing.T) {
 		"name": "Rep", "description": "d", "soul": "s", "model": "m", "workspace_id": "sales"})
 	require.False(t, res.IsError, res.ForLLM)
 	m := wu3Body(t, res)
-	id := m["id"].(string)
+	id, ok := m["id"].(string)
+	require.True(t, ok, res.ForLLM)
 	require.Equal(t, "joined_workspace", m["status"])
 	require.Equal(t, "sales", m["workspace_id"])
 	sales, err := workspacepkg.ReadState(home, "sales")
@@ -100,5 +101,7 @@ func TestWU3CreateAgent_WorkspaceIDTarget(t *testing.T) {
 	res = systools.NewAgentCreateTool(deps).Execute(jim, map[string]any{
 		"name": "Sneaky", "description": "d", "soul": "s", "model": "m", "workspace_id": "sales"})
 	require.True(t, res.IsError, res.ForLLM)
-	require.Equal(t, "WORKSPACE_NOT_AUTHORIZED", wu3Body(t, res)["error"].(map[string]any)["code"])
+	errBlock, ok := wu3Body(t, res)["error"].(map[string]any)
+	require.True(t, ok, res.ForLLM)
+	require.Equal(t, "WORKSPACE_NOT_AUTHORIZED", errBlock["code"])
 }

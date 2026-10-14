@@ -794,7 +794,7 @@ func (ac *agentCreateToolExecute) createVerdict(activation agentstore.Activation
 // otherwise nothing was saved. The stage, revision and cause are always named
 // — never blank fields (#1064 A2).
 func createSaveFailedResult(id string, mutation agentstore.MutationResult, err error) *tools.ToolResult {
-	stage := string(mutation.ErrorStage)
+	stage := mutation.ErrorStage
 	if stage == "" {
 		stage = "unknown (the store did not report a stage)"
 	}
