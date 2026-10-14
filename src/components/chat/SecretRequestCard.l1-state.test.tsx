@@ -6,9 +6,14 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from '@/lib/queryClient'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useChatStore } from '@/store/chat'
+import { useUiStore } from '@/store/ui'
+import { useAuthStore } from '@/store/auth'
+import { useToolApprovalStore } from '@/store/toolApproval'
+import { useConnectionStore } from '@/store/connection'
 import type { SecretRequestFrame, SecretRequestResolvedFrame, SessionStateSecretRequest } from '@/lib/api/generated/asyncapi-types'
 import type { SecretRequestState } from '@/lib/api/generated/openapi-types'
-import { labelledControl, queryLabelledControl, deferred, installNetwork, jsonResponse, loadSecretSurface, requests, resetSharedState } from '../../../tests/l1-ui-red-u23/support'
+import { labelledControl, queryLabelledControl, deferred, installNetwork, jsonResponse, loadSecretSurface, requests, resetSharedState, observableText, socketSends } from '../../../tests/l1-ui-red-u23/support'
 
 
 const frame: SecretRequestFrame = {
@@ -47,7 +52,41 @@ beforeEach(async () => {
     throw new Error(`Unexpected boundary ${call.method} ${call.path}`)
   })
 })
-afterEach(() => { queryClient.clear(); vi.unstubAllGlobals() })
+afterEach(() => {
+  for (const dispose of refusalObservers.splice(0)) dispose()
+  for (const spy of refusalOutput.splice(0)) spy.mockRestore()
+  queryClient.clear()
+  vi.unstubAllGlobals()
+})
+
+// CHECK2 F2: observe values in controls AND all currently exposed shared sinks.
+// A typed value is allowed only in the explicit submit request, not anywhere
+// else in the tab. These are real subscriptions and call-through output spies.
+const refusalObservers: Array<() => void> = []
+const refusalOutput: Array<ReturnType<typeof vi.spyOn>> = []
+function watchRefusalSinks() {
+  const emitted: string[] = []
+  for (const store of [surface.store, useChatStore, useSessionStore, useUiStore, useAuthStore, useWorkspacesStore, useToolApprovalStore, useConnectionStore]) {
+    emitted.push(observableText(store.getState()))
+    refusalObservers.push(store.subscribe(value => emitted.push(observableText(value))))
+  }
+  const captureCache = () => emitted.push(observableText({
+    queries: queryClient.getQueryCache().getAll().map(query => query.state),
+    mutations: queryClient.getMutationCache().getAll().map(mutation => mutation.state),
+  }))
+  refusalObservers.push(queryClient.getQueryCache().subscribe(captureCache), queryClient.getMutationCache().subscribe(captureCache))
+  captureCache()
+  refusalOutput.push(...['log', 'warn', 'error', 'info', 'debug'].map(method => vi.spyOn(console, method as 'log')))
+  return (...values: string[]) => {
+    const sinks = { emitted, output: refusalOutput.flatMap(spy => spy.mock.calls), socketSends,
+      otherRequests: requests.filter(call => !(call.method === 'POST' && call.path === '/api/v1/secret-requests/sec-state/submit')),
+      localStorage: { ...localStorage }, sessionStorage: { ...sessionStorage } }
+    for (const value of values) for (const [name, sink] of Object.entries(sinks)) {
+      expect(observableText(sink), `FR-062/075: rejected submit leaked to ${name}`).not.toContain(value)
+    }
+    expect(emitted.length, 'real shared-sink observation is non-empty').toBeGreaterThan(0)
+  }
+}
 
 describe('terminal disposal (FR-074/075; BDD-6.5)', () => {
   it.each(['submitted', 'cancelled', 'stopped', 'interrupted', 'refused'] as const)('FR-075: resolved %s clears even detached input handles and sends nothing', async terminal => {
@@ -114,9 +153,17 @@ describe('submission uncertainty (FR-079; §6.3; BDD-6.7)', () => {
   it('FR-074: explicit 400 rejection is visible, associated, value-free and not Saved', async () => {
     installNetwork(() => jsonResponse({ error: 'missing field', code: 'invalid_payload' }, 400))
     mount()
+    const bot = labelledControl('Bot token')
+    const app = labelledControl('App token')
     fill()
     fireEvent.click(screen.getByRole('button', { name: /submit|save/i }))
+    // CHECK2 B-S2-submit-failure / B-S2-refusal-branch: body text cannot
+    // prove password-value erasure. Keep both real control handles.
+    expect(bot).toHaveValue('')
+    expect(app).toHaveValue('')
     await waitFor(() => expect(surface.store.getState().byId[frame.request_id].localPhase).toBe('rejected'))
+    expect(bot).toHaveValue('')
+    expect(app).toHaveValue('')
     expect(screen.queryByText(/^Saved(?:\s|$)/)).not.toBeInTheDocument()
     // Card-level server rejection may be polite; only field validation
     // requires the Field alert. The exact boundary error must be announced.
@@ -172,6 +219,118 @@ describe('submission uncertainty (FR-079; §6.3; BDD-6.7)', () => {
     expect(queryLabelledControl('Bot token')).not.toBeInTheDocument()
     expect(requests).toEqual([])
   })
+})
+
+// CHECK2 F2 / S2: refusal-selective clearing must be watched independently
+// of lost-response and eventual-disposal cleanup. These expectations come
+// from FR-075 and the founder-approved clear-at-handoff rule, not production.
+it.each([400, 403])('FR-075 / CHECK2: HTTP %i refusal clears every field at handoff and requires new input to retry', async status => {
+  const refusal = deferred<Response>()
+  let sends = 0
+  installNetwork(call => {
+    expect(call.path).toBe('/api/v1/secret-requests/sec-state/submit')
+    expect(call.method).toBe('POST')
+    sends++
+    return sends === 1 ? refusal.promise : jsonResponse(state('submitted'))
+  })
+  mount()
+  const noLeak = watchRefusalSinks()
+  const bot = labelledControl('Bot token')
+  const app = labelledControl('App token')
+  const first = { bot_token: 'CHECK2_FIRST_BOT_TOKEN', app_token: 'CHECK2_FIRST_APP_TOKEN' }
+  fireEvent.change(bot, { target: { value: first.bot_token } })
+  fireEvent.change(app, { target: { value: first.app_token } })
+  const submit = screen.getByRole('button', { name: /submit|save/i })
+  fireEvent.click(submit)
+  expect(bot).toHaveValue('')
+  expect(app).toHaveValue('')
+  expect(submit).toBeDisabled()
+  expect(requests).toHaveLength(1)
+  expect(JSON.parse(requests[0].body!)).toEqual({ values: first })
+  noLeak(...Object.values(first))
+  fireEvent.click(submit)
+  expect(requests).toHaveLength(1)
+  await act(async () => refusal.resolve(jsonResponse({
+    error: status === 400 ? 'missing field' : 'csrf token mismatch',
+    code: status === 400 ? 'invalid_payload' : 'csrf_mismatch',
+  }, status)))
+  await waitFor(() => expect(surface.store.getState().byId[frame.request_id].localPhase).toBe('rejected'))
+  expect(bot).toHaveValue('')
+  expect(app).toHaveValue('')
+  expect(screen.queryByText(/^Saved(?:\s|$)/)).not.toBeInTheDocument()
+  expect(requests.map(call => call.method)).toEqual(['POST'])
+  noLeak(...Object.values(first))
+
+  // A blank or partial retry may not reuse hidden React drafts. Exactly
+  // two fresh values are needed for the second deliberate submit.
+  fireEvent.click(screen.getByRole('button', { name: /submit|save/i }))
+  fireEvent.keyDown(app, { key: 'Enter', code: 'Enter' })
+  expect(requests).toHaveLength(1)
+  const fresh = { bot_token: 'CHECK2_FRESH_BOT_TOKEN', app_token: 'CHECK2_FRESH_APP_TOKEN' }
+  fireEvent.change(bot, { target: { value: fresh.bot_token } })
+  fireEvent.click(screen.getByRole('button', { name: /submit|save/i }))
+  expect(requests).toHaveLength(1)
+  fireEvent.change(bot, { target: { value: fresh.bot_token } })
+  fireEvent.change(app, { target: { value: fresh.app_token } })
+  fireEvent.click(screen.getByRole('button', { name: /submit|save/i }))
+  expect(bot).toHaveValue('')
+  expect(app).toHaveValue('')
+  await waitFor(() => expect(surface.store.getState().byId[frame.request_id].request.state).toBe('submitted'))
+  expect(requests.map(call => JSON.parse(call.body!))).toEqual([{ values: first }, { values: fresh }])
+  expect(sends).toBe(2)
+  noLeak(...Object.values(first), ...Object.values(fresh))
+})
+
+it('FR-075/079 / CHECK2: refusal then lost-response retry clears fresh fields before uncertainty and never reuses earlier values', async () => {
+  const refused = deferred<Response>()
+  const recovered = deferred<Response>()
+  let sends = 0
+  installNetwork(call => {
+    if (call.method === 'GET') {
+      expect(call.path).toBe('/api/v1/secret-requests/sec-state')
+      expect(call.body).toBeUndefined()
+      return recovered.promise
+    }
+    expect(call.path).toBe('/api/v1/secret-requests/sec-state/submit')
+    expect(call.method).toBe('POST')
+    sends++
+    return sends === 1 ? refused.promise : Promise.reject(new TypeError('response lost'))
+  })
+  mount()
+  const noLeak = watchRefusalSinks()
+  const bot = labelledControl('Bot token')
+  const app = labelledControl('App token')
+  const first = { bot_token: 'CHECK2_REFUSED_BOT', app_token: 'CHECK2_REFUSED_APP' }
+  fireEvent.change(bot, { target: { value: first.bot_token } })
+  fireEvent.change(app, { target: { value: first.app_token } })
+  fireEvent.click(screen.getByRole('button', { name: /submit|save/i }))
+  expect(bot).toHaveValue('')
+  expect(app).toHaveValue('')
+  await act(async () => refused.resolve(jsonResponse({ error: 'missing field', code: 'invalid_payload' }, 400)))
+  await waitFor(() => expect(surface.store.getState().byId[frame.request_id].localPhase).toBe('rejected'))
+  expect(bot).toHaveValue('')
+  expect(app).toHaveValue('')
+  fireEvent.click(screen.getByRole('button', { name: /submit|save/i }))
+  expect(requests).toHaveLength(1)
+  const fresh = { bot_token: 'CHECK2_SECOND_BOT', app_token: 'CHECK2_SECOND_APP' }
+  fireEvent.change(bot, { target: { value: fresh.bot_token } })
+  fireEvent.change(app, { target: { value: fresh.app_token } })
+  fireEvent.click(screen.getByRole('button', { name: /submit|save/i }))
+  expect(bot).toHaveValue('')
+  expect(app).toHaveValue('')
+  await waitFor(() => expect(requests.map(call => call.method)).toEqual(['POST', 'POST', 'GET']))
+  expect(screen.getByText(/submission unknown.*checking/i)).toBeInTheDocument()
+  expect(screen.queryByText(/^Saved(?:\s|$)/)).not.toBeInTheDocument()
+  expect(bot).toHaveValue('')
+  expect(app).toHaveValue('')
+  expect(requests.filter(call => call.method === 'POST').map(call => JSON.parse(call.body!))).toEqual([{ values: first }, { values: fresh }])
+  noLeak(...Object.values(first), ...Object.values(fresh))
+  await act(async () => recovered.resolve(jsonResponse(state('submitted'))))
+  await waitFor(() => expect(document.body).toHaveTextContent(references[0]))
+  expect(document.body).toHaveTextContent(references[1])
+  expect(requests.map(call => call.method)).toEqual(['POST', 'POST', 'GET'])
+  expect(sends).toBe(2)
+  noLeak(...Object.values(first), ...Object.values(fresh))
 })
 
 describe('keyboard and root routing (FR-109/061; BDD-12.9/6.11)', () => {

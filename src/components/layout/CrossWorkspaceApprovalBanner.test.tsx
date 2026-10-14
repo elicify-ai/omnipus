@@ -13,7 +13,8 @@ import { workspacesQueryKeys } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { useSessionStore } from '@/store/session'
+import { useSessionStore, readPersistedSessionByWorkspace } from '@/store/session'
+import { useConnectionStore } from '@/store/connection'
 import { CrossWorkspaceApprovalBanner } from './CrossWorkspaceApprovalBanner'
 import { cleanupApprovalState, installNetwork, jsonResponse, resetSharedState, approvalPosts } from '../../../tests/l1-ui-red-u23/support'
 
@@ -64,7 +65,11 @@ beforeEach(() => {
     throw new Error(`Unexpected ${call.method} ${call.path}`)
   })
 })
-afterEach(async () => { await cleanupApprovalState() })
+afterEach(async () => {
+  await cleanupApprovalState()
+  useSessionStore.setState({ sessionByWorkspace: {} })
+  localStorage.removeItem('omnipus.sessionByWorkspace.v1')
+})
 const enqueue = (frame: ToolApprovalRequiredFrame) => act(() => useToolApprovalStore.getState().enqueue(frame))
 
 describe('CrossWorkspaceApprovalBanner — now waiting in another chat (amendment R6)', () => {
@@ -91,7 +96,7 @@ describe('CrossWorkspaceApprovalBanner — now waiting in another chat (amendmen
     await renderBanner()
     const notice = screen.getByTestId('cross-workspace-approval-banner')
     expect(notice).toHaveTextContent(/1 approval waiting/i)
-    expect(notice.textContent).toMatch(/Jim|UAT-T2/)
+    expect(notice.textContent).toMatch(/Jim's chat in UAT-T2/)
     expect(notice).not.toHaveTextContent('ws-other')
   })
 
@@ -100,12 +105,27 @@ describe('CrossWorkspaceApprovalBanner — now waiting in another chat (amendmen
     enqueue(requiredFrame('a2', { workspace_id: 'ws-other', session_id: 'main-other' }))
     await renderBanner()
     expect(screen.getByTestId('cross-workspace-approval-banner')).toHaveTextContent(/2 approvals waiting/i)
-    expect(screen.getByTestId('cross-workspace-approval-banner').textContent).toMatch(/Jim|UAT-T2/)
+    expect(screen.getByTestId('cross-workspace-approval-banner').textContent).toMatch(/Jim's chat in UAT-T2/)
   })
 
   it('L1 R6: Go there opens the owning workspace chat and the exact root, never its helper', async () => {
+    // CHECK2 B3-banner-root: a cached helper must not silently win the
+    // resolver. The previous missing-helper fixture let fallback compensate.
+    const conflicting = {
+      ...sessions[1], id: 'helper-child', agent_id: 'helper', workspace_id: 'ws-active',
+      type: 'delegate' as const, parent_session_id: 'main-other', title: 'Wrong helper destination',
+    }
+    queryClient.setQueryData(['sessions'], [...sessions, conflicting].map(session => ({
+      ...session, message_count: session.stats.message_count,
+      total_tokens: session.stats.tokens_total, total_cost: session.stats.cost,
+    })))
+    queryClient.setQueryData(['agents'], [makeAgent({ id: 'jim', name: 'Jim' }), makeAgent({ id: 'helper', name: 'Conflicting helper', type: 'Subagent' })])
     enqueue(requiredFrame('a1', { workspace_id: 'ws-other', session_id: 'helper-child', root_session_id: 'main-other' }))
     const router = await renderBanner()
+    const notice = screen.getByTestId('cross-workspace-approval-banner')
+    expect(notice).toHaveTextContent("Jim's chat in UAT-T2")
+    expect(notice).not.toHaveTextContent('Home Base')
+    expect(notice).not.toHaveTextContent('Conflicting helper')
     fireEvent.click(screen.getByTestId('cross-workspace-approval-banner'))
     await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/ws-other/chat'))
     expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('ws-other')
@@ -135,6 +155,24 @@ describe('CrossWorkspaceApprovalBanner — now waiting in another chat (amendmen
   })
 
   it('FR-092 / R6: Omnipus helper points to /omnipus without changing active workspace', async () => {
+    // CHECK2 F4 / B3-banner-workspace: the docs promise that going back
+    // returns to this workspace's OWN prior conversation. Seed the complete
+    // real descriptor, not only activeWorkspaceId/activeSessionId.
+    const remembered = { id: 'remembered-extra', type: 'chat' as const, title: 'Sales follow-up', agentId: 'mia' }
+    const other = { id: 'other-remembered', type: 'chat' as const, title: 'Other conversation', agentId: 'jim' }
+    const expected = { 'ws-active': remembered, 'ws-other': other }
+    const storageKey = 'omnipus.sessionByWorkspace.v1'
+    localStorage.removeItem(storageKey)
+    act(() => {
+      useConnectionStore.setState({ connection: null, isConnected: false })
+      useSessionStore.setState({ sessionByWorkspace: {} })
+      useSessionStore.getState().setWorkspaceSessionDescriptor('ws-active', remembered)
+      useSessionStore.getState().setWorkspaceSessionDescriptor('ws-other', other)
+    })
+    expect(useSessionStore.getState().sessionByWorkspace).toEqual(expected)
+    expect(readPersistedSessionByWorkspace()).toEqual(expected)
+    const persistedBefore = localStorage.getItem(storageKey)
+    expect(JSON.parse(persistedBefore!)).toEqual(expected)
     enqueue(requiredFrame('a1', { agent_id: 'helper', acting_agent_name: 'Setup helper', session_id: 'helper-child', root_session_id: 'omnipus-main', workspace_id: undefined }))
     const router = await renderBanner()
     expect(screen.getByTestId('cross-workspace-approval-banner')).toHaveTextContent('Omnipus')
@@ -142,6 +180,10 @@ describe('CrossWorkspaceApprovalBanner — now waiting in another chat (amendmen
     await waitFor(() => expect(router.state.location.pathname).toBe('/omnipus'))
     expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('ws-active')
     expect(useSessionStore.getState().activeSessionId).toBe('omnipus-main')
+    expect(useSessionStore.getState().sessionByWorkspace).toEqual(expected)
+    expect(readPersistedSessionByWorkspace()).toEqual(expected)
+    expect(localStorage.getItem(storageKey)).toBe(persistedBefore)
+    expect(approvalPosts()).toEqual([])
   })
 
   it('L1 R6: appearing notice keeps composer focus and resolution is never a banner action', async () => {

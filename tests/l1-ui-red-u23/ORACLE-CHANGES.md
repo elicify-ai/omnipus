@@ -1,5 +1,7 @@
 # Legacy oracle changes — per test case
 
+**Correction (CHECK2):** Said the store-resolution file had eight original/final declarations. Wrong because the author inventory omitted its template-literal memory-bound test. Correct is **nine**, with that existing predicate retained unchanged. Also, the prior banner retarget was not wholly non-weakened: `/Jim|UAT-T2/` dropped the independently known workspace guard. CHECK2 closure now requires both identities; see the correction rows below and the gap-closure ledger.
+
 Authority: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/designs/L1-AMENDMENTS-20261013.md §1.2 R6 and §1.5.
 
 Binding quotes: "Card renders ... chat whose session id equals root_session_id (or session_id when ... omitted)"; "card never takes focus on appearance"; "Escape does not resolve"; "same actions ... and previews". Dispatch explicitly defers B3: every reconnect-stub shape/action assertion is retained.
@@ -186,7 +188,7 @@ Added declarations: `L1 R6 / FR-092: keeps server-derived root, acting name, ori
 
 ## /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/store/toolApproval.resolution.test.ts
 
-Original declarations: 8; final declarations: 8.
+Original declarations: 9; final declarations: 9. CHECK2 corrected the inventory only; no declaration was deleted.
 
 | Old case / oracle | New case / oracle | Authority / preserved checks |
 |---|---|---|
@@ -195,6 +197,7 @@ Original declarations: 8; final declarations: 8.
 | a session_state snapshot still listing a resolved id neither keeps nor re-creates it | a session_state snapshot still listing a resolved id neither keeps nor re-creates it — Real store assertion preserved (including stub empty ids, dedupe, expiry and confirmed-resolution memory). K7 root/acting/origin metadata additions listed separately. | §1.2 R6 / §1.5; B3 deferred |
 | dequeue alone is only a local dismissal: a later snapshot that still lists the id restores it | dequeue alone is only a local dismissal: a later snapshot that still lists the id restores it — Real store assertion preserved (including stub empty ids, dedupe, expiry and confirmed-resolution memory). K7 root/acting/origin metadata additions listed separately. | §1.2 R6 / §1.5; B3 deferred |
 | marking the same id twice records it once | marking the same id twice records it once — Real store assertion preserved (including stub empty ids, dedupe, expiry and confirmed-resolution memory). K7 root/acting/origin metadata additions listed separately. | §1.2 R6 / §1.5; B3 deferred |
+| remembers at most `${RESOLVED_APPROVAL_MEMORY}` ids, evicting the oldest first | Same memory-bound case, unchanged — previously omitted from this ledger because its title is a template expression, not a plain string. | Original declaration and all bound/order assertions retained; CHECK2 accounting correction |
 | a live frame keeps its workspace_id on the queue entry | a live frame keeps its workspace_id on the queue entry — Real store assertion preserved (including stub empty ids, dedupe, expiry and confirmed-resolution memory). K7 root/acting/origin metadata additions listed separately. | §1.2 R6 / §1.5; B3 deferred |
 | a reconnect stub keeps the snapshot workspace_id | a reconnect stub keeps the snapshot workspace_id — Real store assertion preserved (including stub empty ids, dedupe, expiry and confirmed-resolution memory). K7 root/acting/origin metadata additions listed separately. | §1.2 R6 / §1.5; B3 deferred |
 | isApprovalInScope: $why → $shown | L1 §1.2 R6: owning-chat scope: $why → $shown — Real store assertion preserved (including stub empty ids, dedupe, expiry and confirmed-resolution memory). The five scope outcomes now use approvalChatId against the viewed root, not workspace-wide visibility. | §1.2 R6 / §1.5; B3 deferred |
@@ -208,8 +211,8 @@ Original declarations: 7; final declarations: 11.
 | renders nothing when the queue is empty | L1 R6: renders nothing when the queue is empty — Inline public component replaces modal; all preview/action/error/queue assertions retained. API-helper/UI/logout mocks replaced by real fetch bodies, real toast store and real auth teardown. | §1.2 R6 / §1.5; B3 deferred |
 | renders nothing when the only pending approval is in the active workspace | L1 R6: renders nothing for the current root chat, regardless of its workspace — Inline public component replaces modal; all preview/action/error/queue assertions retained. API-helper/UI/logout mocks replaced by real fetch bodies, real toast store and real auth teardown. | §1.2 R6 / §1.5; B3 deferred |
 | renders nothing for an approval with no workspace_id (in scope everywhere) | L1 R6: renders nothing for an unscoped approval only when this IS its owning chat — No-workspace means fallback acting/root chat only, not every chat. Elsewhere control added. | §1.2 R6 / §1.5; B3 deferred |
-| shows singular copy with the resolved workspace name for one cross-workspace approval | L1 R6 / BDD-11.3: singular notice labels the target root chat, not a raw workspace id — Inline public component replaces modal; all preview/action/error/queue assertions retained. API-helper/UI/logout mocks replaced by real fetch bodies, real toast store and real auth teardown. | §1.2 R6 / §1.5; B3 deferred |
-| shows plural copy for several approvals in the same other workspace | L1 R6: plural notice counts several approvals in the same other root chat — Inline public component replaces modal; all preview/action/error/queue assertions retained. API-helper/UI/logout mocks replaced by real fetch bodies, real toast store and real auth teardown. | §1.2 R6 / §1.5; B3 deferred |
+| shows singular copy with the resolved workspace name for one cross-workspace approval | L1 R6 / BDD-11.3: singular notice labels the target root chat, not a raw workspace id — Historical OR matcher was weaker; CHECK2 restores **Jim's chat AND UAT-T2** together, plus original exact count/raw-id absence. | §1.2 R6 / BDD-11.3; F6 correction; B3 deferred |
+| shows plural copy for several approvals in the same other workspace | L1 R6: plural notice counts several approvals in the same other root chat — Historical OR matcher was weaker; CHECK2 restores **Jim's chat AND UAT-T2** together with exact two-approval count. | §1.2 R6 / BDD-11.3; F6 correction; B3 deferred |
 | clicking navigates to the target workspace and sets it active | L1 R6: Go there opens the owning workspace chat and the exact root, never its helper — Workspace-only visibility replaced by exact owning-chat visibility, across/same/no workspace controls. Workspace metadata, queue preservation and in-scope counting remain. | §1.2 R6 / §1.5; B3 deferred |
 | disappears once the cross-workspace approvals resolve | L1 R6: disappears on server-confirmed resolution of the elsewhere approval — Inline public component replaces modal; all preview/action/error/queue assertions retained. API-helper/UI/logout mocks replaced by real fetch bodies, real toast store and real auth teardown. | §1.2 R6 / §1.5; B3 deferred |
 
