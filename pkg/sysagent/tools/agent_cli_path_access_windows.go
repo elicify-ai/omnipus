@@ -36,8 +36,9 @@ func currentUserCanExecute(path string) error {
 	return fmt.Errorf("extension %q is not in PATHEXT (%s)", ext, strings.Join(allowed, ";"))
 }
 
-// pathextExtensions parses %PATHEXT% into a normalized list of extensions,
-// falling back to the standard set when unset or blank.
+// pathextExtensions parses %PATHEXT%, skipping empty segments and supplying
+// missing leading dots. The matcher compares extensions case-insensitively.
+// An unset or blank list falls back to the standard set.
 func pathextExtensions() []string {
 	raw := os.Getenv("PATHEXT")
 	if strings.TrimSpace(raw) == "" {
@@ -45,9 +46,14 @@ func pathextExtensions() []string {
 	}
 	out := make([]string, 0, 8)
 	for _, e := range strings.Split(raw, ";") {
-		if e = strings.TrimSpace(e); e != "" {
-			out = append(out, e)
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
 		}
+		if !strings.HasPrefix(e, ".") {
+			e = "." + e
+		}
+		out = append(out, e)
 	}
 	if len(out) == 0 {
 		return defaultPathextExtensions()
