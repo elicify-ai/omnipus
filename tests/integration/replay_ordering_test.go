@@ -711,8 +711,12 @@ func createSession(t *testing.T, gw *testutil.TestGateway) string {
 	req, err := gw.NewRequest(
 		http.MethodPost,
 		"/api/v1/sessions",
-		// FR-122 / K16: a REST session create names its agent.
-		strings.NewReader(`{"type":"chat","channel":"webchat","agent_id":"`+integrationChatAgentID+`"}`),
+		// FR-122 / K16: a REST session create names its agent. The body carries
+		// only SessionCreateRequest members: the contract is
+		// additionalProperties:false and WU-1 refuses an unknown member in both
+		// validation modes (TestL1WU1SessionCreate_RequiresNamedAgentValidationOnAndOff),
+		// so the former "channel":"webchat" member is gone.
+		strings.NewReader(`{"type":"chat","agent_id":"`+integrationChatAgentID+`"}`),
 	)
 	if err != nil {
 		t.Fatalf("createSession: build request: %v", err)
