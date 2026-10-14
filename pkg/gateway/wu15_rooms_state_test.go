@@ -135,6 +135,7 @@ func TestWU15Rooms_RateLimitIsUnavailableNotReplyCountCap(t *testing.T) {
 	}
 	last := wu15Delivery(t, wu15FindEntry(t, snap, "rate-61"), "mia")
 	require.Equal(t, "unavailable", last.State)
+	require.NotNil(t, last.Reason, "K27: rate-limited admission explains unavailability")
 	require.Equal(t, "rate_limit", *last.Reason, "K27: distinguish pacing from held/working")
 }
 
@@ -147,7 +148,10 @@ func TestWU15Rooms_RestartWorkingIsInterruptedAndNeverReplayed(t *testing.T) {
 	h.post(room.Id, "interrupted", "@Mia unfinished request")
 	request := wu15Delivery(t, wu15FindEntry(t, h.snapshot(room.Id), "interrupted"), "mia")
 	h.waitState(room.Id, request.RequestId, "working")
-	h = h.restart()
+	restoreCrashBytes := wu15DurableCrashImage(t, h.home)
+	h.shutdown()
+	restoreCrashBytes()
+	h = wu15Boot(t, h.home, h.cfg)
 	snap := h.waitState(room.Id, request.RequestId, "interrupted")
 	restarted := &wu15ScriptProvider{answer: "must not replay"}
 	h.provider("mia", restarted)

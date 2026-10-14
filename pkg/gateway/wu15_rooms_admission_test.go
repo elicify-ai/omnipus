@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -118,6 +119,7 @@ func TestWU15Rooms_AgentRepliesOnlyMentionedMembersAndNeverSelf(t *testing.T) {
 				}
 			}
 			require.Len(t, answers, 1, "FR-215: exactly one room answer")
+			require.NotNil(t, answers[0].Author.AgentId, "K26: agent answer names its author")
 			require.Equal(t, "jim", *answers[0].Author.AgentId)
 			require.ElementsMatch(t, tc.want, answers[0].Addressees, "FR-165: sender excluded from @all; plain/unknown names reach nobody")
 			require.False(t, h.room(room.Id).Paused, "FR-168: agent /pause is text only")
@@ -128,29 +130,31 @@ func TestWU15Rooms_AgentRepliesOnlyMentionedMembersAndNeverSelf(t *testing.T) {
 
 func TestWU15Rooms_MentionNamespaceIsExactAndAmbiguityRefuses(t *testing.T) {
 	h := wu15NewHarness(t)
-	room := h.create("squad", "Launch", "mia", "jim", "researcher2")
-	// Fixture names, not new production seams. Apply before admission.
-	mia, ok := h.al.GetRegistry().GetAgent("mia")
-	require.True(t, ok)
-	jim, ok := h.al.GetRegistry().GetAgent("jim")
-	require.True(t, ok)
-	researcher, ok := h.al.GetRegistry().GetAgent("researcher2")
-	require.True(t, ok)
-	mia.Name, researcher.Name, jim.Name = "Mia", "Mia", "Jim Smith"
+	h.create("squad", "Control", "mia", "jim")
+	h.shutdown()
+	// Custom IDs avoid changing protected built-in identities. Names are
+	// current production config, not an in-memory registry-only side door.
+	h.cfg.Agents.List = append(h.cfg.Agents.List,
+		config.AgentConfig{ID: "member-a", Name: "Mia", Type: config.AgentTypeCustom},
+		config.AgentConfig{ID: "member-b", Name: "Mia", Type: config.AgentTypeCustom},
+		config.AgentConfig{ID: "member-c", Name: "Jim Smith", Type: config.AgentTypeCustom})
+	seedBindingWorkspace(t, h.home, wu15Workspace, "member-a", "member-b", "member-c")
+	h = wu15Boot(t, h.home, h.cfg)
+	room := h.create("squad", "Launch", "member-a", "member-b", "member-c")
 	status, body := h.http(http.MethodPost, "/api/v1/rooms/"+room.Id+"/messages", gen.RoomMessageRequest{ClientMessageId: "ambiguous", Text: "@Mia hello", Mentions: []string{}})
 	wu15RequireError(t, status, body, http.StatusUnprocessableEntity, "Several members are called Mia — pick from the list")
 	h.post(room.Id, "short", "@Jim go")
 	require.Empty(t, wu15FindEntry(t, h.snapshot(room.Id), "short").Addressees, "BDD-17.31: short names never promoted to a match")
 	h.post(room.Id, "full", "@jIM sMITH go")
-	require.Equal(t, []string{"jim"}, wu15FindEntry(t, h.snapshot(room.Id), "full").Addressees, "§6.13: exact full name is case-insensitive")
-	jim.Name = "New Jim"
-	h.post(room.Id, "stable", "@Jim Smith go", "jim")
-	require.Equal(t, []string{"jim"}, wu15FindEntry(t, h.snapshot(room.Id), "stable").Addressees, "picker id survives rename")
-	mia.Name = "all"
+	require.Equal(t, []string{"member-c"}, wu15FindEntry(t, h.snapshot(room.Id), "full").Addressees, "§6.13: exact full name is case-insensitive")
+	h.renameAgent("member-c", "New Jim")
+	h.post(room.Id, "stable", "@Jim Smith go", "member-c")
+	require.Equal(t, []string{"member-c"}, wu15FindEntry(t, h.snapshot(room.Id), "stable").Addressees, "picker id survives real rename")
+	h.renameAgent("member-a", "all")
 	h.post(room.Id, "reserved", "@all go")
 	require.ElementsMatch(t, room.Members, wu15FindEntry(t, h.snapshot(room.Id), "reserved").Addressees, "§6.13: all remains reserved")
-	h.post(room.Id, "pick-all-name", "hello", "mia")
-	require.Equal(t, []string{"mia"}, wu15FindEntry(t, h.snapshot(room.Id), "pick-all-name").Addressees)
+	h.post(room.Id, "pick-all-name", "hello", "member-a")
+	require.Equal(t, []string{"member-a"}, wu15FindEntry(t, h.snapshot(room.Id), "pick-all-name").Addressees)
 }
 
 func TestWU15Rooms_PickerRejectsNonmembersAndRetryUsesCurrentMembersOnly(t *testing.T) {
@@ -167,6 +171,7 @@ func TestWU15Rooms_PickerRejectsNonmembersAndRetryUsesCurrentMembersOnly(t *test
 	require.Equal(t, before.Id, after.Id, "FR-216: caller id Retry records one entry")
 	delivery := wu15Delivery(t, after, "jim")
 	require.Equal(t, "cancelled", delivery.State)
+	require.NotNil(t, delivery.Reason, "K27: cancelled removal reason")
 	require.Equal(t, "removed", *delivery.Reason, "BDD-17.33: removed is not readmitted")
 	for _, id := range []string{"mia", "researcher2"} {
 		d := wu15Delivery(t, before, id)
@@ -186,9 +191,11 @@ func TestWU15Rooms_MessageUTF8ByteLimits(t *testing.T) {
 			h := wu15NewHarness(t)
 			room := h.create("squad", "Launch", "mia", "jim")
 			text := strings.Repeat("x", size)
+			before := h.snapshot(room.Id)
 			status, data := h.http(http.MethodPost, "/api/v1/rooms/"+room.Id+"/messages", gen.RoomMessageRequest{ClientMessageId: "limit", Text: text, Mentions: []string{}})
 			if size == 0 || size > 65536 {
 				wu15RequireError(t, status, data, http.StatusUnprocessableEntity, "")
+				wu15UnchangedSnapshot(t, before, h.snapshot(room.Id))
 			} else {
 				require.Equal(t, http.StatusAccepted, status, "FR-176: valid byte boundary: %s", data)
 			}
@@ -197,9 +204,11 @@ func TestWU15Rooms_MessageUTF8ByteLimits(t *testing.T) {
 	t.Run("unicode_is_bytes_not_runes", func(t *testing.T) {
 		h := wu15NewHarness(t)
 		room := h.create("squad", "Launch", "mia", "jim")
-		text := strings.Repeat("🙂", 16384) // 16384 × 4 UTF-8 bytes = 65536.
+		text := strings.Repeat("界", 21845) + "x" // 21845 × 3 UTF-8 bytes + 1 = 65536.
 		h.post(room.Id, "utf8-max", text)
+		before := h.snapshot(room.Id)
 		status, data := h.http(http.MethodPost, "/api/v1/rooms/"+room.Id+"/messages", gen.RoomMessageRequest{ClientMessageId: "utf8-over", Text: text + "x", Mentions: []string{}})
 		wu15RequireError(t, status, data, http.StatusUnprocessableEntity, "")
+		wu15UnchangedSnapshot(t, before, h.snapshot(room.Id))
 	})
 }

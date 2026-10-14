@@ -124,7 +124,13 @@ func (h *wu15RoomHarness) shutdown() {
 				h.t.Error("SETUP: agent loop did not shut down")
 			}
 		}
+		channel, found := h.rs.ChannelManager.GetChannel("webchat")
 		stopAndCleanupServices(h.rs, 10*time.Second, false)
+		if found {
+			webchat, ok := channel.(*webchatChannel)
+			require.True(h.t, ok, "SETUP: real webchat transport")
+			webchat.wsHandler.Wait()
+		}
 		h.al.Close()
 	})
 }

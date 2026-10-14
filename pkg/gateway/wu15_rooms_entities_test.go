@@ -40,11 +40,13 @@ func TestWU15Rooms_TwoAgentMinimumAndDistinctMembers(t *testing.T) {
 			// false-negative proof of semantic membership rejection.
 			h.create("squad", "Control", "mia", "jim")
 			name := "Launch"
+			before := h.listRooms(wu15Workspace)
 			status, body := h.http(http.MethodPost, "/api/v1/workspaces/sales/rooms", gen.RoomCreateRequest{
 				Kind: gen.RoomCreateRequestKindSquad, Name: &name, AgentIds: ids,
 			})
 			if len(ids) < 2 || (len(ids) == 2 && ids[0] == ids[1]) {
 				wu15RequireError(t, status, body, http.StatusUnprocessableEntity, "at least two agents")
+				require.ElementsMatch(t, before, h.listRooms(wu15Workspace), "FR-204: rejected room creation saved nothing")
 			} else {
 				require.Equal(t, http.StatusCreated, status, "FR-204: two and three distinct agents are valid: %s", body)
 				var room gen.Room
@@ -62,11 +64,13 @@ func TestWU15Rooms_SquadNameBoundaries(t *testing.T) {
 			h := wu15NewHarness(t)
 			h.create("squad", "Control", "mia", "jim")
 			name := strings.Repeat("N", length)
+			before := h.listRooms(wu15Workspace)
 			status, body := h.http(http.MethodPost, "/api/v1/workspaces/sales/rooms", gen.RoomCreateRequest{
 				Kind: gen.RoomCreateRequestKindSquad, Name: &name, AgentIds: []string{"mia", "jim"},
 			})
 			if length == 0 || length == 81 {
 				wu15RequireError(t, status, body, http.StatusUnprocessableEntity, "")
+				require.ElementsMatch(t, before, h.listRooms(wu15Workspace), "K24: rejected name saved nothing")
 			} else {
 				require.Equal(t, http.StatusCreated, status, "K24: valid name: %s", body)
 				var room gen.Room
@@ -83,10 +87,12 @@ func TestWU15Rooms_IneligibleAgentsAndTeamCreationAreRefused(t *testing.T) {
 			h := wu15NewHarness(t)
 			h.create("squad", "Control", "mia", "jim")
 			name := "Forbidden"
+			before := h.listRooms(wu15Workspace)
 			status, body := h.http(http.MethodPost, "/api/v1/workspaces/sales/rooms", gen.RoomCreateRequest{
 				Kind: gen.RoomCreateRequestKindSquad, Name: &name, AgentIds: []string{"mia", id},
 			})
 			wu15RequireError(t, status, body, http.StatusUnprocessableEntity, "")
+			require.ElementsMatch(t, before, h.listRooms(wu15Workspace), "FR-162: invalid participant saves nothing")
 			if id == "ray" {
 				var refusal gen.ErrorResponse
 				require.NoError(t, json.Unmarshal(body, &refusal))
@@ -98,8 +104,10 @@ func TestWU15Rooms_IneligibleAgentsAndTeamCreationAreRefused(t *testing.T) {
 	t.Run("team_is_server_owned", func(t *testing.T) {
 		h := wu15NewHarness(t)
 		h.create("squad", "Control", "mia", "jim")
+		before := h.listRooms(wu15Workspace)
 		status, body := h.rawHTTP(http.MethodPost, "/api/v1/workspaces/sales/rooms", []byte(`{"kind":"team","agent_ids":["mia","jim"]}`))
 		wu15RequireError(t, status, body, http.StatusUnprocessableEntity, "")
+		require.ElementsMatch(t, before, h.listRooms(wu15Workspace), "K24: rejected team creation saves nothing")
 	})
 }
 
@@ -121,14 +129,15 @@ func TestWU15Rooms_MembershipMinimumMuteAndForeignAgentRefusal(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, "K24: %s: %s", action, body)
 		var updated gen.Room
 		require.NoError(t, json.Unmarshal(body, &updated))
-		if action == gen.RoomMembersUpdateRequestActionMute {
+		switch action {
+		case gen.RoomMembersUpdateRequestActionMute:
 			require.Equal(t, []string{"jim"}, updated.Muted)
 			require.ElementsMatch(t, []string{"mia", "jim"}, updated.Members, "FR-158: muted agents remain members and count toward minimum")
-		} else if action == gen.RoomMembersUpdateRequestActionUnmute {
+		case gen.RoomMembersUpdateRequestActionUnmute:
 			require.Empty(t, updated.Muted)
-		} else if action == gen.RoomMembersUpdateRequestActionAdd {
+		case gen.RoomMembersUpdateRequestActionAdd:
 			require.ElementsMatch(t, []string{"mia", "jim", "researcher2"}, updated.Members)
-		} else {
+		default:
 			require.ElementsMatch(t, []string{"mia", "jim"}, updated.Members)
 		}
 	}

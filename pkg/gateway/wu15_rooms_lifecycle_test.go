@@ -186,11 +186,16 @@ func TestWU15Rooms_CreateMembershipMuteDeleteAreAudited(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, rows, 6, "FR-172: create/add/remove/mute/unmute/delete each has one actual audit row")
-	for _, entry := range rows {
+	expectedAgents := [][]string{{"mia", "jim"}, {"researcher2"}, {"researcher2"}, {"jim"}, {"jim"}, {"mia", "jim"}}
+	for index, entry := range rows {
+		require.Equal(t, "wu15-tester", entry.User, "FR-172: actual authenticated caller, never the agent")
 		require.False(t, entry.Timestamp.IsZero(), "FR-172: when")
 		require.NotEmpty(t, entry.Details, "FR-172: caller and changed agents recorded, not bare event")
 		encoded, err := json.Marshal(entry.Details)
 		require.NoError(t, err)
 		require.Contains(t, string(encoded), room.Id, "FR-172: which room")
+		for _, id := range expectedAgents[index] {
+			require.Contains(t, string(encoded), `"`+id+`"`, "FR-172: exact affected agent id")
+		}
 	}
 }

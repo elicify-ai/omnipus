@@ -56,7 +56,10 @@ func wu15RoomMutationName(name string) bool {
 	return regexp.MustCompile(`(?i)(?:^|_)(?:create|add|remove|update|delete|manage)_(?:room|rooms|squad|squads)(?:_|$)|^(?:room|squad)_(?:create|add|remove|update|delete|manage)$`).MatchString(name)
 }
 
-func TestWU15Rooms_HelpListsOnlySixCommandsAndMembersIncludeStateMute(t *testing.T) {
+// Oracle replacement: the binding WU15-ROOM-RULINGS-20261014.md::Q1
+// supersedes the checkpoint's assumed server output. Visible help/members text
+// is SPA-local; the server must accept a no-op without persistence or sequence.
+func TestWU15Rooms_ServerMembersAndHelpAreNoopsWithUnchangedSequence(t *testing.T) {
 	h := wu15NewHarness(t)
 	room := h.create("squad", "Launch", "mia", "jim", "researcher2")
 	for _, id := range room.Members {
@@ -64,30 +67,16 @@ func TestWU15Rooms_HelpListsOnlySixCommandsAndMembersIncludeStateMute(t *testing
 	}
 	h.post(room.Id, "question", "status?")
 	h.post(room.Id, "mute", "/mute @Researcher2")
-	h.post(room.Id, "members", "/members")
-	h.post(room.Id, "help", "/help")
-	snap := h.snapshot(room.Id)
-	commands := regexp.MustCompile(`/[a-z][a-z_-]*`)
-	var help, members string
-	for _, entry := range snap.Entries {
-		if entry.ClientMessageId != nil {
-			continue
-		}
-		if strings.Contains(entry.Text, "/pause") && strings.Contains(entry.Text, "/unmute") {
-			help = entry.Text
-		}
-		if strings.Contains(entry.Text, "Researcher2") && strings.Contains(strings.ToLower(entry.Text), "muted") {
-			members = entry.Text
-		}
+	require.Equal(t, []string{"researcher2"}, h.room(room.Id).Muted)
+	for _, command := range []string{"/members", "/help"} {
+		before := h.snapshot(room.Id)
+		h.post(room.Id, "ephemeral-"+command[1:], command)
+		after := h.snapshot(room.Id)
+		wu15UnchangedSnapshot(t, before, after)
+		require.Equal(t, before.Seq, after.Seq, "ruling Q1: no-op %s never increments the room stream sequence", command)
 	}
-	require.ElementsMatch(t, []string{"/pause", "/resume", "/mute", "/unmute", "/members", "/help"}, commands.FindAllString(help, -1), "FR-205: help lists exactly six room commands")
-	for _, name := range []string{"Mia", "Jim", "Researcher2"} {
-		require.Contains(t, members, name, "FR-206: every member named")
-	}
-	require.Contains(t, strings.ToLower(members), "held", "FR-206: members' request state is included")
-	require.Contains(t, strings.ToLower(members), "muted", "FR-206: mute state included")
 	h.post(room.Id, "unmute", "/unmute @Researcher2")
-	require.Empty(t, h.room(room.Id).Muted)
+	require.Empty(t, h.room(room.Id).Muted, "real muting commands still change state")
 }
 
 func TestWU15Rooms_SteeringAndMembershipCommandsRefuseWithMainLinks(t *testing.T) {

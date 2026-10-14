@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +27,7 @@ type wu15ScriptProvider struct {
 	mu        sync.Mutex
 	answer    string
 	requestID string
+	autoReply bool
 	calls     [][]providers.Message
 	entered   chan struct{}
 	release   chan struct{}
@@ -38,7 +40,7 @@ func (p *wu15ScriptProvider) Chat(ctx context.Context, msgs []providers.Message,
 	p.mu.Lock()
 	p.calls = append(p.calls, append([]providers.Message(nil), msgs...))
 	first := len(p.calls) == 1
-	requestID, answer, failure, tool, args := p.requestID, p.answer, p.fail, p.tool, p.toolArgs
+	requestID, answer, failure, tool, args, autoReply := p.requestID, p.answer, p.fail, p.tool, p.toolArgs, p.autoReply
 	p.mu.Unlock()
 	if first && p.entered != nil {
 		close(p.entered)
@@ -58,6 +60,16 @@ func (p *wu15ScriptProvider) Chat(ctx context.Context, msgs []providers.Message,
 	}
 	if tool != "" {
 		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "wu15-tool", Type: "function", Name: tool, Arguments: args}}, FinishReason: "tool_calls"}, nil
+	}
+	if autoReply {
+		for _, msg := range msgs {
+			if msg.Role == "system" {
+				continue
+			}
+			for _, match := range regexp.MustCompile(`request_id="([^"]+)"`).FindAllStringSubmatch(msg.Content, -1) {
+				requestID = match[1]
+			}
+		}
 	}
 	if requestID != "" {
 		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "wu15-answer", Type: "function", Name: "answer_request", Arguments: map[string]any{"request_id": requestID, "text": answer}}}, FinishReason: "tool_calls"}, nil
