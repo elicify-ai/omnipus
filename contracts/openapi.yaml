@@ -13079,6 +13079,8 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '422':
           $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /rooms/{id}:
     get:
       operationId: getRoom
@@ -13109,6 +13111,8 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
     delete:
       operationId: deleteRoom
       summary: Delete a squad or an ad-hoc room
@@ -13137,6 +13141,8 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '422':
           $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /rooms/{id}/members:
     patch:
       operationId: updateRoomMembers
@@ -13176,6 +13182,8 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '422':
           $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /rooms/{id}/messages:
     post:
       operationId: postRoomMessage
@@ -13212,6 +13220,8 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '422':
           $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
 security:
 - BearerAuth: []

@@ -201,3 +201,94 @@ func TestRoomsREST_ListStorageFailureIs500(t *testing.T) {
 		t.Fatalf("500 body %q must be an ErrorResponse, not a list", w.Body.String())
 	}
 }
+
+// faultJournal fails the named journal operations (the rooms.Journal
+// post-back seam), to prove every room route answers a storage fault with a
+// 500 ErrorResponse.
+type faultJournal struct {
+	rooms.Journal
+	fail map[string]bool
+}
+
+func (j *faultJournal) Create(id string) error {
+	if j.fail["create"] {
+		return os.ErrPermission
+	}
+	return j.Journal.Create(id)
+}
+
+func (j *faultJournal) WriteRecord(id string, rec any) error {
+	if j.fail["write"] {
+		return os.ErrPermission
+	}
+	return j.Journal.WriteRecord(id, rec)
+}
+
+func (j *faultJournal) Append(id, stream string, rec any) error {
+	if j.fail["append"] {
+		return os.ErrPermission
+	}
+	return j.Journal.Append(id, stream, rec)
+}
+
+func (j *faultJournal) Remove(id string) error {
+	if j.fail["remove"] {
+		return os.ErrPermission
+	}
+	return j.Journal.Remove(id)
+}
+
+// useJournal replaces the harness's room service with one over journal.
+func (rh *roomsHarness) useJournal(j rooms.Journal) {
+	hub := &roomsHub{subs: map[string]map[*wsConn]struct{}{}}
+	hub.svc = rooms.New(j, &gatewayRoomDeps{h: rh.h, home: rh.api.homePath, hub: hub})
+	rh.h.agentLoop.SetRoomRuntime(agentRoomRuntime{svc: hub.svc})
+	rh.h.rooms = hub
+	rh.hub = hub
+	rh.api.rooms.Store(hub)
+}
+
+func TestRoomsREST_StorageFaultIs500OnEveryRoute(t *testing.T) {
+	rh := newRoomsHarness(t)
+	fj := &faultJournal{Journal: rooms.NewFileJournal(rooms.DefaultDir(rh.api.homePath)), fail: map[string]bool{}}
+	rh.useJournal(fj)
+	w := rh.do(http.MethodPost, "/api/v1/workspaces/sales/rooms", `{"kind":"adhoc","agent_ids":["mia","jim"]}`, rh.api.HandleWorkspaces)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("control create: %d %s", w.Code, w.Body.String())
+	}
+	var room generated.Room
+	_ = json.Unmarshal(w.Body.Bytes(), &room)
+	base := "/api/v1/rooms/" + room.Id
+	cases := []struct {
+		name, fault, method, path, body string
+		handler                         http.HandlerFunc
+	}{
+		{"createRoom", "create", http.MethodPost, "/api/v1/workspaces/sales/rooms", `{"kind":"adhoc","agent_ids":["mia","jim"]}`, rh.api.HandleWorkspaces},
+		{"updateRoomMembers", "write", http.MethodPatch, base + "/members", `{"action":"mute","agent_ids":["jim"]}`, rh.api.HandleRooms},
+		{"postRoomMessage", "append", http.MethodPost, base + "/messages", `{"client_message_id":"c1","text":"status?","mentions":[]}`, rh.api.HandleRooms},
+		{"deleteRoom", "remove", http.MethodDelete, base, "", rh.api.HandleRooms},
+	}
+	for _, c := range cases {
+		fj.fail = map[string]bool{c.fault: true}
+		w := rh.do(c.method, c.path, c.body, c.handler)
+		var e generated.ErrorResponse
+		if w.Code != http.StatusInternalServerError || json.Unmarshal(w.Body.Bytes(), &e) != nil || e.Error == "" {
+			t.Errorf("%s under a %s fault: %d %q, want 500 with an ErrorResponse", c.name, c.fault, w.Code, w.Body.String())
+		}
+	}
+	fj.fail = map[string]bool{}
+	got, err := rh.hub.svc.Get(room.Id)
+	if err != nil || len(got.Muted) != 0 {
+		t.Fatalf("a failed members write changed the room: %+v %v", got, err)
+	}
+	// getRoom: an unreadable record after a restart.
+	if err := os.WriteFile(filepath.Join(rooms.DefaultDir(rh.api.homePath), room.Id, "room.json"), []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rh.useJournal(rooms.NewFileJournal(rooms.DefaultDir(rh.api.homePath)))
+	w = rh.do(http.MethodGet, base, "", rh.api.HandleRooms)
+	var e generated.ErrorResponse
+	if w.Code != http.StatusInternalServerError || json.Unmarshal(w.Body.Bytes(), &e) != nil || e.Error == "" {
+		t.Fatalf("getRoom over an unreadable room: %d %q, want 500", w.Code, w.Body.String())
+	}
+}

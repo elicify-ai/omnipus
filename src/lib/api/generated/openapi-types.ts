@@ -27184,6 +27184,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     getRoom: {
@@ -27210,6 +27211,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     deleteRoom: {
@@ -27235,6 +27237,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     updateRoomMembers: {
@@ -27266,6 +27269,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     postRoomMessage: {
@@ -27295,6 +27299,7 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
 }

@@ -12683,6 +12683,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         description: `Resource not found.`,
         schema: ErrorResponse,
       },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
@@ -12719,6 +12724,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -12764,6 +12774,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         description: `Validation failed — semantically invalid input.`,
         schema: ErrorResponse,
       },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
@@ -12805,6 +12820,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -16971,6 +16991,11 @@ This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-
       {
         status: 422,
         description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
