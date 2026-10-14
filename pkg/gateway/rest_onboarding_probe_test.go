@@ -31,7 +31,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -686,9 +685,8 @@ func testProbeProviderOpenAIEncryptedOAuth(t *testing.T) {
 
 func TestProbeProvider_SignIn(t *testing.T) {
 	withEdition(t, config.EditionHosted)
-	if runtime.GOOS == "windows" {
-		t.Skip("the fake vendor CLIs are POSIX shell stubs")
-	}
+	// WU-24 CHECK F6: all remaining cases use HTTP and the encrypted store;
+	// the removed shell fixtures no longer justify skipping Windows.
 
 	t.Run("openai-chatgpt with an encrypted OAuth entry probes with the saved token",
 		testProbeProviderOpenAIEncryptedOAuth)

@@ -487,11 +487,44 @@ describe('OnboardingWizard — step 4 renders the shared provider picker (FR-021
     expect(screen.getAllByText('Step 4 of 4').length).toBeGreaterThan(0)
   })
 
-  // (The "switching the auth segment to API key" case was removed with WU-24:
-  // its only fixture trigger was the retired GitHub Copilot sign-in row
-  // sitting beside the github-models key row — no catalog company offers both
-  // methods any more. The FR-028 segment behaviour itself is retained and
-  // unit-covered in AuthMethodControl.test.tsx.)
+  it('switching the real OpenAI auth segment reveals the key field without navigation or progress changes', async () => {
+    // WU-24 CHECK W1: the kept HTTP and API-key rows are one company in
+    // the real catalog. Regroup only these existing fixture entries; never
+    // resurrect a removed transport as the trigger for a retained behavior.
+    const openAIIds = new Set(['openai', 'openai-chatgpt'])
+    expect(CATALOG_PROVIDERS.filter((entry) => openAIIds.has(entry.id)).map((entry) => entry.id).sort()).toEqual([
+      'openai', 'openai-chatgpt',
+    ])
+    vi.mocked(fetchProvidersCatalog).mockResolvedValue({
+      ...PROVIDERS_CATALOG,
+      providers: CATALOG_PROVIDERS.map((entry) => openAIIds.has(entry.id) ? { ...entry, company: 'OpenAI' } : entry),
+    })
+    await goToStep4()
+    await openPanelForTile('openai')
+    const picker = screen.getByTestId('onboarding-provider-picker')
+    const panel = screen.getByTestId('provider-detail-panel')
+    const progress = screen.getByRole('progressbar')
+    expect(progress).toHaveAttribute('aria-valuemax', '4')
+    expect(progress).toHaveAttribute('aria-valuenow', '4')
+    expect(screen.getByTestId('provider-detail-panel-auth-segment-sign_in')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('provider-detail-panel-auth-signin')).toBeInTheDocument()
+    expect(screen.queryByTestId('provider-detail-panel-api-key-input')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('provider-detail-panel-auth-segment-api_key'))
+    const key = screen.getByTestId('provider-detail-panel-api-key-input')
+    fireEvent.change(key, { target: { value: 'wu24-fixture-api-key' } })
+    expect(key).toHaveValue('wu24-fixture-api-key')
+    expect(screen.getByTestId('provider-detail-panel-auth-segment-api_key')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByTestId('provider-detail-panel-auth-signin')).not.toBeInTheDocument()
+    expect(screen.getByTestId('onboarding-provider-picker')).toBe(picker)
+    expect(screen.getByTestId('provider-detail-panel')).toBe(panel)
+    expect(screen.getByRole('progressbar')).toBe(progress)
+    expect(progress).toHaveAttribute('aria-valuemax', '4')
+    expect(progress).toHaveAttribute('aria-valuenow', '4')
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(completeOnboardingTransaction).not.toHaveBeenCalled()
+    expect(probeProvider).not.toHaveBeenCalled()
+  })
 
   it('the confirmed row renders the subtitle and endpoint derived from the fetched document (US-7 parity)', async () => {
     await goToStep4()

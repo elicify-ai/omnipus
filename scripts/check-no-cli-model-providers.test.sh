@@ -78,6 +78,20 @@ with tempfile.TemporaryDirectory(prefix="wu24-guard-selfcheck-", dir=os.environ.
         put(tree, "docs/api.md", "/api/v1/providers/" + provider + "/sign-in\n")
         expect(tree, "REST path " + provider, 1, provider)
 
+    # WU-24 CHECK F2: source resurrection must be caught even in the runner
+    # package, whose surviving credential-reader symbols are allowed.
+    deleted_uri = "/api/v1/providers/openai-chatgpt/sign-in/" + "im" + "port"
+    for path, symbol, source in (
+        ("pkg/agent/runner/wu24_guard_probe.go", "handleProviderSignIn" + "Import", "go"),
+        ("src/wu24-guard-probe.ts", "importCodex" + "Login", "ts"),
+    ):
+        tree = fresh()
+        put(tree, path, 'const endpoint = "' + deleted_uri + '"\n')
+        expect(tree, source + " deleted credential-copy URI", 1, deleted_uri)
+        tree = fresh()
+        put(tree, path, "// forbidden helper resurrection: " + symbol + "\n")
+        expect(tree, source + " deleted credential-copy helper", 1, symbol)
+
     for prefix in ("codex_" + "cli_", "copilot_" + "cli_"):
         for suffix in ("provider.go", "credentials.go", "provider_test.go"):
             tree = fresh()
