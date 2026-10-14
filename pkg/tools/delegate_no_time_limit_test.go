@@ -47,7 +47,7 @@ func TestDelegateRun_IgnoresRetiredTimeoutSeconds(t *testing.T) {
 func TestDelegateTool_DescriptionHasNoTimeLimit(t *testing.T) {
 	desc := NewDelegateTool("test-model", 0, 0).Description()
 	// The deleted sentence must leave the surrounding text intact.
-	if !strings.Contains(desc, "stop it with delegate stop_all. A run has two modes.") {
+	if !strings.Contains(desc, "even when you alternate actions. A run has two modes.") {
 		t.Error("delegate description is broken around the removed time-limit sentence")
 	}
 	for _, stale := range []string{"timeout_seconds", "force-stopped", "1800s"} {
