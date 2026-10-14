@@ -130,6 +130,25 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	}
 
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.autoTitleAfterFirstReply(rz.rc.rx.finalContent)
+
+	// #1178 (amendment §4.1, re-CHECK F01 engine boundary): the streamed
+	// turn's late transcript write and done frame happen inside the
+	// streamer's Finalize. Run it HERE — before the completed result is built
+	// and before runTurn's defers emit turn.end — so a failed late write
+	// becomes the turn's real outcome: markTurnFailed, TurnEndStatusError and
+	// the gateway's error returned to the caller instead of a false success.
+	// The gateway's own could-not-save notice already went out exactly once,
+	// so nothing is emitted here; finalizeStreamer's WARN stays as operator
+	// detail. runTurn's deferred finalizeStreamer call is a no-op after this
+	// (ts.lastStreamer is nil once it has run); on a non-streamed turn the
+	// call is a no-op too (no streamer).
+	if finErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.finalizeStreamer(rz.rc.rx.ctx); finErr != nil {
+		notSaved := &messageNotSavedError{role: "assistant", cause: finErr}
+		rz.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+		rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+		return turnResult{status: TurnEndStatusError, turnFailed: true}, notSaved
+	}
+
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseCompleted)
 	return turnResult{
 		finalContent: rz.rc.rx.finalContent,
