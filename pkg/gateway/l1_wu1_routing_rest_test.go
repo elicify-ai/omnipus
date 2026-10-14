@@ -55,8 +55,10 @@ func TestL1WU1ChannelRoutingWrite_RequiresNonblankPairValidationOnOff(t *testing
 					require.NoError(t, err)
 					w := setChannelRoutingReq(t, api, "telegram.red", row.body)
 					assert.Equal(t, http.StatusBadRequest, w.Code, "FR-127 / BDD-13.8: %s", w.Body.String())
-					if row.semantic && !validation {
-						assert.Contains(t, w.Body.String(), "bind this channel to an agent in a workspace", "semantic rule cannot rely on schema validation")
+					if row.semantic && (!validation || row.name == "whitespace_pair") {
+						assert.Contains(t, w.Body.String(), "bind this channel to an agent in a workspace", "§6.2 / chief Q2 A: whitespace needs the semantic refusal even with validation ON")
+					} else if row.semantic {
+						assert.Contains(t, w.Body.String(), "ChannelRoutingUpdateRequest", "schema-invalid ON requests must name their schema")
 					}
 					after, err := os.ReadFile(api.configPath())
 					require.NoError(t, err)

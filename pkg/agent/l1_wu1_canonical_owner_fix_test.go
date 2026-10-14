@@ -70,7 +70,7 @@ func TestL1WU1EngineExistingSession_ConflictingMetadataRefusesBeforeTurn(t *test
 				}
 				assert.Nil(t, owner, "no admitted/returned substitute owner")
 				assert.Empty(t, answer)
-				assert.Equal(t, before, l1WU1OwnerSnapshot(t, store), "no transcript/model-window/session metadata writes")
+				assert.Equal(t, before, l1WU1OwnerSnapshot(t, store), "no transcript/session metadata writes")
 				for _, id := range []string{"mia", "jim"} {
 					inst, ok := al.GetRegistry().GetAgent(id)
 					require.True(t, ok)
