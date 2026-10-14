@@ -493,8 +493,8 @@ func (t *ExecTool) guardProtectedOperands(ctx context.Context, command string) (
 		}
 		if t.operandIsProtected(p, turnPolicy, policyOK, home) {
 			resolved := p
-			if real, resolveErr := resolvePathAgainstExistingAncestor(p); resolveErr == nil {
-				resolved = real
+			if canonical, resolveErr := resolvePathAgainstExistingAncestor(p); resolveErr == nil {
+				resolved = canonical
 			}
 			// D2 retains the existing cross-agent/workspace protection. Do
 			// not relabel that refusal as a newly named internal-file denial;
