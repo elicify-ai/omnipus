@@ -43,7 +43,7 @@ func mintedSessionMetaWorkspace(
 		chatID,
 		"", // frameSessionID empty → mint a new session
 		"do it",
-		"",          // agentID
+		"mia",       // agentID — a new chat names its agent (FR-122)
 		nil,         // mediaRefs
 		"",          // modelName
 		workspaceID, // workspaceID under test

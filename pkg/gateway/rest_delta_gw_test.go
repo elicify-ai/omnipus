@@ -29,49 +29,47 @@ const (
 	deltaOtherWS = "01JDELTAGWOTHERWS000000002"
 )
 
-// deltaAdminChat creates an Admin chat in the default workspace and returns its id.
-func deltaAdminChat(t *testing.T, env *u1Env) string {
+// deltaOmnipusChat returns Omnipus's chat in the default workspace — its one
+// conversation, the main chat (omnipus-system-agent FR-005).
+func deltaOmnipusChat(t *testing.T, env *u1Env) string {
 	t.Helper()
-	code, body := sf1Do(env, http.MethodPost, "/api/v1/sessions",
-		`{"type":"chat","agent_id":"admin","workspace_id":"`+deltaDefWS+`"}`)
-	require.Equal(t, http.StatusCreated, code, body)
-	var s gen.Session
-	require.NoError(t, json.Unmarshal([]byte(body), &s))
-	return s.Id
+	main, err := env.store(t).GetOrCreateMainSession(deltaDefWS, "omnipus")
+	require.NoError(t, err)
+	return main.ID
 }
 
-// Finding 1: an existing Admin chat must not be re-bound to another workspace by
+// Finding 1: an existing Omnipus chat must not be re-bound to another workspace by
 // a later frame's workspace_id (navigation FR-038).
-func TestDeltaGW_AdminChatCannotBeRebound_ByAFrameOnAnExistingSession(t *testing.T) {
+func TestDeltaGW_OmnipusChatCannotBeRebound_ByAFrameOnAnExistingSession(t *testing.T) {
 	env := u1NewEnv(t, false)
-	env.seedWorkspace(t, deltaDefWS, true, "mia")
+	env.seedWorkspace(t, deltaDefWS, true, "mia", "omnipus")
 	env.seedWorkspace(t, deltaOtherWS, false, "mia")
-	sid := deltaAdminChat(t, env)
+	sid := deltaOmnipusChat(t, env)
 	h := newWSHandler(bus.NewMessageBus(), env.api.agentLoop, "")
 	t.Cleanup(h.Wait)
 
 	wc := makeTestConn()
-	h.handleChatMessage(context.Background(), "chat-delta", sid, "move me", "admin", nil, "", deltaOtherWS, false, wc)
+	h.handleChatMessage(context.Background(), "chat-delta", sid, "move me", "omnipus", nil, "", deltaOtherWS, false, wc)
 
 	frames := drainConnFrames(wc)
 	assert.Contains(t, frames, `"type":"error"`, frames)
 	assert.Contains(t, frames, "default workspace", frames)
 	meta, err := env.store(t).GetMeta(sid)
 	require.NoError(t, err)
-	assert.Equal(t, deltaDefWS, meta.WorkspaceID, "the Admin chat must stay in the default workspace")
+	assert.Equal(t, deltaDefWS, meta.WorkspaceID, "the Omnipus chat must stay in the default workspace")
 }
 
 // Positive control for finding 1: the same frame carrying the default workspace is
 // not refused and leaves the binding alone.
-func TestDeltaGW_AdminChatInTheDefaultWorkspace_IsNotRefusedOnAFrame(t *testing.T) {
+func TestDeltaGW_OmnipusChatInTheDefaultWorkspace_IsNotRefusedOnAFrame(t *testing.T) {
 	env := u1NewEnv(t, false)
-	env.seedWorkspace(t, deltaDefWS, true, "mia")
-	sid := deltaAdminChat(t, env)
+	env.seedWorkspace(t, deltaDefWS, true, "mia", "omnipus")
+	sid := deltaOmnipusChat(t, env)
 	h := newWSHandler(bus.NewMessageBus(), env.api.agentLoop, "")
 	t.Cleanup(h.Wait)
 
 	wc := makeTestConn()
-	h.handleChatMessage(context.Background(), "chat-delta", sid, "hello", "admin", nil, "", deltaDefWS, false, wc)
+	h.handleChatMessage(context.Background(), "chat-delta", sid, "hello", "omnipus", nil, "", deltaDefWS, false, wc)
 
 	frames := drainConnFrames(wc)
 	assert.NotContains(t, frames, "default workspace", frames)
@@ -90,13 +88,13 @@ func breakWorkspacesDir(t *testing.T, home string) {
 }
 
 // Finding 4: an unreadable workspaces directory is a server fault (500, fixed
-// text), not the 400 Admin refusal; and the control (no workspaces yet) stays 400.
-func TestDeltaGW_AdminRefusal_ServerFaultIsA500NotA400(t *testing.T) {
+// text), not the 400 Omnipus refusal; and the control (no workspaces yet) stays 400.
+func TestDeltaGW_OmnipusRefusal_ServerFaultIsA500NotA400(t *testing.T) {
 	env := u1NewEnv(t, false)
 	breakWorkspacesDir(t, env.home)
 
 	code, body := sf1Do(env, http.MethodPost, "/api/v1/sessions",
-		`{"type":"chat","agent_id":"admin","workspace_id":"`+deltaDefWS+`"}`)
+		`{"type":"chat","agent_id":"omnipus","workspace_id":"`+deltaDefWS+`"}`)
 
 	assert.Equal(t, http.StatusInternalServerError, code, body)
 	assert.Contains(t, body, "server storage or configuration failed")
@@ -104,14 +102,14 @@ func TestDeltaGW_AdminRefusal_ServerFaultIsA500NotA400(t *testing.T) {
 	r5AssertClean(t, body, env.home)
 }
 
-func TestDeltaGW_AdminRefusal_ServerFaultOverWebSocketIsTheFixedText(t *testing.T) {
+func TestDeltaGW_OmnipusRefusal_ServerFaultOverWebSocketIsTheFixedText(t *testing.T) {
 	env := u1NewEnv(t, false)
 	breakWorkspacesDir(t, env.home)
 	h := newWSHandler(bus.NewMessageBus(), env.api.agentLoop, "")
 	t.Cleanup(h.Wait)
 
 	wc := makeTestConn()
-	h.handleChatMessage(context.Background(), "chat-delta", "", "hello", "admin", nil, "", deltaDefWS, false, wc)
+	h.handleChatMessage(context.Background(), "chat-delta", "", "hello", "omnipus", nil, "", deltaDefWS, false, wc)
 
 	frames := drainConnFrames(wc)
 	assert.Contains(t, frames, "server storage or configuration failed", frames)
@@ -119,11 +117,13 @@ func TestDeltaGW_AdminRefusal_ServerFaultOverWebSocketIsTheFixedText(t *testing.
 	r5AssertClean(t, frames, env.home)
 }
 
-func TestDeltaGW_AdminRefusal_NoDefaultWorkspaceYetIsStillThe400Refusal(t *testing.T) {
+// FR-005: a request for another Omnipus chat is refused with Omnipus's main
+// (409) — never a new chat, and never a dead end.
+func TestDeltaGW_OmnipusRefusal_ExtraChatIsThe409WithTheMain(t *testing.T) {
 	env := u1NewEnv(t, false)
-	code, body := sf1Do(env, http.MethodPost, "/api/v1/sessions", `{"type":"chat","agent_id":"admin"}`)
-	assert.Equal(t, http.StatusBadRequest, code, body)
-	assert.Contains(t, body, "default workspace")
+	code, body := sf1Do(env, http.MethodPost, "/api/v1/sessions", `{"type":"chat","agent_id":"omnipus"}`)
+	assert.Equal(t, http.StatusConflict, code, body)
+	assert.Contains(t, body, "main chat")
 }
 
 // deltaCorruptSession writes a session directory whose meta.json cannot be parsed.

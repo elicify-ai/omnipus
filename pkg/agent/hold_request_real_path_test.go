@@ -96,7 +96,7 @@ func TestHeldRequest_RealWorkerDropsTheWake_ResumeThenDeliversTheTextToTheModel(
 		Sender:     bus.SenderInfo{CanonicalID: "webchat:tester"}, GatewayUserID: "webchat:tester", UserInitiated: true,
 		Metadata: map[string]string{"agent_id": addrReceiver, "workspace_id": addrWS},
 	}
-	if _, _, perr := al.processMessage(context.Background(), human); perr != nil {
+	if _, _, perr := al.processMessageAsPrimaryForTest(context.Background(), human); perr != nil {
 		t.Fatalf("resume turn: %v", perr)
 	}
 	select {

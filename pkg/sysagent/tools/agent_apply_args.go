@@ -19,7 +19,7 @@ var agentUpdateArgNames = map[string]struct{}{
 	"id": {}, "revision": {}, "name": {}, "description": {}, "soul": {},
 	"model": {}, "provider": {}, "fallback_models": {}, "color": {},
 	"max_tool_iterations": {}, "skills": {},
-	"memory_enabled": {}, "default": {}, "voice": {},
+	"memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
 }
 
@@ -45,7 +45,7 @@ var agentCreateArgNames = map[string]struct{}{
 	"name": {}, "description": {}, "soul": {}, "model": {}, "color": {},
 	"agent_type": {}, "cli": {}, "cli_path": {}, "provider": {}, "fallback_models": {},
 	"heartbeat": {}, "max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
-	"tool_policy_changes": {}, "memory_enabled": {}, "default": {}, "voice": {},
+	"tool_policy_changes": {}, "memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
 }
 
@@ -233,16 +233,6 @@ func applySharedConfigArgs(a *config.AgentConfig, args map[string]any) error {
 		}
 		a.MemoryEnabled = &b
 	}
-	if raw, present := args["default"]; present {
-		b, ok := raw.(bool)
-		if !ok {
-			return fieldErr("default", "default must be a boolean")
-		}
-		if b && a.IsWorker() {
-			return fieldErr("default", "a worker agent cannot be set as the default agent (workers are not chat targets)")
-		}
-		a.Default = b
-	}
 	if err := applyOptionalString(args, "voice", func(v string) error {
 		if a.IsWorker() && strings.TrimSpace(v) != "" {
 			return fieldErr("voice", "a worker cannot have a per-agent voice (workers are not chat personas)")
@@ -428,45 +418,6 @@ func decodePolicyPatch(raw any) (agentmutation.ToolPolicyChanges, error) {
 		p.Remove = vals
 	}
 	return p, nil
-}
-
-func requireDefaultWriter(deps *Deps) error {
-	if deps == nil || deps.MutateConfig == nil {
-		return fieldErr("default", "default singleton writer is not wired")
-	}
-	return nil
-}
-
-func defaultSingletonPartialResult(id, revision string, fields []string) *tools.ToolResult {
-	return tools.ErrorResult(successJSON(map[string]any{
-		"id":                 id,
-		"code":               "SAVE_FAILED",
-		"message":            "agent was saved but the default-agent singleton could not be updated. Read current state before retrying.",
-		"persistence_status": agentstore.PersistencePartial,
-		"activation_status":  agentstore.ActivationNotAttempted,
-		"revision":           revision,
-		"changed_fields":     fields,
-		"error_stage":        "defaults_singleton",
-	}))
-}
-
-func writeDefaultSingleton(deps *Deps, id string, want bool) error {
-	if err := requireDefaultWriter(deps); err != nil {
-		return err
-	}
-	return deps.WithConfig(func(cfg *config.Config) error {
-		cur := cfg.Agents.Defaults.DefaultAgentID
-		if want {
-			if cur != id {
-				cfg.Agents.Defaults.DefaultAgentID = id
-			}
-			return nil
-		}
-		if cur == id {
-			cfg.Agents.Defaults.DefaultAgentID = ""
-		}
-		return nil
-	})
 }
 
 // publishAgentActivation publishes id into the live, in-memory config/registry

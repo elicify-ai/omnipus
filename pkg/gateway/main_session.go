@@ -139,6 +139,52 @@ func mainSessionGate(home string, cfg *config.Config, id string) (isMain, eligib
 // chat with Omnipus outside the default workspace.
 const omnipusStandaloneRefusal = "Omnipus's chats live in the default workspace; open Omnipus's main chat there."
 
+// agentMustBeNamed is the visible refusal for a new chat (REST create or a
+// WebSocket frame without session_id) that names no agent
+// (omnipus-system-agent FR-122, §6.4): there is no default agent.
+const agentMustBeNamed = "an agent must be named"
+
+// omnipusSecondConversationRefusal enforces FR-005: Omnipus has exactly one
+// conversation, its main chat, so any request to mint another chat with it is
+// refused with that main's id (never a dead end). The id is the existing main
+// in store when there is one, else the main the default workspace will hold.
+// Returns ("", "", nil) for any other agent, and when Omnipus has no main and
+// there is no default workspace yet (omnipusChatRefusal answers that case). A
+// failure to read the sessions or the workspaces is returned as the error.
+func omnipusSecondConversationRefusal(store *session.UnifiedStore, home, agentID string) (string, string, error) {
+	if agentID != string(coreagent.IDOmnipus) {
+		return "", "", nil
+	}
+	mainID := ""
+	if store != nil {
+		mains, err := store.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
+			return m.Type == session.SessionTypeMain && m.AgentID == agentID
+		})
+		if err != nil {
+			return "", "", err
+		}
+		if len(mains) > 0 {
+			mainID = mains[0].ID
+		}
+	}
+	if mainID == "" {
+		def, err := workspace.ResolveDefaultID(home)
+		if err != nil {
+			if errors.Is(err, workspace.ErrNoDefault) {
+				return "", "", nil
+			}
+			return "", "", err
+		}
+		if def == "" {
+			return "", "", nil
+		}
+		if mainID, err = session.MainSessionID(def, agentID); err != nil {
+			return "", "", err
+		}
+	}
+	return fmt.Sprintf("Omnipus has one conversation; continue it in its main chat (session %s)", mainID), mainID, nil
+}
+
 // omnipusChatRefusal enforces "one main per agent per workspace" for the
 // system agent at every door that mints or re-binds a chat session (POST
 // /sessions, the first WebSocket message, and a later frame naming another

@@ -94,7 +94,7 @@ func TestServerPongDoesNotCorruptInFlightStream(t *testing.T) {
 	// error or done frame — we do not need streaming. The test's purpose is
 	// to verify that a ping sent at any point during the exchange does not
 	// disrupt the frame sequence.
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "ping interleave test"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "ping interleave test", AgentID: "mia"}
 	msgData, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness

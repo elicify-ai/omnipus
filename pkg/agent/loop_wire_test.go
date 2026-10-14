@@ -38,7 +38,7 @@ func TestRegisterSharedTools_HotReload_ShutsDownReplacedBrowserManager(t *testin
 	provider := &mockProvider{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 	id := defaultAgent.ID
 

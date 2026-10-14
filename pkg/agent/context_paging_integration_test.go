@@ -108,7 +108,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 
 		// Run windowTrim. Because the window alone is tiny and under budget, but
 		// window+span is over budget, windowTrim should drop the span and return ok=false.
-		_, ok := al.windowTrim(al.GetRegistry().GetDefaultAgent(), "", sk)
+		_, ok := al.windowTrim(al.GetRegistry().primaryChatAgentForTest(), "", sk)
 
 		// The span must be dropped.
 		if al.activeRecallSpan(sk) != nil {
@@ -128,7 +128,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 		if ok {
 			// If ok=true, the window was trimmed — that means the span drop alone was
 			// NOT sufficient. But we sized the window to be tiny, so this would be a bug.
-			afterWindow := al.GetRegistry().GetDefaultAgent().Sessions.GetHistory(sk)
+			afterWindow := al.GetRegistry().primaryChatAgentForTest().Sessions.GetHistory(sk)
 			if len(afterWindow) < len(smallWindow) {
 				t.Errorf(
 					"SC-016: real Turns were evicted even though span-drop alone should suffice: before=%d after=%d",
@@ -165,7 +165,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 
 		pressureBefore := RecallSpanDropCount("pressure")
 
-		_, ok := al2.windowTrim(al2.GetRegistry().GetDefaultAgent(), "", sk2)
+		_, ok := al2.windowTrim(al2.GetRegistry().primaryChatAgentForTest(), "", sk2)
 
 		// The span must be dropped.
 		if al2.activeRecallSpan(sk2) != nil {
@@ -182,7 +182,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 			t.Error("T29b: windowTrim must return ok=true when real Turns are evicted")
 		}
 
-		afterWindow := al2.GetRegistry().GetDefaultAgent().Sessions.GetHistory(sk2)
+		afterWindow := al2.GetRegistry().primaryChatAgentForTest().Sessions.GetHistory(sk2)
 		if len(afterWindow) >= len(bigHistory) {
 			t.Errorf("T29b: real Turns must be evicted when span drop is insufficient: before=%d after=%d",
 				len(bigHistory), len(afterWindow))

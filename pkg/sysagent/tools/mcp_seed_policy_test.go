@@ -14,31 +14,32 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// ADR-090 section 5 gives Admin connector setup while every other seeded role
-// remains denied. The global ceiling permits that explicit role assignment;
-// the compositor must still enforce an operator's global Deny for Admin.
-func TestSeededPolicy_AddMCPServerAdminOnly(t *testing.T) {
+// Connector setup belongs to Omnipus alone (omnipus-system-agent §6.5:
+// allow-to-ceiling for Omnipus, deny for every other seeded role; FR-020
+// ships the ceiling at "ask"). The compositor must still enforce an
+// operator's global Deny for Omnipus.
+func TestSeededPolicy_AddMCPServerOmnipusOnly(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = nil
 	coreagent.SeedConfig(cfg)
 	policies := cfg.Sandbox.ToolPolicies
-	if got := policies["add_mcp_server"]; got != "allow" {
-		t.Fatalf("ADR-090 Admin setup requires global allow ceiling, got %q", got)
+	if got := policies["add_mcp_server"]; got != "ask" {
+		t.Fatalf("FR-020: add_mcp_server ships an ask ceiling, got %q", got)
 	}
 	for _, agent := range cfg.Agents.List {
 		policy, agentType := tools.BuildFallbackPolicyCfg(cfg, agent.ID)
 		want := "deny"
-		if agent.ID == "admin" {
-			want = "allow"
+		if agent.ID == string(coreagent.IDOmnipus) {
+			want = "ask" // rides the ceiling (§6.5 allow-to-ceiling)
 		}
 		if got := tools.EffectiveToolPolicy(policy, tools.ScopeCore, agentType, "add_mcp_server"); got != want {
 			t.Errorf("%s add_mcp_server = %q, want %q", agent.ID, got, want)
 		}
 	}
 	cfg.Sandbox.ToolPolicies["add_mcp_server"] = "deny"
-	policy, agentType := tools.BuildFallbackPolicyCfg(cfg, "admin")
+	policy, agentType := tools.BuildFallbackPolicyCfg(cfg, string(coreagent.IDOmnipus))
 	if got := tools.EffectiveToolPolicy(policy, tools.ScopeCore, agentType, "add_mcp_server"); got != "deny" {
-		t.Errorf("operator global denial must block Admin, got %q", got)
+		t.Errorf("operator global denial must block Omnipus, got %q", got)
 	}
 
 	// remove_mcp_server stays "ask", deliberately: it narrows capability rather

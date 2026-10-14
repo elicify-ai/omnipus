@@ -64,26 +64,26 @@ func findAgent(cfg *config.Config, id string) *config.AgentConfig {
 }
 
 // ==================================================================================
-// Scenario 2: AvaCreatesAgentPenny
-// BDD: Given Ava agent is active, When system.agent.create is called with name="Penny",
+// Scenario 2: OmnipusCreatesAgentPenny
+// BDD: Given Omnipus agent is active, When system.agent.create is called with name="Penny",
 //
 //	Then a new AgentConfig appears in cfg.Agents.List, Locked=false, workspace created.
 //
 // Traces to: temporal-puzzling-melody.md §Layer 2, scenario 2
 // ==================================================================================
-func TestScenario2AvaCreatesAgentPenny(t *testing.T) {
+func TestScenario2OmnipusCreatesAgentPenny(t *testing.T) {
 	// Traces to: temporal-puzzling-melody.md §Layer 2, scenario 2
-	// This test works at the registry level: seed Ava, verify SeedConfig produces
+	// This test works at the registry level: seed Omnipus, verify SeedConfig produces
 	// locked core agents, then assert that a custom "penny" agent added manually
 	// is NOT locked (Locked=false by default for custom agents).
 	cfg, tmpDir := newScenarioCfg(t)
 
-	// Verify Ava is present and locked (seeded by SeedConfig).
-	ava := findAgent(cfg, "ava")
-	require.NotNil(t, ava, "Ava must be seeded into Agents.List by coreagent.SeedConfig")
-	assert.True(t, ava.Locked, "Ava must be locked (core agent identity protection)")
+	// Verify Omnipus is present and locked (seeded by SeedConfig).
+	omnipus := findAgent(cfg, "omnipus")
+	require.NotNil(t, omnipus, "Omnipus must be seeded into Agents.List by coreagent.SeedConfig")
+	assert.True(t, omnipus.Locked, "Omnipus must be locked (core agent identity protection)")
 
-	// Simulate Ava creating a new custom agent "penny" — this is what system.agent.create
+	// Simulate Omnipus creating a new custom agent "penny" — this is what system.agent.create
 	// does at the config layer.
 	penny := config.AgentConfig{
 		ID:     "penny",

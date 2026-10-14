@@ -72,7 +72,6 @@ func TestSeedWorker(t *testing.T) {
 	assert.True(t, worker.IsWorker(), "IsWorker() must be true for the worker")
 	assert.False(t, worker.IsChatTarget(), "a worker must NOT be a chat target")
 	assert.True(t, worker.Locked, "worker must be Locked like the core agents")
-	assert.False(t, worker.Default, "worker must never be the default agent")
 
 	require.NotNil(t, worker.Subagents, "worker must carry a Subagents config holding the executor")
 	require.NotNil(t, worker.Subagents.Executor, "worker must carry an executor (Spec-4 field)")

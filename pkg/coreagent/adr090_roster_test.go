@@ -63,21 +63,6 @@ func TestADR090_ExactRosterAndPolicyInventory(t *testing.T) {
 			t.Errorf("roster[%d] %q must use the native runtime", i, got.ID)
 		}
 	}
-	if cfg.Agents.Defaults.DefaultAgentID != "mia" {
-		t.Errorf("fresh default agent = %q, want mia", cfg.Agents.Defaults.DefaultAgentID)
-	}
-	defaultFlags := 0
-	for _, got := range cfg.Agents.List {
-		if got.Default {
-			defaultFlags++
-			if got.ID != "mia" {
-				t.Errorf("legacy default flag set on %q, want only mia", got.ID)
-			}
-		}
-	}
-	if defaultFlags != 1 {
-		t.Errorf("fresh legacy default flags = %d, want exactly 1", defaultFlags)
-	}
 
 	for _, retired := range []string{"ray", "explorer", "max", "ava", "admin"} {
 		if ByID(CoreAgentID(retired)) != nil {

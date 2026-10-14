@@ -73,7 +73,9 @@ import { ApiError } from '@/lib/api-error'
 
 const editable = (...names: string[]) => names.map((name) => ({ name, editable: true }))
 const COMMON_EDITABLE_FIELDS = editable(
-  'name', 'description', 'color', 'icon', 'figure', 'role', 'default', 'model', 'provider',
+  // No 'default' — the field is off the wire (omnipus-system-agent K11/K12,
+  // bundle B1) and the server no longer describes it as editable.
+  'name', 'description', 'color', 'icon', 'figure', 'role', 'model', 'provider',
   'fallback_models', 'model_params', 'soul', 'memory_enabled', 'voice',
   'max_tool_iterations', 'context_window_override', 'skills',
   'tool_policy_changes', 'executor',
@@ -875,9 +877,8 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     // No heartbeat affordances for workers
     expect(screen.queryByText(/Enable heartbeat/i)).toBeNull()
     expect(screen.queryByText(/HEARTBEAT\.md/i)).toBeNull()
-    // No "Set as default" / default-★ control in the profile for workers
-    // (the default-★ lives on AgentCard; the profile must never surface it
-    // for workers — they are never the default per the locked concept).
+    // No "Set as default" / default-★ control anywhere — the default-agent
+    // feature is removed (omnipus-system-agent K11/K12, bundle B1).
     expect(screen.queryByRole('button', { name: /set as default/i })).toBeNull()
   })
 
@@ -3118,23 +3119,10 @@ describe('AgentProfile — Model input kind by agent kind (external = free text)
 // on `!isWorkerAgent` only — NOT `!isLocked` (operator decision 2026-07-03:
 // locked core agents keep it editable/visible). No prior test asserted
 // either fact for a locked core agent, nor its absence for a worker.
-describe('AgentProfile — Default-agent toggle visibility (field matrix, W2c)', () => {
-  it('shows the Default-agent toggle row for a locked core agent', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
-    renderProfile('mia')
-    await screen.findByText('Mia')
-    expect((await screen.findAllByTestId('default-toggle-row')).length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('hides the Default-agent toggle row for a worker (Subagent)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
-    renderProfile('web-researcher')
-    await screen.findByText('Web Researcher')
-    await waitFor(() => {
-      expect(screen.queryAllByTestId('default-toggle-row').length).toBe(0)
-    })
-  })
-})
+// The "Default-agent toggle visibility (field matrix, W2c)" describe was
+// DELETED with the default-agent feature itself (omnipus-system-agent K11/K12,
+// bundle B1): Agent.default is off the wire, the Identity strip no longer
+// renders a default-toggle row for any agent, and PUT refuses a `default` key.
 
 // Unlocked-side guard: custom Main identity choices stay editable rather
 // than accidentally inheriting the built-in locks.

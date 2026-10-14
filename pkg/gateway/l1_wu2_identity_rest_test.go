@@ -227,8 +227,8 @@ func TestL1WU2RESTMembership_RejectsOmnipusOutsideDefaultAndRemovalFromDefault(t
 			api.HandleWorkspaces(w, r)
 			if testCase == "ordinary_remove_positive_control" {
 				require.Equal(t, http.StatusOK, w.Code, "ordinary member removal remains reachable: %s", w.Body.String())
-				updated, err := readWorkspaceFile(api.homePath, ws.ID)
-				require.NoError(t, err)
+				updated, readErr := readWorkspaceFile(api.homePath, ws.ID)
+				require.NoError(t, readErr)
 				assert.Empty(t, updated.CoreTeam)
 				return
 			}

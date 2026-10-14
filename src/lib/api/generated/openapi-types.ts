@@ -645,7 +645,7 @@ export interface paths {
         };
         /**
          * Health check
-         * @description Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP 503 with status "degraded" plus a reason on a gateway-fatal condition (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
+         * @description Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP 503 with status "degraded" plus a reason on a gateway-fatal condition (agent loop dead, config reload failed). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
          */
         get: operations["getHealth"];
         put?: never;
@@ -1234,12 +1234,12 @@ export interface paths {
         };
         /**
          * Get channel routing configuration
-         * @description Returns the routing configuration for the specified channel, including which agent handles its inbound messages.
+         * @description Returns the routing configuration for the specified channel: its workspace binding and main agent, or — for an instance that is not yet bound — `bound: false` with empty ids (FR-128). Never an invented or legacy destination.
          */
         get: operations["getChannelRouting"];
         /**
          * Set channel routing configuration
-         * @description Sets the routing configuration for the specified channel. The default_agent_id field controls which agent handles inbound messages arriving on this channel. Omit it or leave it empty to fall back to the global default agent.
+         * @description Binds the channel instance to a workspace and names its main agent. Both workspace_id and default_agent_id are required and nonblank (omnipus-system-agent FR-127, K14); there is no unbound mode and no global default agent. A missing or blank value is refused with 400 "bind this channel to an agent in a workspace" and changes nothing. Saving a valid binding clears the channel's routing degradation (FR-129).
          */
         put: operations["setChannelRouting"];
         post?: never;
@@ -4833,10 +4833,10 @@ export interface components {
         /** @description Body for POST /sessions. Creates a new session for an agent. */
         SessionCreateRequest: {
             /**
-             * @description Agent ID that will own this session. Defaults to "main" when omitted. Must reference an existing agent (400 if not found).
+             * @description Agent ID that will own this session. Required and nonblank — there is no default agent (omnipus-system-agent FR-122, K16); a missing or blank value is refused with 400 "an agent must be named". Must reference an existing chat-target agent (400 if not found). Omnipus has exactly one conversation, so naming Omnipus is refused with 409 carrying its main session id (FR-005).
              * @example jim
              */
-            agent_id?: string;
+            agent_id: string;
             /**
              * @description Session type. Defaults to "chat" when omitted. "main" is absent.
              * @example chat
@@ -8689,11 +8689,6 @@ export interface components {
             rate_limits?: components["schemas"]["AgentRateLimits"];
             stats?: components["schemas"]["AgentStats"];
             /**
-             * @description Whether this agent is the current global default that handles inbound messages with no more-specific routing rule. This is a COMPUTED value — the backend derives it by comparing the agent's id against the single default-agent setting each time it builds a response; it is never stored per-agent. At most one agent is default at a time. Main only — workers never default.
-             * @example false
-             */
-            default?: boolean;
-            /**
              * @description List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
              * @example [
              *       "web-research"
@@ -9205,11 +9200,6 @@ export interface components {
             };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
-             * @description Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
-             * @example false
-             */
-            default?: boolean;
-            /**
              * @description Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills. Rejected 400 on subagent_3p agents (CLI doesn't see Omnipus skills).
              * @example [
              *       "web-research"
@@ -9618,15 +9608,21 @@ export interface components {
              */
             native_available?: boolean;
             /**
-             * @description True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential). The channel is NOT serving despite enabled=true.
+             * @description True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential) — the channel is NOT serving despite enabled=true — or when it dropped an inbound message it could not route (omnipus-system-agent FR-121, K15: unbound instance, missing or ineligible bound agent). A routing degradation is cleared when a valid binding is saved (FR-129).
              * @example false
              */
             degraded?: boolean;
             /**
-             * @description Human-readable reason the channel is degraded. Present only when degraded is true.
+             * @description Human-readable reason the channel is degraded. Present only when degraded is true. For a routing drop it is the drop reason, e.g. "bind this channel to an agent in a workspace".
              * @example whatsapp native is not compiled into this build
              */
             degraded_reason?: string;
+            /**
+             * Format: date-time
+             * @description When this channel last dropped an inbound message it could not route (K15). Present only while the routing degradation is active.
+             * @example 2026-10-14T09:30:00Z
+             */
+            last_dropped_at?: string;
         };
         /**
          * RetentionConfig
@@ -10177,7 +10173,7 @@ export interface components {
         };
         /**
          * HealthResponse
-         * @description Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
+         * @description Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
          */
         HealthResponse: {
             /**
@@ -12618,19 +12614,40 @@ export interface components {
         };
         /**
          * ChannelRouting
-         * @description Routing configuration for a single communication channel. Controls which agent handles inbound messages arriving on this channel.
+         * @description Routing configuration for a single communication channel instance, as read back by GET and returned by PUT /channels/{id}/routing. Every channel is bound to a workspace and names that binding's main agent (omnipus-system-agent FR-127, K14); there is no global default agent and no unbound routing mode. An instance that has no binding yet is reported truthfully (FR-128): `bound` is false and both ids are empty strings — never an invented or legacy destination.
          */
         ChannelRouting: {
             /**
-             * @description ID of the agent that handles this channel's inbound messages. Omitted or empty means fall back to the global default agent.
-             * @example 550e8400-e29b-41d4-a716-446655440000
+             * @description ID of the bound main agent that answers this channel's inbound messages. Empty string when `bound` is false. (Landing 1 keeps the historical key name; it no longer means any global-default fallback.)
+             * @example mia
              */
-            default_agent_id?: string;
+            default_agent_id: string;
             /**
-             * @description Workspace this channel instance is bound to. Required (non-empty) for a bound instance; empty/omitted = unbound (legacy default routing).
+             * @description Workspace this channel instance is bound to. Empty string when `bound` is false.
              * @example my-workspace
              */
-            workspace_id?: string;
+            workspace_id: string;
+            /**
+             * @description True when the instance is bound to a workspace and names a main agent. An unbound instance drops every inbound message loudly until bound.
+             * @example true
+             */
+            bound: boolean;
+        };
+        /**
+         * ChannelRoutingUpdateRequest
+         * @description Body for PUT /channels/{id}/routing. Binds the channel instance to a workspace and names the main agent that answers it. Both fields are required and nonblank (omnipus-system-agent FR-127, K14); the legacy unbound mode is removed, so a request missing either is refused with 400 "bind this channel to an agent in a workspace" and changes nothing. Saving a valid binding clears the instance's routing `degraded` status (FR-129).
+         */
+        ChannelRoutingUpdateRequest: {
+            /**
+             * @description Workspace to bind the channel instance to. Must exist and be active.
+             * @example my-workspace
+             */
+            workspace_id: string;
+            /**
+             * @description The bound main agent: a chat-capable member of the workspace's team (never a worker or system agent). Landing 1 keeps the historical key name.
+             * @example mia
+             */
+            default_agent_id: string;
         };
         /**
          * ChannelCreateRequest
@@ -21132,7 +21149,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ChannelRouting"];
+                "application/json": components["schemas"]["ChannelRoutingUpdateRequest"];
             };
         };
         responses: {
@@ -27629,6 +27646,7 @@ export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
+export type ChannelRoutingUpdateRequest = components["schemas"]["ChannelRoutingUpdateRequest"];
 export type ChannelCreateRequest = components["schemas"]["ChannelCreateRequest"];
 export type ChannelCreateResponse = components["schemas"]["ChannelCreateResponse"];
 export type Mailbox = components["schemas"]["Mailbox"];

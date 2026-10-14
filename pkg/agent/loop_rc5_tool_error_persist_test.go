@@ -79,7 +79,7 @@ func TestRunTurn_FailedToolCall_PersistsErrorReasonInTranscript(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(func() { al.Close() })
 
-	mia := registerAgent(t, al, home, "mia", provider, true)
+	mia := registerAgent(t, al, home, "mia", provider)
 
 	stub := &failingStubTool{}
 	al.RegisterTool(stub)

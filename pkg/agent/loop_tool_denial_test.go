@@ -214,21 +214,19 @@ func TestRunTurn_TimeoutDenial_PersistedPayloadNeverClaimsUserDenied(t *testing.
 	approver := &countingDenyApprover{reason: "timeout"}
 	al.SetToolApprover(approver)
 
-	finalContent, err := al.ProcessDirect(context.Background(), "please run_task for me", "test-session-timeout-honest")
+	finalContent, err := al.processDirectPrimaryForTest(context.Background(), "please run_task for me", "test-session-timeout-honest")
 	require.NoError(t, err, "a single denial, far under the aggregate budget of 10, must not abort the turn")
 	assert.Equal(t, "understood — I will not retry that tool", finalContent,
 		"turn must reach the second scripted response, proving it continued past the denial")
 	assert.False(t, stub.wasCalled.Load(), "the tool must never execute — it was denied, not approved")
 	assert.Equal(t, 1, approver.callCount())
 
-	// Locate the persisted role="tool" permission_denied message. Same
-	// session-key derivation as scenario_runturn_test.go's precedent:
-	// ProcessDirect's channel="cli"/chatID="direct" resolves to DMScopeMain,
-	// producing session key "agent:mia:main" via BuildAgentMainSessionKey
-	// ("mia" is the only agent baseLoopDenialTestConfig registers).
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	// Locate the persisted role="tool" permission_denied message under the
+	// direct turn's explicit-agent route key ("mia" is the only agent
+	// baseLoopDenialTestConfig registers).
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent)
-	const resolvedSessionKey = "agent:mia:main"
+	resolvedSessionKey := directTurnHistoryKeyForTest("mia", "cli", "direct")
 	history := defaultAgent.Sessions.GetHistory(resolvedSessionKey)
 	require.NotEmpty(t, history)
 
@@ -321,7 +319,7 @@ func TestRunTurn_HeterogeneousDenialStorm_AbortsAtAggregateTenAcrossThreeTools(t
 	sub := al.SubscribeEvents(32)
 	defer al.UnsubscribeEvents(sub.ID)
 
-	finalContent, err := al.ProcessDirect(context.Background(), "cycle through three denied tools", "test-session-heterogeneous-storm")
+	finalContent, err := al.processDirectPrimaryForTest(context.Background(), "cycle through three denied tools", "test-session-heterogeneous-storm")
 
 	require.Error(t, err, "the turn must abort once the aggregate budget is exhausted, even across distinct tools")
 	assert.Empty(t, finalContent)
@@ -420,7 +418,7 @@ func TestRunTurn_SaturatedDenial_NeverQuarantines_ApproverConsultedEveryTime(t *
 	sub := al.SubscribeEvents(32)
 	defer al.UnsubscribeEvents(sub.ID)
 
-	finalContent, err := al.ProcessDirect(context.Background(), "please fetch three times", "test-session-saturated-no-quarantine")
+	finalContent, err := al.processDirectPrimaryForTest(context.Background(), "please fetch three times", "test-session-saturated-no-quarantine")
 
 	require.NoError(t, err, "3 saturated denials, all retryable and far under budget=10, must not abort the turn")
 	assert.Equal(t, "queue drained, moving on", finalContent)
@@ -544,7 +542,7 @@ func TestRunTurn_PolicyDeniedExcludedFromQuarantine_MidBatchAllowFlipExecutes(t 
 	sub := al.SubscribeEvents(32)
 	defer al.UnsubscribeEvents(sub.ID)
 
-	finalContent, err := al.ProcessDirect(
+	finalContent, err := al.processDirectPrimaryForTest(
 		context.Background(), "run bash twice", "test-session-policy-denied-no-quarantine")
 	require.NoError(t, err, "one policy_denied denial, far under budget=10, must not abort the turn")
 	assert.Equal(t, "both handled", finalContent,
@@ -644,7 +642,7 @@ func TestRunTurn_HookDenyTool_BoundedByLedger_QuarantinesAfterFirstDenial(t *tes
 	sub := al.SubscribeEvents(32)
 	defer al.UnsubscribeEvents(sub.ID)
 
-	finalContent, err := al.ProcessDirect(
+	finalContent, err := al.processDirectPrimaryForTest(
 		context.Background(), "please run the tool three times", "test-session-hookdeny-quarantine")
 	require.NoError(t, err, "3 hook denials, far under the aggregate budget of 10, must not abort the turn")
 	assert.Equal(t, "understood — will not retry", finalContent)
@@ -710,7 +708,7 @@ func TestRunTurn_ApprovalHookDeny_BoundedByLedger_QuarantinesAfterFirstDenial(t 
 	hook := &alwaysDenyApprovalHook{reason: "blocked"}
 	require.NoError(t, al.MountHook(NamedHook("always-deny-approval", hook)))
 
-	finalContent, err := al.ProcessDirect(
+	finalContent, err := al.processDirectPrimaryForTest(
 		context.Background(), "please run the tool three times", "test-session-approvalhookdeny-quarantine")
 	require.NoError(t, err, "3 approval-hook denials, far under the aggregate budget of 10, must not abort the turn")
 	assert.Equal(t, "understood — will not retry", finalContent)
@@ -748,7 +746,7 @@ func TestRunTurn_HeadlessAutoDeny_UsesDedicatedTableRowNotUnknownFallback(t *tes
 	provider := testutil.NewScenario().
 		WithToolCall(toolName, `{}`).
 		WithText("understood, moving on")
-	mia := registerAgent(t, al, home, "mia", provider, false)
+	mia := registerAgent(t, al, home, "mia", provider)
 
 	stub := &dangerousStubTool{}
 	mia.Tools.Register(stub)
@@ -837,7 +835,7 @@ func TestRunTurn_QuarantineReplay_PersistsTranscriptEntryPerCall(t *testing.T) {
 	provider := testutil.NewScenario().
 		WithToolCalls(distinctToolCalls(toolName, 3)).
 		WithText("headless run finished")
-	mia := registerAgent(t, al, home, "mia", provider, false)
+	mia := registerAgent(t, al, home, "mia", provider)
 
 	stub := &dangerousStubTool{}
 	mia.Tools.Register(stub)
@@ -1082,7 +1080,7 @@ func TestRunTurn_ToolDenialBudgetAbort_AuditsNewEventNotOldOne(t *testing.T) {
 	approver := &countingDenyApprover{reason: "timeout"}
 	al.SetToolApprover(approver)
 
-	finalContent, err := al.ProcessDirect(context.Background(), "run budget_probe_tool twelve times", "test-session-fr084-gone")
+	finalContent, err := al.processDirectPrimaryForTest(context.Background(), "run budget_probe_tool twelve times", "test-session-fr084-gone")
 	require.Error(t, err)
 	assert.Empty(t, finalContent)
 	assert.Contains(t, err.Error(), "tool_denial_budget")

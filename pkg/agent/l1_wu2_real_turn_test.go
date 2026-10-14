@@ -116,7 +116,7 @@ func TestL1WU2GodModeNote_OneNewLineReachesRealTurnAndDisappearsWhenOff(t *testi
 		}
 		return out
 	}
-	counts := []map[string]int{}
+	counts := make([]map[string]int, 0, 3)
 	for index, enabled := range []bool{false, true, false} {
 		cfg.Sandbox.GodMode = enabled
 		before := len(provider.AllRequests())

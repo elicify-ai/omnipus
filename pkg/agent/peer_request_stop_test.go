@@ -47,7 +47,7 @@ func TestPeerRequest_AfterLandedStop_DoesNotReviveOrRun(t *testing.T) {
 	h.seedState(t, session.LifecycleStopped) // ... a person's Stop lands ...
 	before := h.journal(t)
 
-	reply, _, perr := h.al.processMessage(context.Background(), req) // ... then it is consumed
+	reply, _, perr := h.al.processMessageAsPrimaryForTest(context.Background(), req) // ... then it is consumed
 
 	require.NoError(t, perr, "a stop is not a failure: the retained request reports no error")
 	assert.Empty(t, reply)
@@ -70,7 +70,7 @@ func TestPeerRequest_ControlsLiveChatStillGetsItAndHumanStillRevives(t *testing.
 	h := newD2bRoot(t)
 	h.seedState(t, session.LifecycleCompleted) // an idle, unstopped chat
 	req := peerRequestEnvelope(t, h)
-	_, _, err := h.al.processMessage(context.Background(), req)
+	_, _, err := h.al.processMessageAsPrimaryForTest(context.Background(), req)
 	require.NoError(t, err)
 	assert.Len(t, h.provider.calls(), 1, "an unstopped receiver must still run on a peer request")
 

@@ -1138,12 +1138,20 @@ export async function fetchSessionDetail(sessionId: string): Promise<SessionDeta
  * carries its workspace from birth instead of from its first message.
  */
 export async function createSession(agentId: string, workspaceId?: string): Promise<Session> {
+  // agent_id is REQUIRED and nonblank on the wire (omnipus-system-agent K16):
+  // there is no default agent, and the server refuses a missing or blank one
+  // with 400 "an agent must be named". Fail fast with the same honesty instead
+  // of spending the round-trip.
+  const trimmedAgentId = typeof agentId === 'string' ? agentId.trim() : ''
+  if (trimmedAgentId === '') {
+    throw new Error('an agent must be named')
+  }
   const trimmedWorkspaceId = typeof workspaceId === 'string' ? workspaceId.trim() : ''
   // Wire returns the wire Session shape (nested stats); transform to SPA Session.
   const raw = await request<RawSession>('/sessions', {
     method: 'POST',
     body: JSON.stringify({
-      agent_id: agentId,
+      agent_id: trimmedAgentId,
       // Omitted entirely when absent: the contract caps it at 128 chars and
       // rejects a workspace that does not exist, and "" is not a workspace.
       ...(trimmedWorkspaceId.length > 0 && trimmedWorkspaceId.length <= 128

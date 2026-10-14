@@ -25,7 +25,7 @@ func g2StoppedOrdinaryRoot(t *testing.T, al *AgentLoop, id string) *session.Life
 	defer func() { inst.Provider = original }()
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := al.processMessage(context.Background(), adr093HumanMessage("Work that the owner will stop.", id))
+		_, _, err := al.processMessageAsPrimaryForTest(context.Background(), adr093HumanMessage("Work that the owner will stop.", id))
 		done <- err
 	}()
 	adr093WaitForEntered(t, provider, 30*time.Second)

@@ -350,10 +350,10 @@ func (a AgentConfig) IsSystem() bool {
 }
 
 // IsChatTarget reports whether this agent may receive inbound channel messages
-// and be resolved as the default/routing agent. Every agent kind is a chat
-// target EXCEPT a worker and a System Agent. Routing (resolveDefaultAgentID,
-// first-enabled fallback) and the default-agent setter/repair use this to
-// exclude workers; System Agents are excluded for the same reason (ADR-049 D3):
+// and chats (a channel's main agent, a chat's named agent). Every agent kind
+// is a chat target EXCEPT a worker and a System Agent. Routing and the
+// channel-binding writer use this to exclude workers; System Agents are
+// excluded for the same reason (ADR-049 D3):
 // the Judge is an out-of-turn internal-LLM agent, never a live persona a user
 // can address.
 func (a AgentConfig) IsChatTarget() bool {

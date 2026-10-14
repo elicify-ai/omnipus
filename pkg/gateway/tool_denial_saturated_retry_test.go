@@ -194,7 +194,7 @@ func TestSaturatedDenial_PositiveLowerBound_RetrySucceedsAfterQueueDrains(t *tes
 	var runErr error
 	go func() {
 		defer close(done)
-		finalContent, runErr = al.ProcessDirect(context.Background(), "please fetch the url", "sess-w6-saturated-retry")
+		finalContent, runErr = al.ProcessDirectAs(context.Background(), agentID, "please fetch the url", "sess-w6-saturated-retry")
 	}()
 
 	// Wait until the SECOND real RequestApproval call has started (and is

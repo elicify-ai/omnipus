@@ -174,7 +174,7 @@ func newRBLoopTurn(
 
 func (lt *rbLoopTurn) run(t *testing.T, key string) {
 	t.Helper()
-	_, err := lt.al.ProcessDirect(context.Background(), "read, list and search", key)
+	_, err := lt.al.processDirectPrimaryForTest(context.Background(), "read, list and search", key)
 	require.NoError(t, err)
 }
 

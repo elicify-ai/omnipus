@@ -46,7 +46,7 @@ func TestResolveSlash_Matrix(t *testing.T) {
 		writeSkillFile(t, cfg.Agents.Defaults.Home, name)
 	}
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -154,7 +154,7 @@ func TestResolveSlash_SkillCannotShadowBuiltin(t *testing.T) {
 	// Install a skill whose slug is "status" — same as the /status built-in.
 	writeSkillFile(t, cfg.Agents.Defaults.Home, "status")
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -183,7 +183,7 @@ func TestResolveSlash_Matrix_A2(t *testing.T) {
 
 	writeSkillFile(t, cfg.Agents.Defaults.Home, "web-research")
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	// ADR-072 D5: absence of a grant list denies every skill now, so this
 	// test must explicitly grant "web-research" — it used to resolve under
 	// the old "no allowlist = unrestricted" default.
@@ -248,7 +248,7 @@ func TestResolveSlash_A12_NoSkillsInstalled(t *testing.T) {
 	provider := &mockProvider{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}

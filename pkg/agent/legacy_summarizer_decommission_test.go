@@ -228,7 +228,7 @@ func TestDecommission_LongConversationMakesNoExtraModelCalls(t *testing.T) {
 	const sessionKey = "agent:mia:chat:decommission-no-extra-calls"
 
 	for i := 0; i < turns; i++ {
-		_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+		_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 			Channel:    "discord",
 			InstanceID: "discord.test",
 			ChatID:     "chat-decommission",
@@ -242,7 +242,7 @@ func TestDecommission_LongConversationMakesNoExtraModelCalls(t *testing.T) {
 		require.NoError(t, err, "turn %d must succeed", i)
 	}
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	// Precondition: the conversation really did grow past the old threshold.

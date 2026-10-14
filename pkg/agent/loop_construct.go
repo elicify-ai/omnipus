@@ -88,22 +88,21 @@ func perAgentSessionDirs(cfg *config.Config) []string {
 func (nal *newAgentLoop) initializeCore() {
 	nal.registry = NewAgentRegistry(nal.cfg, nal.provider)
 
-	// Apply configurable default agent override.
-	if nal.cfg.Agents.Defaults.DefaultAgentID != "" {
-		nal.registry.SetDefaultAgentOverride(nal.cfg.Agents.Defaults.DefaultAgentID)
-	}
-
 	// Set up shared fallback chain with per-candidate timeout so a primary
 	// provider timeout does not strand fallback candidates with an exhausted
 	// context deadline (#235).
 	cooldown := providers.NewCooldownTracker()
 	fallbackChain := providers.NewFallbackChainWithTimeout(cooldown, perCandidateTimeoutFromConfig(nal.cfg))
 
-	// Create state manager using default agent's workspace for channel recording
-	defaultAgent := nal.registry.GetDefaultAgent()
+	// Channel recording state lives at the install-level root, never in an
+	// agent's home (omnipus-system-agent FR-124, §6.4). With no root
+	// configured, recording is disabled and says so.
 	var stateManager *state.Manager
-	if defaultAgent != nil {
-		stateManager = state.NewManager(defaultAgent.Home)
+	if base := nal.cfg.AgentHomeBasePath(); base != "" {
+		stateManager = state.NewManager(base)
+	} else {
+		logger.ErrorCF("agent", "Channel recording disabled: no install root (agents.defaults.workspace) is configured",
+			map[string]any{"state_file": "<install root>/state/state.json"})
 	}
 
 	eventBus := NewEventBus()

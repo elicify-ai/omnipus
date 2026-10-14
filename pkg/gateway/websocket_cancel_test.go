@@ -157,7 +157,7 @@ func TestHandleCancel_SecondClickOnAlreadyClaimedTurn_SendsNoAckFrame(t *testing
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
@@ -440,7 +440,7 @@ func TestHandleCancel_FiredImmediately_NoLatchExpiredFalseAlarm(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))

@@ -43,6 +43,10 @@ import (
 )
 
 type AgentLoop struct {
+	// routingDrops is the per-channel-instance routing degradation
+	// (omnipus-system-agent FR-121, K15): set when an inbound message is
+	// dropped as unroutable, cleared by a valid binding (FR-129).
+	routingDrops routingDropTracker
 	// connLanes holds the per-chat serial lanes of bound connector input that
 	// is waiting behind a voice note being transcribed (connector_lane.go).
 	connLanes   sync.Mutex
@@ -1460,11 +1464,38 @@ func hookDeniedToolContent(prefix, reason string) string {
 	return prefix + ": " + reason
 }
 
-func (al *AgentLoop) ProcessDirect(
+// ProcessDirectAs runs one direct (CLI-style) turn as the named agent. There
+// is no default agent (omnipus-system-agent FR-120): the caller names the
+// agent, which is routed through the same explicit-agent path a web chat
+// frame uses.
+func (al *AgentLoop) ProcessDirectAs(
 	ctx context.Context,
-	content, sessionKey string,
+	agentID, content, sessionKey string,
 ) (string, error) {
-	return al.ProcessDirectWithChannel(ctx, content, sessionKey, "cli", "direct")
+	return al.ProcessDirectWithChannelAs(ctx, agentID, content, sessionKey, "cli", "direct")
+}
+
+// ProcessDirectWithChannelAs is ProcessDirectAs on a given channel and chat.
+func (al *AgentLoop) ProcessDirectWithChannelAs(
+	ctx context.Context,
+	agentID, content, sessionKey, channel, chatID string,
+) (string, error) {
+	if err := al.ensureHooksInitialized(ctx); err != nil {
+		return "", err
+	}
+	if err := al.ensureMCPInitialized(ctx); err != nil {
+		return "", err
+	}
+	msg := bus.InboundMessage{
+		Channel:    channel,
+		Sender:     bus.SenderInfo{CanonicalID: "cron"},
+		ChatID:     chatID,
+		Content:    content,
+		SessionKey: sessionKey,
+		Metadata:   map[string]string{"agent_id": agentID},
+	}
+	resp, _, err := al.processMessage(ctx, msg)
+	return resp, err
 }
 
 func (al *AgentLoop) ProcessDirectWithChannel(
@@ -1535,7 +1566,7 @@ func (al *AgentLoop) ProcessScheduled(
 	}
 
 	// Owner pinning (FR-001): a missing owner is a hard error — NEVER fall back
-	// to GetDefaultAgent.
+	// to another agent (there is no default agent).
 	agent, ok := al.GetRegistry().GetAgent(ownerAgentID)
 	if !ok || agent == nil {
 		return "", fmt.Errorf("owner unavailable: agent %q not found", ownerAgentID)
@@ -1684,39 +1715,13 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 
 	route, agent, routeErr := pm.al.resolveMessageRoute(pm.msg)
 	if routeErr != nil {
-		// ADR-029 FR-028/MAJ-003: emit the drift-drop counter and audit event
-		// exactly once — here, at the single point where the message is actually
-		// rejected.  resolveMessageRoute returns route.Drop=true only for
-		// workspace-bound instances whose configured agent is unresolvable
-		// (deleted or a worker).  resolveMessageRoute itself is side-effect-free
-		// w.r.t. this counter so that its multiple callers (resolveSteeringTarget,
-		// buildContinuationTarget) do not double-count the same drop.
-		if route.Drop {
-			instanceID := inboundInstanceID(pm.msg)
-			wsID := ""
-			intendedAgent := ""
-			if identity := pm.al.resolveInboundIdentity(instanceID); identity != nil {
-				intendedAgent = strings.TrimSpace(identity.ID)
-			}
-			if cfg := pm.al.GetConfig(); cfg != nil {
-				if inst, ok := cfg.Channels[instanceID]; ok {
-					wsID = inst.WorkspaceID
-				}
-			}
-			pm.al.driftDropped.Add(1)
-			if pm.al.auditLogger != nil {
-				_ = pm.al.auditLogger.Log(&audit.Entry{
-					Event:    audit.EventChannelRoutingDriftDrop,
-					Decision: audit.DecisionDeny,
-					Details: map[string]any{
-						"instance_id":       instanceID,
-						"workspace_id":      wsID,
-						"intended_agent_id": intendedAgent,
-						"chat_id":           pm.msg.ChatID,
-						"reason":            "bound agent unresolvable (deleted or worker — not a chat target)",
-					},
-				})
-			}
+		// FR-121: the single point where an unroutable channel message is
+		// actually rejected — logged at error level, audited and shown as the
+		// instance's routing degradation exactly once (resolveMessageRoute
+		// itself is side-effect-free; it has several callers).
+		var drop *routeDropError
+		if errors.As(routeErr, &drop) {
+			pm.al.recordRouteDrop(pm.msg, drop)
 		}
 		return "", nil, routeErr
 	}
@@ -2725,12 +2730,8 @@ func extractProvider(registry *AgentRegistry) (providers.LLMProvider, bool) {
 	if registry == nil {
 		return nil, false
 	}
-	// Any agent's provider will do — they all borrow the same one. Ask the
-	// default first because it is the cheapest lookup, then any registered
-	// agent, then the registry's own.
-	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil && defaultAgent.Provider != nil {
-		return defaultAgent.Provider, true
-	}
+	// Any agent's provider will do — they all borrow the same one: ask any
+	// registered agent, then the registry's own (§6.4: no default agent).
 	for _, id := range registry.ListAgentIDs() {
 		if ag, ok := registry.GetAgent(id); ok && ag != nil && ag.Provider != nil {
 			return ag.Provider, true

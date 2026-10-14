@@ -715,38 +715,6 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 		return rosterErr, true
 	}
 
-	// RELEASE BLOCKER fix follow-up (2026-07-26): on a genuinely fresh
-	// install, coreagent.SeedConfig also sets the settings singleton
-	// (cfg.Agents.Defaults.DefaultAgentID = "mia") — the ONLY field
-	// agent.AgentRegistry.GetDefaultAgent and pkg/routing's
-	// resolveDefaultAgentID consult (ADR-054 D6.4). SeedConfig is a pure
-	// in-memory struct mutation by design, with zero filesystem side effects
-	// (mirrors why seedSystemAgentEagerSouls below is a separate call site
-	// rather than living inside SeedConfig itself) — so without persisting it here,
-	// the singleton lives only in THIS process's in-memory cfg. NewAgentLoop
-	// immediately below reads it fine, so THIS boot resolves correctly, but
-	// config.json on disk never gets it: the very next restart reloads an
-	// empty default_agent_id, isFreshInstall is now false (agents already
-	// exist), SeedConfig never re-seeds it, and the two resolution ladders'
-	// differing Priority-2 fallbacks silently disagree again — reopening the
-	// exact bug this fix closes, just delayed by one restart. Persist it
-	// directly into config.json's raw JSON map (mirrors rest.go's
-	// updateConfigJSONLocked/ensureMap convention — never config.SaveConfig,
-	// which round-trips the whole typed struct and can clobber
-	// SecureString-backed API keys, CLAUDE.md's hard rule). Runs once, here,
-	// strictly before the config-file watcher starts later in this function,
-	// so there is no self-write-registry race to account for. Best-effort:
-	// a write failure only means the in-memory resolution (correct for this
-	// boot) does not survive a restart — not a boot-time fatal, since the
-	// gateway is otherwise fully healthy.
-	if rc.cfg.Agents.Defaults.DefaultAgentID != "" {
-		if persistErr := persistFreshInstallDefaultAgentID(rc.configPath, rc.cfg.Agents.Defaults.DefaultAgentID); persistErr != nil {
-			slog.Warn("gateway: could not persist fresh-install default_agent_id to config.json; "+
-				"in-memory resolution is correct for this boot but will not survive a restart",
-				"default_agent_id", rc.cfg.Agents.Defaults.DefaultAgentID, "error", persistErr)
-		}
-	}
-
 	// Eagerly seed every System Agent's SOUL.md right after SeedConfig.
 	// For the Judge this closes an operator-reported UX gap: its soul only
 	// materialized lazily on its FIRST real verifier dispatch (pkg/agent's
@@ -1345,6 +1313,34 @@ func (rc *runContextWithOptions) prepareSkillServices() {
 	}
 }
 
+// sysagentFastUpsert is the agent tools' publish hook (create_agent,
+// update_agent, set_agent_permissions): it re-derives the agent roster from the
+// entity store, then republishes ONE agent into the live registry — so a
+// permission change made by an agent tool takes effect on the next turn
+// without a restart. It falls back to a full reload when one is already
+// pending or the fast path fails.
+func sysagentFastUpsert(al *agent.AgentLoop, home string, reloadTrigger func() error) func(string) error {
+	return func(agentID string) error {
+		if al.IsReloadPending() {
+			return reloadTrigger()
+		}
+		if err := al.MutateConfig(func(cfg *config.Config) error {
+			return populateAgentsListFromEntityStoreStrict(cfg, home)
+		}); err != nil {
+			slog.Warn("gateway: sysagent fast agent upsert: could not refresh the agent roster "+
+				"from the entity store; falling back to full reload",
+				"agent_id", agentID, "error", err)
+			return reloadTrigger()
+		}
+		if _, err := al.UpsertAgentFast(al.GetConfig(), agentID); err != nil {
+			slog.Warn("gateway: sysagent fast agent upsert failed; falling back to full reload",
+				"agent_id", agentID, "error", err)
+			return reloadTrigger()
+		}
+		return nil
+	}
+}
+
 // wireSystemTools wires system-tool dependencies and refreshes the central builtin registry.
 func (rc *runContextWithOptions) wireSystemTools() {
 	sysAgentDeps := &systools.Deps{
@@ -1417,25 +1413,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// is serialized with every other al.mu-guarded reader/writer, rather
 		// than reloading config.json from disk or re-resolving credentials
 		// (neither of which agent CRUD via the entity store can affect).
-		UpsertAgentFastFunc: func(agentID string) error {
-			if rc.agentLoop.IsReloadPending() {
-				return rc.reloadTrigger()
-			}
-			if err := rc.agentLoop.MutateConfig(func(cfg *config.Config) error {
-				return populateAgentsListFromEntityStoreStrict(cfg, rc.homePath)
-			}); err != nil {
-				slog.Warn("gateway: sysagent fast agent upsert: could not refresh the agent roster "+
-					"from the entity store; falling back to full reload",
-					"agent_id", agentID, "error", err)
-				return rc.reloadTrigger()
-			}
-			if _, err := rc.agentLoop.UpsertAgentFast(rc.agentLoop.GetConfig(), agentID); err != nil {
-				slog.Warn("gateway: sysagent fast agent upsert failed; falling back to full reload",
-					"agent_id", agentID, "error", err)
-				return rc.reloadTrigger()
-			}
-			return nil
-		},
+		UpsertAgentFastFunc: sysagentFastUpsert(rc.agentLoop, rc.homePath, rc.reloadTrigger),
 		// agent-picker-freshness fix (#1009): create_agent's own counterpart
 		// to the REST createAgent handler's emitAgentCreated call — see
 		// systools.Deps.NotifyAgentCreated's doc comment. restAPIRef is
@@ -1634,16 +1612,6 @@ func (rc *runContextWithOptions) configureHealthAndWatcher() {
 		}
 		if degraded, reason := rc.runningServices.reloadDegradedStatus(); degraded {
 			return true, reason
-		}
-		// ADR-054 §0 R3: the configured default agent naming an entity record
-		// that failed to load is a degraded state, not a silent fallback —
-		// EvaluateDefaultAgentHealth (called from NewAgentRegistry) records it.
-		// SetDegradedFunc is a single-slot hook, so this COMPOSES with the
-		// checks above rather than replacing them.
-		if registry := rc.agentLoop.GetRegistry(); registry != nil {
-			if degraded, reason := registry.DefaultAgentDegraded(); degraded {
-				return true, reason
-			}
 		}
 		return false, ""
 	})

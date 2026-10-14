@@ -614,22 +614,34 @@ func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.Transcri
 	hcm.h.hubPublishAndDeliverAlsoTo(hcm.sessionID, string(generated.WsFrameTypeUserMessage), data, hcm.wc)
 }
 
-// resolveTargetAgent resolves the target agent from the frame's agent_id (default-agent fallbacks included) and rejects worker agents and targets that resolve to nothing.
+// resolveTargetAgent resolves the turn's agent (omnipus-system-agent §6.4):
+// the frame's agent_id for a new chat, the session's canonical owner for a
+// frame naming an existing session without one. There is no default agent:
+// a new chat that names no agent is refused with "an agent must be named"
+// (FR-122) before anything is minted or dispatched. Worker targets are
+// rejected as before.
 func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
-	hcm.targetAgentID = hcm.agentID
-	if hcm.targetAgentID == "" {
-		if reg := hcm.h.agentLoop.GetRegistry(); reg != nil {
-			if def := reg.GetDefaultAgent(); def != nil {
-				hcm.targetAgentID = def.ID
+	hcm.targetAgentID = strings.TrimSpace(hcm.agentID)
+	if hcm.targetAgentID == "" && hcm.frameSessionID != "" {
+		// An existing session keeps its canonical owner. An unknown session
+		// id resolves to nothing here; the session checks below reject it.
+		if store := hcm.h.agentLoop.GetSessionStore(); store != nil {
+			if meta, err := store.GetMeta(hcm.frameSessionID); err == nil && meta != nil {
+				hcm.targetAgentID = meta.AgentID
 			}
 		}
-		if hcm.targetAgentID == "" {
-			// Fall back to the first chat-target agent (mirrors handleBoardTaskStart /
-			// resolveDefaultAgentID in pkg/routing/route.go). firstChatTargetAgentID
-			// already skips workers, so this fallback never lands on one.
-			hcm.targetAgentID = firstChatTargetAgentID(hcm.h.agentLoop.GetConfig())
-		}
-	} else if isWorkerAgentID(hcm.h.agentLoop.GetConfig(), hcm.targetAgentID) && !hcm.addressesExistingHelperOf(hcm.targetAgentID) {
+		return false
+	}
+	if hcm.targetAgentID == "" {
+		logsafeWarn("ws: rejecting new-chat frame that names no agent",
+			"chat_id", hcm.chatID, "workspace_id", hcm.workspaceID)
+		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: agentMustBeNamed,
+		})
+		return true
+	}
+	if isWorkerAgentID(hcm.h.agentLoop.GetConfig(), hcm.targetAgentID) && !hcm.addressesExistingHelperOf(hcm.targetAgentID) {
 		// An explicit agent_id that resolves to a worker is illegitimate: a worker
 		// is a delegation-only labor tier, never a chat target. Refuse to mint a
 		// live chat session for it. Mirror the error-frame pattern used for an
@@ -640,23 +652,6 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
 			Message: "this agent is a worker and cannot be a chat target — workers are invoked via delegation",
-		})
-		return true
-	}
-
-	// No caller-supplied agent_id AND neither fallback resolved one (no
-	// seeded default agent, no chat-target agent in the roster at all): reject
-	// explicitly rather than letting an empty targetAgentID flow into
-	// store.NewSession/transcript writes below. The retired "main" sentinel
-	// used to silently absorb this case; there is no substitute default to
-	// fall back to now — an empty owner on a persisted session is exactly the
-	// unpoliced-shadow-agent bug removing the sentinel was meant to close.
-	if hcm.targetAgentID == "" {
-		logsafeWarn("ws: rejecting chat frame — no agent_id supplied and no default agent could be resolved",
-			"chat_id", hcm.chatID, "workspace_id", hcm.workspaceID)
-		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:    string(generated.WsFrameTypeError),
-			Message: "no agent available to handle this message: no default agent is configured",
 		})
 		return true
 	}
@@ -975,6 +970,18 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 	home := hcm.h.home
 	if home == "" {
 		home = config.OmnipusHomeDir()
+	}
+	// FR-005: Omnipus has one conversation; a second is refused with its
+	// main chat's id, before anything is minted.
+	if msg, _, err := omnipusSecondConversationRefusal(hcm.h.agentLoop.GetSessionStore(), home, hcm.targetAgentID); err != nil || msg != "" {
+		if err != nil {
+			msg = serverFailureText("could not check Omnipus's conversation", err)
+		}
+		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: msg,
+		})
+		return true
 	}
 	if hcm.refuseOmnipusChat(home, hcm.targetAgentID, hcm.workspaceID, "") {
 		return true
@@ -1328,11 +1335,11 @@ func (hcm *wsHandlerHandleChatMessage) buildInboundMessage() {
 		// this field).
 		OperatorPrompt: true,
 	}
-	if hcm.agentID != "" {
-		// Format already validated up front, before the kickoff consume step
-		// (see the check next to the worker-agent guard near the top of this
-		// function) — no re-validation needed here.
-		hcm.msg.Metadata = map[string]string{"agent_id": hcm.agentID}
+	if hcm.targetAgentID != "" {
+		// The resolved turn agent: the frame's agent_id (format validated up
+		// front, before the kickoff consume step) or, for an existing session,
+		// its canonical owner (§6.4) — never left to a default.
+		hcm.msg.Metadata = map[string]string{"agent_id": hcm.targetAgentID}
 	}
 	// FR-010: forward per-turn model override to the bus so the agent loop's
 	// switch-compress path can route THIS turn to the chosen model. Trim

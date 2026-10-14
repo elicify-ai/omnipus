@@ -200,6 +200,9 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 	"pkg/gateway/rest_workspace_delegation.go": {
 		"ws := state.Workspace": true,
 	},
+	"pkg/agent/routing_drops.go": {
+		"ws := state.Workspace": true,
+	},
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go": {
 		"reread := workspaceToWire(api, snapshot.Workspace, 0)":                                               true,
 		"wire := workspaceToWireFrom(api.homePath, snapshot.Workspace, 0, &snapshot, api.mainSessionAddress)": true,
@@ -270,7 +273,7 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 
 	// pkg/migrate/sources/openclaw: frozen OpenClaw schema + local staging types.
 	"pkg/migrate/sources/openclaw/openclaw_config.go": {
-		"Home:    a.Workspace,": true,
+		"Home:   a.Workspace,": true,
 		"agentCfg.Workspace = rewriteWorkspacePath(*entry.Workspace)":                            true,
 		"cfg.Agents.Defaults.Home = c.Agents.Defaults.Workspace":                                 true,
 		"cfg.Agents.Defaults.Workspace = c.GetDefaultWorkspace()":                                true,

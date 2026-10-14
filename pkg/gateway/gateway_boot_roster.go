@@ -217,7 +217,7 @@ func forgetRosterBaseline(homePath string) {
 // for that sentinel. pkg/config/defaults.go seeds that global floor "allow"
 // for bash, write_file, edit_file, delegate, send_email, and more. So a
 // wiped roster silently promotes ALL routed traffic (via
-// AgentRegistry.GetDefaultAgent's fallback ladder) to an unrestricted
+// the former default-agent fallback ladder) to an unrestricted
 // agent — and repairAndValidateToolPolicyCoverage (this file), which walks
 // cfg.Agents.List to find coverage gaps, finds ZERO agents to check and
 // vacuously PASSES an empty roster, so the existing coverage gate does not
@@ -358,41 +358,10 @@ func persistSeededCoreAgents(homePath string, agents []config.AgentConfig) error
 	return nil
 }
 
-// persistFreshInstallDefaultAgentID writes agents.defaults.default_agent_id
-// into config.json's raw JSON map, preserving every other key exactly as-is —
-// unlike config.SaveConfig, which round-trips the whole typed Config struct
-// and can clobber SecureString-backed API keys (CLAUDE.md hard rule: "NEVER
-// use config.SaveConfig() — it corrupts API keys"). Mirrors
-// pkg/gateway/rest.go's updateConfigJSONLocked/ensureMap read-modify-write
-// convention. Called exactly once, at boot, immediately after
-// coreagent.SeedConfig sets this field in memory on a genuinely fresh
-// install (SeedConfig itself performs no file I/O by design) — see the call
-// site's doc comment for why this durability step cannot live inside
-// SeedConfig or persistSeededCoreAgents.
-func persistFreshInstallDefaultAgentID(configPath, agentID string) error {
-	raw, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-	var m map[string]any
-	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
-		return fmt.Errorf("parse config: %w", unmarshalErr)
-	}
-	ensureMap(m, "agents", "defaults")["default_agent_id"] = agentID
-	out, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return fmt.Errorf("serialize config: %w", err)
-	}
-	if err := fileutil.WriteFileAtomic(configPath, out, 0o600); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
-	return nil
-}
-
 // persistSeededSkillGrants durably records config.seeded_skill_grants (the
 // ADR-074 D4 one-shot migration markers coreagent.SeedConfig checks) into
 // config.json's raw JSON map, preserving every other key exactly as-is — the
-// same read-modify-write convention as persistFreshInstallDefaultAgentID
+// same read-modify-write convention as rest.go's updateConfigJSONLocked
 // above, and for the same reason: SeedConfig is a pure config-struct mutation
 // with zero filesystem side effects, so without this step the marker lives
 // only in THIS process's in-memory cfg and the migration would re-run on

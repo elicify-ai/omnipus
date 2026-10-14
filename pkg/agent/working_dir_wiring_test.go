@@ -62,9 +62,9 @@ func writeWorkspaceTeamRecord(
 // workspace's title/description and its shared work directory.
 func TestWorkingDirWiring_CoreTeamMember_BlockPresent(t *testing.T) {
 	const wsID = "01JWWORKDIRTEST0000000001"
-	seedWorkspaceTeam(t, wsID, true, []string{"ava"}, "Launch Prep", "Everything for the Q3 launch")
+	seedWorkspaceTeam(t, wsID, true, []string{"mia"}, "Launch Prep", "Everything for the Q3 launch")
 
-	const agentID = "ava"
+	const agentID = "mia"
 	al, cb := wireTestLoopWithGraph(t, agentID)
 	_ = al
 
@@ -81,8 +81,8 @@ func TestWorkingDirWiring_CoreTeamMember_BlockPresent(t *testing.T) {
 	if !strings.Contains(got, filepath.Join("workspaces", wsID, "work")) {
 		t.Errorf("expected the resolved work dir path in block.\ngot: %s", got)
 	}
-	if !strings.Contains(got, "agents/ava/") {
-		t.Errorf("expected an explicit warning against the private agents/ava/ dir.\ngot: %s", got)
+	if !strings.Contains(got, "agents/mia/") {
+		t.Errorf("expected an explicit warning against the private agents/mia/ dir.\ngot: %s", got)
 	}
 }
 
@@ -92,8 +92,8 @@ func TestWorkingDirWiring_CoreTeamMember_BlockPresent(t *testing.T) {
 // this feature existed, with nothing new to tell it.
 func TestWorkingDirWiring_NotCoreTeamMember_BlockAbsent(t *testing.T) {
 	const wsID = "01JWWORKDIRTEST0000000002"
-	// "ava" is on the team; "jim" (the agent under test) is deliberately not.
-	seedWorkspaceTeam(t, wsID, true, []string{"ava"}, "Some Workspace", "")
+	// "mia" is on the team; "jim" (the agent under test) is deliberately not.
+	seedWorkspaceTeam(t, wsID, true, []string{"mia"}, "Some Workspace", "")
 
 	const agentID = "jim"
 	al, cb := wireTestLoopWithGraph(t, agentID)

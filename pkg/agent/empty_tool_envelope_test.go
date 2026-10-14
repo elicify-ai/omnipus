@@ -21,7 +21,7 @@ import (
 func runEnvelopeTurn(t *testing.T, provider providers.LLMProvider) (reply string, stub *argsRecordingTool, err error) {
 	t.Helper()
 	al, home := schedTestLoop(t)
-	mia := registerAgent(t, al, home, "mia", provider, false)
+	mia := registerAgent(t, al, home, "mia", provider)
 	stub = &argsRecordingTool{}
 	mia.Tools.Register(stub)
 	mia.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"args_tool": "allow"}})
@@ -127,7 +127,7 @@ func TestEmptyEnvelope_FailedMidStreamAttemptUsageIsDebitedOnTheTurn(t *testing.
 		WithError(&common.StreamProviderError{Code: "server_error", Message: "x",
 			Usage: &providers.UsageInfo{PromptTokens: 4000, CompletionTokens: 1000, TotalTokens: 5000}}).
 		WithText("done").WithUsage(40, 60)
-	registerAgent(t, al, home, "mia", provider, false)
+	registerAgent(t, al, home, "mia", provider)
 	meta, err := al.GetSessionStore().NewScheduledSession("mia")
 	require.NoError(t, err)
 	_, err = al.ProcessScheduled(context.Background(), "mia", meta.ID, "go", "scheduled", meta.ID)

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/channels"
@@ -294,6 +295,12 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		channels = append(channels, entry)
 	}
 
+	// K15 / FR-121: an instance that dropped an inbound message it could not
+	// route is degraded with the drop reason until a valid binding clears it
+	// (FR-129). Applied first so a construction failure below, the more
+	// fundamental fault, wins the reason when both hold.
+	applyRoutingDropOverlay(channels, a.agentLoop.RoutingDropFor)
+
 	// Overlay degraded state from the runtime channel manager. Channels that
 	// failed to construct at startup are marked degraded=true with the init
 	// error as the reason. whatsapp_native failures map to the "whatsapp" entry
@@ -367,6 +374,23 @@ func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.Chan
 	}
 }
 
+// applyRoutingDropOverlay marks every entry whose instance has an active
+// routing drop as degraded with the drop's reason and time (K15). Entry ids
+// are instance keys ("telegram", "whatsapp.eu").
+func applyRoutingDropOverlay(channelList []gen.ChannelEntry, dropFor func(string) (agent.RoutingDrop, bool)) {
+	for i := range channelList {
+		drop, ok := dropFor(channelList[i].Id)
+		if !ok {
+			continue
+		}
+		reason := drop.Reason
+		at := drop.At
+		channelList[i].Degraded = boolPtr(true)
+		channelList[i].DegradedReason = &reason
+		channelList[i].LastDroppedAt = &at
+	}
+}
+
 // identityForInstance converts a persisted config.ChannelIdentity into the
 // generated ChannelEntry.Identity anonymous-struct pointer, or nil when the
 // instance has no identity or a malformed one (a bad persisted identity is
@@ -401,26 +425,6 @@ func identityForInstance(identity *config.ChannelIdentity) *struct {
 	return ident
 }
 
-// channelWildcardIdx returns the index of the channel-wildcard AgentBinding
-// for the given channelID in the bindings slice, or -1 if not found.
-// A channel-wildcard binding has Match.Channel equal to channelID (compared
-// case-insensitively), Match.AccountID=="*", and no Peer/Guild/Team qualifiers.
-func channelWildcardIdx(bindings []config.AgentBinding, channelID string) int {
-	for i, b := range bindings {
-		if strings.ToLower(b.Match.Channel) != channelID {
-			continue
-		}
-		if b.Match.AccountID != "*" {
-			continue
-		}
-		if b.Match.Peer != nil || b.Match.GuildID != "" || b.Match.TeamID != "" {
-			continue
-		}
-		return i
-	}
-	return -1
-}
-
 // isChannelWildcardRaw reports whether a raw binding match-map represents the
 // channel-wildcard entry for channelID. A match is:
 //   - match["channel"] equal to channelID (compared case-insensitively)
@@ -436,52 +440,36 @@ func isChannelWildcardRaw(matchMap map[string]any, channelID string) bool {
 }
 
 // getChannelRouting handles GET /api/v1/channels/{id}/routing.
-// ADR-029 FR-029 / MAJ-004: for a BOUND instance (has WorkspaceID + agent Identity)
-// returns {workspace_id, default_agent_id} read from cfg.Channels[id]; for an
-// UNBOUND instance returns the legacy wildcard binding. The two representations are
-// mutually exclusive per instance. For routing endpoints, a well-formed instance id
-// that is not in cfg.Channels returns 404 "unknown instance" (FR-024/US-11 AC-2).
+// A bound instance (workspace + agent identity) reports {workspace_id,
+// default_agent_id, bound:true}; anything else reports the truthful unbound
+// state — empty ids and bound:false (omnipus-system-agent FR-128, K14). A
+// legacy wildcard binding or a bare identity is never reported as a
+// destination: neither routes anything any more (FR-121, FR-133). For routing
+// endpoints, a well-formed instance id that is not in cfg.Channels returns 404
+// "unknown instance" (FR-024/US-11 AC-2).
 func (a *restAPI) getChannelRouting(w http.ResponseWriter, channelID string) {
 	cfg := a.agentLoop.GetConfig()
-
-	// Per-instance existence check for routing endpoints (FR-024).
-	// A namespaced id like "whatsapp.eu" passes the base-type gate above but may
-	// not have an entry in cfg.Channels if it was never configured.
-	_, hasSlug := func() (string, bool) {
-		_, slug := config.ParseInstanceKey(channelID)
-		return slug, slug != ""
-	}()
-	if hasSlug {
-		// Namespaced key: require entry in cfg.Channels.
+	if _, slug := config.ParseInstanceKey(channelID); slug != "" {
 		if _, exists := cfg.Channels[channelID]; !exists {
 			jsonErr(w, http.StatusNotFound, "unknown instance")
 			return
 		}
 	}
+	jsonOK(w, channelRoutingRead(cfg, channelID))
+}
 
-	// Check for bound representation first (FR-029). Use the single-source-of-truth
-	// predicate so this GET path cannot diverge from the config layer's definition
-	// of "bound" (e.g. the inline check previously omitted the TrimSpace on
-	// WorkspaceID that IsWorkspaceBound applies).
-	if inst, ok := cfg.Channels[channelID]; ok && inst.IsWorkspaceBound() {
-		wsID := inst.WorkspaceID
-		agentID := inst.Identity.ID
-		resp := gen.ChannelRouting{
-			WorkspaceId:    &wsID,
-			DefaultAgentId: &agentID,
-		}
-		jsonOK(w, resp)
-		return
+// channelRoutingRead is the K14 read shape for one instance, derived from the
+// single bound predicate (ChannelInstanceConfig.IsWorkspaceBound).
+func channelRoutingRead(cfg *config.Config, channelID string) gen.ChannelRouting {
+	inst, ok := cfg.Channels[channelID]
+	if !ok || !inst.IsWorkspaceBound() {
+		return gen.ChannelRouting{Bound: false, WorkspaceId: "", DefaultAgentId: ""}
 	}
-
-	// Unbound: fall back to legacy wildcard binding.
-	idx := channelWildcardIdx(cfg.Bindings, channelID)
-	var resp gen.ChannelRouting
-	if idx >= 0 {
-		id := cfg.Bindings[idx].AgentID
-		resp.DefaultAgentId = &id
+	return gen.ChannelRouting{
+		Bound:          true,
+		WorkspaceId:    strings.TrimSpace(inst.WorkspaceID),
+		DefaultAgentId: strings.TrimSpace(inst.Identity.ID),
 	}
-	jsonOK(w, resp)
 }
 
 // restAPISetChannelRouting carries the shared state of setChannelRouting across its stages.
@@ -495,41 +483,32 @@ type restAPISetChannelRouting struct {
 	workspaceID string
 }
 
+// channelBindingRequired is the visible refusal for a routing write that
+// does not name both a workspace and its main agent (FR-121, FR-127).
+const channelBindingRequired = "bind this channel to an agent in a workspace"
+
 // setChannelRouting handles PUT /api/v1/channels/{id}/routing.
-// ADR-029 FR-029 / MAJ-004 REWRITE:
-//   - When workspace_id is present (bound flow): writes cfg.Channels[id].WorkspaceID +
-//     cfg.Channels[id].Identity and REMOVES any stale channel-wildcard binding for id.
-//     Rejection set: empty default_agent_id → 422; agent ∉ workspace.CoreTeam → 422;
-//     worker agent → 422 (MIN-002, standardized from 400); unknown/archived workspace → 404.
-//   - When workspace_id is absent (unbound/legacy flow): keeps existing wildcard-binding
-//     upsert behavior unchanged (FR-005/FR-008 for the worker check still apply).
-//   - Emits a routing-change audit event in both flows (FR-030 / STRIDE repudiation).
+// omnipus-system-agent FR-127 / K14: the only write is a binding — a nonblank
+// workspace_id AND default_agent_id (the bound main agent); a missing or
+// blank member is a 400 that changes nothing, in both validation modes. The
+// legacy unbound mode (global-default / channel-wildcard routing) is gone.
+// ADR-029 FR-029: writes cfg.Channels[id].WorkspaceID + Identity and REMOVES
+// any stale channel-wildcard binding for id. Rejections: agent ∉
+// workspace.CoreTeam → 422; worker → 422; system agent → 400; unknown or
+// archived workspace → 404. Emits a routing-change audit event (FR-030) and
+// clears the instance's routing degradation (FR-129).
 func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, channelID string) {
 	scr := &restAPISetChannelRouting{a: a, w: w, r: r, channelID: channelID}
-
 	if scr.decodeRequest() {
 		return
 	}
-
-	if scr.handleBound() {
-		return
-	}
-
-	if scr.validateUnbound() {
-		return
-	}
-
-	if scr.persistUnbound() {
-		return
-	}
-
-	scr.finishUnbound()
+	scr.handleBound()
 }
 
 // decodeRequest decodes the routing request, validates the channel instance, and determines whether the request is bound.
 func (scr *restAPISetChannelRouting) decodeRequest() bool {
 	validateEnabled := scr.a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(scr.w, scr.r, "ChannelRouting", &scr.req, validateEnabled) {
+	if !decodeAndValidateStrict(scr.w, scr.r, "ChannelRoutingUpdateRequest", &scr.req, validateEnabled) {
 		return true
 	}
 
@@ -546,17 +525,19 @@ func (scr *restAPISetChannelRouting) decodeRequest() bool {
 		}
 	}
 
-	// Determine flow: bound (workspace_id present) or legacy (unbound).
-	scr.workspaceID = ""
-	if scr.req.WorkspaceId != nil {
-		scr.workspaceID = strings.TrimSpace(*scr.req.WorkspaceId)
+	// FR-127: both members required and nonblank — checked here, not only by
+	// the schema, so the rule holds with inbound validation off.
+	scr.workspaceID = strings.TrimSpace(scr.req.WorkspaceId)
+	if scr.workspaceID == "" || strings.TrimSpace(scr.req.DefaultAgentId) == "" {
+		jsonErr(scr.w, http.StatusBadRequest, channelBindingRequired)
+		return true
 	}
 	return false
 }
 
 // handleBound validates and persists a workspace-bound routing request, updates existing sessions, and returns the bound response.
 func (scr *restAPISetChannelRouting) handleBound() bool {
-	if scr.workspaceID != "" {
+	{
 		// S-5: validate workspace_id grammar before building any filesystem path.
 		// A workspace_id from the request body is only TrimSpace'd; without a
 		// positive-allowlist check, a value such as "../../../etc/passwd" would
@@ -568,16 +549,7 @@ func (scr *restAPISetChannelRouting) handleBound() bool {
 			return true
 		}
 
-		// ── Bound flow ──────────────────────────────────────────────────────────
-		// FR-005: empty default_agent_id → 422.
-		agentID := ""
-		if scr.req.DefaultAgentId != nil {
-			agentID = strings.TrimSpace(*scr.req.DefaultAgentId)
-		}
-		if agentID == "" {
-			jsonErr(scr.w, http.StatusUnprocessableEntity, "default_agent_id is required for a bound instance")
-			return true
-		}
+		agentID := strings.TrimSpace(scr.req.DefaultAgentId)
 
 		// FR-007: unknown or archived workspace → 404.
 		ws, err := readWorkspaceFile(scr.a.homePath, scr.workspaceID)
@@ -613,14 +585,14 @@ func (scr *restAPISetChannelRouting) handleBound() bool {
 		// non-chat-target — the spec requires the system-specific 400.
 		if foundAgent.IsSystem() {
 			jsonErr(scr.w, http.StatusBadRequest,
-				"system agents are not chat targets and cannot be a channel's default agent")
+				"system agents are not chat targets and cannot be a channel's main agent")
 			return true
 		}
 		if foundAgent.IsWorker() {
 			jsonErr(
 				scr.w,
 				http.StatusUnprocessableEntity,
-				"workers are not chat targets and cannot be a channel's default agent",
+				"workers are not chat targets and cannot be a channel's main agent",
 			)
 			return true
 		}
@@ -733,189 +705,17 @@ func (scr *restAPISetChannelRouting) handleBound() bool {
 			}
 		}
 
-		// Return the bound representation.
-		wsIDCopy := scr.workspaceID
-		agentIDCopy := agentID
+		// FR-129: a valid binding clears the routing degradation, so the
+		// channel's status stops reporting the drop the binding just repaired.
+		scr.a.agentLoop.ClearRoutingDrop(scr.channelID)
+
 		jsonOK(scr.w, gen.ChannelRouting{
-			WorkspaceId:    &wsIDCopy,
-			DefaultAgentId: &agentIDCopy,
+			Bound:          true,
+			WorkspaceId:    scr.workspaceID,
+			DefaultAgentId: agentID,
 		})
 		return true
 	}
-	return false
-}
-
-// validateUnbound validates the optional agent target for an unbound routing request.
-func (scr *restAPISetChannelRouting) validateUnbound() bool {
-	// ── Unbound / legacy flow ────────────────────────────────────────────────
-	// Validate the agent ID when non-empty (FR-005/FR-008 still apply).
-	if scr.req.DefaultAgentId != nil && *scr.req.DefaultAgentId != "" {
-		agentID := *scr.req.DefaultAgentId
-		var found *config.AgentConfig
-		for i := range scr.cfg.Agents.List {
-			if scr.cfg.Agents.List[i].ID == agentID {
-				ac := scr.cfg.Agents.List[i]
-				found = &ac
-				break
-			}
-		}
-		if found == nil {
-			jsonErr(scr.w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
-			return true
-		}
-		// ADR-049 D3: System Agents are not valid routing-binding targets (400).
-		if found.IsSystem() {
-			jsonErr(scr.w, http.StatusBadRequest,
-				"system agents are not chat targets and cannot be a channel's default agent")
-			return true
-		}
-		// MIN-002: standardize to 422 (was 400).
-		if found.IsWorker() {
-			jsonErr(
-				scr.w,
-				http.StatusUnprocessableEntity,
-				"workers are not chat targets and cannot be a channel's default agent",
-			)
-			return true
-		}
-	}
-	return false
-}
-
-// persistUnbound persists the unbound routing representation and its wildcard binding.
-func (scr *restAPISetChannelRouting) persistUnbound() bool {
-	if err := scr.a.safeUpdateConfigJSON(func(m map[string]any) error {
-		// FR-029 (bound→unbound): clear workspace_id and identity from the
-		// channel entry so that a previously-bound instance is fully unbound.
-		// Without this, cfg.Channels[id].WorkspaceID persists across the PUT
-		// and RepairStaleChannelWildcardBindings drops the new wildcard on
-		// next config load — leaving the bound representation intact and
-		// silently discarding the caller's unbind intent.
-		if channels, _ := m["channels"].(map[string]any); channels != nil {
-			if ch, _ := channels[scr.channelID].(map[string]any); ch != nil {
-				delete(ch, "workspace_id")
-				delete(ch, "identity")
-				channels[scr.channelID] = ch
-				m["channels"] = channels
-			}
-		}
-
-		// Read the bindings array from the raw JSON map.
-		rawBindings, _ := m["bindings"].([]any)
-
-		if scr.req.DefaultAgentId == nil || *scr.req.DefaultAgentId == "" {
-			// Remove the channel-wildcard binding for this channel if it exists.
-			filtered := make([]any, 0, len(rawBindings))
-			for _, entry := range rawBindings {
-				bMap, ok := entry.(map[string]any)
-				if !ok {
-					filtered = append(filtered, entry)
-					continue
-				}
-				matchMap, _ := bMap["match"].(map[string]any)
-				if matchMap == nil {
-					filtered = append(filtered, entry)
-					continue
-				}
-				if isChannelWildcardRaw(matchMap, scr.channelID) {
-					continue
-				}
-				filtered = append(filtered, entry)
-			}
-			if len(filtered) == 0 {
-				delete(m, "bindings")
-			} else {
-				m["bindings"] = filtered
-			}
-			return nil
-		}
-
-		// Upsert: replace or append the channel-wildcard binding.
-		newBinding := map[string]any{
-			"agent_id": *scr.req.DefaultAgentId,
-			"match": map[string]any{
-				"channel":    scr.channelID,
-				"account_id": "*",
-			},
-		}
-		replaced := false
-		for i, entry := range rawBindings {
-			bMap, ok := entry.(map[string]any)
-			if !ok {
-				continue
-			}
-			matchMap, _ := bMap["match"].(map[string]any)
-			if matchMap == nil {
-				continue
-			}
-			if isChannelWildcardRaw(matchMap, scr.channelID) {
-				rawBindings[i] = newBinding
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			rawBindings = append(rawBindings, newBinding)
-		}
-		m["bindings"] = rawBindings
-		return nil
-	}); err != nil {
-		slog.Error("rest: save config for channel routing", "channel_id", scr.channelID, "error", err)
-		jsonServerFailure(scr.w, http.StatusInternalServerError, "could not save config", err)
-		return true
-	}
-	return false
-}
-
-// finishUnbound audits an unbound routing change, updates existing sessions, and returns the resulting routing state.
-func (scr *restAPISetChannelRouting) finishUnbound() {
-	// FR-030: emit routing-change audit event.
-	agentIDForAudit := ""
-	if scr.req.DefaultAgentId != nil {
-		agentIDForAudit = *scr.req.DefaultAgentId
-	}
-	if scr.a.auditor != nil {
-		if err := scr.a.auditor.Log(&audit.Entry{
-			Event:    audit.EventChannelRoutingChanged,
-			Decision: audit.DecisionAllow,
-			Details: map[string]any{
-				"channel_id": scr.channelID,
-				"agent_id":   agentIDForAudit,
-				"flow":       "unbound",
-			},
-		}); err != nil {
-			slog.Warn("audit write failed", "event", audit.EventChannelRoutingChanged,
-				"channel_id", scr.channelID, "flow", "unbound", "error", err)
-		}
-	}
-
-	// Symmetric with the bound flow above: unbinding a previously-bound
-	// channel clears cfg.Channels[id].WorkspaceID, so every existing
-	// session that was stamped from that binding must be cleared too —
-	// otherwise it stays pinned to a workspace the channel is no longer
-	// routed through, forever. A channel that was never bound has no
-	// sessions carrying a channel-derived workspace stamp, so this is a
-	// harmless no-op for it (restampChannelSessionsWorkspace skips writes
-	// where WorkspaceID already matches the target).
-	if store := scr.a.agentLoop.GetSessionStore(); store != nil {
-		if n, rsErr := restampChannelSessionsWorkspace(store, scr.channelID, ""); rsErr != nil {
-			slog.Warn("rest: setChannelRouting: clear existing sessions on unbind",
-				"instance_id", scr.channelID, "error", rsErr)
-		} else if n > 0 {
-			slog.Info("rest: setChannelRouting: cleared stale workspace on existing sessions after unbind",
-				"instance_id", scr.channelID, "count", n)
-		}
-	}
-
-	// Return the resulting routing state.
-	liveCfg := scr.a.agentLoop.GetConfig()
-	idx := channelWildcardIdx(liveCfg.Bindings, scr.channelID)
-	var resp gen.ChannelRouting
-	if idx >= 0 {
-		id := liveCfg.Bindings[idx].AgentID
-		resp.DefaultAgentId = &id
-	}
-	jsonOK(scr.w, resp)
 }
 
 // restampChannelSessionsWorkspace re-stamps WorkspaceID on every existing

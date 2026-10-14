@@ -1267,7 +1267,7 @@ func TestBrowserWS_Input_Navigate_SSRFBlocked_FullRoundTrip(t *testing.T) {
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 	agentID := defaultAgent.ID
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, "")
@@ -1361,7 +1361,7 @@ func TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection(t *tes
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 	agentID := defaultAgent.ID
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, "")
@@ -1543,7 +1543,7 @@ func TestBrowserWS_Attach_AnnouncesWebRTCAvailabilityOnSameConnection(t *testing
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
 	agentID := defaultAgent.ID
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, "")

@@ -104,7 +104,7 @@ func TestSessionStateFrame_ActiveTurn(t *testing.T) {
 	assert.Equal(t, idleMeta.ID, *idleFrame.SessionID)
 
 	// Start a real, blocking turn.
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start stubborn turn for session_state test"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start stubborn turn for session_state test", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
@@ -192,7 +192,7 @@ func TestFix_CR1_S1_SessionStateFirstInWireOrder(t *testing.T) {
 	connA := dialTestWS(t, srv)
 	sendWSAuthFrameDevMode(t, connA)
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start turn for CR1 wire order test"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start turn for CR1 wire order test", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, connA.WriteMessage(websocket.TextMessage, data))

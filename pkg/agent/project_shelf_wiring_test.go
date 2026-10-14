@@ -122,7 +122,7 @@ func TestWireProjectShelfResolvers_MountedProjectSkillResolvesEndToEnd(t *testin
 	writeProjectSkillFixture(t, mountRoot, "deploy-helper", "Use when the user asks to deploy the service")
 	seedProjectShelfWorkspace(t, home, wsID, "acme", mountRoot)
 
-	cb := buildLoopForProjectShelfTest(t, "ava")
+	cb := buildLoopForProjectShelfTest(t, "mia")
 
 	// 1. The project shelf itself resolves and contains the mounted skill.
 	shelf := cb.ProjectShelfForWorkspace(wsID)
@@ -178,14 +178,14 @@ func TestWireProjectShelfResolvers_SurvivesConfigReload(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(al.Close)
 
-	inst, ok := al.GetRegistry().GetAgent("ava")
+	inst, ok := al.GetRegistry().GetAgent("mia")
 	require.True(t, ok)
 	_, ok = inst.ContextBuilder.ResolveSkillFullForWorkspace(wsID, "deploy-helper")
 	require.True(t, ok, "sanity: the mounted skill must resolve before any reload")
 
 	require.NoError(t, al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, cfg))
 
-	inst, ok = al.GetRegistry().GetAgent("ava")
+	inst, ok = al.GetRegistry().GetAgent("mia")
 	require.True(t, ok, "agent must still be in the registry after reload")
 	resolved, ok := inst.ContextBuilder.ResolveSkillFullForWorkspace(wsID, "deploy-helper")
 	require.True(t, ok, "the mounted project skill must STILL resolve after a hot config reload — this is the regression")
@@ -210,7 +210,7 @@ func TestWireProjectShelfResolvers_WorkspaceScoped_NoLeakToOtherWorkspace(t *tes
 	seedProjectShelfWorkspace(t, home, mountedWsID, "acme", mountRoot)
 	seedProjectShelfWorkspace(t, home, bareWsID, "", "") // no mount at all
 
-	cb := buildLoopForProjectShelfTest(t, "ava")
+	cb := buildLoopForProjectShelfTest(t, "mia")
 
 	_, ok := cb.ResolveSkillFullForWorkspace(bareWsID, "deploy-helper")
 	assert.False(t, ok, "a workspace with no mounts must not resolve another workspace's project skill")
@@ -236,7 +236,7 @@ func TestWireProjectShelfResolvers_NoMounts_NoRegression(t *testing.T) {
 	const wsID = "01PSHELFWIRING000000004"
 	seedProjectShelfWorkspace(t, home, wsID, "", "")
 
-	cb := buildLoopForProjectShelfTest(t, "ava")
+	cb := buildLoopForProjectShelfTest(t, "mia")
 
 	shelf := cb.ProjectShelfForWorkspace(wsID)
 	assert.Empty(t, shelf)

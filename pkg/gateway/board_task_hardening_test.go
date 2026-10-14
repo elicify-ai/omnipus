@@ -60,11 +60,11 @@ func newTestRestAPIWithAgent(t *testing.T) *restAPI {
 			},
 			List: []config.AgentConfig{
 				{
-					ID:      "01JXTESTAGENTSTARTTEST001",
-					Name:    "Test Agent",
-					Default: true,
-					Type:    config.AgentTypeCustom,
-					Home:    agentWorkspace,
+					ID:   "01JXTESTAGENTSTARTTEST001",
+					Name: "Test Agent",
+
+					Type: config.AgentTypeCustom,
+					Home: agentWorkspace,
 				},
 			},
 		},

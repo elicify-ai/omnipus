@@ -160,7 +160,10 @@ func TestL1WU2AgentToolNames_TrimmedCaseInsensitiveOmnipusIsReserved(t *testing.
 		t.Setenv("OMNIPUS_HOME", deps.Home)
 		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), createNativeArgs("Omnipus Helper"))
 		require.False(t, result.IsError, "BDD-1.2 similar-name control: %s", result.ForLLM)
-		id := parseSuccess(t, result.ForLLM)["id"].(string)
+		id, ok := parseSuccess(t, result.ForLLM)["id"].(string)
+		if !ok {
+			t.Fatal("similar-name positive control must return a string agent id")
+		}
 		ac, err := agentstore.New(deps.Home).Get(id)
 		require.NoError(t, err)
 		assert.Equal(t, "Omnipus Helper", ac.Name)

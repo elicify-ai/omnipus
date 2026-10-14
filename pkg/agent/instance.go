@@ -568,17 +568,8 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 			resolvedAgentType = "custom"
 		}
 	}
-	// NOTE (ADR-054 D6.4): this constructor used to also derive an
-	// IsRoutingDefault bool from agentCfg.Default here and store it on the
-	// instance. That field is removed: splitting agents into independent
-	// per-entity files means two concurrent agent writes could each set
-	// Default=true with no shared lock to serialize them (each delta is
-	// individually valid, the composition is not — ADR-054 D6 rule 4). The
-	// single "default agent" pointer now lives exclusively in the settings
-	// singleton (config.Agents.Defaults.DefaultAgentID, already existed) and
-	// is consulted directly by AgentRegistry.GetDefaultAgent /
-	// RouteResolver.resolveDefaultAgentID — see those functions' doc
-	// comments for the current (3-priority) ladder.
+	// There is no default agent (omnipus-system-agent FR-120): an instance
+	// carries no routing-default flag of any kind.
 	inst := &AgentInstance{
 		ID:                  nai.agentID,
 		Name:                nai.agentName,

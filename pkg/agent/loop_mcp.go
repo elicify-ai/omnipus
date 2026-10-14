@@ -278,20 +278,14 @@ func (al *AgentLoop) MCPServersSnapshot() map[string]config.MCPServerConfig {
 }
 
 // MCPWorkspacePath returns the workspace directory relative MCP server
-// env_file paths are resolved against during reconciliation: the default
-// agent's Home when set, otherwise cfg.AgentHomeBasePath(). Both
-// reconcileLocked and the gateway's MCP-test handler resolve env_file
-// against this single derivation so the two never drift apart.
+// env_file paths are resolved against during reconciliation: the install-level
+// root cfg.AgentHomeBasePath(), never an agent's home (omnipus-system-agent
+// FR-124, §6.4). Both reconcileLocked and the gateway's MCP-test handler
+// resolve env_file against this single derivation so the two never drift.
 func (al *AgentLoop) MCPWorkspacePath() string {
 	al.mu.RLock()
-	workspacePath := al.cfg.AgentHomeBasePath()
-	al.mu.RUnlock()
-
-	registry := al.GetRegistry()
-	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil && defaultAgent.Home != "" {
-		workspacePath = defaultAgent.Home
-	}
-	return workspacePath
+	defer al.mu.RUnlock()
+	return al.cfg.AgentHomeBasePath()
 }
 
 // ensureMCPInitialized loads MCP servers/tools once so both Run() and direct

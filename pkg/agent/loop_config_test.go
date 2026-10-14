@@ -62,7 +62,7 @@ func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 
-	before := al.GetRegistry().GetDefaultAgent()
+	before := al.GetRegistry().primaryChatAgentForTest()
 	if before == nil {
 		t.Fatal("no default agent")
 	}
@@ -122,7 +122,7 @@ func TestApplyAgentModel_UnknownModelRejectedNoMutation(t *testing.T) {
 		t.Fatalf("CreateProvider: %v", err)
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
-	defAgent := al.GetRegistry().GetDefaultAgent()
+	defAgent := al.GetRegistry().primaryChatAgentForTest()
 	if defAgent == nil {
 		t.Fatal("no default agent")
 	}
@@ -188,7 +188,7 @@ func TestApplyAgentModel_ModelOfferedByAnotherConfiguredProvider(t *testing.T) {
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 
-	before := al.GetRegistry().GetDefaultAgent()
+	before := al.GetRegistry().primaryChatAgentForTest()
 	if before == nil {
 		t.Fatal("no default agent")
 	}
@@ -385,7 +385,7 @@ func TestApplyAgentModel_RebuildsProviderPool(t *testing.T) {
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 
-	before := al.GetRegistry().GetDefaultAgent()
+	before := al.GetRegistry().primaryChatAgentForTest()
 	if before == nil {
 		t.Fatal("no default agent")
 	}
@@ -533,7 +533,7 @@ func TestApplyAgentModel_SwitchesInPlace_PreservesID(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	t.Cleanup(al.Close)
 
-	before := al.GetRegistry().GetDefaultAgent()
+	before := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, before)
 	id := before.ID
 	require.NotEmpty(t, id)

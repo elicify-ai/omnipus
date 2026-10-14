@@ -85,7 +85,7 @@ func TestAutoApprove_T18_OneDialogForRuleAsk(t *testing.T) {
 	t.Run("approve: one request carrying rule_ask, command runs", func(t *testing.T) {
 		provider := testutil.NewScenario().WithToolCall("bash", cmd).WithText("done")
 		al, approver := ruleAskLoop(t, provider, askEcho, true)
-		_, err := al.ProcessDirect(context.Background(), "run it", "t18-approve")
+		_, err := al.processDirectPrimaryForTest(context.Background(), "run it", "t18-approve")
 		require.NoError(t, err)
 		reqs := approver.requests()
 		require.Len(t, reqs, 1, "exactly one dialog for one call")
@@ -96,7 +96,7 @@ func TestAutoApprove_T18_OneDialogForRuleAsk(t *testing.T) {
 	t.Run("deny: one request, nothing runs", func(t *testing.T) {
 		provider := testutil.NewScenario().WithToolCall("bash", cmd).WithText("done")
 		al, approver := ruleAskLoop(t, provider, askEcho, false)
-		_, err := al.ProcessDirect(context.Background(), "run it", "t18-deny")
+		_, err := al.processDirectPrimaryForTest(context.Background(), "run it", "t18-deny")
 		require.NoError(t, err)
 		assert.Len(t, approver.requests(), 1)
 		result := toolResultText(t, provider, "bash-0")
@@ -106,7 +106,7 @@ func TestAutoApprove_T18_OneDialogForRuleAsk(t *testing.T) {
 	t.Run("deny rule: refused with zero requests", func(t *testing.T) {
 		provider := testutil.NewScenario().WithToolCall("bash", cmd).WithText("done")
 		al, approver := ruleAskLoop(t, provider, []shellrule.Rule{{Action: shellrule.ActionDeny, Binary: "echo"}}, true)
-		_, err := al.ProcessDirect(context.Background(), "run it", "t18-denyrule")
+		_, err := al.processDirectPrimaryForTest(context.Background(), "run it", "t18-denyrule")
 		require.NoError(t, err)
 		assert.Empty(t, approver.requests())
 		result := toolResultText(t, provider, "bash-0")

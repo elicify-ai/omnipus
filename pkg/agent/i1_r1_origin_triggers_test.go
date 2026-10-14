@@ -86,7 +86,7 @@ func TestI1R1OriginTriggers(t *testing.T) {
 			case "chat":
 				response, err = h.humanTurn(t, prompt)
 			case "channel":
-				response, _, err = h.al.processMessage(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "i1-restart-peer", Content: prompt, UserInitiated: true, Sender: bus.SenderInfo{CanonicalID: "telegram:i1-owner"}, Metadata: map[string]string{"agent_id": testDefaultAgentID, "workspace_id": testHarnessWorkspaceMembershipID}})
+				response, _, err = h.al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "i1-restart-peer", Content: prompt, UserInitiated: true, Sender: bus.SenderInfo{CanonicalID: "telegram:i1-owner"}, Metadata: map[string]string{"agent_id": testDefaultAgentID, "workspace_id": testHarnessWorkspaceMembershipID}})
 			default:
 				response, err = h.scheduledTurn(kind, prompt)
 			}

@@ -72,7 +72,6 @@ func TestSeed_JudgeSystemAgent(t *testing.T) {
 	assert.Equal(t, "judge", j.ID, "the System Agent must be the Judge")
 	assert.Equal(t, config.AgentTypeSystem, j.Type)
 	assert.True(t, j.Locked, "Judge must be locked")
-	assert.False(t, j.Default, "Judge must never be the default agent")
 	assert.False(t, j.IsChatTarget(), "Judge must not be a chat target")
 	assert.True(t, j.IsSystem(), "Judge must report IsSystem()==true")
 
@@ -258,7 +257,6 @@ func TestSeed_JudgeReEnforced_Tamper(t *testing.T) {
 			continue
 		}
 		cfg.Agents.List[i].Locked = false
-		cfg.Agents.List[i].Default = true
 		cfg.Agents.List[i].Type = config.AgentTypeCustom
 		cfg.Agents.List[i].Tools.Builtin.Policies["bash"] = config.ToolPolicyAllow
 		cfg.Agents.List[i].Model = &config.AgentModelConfig{Primary: "operator/model"}
@@ -275,7 +273,6 @@ func TestSeed_JudgeReEnforced_Tamper(t *testing.T) {
 	require.NotNil(t, j)
 	// Non-editable fields re-enforced.
 	assert.True(t, j.Locked, "Locked re-enforced")
-	assert.False(t, j.Default, "stray Default cleared")
 	assert.Equal(t, config.AgentTypeSystem, j.Type, "Type re-enforced to system")
 	assert.Equal(t, config.ToolPolicyDeny, j.Tools.Builtin.Policies["bash"],
 		"granted tool re-enforced back to deny (exact-set invariant: bash is outside the verifier read-only set)")

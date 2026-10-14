@@ -46,7 +46,7 @@ func u1Roster(extra ...config.AgentConfig) []config.AgentConfig {
 	l = append(l,
 		config.AgentConfig{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom},
 		config.AgentConfig{ID: "jim", Name: "Jim", Type: config.AgentTypeCustom},
-		config.AgentConfig{ID: "admin", Name: "Admin", Type: config.AgentTypeCore},
+		config.AgentConfig{ID: "omnipus", Name: "Omnipus", Type: config.AgentTypeCore},
 		config.AgentConfig{ID: "worker1", Name: "Worker", Type: config.AgentTypeWorker},
 		config.AgentConfig{ID: "judge", Name: "Judge", Type: config.AgentTypeSystem},
 	)

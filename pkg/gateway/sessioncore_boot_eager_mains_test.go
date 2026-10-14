@@ -39,7 +39,7 @@ func TestSessionCoreFR002_FreshBootCreatesMainsForSeededTeam(t *testing.T) {
 	}
 	require.NotEmpty(t, wsID)
 	require.Contains(t, team, "worker", "instrument check: the seeded team must contain the ineligible worker")
-	require.Contains(t, team, "ava")
+	require.Contains(t, team, "omnipus")
 
 	req, err := gw.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
 	require.NoError(t, err)
@@ -56,7 +56,7 @@ func TestSessionCoreFR002_FreshBootCreatesMainsForSeededTeam(t *testing.T) {
 		id, _ := s["id"].(string)
 		ids = append(ids, id)
 	}
-	for _, agentID := range []string{"admin", "mia", "jim", "ava"} {
+	for _, agentID := range []string{"mia", "jim", "omnipus"} {
 		require.Contains(t, ids, u1MainID(wsID, agentID), "boot must eagerly create %s's main", agentID)
 	}
 	require.NotContains(t, ids, u1MainID(wsID, "worker"), "a worker owns no main")

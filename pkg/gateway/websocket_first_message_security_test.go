@@ -43,13 +43,13 @@ func issue1090SecurityFixture(t *testing.T) (*WSHandler, *bus.MessageBus, *sessi
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
 	// Same real intake fixture as newTestWSHandlerForModelName, with a second
-	// chat target so a default-agent change is an observable runtime input.
+	// chat target so a changed agent is an observable request difference.
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
-				Home: t.TempDir(), DefaultAgentID: "mia",
+				Home:         t.TempDir(),
 				DefaultModel: config.DefaultModel{Model: "test-default-model"}, MaxTokens: 4096,
 			},
 			List: []config.AgentConfig{{ID: "mia"}, {ID: "security-other-chat-agent"}},
@@ -278,7 +278,7 @@ func TestFirstUserMessage_ChangedRequestedFieldsRetryIsRejected(t *testing.T) {
 		name   string
 		change func(*generated.MessageFrame)
 	}{
-		{"agent_omitted_to_explicit_default", func(f *generated.MessageFrame) { agentID := "mia"; f.AgentId = &agentID }},
+		{"agent_changed", func(f *generated.MessageFrame) { agentID := "security-other-chat-agent"; f.AgentId = &agentID }},
 		{"media_reference_changed", func(f *generated.MessageFrame) { f.Media = []string{"media://s2-different", "media://s2-second"} }},
 		{"media_order_changed", func(f *generated.MessageFrame) { f.Media = []string{"media://s2-second", "media://s2-original"} }},
 		{"workspace_changed", func(f *generated.MessageFrame) { f.Metadata["workspace_id"] = "s2-another-requested-workspace" }},
@@ -289,7 +289,6 @@ func TestFirstUserMessage_ChangedRequestedFieldsRetryIsRejected(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			original := issue1090SecurityFrame("s2-fields-"+tc.name, "The exact text does not change")
-			original.AgentId = nil // resolves Mia, but absent is the ORIGINAL request
 			if tc.name == "auto_false_to_true" {
 				choice := false
 				original.AutoApprove = &choice
@@ -313,39 +312,30 @@ func TestFirstUserMessage_ChangedRequestedFieldsRetryIsRejected(t *testing.T) {
 
 func TestFirstUserMessage_IdenticalRequestRetryRecovers(t *testing.T) {
 	// Standalone passing controls, including requested fields that intake resolves
-	// or drops, and a changed SERVER default that must not conflict with a retry.
-	for _, name := range []string{"explicit_agent", "original_media_and_metadata", "auto_false", "server_default_changed"} {
+	// or drops. (A new chat always names its agent — FR-122 — so there is no
+	// server default left that a retry could depend on.)
+	for _, name := range []string{"explicit_agent", "original_media_and_metadata", "auto_false"} {
 		t.Run(name, func(t *testing.T) {
 			const principal, content = "1090-s2-alice", "Identical ORIGINAL request control"
 			clientID := "s2-identical-" + name
-			handler, msgBus, store, cfg := issue1090SecurityFixture(t)
+			handler, msgBus, store, _ := issue1090SecurityFixture(t)
 			frame := issue1090SecurityFrame(clientID, content)
 			switch name {
 			case "original_media_and_metadata":
-				frame.AgentId = nil
 				frame.Media = []string{"media://s2-original", "media://s2-second"}
 				frame.Metadata = map[string]any{"workspace_id": "s2-original-requested-workspace", "model_name": "s2-original-requested-model"}
 			case "auto_false":
 				choice := false
 				frame.AutoApprove = &choice
-			case "server_default_changed":
-				frame.AgentId = nil
 			}
 			_, initial := issue1090SecurityDispatch(t, handler, principal, "s2-control-first", frame)
 			sessionID := issue1090SecurityAssertFresh(t, initial, clientID)
 			before := issue1090AssertSavedFirstEntry(t, store, sessionID, content, clientID)
 			require.Equal(t, [][3]string{{sessionID, content, principal}}, issue1090AdmittedTurns(msgBus), "S2 control: real original admission")
-			if name == "server_default_changed" {
-				registry := handler.agentLoop.GetRegistry()
-				require.Equal(t, "mia", registry.GetDefaultAgent().ID, "S2 default control: original resolves Mia")
-				cfg.Agents.Defaults.DefaultAgentID = "security-other-chat-agent"
-				registry.SetDefaultAgentOverride("security-other-chat-agent")
-				require.Equal(t, "security-other-chat-agent", registry.GetDefaultAgent().ID, "S2 default control: runtime default actually changed")
-			}
 
 			_, retry := issue1090SecurityDispatch(t, handler, principal, "s2-control-retry", frame)
 			issue1090AssertRecovered(t, retry, sessionID, clientID, "S2 standalone identical-request control")
-			assert.Equal(t, "mia", retry[0]["agent_id"], "S2 identical control: Retry must retain the ORIGINAL resolved agent, even after the default changes")
+			assert.Equal(t, "mia", retry[0]["agent_id"], "S2 identical control: Retry must retain the ORIGINAL agent")
 			assert.Equal(t, before, issue1090DiskTranscriptEntries(t, store, sessionID), "S2 identical control: transcript stays exact")
 			assert.Equal(t, []string{sessionID}, issue1090SessionDirectories(t, store), "S2 identical control: only one session")
 			assert.Empty(t, issue1090AdmittedTurns(msgBus), "S2 identical control: no new turn")

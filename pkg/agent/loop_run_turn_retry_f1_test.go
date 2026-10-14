@@ -65,7 +65,7 @@ func TestCallProviderOnce_SingleCandidateRetriesWithFrame_F1(t *testing.T) {
 		}
 	}
 
-	_, err := al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), processOptions{
+	_, err := al.runAgentLoop(context.Background(), al.GetRegistry().primaryChatAgentForTest(), processOptions{
 		SessionKey:      "f1-retry-session",
 		Channel:         "web",
 		ChatID:          "f1-chat",
@@ -110,7 +110,7 @@ func TestCallProviderOnce_SingleCandidateAlways429_ExhaustsThreeCalls_F1(t *test
 	t.Cleanup(func() { msgBus.Close() })
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(al.Close)
-	_, err := al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), processOptions{
+	_, err := al.runAgentLoop(context.Background(), al.GetRegistry().primaryChatAgentForTest(), processOptions{
 		SessionKey:      "f1-exhaust-session",
 		Channel:         "web",
 		ChatID:          "f1-exhaust-chat",
@@ -189,7 +189,7 @@ func TestCallProviderOnce_SingleCandidateExhaustion_NeverCooldownSkipsNextTurn_F
 	t.Cleanup(al.Close)
 
 	run := func(session string) error {
-		_, err := al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), processOptions{
+		_, err := al.runAgentLoop(context.Background(), al.GetRegistry().primaryChatAgentForTest(), processOptions{
 			SessionKey:      session,
 			Channel:         "web",
 			ChatID:          "f1-cd-chat",

@@ -4,24 +4,25 @@
 
 package agent
 
-// adr090_admin_standalone_reroot_test.go — pins the ADR-090 Admin standalone
-// operator on the TURN-ADMISSION side (resolveTurnWorkDirOrRefuse, the single
-// shared gate for native and external-cli dispatch):
+// omnipus_home_rooting_test.go — pins the Omnipus system agent's turn rooting
+// on the TURN-ADMISSION side (resolveTurnWorkDirOrRefuse, the single shared
+// gate for native and external-cli dispatch). The home rooting the retired
+// Admin had now belongs to Omnipus (omnipus-system-agent OSA-9.1, L1 amendment
+// §2.2 D4):
 //
-//   - Admin (§2.2 / FR-001: "Yes / no team membership") must have REAL,
-//     executable turns rooted at its own agent home — chat-able core, but
-//     never a workspace teammate;
-//   - the rooting must hold EVEN WHEN a workspace record lists admin in its
+//   - Omnipus has REAL, executable turns rooted at its own agent home — the
+//     workspace a request names is target data, never the turn's root;
+//   - the rooting holds EVEN WHEN a workspace record lists omnipus in its
 //     core_team. The workspace record is writable by the sandboxed child
 //     (the reason the delegation store lives in entities/, see
-//     pkg/workspace/delegationstore.go), so a membership-driven Admin branch
-//     would let a forged core_team entry re-root the operator's turns into a
-//     child-writable workspace. Admin's home rooting must be checked BEFORE
-//     workspace resolution, unconditionally;
+//     pkg/workspace/delegationstore.go), so a membership-driven branch would
+//     let a forged core_team entry re-root Omnipus's turns into a
+//     child-writable workspace. The home rooting is checked BEFORE workspace
+//     resolution, unconditionally;
 //   - an empty/unusable agent home still refuses (ErrAgentHomeUnavailable) —
-//     standalone is not a license to fall back to the process CWD;
+//     never a fall back to the process CWD;
 //   - ordinary unassigned agents stay refused (ErrAgentNotWorkspaceMember) —
-//     the standalone route is Admin's alone, not a general relaxation;
+//     the home route is Omnipus's alone, not a general relaxation;
 //   - malformed/unsafe workspace ids still fail the traversal guard for the
 //     agents that DO go through workspace resolution.
 //
@@ -29,7 +30,7 @@ package agent
 // ProcessDirect with a scripted provider and assert purely from where the
 // file landed on disk. They deliberately construct the loop via NewAgentLoop
 // (NOT mustNewAgentLoop) — the harness's ensureTestWorkspaceMembership would
-// otherwise seed Admin onto a workspace and defeat the standalone case.
+// otherwise seed the agent onto a workspace and defeat the home-rooting case.
 
 import (
 	"context"
@@ -65,52 +66,53 @@ func adr090StandaloneLoopConfig(agentID, homeDir string) *config.Config {
 	}
 }
 
-// seedForgedAdminWorkspace persists a workspace record that CLAIMS admin on
-// its core_team. Under ADR-090 no legitimate writer can produce this file
-// (REST, tools, and boot seed all exclude Admin) — but the file is on the
-// child-writable side of the boundary, so admission must not trust it.
-func seedForgedAdminWorkspace(t *testing.T, home string) {
+// seedForgedOmnipusWorkspace persists a workspace record that CLAIMS omnipus on
+// the core_team of a NON-default workspace. No legitimate writer can produce
+// this file (REST and tools refuse Omnipus outside the default workspace,
+// FR-003) — but the file is on the child-writable side of the boundary, so
+// admission must not trust it.
+func seedForgedOmnipusWorkspace(t *testing.T, home string) {
 	t.Helper()
 	wsDir := filepath.Join(home, "workspaces")
 	require.NoError(t, os.MkdirAll(wsDir, 0o755))
-	forged := `{"id":"forged-ws","core_team":["admin","mia"]}`
+	forged := `{"id":"forged-ws","core_team":["omnipus","mia"]}`
 	require.NoError(t, os.WriteFile(filepath.Join(wsDir, "forged-ws.json"), []byte(forged), 0o644))
 }
 
-// TestResolveTurnWorkDirOrRefuse_AdminRootsAtOwnHome_IgnoresForgedCoreTeam is
+// TestResolveTurnWorkDirOrRefuse_OmnipusRootsAtOwnHome_IgnoresForgedCoreTeam is
 // the unit oracle for the admission gate: with a forged membership record on
-// disk, Admin still resolves to its own agent home — and the forge must not
+// disk, Omnipus still resolves to its own agent home — and the forge must not
 // even cause the workspace's work/ directory to be created (the branch must
 // return before workspace resolution runs at all).
-func TestResolveTurnWorkDirOrRefuse_AdminRootsAtOwnHome_IgnoresForgedCoreTeam(t *testing.T) {
+func TestResolveTurnWorkDirOrRefuse_OmnipusRootsAtOwnHome_IgnoresForgedCoreTeam(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
-	seedForgedAdminWorkspace(t, home)
+	seedForgedOmnipusWorkspace(t, home)
 
-	adminHome := filepath.Join(home, "agents", "admin") // deliberately NOT pre-created
-	dir, err := resolveTurnWorkDirOrRefuse(context.Background(), "admin", adminHome, "")
-	require.NoError(t, err, "an Admin turn must be admissible without any workspace membership (ADR-090 §2.2 standalone operator)")
-	assert.Equal(t, adminHome, dir,
-		"Admin's turn must root at its own agent home, not at any workspace — even one whose record claims admin")
+	omnipusHome := filepath.Join(home, "agents", "omnipus") // deliberately NOT pre-created
+	dir, err := resolveTurnWorkDirOrRefuse(context.Background(), "omnipus", omnipusHome, "")
+	require.NoError(t, err, "an Omnipus turn must be admissible without any workspace membership (omnipus-system-agent OSA-9.1: home-rooted)")
+	assert.Equal(t, omnipusHome, dir,
+		"Omnipus's turn must root at its own agent home, not at any workspace — even one whose record claims omnipus")
 
 	_, statErr := os.Stat(filepath.Join(home, "workspaces", "forged-ws", "work"))
 	assert.True(t, errors.Is(statErr, os.ErrNotExist),
-		"resolving an Admin turn must not materialize any workspace work/ directory — the Admin branch must precede workspace resolution")
+		"resolving an Omnipus turn must not materialize any workspace work/ directory — the Omnipus branch must precede workspace resolution")
 
-	_, homeStatErr := os.Stat(adminHome)
-	require.NoError(t, homeStatErr, "the Admin home rooting must materialize its own directory (0700)")
+	_, homeStatErr := os.Stat(omnipusHome)
+	require.NoError(t, homeStatErr, "the Omnipus home rooting must materialize its own directory (0700)")
 }
 
-// TestResolveTurnWorkDirOrRefuse_AdminEmptyHomeRefused pins the failure side
-// of the Admin route: with no usable agent home the turn is refused with
+// TestResolveTurnWorkDirOrRefuse_OmnipusEmptyHomeRefused pins the failure side
+// of the Omnipus route: with no usable agent home the turn is refused with
 // ErrAgentHomeUnavailable — never a silent fall-back to the process CWD or a
 // workspace.
-func TestResolveTurnWorkDirOrRefuse_AdminEmptyHomeRefused(t *testing.T) {
+func TestResolveTurnWorkDirOrRefuse_OmnipusEmptyHomeRefused(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 	// No workspaces at all and an empty home — nothing to root at.
-	_, err := resolveTurnWorkDirOrRefuse(context.Background(), "admin", "", "")
-	require.Error(t, err, "an Admin turn with no agent home must be refused")
+	_, err := resolveTurnWorkDirOrRefuse(context.Background(), "omnipus", "", "")
+	require.Error(t, err, "an Omnipus turn with no agent home must be refused")
 	assert.True(t, errors.Is(err, ErrAgentHomeUnavailable),
 		"refusal must wrap ErrAgentHomeUnavailable, got: %v", err)
 }
@@ -118,7 +120,7 @@ func TestResolveTurnWorkDirOrRefuse_AdminEmptyHomeRefused(t *testing.T) {
 // TestResolveTurnWorkDirOrRefuse_OrdinaryUnassignedAgentStillRefused is the
 // control for the standalone route's scope: an ordinary agent that is a
 // member of nothing keeps the hard ADR-046 refusal. Standalone operation is
-// Admin's role property (FR-001), not a general relaxation.
+// Omnipus's role property (FR-001), not a general relaxation.
 func TestResolveTurnWorkDirOrRefuse_OrdinaryUnassignedAgentStillRefused(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
@@ -153,29 +155,29 @@ func TestResolveTurnWorkDirOrRefuse_UnsafeWorkspaceIDStillFails(t *testing.T) {
 		"an unsafe workspace id must not materialize a directory outside home")
 }
 
-// TestRunTurn_AdminStandalone_WritesToOwnHomeNotForgedWorkspace is the E2E
-// proof through the real dispatch path: a full Admin turn (scripted
-// write_file) executes, lands in agents/admin/, and neither touches nor
+// TestRunTurn_OmnipusHomeRooted_WritesToOwnHomeNotForgedWorkspace is the E2E
+// proof through the real dispatch path: a full Omnipus turn (scripted
+// write_file) executes, lands in agents/omnipus/, and neither touches nor
 // creates the forged workspace's tree. Pre-fix this is RED twice over: the
 // turn would re-root into workspaces/forged-ws/work (membership claim honored).
-func TestRunTurn_AdminStandalone_WritesToOwnHomeNotForgedWorkspace(t *testing.T) {
+func TestRunTurn_OmnipusHomeRooted_WritesToOwnHomeNotForgedWorkspace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
-	seedForgedAdminWorkspace(t, home)
+	seedForgedOmnipusWorkspace(t, home)
 
-	adminHome := filepath.Join(home, "agents", "admin")
-	require.NoError(t, os.MkdirAll(adminHome, 0o755))
+	omnipusHome := filepath.Join(home, "agents", "omnipus")
+	require.NoError(t, os.MkdirAll(omnipusHome, 0o755))
 
 	provider := testutil.NewScenario().
-		WithToolCall("write_file", `{"path":"proof.txt","content":"hello-from-standalone-admin","overwrite":true}`).
+		WithToolCall("write_file", `{"path":"proof.txt","content":"hello-from-home-rooted-omnipus","overwrite":true}`).
 		WithText("done")
 
-	cfg := adr090StandaloneLoopConfig("admin", adminHome)
+	cfg := adr090StandaloneLoopConfig("omnipus", omnipusHome)
 
 	al, err := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	require.NoError(t, err, "NewAgentLoop must succeed")
 	defer al.Close()
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -184,31 +186,31 @@ func TestRunTurn_AdminStandalone_WritesToOwnHomeNotForgedWorkspace(t *testing.T)
 		Policies: map[string]config.ToolPolicy{"write_file": "allow"},
 	})
 
-	finalContent, err := al.ProcessDirect(context.Background(), "please write proof.txt for me", "test-session-admin-standalone")
-	require.NoError(t, err, "an Admin turn must be admissible with zero workspace memberships (ADR-090 standalone operator)")
+	finalContent, err := al.processDirectPrimaryForTest(context.Background(), "please write proof.txt for me", "test-session-omnipus-home")
+	require.NoError(t, err, "an Omnipus turn must be admissible with zero workspace memberships (omnipus-system-agent OSA-9.1: home-rooted)")
 	assert.Equal(t, "done", finalContent)
 	requests := provider.AllRequests()
 	require.NotEmpty(t, requests)
 	for _, messages := range requests {
 		for _, message := range messages {
-			assert.NotContains(t, message.Content, filepath.Join(home, "workspaces", "forged-ws", "work"), "Admin instructions must not advertise a workspace it does not belong to")
+			assert.NotContains(t, message.Content, filepath.Join(home, "workspaces", "forged-ws", "work"), "Omnipus instructions must not advertise a workspace it does not belong to")
 		}
 	}
 
-	got, readErr := os.ReadFile(filepath.Join(adminHome, "proof.txt"))
+	got, readErr := os.ReadFile(filepath.Join(omnipusHome, "proof.txt"))
 	require.NoError(t, readErr,
-		"write_file must land in Admin's own home (%s) — the standalone operator roots there", adminHome)
-	assert.Equal(t, "hello-from-standalone-admin", string(got))
+		"write_file must land in Omnipus's own home (%s) — Omnipus roots there", omnipusHome)
+	assert.Equal(t, "hello-from-home-rooted-omnipus", string(got))
 
 	// The forged membership must not have re-rooted the turn…
 	forgedWork := filepath.Join(home, "workspaces", "forged-ws", "work", "proof.txt")
 	_, forgedErr := os.Stat(forgedWork)
 	assert.True(t, errors.Is(forgedErr, os.ErrNotExist),
-		"write_file must NOT land in a workspace that merely claims admin on core_team (%s)", forgedWork)
+		"write_file must NOT land in a workspace that merely claims omnipus on core_team (%s)", forgedWork)
 	// …and must not even have had its work/ tree materialized.
 	_, forgedDirErr := os.Stat(filepath.Join(home, "workspaces", "forged-ws", "work"))
 	assert.True(t, errors.Is(forgedDirErr, os.ErrNotExist),
-		"an Admin turn must not materialize any workspace work/ directory")
+		"an Omnipus turn must not materialize any workspace work/ directory")
 
 	// No spontaneous workspace creation or join: exactly the one seeded
 	// (forged) record may exist — nothing new, nothing renamed.
@@ -219,11 +221,11 @@ func TestRunTurn_AdminStandalone_WritesToOwnHomeNotForgedWorkspace(t *testing.T)
 		names = append(names, e.Name())
 	}
 	assert.ElementsMatch(t, []string{"forged-ws.json"}, names,
-		"an Admin turn must not create, join, or otherwise mutate any workspace record")
+		"an Omnipus turn must not create, join, or otherwise mutate any workspace record")
 }
 
 // TestRunTurn_OrdinaryUnassignedAgentRefused is the E2E control adjacent to
-// the Admin E2E above: the same loop shape for an ordinary team-role agent
+// the Omnipus E2E above: the same loop shape for an ordinary team-role agent
 // with no memberships is refused (ErrAgentNotWorkspaceMember) and writes
 // nothing anywhere. Keeping it in the same file means no future edit can
 // widen the standalone route without failing its control first.
@@ -243,7 +245,7 @@ func TestRunTurn_OrdinaryUnassignedAgentRefused(t *testing.T) {
 	al, err := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	require.NoError(t, err, "NewAgentLoop must succeed")
 	defer al.Close()
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -251,7 +253,7 @@ func TestRunTurn_OrdinaryUnassignedAgentRefused(t *testing.T) {
 		Policies: map[string]config.ToolPolicy{"write_file": "allow"},
 	})
 
-	_, procErr := al.ProcessDirect(context.Background(), "please write proof.txt for me", "test-session-jim-unassigned")
+	_, procErr := al.processDirectPrimaryForTest(context.Background(), "please write proof.txt for me", "test-session-jim-unassigned")
 	require.Error(t, procErr, "an ordinary unassigned agent's turn must be refused")
 	assert.True(t, errors.Is(procErr, ErrAgentNotWorkspaceMember),
 		"refusal must wrap ErrAgentNotWorkspaceMember, got: %v", procErr)

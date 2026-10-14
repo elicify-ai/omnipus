@@ -74,11 +74,6 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		return fmt.Errorf("registry creation failed: %w", err)
 	}
 
-	// Apply configurable default agent override on the new registry.
-	if cfg.Agents.Defaults.DefaultAgentID != "" {
-		registry.SetDefaultAgentOverride(cfg.Agents.Defaults.DefaultAgentID)
-	}
-
 	// Ensure shared tools are re-registered on the new registry
 	registerSharedTools(al, cfg, al.bus, registry, provider)
 

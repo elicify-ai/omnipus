@@ -66,7 +66,7 @@ func TestQA4Stop_CompletedOrdinaryRootHandbackOwnsAndStopsItsRunningExecution(t 
 	var wakeErr error
 	go func() {
 		defer close(wakeDone)
-		_, _, wakeErr = f.al.processMessage(context.Background(), wake)
+		_, _, wakeErr = f.al.processMessageAsPrimaryForTest(context.Background(), wake)
 	}()
 	joinWake := func() {
 		select {

@@ -67,7 +67,7 @@ const WORKSPACE: Workspace = {
 } as Workspace
 
 const AGENTS: Agent[] = [
-  agent('mia', { name: 'Mia', default: true }),
+  agent('mia', { name: 'Mia' }),
   agent('jim', { name: 'Jim' }),
   agent('planner', { name: 'Planner', type: 'Subagent' }),
   agent('ray', { name: 'Ray' }), // not on the team — should appear in the picker
@@ -695,16 +695,17 @@ describe('WorkspaceTeamTab — node interactions', () => {
     useUiStore.setState({ editAgentId: null, editAgentWorkspaceId: null })
   })
 
-  it('does not offer a remove button on the default agent node (remove-default guard)', async () => {
+  it('offers the remove action on every team member node (there is no default-agent guard)', async () => {
     await renderTab()
     await waitFor(() => expect(screen.getByTestId('team-node-mia')).toBeInTheDocument())
-    // Mia is the default agent — the node must NOT render a "Remove … from team"
-    // action (the guard's UI side; the handler also blocks it defensively).
+    // The default-agent feature is removed (omnipus-system-agent K11/K12,
+    // bundle B1): no member node is shielded from removal any more — every
+    // regular member renders the "Remove … from team" action. Implicit
+    // System nodes (the Judge) are a separate render branch with no actions.
     const miaNode = screen.getByTestId('team-node-mia')
     expect(
       miaNode.querySelector('[aria-label="Remove Mia from team"]'),
-    ).toBeNull()
-    // A non-default member (Jim) DOES get the remove action.
+    ).not.toBeNull()
     const jimNode = screen.getByTestId('team-node-jim')
     expect(
       jimNode.querySelector('[aria-label="Remove Jim from team"]'),

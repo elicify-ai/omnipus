@@ -233,7 +233,7 @@ There is no screen for it. It ships as `["judge", "plansupervisor"]` — the two
 | The key | Effect |
 |---|---|
 | Absent (the key, or the whole `workspace_seed_defaults` block, is missing) | The shipped list applies. A fresh install and an install that never wrote the key behave the same |
-| An empty list `[]` | **Nobody is excluded by this list.** It does not make the two hidden agents (or Admin) team members: they cannot be added to a workspace team, so they still get no workspace self-line. Every ordinary agent that joins a team is seeded one |
+| An empty list `[]` | **Nobody is excluded by this list.** It does not make the two hidden agents team members: they cannot be added to a workspace team, so they still get no workspace self-line. Every ordinary agent that joins a team is seeded one |
 | A list of ids | Exactly those ids are excluded. Adding an ordinary agent such as `"mia"` takes effect with no code change and no restart beyond the usual config reload |
 
 Two limits on what the key does:
@@ -273,7 +273,7 @@ Three protections are fixed in the code on purpose. They guard against malformed
 
 - [security](security.md) — the rest of the Security tab: the sandbox, the encrypted credential vault, and the audit log.
 - [tools](tools.md) — which tools agents may use, and the allow, ask, and deny permissions that govern them.
-- [agents](agents.md) — giving one agent its own model instead of the default, and choosing the default agent.
+- [agents](agents.md) — giving one agent its own model instead of the default, and the agent roster.
 - [memory](memory.md) — what the team remembers between chats, behind the Memory tab.
 - [connectors](connectors.md) — connector accounts and their credentials, managed on the Connectors screen.
 - [providers and models](providers-and-models.md) — how providers, sign-in methods, models, and defaults fit together.

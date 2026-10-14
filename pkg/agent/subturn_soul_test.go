@@ -37,7 +37,7 @@ func TestSpawnSubTurn_NativeWithWorkerTargetComposesSoulAndTask(t *testing.T) {
 	defer cleanup()
 
 	parent := &turnState{
-		agent: al.registry.GetDefaultAgent(),
+		agent: al.registry.primaryChatAgentForTest(),
 	}
 	if parent.agent == nil {
 		t.Fatal("test setup: no default agent")

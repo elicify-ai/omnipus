@@ -30,6 +30,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // --- helpers ---
@@ -74,6 +76,12 @@ func postToolApproval(
 // Traces to: tool-registry-redesign-spec.md FR-027
 func TestREST_GetTools_FullSnapshot(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+	// FR-125: the listing reads the central builtin registry, populated at
+	// boot from the builtin metadata catalogue.
+	api.builtinRegistry = tools.NewBuiltinRegistry()
+	for _, tl := range tools.GeneralBuiltinMetadata() {
+		require.NoError(t, api.builtinRegistry.RegisterBuiltin(tl))
+	}
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
 	r = withAdminRole(r)

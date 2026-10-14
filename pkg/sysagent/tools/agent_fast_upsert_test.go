@@ -237,7 +237,7 @@ func TestAgentCreate_DoesNotTriggerFullReload(t *testing.T) {
 	}
 
 	// Usable, not merely present: ResolveRoute against a pre-existing binding.
-	route := al.GetRegistry().ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "acct-1"})
+	route := al.GetRegistry().ResolveRoute(boundTelegramRouteInput(agentID))
 	if route.Drop {
 		t.Fatalf("route must not drop for %q", agentID)
 	}
@@ -385,9 +385,23 @@ func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
 	if _, ok := al.GetRegistry().GetAgent(agentID); ok {
 		t.Fatalf("deleted agent %q must no longer be resolvable via GetAgent after the reload", agentID)
 	}
-	route := al.GetRegistry().ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "acct-1"})
+	route := al.GetRegistry().ResolveRoute(boundTelegramRouteInput(agentID))
 	if route.AgentID == agentID && !route.Drop {
 		t.Fatalf("ResolveRoute must no longer resolve the telegram binding to the deleted agent %q, got "+
 			"agent_id=%q drop=%v", agentID, route.AgentID, route.Drop)
+	}
+}
+
+// boundTelegramRouteInput is the route input of a "telegram" instance bound
+// to a workspace with agentID as its main agent (omnipus-system-agent FR-121:
+// channels route only through a binding; the resolver checks the named agent
+// against its own config snapshot, so a stale resolver cannot see a new agent).
+func boundTelegramRouteInput(agentID string) routing.RouteInput {
+	return routing.RouteInput{
+		Channel:       "telegram",
+		InstanceID:    "telegram",
+		AccountID:     "acct-1",
+		Identity:      &config.ChannelIdentity{Kind: "agent", ID: agentID},
+		BoundInstance: true,
 	}
 }

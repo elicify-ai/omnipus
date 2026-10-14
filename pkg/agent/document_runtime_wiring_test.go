@@ -84,7 +84,7 @@ func TestNewAgentLoopDocumentSkillPublishesProvisionedRuntime(t *testing.T) {
 	t.Setenv(config.EnvHome, home)
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+		{ID: "mia", Name: "Mia", Type: config.AgentTypeCore},
 		{ID: "worker", Name: "General Purpose", Type: config.AgentTypeWorker},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})

@@ -14570,9 +14570,6 @@ type Agent struct {
 	// ContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 	ContextWindowSource *AgentContextWindowSource `json:"context_window_source,omitempty"`
 
-	// Default Whether this agent is the current global default that handles inbound messages with no more-specific routing rule. This is a COMPUTED value — the backend derives it by comparing the agent's id against the single default-agent setting each time it builds a response; it is never stored per-agent. At most one agent is default at a time. Main only — workers never default.
-	Default *bool `json:"default,omitempty"`
-
 	// DegradedReason Present iff the agent cannot run a turn because of its provider binding (ADR-067 FR-016/FR-031): "needs_provider" = the primary model's provider id is neither a catalog id nor a custom row (or fails exact match). Such an agent refuses turns with LLMError code needs_provider and makes zero upstream requests. When both this and needs_model apply, the "needs a provider" copy wins in the UI. Absent when the agent is healthy.
 	DegradedReason *AgentDegradedReason `json:"degraded_reason,omitempty"`
 
@@ -15392,9 +15389,6 @@ type AgentUpdateRequest struct {
 	// ContextWindowOverride Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.
 	ContextWindowOverride *int `json:"context_window_override,omitempty"`
 
-	// Default Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
-	Default *bool `json:"default,omitempty"`
-
 	// Description New description. Rejected on locked agents. Empty string removes it. For Subagent / subagent_3p, an empty string after trim is rejected 400 (description is required for workers per the routing contract).
 	Description *string `json:"description,omitempty"`
 
@@ -16113,10 +16107,10 @@ type ChannelEnabledResponse struct {
 
 // ChannelEntry A communication channel entry returned by GET /api/v1/channels.
 type ChannelEntry struct {
-	// Degraded True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential). The channel is NOT serving despite enabled=true.
+	// Degraded True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential) — the channel is NOT serving despite enabled=true — or when it dropped an inbound message it could not route (omnipus-system-agent FR-121, K15: unbound instance, missing or ineligible bound agent). A routing degradation is cleared when a valid binding is saved (FR-129).
 	Degraded *bool `json:"degraded,omitempty"`
 
-	// DegradedReason Human-readable reason the channel is degraded. Present only when degraded is true.
+	// DegradedReason Human-readable reason the channel is degraded. Present only when degraded is true. For a routing drop it is the drop reason, e.g. "bind this channel to an agent in a workspace".
 	DegradedReason *string `json:"degraded_reason,omitempty"`
 
 	// Description Short description of the channel.
@@ -16139,6 +16133,9 @@ type ChannelEntry struct {
 
 	// InstanceId The map key under which this instance is stored in config.json (currently equals the channel type in v0.1 cap-1). Included in responses so the SPA can address per-instance configure/enable/routing endpoints without hardcoding the key.
 	InstanceId *string `json:"instance_id,omitempty"`
+
+	// LastDroppedAt When this channel last dropped an inbound message it could not route (K15). Present only while the routing degradation is active.
+	LastDroppedAt *time.Time `json:"last_dropped_at,omitempty"`
 
 	// Name Human-readable channel name.
 	Name string `json:"name"`
@@ -16171,13 +16168,25 @@ type ChannelIdentity struct {
 // ChannelIdentityKind Routing kind for this channel instance.
 type ChannelIdentityKind string
 
-// ChannelRouting Routing configuration for a single communication channel. Controls which agent handles inbound messages arriving on this channel.
+// ChannelRouting Routing configuration for a single communication channel instance, as read back by GET and returned by PUT /channels/{id}/routing. Every channel is bound to a workspace and names that binding's main agent (omnipus-system-agent FR-127, K14); there is no global default agent and no unbound routing mode. An instance that has no binding yet is reported truthfully (FR-128): `bound` is false and both ids are empty strings — never an invented or legacy destination.
 type ChannelRouting struct {
-	// DefaultAgentId ID of the agent that handles this channel's inbound messages. Omitted or empty means fall back to the global default agent.
-	DefaultAgentId *string `json:"default_agent_id,omitempty"`
+	// Bound True when the instance is bound to a workspace and names a main agent. An unbound instance drops every inbound message loudly until bound.
+	Bound bool `json:"bound"`
 
-	// WorkspaceId Workspace this channel instance is bound to. Required (non-empty) for a bound instance; empty/omitted = unbound (legacy default routing).
-	WorkspaceId *string `json:"workspace_id,omitempty"`
+	// DefaultAgentId ID of the bound main agent that answers this channel's inbound messages. Empty string when `bound` is false. (Landing 1 keeps the historical key name; it no longer means any global-default fallback.)
+	DefaultAgentId string `json:"default_agent_id"`
+
+	// WorkspaceId Workspace this channel instance is bound to. Empty string when `bound` is false.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// ChannelRoutingUpdateRequest Body for PUT /channels/{id}/routing. Binds the channel instance to a workspace and names the main agent that answers it. Both fields are required and nonblank (omnipus-system-agent FR-127, K14); the legacy unbound mode is removed, so a request missing either is refused with 400 "bind this channel to an agent in a workspace" and changes nothing. Saving a valid binding clears the instance's routing `degraded` status (FR-129).
+type ChannelRoutingUpdateRequest struct {
+	// DefaultAgentId The bound main agent: a chat-capable member of the workspace's team (never a worker or system agent). Landing 1 keeps the historical key name.
+	DefaultAgentId string `json:"default_agent_id"`
+
+	// WorkspaceId Workspace to bind the channel instance to. Must exist and be active.
+	WorkspaceId string `json:"workspace_id"`
 }
 
 // ChannelTestResponse Response from POST /api/v1/channels/{id}/test. Returns whether required credentials are configured.
@@ -18790,7 +18799,7 @@ type GodModeUpdateResponse struct {
 	RestartRequired bool `json:"restart_required"`
 }
 
-// HealthResponse Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
+// HealthResponse Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
 type HealthResponse struct {
 	// AuditDegraded True when the operator asked for audit logging and it is not working, or when audit writes are being dropped. Does not change the HTTP status.
 	AuditDegraded *bool `json:"audit_degraded,omitempty"`
@@ -24881,8 +24890,8 @@ type SessionType string
 
 // SessionCreateRequest Body for POST /sessions. Creates a new session for an agent.
 type SessionCreateRequest struct {
-	// AgentId Agent ID that will own this session. Defaults to "main" when omitted. Must reference an existing agent (400 if not found).
-	AgentId *string `json:"agent_id,omitempty"`
+	// AgentId Agent ID that will own this session. Required and nonblank — there is no default agent (omnipus-system-agent FR-122, K16); a missing or blank value is refused with 400 "an agent must be named". Must reference an existing chat-target agent (400 if not found). Omnipus has exactly one conversation, so naming Omnipus is refused with 409 carrying its main session id (FR-005).
+	AgentId string `json:"agent_id"`
 
 	// Type Session type. Defaults to "chat" when omitted. "main" is absent.
 	Type *SessionCreateRequestType `json:"type,omitempty"`
@@ -29748,7 +29757,7 @@ type CreateChannelInstanceJSONRequestBody = ChannelCreateRequest
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
 
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
-type SetChannelRoutingJSONRequestBody = ChannelRouting
+type SetChannelRoutingJSONRequestBody = ChannelRoutingUpdateRequest
 
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
 type SetCredentialJSONRequestBody = CredentialSetRequest

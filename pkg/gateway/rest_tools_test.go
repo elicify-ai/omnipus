@@ -435,6 +435,8 @@ func TestUpdateAgentTools_D86_NeitherShapeStillRejected400(t *testing.T) {
 func TestHandleToolsGET(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
+	// FR-125: the listing reads the central builtin registry, wired at boot.
+	api.builtinRegistry = tools.NewBuiltinRegistry()
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)

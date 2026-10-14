@@ -13,7 +13,7 @@ interface WorkerCardProps {
 // Sub-agent worker card. Workers are delegation-only labour agents — "a tool you
 // point at work, not a colleague". They differ from base AgentCards:
 //   SHOW : executor/runner badge.
-//   OMIT : chat/open-conversation entry, heartbeat indicator, default-★ control,
+//   OMIT : chat/open-conversation entry, heartbeat indicator,
 //          and any "Test run" control (removed, issue #915 — for an external
 //          worker the runner check now runs only automatically, before its
 //          profile saves; the profile has no manual button for it).
@@ -81,7 +81,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
                   Running
                 </span>
               )}
-              {/* NB: no heartbeat indicator and no default-★ — workers never have them. */}
+              {/* NB: no heartbeat indicator — workers never have one. */}
             </div>
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] line-clamp-2 mb-[var(--space-2)]">
               {agent.description || 'No description'}

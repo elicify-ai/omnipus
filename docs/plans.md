@@ -97,7 +97,7 @@ After a correction the plan returns to running. The plan fails when its configur
 - **Bounds are per plan** — the judge-round ceiling and idle-expiry days, defaulting to 20 rounds and 7 days. A plan idle that long ends failed.
 - **A running plan can pause.** If its owner agent is disabled, the plan pauses and the tile shows the reason.
 - **A running plan cannot be deleted.** The Clear action in a tile's menu works only on plans that are not running.
-- **Agent-driven plan execution is permission-gated.** On a fresh install, Jim is allowed to execute and stop plans. Mia, Ava and Admin are denied those tools by their shipped role policies. Operators can configure supported per-agent permissions. [Tools](tools.md) explains the per-agent settings.
+- **Agent-driven plan execution is permission-gated.** On a fresh install, Jim is allowed to execute and stop plans. Mia and Omnipus are denied those tools by their shipped role policies. Operators can configure supported per-agent permissions. [Tools](tools.md) explains the per-agent settings.
 
 ## Related pages
 

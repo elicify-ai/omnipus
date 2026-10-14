@@ -82,7 +82,7 @@ func TestProcessMessage_ChannelSessionCreated(t *testing.T) {
 	assert.Empty(t, sessions, "precondition: shared store must be empty before processMessage")
 
 	// When — send a non-webchat message with no SessionID.
-	_, _, err = al.processMessage(context.Background(), bus.InboundMessage{
+	_, _, err = al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "discord",
 		Sender: bus.SenderInfo{
 			CanonicalID: "discord:user-7",
@@ -116,7 +116,7 @@ func TestProcessMessage_ChannelSessionCreated(t *testing.T) {
 func TestProcessMessage_WebchatDoesNotCreateChannelSession(t *testing.T) {
 	al, store := makeLoopWithSharedStore(t)
 
-	_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "webchat",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user-1",
@@ -146,7 +146,7 @@ func TestProcessMessage_WebchatDoesNotCreateChannelSession(t *testing.T) {
 func TestProcessMessage_ChannelUserMessageWrittenToTranscript(t *testing.T) {
 	al, store := makeLoopWithSharedStore(t)
 
-	_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:user-42",
@@ -196,7 +196,7 @@ func TestProcessMessage_ChannelUserMessageWrittenToTranscript(t *testing.T) {
 func TestProcessMessage_WebchatUserMessageNotDoubleWritten(t *testing.T) {
 	al, store := makeLoopWithSharedStore(t)
 
-	_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "webchat",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user-web-1",

@@ -38,7 +38,7 @@ func steerRouteFixture(t *testing.T) (*AgentLoop, *session.LifecycleStore) {
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "jim", Default: true},
+		{ID: "jim"},
 		{ID: "worker", Type: config.AgentTypeWorker},
 	}
 
