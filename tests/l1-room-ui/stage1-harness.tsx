@@ -21,6 +21,7 @@ import { useAuthStore } from '@/store/auth'
 import { useSidebarStore } from '@/store/sidebar'
 import { useSessionStore } from '@/store/session'
 import { useToolApprovalStore } from '@/store/toolApproval'
+import { useSecretRequestStore } from '@/store/secretRequests'
 import { useNotificationsStore } from '@/store/notifications'
 import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -29,6 +30,25 @@ import { json, MAIN_ID, Network, NOW, resetRealStores, TestSocket, WS } from './
 
 export const MAIN_PATH = `/workspaces/${WS}/chat`
 export const SETTINGS_PATH = '/settings?tab=chat'
+
+const originalHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+const originalWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+const originalScrollTo = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTo')
+
+// Browser layout edge only: jsdom has no measured viewport. TanStack's real
+// virtualizer reads offsetHeight/offsetWidth, and a zero height draws no rows.
+export function exposeTranscriptViewport() {
+  for (const [property, original] of [['offsetHeight', originalHeight], ['offsetWidth', originalWidth]] as const) {
+    Object.defineProperty(HTMLElement.prototype, property, {
+      configurable: true,
+      get() {
+        return this.getAttribute('data-testid') === 'virtualized-message-list'
+          ? 800 // Fixture viewport, not a size/timing oracle.
+          : original?.get?.call(this) ?? 0
+      },
+    })
+  }
+}
 
 const mainSession: Session = {
   id: MAIN_ID, type: 'main', agent_id: 'mia', workspace_id: WS,
@@ -94,11 +114,19 @@ export class Stage1Network extends Network {
 export function resetStage1App() {
   resetRealStores()
   resetTokenValidationCache()
+  if (!Element.prototype.scrollTo) {
+    Object.defineProperty(Element.prototype, 'scrollTo', { configurable: true, value() {} })
+  }
   vi.stubGlobal('matchMedia', (media: string) => ({
     matches: media === '(min-width: 1024px)' || media === '(min-width: 40rem)',
     media, onchange: null, addListener() {}, removeListener() {},
     addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
   }))
+  // jsdom implements rAF with an interval. Keep browser frame delivery on
+  // the real timeout edge when an expiry case controls only Date/intervals.
+  // WsConnection still parses/batches/dispatches every actual frame itself.
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 0))
+  vi.stubGlobal('cancelAnimationFrame', (handle: number) => window.clearTimeout(handle))
   vi.stubGlobal('WebSocket', TestSocket)
   TestSocket.instances = []
   act(() => {
@@ -106,6 +134,7 @@ export function resetStage1App() {
     useAuthStore.getState().setUsername('stage1-tester')
     useSidebarStore.setState({ ...useSidebarStore.getInitialState(), isOpen: true, isPinned: true }, true)
     useToolApprovalStore.setState(useToolApprovalStore.getInitialState(), true)
+    useSecretRequestStore.getState().reset()
     useNotificationsStore.setState(useNotificationsStore.getInitialState(), true)
     useChatPreferencesStore.setState(useChatPreferencesStore.getInitialState(), true)
     useSessionStore.setState({
@@ -171,5 +200,11 @@ export async function stopStage1App() {
   queryClient.clear()
   localStorage.clear()
   document.cookie = 'csrf=; Max-Age=0; Path=/'
+  for (const [property, original] of [['offsetHeight', originalHeight], ['offsetWidth', originalWidth]] as const) {
+    if (original) Object.defineProperty(HTMLElement.prototype, property, original)
+    else Reflect.deleteProperty(HTMLElement.prototype, property)
+  }
+  if (originalScrollTo) Object.defineProperty(Element.prototype, 'scrollTo', originalScrollTo)
+  else Reflect.deleteProperty(Element.prototype, 'scrollTo')
   vi.unstubAllGlobals()
 }

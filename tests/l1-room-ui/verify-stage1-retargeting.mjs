@@ -21,6 +21,7 @@ const files = [
   'src/store/chat.sessionModeUpdate.test.ts',
   'src/store/chat.recipient-send.test.ts',
   'src/lib/ws.test.ts',
+  'src/components/chat/RoomTrafficEntry.test.tsx',
 ]
 
 function snapshot(text, file) {
@@ -52,12 +53,39 @@ assert.notDeepEqual(snapshot(control, 'control.ts'), snapshot(control.replace('t
 assert.notDeepEqual(snapshot(control, 'control.ts'), snapshot(control.replace('it(', 'it.skip('), 'control.ts'))
 console.log('instrument control: assertion weakening and case suppression both detected')
 
+// Accepted follow-ups add only these five stronger visibility assertions.
+// Require each addition exactly once, then compare EVERY original assertion
+// and case declaration in order. No original oracle is ignored or replaced.
+const visibleMountAdditions = new Map([
+  ['src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx', [
+    'expect(group).toBeVisible()', 'expect(other).toBeVisible()',
+  ]],
+  ['src/components/layout/AppShell.test.tsx', [
+    'expect(connectionBanner).toBeVisible()', 'expect(approvalBanner).toBeVisible()',
+  ]],
+  ['src/components/chat/RoomTrafficEntry.test.tsx', ['expect(toggle).toBeVisible()']],
+])
+
 for (const file of files) {
   const original = snapshot(execFileSync('git', ['show', `${base}:${file}`], { encoding: 'utf8' }), file)
   const current = snapshot(readFileSync(file, 'utf8'), file)
-  assert.deepEqual(current, original, `${resolve(file)}: assertion or case declaration changed`)
-  console.log(`${resolve(file)}: assertions=${current.assertions.length}; case declarations=${current.cases.length}; unchanged`)
+  const additions = visibleMountAdditions.get(file) ?? []
+  for (const expression of additions) {
+    assert.equal(current.assertions.filter((item) => item === expression).length, 1, `${resolve(file)}: required visibility assertion missing or duplicated`)
+    current.assertions.splice(current.assertions.indexOf(expression), 1)
+  }
+  assert.deepEqual(current, original, `${resolve(file)}: original assertion or case declaration changed`)
+  console.log(`${resolve(file)}: original assertions=${current.assertions.length}; added visible-mount assertions=${additions.length}; case declarations=${current.cases.length}; original oracles unchanged`)
 }
+
+// Original (a)–(f) are a frozen prefix of the extended acceptance file.
+// Compare to the prior pack, not the production head where the file was absent.
+const acceptanceFile = 'src/components/layout/AppShell.stage1.test.tsx'
+const priorAcceptance = snapshot(execFileSync('git', ['show', `8eafc5ac4a71735748a18ce29dae3cd5608d4ab3:${acceptanceFile}`], { encoding: 'utf8' }), acceptanceFile)
+const extendedAcceptance = snapshot(readFileSync(acceptanceFile, 'utf8'), acceptanceFile)
+assert.deepEqual(extendedAcceptance.assertions.slice(0, priorAcceptance.assertions.length), priorAcceptance.assertions)
+assert.deepEqual(extendedAcceptance.cases.slice(0, priorAcceptance.cases.length), priorAcceptance.cases)
+console.log('original nine real-shell acceptance oracles: unchanged in extended pack')
 
 // The sole allowed expected-fixture-set addition is the independently specified
 // K45 client discriminator. The exact-equality matcher above stays identical.

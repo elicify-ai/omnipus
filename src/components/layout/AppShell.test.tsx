@@ -673,6 +673,9 @@ describe('AppShell — cross-workspace approval banner coexists with other banne
     )
     expect(connectionBanner).toBeInTheDocument()
     expect(approvalBanner).toBeInTheDocument()
+    // Follow-up (h): mounted-but-hidden banners cannot satisfy coexistence.
+    expect(connectionBanner).toBeVisible()
+    expect(approvalBanner).toBeVisible()
 
     // Stacked siblings, not overlapping: the approval banner's ancestor
     // button must come AFTER the connection-error alert in document order

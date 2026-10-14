@@ -2,17 +2,21 @@
 // REAL production route tree, AppShell, sidebar/chat/profile/modal, stores,
 // generated API clients and socket dispatcher. No feature-switch mocks.
 // GREEN and the exact mutations listed per case are deferred to fresh CHECK.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { act } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ToolApprovalActionRequest, ToolApprovalResponse } from '@/lib/api/generated/openapi-types'
+import type { RoomRef, SecretRequestFrame, SessionStateFrame, SessionStateSecretRequest, ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { useSessionStore } from '@/store/session'
+import { useChatStore } from '@/store/chat'
+import { useSecretRequestStore } from '@/store/secretRequests'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { json, MAIN_ID, ROOM_ID, workspace, WS } from '../../../tests/l1-room-ui/harness'
+import { json, MAIN_ID, NOW, ROOM_ID, workspace, WS } from '../../../tests/l1-room-ui/harness'
 import {
-  approval, emitFromGateway, MAIN_PATH, mountStage1App, resetStage1App,
+  approval, emitFromGateway, exposeTranscriptViewport, MAIN_PATH, mountStage1App, resetStage1App,
   SETTINGS_PATH, settledMainChat, Stage1Network, stopStage1App,
 } from '../../../tests/l1-room-ui/stage1-harness'
 
@@ -22,6 +26,7 @@ afterEach(async () => {
   try {
     expect(net.unexpected, 'the real app must not fail its setup or hide an unexpected network error').toEqual([])
   } finally {
+    vi.useRealTimers()
     await stopStage1App()
   }
 })
@@ -194,6 +199,192 @@ describe('stage 1 — every pending approval has exactly one actionable surface'
     expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
     expect(router.state.location.pathname).toBe(MAIN_PATH)
     expect(screen.queryByTestId('cross-workspace-approval-banner')).toBeNull()
+    expect(net.writes()).toEqual([])
+  })
+})
+
+describe('stage 1 — hidden room traffic in the real main-chat renderer', () => {
+  // CHECK mutant for all four cases: ROOMS_ENABLED=true; a narrower probe
+  // removes the gate at the corresponding RoomTrafficMessage mount.
+  it.each([
+    { layout: 'plain', kind: 'request' },
+    { layout: 'virtual', kind: 'request' },
+    { layout: 'virtual', kind: 'streaming answer' },
+    { layout: 'virtual', kind: 'completed answer' },
+  ] as const)(
+    '[S1-a traffic; added dispatch] a $layout $kind carrying room_ref renders no room-traffic entry',
+    async ({ layout, kind }) => {
+      if (layout === 'plain') vi.stubGlobal('ResizeObserver', undefined)
+      else exposeTranscriptViewport()
+      const { socket } = await mountStage1App()
+      await settledMainChat(socket)
+      await emitFromGateway(socket, { type: 'catch_up_complete', session_id: MAIN_ID, seq: 1, mode: 'snapshot' })
+      const ordinary = 'Ordinary main-chat control.'
+      await emitFromGateway(socket, { type: 'user_message', session_id: MAIN_ID, id: 'ordinary-stage1', timestamp: NOW, content: ordinary })
+      expect(await screen.findByText(ordinary, { exact: true })).toBeVisible()
+      const roomRef: RoomRef = { room_id: ROOM_ID, room_name: 'Launch', request_id: 'legacy-room-delivery', role: kind === 'request' ? 'request' : 'answer' }
+      const content = 'Stage-one room traffic must not become an entry.'
+      if (kind === 'request') {
+        await emitFromGateway(socket, { type: 'user_message', session_id: MAIN_ID, id: 'room-stage1', timestamp: NOW, content, agent_id: 'mia', room_ref: roomRef })
+      } else {
+        await emitFromGateway(socket, { type: 'token', session_id: MAIN_ID, message_id: 'room-answer-stage1', turn_id: 'room-turn-stage1', content, agent_id: 'mia', room_ref: roomRef })
+        if (kind === 'completed answer') {
+          await emitFromGateway(socket, { type: 'done', session_id: MAIN_ID, message_id: 'room-answer-stage1', turn_id: 'room-turn-stage1', room_ref: roomRef })
+        }
+      }
+      // Positive transport/store control: the tested carrier really arrived;
+      // absence cannot pass because the fixture/parser dropped room_ref.
+      await waitFor(() => {
+        const messages = Object.values(useChatStore.getState().sessionsById[MAIN_ID]?.messagesById ?? {})
+        expect(messages.find((message) => message.content === content)?.roomRef).toEqual(roomRef)
+      })
+      await settledReads()
+      expect(screen.queryByTestId('room-traffic-entry')).toBeNull()
+      expect(screen.queryByTestId('room-traffic-toggle')).toBeNull()
+      expect(screen.queryByRole('link', { name: /open group/i, hidden: true })).toBeNull()
+      expect(roomRequests()).toEqual([])
+    },
+  )
+})
+
+describe('stage 1 — hidden secret cards for live and snapshot carriers', () => {
+  // CHECK mutant for BOTH cases: AGENT_PRIVATE_SECRETS_ENABLED=true;
+  // narrower probe: remove its SecretRequestThreadTail mount guard.
+  it.each(['live', 'session_state'] as const)(
+    '[S1-b card; added dispatch] a %s secret request renders no card or secret endpoint request',
+    async (carrier) => {
+      const { socket } = await mountStage1App()
+      await settledMainChat(socket)
+      const frame: SecretRequestFrame = {
+        type: 'secret_request', request_id: `stage1-secret-${carrier}`,
+        session_id: 'secret-helper', root_session_id: MAIN_ID,
+        acting_agent_id: 'mia', acting_agent_name: 'Mia', workspace_id: WS,
+        owner: { workspace_id: WS, agent_id: 'mia' }, purpose: 'Legacy secret request',
+        recipient: { kind: 'agent_private', lines: ['Sales / Mia', 'STAGE1_TOKEN'] },
+        fields: [{ key: 'value', label: 'Stage-one token' }],
+      }
+      const { type: _type, ...payload } = frame
+      void _type
+      if (carrier === 'live') {
+        await emitFromGateway(socket, frame)
+      } else {
+        const snapshot: SessionStateSecretRequest = { ...payload, state: 'pending', updated_at: NOW }
+        const state: SessionStateFrame = { type: 'session_state', session_id: MAIN_ID, user_id: 'stage1-tester', emitted_at: NOW, pending_approvals: [], secret_requests: [snapshot] }
+        await emitFromGateway(socket, state)
+      }
+      await waitFor(() => expect(useSecretRequestStore.getState().byId[frame.request_id]?.request.state).toBe('pending'))
+      const { updated_at: _updated, ...received } = useSecretRequestStore.getState().byId[frame.request_id]!.request
+      void _updated
+      expect(received).toEqual({ ...payload, state: 'pending' })
+      expect(screen.queryByTestId('secret-request-card')).toBeNull()
+      expect(screen.queryByTestId('secret-request-thread-tail')).toBeNull()
+      expect(screen.queryByLabelText('Stage-one token')).toBeNull()
+      expect(net.requests.filter((request) => /^\/api\/v1\/(?:secrets|secret-requests)(?:\/|$)/.test(request.path))).toEqual([])
+    },
+  )
+})
+
+function visibleModalFor(frame: ToolApprovalRequiredFrame) {
+  const modal = screen.getByRole('dialog', { name: 'Tool Approval Required' })
+  expect(modal).toBeVisible()
+  expect(modal).toHaveTextContent(String(frame.args.path))
+  expect(screen.getAllByRole('dialog', { hidden: true })).toHaveLength(1)
+  return modal
+}
+
+function replyToApproval(frame: ToolApprovalRequiredFrame, action: ToolApprovalActionRequest['action']) {
+  const response: ToolApprovalResponse = { approval_id: frame.approval_id, action, status: 'ok' }
+  net.respond('POST', `/api/v1/tool-approvals/${frame.approval_id}`, () => json(response))
+}
+
+describe('stage 1 — release modal drains every queued approval', () => {
+  // CHECK mutant: remove AppShell's ToolApprovalModal mount; narrower probe:
+  // filter the modal queue by active session, losing its child/other workspace.
+  it('[S1-q; added dispatch] approve/deny/approve drains three real queued requests in arrival order without navigation', async () => {
+    const { router, socket } = await mountStage1App(SETTINGS_PATH)
+    const first = approval({ approval_id: 'queue-parent', args: { path: 'queue-parent.txt' } })
+    const child = approval({ approval_id: 'queue-child', session_id: 'helper-child', agent_id: 'gp', args: { path: 'queue-child.txt' } })
+    const other = approval({ approval_id: 'queue-other', workspace_id: 'marketing', session_id: 'main-ray-marketing', agent_id: 'ray', args: { path: 'queue-other.txt' } })
+    replyToApproval(first, 'allow_once'); replyToApproval(child, 'deny'); replyToApproval(other, 'allow_once')
+    await showApproval(socket, first)
+    await emitFromGateway(socket, child)
+    await emitFromGateway(socket, other)
+    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([first.approval_id, child.approval_id, other.approval_id]))
+    visibleModalFor(first)
+    expect(visibleModalFor(first)).not.toHaveTextContent('queue-child.txt')
+    const user = userEvent.setup()
+    await user.click(within(visibleModalFor(first)).getByRole('button', { name: 'Approve Once' }))
+    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([child.approval_id, other.approval_id]))
+    await user.click(within(visibleModalFor(child)).getByRole('button', { name: 'Deny' }))
+    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([other.approval_id]))
+    await user.click(within(visibleModalFor(other)).getByRole('button', { name: 'Approve Once' }))
+    await waitFor(() => expect(useToolApprovalStore.getState().queue).toEqual([]))
+    expect(net.writes().map(({ method, path, body }) => ({ method, path, body }))).toEqual([
+      { method: 'POST', path: '/api/v1/tool-approvals/queue-parent', body: { action: 'allow_once' } },
+      { method: 'POST', path: '/api/v1/tool-approvals/queue-child', body: { action: 'deny' } },
+      { method: 'POST', path: '/api/v1/tool-approvals/queue-other', body: { action: 'allow_once' } },
+    ])
+    expect(useToolApprovalStore.getState().resolvedIds).toEqual([first.approval_id, child.approval_id, other.approval_id])
+    expect(screen.queryByRole('dialog', { name: 'Tool Approval Required' })).toBeNull()
+    expect(router.state.location.pathname).toBe('/settings')
+    expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
+    expect(useWorkspacesStore.getState().activeWorkspaceId).toBe(WS)
+  })
+})
+
+describe('stage 1 — release modal expiry cannot approve a timed-out call', () => {
+  // CHECK mutant: remove AppShell's modal mount; narrower probe: force
+  // ToolApprovalModal.tsx::ToolApprovalCard hasExpired=false.
+  // Oracle: added expiry requirement, ADR-092 D4 (no auto-submit; timeout is
+  // denial) and asyncapi.yaml::ToolApprovalResolvedFrame (drop terminal entry).
+  it('[S1-exp; added dispatch] at expiry actions disappear without a POST and denied_timeout promotes the next queued request', async () => {
+    const { router, socket } = await mountStage1App(SETTINGS_PATH)
+    await settledReads()
+    // Clock edge only. Preserve real DOM/socket/query scheduling so fixture
+    // delivery is not manufactured by mocked application helpers.
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    vi.setSystemTime(new Date(NOW))
+    const expiring = approval({ approval_id: 'expiry-first', expires_in_ms: 1000, args: { path: 'expiry-first.txt' } })
+    const next = approval({ approval_id: 'expiry-next', args: { path: 'expiry-next.txt' } })
+    await showApproval(socket, expiring)
+    await emitFromGateway(socket, next)
+    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([expiring.approval_id, next.approval_id]))
+    act(() => { vi.advanceTimersByTime(999) })
+    expect(within(visibleModalFor(expiring)).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
+    act(() => { vi.advanceTimersByTime(1) })
+    const expired = visibleModalFor(expiring)
+    for (const name of ['Approve Once', 'Deny', 'Always Allow', 'Cancel']) {
+      expect(within(expired).queryByRole('button', { name })).toBeNull()
+    }
+    expect(net.writes()).toEqual([])
+    await emitFromGateway(socket, { type: 'tool_approval_resolved', approval_id: expiring.approval_id, state: 'denied_timeout', session_id: MAIN_ID })
+    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([next.approval_id]))
+    expect(useToolApprovalStore.getState().resolvedIds).toContain(expiring.approval_id)
+    expect(within(visibleModalFor(next)).getByRole('button', { name: 'Approve Once' })).toBeEnabled()
+    expect(within(visibleModalFor(next)).getByRole('button', { name: 'Deny' })).toBeEnabled()
+    expect(net.writes()).toEqual([])
+    expect(router.state.location.pathname).toBe('/settings')
+    expect(useSessionStore.getState().activeSessionId).toBe(MAIN_ID)
+    vi.useRealTimers()
+  })
+
+  // CHECK mutant: remove AppShell's modal mount, or force hasExpired=false.
+  it('[S1-exp zero; added dispatch] a zero-lifetime request is already non-actionable on arrival and never submits automatically', async () => {
+    const { socket } = await mountStage1App(SETTINGS_PATH)
+    const frame = approval({ approval_id: 'expired-on-arrival', expires_in_ms: 0, args: { path: 'expired-on-arrival.txt' } })
+    await emitFromGateway(socket, frame)
+    await waitFor(() => expect(useToolApprovalStore.getState().queue.map((entry) => entry.approvalId)).toEqual([frame.approval_id]))
+    const modal = await screen.findByRole('dialog', { name: 'Tool Approval Required' })
+    expect(modal).toBeVisible()
+    expect(modal).toHaveTextContent('expired-on-arrival.txt')
+    for (const name of ['Approve Once', 'Deny', 'Always Allow', 'Cancel']) {
+      expect(within(modal).queryByRole('button', { name })).toBeNull()
+    }
+    const dismiss = within(modal).getByRole('button', { name: 'Dismiss' })
+    expect(dismiss).toBeEnabled()
+    await userEvent.setup().click(dismiss)
+    await waitFor(() => expect(useToolApprovalStore.getState().queue).toEqual([]))
+    expect(screen.queryByRole('dialog', { name: 'Tool Approval Required' })).toBeNull()
     expect(net.writes()).toEqual([])
   })
 })

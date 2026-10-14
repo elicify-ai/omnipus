@@ -3,7 +3,14 @@
 // "From group <name>: …" form. The planned "Jim in group …" answer form is
 // not used as an oracle. Direct props are only the public import interface.
 import type { ComponentType } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Stage 1 hides RoomTrafficMessage's ChatThread/ChatScreen entry points.
+// Keep the original enabled-feature carrier oracles for their later landing.
+vi.mock('@/lib/featureSwitches', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/featureSwitches')>(),
+  ROOMS_ENABLED: true,
+}))
 import { act } from 'react'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -32,6 +39,7 @@ async function direct(ref: RoomRef = roomRef, author?: string) {
 
 function expectCollapsed() {
   const toggle = screen.getByTestId('room-traffic-toggle')
+  expect(toggle).toBeVisible()
   expect(toggle).toHaveAttribute('aria-expanded', 'false')
   expect(toggle).toHaveTextContent(/^From group Launch: draft it/)
   expect(toggle).not.toHaveTextContent('Room context: Jim has finished the plan.')

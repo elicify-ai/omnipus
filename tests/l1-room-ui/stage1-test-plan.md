@@ -36,6 +36,39 @@ Capture the original ten files individually on UI head ca09d06f9d34bbcc63f158dc6
 
 Supplemental team-lead dispatch adds three existing packs: select an explicit owner in the first-send Auto-approve/recipient fixtures; add the contract's attach_room discriminator to the exact WebSocket frame set. Preserve every existing assertion and case declaration in these too. The full before/after ledger therefore contains 13 existing files, plus the new nine-case shell file.
 
+## Accepted follow-up (g)/(h), before writing assertions
+
+Source: team-lead accepts the chief's stage-1 requirements, 2026-10-14.
+
+| Case | Boundary and independent oracle | Exact mutant for fresh CHECK |
+|---|---|---|
+| S1-g rooms | Static import of the real feature-switch module, no mock; ROOMS_ENABLED must be exactly false per founder's stage-1 decision of 2026-10-14 | Set ROOMS_ENABLED=true in the production switch module |
+| S1-g secrets | Same real module; AGENT_PRIVATE_SECRETS_ENABLED must be exactly false per the same decision | Set AGENT_PRIVATE_SECRETS_ENABLED=true |
+| S1-g approvals | Same real module; INLINE_TOOL_APPROVALS_ENABLED must be exactly false per the same decision | Set INLINE_TOOL_APPROVALS_ENABLED=true |
+| S1-h enabled rooms | Keep all seven enabled room-section oracles; add a visible group-mount assertion to their shared helper and a visible assertion for the second workspace section | CHECK can hide the enabled Group chats section; no production mutation by RED |
+| S1-h enabled header | Existing real ChatScreen header case already asserts Add participant.toBeVisible with ROOMS_ENABLED mocked ON; preserve it byte-for-byte | Existing enabled-path oracle retained |
+| S1-h enabled banner | Keep original coexistence/order assertions and INLINE_TOOL_APPROVALS_ENABLED mocked ON; add visibility of both the approval banner and connection-error banner | CHECK can hide the mounted approval banner; no production mutation by RED |
+
+The other ten retargeted files (seven session-module mock completions, two first-send fixtures, and the exact client-frame set) have no feature-switch-gated UI mount. They remain unchanged by this follow-up. The unreachability suite and its support must retain the real module; no feature-switch mock is permitted there.
+
+The switch module was introduced at ca09d06f9 already carrying all three false values; its prior absence would be a collection error, not qualified behavioural RED. Record current guard execution honestly and defer its three mutation probes to fresh CHECK. Historical 9/9 behavioural RED for (a)–(f) remains valid. Re-run the final fifteen test files individually and serially, plus typecheck, budget and preservation/discovery checks; save fresh logs without overwriting the earlier receipts.
+
+## Additional accepted room/secret mounts and release-modal coverage
+
+Source: team-lead follow-up during resume, 2026-10-14. Production gates are coming from the UI implementer; RED owns no production integration.
+
+| New case | Independent expectation and positive instrument control | Exact fresh CHECK mutant |
+|---|---|---|
+| S1-a traffic plain request / virtualized request / streaming answer / completed answer | Real app main chat receives room_ref on generated user_message or token/done frames. Store retains that exact reference and ordinary traffic renders, but there is no room-traffic entry/toggle or room link while shipped switches are false. | Set ROOMS_ENABLED=true; narrower probe: remove the ROOMS_ENABLED check at the relevant RoomTrafficMessage mount in ChatScreen |
+| S1-b live / snapshot secret | Real app receives either secret_request or session_state.secret_requests; exact pending request is recorded in the real secret store, while no secret card/thread tail/password control renders and no secret endpoint is called. | Set AGENT_PRIVATE_SECRETS_ENABLED=true; narrower probe: remove its check at SecretRequestThreadTail's ChatScreen mount |
+| S1-q three approvals | Parent, child without root_session_id, and another-workspace request all enter the real queue. Exactly one modal presents them in arrival order; approve/deny/approve send the exact three POST decisions and leave route/session/workspace unchanged. | Remove AppShell's release modal mount; narrower probe: filter visible approvals by active session, hiding child/other-workspace entries |
+| S1-exp expiry | A live request remains actionable before its expires_in_ms deadline, is not actionable at/after expiry, and never posts an automatic decision. Gateway denied_timeout removes it; the next queued request becomes actionable. | Remove AppShell's modal mount; narrower probe: force ToolApprovalCard.hasExpired=false |
+| S1-exp zero | Contract-minimum expires_in_ms=0 is non-actionable immediately; dismissing this already-expired notice removes it without a decision POST. Dismissal is a release-UI characterization; non-actionability/no automatic submission is the safety oracle. | Remove AppShell's modal mount; narrower probe: force ToolApprovalCard.hasExpired=false |
+
+Expiry safety derives from the requested release approval flow, ADR-092 D4's no-auto-submit/timeout denial, and the generating ToolApprovalResolvedFrame contract, which explicitly requires dropping the matching queue entry on denied_timeout. Test time is controlled at the clock edge; no sleep/elapsed-time assertion or increased timeout. Rendered expiry copy is not an oracle.
+
+Existing mount discovery found one additional gated carrier pack: RoomTrafficEntry.test.tsx renders through real ChatThread in six cases. Retarget that file with ROOMS_ENABLED mocked ON, retain every original oracle, and add visibility to its shared collapsed-toggle control. SecretRequestCard behaviour/security/state packs mount the card/tail directly, not via ChatScreen/ChatThread; do not add unnecessary switch mocks there. Existing ToolApprovalModal-named files render the inline panel and do not establish shipped-modal coverage.
+
 ## RED / CHECK boundary
 
 RED proves a failure only on an actual historical pre-change implementation, with an expected-versus-actual behavioural failure. A current-head pass does not establish RED. No production mutations will be performed by this writer. GREEN verification, mutation execution and the skill's Proof-of-failability checklist are deferred to a fresh CHECK instance. The ledger will distinguish observed results, qualified RED evidence, and unverified claims.

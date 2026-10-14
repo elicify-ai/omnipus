@@ -31,7 +31,10 @@ async function showSidebar(projects = [workspace()]) {
   expect(screen.getByRole('button', { name: 'Sales' })).toBeVisible()
   // The group itself must exist during loading too (§6.3), so absence is an
   // immediate, precise behavioural RED instead of a fetch/time-budget failure.
-  return screen.getByTestId(`group-chats-${WS}`)
+  const group = screen.getByTestId(`group-chats-${WS}`)
+  // Follow-up (h): every enabled room-section case proves the visible mount.
+  expect(group).toBeVisible()
+  return group
 }
 
 describe('workspace Group chats section', () => {
@@ -66,6 +69,7 @@ describe('workspace Group chats section', () => {
     net.respond('GET', '/api/v1/workspaces/marketing/rooms', () => json([room({ id: 'marketing-room', workspace_id: 'marketing', name: 'Marketing launch' })]))
     const sales = await showSidebar(net.workspaces)
     const other = screen.getByTestId('group-chats-marketing')
+    expect(other).toBeVisible()
     expect(await within(sales).findByTestId('room-row-launch')).toHaveTextContent('Launch')
     expect(await within(other).findByTestId('room-row-marketing-room')).toHaveTextContent('Marketing launch')
     expect(within(sales).queryByTestId('room-row-marketing-room')).toBeNull()

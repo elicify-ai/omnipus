@@ -1,6 +1,8 @@
 # L1 UI stage 1 — RED pack and before/after ledger
 
-**Bottom line:** 13 existing files retargeted, with every assertion and case declaration preserved; nine new real-application acceptance cases cover dispatch 2(a)–(f). The final new tests show 9/9 behavioural RED failures on unchanged historical production. Current-head serial execution receipts collect 269/269 passing cases across 14 files. **Independent GREEN verification, production mutation probes and the Proof-of-failability checklist remain deferred to fresh CHECK. This is not a CHECK verdict or release approval.**
+**Follow-up in progress:** accepted requirements (g)/(h) and room/secret traffic plus release-modal queue/expiry coverage are now in the tests-only pack. Three real-module switch guards were added. Every original oracle remains; five visible-mount assertions strengthen the enabled-feature tests. The extended real-shell file has 18 cases: its pre-hardening run on ca09d06f9 has 6 expected behavioural failures (four room-traffic variants, two secret carriers) and 12 successes; unchanged historical production 08a204c98 fails all 18 for their specified behavioural difference. The three constant guards have no qualified historical RED and await fresh CHECK mutation proof. The accepted UI hardening head e4c84116b will be merged next and final execution receipts refreshed before push. **Independent GREEN verification, production mutation probes and the Proof-of-failability checklist remain deferred to fresh CHECK.**
+
+The sections below preserve the original 8eafc5ac4 pack's before/after evidence until the final merged-head ledger update. Its 269/269 count is historical, not the extended pack's current result.
 
 ## Specification and source states
 
