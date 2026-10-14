@@ -1067,6 +1067,23 @@ func (rp *resolvePath) validateInputs() error {
 	return nil
 }
 
+// protectedPathDenial classifies an already resolved protected path. The
+// predicate remains the authority; this helper only preserves the Skill redirect.
+func (rp *resolvePath) protectedPathDenial(realAbs string) error {
+	if !fspolicy.IsCarveOut(realAbs, rp.policy) {
+		return nil
+	}
+	// #1284 adds instruction files to the predicate without retiring
+	// D10.3's helpful redirect. This refines the refusal, never admits it.
+	if rp.op == FSOpRead || rp.op == FSOpList || rp.op == FSOpSend {
+		if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched &&
+			shelf == skillShelfRegistry && isSkillInstructionFile(rp.rawPath, realAbs) {
+			return skillsGateDenialError(rp.rawPath)
+		}
+	}
+	return ErrCarveOut
+}
+
 // resolveValidatedPath resolves and gates the validated path, then returns the appropriate host, mount, or workspace-rooted handle.
 func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 	realWorkDir, err := resolveRealpathUnderWorkDir(rp.policy.WorkDir, "")
@@ -1079,16 +1096,8 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 		return nil, fmt.Errorf("%w: %w", ErrPathInvalid, err)
 	}
 
-	if fspolicy.IsCarveOut(realAbs, rp.policy) {
-		// #1284 adds instruction files to the predicate without retiring
-		// D10.3's helpful redirect. This refines the refusal, never admits it.
-		if rp.op == FSOpRead || rp.op == FSOpList || rp.op == FSOpSend {
-			if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched &&
-				shelf == skillShelfRegistry && isSkillInstructionFile(rp.rawPath, realAbs) {
-				return nil, skillsGateDenialError(rp.rawPath)
-			}
-		}
-		return nil, ErrCarveOut
+	if denial := rp.protectedPathDenial(realAbs); denial != nil {
+		return nil, denial
 	}
 
 	// ADR-072 D10.3 (read gate, narrowed) / D6.1.1 (write audit): classify the
