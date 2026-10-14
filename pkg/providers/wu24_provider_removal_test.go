@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -46,8 +47,10 @@ func TestWU24ProviderFactory(t *testing.T) {
 			if provider != nil || model != "" {
 				t.Errorf("factory(%q) = (%T, %q), want (nil, empty model)", id, provider, model)
 			}
-			unknown, ok := err.(*UnknownProviderError)
-			if !ok {
+			var unknown *UnknownProviderError
+			// Keep the exact, unwrapped-type oracle: errors.As alone would
+			// also accept a wrapped error that the original assertion rejects.
+			if !errors.As(err, &unknown) || reflect.TypeOf(err) != reflect.TypeOf(unknown) {
 				t.Fatalf("factory(%q) error = %T (%v), want *UnknownProviderError", id, err, err)
 			}
 			if unknown.ProviderID != id {

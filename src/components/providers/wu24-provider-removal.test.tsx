@@ -1,55 +1,141 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import type { ProvidersCatalog } from '@/lib/api/generated/openapi-types'
+import type { CatalogProvider, Provider } from '@/lib/api/generated/openapi-types'
+import { ProviderRow } from '@/components/settings/ProviderRow'
+import { AuthMethodControl } from './AuthMethodControl'
 import { toCompanyRows } from './provider-picker-model'
-import { ProviderDetailPanel, signInOptionsFor } from './ProviderDetailPanel'
+import { ProviderDetailPanel } from './ProviderDetailPanel'
 
-// WU-24 founder removal/KEEP decision, 2026-10-14 / L1 plan section 10.
-// Use the real committed catalog, not the hand-maintained test catalog that
-// could manufacture a green by simply omitting the unwanted providers.
-function realCompanyRows() {
-  const path = resolve(__dirname, '../../../pkg/providers/catalog/data/providers_catalog.json')
-  const catalog = JSON.parse(readFileSync(path, 'utf8')) as ProvidersCatalog
-  return toCompanyRows(catalog.providers)
+// Founder WU-24 follow-up, 2026-10-14: HTTP ChatGPT has one sign-in
+// method (device code). These are independent generated-type UI inputs,
+// deliberately NOT the server's embedded catalog or its hand-maintained copy.
+const HTTP_CHATGPT: CatalogProvider = {
+  id: 'openai-chatgpt',
+  name: 'ChatGPT',
+  company: 'OpenAI',
+  api: 'https://chatgpt.com/backend-api/codex',
+  protocol: 'openai-compatible',
+  tier: 'standard',
+  auth_methods: ['sign_in'],
+  aliases: [],
+  locality: 'cloud',
+  models: [],
 }
 
-function openAICompany() {
-  const row = realCompanyRows().find((candidate) => candidate.company === 'OpenAI')
-  if (!row) throw new Error('KEEP control: real catalog is missing the OpenAI company')
-  return row
+const OPENAI_API: CatalogProvider = {
+  ...HTTP_CHATGPT,
+  id: 'openai',
+  name: 'OpenAI API',
+  api: 'https://api.openai.com/v1',
+  tier: 'popular',
+  auth_methods: ['api_key'],
 }
 
-const retiredIds = ['codex' + '-cli', 'github' + '-copilot']
+const removedIds = ['codex' + '-cli', 'github' + '-copilot']
 
-describe('WU-24 — provider sign-in has no subprocess model path', () => {
-  it('offers no retired id in any company and exactly HTTP ChatGPT sign-in for OpenAI', () => {
-    const offered = realCompanyRows().flatMap((row) => signInOptionsFor(row.variants))
-    expect(offered.filter((option) => retiredIds.includes(option.providerId))).toEqual([])
-    expect(signInOptionsFor(openAICompany().variants).map((option) => option.providerId)).toEqual([
-      'openai-chatgpt',
-    ])
-  })
+function assertNoLocalLoginControls(root: HTMLElement) {
+  expect(within(root).queryAllByRole('radio')).toHaveLength(0)
+  expect(within(root).queryByRole('button', { name: /existing Codex login|import.*login|check sign-in/i })).not.toBeInTheDocument()
+  expect(within(root).queryByText(/run in a terminal|official Codex app|sign in inside it|Copilot subscription/i)).not.toBeInTheDocument()
+}
 
-  it('renders the real OpenAI provider panel without a CLI option or terminal-login helper', () => {
-    render(<ProviderDetailPanel company={openAICompany()} locale="en-US" />)
-    const signIn = screen.getByTestId('provider-detail-panel-auth-signin')
-    expect(within(signIn).getByRole('button', { name: /^Sign in$/ })).toBeEnabled()
-    for (const id of retiredIds) {
-      expect(screen.queryByTestId(`provider-detail-panel-auth-signin-option-${id}`)).not.toBeInTheDocument()
-    }
-    // One retained HTTP sign-in needs no method chooser. This assertion catches
-    // a removed option rendered without its old identifier/test id as well.
-    expect(within(signIn).queryAllByRole('radio')).toHaveLength(0)
-    expect(within(signIn).queryByText(/official Codex app|sign in inside it|Copilot subscription/i)).not.toBeInTheDocument()
-  })
-
-  it('keeps the HTTP ChatGPT sign-in action reachable and sends its exact provider identity', () => {
+describe('WU-24 — real provider controls, independent of server catalog cleanup', () => {
+  it('AuthMethodControl offers one in-app sign-in action targeting HTTP ChatGPT', () => {
     const onSignIn = vi.fn()
-    render(<ProviderDetailPanel company={openAICompany()} locale="en-US" onSignIn={onSignIn} />)
-    fireEvent.click(screen.getByTestId('provider-detail-panel-auth-signin-start'))
-    expect(onSignIn).toHaveBeenCalledTimes(1)
-    expect(onSignIn).toHaveBeenCalledWith('openai-chatgpt')
+    const onMethodChange = vi.fn()
+    const onProviderChange = vi.fn()
+    render(
+      <AuthMethodControl
+        apiKeyOffered={false}
+        companyName="OpenAI"
+        signInOptions={[{ providerId: HTTP_CHATGPT.id, label: HTTP_CHATGPT.name }]}
+        onSignIn={onSignIn}
+        onMethodChange={onMethodChange}
+        onSignInProviderChange={onProviderChange}
+      />,
+    )
+    const control = screen.getByTestId('auth-method-control')
+    const signIn = within(control).getByRole('button', { name: /^Sign in$/ })
+    expect(signIn).toBeEnabled()
+    assertNoLocalLoginControls(control)
+    fireEvent.click(signIn)
+    expect(onSignIn).toHaveBeenCalledExactlyOnceWith('openai-chatgpt')
+    expect(onMethodChange).toHaveBeenCalledExactlyOnceWith('sign_in')
+    expect(onProviderChange).toHaveBeenCalledExactlyOnceWith('openai-chatgpt')
+  })
+
+  it('ProviderDetailPanel keeps API credentials separate from the sole HTTP sign-in method', () => {
+    const company = toCompanyRows([OPENAI_API, HTTP_CHATGPT])[0]
+    if (!company) throw new Error('independent OpenAI fixture did not produce a company row')
+    const onSignIn = vi.fn()
+    render(<ProviderDetailPanel company={company} locale="en-US" onSignIn={onSignIn} />)
+    const panel = screen.getByTestId('provider-detail-panel')
+    expect(within(panel).getByTestId('provider-detail-panel-auth-segment-sign_in')).toHaveAttribute('aria-pressed', 'true')
+    expect(within(panel).getByTestId('provider-detail-panel-auth-segment-api_key')).toBeInTheDocument()
+    assertNoLocalLoginControls(panel)
+    fireEvent.click(within(panel).getByRole('button', { name: /^Sign in$/ }))
+    expect(onSignIn).toHaveBeenCalledExactlyOnceWith('openai-chatgpt')
+  })
+
+  it.each(removedIds)('ProviderRow preserves the loud unknown error for %s without a login/recovery action', (id) => {
+    // This is the valid configured-row projection the server now returns for
+    // an unknown kind, not a synthetic obsolete catalog row or migration.
+    const error = `unknown provider "${id}"`
+    const provider: Provider = {
+      id,
+      name: id,
+      status: 'unknown-provider',
+      auth_method: 'sign_in',
+      models: [],
+      dependents: [],
+      backs_default: false,
+      error,
+    }
+    const onSignIn = vi.fn()
+    const onManage = vi.fn()
+    render(
+      <ProviderRow
+        provider={provider}
+        title={id}
+        showIcon={false}
+        onConfigure={vi.fn()}
+        onSignIn={onSignIn}
+        onManage={onManage}
+      />,
+    )
+    const row = screen.getByTestId(`provider-row-${id}`)
+    expect(within(row).getByText('Unknown provider', { exact: true })).toBeInTheDocument()
+    expect(within(row).getByText(error, { exact: true })).toBeInTheDocument()
+    expect(within(row).queryByRole('button', { name: /^(Sign in|Manage|Check sign-in)$/ })).not.toBeInTheDocument()
+    expect(onSignIn).not.toHaveBeenCalled()
+    expect(onManage).not.toHaveBeenCalled()
+  })
+
+  it('ProviderRow keeps first-time HTTP ChatGPT sign-in reachable', () => {
+    const onSignIn = vi.fn()
+    const provider: Provider = {
+      id: HTTP_CHATGPT.id,
+      name: HTTP_CHATGPT.name,
+      status: 'disconnected',
+      auth_method: 'sign_in',
+      models: [],
+      dependents: [],
+      backs_default: false,
+    }
+    render(
+      <ProviderRow
+        provider={provider}
+        entry={HTTP_CHATGPT}
+        title="ChatGPT"
+        showIcon={false}
+        onConfigure={vi.fn()}
+        onSignIn={() => onSignIn(provider.id)}
+      />,
+    )
+    const row = screen.getByTestId('provider-row-openai-chatgpt')
+    expect(within(row).getByText('Not signed in', { exact: true })).toBeInTheDocument()
+    fireEvent.click(within(row).getByRole('button', { name: /^Sign in$/ }))
+    expect(onSignIn).toHaveBeenCalledExactlyOnceWith('openai-chatgpt')
+    assertNoLocalLoginControls(row)
   })
 })
