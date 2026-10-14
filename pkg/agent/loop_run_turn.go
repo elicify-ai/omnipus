@@ -152,12 +152,9 @@ func (rc *agentLoopRunTurnConductor) createTurnContext() agentLoopRunTurnConduct
 	rc.rx.rr.rq.ri.turnCatalog = rc.rx.rr.rq.ri.rf.rt.al.getCapabilityCatalog()
 	rc.rx.rr.rq.ri.turnRefcounter = rc.rx.rr.rq.ri.rf.rt.al.getTurnRefcounter(rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID, rc.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID)
 
-	turnTimeout := time.Duration(rc.rx.rr.rq.ri.rf.rt.ts.agent.TimeoutSeconds) * time.Second
-	if turnTimeout > 0 {
-		rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.turnCancel = context.WithTimeout(rc.rx.ctx, turnTimeout)
-	} else {
-		rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.turnCancel = context.WithCancel(rc.rx.ctx)
-	}
+	// No turn deadline (issue #1306): the turn context is cancel-only, so a
+	// turn ends when it finishes or an explicit Stop/cancel fires turnCancel.
+	rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.turnCancel = context.WithCancel(rc.rx.ctx)
 	return agentLoopRunTurnConductorNext
 }
 

@@ -87,7 +87,6 @@ const mockLockedCoreAgent: Agent = {
   model: 'claude-opus-4-6',
   description: 'Core agent with compiled prompt — identity is read-only',
   soul: '',
-  timeout_seconds: 60,
   max_tool_iterations: 20,
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,
@@ -153,7 +152,6 @@ const mockJudgeAgent: Agent = {
   model: 'claude-opus-4-6',
   description: 'Impartial acceptance-criteria verifier',
   soul: 'You are the Judge — an impartial acceptance-criteria evaluator.',
-  timeout_seconds: 60,
   max_tool_iterations: 20,
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,
@@ -2924,7 +2922,6 @@ describe('AgentProfile — Max tool calls per turn visibility by agent kind (fie
     }, { timeout: 5000 })
     const payload = vi.mocked(updateAgent).mock.calls[0][1] as Record<string, unknown>
     expect(payload).not.toHaveProperty('max_tool_iterations')
-    // timeout_seconds stays allowed on the wire for subagent_3p.
     expect(payload).toHaveProperty('name', 'Renamed External')
   })
 })

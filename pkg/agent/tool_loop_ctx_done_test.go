@@ -8,9 +8,9 @@
 //
 // Before the check, only the hard-abort flag stopped a batch mid-way.
 // ToolRegistry.ExecuteWithContext never consults the context, so a batch whose
-// first call ran past the agent's own turn timeout (or whose turn context was
-// cancelled by anything other than a hard abort) went on dispatching every
-// queued call after it.
+// turn context was cancelled by anything other than a hard abort went on
+// dispatching every queued call after it. (A turn has no timeout any more —
+// issue #1306 — so cancellation is the only way the turn context ends.)
 package agent
 
 import (
@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,9 +31,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// ctxDoneTriggerTool ends its own turn's context while it runs, then returns a
-// normal successful result. mode "cancel" calls the turn's cancel function;
-// mode "outlast" waits until the turn's deadline has passed.
+// ctxDoneTriggerTool ends its own turn's context while it runs (it calls the
+// turn's cancel function), then returns a normal successful result.
 type ctxDoneTriggerTool struct {
 	tools.BaseTool
 	name string
@@ -64,19 +62,13 @@ func (c *ctxDoneTriggerTool) Execute(ctx context.Context, _ map[string]any) *too
 			return tools.ErrorResult("test setup: turn has no cancel function")
 		}
 		cancel()
-	case "outlast":
-		select {
-		case <-ctx.Done():
-		case <-time.After(10 * time.Second):
-			return tools.ErrorResult("test setup: the turn deadline never passed")
-		}
 	}
 	return tools.NewToolResult("done")
 }
 
-// newCtxDoneLoop builds an agent loop for agent "mia" with the given per-turn
-// timeout (0 = none) and a default workspace on disk.
-func newCtxDoneLoop(t *testing.T, provider providers.LLMProvider, timeoutSeconds int) *AgentLoop {
+// newCtxDoneLoop builds an agent loop for agent "mia" with a default workspace
+// on disk.
+func newCtxDoneLoop(t *testing.T, provider providers.LLMProvider) *AgentLoop {
 	t.Helper()
 	tmpHome := t.TempDir()
 	workspaceDir := filepath.Join(tmpHome, "workspace")
@@ -93,7 +85,6 @@ func newCtxDoneLoop(t *testing.T, provider providers.LLMProvider, timeoutSeconds
 				DefaultModel:      config.DefaultModel{Model: "scripted-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
-				TimeoutSeconds:    timeoutSeconds,
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: workspaceDir}},
 		},
@@ -128,24 +119,16 @@ func skippedToolReasons(sub EventSubscription, toolName string) []string {
 
 func TestRunTurn_ToolBatch_TurnContextDone_StopsStartingQueuedCalls(t *testing.T) {
 	cases := []struct {
-		name           string
-		mode           string
-		timeoutSeconds int
-		wantSentinel   error
-		wantCause      error
+		name         string
+		mode         string
+		wantSentinel error
+		wantCause    error
 	}{
 		{
 			name:         "turn_context_cancelled_mid_batch",
 			mode:         "cancel",
 			wantSentinel: ErrTurnCanceled,
 			wantCause:    context.Canceled,
-		},
-		{
-			name:           "agent_turn_timeout_passes_mid_batch",
-			mode:           "outlast",
-			timeoutSeconds: 2,
-			wantSentinel:   ErrTurnTimedOut,
-			wantCause:      context.DeadlineExceeded,
 		},
 	}
 
@@ -162,7 +145,7 @@ func TestRunTurn_ToolBatch_TurnContextDone_StopsStartingQueuedCalls(t *testing.T
 				}).
 				WithText("unreachable: the turn must end before another provider round")
 
-			al := newCtxDoneLoop(t, provider, tc.timeoutSeconds)
+			al := newCtxDoneLoop(t, provider)
 			trigger := &ctxDoneTriggerTool{name: "end_turn_ctx", mode: tc.mode}
 			queued := &fixedResultTool{name: "queued_poll", result: `{"jobs":[]}`}
 			al.RegisterTool(trigger)

@@ -692,11 +692,12 @@ type ErrorPayload struct {
 	SessionID string
 }
 
-// TurnTimeoutPayload describes a turn that exceeded its configured timeout.
+// TurnTimeoutPayload describes a provider request that timed out inside a
+// turn (classified FailoverTimeout or a transient stream reset) and is being
+// recovered. It is not a turn deadline — turns have none (issue #1306).
 type TurnTimeoutPayload struct {
-	TimeoutSeconds int
-	Compacted      bool
-	Retried        bool
+	Compacted bool
+	Retried   bool
 }
 
 // EmptyResponseRetryPayload describes a retry triggered by an empty LLM response.

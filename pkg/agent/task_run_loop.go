@@ -562,9 +562,12 @@ func (te *TaskExecutor) adjudicateRunClaim(
 		logger.WarnCF("task_executor", "goal: the Judge is unavailable — retrying the same claim, no try used",
 			map[string]any{"task_id": t.ID, "judge_try": judgeTry, "reason": result.Reason})
 		if judgeTry >= judgeUnavailableRetryBound {
+			// Issue #1306 (founder): the Judge must conclude, and the worker's
+			// result must survive it — the task's Result carries the verdict
+			// AND the evidence the worker claimed completion with.
 			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf(
 				"The Judge could not check this task's work after %d tries (%s). Re-run the task once the Judge is available.",
-				judgeTry, result.Reason), run)
+				judgeTry, result.Reason)+"\n\n"+notVerifiedConclusion("the Judge was unavailable", "", evidence), run)
 			return runStepEnded, "", ""
 		}
 		te.writeTaskReason(t, fmt.Sprintf(

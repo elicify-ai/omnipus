@@ -14394,9 +14394,6 @@ type Agent struct {
 	// Status Current runtime status. "active" = agent is processing a turn. "idle" = ready and waiting. "draft" = SOUL.md is empty (no prompt written yet). "error" is a frontend-added possibility not emitted by the backend today.
 	Status AgentStatus `json:"status"`
 
-	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted. Inherited from agents.defaults.timeout_seconds when not overridden per-agent.
-	TimeoutSeconds int `json:"timeout_seconds"`
-
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
@@ -14681,7 +14678,7 @@ type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
 // AgentCreateRequestSubagentType Discriminator. Must be exactly "Subagent" for this variant.
 type AgentCreateRequestSubagentType string
 
-// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
 // Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
 type AgentCreateRequestSubagent3p struct {
 	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
@@ -14749,9 +14746,6 @@ type AgentCreateRequestSubagent3p struct {
 
 	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
 	Soul string `json:"soul"`
-
-	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted.
-	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 
 	// Type Discriminator. Must be exactly "subagent_3p" for this variant.
 	Type AgentCreateRequestSubagent3pType `json:"type"`
@@ -16853,9 +16847,6 @@ type DelegateRunAction struct {
 
 	// Task The task prompt handed to the child as its first user message.
 	Task string `json:"task"`
-
-	// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = default (30 min).
-	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 }
 
 // DelegateRunActionAction defines model for DelegateRunAction.Action.
@@ -17093,12 +17084,6 @@ type DelegateStatusResponse struct {
 				// RemainingDepth Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
 				RemainingDepth int `json:"remaining_depth"`
 			} `json:"authorization"`
-
-			// Limits Creator-set session limits.
-			Limits *struct {
-				// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
-				TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
-			} `json:"limits,omitempty"`
 
 			// ReportingTarget The steering session's own address; where completion wakes it.
 			ReportingTarget *struct {
@@ -21738,7 +21723,7 @@ type Plan struct {
 		// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
 		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
 		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
@@ -21945,7 +21930,7 @@ type PlanCreateRequest struct {
 		// SupervisionMaxAttempts Override of FR-022's no-correction supervision attempt ceiling (global default `planning.supervision_max_attempts`, 3).
 		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
 		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
@@ -22064,7 +22049,7 @@ type PlanListResponse struct {
 			// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
 			SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
 			SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 		} `json:"bounds,omitempty"`
 
@@ -22276,7 +22261,7 @@ type PlanRestartResponse struct {
 			// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
 			SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
 			SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 		} `json:"bounds,omitempty"`
 
@@ -22473,7 +22458,7 @@ type PlanUpdateRequest struct {
 		// SupervisionMaxAttempts Override of FR-022's no-correction supervision attempt ceiling (global default `planning.supervision_max_attempts`, 3).
 		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
 		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
@@ -23902,7 +23887,7 @@ type Schedule struct {
 		// SessionId The scheduled session this run executed in (links to the transcript).
 		SessionId *string `json:"session_id,omitempty"`
 
-		// Status ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+		// Status ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 		Status ScheduleRunsStatus `json:"status"`
 	} `json:"runs,omitempty"`
 
@@ -23920,7 +23905,7 @@ type Schedule struct {
 		// LastRunAtMs Unix epoch milliseconds of the most recent run.
 		LastRunAtMs *int64 `json:"last_run_at_ms,omitempty"`
 
-		// LastStatus Status of the most recent run (ok/error/skipped/timeout), empty if never run.
+		// LastStatus Status of the most recent run (ok/error/skipped, or the historical timeout), empty if never run.
 		LastStatus *string `json:"last_status,omitempty"`
 
 		// NextRunAtMs Unix epoch milliseconds of the next computed run, if enabled.
@@ -23929,9 +23914,6 @@ type Schedule struct {
 		// Running True while a run of this schedule is currently in progress (overlap guard).
 		Running *bool `json:"running,omitempty"`
 	} `json:"state"`
-
-	// TimeoutSeconds Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default.
-	TimeoutSeconds int `json:"timeout_seconds"`
 
 	// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
 	Trigger struct {
@@ -23948,7 +23930,7 @@ type Schedule struct {
 	UpdatedAtMs int64 `json:"updated_at_ms"`
 }
 
-// ScheduleRunsStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+// ScheduleRunsStatus ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 type ScheduleRunsStatus string
 
 // ScheduleTriggerKind defines model for Schedule.Trigger.Kind.
@@ -23964,9 +23946,6 @@ type ScheduleCreate struct {
 
 	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
 	RunIsolated *bool `json:"run_isolated,omitempty"`
-
-	// TimeoutSeconds Per-run deadline; default 0 = use the global default.
-	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 
 	// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
 	Trigger struct {
@@ -24023,7 +24002,7 @@ type ScheduleList struct {
 			// SessionId The scheduled session this run executed in (links to the transcript).
 			SessionId *string `json:"session_id,omitempty"`
 
-			// Status ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+			// Status ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 			Status ScheduleListSchedulesRunsStatus `json:"status"`
 		} `json:"runs,omitempty"`
 
@@ -24041,7 +24020,7 @@ type ScheduleList struct {
 			// LastRunAtMs Unix epoch milliseconds of the most recent run.
 			LastRunAtMs *int64 `json:"last_run_at_ms,omitempty"`
 
-			// LastStatus Status of the most recent run (ok/error/skipped/timeout), empty if never run.
+			// LastStatus Status of the most recent run (ok/error/skipped, or the historical timeout), empty if never run.
 			LastStatus *string `json:"last_status,omitempty"`
 
 			// NextRunAtMs Unix epoch milliseconds of the next computed run, if enabled.
@@ -24050,9 +24029,6 @@ type ScheduleList struct {
 			// Running True while a run of this schedule is currently in progress (overlap guard).
 			Running *bool `json:"running,omitempty"`
 		} `json:"state"`
-
-		// TimeoutSeconds Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default.
-		TimeoutSeconds int `json:"timeout_seconds"`
 
 		// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
 		Trigger struct {
@@ -24070,7 +24046,7 @@ type ScheduleList struct {
 	} `json:"schedules"`
 }
 
-// ScheduleListSchedulesRunsStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+// ScheduleListSchedulesRunsStatus ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 type ScheduleListSchedulesRunsStatus string
 
 // ScheduleListSchedulesTriggerKind defines model for ScheduleList.Schedules.Trigger.Kind.
@@ -24090,11 +24066,11 @@ type ScheduleRunRecord struct {
 	// SessionId The scheduled session this run executed in (links to the transcript).
 	SessionId *string `json:"session_id,omitempty"`
 
-	// Status ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+	// Status ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 	Status ScheduleRunRecordStatus `json:"status"`
 }
 
-// ScheduleRunRecordStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+// ScheduleRunRecordStatus ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 type ScheduleRunRecordStatus string
 
 // ScheduleRunResult Result of a run-now request (#264).
@@ -24123,7 +24099,7 @@ type ScheduleState struct {
 	// LastRunAtMs Unix epoch milliseconds of the most recent run.
 	LastRunAtMs *int64 `json:"last_run_at_ms,omitempty"`
 
-	// LastStatus Status of the most recent run (ok/error/skipped/timeout), empty if never run.
+	// LastStatus Status of the most recent run (ok/error/skipped, or the historical timeout), empty if never run.
 	LastStatus *string `json:"last_status,omitempty"`
 
 	// NextRunAtMs Unix epoch milliseconds of the next computed run, if enabled.
@@ -24154,8 +24130,7 @@ type ScheduleUpdate struct {
 	OwnerAgentId *string `json:"owner_agent_id,omitempty"`
 
 	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
-	RunIsolated    *bool `json:"run_isolated,omitempty"`
-	TimeoutSeconds *int  `json:"timeout_seconds,omitempty"`
+	RunIsolated *bool `json:"run_isolated,omitempty"`
 
 	// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
 	Trigger *struct {
@@ -24307,10 +24282,10 @@ type Session struct {
 		// BootSeq Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
 		BootSeq *int64 `json:"boot_seq,omitempty"`
 
-		// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, a goal-loop attempt supersession), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
+		// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a goal-loop attempt supersession, or a historical lifetime-budget timeout), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
 		By string `json:"by"`
 
-		// Cause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+		// Cause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
 		Cause SessionStopNoteCause `json:"cause"`
 
 		// Seq Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
@@ -24342,7 +24317,7 @@ type SessionLifecycleState string
 // SessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 type SessionStatus string
 
-// SessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+// SessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
 type SessionStopNoteCause string
 
 // SessionType Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
@@ -24915,10 +24890,10 @@ type SessionDetail struct {
 			// BootSeq Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
 			BootSeq *int64 `json:"boot_seq,omitempty"`
 
-			// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, a goal-loop attempt supersession), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
+			// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a goal-loop attempt supersession, or a historical lifetime-budget timeout), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
 			By string `json:"by"`
 
-			// Cause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+			// Cause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
 			Cause SessionDetailSessionStopNoteCause `json:"cause"`
 
 			// Seq Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
@@ -25038,7 +25013,7 @@ type SessionDetailSessionLifecycleState string
 // SessionDetailSessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 type SessionDetailSessionStatus string
 
-// SessionDetailSessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+// SessionDetailSessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
 type SessionDetailSessionStopNoteCause string
 
 // SessionDetailSessionType Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
@@ -25119,12 +25094,6 @@ type SessionLifecycleRecord struct {
 			// RemainingDepth Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
 			RemainingDepth int `json:"remaining_depth"`
 		} `json:"authorization"`
-
-		// Limits Creator-set session limits.
-		Limits *struct {
-			// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
-			TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
-		} `json:"limits,omitempty"`
 
 		// ReportingTarget The steering session's own address; where completion wakes it.
 		ReportingTarget *struct {

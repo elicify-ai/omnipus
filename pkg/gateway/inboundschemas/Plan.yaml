@@ -321,6 +321,9 @@ properties:
           the PlanSupervisor waits on an armed supervision wake before that
           attempt counts as spent (global default
           `planning.supervision_turn_timeout_seconds`, 600 s).
+          It never stops a running supervision turn: the deadline is only
+          evaluated once no supervision turn is in flight, so it is the grace
+          after a turn settles before that attempt counts as producing nothing.
         example: 600
       supervision_max_attempts:
         type: integer

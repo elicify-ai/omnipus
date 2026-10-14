@@ -27,7 +27,6 @@ function makeWorker(overrides: Partial<Agent> = {}): Agent {
     model: 'anthropic/claude-3.5-haiku',
     description: 'General purpose worker',
     soul: '',
-    timeout_seconds: 60,
     max_tool_iterations: 20,
     max_tool_iterations_source: 'global',
     max_tool_iterations_override_ignored: false,

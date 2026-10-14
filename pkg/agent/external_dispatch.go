@@ -133,17 +133,15 @@ func acquireWorkspaceRunLockCtx(ctx context.Context, workDir string) (release fu
 
 // runExternalCLISubTurnState carries the shared state of runExternalCLISubTurn across its stages.
 type runExternalCLISubTurnState struct {
-	al          *AgentLoop
-	childTS     *turnState
-	timeout     time.Duration
-	agent       *AgentInstance
-	runID       string
-	timeoutSecs int
-	maxTurns    int
-	agentModel  string
-	childEnv    []string
-	execCfg     *config.ExecutorConfig
-	cliArgs     []string
+	al         *AgentLoop
+	childTS    *turnState
+	agent      *AgentInstance
+	runID      string
+	maxTurns   int
+	agentModel string
+	childEnv   []string
+	execCfg    *config.ExecutorConfig
+	cliArgs    []string
 }
 
 // runExternalCLISubTurn executes a delegated sub-agent task through an external
@@ -151,7 +149,8 @@ type runExternalCLISubTurnState struct {
 // shape (ForLLM/ForUser carry the run's aggregated output; Err is set on failure).
 //
 // childTS is the sub-turn's turnState (used for transcript writes + agent ID).
-// task is the delegated input prompt. timeout bounds the whole run.
+// task is the delegated input prompt. There is no run deadline: the CLI runs
+// until it finishes or ctx is cancelled by an explicit Stop (issue #1306).
 //
 // childTS.agent is the resolved DELEGATE's own AgentInstance
 // (steer_reconstruct.go::reconstructSteeredTurn sources it from
@@ -198,9 +197,8 @@ func runExternalCLISubTurn(
 	al *AgentLoop,
 	childTS *turnState,
 	task string,
-	timeout time.Duration,
 ) (*tools.ToolResult, error) {
-	ed := &runExternalCLISubTurnState{al: al, childTS: childTS, timeout: timeout}
+	ed := &runExternalCLISubTurnState{al: al, childTS: childTS}
 
 	ed.agent = ed.childTS.agent
 	if ed.agent == nil || ed.agent.Subagents == nil || ed.agent.Subagents.Executor == nil {
@@ -296,10 +294,10 @@ func runExternalCLISubTurn(
 	// inline context.Background() call. ADR-091 fix lane RX-SUBTURN note
 	// (comment-only; code unchanged): today runCtx is built below via
 	// context.WithCancel(ctx), where ctx is this function's own parameter —
-	// tracing its callers (task_executor_run.go's dispatchCtx, itself
-	// derived from the incoming ctx; and, for a delegate-tool dispatch,
-	// ultimately steer_launcher.go::runDispatchedSteeredTurn's
-	// steeredTurnRunContext(context.Background(), rec)) suggests the same
+	// tracing its callers (task_executor_run.go passes the task's own ctx;
+	// and, for a delegate-tool dispatch, ultimately
+	// steer_launcher.go::runDispatchedSteeredTurn's context.Background() —
+	// no deadline since issue #1306) suggests the same
 	// Background()-rooted detachment still holds indirectly, but this was
 	// not re-verified end-to-end for this lane. Worst case, pre-ADR-091: a
 	// SYNCHRONOUS delegate (`delegate(async=false)`) deadlocked the parent
@@ -307,8 +305,8 @@ func runExternalCLISubTurn(
 	// graceful→hard→detached as if cancel worked — ADR-091 D4 deleted the
 	// async=false option outright, so this specific scenario no longer
 	// applies, though the underlying "nothing else can ever cancel runCtx
-	// without this registration" concern is presumably still real for
-	// whatever timeout/cancel path replaced it.
+	// without this registration" concern is presumably still real for the
+	// cancel path that replaced it (there is no run timeout since #1306).
 	//
 	// One cancel func for both slots is the correct behavior here (not a
 	// simplification): runner.ExternalAgentRunner exposes no distinct graceful
@@ -436,15 +434,14 @@ func (ed *runExternalCLISubTurnState) startAndDrain(
 	resume bool,
 ) (*tools.ToolResult, error) {
 	runOpts := runner.RunOptions{
-		RunID:          ed.runID,
-		WorkDir:        resolvedWorkDir,
-		Input:          task,
-		Env:            ed.childEnv,
-		TimeoutSeconds: ed.timeoutSecs,
-		MaxTurns:       ed.maxTurns,
-		CLIPath:        ed.execCfg.CLIPath,
-		CLIArgs:        ed.cliArgs,
-		EnvOverrides:   ed.execCfg.EnvOverrides,
+		RunID:        ed.runID,
+		WorkDir:      resolvedWorkDir,
+		Input:        task,
+		Env:          ed.childEnv,
+		MaxTurns:     ed.maxTurns,
+		CLIPath:      ed.execCfg.CLIPath,
+		CLIArgs:      ed.cliArgs,
+		EnvOverrides: ed.execCfg.EnvOverrides,
 		// Fix C: auto-set the delegate's own configured model on the external
 		// CLI invocation. Each driver's buildArgs guards so an unmapped/empty
 		// model string is simply omitted rather than passed as garbage.
@@ -474,7 +471,7 @@ func (ed *runExternalCLISubTurnState) startAndDrain(
 
 	slog.Info("external-cli dispatch: run started",
 		"run_id", ed.runID, "cli", cli, "work_dir", resolvedWorkDir,
-		"timeout_s", ed.timeoutSecs, "max_turns", ed.maxTurns, "agent_id", ed.childTS.agentID)
+		"max_turns", ed.maxTurns, "agent_id", ed.childTS.agentID)
 
 	// 5. Route events through the consent dispatcher and drain into the transcript.
 	//    ConsentDispatcher answers permission-requests (Decide) and forwards every
@@ -537,13 +534,11 @@ func acquireRunSlot(runCtx context.Context, cli, workDir string) (release func()
 	return releaseWorkspaceLock, nil, nil
 }
 
-// prepareRunOptions derives the run limits, model, scrubbed environment, and configured CLI arguments.
+// prepareRunOptions derives the turn cap, model, scrubbed environment, and configured CLI arguments.
 func (ed *runExternalCLISubTurnState) prepareRunOptions() {
-	// 4. Bound the run: a per-run timeout + turn cap (FR-5.4).
-	ed.timeoutSecs = int(ed.timeout.Seconds())
-	if ed.timeoutSecs <= 0 {
-		ed.timeoutSecs = int(defaultSubTurnTimeout.Seconds())
-	}
+	// 4. Bound the run by its turn cap only (FR-5.4). There is no wall-clock
+	// timeout: RunOptions.TimeoutSeconds stays zero, so no driver arms a
+	// kill timer on agent work (issue #1306).
 	// Turn cap = the agent's effective tool-iteration limit (#904 D4/D14),
 	// already resolved onto MaxIterations by NewAgentInstance. An instance
 	// built without that constructor (MaxIterations <= 0) resolves through

@@ -424,9 +424,8 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 			EventKindTurnTimeout,
 			cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.timeout"),
 			TurnTimeoutPayload{
-				TimeoutSeconds: cr.rr.rq.ri.rf.rt.ts.agent.TimeoutSeconds,
-				Compacted:      cr.compactionAttemptedOnTimeout,
-				Retried:        retry > 0,
+				Compacted: cr.compactionAttemptedOnTimeout,
+				Retried:   retry > 0,
 			},
 		)
 		// Timeout recovery: compact context if it's heavily loaded, then retry once.

@@ -1280,7 +1280,6 @@ type Agent = {
   status: "active" | "idle" | "draft" | "error";
   soul: string;
   warning?: string | undefined;
-  timeout_seconds: number;
   max_tool_iterations: number;
   max_tool_iterations_source: MaxToolIterationsSource;
   max_tool_iterations_override?: number | undefined;
@@ -1489,7 +1488,6 @@ type AgentCreateRequestSubagent3p = {
     | undefined;
   soul: string;
   executor: ExecutorConfig;
-  timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
 };
 type AgentUpdateRequest = {
@@ -2426,7 +2424,6 @@ type Schedule = {
   trigger: ScheduleTrigger;
   message: string;
   run_isolated?: boolean | undefined;
-  timeout_seconds: number;
   session_id?: string | undefined;
   state: ScheduleState;
   runs?: Array<ScheduleRunRecord> | undefined;
@@ -2460,7 +2457,6 @@ type ScheduleCreate = {
   trigger: ScheduleTrigger;
   message: string;
   run_isolated?: boolean | undefined;
-  timeout_seconds?: number | undefined;
   enabled?: boolean | undefined;
 };
 type ScheduleUpdate = Partial<{
@@ -2469,7 +2465,6 @@ type ScheduleUpdate = Partial<{
   trigger: ScheduleTrigger;
   message: string;
   run_isolated: boolean;
-  timeout_seconds: number;
   enabled: boolean;
 }>;
 type ScheduleList = {
@@ -2960,7 +2955,6 @@ type DelegateRunAction = {
   task: string;
   label?: string | undefined;
   critical?: boolean | undefined;
-  timeout_seconds?: number | undefined;
   snapshot?:
     | Partial<{
         references: Array<string>;
@@ -3100,11 +3094,6 @@ type SessionLifecycleRecord = {
           mode: "direct" | "task";
           remaining_depth: number;
         };
-        limits?:
-          | Partial<{
-              timeout_seconds: number;
-            }>
-          | undefined;
         tool_exclusions?: Array<string> | undefined;
       }
     | undefined;
@@ -3927,7 +3916,6 @@ export const Agent: z.ZodType<Agent> = z
     status: z.enum(["active", "idle", "draft", "error"]),
     soul: z.string(),
     warning: z.string().optional(),
-    timeout_seconds: z.number().int().gte(0),
     max_tool_iterations: z.number().int().gte(1).lte(1000),
     max_tool_iterations_source: MaxToolIterationsSource,
     max_tool_iterations_override: z.number().int().gte(1).optional(),
@@ -4030,7 +4018,6 @@ export const AgentCreateRequestSubagent3p =
       .optional(),
     soul: z.string().min(1),
     executor: ExecutorConfig,
-    timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestSubagent3p>;
 export const AgentCreateRequest =
@@ -5433,7 +5420,6 @@ export const Schedule: z.ZodType<Schedule> = z.object({
   trigger: ScheduleTrigger,
   message: z.string().min(1),
   run_isolated: z.boolean().optional(),
-  timeout_seconds: z.number().int(),
   session_id: z.string().optional(),
   state: ScheduleState,
   runs: z.array(ScheduleRunRecord).optional(),
@@ -5449,7 +5435,6 @@ export const ScheduleCreate: z.ZodType<ScheduleCreate> = z.object({
   trigger: ScheduleTrigger,
   message: z.string().min(1),
   run_isolated: z.boolean().optional().default(false),
-  timeout_seconds: z.number().int().gte(0).optional(),
   enabled: z.boolean().optional(),
 });
 export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
@@ -5459,7 +5444,6 @@ export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
     trigger: ScheduleTrigger,
     message: z.string().min(1),
     run_isolated: z.boolean().default(false),
-    timeout_seconds: z.number().int().gte(0),
     enabled: z.boolean(),
   })
   .partial();
@@ -7400,10 +7384,6 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
           mode: z.enum(["direct", "task"]),
           remaining_depth: z.number().int().gte(0),
         }),
-        limits: z
-          .object({ timeout_seconds: z.number().int().gte(0) })
-          .partial()
-          .optional(),
         tool_exclusions: z.array(z.string()).optional(),
       })
       .optional(),
@@ -7489,7 +7469,6 @@ export const DelegateRunAction = z.object({
   task: z.string().min(1).max(10000),
   label: z.string().max(100).optional(),
   critical: z.boolean().optional(),
-  timeout_seconds: z.number().int().gte(0).optional(),
   snapshot: z
     .object({ references: z.array(z.string()), notes: z.string().max(8192) })
     .partial()

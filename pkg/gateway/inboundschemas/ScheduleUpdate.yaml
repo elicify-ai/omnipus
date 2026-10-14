@@ -26,8 +26,5 @@ properties:
       worker runs isolated once or continues its own chat when recurring. There
       is no other session-mode choice.
     example: false
-  timeout_seconds:
-    type: integer
-    minimum: 0
   enabled:
     type: boolean

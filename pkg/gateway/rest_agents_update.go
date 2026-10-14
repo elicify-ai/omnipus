@@ -1079,10 +1079,9 @@ func (rp *restAPIUpdateAgentPersistAgent) updateIdentityAndModel(agentRec *confi
 		agentRec.Model.Provider = strings.TrimSpace(*rp.ru.req.Provider)
 	}
 	// NOTE (discovered during ADR-054 conversion, pre-existing gap,
-	// out of scope here): req.TimeoutSeconds and req.RateLimits
-	// have NO corresponding config.AgentConfig field —
-	// config.AgentConfig has no TimeoutSeconds/RateLimits at all
-	// (only agents.defaults.timeout_seconds, a global setting).
+	// out of scope here): req.RateLimits has NO corresponding
+	// config.AgentConfig field. (timeout_seconds is gone from the wire
+	// and from config entirely — agent work has no time limit, #1306.)
 	// The pre-conversion code wrote them to raw map keys with no
 	// Go struct field to read them back into, so they never
 	// survived a struct-based config reload even before this

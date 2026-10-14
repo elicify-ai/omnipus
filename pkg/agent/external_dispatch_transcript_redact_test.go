@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -58,7 +57,7 @@ func runExternalAndReadStore(t *testing.T, evs []runner.RunEvent) (stored string
 		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
-	_, _ = runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	_, _ = runExternalCLISubTurn(context.Background(), al, ts, "task")
 	require.NoError(t, store.Close())
 
 	var sb strings.Builder

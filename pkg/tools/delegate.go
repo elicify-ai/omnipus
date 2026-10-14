@@ -567,8 +567,7 @@ func (t *DelegateTool) Description() string {
 		"action=\"run\" (default) launches a session. It returns at once with the child's session_id " +
 		"and whether it is running or queued (with its place in line). You get a message when the " +
 		"child finishes, asks a question, or hits a problem. Check on it with delegate status, " +
-		"redirect it with delegate redirect, stop it with delegate stop_all. A delegation is " +
-		"force-stopped after timeout_seconds (default 1800s / 30 min) if it has not finished by then. " +
+		"redirect it with delegate redirect, stop it with delegate stop_all. " +
 		"A run has two modes. Without a goal (the default) the helper is done when it returns a non-empty " +
 		"final answer and none of its own helpers are still running; an empty answer is a failure. With a " +
 		"goal — pass criteria and dod together, one without the other is refused — the helper works toward " +
@@ -739,10 +738,6 @@ func (t *DelegateTool) Parameters() map[string]any {
 					"whole delegation call fails instead of silently proceeding without it. Merely mentioning " +
 					"a skill by name inside \"task\" does not have this effect — it is only a hopeful hint " +
 					"the target's own judgement may or may not act on.",
-			},
-			"timeout_seconds": map[string]any{
-				"type":        "integer",
-				"description": "Optional (action=\"run\" only): max seconds before this delegation is force-cancelled. 0 = default (30 min).",
 			},
 			"critical": map[string]any{
 				"type":        "boolean",

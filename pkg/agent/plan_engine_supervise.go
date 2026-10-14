@@ -705,10 +705,17 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	ctx, cancel := context.WithTimeout(context.Background(), planJudgeRoundTimeout)
 	defer cancel()
 
+	// Issue #1306 (founder): the Judge must conclude. A round that cannot
+	// even gather its inputs is an UNAVAILABLE round, routed through the same
+	// outcome path as a judge outage — bounded retry, a visible handover on
+	// the plan, and the park at the bound — never a silent return that
+	// leaves the plan in "judging" with nothing watching it.
 	p, err := pe.planStore.Get(planID)
 	if err != nil {
 		logger.WarnCF("plan_engine", "judge round: could not reload plan",
 			map[string]any{"plan_id": planID, "error": err.Error()})
+		pe.applyJudgeRoundOutcome(planID, JudgeCriteriaResult{Unavailable: true,
+			Reason: "the plan record could not be reloaded for the judge round: " + err.Error()}, false, "")
 		return
 	}
 
@@ -716,6 +723,8 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	if err != nil {
 		logger.WarnCF("plan_engine", "judge round: could not list member tasks",
 			map[string]any{"plan_id": planID, "error": err.Error()})
+		pe.applyJudgeRoundOutcome(planID, JudgeCriteriaResult{Unavailable: true,
+			Reason: "the plan's member tasks could not be listed for the judge round: " + err.Error()}, false, "")
 		return
 	}
 	// F2 round-burn gate (acceptance G-9): the signature of the EXACT
@@ -1196,10 +1205,9 @@ func supervisionUnitForPlan(planID string) string { return "supervision:" + plan
 // genuinely fresh turn. A holder that crashes mid-turn releases nothing
 // explicitly, but the registry is process-local (verifier_registry.go's own
 // documented contract) — a restart rebuilds it empty, so a crashed holder
-// cannot wedge a plan past that restart, and short of a restart the existing
-// FR-021 observation deadline (supervisionTurnTimeout) already bounds the
-// turn's own context, so a genuinely wedged turn still exits (context
-// deadline) and releases its claim within that same bound.
+// cannot wedge a plan past that restart. Short of a restart a running turn
+// keeps its claim for as long as it runs: there is no turn deadline (issue
+// #1306), and an explicit Stop is what ends a wedged one.
 //
 // Caller must hold planDecisionMu.
 func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string, newPark bool) {
@@ -1349,7 +1357,7 @@ func (pe *PlanEngine) wakeSupervisor(p *plan.Plan, content, sourceKind string, n
 	// no goroutine ever ran) or from the dispatched goroutine's own defer chain
 	// once the turn truly settles (success, error, or panic-recovered). Do NOT
 	// also call it here on the error branch — dispatchPlanTurn already did.
-	if dispatchErr := pe.dispatchPlanTurn(p.ID, planSupervisorAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p), releaseClaim); dispatchErr != nil {
+	if dispatchErr := pe.dispatchPlanTurn(p.ID, planSupervisorAgentID, sessionID, content, sourceKind, releaseClaim); dispatchErr != nil {
 		// FR-024 / §20: an undelivered supervision wake is RECORDED on the
 		// plan, not WARNed away — "parked" and "silently stuck" must be
 		// distinguishable from the record alone. Unlike a missing chat origin
@@ -1464,6 +1472,13 @@ func (pe *PlanEngine) evaluateSupervisionDeadlineLocked(p *plan.Plan) {
 		// parked plan — see bootReconcile) can answer it.
 		return
 	}
+	if pe.supervisionTurnInFlight(p.ID) {
+		// Issue #1306: a supervision turn that is still working is never
+		// treated as having "produced nothing" — that would re-issue or fail
+		// the plan under a turn that may still conclude. The deadline is the
+		// grace AFTER the turn settles, measured from the same wake_at.
+		return
+	}
 	if !pe.clock.Now().UTC().After(wakeAt.Add(pe.supervisionTurnTimeout(p))) {
 		return // strict >: at exactly wake_at+timeout the deadline does NOT fire
 	}
@@ -1497,6 +1512,16 @@ func (pe *PlanEngine) evaluateSupervisionDeadlineLocked(p *plan.Plan) {
 		})
 	pe.failPlanLocked(p.ID, plan.FailedReasonSupervisionUnavailable,
 		buildSupervisionUnavailableHandover(p, maxAttempts))
+}
+
+// supervisionTurnInFlight reports whether a supervision turn for planID still
+// holds its wakeSupervisor CAS claim — i.e. it was dispatched and has not
+// settled yet (the claim is released from dispatchPlanTurn's goroutine only
+// once the turn truly ends). The registry is process-local, so after a
+// restart no claim exists and the deadline is evaluated normally.
+func (pe *PlanEngine) supervisionTurnInFlight(planID string) bool {
+	_, held := pe.registry().Lookup(supervisionUnitForPlan(planID))
+	return held
 }
 
 // supervisionTurnTimeout resolves FR-021's observation deadline for p:

@@ -16,7 +16,6 @@ required:
   - role
   - status
   - soul
-  - timeout_seconds
   - max_tool_iterations
   - max_tool_iterations_source
   - max_tool_iterations_override_ignored
@@ -136,13 +135,6 @@ properties:
     type: string
     description: Non-fatal advisory (e.g. config reload failed after create/update).
     example: "config reload failed: ..."
-  timeout_seconds:
-    type: integer
-    minimum: 0
-    description: >
-      Maximum seconds a single agent turn may run before being interrupted.
-      Inherited from agents.defaults.timeout_seconds when not overridden per-agent.
-    example: 300
   max_tool_iterations:
     type: integer
     minimum: 1

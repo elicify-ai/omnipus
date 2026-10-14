@@ -1157,7 +1157,8 @@ type TurnCancelHook interface {
 	// and has now been set to true). Returns false if already canceled.
 	ClaimCancel() bool
 	// MarkAbandoned suppresses later writes after a controller detaches a
-	// stuck turn goroutine (gateway cancel or delegation timeout).
+	// stuck turn goroutine (gateway cancel; there is no delegation timeout
+	// since issue #1306).
 	MarkAbandoned()
 }
 

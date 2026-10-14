@@ -51,7 +51,6 @@ func TestLifecycleRecord_SteeredByRoundTrip_AfterStoreReopen(t *testing.T) {
 				Mode:           AuthorizationModeDirect,
 				RemainingDepth: 3,
 			},
-			Limits:         Limits{TimeoutSeconds: 600},
 			ToolExclusions: []string{"switch_agent"},
 		},
 		Stop: &Stop{
@@ -97,9 +96,6 @@ func TestLifecycleRecord_SteeredByRoundTrip_AfterStoreReopen(t *testing.T) {
 	}
 	if sb.Authorization != (Authorization{Mode: AuthorizationModeDirect, RemainingDepth: 3}) {
 		t.Errorf("SteeredBy.Authorization = %+v, want {direct 3}", sb.Authorization)
-	}
-	if sb.Limits != (Limits{TimeoutSeconds: 600}) {
-		t.Errorf("SteeredBy.Limits = %+v, want {600}", sb.Limits)
 	}
 	if len(sb.ToolExclusions) != 1 || sb.ToolExclusions[0] != "switch_agent" {
 		t.Errorf("SteeredBy.ToolExclusions = %v, want [switch_agent]", sb.ToolExclusions)

@@ -110,9 +110,50 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 				"attempt": attempt, "max_attempts": goalJudgeRedriveAttempts})
 	}
 	reason := fmt.Sprintf("judge unavailable after %d attempts: the completion claim could not be adjudicated", goalJudgeRedriveAttempts)
+	// Issue #1306 (founder): the Judge must conclude. The conclusion names the
+	// verdict AND carries the worker's claim, so the parent (or the chat user)
+	// gets the actual work result with "not verified" — never a bare failure.
+	conclusion := notVerifiedConclusion(reason,
+		"The goal stays active: claim completion again once the Judge is available.", work.claimText)
+	if !al.goalSessionIsSteered(work.sessionID) {
+		al.concludeInteractiveGoalNotVerified(store, work, conclusion)
+		return
+	}
 	logger.ErrorCF("agent", "goal: "+reason+" — failing the goal-bearing child visibly",
 		map[string]any{"session_id": work.sessionID})
-	al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), work.producer), work.sessionID, "", errors.New(reason))
+	al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), work.producer), work.sessionID, "", errors.New(conclusion))
+}
+
+// goalSessionIsSteered reports whether sessionID is a steered child (someone
+// delegated it), i.e. whether a parent receives its completion tail.
+func (al *AgentLoop) goalSessionIsSteered(sessionID string) bool {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false
+	}
+	rec, err := lifecycle.Load(sessionID)
+	return err == nil && rec != nil && rec.SteeredBy != nil
+}
+
+// concludeInteractiveGoalNotVerified is the interactive (/goal chat) arm of
+// the Judge-unavailable conclusion: there is no parent, the user is the
+// audience. The conclusion lands durably in the chat transcript (so it
+// survives a reconnect) and on the live goal pill. The worker's answer was
+// already published to the chat before adjudication started; the goal stays
+// active so the work can be claimed again.
+func (al *AgentLoop) concludeInteractiveGoalNotVerified(store *session.UnifiedStore, work *goalDeferredAdjudicationWork, conclusion string) {
+	agentID := ""
+	if work.agentInst != nil {
+		agentID = work.agentInst.ID
+	}
+	logger.ErrorCF("agent", "goal: the Judge could not conclude — recording a not-verified conclusion in the chat",
+		map[string]any{"session_id": work.sessionID})
+	al.writeGoalSystemTranscript(store, work.sessionID, agentID, conclusion)
+	rec, err := activeGoalForSession(work.sessionID)
+	if err != nil || rec == nil {
+		return
+	}
+	al.emitGoalStatusFrame(work.sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds, conclusion, goalPillJudgeUnavailable)
 }
 
 // waitGoalRedriveBackoff spaces two re-drive attempts through judgeSleepFn.

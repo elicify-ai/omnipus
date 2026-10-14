@@ -139,7 +139,7 @@ x-user-messages:
     message: "This turn was stopped before it finished."
     attribution: user
   turn_timed_out:
-    message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+    message: "The model provider didn’t answer this request in time. Retry — if it keeps happening, open Verbose chat for details."
     attribution: provider
   delegated_task_limit:
     message: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed."

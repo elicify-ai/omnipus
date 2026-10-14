@@ -8463,11 +8463,6 @@ export interface components {
              */
             warning?: string;
             /**
-             * @description Maximum seconds a single agent turn may run before being interrupted. Inherited from agents.defaults.timeout_seconds when not overridden per-agent.
-             * @example 300
-             */
-            timeout_seconds: number;
-            /**
              * @description The EFFECTIVE maximum number of tool calls allowed per turn (issue #904, tool-iteration-limit spec D1): the global limit (agents.defaults.max_tool_iterations) unless the agent has its own value lower than or equal to it, in which case the own value. An own value above the global never raises the limit — it is ignored (see max_tool_iterations_override_ignored). max_tool_iterations_source says which rule applied.
              * @example 50
              */
@@ -8870,7 +8865,7 @@ export interface components {
         };
         /**
          * AgentCreateRequestSubagent3p
-         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
          *     Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
          */
         AgentCreateRequestSubagent3p: {
@@ -8933,11 +8928,6 @@ export interface components {
              */
             soul: string;
             executor: components["schemas"]["ExecutorConfig"];
-            /**
-             * @description Maximum seconds a single agent turn may run before being interrupted.
-             * @example 300
-             */
-            timeout_seconds?: number;
             /**
              * @description The new worker's own tool-iteration limit (issue #904, D14), passed to the external CLI as its turn cap. Omitted = the worker rides the global limit. Refused (400) if above the current global limit.
              * @example 50
@@ -14619,7 +14609,7 @@ export interface components {
              */
             ran_at_ms: number;
             /**
-             * @description ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+             * @description ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
              * @enum {string}
              */
             status: "ok" | "error" | "skipped" | "timeout";
@@ -14648,7 +14638,7 @@ export interface components {
              * @description Unix epoch milliseconds of the most recent run.
              */
             last_run_at_ms?: number;
-            /** @description Status of the most recent run (ok/error/skipped/timeout), empty if never run. */
+            /** @description Status of the most recent run (ok/error/skipped, or the historical timeout), empty if never run. */
             last_status?: string;
             /** @description Error from the most recent failed run. */
             last_error?: string;
@@ -14679,8 +14669,6 @@ export interface components {
              * @example false
              */
             run_isolated?: boolean;
-            /** @description Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default. */
-            timeout_seconds: number;
             /** @description For continue/main modes, the persistent session id this schedule runs in. */
             session_id?: string;
             state: components["schemas"]["ScheduleState"];
@@ -14706,8 +14694,6 @@ export interface components {
              * @example false
              */
             run_isolated: boolean;
-            /** @description Per-run deadline; default 0 = use the global default. */
-            timeout_seconds?: number;
             /** @description Default true. */
             enabled?: boolean;
         };
@@ -14726,7 +14712,6 @@ export interface components {
              * @example false
              */
             run_isolated: boolean;
-            timeout_seconds?: number;
             enabled?: boolean;
         };
         /**
@@ -15244,7 +15229,7 @@ export interface components {
                  */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @description Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;
@@ -15365,7 +15350,7 @@ export interface components {
                 /** @example 7 */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;
@@ -15422,7 +15407,7 @@ export interface components {
                 /** @example 7 */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;
@@ -16822,14 +16807,6 @@ export interface components {
                      */
                     remaining_depth: number;
                 };
-                /** @description Creator-set session limits. */
-                limits?: {
-                    /**
-                     * @description Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
-                     * @example 300
-                     */
-                    timeout_seconds?: number;
-                };
                 /**
                  * @description Tool names excluded for this steered session (e.g., switch_agent). Applied at launch.
                  * @example [
@@ -17082,11 +17059,6 @@ export interface components {
              * @example false
              */
             critical?: boolean;
-            /**
-             * @description Maximum seconds before this delegation is force-cancelled. 0 = default (30 min).
-             * @example 300
-             */
-            timeout_seconds?: number;
             /** @description The DISCRETIONARY portion of the curated context snapshot (R§8.5). Deny-by-default — nothing beyond this + the mandatory core reaches the child. Over-cap is rejected with a narrow-the-snapshot tool error, never silently truncated. */
             snapshot?: {
                 /**
@@ -17691,7 +17663,7 @@ export interface components {
              */
             at: string;
             /**
-             * @description Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, a goal-loop attempt supersession), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
+             * @description Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a goal-loop attempt supersession, or a historical lifetime-budget timeout), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
              * @example human:user-123
              */
             by: string;
@@ -17702,7 +17674,7 @@ export interface components {
              */
             seq: number;
             /**
-             * @description The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+             * @description The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
              * @example stop
              * @enum {string}
              */

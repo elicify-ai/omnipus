@@ -94,7 +94,7 @@ var LLMErrorUserMessages = map[string]string{
 	"needs_provider":         "Your sign-in for this provider expired. Sign in again under Settings → Providers.",
 	"model_unassigned":       "This agent has no model. Pick one in the agent's settings.",
 	"turn_canceled":          "This turn was stopped before it finished.",
-	"turn_timed_out":         "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details.",
+	"turn_timed_out":         "The model provider didn’t answer this request in time. Retry — if it keeps happening, open Verbose chat for details.",
 	"delegated_task_limit":   "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed.",
 	"context_window_unknown": "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length.",
 	"unknown":                "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",

@@ -177,8 +177,12 @@ type RunOptions struct {
 	// Env is the environment variable set for the external process. The driver
 	// merges this with its own required variables and the platform env allowlist.
 	Env []string
-	// TimeoutSeconds is the maximum wall-clock duration for this run.
-	// Zero means the driver's built-in default applies.
+	// TimeoutSeconds is an optional wall-clock bound for this run; zero means
+	// no bound at all. Agent work (delegation, steered sessions, task runs)
+	// always leaves it zero — work has no time limit and ends only when it
+	// finishes or ctx is cancelled by an explicit Stop (issue #1306). The one
+	// caller that sets it is the bounded executor smoke-test probe
+	// (pkg/gateway/rest_executor_smoketest.go), a short config check, not work.
 	TimeoutSeconds int
 	// MaxTurns is the maximum number of agentic turns the external agent may
 	// take — the agent's resolved tool-iteration limit (1-1000), passed by the

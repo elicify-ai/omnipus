@@ -16,7 +16,6 @@ package agent
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -67,7 +66,7 @@ func TestExternalDispatch_ErrorEvent_CarriesChatID(t *testing.T) {
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	require.Error(t, err, "fatal error event must surface as a run failure")
 	require.NotNil(t, res)
 

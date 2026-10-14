@@ -142,7 +142,7 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 		fr.Cancel() // closes the event channel so the dispatcher/drain loop ends
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "do the task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "do the task")
 	if err != nil {
 		t.Fatalf("runExternalCLISubTurn error: %v", err)
 	}
@@ -150,8 +150,8 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 		t.Fatalf("aggregated output = %q, want %q", res.ForLLM, "hello world")
 	}
 
-	// The run options passed to the driver carry the workspace dir, input,
-	// timeout and turn cap (FR-5.4 bound).
+	// The run options passed to the driver carry the workspace dir, input and
+	// turn cap (FR-5.4 bound) — and NO wall-clock timeout (issue #1306).
 	opts := fr.RecordedRunOpts()
 	if len(opts) != 1 {
 		t.Fatalf("driver Run called %d times, want 1", len(opts))
@@ -164,8 +164,11 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 	if opts[0].WorkDir != wantWorkDir {
 		t.Errorf("driver WorkDir = %q, want the workspace's work/ dir %q (ADR-046 P1)", opts[0].WorkDir, wantWorkDir)
 	}
-	if opts[0].TimeoutSeconds != 30 {
-		t.Errorf("driver TimeoutSeconds = %d, want 30", opts[0].TimeoutSeconds)
+	if opts[0].TimeoutSeconds != 0 {
+		t.Errorf("driver TimeoutSeconds = %d, want 0: an external CLI worker must not be armed with a kill timer (issue #1306)", opts[0].TimeoutSeconds)
+	}
+	if dl := fr.RecordedRunDeadlines(); len(dl) != 1 || dl[0] {
+		t.Errorf("driver run context deadlines = %v, want [false]: the CLI run must have no deadline (issue #1306)", dl)
 	}
 	// #904 (FR-004, D4): the turn cap is the agent's EFFECTIVE limit — the
 	// instance's MaxIterations, set below from the resolver's output — with
@@ -227,7 +230,7 @@ func TestExternalDispatch_WorkspacelessAgentRefused(t *testing.T) {
 	fr, restore := withFakeDriver(t)
 	defer restore()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err == nil {
 		t.Fatal("expected an error for a workspace-less agent, got nil")
 	}
@@ -310,7 +313,7 @@ func TestExternalDispatch_MemberWithUnsafeWorkspaceID_Refused(t *testing.T) {
 	fr, restore := withFakeDriver(t)
 	defer restore()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err == nil {
 		t.Fatal("expected an error for a member with an unsafe workspace id, got nil")
 	}
@@ -349,7 +352,7 @@ func TestExternalDispatch_ModelAutoSet(t *testing.T) {
 		fr.Cancel()
 	}()
 
-	_, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	_, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err != nil {
 		t.Fatalf("runExternalCLISubTurn error: %v", err)
 	}
@@ -396,7 +399,7 @@ func TestExternalDispatch_PermissionRequestAutoApproved(t *testing.T) {
 
 	runCtx, cancelRun := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelRun()
-	res, err := runExternalCLISubTurn(runCtx, al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(runCtx, al, ts, "task")
 	if err != nil {
 		t.Fatalf("expected the run to complete despite the permission request, got error: %v (res=%+v)", err, res)
 	}
@@ -465,7 +468,7 @@ func TestExternalDispatch_NoApproverWired_StillAutoApproves(t *testing.T) {
 
 	runCtx, cancelRun := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelRun()
-	res, err := runExternalCLISubTurn(runCtx, al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(runCtx, al, ts, "task")
 	if err != nil {
 		t.Fatalf("expected the run to complete with no approver wired, got error: %v (res=%+v)", err, res)
 	}
@@ -502,7 +505,7 @@ func TestExternalDispatch_ErrorEvent_FailsRun(t *testing.T) {
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err == nil {
 		t.Fatal("expected error from fatal error event, got nil")
 	}
@@ -527,7 +530,7 @@ func TestExternalDispatch_UnknownCLI_FailsCleanly(t *testing.T) {
 
 	// Use the REAL factory (restore default) so NewDriver rejects the unknown CLI.
 	al, ts := newExternalTestLoop(t, "", "")
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err == nil {
 		t.Fatal("expected error for empty CLI, got nil")
 	}
@@ -577,7 +580,7 @@ func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err != nil {
 		t.Fatalf("runExternalCLISubTurn error: %v", err)
 	}
@@ -667,7 +670,7 @@ func TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir(t *testing.T) 
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err != nil {
 		t.Fatalf("runExternalCLISubTurn error: %v", err)
 	}
@@ -893,7 +896,7 @@ func TestExternalDispatch_G2_NeverAttributesTokens(t *testing.T) {
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	require.NoError(t, err)
 	require.NotNil(t, res)
 
@@ -961,7 +964,7 @@ func TestExternalDispatch_SanitizesRunnerError(t *testing.T) {
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	require.Error(t, err, "fatal error event must surface as a run failure")
 	require.NotNil(t, res)
 	require.NotNil(t, res.Err)
@@ -1064,7 +1067,7 @@ func TestExternalDispatch_ForLLM_NoProviderShapedLeak(t *testing.T) {
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	require.Error(t, err, "fatal error must surface as a run failure")
 	require.NotNil(t, res)
 

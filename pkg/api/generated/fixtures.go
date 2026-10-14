@@ -711,7 +711,6 @@ func FixtureAgent_Populated() Agent {
 		Locked:            true,
 		Status:            AgentStatusIdle,
 		Soul:              "You are Jim, a helpful assistant.",
-		TimeoutSeconds:    300,
 		MaxToolIterations: 50,
 		// #904: 50 is the agent's own value (≤ the global), so source=agent.
 		MaxToolIterationsSource:   MaxToolIterationsSourceAgent,
@@ -728,14 +727,13 @@ func FixtureAgent_ZeroValue() Agent {
 
 func FixtureAgent_Edge() Agent {
 	return Agent{
-		Revision:       repeatStr("a", 64),
-		Id:             "custom-" + repeatStr("y", 36),
-		Name:           "Unicode Agent 🤖",
-		Type:           AgentTypeMain,
-		Locked:         false,
-		Status:         AgentStatusDraft,
-		Soul:           "",
-		TimeoutSeconds: 0,
+		Revision: repeatStr("a", 64),
+		Id:       "custom-" + repeatStr("y", 36),
+		Name:     "Unicode Agent 🤖",
+		Type:     AgentTypeMain,
+		Locked:   false,
+		Status:   AgentStatusDraft,
+		Soul:     "",
 		// #904: the effective limit's lower bound is 1 (Agent.yaml minimum).
 		MaxToolIterations:       1,
 		MaxToolIterationsSource: MaxToolIterationsSourceGlobal,
@@ -2394,7 +2392,7 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 //   - Main: full field set (voice included), no executor.
 //   - Subagent: like Main minus voice, no executor (server derives native).
 //   - Subagent3p: ONLY type/name/description/model/provider/color/
-//     rate_limits/soul/executor/timeout_seconds — executor
+//     rate_limits/soul/executor — executor
 //     is REQUIRED. All Main/Subagent-only fields (tools_cfg, skills,
 //     fallback_models, model_params, shell_policy, voice,
 //     max_tool_iterations) do not exist as properties on this
@@ -2514,7 +2512,7 @@ func FixtureAgentCreateRequestSubagent_InvalidType() AgentCreateRequestSubagent 
 
 // FixtureAgentCreateRequestSubagent3p_Populated — every field this variant
 // allows: type/name/description/model/provider/color/rate_limits/soul/
-// executor/timeout_seconds. executor is REQUIRED.
+// executor. executor is REQUIRED.
 func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3p {
 	color := AgentColorHashCDBA96
 	model := "claude-sonnet-4-6"
@@ -2524,19 +2522,17 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 	maxCost := 5.0
 	maxCalls := 100
 	maxTools := 60
-	timeoutSeconds := 300
 	cli := ExternalCliToolClaudeCode
 	cliPath := "/usr/local/bin/claude"
 
 	return AgentCreateRequestSubagent3p{
-		Name:           "Claude Code Worker",
-		Type:           AgentCreateRequestSubagent3pTypeSubagent3p,
-		Description:    &description,
-		Model:          &model,
-		Provider:       &provider,
-		Color:          &color,
-		Soul:           "You are a focused worker running on the claude-code CLI.",
-		TimeoutSeconds: &timeoutSeconds,
+		Name:        "Claude Code Worker",
+		Type:        AgentCreateRequestSubagent3pTypeSubagent3p,
+		Description: &description,
+		Model:       &model,
+		Provider:    &provider,
+		Color:       &color,
+		Soul:        "You are a focused worker running on the claude-code CLI.",
 		RateLimits: &struct {
 			MaxCostPerDay         *float64 `json:"max_cost_per_day,omitempty"`
 			MaxLlmCallsPerHour    *int     `json:"max_llm_calls_per_hour,omitempty"`

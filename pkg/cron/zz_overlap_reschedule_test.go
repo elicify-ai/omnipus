@@ -165,9 +165,11 @@ func TestBoundedStopReturnsOnTimeout(t *testing.T) {
 	cs.WaitForLane()
 }
 
-// TestTimeoutClassifiedAsTimeoutStatus verifies a context.DeadlineExceeded run
-// is recorded with Status "timeout" (not "error"), so the contract enum is live.
-func TestTimeoutClassifiedAsTimeoutStatus(t *testing.T) {
+// TestDeadlineErrorClassifiedAsErrorNotTimeout pins issue #1306: a scheduled
+// run has no deadline, so a context.DeadlineExceeded reaching the lane can
+// only be a provider request timeout. It is an ordinary "error" run — the
+// "timeout" status (deadline aborted) is never written any more.
+func TestDeadlineErrorClassifiedAsErrorNotTimeout(t *testing.T) {
 	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	cs, _ := newAutonomyService(t, clk)
 	runner := &recordingRunner{ctxHook: func(ctx context.Context, job *CronJob) (string, error) {
@@ -183,14 +185,14 @@ func TestTimeoutClassifiedAsTimeoutStatus(t *testing.T) {
 	clk.Advance(2 * time.Minute)
 
 	status, _, err := cs.RunNow(job.ID)
-	if status != "timeout" {
-		t.Fatalf("RunNow status = %q, want timeout", status)
+	if status != "error" {
+		t.Fatalf("RunNow status = %q, want error (no deadline-aborted timeout status since #1306)", status)
 	}
 	if err == nil {
-		t.Fatal("expected a non-nil error for a timed-out run")
+		t.Fatal("expected a non-nil error for a failed run")
 	}
-	if st := jobState(t, cs, job.ID); st.LastStatus != "timeout" {
-		t.Fatalf("LastStatus = %q, want timeout", st.LastStatus)
+	if st := jobState(t, cs, job.ID); st.LastStatus != "error" {
+		t.Fatalf("LastStatus = %q, want error", st.LastStatus)
 	}
 }
 

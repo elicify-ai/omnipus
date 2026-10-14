@@ -45,7 +45,6 @@ function agent(id: string, over: Partial<Agent> = {}): Agent {
     locked: false,
     status: 'active',
     soul: '',
-    timeout_seconds: 60,
     max_tool_iterations: 10,
     figure: 'Omnipus',
     role: 'general',

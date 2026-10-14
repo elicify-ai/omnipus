@@ -193,12 +193,17 @@ const (
 	// ErrTurnCanceled.
 	CodeTurnCanceled LLMErrorCode = "turn_canceled"
 
-	// CodeTurnTimedOut (ADR-066 D7, FR-034): the turn's deadline expired
-	// while waiting on the provider. Attribution `provider`; retryable.
+	// CodeTurnTimedOut (ADR-066 D7, FR-034): a provider request timed out —
+	// the per-network-call request timeout (model request_timeout / the HTTP
+	// client's Timeout), whose error satisfies errors.Is(err,
+	// context.DeadlineExceeded). Turns themselves have no deadline any more
+	// (issue #1306), so this never means "the turn ran too long".
+	// Attribution `provider`; retryable.
 	CodeTurnTimedOut LLMErrorCode = "turn_timed_out"
 
 	// CodeDelegatedTaskLimit identifies a controller-authored notice for a
-	// delegated task that reached timeout_seconds or max_tool_iterations.
+	// delegated task that reached max_tool_iterations (there is no
+	// timeout_seconds limit any more, issue #1306).
 	// Unlike CodeTurnTimedOut, this is not a provider error. Its only variable
 	// fields are normalized task correlation identifiers and the limit; its
 	// producers must never include child output or file contents.
@@ -1097,7 +1102,8 @@ var (
 	// ErrTurnCanceled: the turn context was cancelled before the provider
 	// finished (Stop button, interrupt, shutdown).
 	ErrTurnCanceled = errors.New("turn canceled")
-	// ErrTurnTimedOut: the turn deadline expired while waiting on the provider.
+	// ErrTurnTimedOut: a provider request timed out (its per-call request
+	// timeout). There is no turn deadline (issue #1306).
 	ErrTurnTimedOut = errors.New("turn timed out")
 )
 

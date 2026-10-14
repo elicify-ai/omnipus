@@ -208,7 +208,9 @@ const (
 	// long after a supervision wake the engine waits before concluding the
 	// adjudication turn produced nothing. The wake is fire-and-forget and no
 	// seam reports a turn's outcome back into the engine, so the deadline —
-	// not a callback — is the observation mechanism.
+	// not a callback — is the observation mechanism. It never stops a running
+	// turn: the deadline is only evaluated once no supervision turn is in
+	// flight (issue #1306).
 	//
 	// It deliberately does NOT reuse the 10 s notify timeout below, which
 	// bounds a bus publish rather than an LLM turn. Spec default: 600 s.
@@ -1716,7 +1718,7 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 				"source_kind":    sourceKind,
 				"reason":         "no_chat_origin",
 			})
-		if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p), nil); err != nil {
+		if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, nil); err != nil {
 			logger.ErrorCF("plan_engine", "could not dispatch origin-less plan owner turn",
 				map[string]any{"plan_id": p.ID, "owner_agent_id": p.OwnerAgentID, "error": err.Error()})
 		}
@@ -1753,7 +1755,7 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 	// one on the plan's own owner session — the outcome is then durable even
 	// though the requester's conversation never received it, and the ERROR
 	// above is the record that the chat delivery itself was lost.
-	if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p), nil); err != nil {
+	if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, nil); err != nil {
 		logger.ErrorCF("plan_engine", "plan owner wake could not be delivered OR dispatched directly",
 			map[string]any{"plan_id": p.ID, "owner_agent_id": p.OwnerAgentID, "source_kind": sourceKind, "error": err.Error()})
 	}
@@ -1802,11 +1804,10 @@ func (pe *PlanEngine) ownerAgentResolves(agentID string) bool {
 // Returns an error only for a DISPATCH failure (no loop wired, agent does not
 // resolve, no session) — never for the turn's own outcome, which the engine
 // observes through FR-021's deadline rather than a callback.
-// turnTimeout bounds a wedged provider and MUST be the SAME number the
-// engine's own FR-021 observation deadline uses (supervisionTurnTimeout) —
-// otherwise a per-plan bounds override moves the deadline the engine watches
-// while leaving the turn itself running against the package default, and the
-// override silently does not apply to the thing it names.
+// The turn has NO deadline (issue #1306): it runs until it finishes or is
+// explicitly stopped. FR-021's observation deadline never stops it either —
+// evaluateSupervisionDeadlineLocked waits while a supervision turn is in
+// flight.
 //
 // onTurnSettled, when non-nil, is called EXACTLY ONCE — either synchronously,
 // before this function returns, on every DISPATCH-failure path below (no
@@ -1819,7 +1820,7 @@ func (pe *PlanEngine) ownerAgentResolves(agentID string) bool {
 // dispatch a concurrent turn while the first is still running. wakeOwner's two
 // call sites below pass nil: owner (outcome) wakes are not part of that
 // invariant.
-func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourceKind string, turnTimeout time.Duration, onTurnSettled func()) error {
+func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourceKind string, onTurnSettled func()) error {
 	settled := func() {
 		if onTurnSettled != nil {
 			onTurnSettled()
@@ -1869,9 +1870,8 @@ func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourc
 		}()
 		// Not derived from the engine's stop channel: the turn's cancellation
 		// authority is RequestCancelForSession against sessionID (the Stop
-		// fan-out), and the timeout bounds a wedged provider.
-		turnCtx, cancel := context.WithTimeout(context.Background(), turnTimeout)
-		defer cancel()
+		// fan-out). No deadline: plan turns have no time limit (issue #1306).
+		turnCtx := context.Background()
 		// D-08/FR-057: every caller of dispatchPlanTurn (wakeOwner's two call
 		// sites, the plan supervisor's own wake) is the engine reacting to a
 		// plan-state transition on its own — never a person clicking anything
