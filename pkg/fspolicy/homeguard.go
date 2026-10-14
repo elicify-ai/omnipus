@@ -260,6 +260,48 @@ func workspaceRecordExists(home, wsID string) bool {
 	return err == nil
 }
 
+// InventoryGuarded reports whether a resolved path is held by the #1284
+// STRUCTURAL protection against operator-grant reopening (fix round 1): the
+// named protected inventory and its prefixes, the D4 agent-home-internal set,
+// the workspace internal directory shape, and the uploads tree outside the
+// turn's explicit session-scoped allowances (amendment §2 D2 names
+// "uploads/ minus allow entry A4"). Operator pattern adapters consult this
+// before turning a matched location into a home-guard allowance: a pattern
+// may open an ordinary non-internal home location (D3 A2) but never one of
+// these — named inventory always wins.
+func InventoryGuarded(policy FSPolicy, path string) bool {
+	home := policy.HomeGuard.Home
+	if home == "" {
+		return false
+	}
+	clean := filepath.Clean(path)
+	if inventoryDenies(home, clean, policy) {
+		return true
+	}
+	// uploads: D2-named minus A4. Inside the acting/root session's own
+	// uploads dir the turn's existing allowance already answers; anywhere
+	// else under uploads/ an operator pattern must not reach.
+	if CoversForDeny(filepath.Join(home, "uploads"), clean) {
+		for _, entry := range policy.HomeGuard.Allow {
+			if entry.Path != "" && CoversForGrant(filepath.Clean(entry.Path), clean) {
+				return false
+			}
+		}
+		return true
+	}
+	// workspaces/<id>/.omnipus/** by shape.
+	rel, err := filepath.Rel(home, clean)
+	if err != nil {
+		return true
+	}
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
+	if len(parts) >= 3 && strings.EqualFold(parts[0], "workspaces") &&
+		strings.EqualFold(parts[2], workspaceInternalDir) {
+		return true
+	}
+	return false
+}
+
 // WorkTreeRootFor widens path to its containing workspace work tree —
 // <home>/workspaces/<id>/work — when path lies inside one by shape, and
 // returns path unchanged otherwise. The God Mode floor uses this so its

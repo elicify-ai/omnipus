@@ -1690,6 +1690,18 @@ func ResolvePathAllowingPatterns(
 				// array, and no hand-computed capacity (CodeQL
 				// go/allocation-size-overflow on PR #1037).
 				granted.AllowedRoots = append(slices.Clone(policy.AllowedRoots), resolvedGrant)
+				// #1284 fix round 1 (F3): the same grant rides the home
+				// guard, which is what the default deny actually consults —
+				// an operator pattern for a NON-internal location inside
+				// $OMNIPUS_HOME keeps its permitted access instead of being
+				// refused by a guard the pattern axis never reached. The
+				// structural protected set is evaluated first and always
+				// wins, so this entry cannot reopen it (A2: operator grants
+				// never override the named inventory — uploads is
+				// D2-named-minus-A4, and the internal shapes stay guarded).
+				if granted.HomeGuard.Home != "" && !fspolicy.InventoryGuarded(granted, resolvedGrant) {
+					granted.HomeGuard.Allow = append(granted.HomeGuard.Allow, fspolicy.AllowRoot{Path: resolvedGrant, Writable: true})
+				}
 			}
 
 			return ResolvePath(ctx, granted, toolName, callID, op, rawPath)

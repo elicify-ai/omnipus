@@ -88,6 +88,59 @@ func KernelDeniedPathsFor(home, workDir string, extraAllowed ...string) ([]strin
 	return denied, err
 }
 
+// runtimeAllowanceOverridesInventory reports whether a Runtime-marked branch
+// must be dropped because it would reopen protected inventory: it sits at or
+// under a named protected entry, covers one, covers the home itself, or
+// matches a protected home-root prefix. The authorized runtime shapes — the
+// published shared generations and workspace env roots under
+// <home>/toolchains/, the managed document prefix under
+// <home>/toolchains/documents/, and the per-worker cache under
+// <home>/cache/documents/ (the one shape that refines a NAMED node, cache/)
+// — are exempt, so amendment §2 A5/A6 reachability is preserved while a
+// synthetic AllowRoot at sessions/, credentials.json, entities/, an agent
+// home, or the home itself is dropped before it can shadow anything.
+func runtimeAllowanceOverridesInventory(home, rawPath string) bool {
+	clean := filepath.Clean(rawPath)
+	if clean == "" || clean == "." || !filepath.IsAbs(clean) {
+		return true // unusable input: drop rather than guess
+	}
+	if CoversForDeny(filepath.Join(home, "toolchains"), clean) {
+		return false
+	}
+	if CoversForDeny(filepath.Join(home, "cache", "documents"), clean) {
+		return false
+	}
+	if CoversForDeny(clean, home) {
+		return true // the home, or an ancestor of it: shadows every named entry
+	}
+	if !CoversForDeny(home, clean) {
+		return false // outside the home: the enumeration ignores it anyway
+	}
+	overlaps := func(root, p string) bool {
+		return CoversForDeny(root, p) || CoversForDeny(p, root)
+	}
+	if dir := filepath.Dir(clean); SameLocationForDeny(dir, home) &&
+		(hasSecretBackupPrefix(filepath.Base(clean)) || hasProtectedInventoryPrefix(filepath.Base(clean))) {
+		return true
+	}
+	for _, name := range ProtectedInventoryNames {
+		if overlaps(filepath.Join(home, name), clean) {
+			return true
+		}
+	}
+	for _, name := range SecretEntriesAlwaysPathOnly {
+		if overlaps(filepath.Join(home, name), clean) {
+			return true
+		}
+	}
+	for _, name := range SecretEntriesPerTurn {
+		if overlaps(filepath.Join(home, name), clean) {
+			return true
+		}
+	}
+	return false
+}
+
 // KernelBranch is one allowed branch of the kernel enumeration: a path under
 // $OMNIPUS_HOME whose subtree stays reachable for the child, and the access
 // class it keeps. Writable=false marks a read/execute-only branch — the
@@ -97,6 +150,17 @@ func KernelDeniedPathsFor(home, workDir string, extraAllowed ...string) ([]strin
 type KernelBranch struct {
 	Path     string
 	Writable bool
+
+	// Runtime marks a branch that arrived as internal runtime input
+	// (amendment §2 A5/A6 — TurnPolicyInput.AllowRoots: published shared
+	// generations, the document runtime prefix, the worker's document
+	// cache). Runtime input is NOT the founder-accepted operator/mount
+	// channel: a Runtime branch at or above a protected-inventory node is
+	// dropped by the enumeration instead of re-admitting it, so a synthetic
+	// AllowRoot pointing at sessions/ or credentials.json can never reopen
+	// them. Only the documented runtime shapes (under toolchains/ and
+	// cache/documents/) may refine a named node such as cache/.
+	Runtime bool
 }
 
 // KernelDenyEnumeration is the generalised per-spawn deny set (amendment §2
@@ -159,6 +223,16 @@ func KernelDenyEnumeration(home, workDir string, branches []KernelBranch) (denie
 		addBranch(workDir, true)
 	}
 	for _, b := range branches {
+		if b.Runtime && runtimeAllowanceOverridesInventory(cleanHome, b.Path) {
+			// Amendment §2 (chief ruling, fix round 1): internal runtime
+			// input is not the accepted operator/mount channel. A runtime
+			// AllowRoot at, above, or covering a protected-inventory node is
+			// dropped outright — it never skips the named deny, never seeds
+			// the walk, and never shadows a subtree. The permitted runtime
+			// shapes (under toolchains/ and cache/documents/) are unaffected,
+			// so A5/A6 reachability is preserved.
+			continue
+		}
 		addBranch(b.Path, b.Writable)
 	}
 

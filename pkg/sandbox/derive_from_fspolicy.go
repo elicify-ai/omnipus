@@ -278,17 +278,7 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 	// operator's allowed paths, the turn's A5/A6 allowances, and media — the
 	// same branches the app layer's HomeGuard allows speak for, minus skills,
 	// whose whole directory stays child-denied (A7, unchanged).
-	branches := make([]fspolicy.KernelBranch, 0, len(authored.AllowedRoots)+len(in.AllowedPaths)+len(in.AllowRoots)+2)
-	for _, root := range authored.AllowedRoots {
-		branches = append(branches, fspolicy.KernelBranch{Path: root, Writable: true})
-	}
-	for _, p := range in.AllowedPaths {
-		branches = append(branches, fspolicy.KernelBranch{Path: p, Writable: true})
-	}
-	for _, root := range in.AllowRoots {
-		branches = append(branches, fspolicy.KernelBranch(root))
-	}
-	branches = append(branches, fspolicy.KernelBaseBranches(in.HomePath)...)
+	branches := kernelBranchSet(authored, in, false)
 
 	denied, writeDenied, enumErr := fspolicy.KernelDenyEnumeration(in.HomePath, authored.WorkDir, branches)
 	if enumErr != nil {
@@ -454,19 +444,9 @@ func deriveFloorPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput, policy Sa
 	// protected set. Outside a workspace work tree the branch is unchanged.
 	floorWork := fspolicy.WorkTreeRootFor(in.HomePath, authored.WorkDir)
 
-	branches := make([]fspolicy.KernelBranch, 0, len(authored.AllowedRoots)+len(in.AllowedPaths)+len(in.AllowRoots)+2)
-	for _, root := range authored.AllowedRoots {
-		branches = append(branches, fspolicy.KernelBranch{Path: fspolicy.WorkTreeRootFor(in.HomePath, root), Writable: true})
-	}
-	for _, p := range in.AllowedPaths {
-		branches = append(branches, fspolicy.KernelBranch{Path: p, Writable: true})
-	}
-	for _, root := range in.AllowRoots {
-		branches = append(branches, fspolicy.KernelBranch(root))
-	}
-	branches = append(branches, fspolicy.KernelBaseBranches(in.HomePath)...)
+	branches := kernelBranchSet(authored, in, true)
 
-	denied, _, enumErr := fspolicy.KernelDenyEnumeration(in.HomePath, floorWork, branches)
+	denied, writeDenied, enumErr := fspolicy.KernelDenyEnumeration(in.HomePath, floorWork, branches)
 	if enumErr != nil {
 		if in.WarnFn != nil {
 			in.WarnFn(
@@ -478,11 +458,30 @@ func deriveFloorPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput, policy Sa
 		slog.Error("sandbox: god floor deny set could not be enumerated; falling back to the strictest set",
 			"home", in.HomePath, "work_dir", authored.WorkDir, "error", enumErr)
 		denied = fspolicy.SecretPaths(in.HomePath)
+		writeDenied = nil
 	}
 	policy.DeniedPaths = denied
-	policy.WriteDeniedPaths = nil
+	// Read-only branches stay read-only under the floor: God Mode A opens
+	// everything except the PROTECTED set and the amendment's read-only
+	// runtime shapes — a published shared generation is rx for a God child
+	// exactly as for an ordinary one (round-1 chief ruling; the workflow test
+	// chmods the program owner-writable so only the kernel can deny).
+	policy.WriteDeniedPaths = writeDenied
 	policy.DeniedNodes = fspolicy.KernelDeniedNodesFor(in.HomePath, floorWork, allowanceBranchRoots...)
-	policy.AllowedBranches = nil
+	// The read-only branches must also survive the LINUX grant expansion: a
+	// branch root is granted with ITS access class instead of the blanket
+	// root rule's, so a generation stays read+execute where Seatbelt's
+	// explicit write deny does the same job.
+	policy.AllowedBranches = policy.AllowedBranches[:0:0]
+	for _, root := range in.AllowRoots {
+		access := AccessRead | AccessExecute
+		if root.Writable {
+			access = AccessRead | AccessWrite
+		}
+		policy.AllowedBranches = append(policy.AllowedBranches, PathRule{
+			Path: filepath.Clean(root.Path), Access: access,
+		})
+	}
 
 	// Free, network-open, uncapped: the floor carries no port rules and the
 	// backend must not apply its default net handling.
@@ -498,6 +497,37 @@ func deriveFloorPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput, policy Sa
 		Access: AccessRead | AccessWrite | AccessExecute,
 	})
 	return policy
+}
+
+// kernelBranchSet builds the enumeration's branch list: the turn's own work
+// dir and mounts, the operator's allowed paths, the §2 A5/A6 runtime
+// allowances (marked Runtime — internal runtime input never reopens
+// inventory), and the base read-only media branch. floorWiden applies the
+// God floor's work-tree widening to the work dir and mounts (a God setup
+// child rooted at an install prefix keeps its whole workspace open).
+func kernelBranchSet(authored fspolicy.FSPolicy, in TurnPolicyInput, floorWiden bool) []fspolicy.KernelBranch {
+	branches := make([]fspolicy.KernelBranch, 0, len(authored.AllowedRoots)+len(in.AllowedPaths)+len(in.AllowRoots)+2)
+	widen := func(p string) string {
+		if !floorWiden {
+			return p
+		}
+		return fspolicy.WorkTreeRootFor(in.HomePath, p)
+	}
+	for _, root := range authored.AllowedRoots {
+		branches = append(branches, fspolicy.KernelBranch{Path: widen(root), Writable: true})
+	}
+	for _, p := range in.AllowedPaths {
+		branches = append(branches, fspolicy.KernelBranch{Path: p, Writable: true})
+	}
+	for _, root := range in.AllowRoots {
+		branches = append(branches, fspolicy.KernelBranch{
+			Path:     root.Path,
+			Writable: root.Writable,
+			Runtime:  true, // internal runtime input — never reopens inventory
+		})
+	}
+	branches = append(branches, fspolicy.KernelBaseBranches(in.HomePath)...)
+	return branches
 }
 
 // pathGrantIsDenied reports whether a would-be PathGrant rule at cleanPath

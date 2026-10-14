@@ -79,9 +79,9 @@ func BuildLimits(workspaceDir string, proxy *EgressProxy, timeoutSec int32) (Lim
 // BuildLimits' workspace mkdir is still skipped under god mode, for the same
 // reason the pre-ADR-035 behaviour skipped it: the "off" profile short-
 // circuits before any filesystem touch.
-func ResolveLimits(godMode bool, workspaceDir string, proxy *EgressProxy, timeoutSec int32) (Limits, error) {
+func ResolveLimits(godMode bool, workspaceDir string, proxy *EgressProxy, timeoutSec int32, extraAllowRoots ...fspolicy.AllowRoot) (Limits, error) {
 	if godMode {
-		return godFloorLimits(workspaceDir, timeoutSec)
+		return godFloorLimits(workspaceDir, timeoutSec, extraAllowRoots)
 	}
 	return BuildLimits(workspaceDir, proxy, timeoutSec)
 }
@@ -91,8 +91,11 @@ func ResolveLimits(godMode bool, workspaceDir string, proxy *EgressProxy, timeou
 // is "open minus the protected set", so the only authored input that matters
 // is the turn's work dir (the one branch of the home that stays a working
 // area). HomeGuard carries the base allowances so this derivation and the
-// app-layer predicate answer from the same list.
-func godFloorLimits(workspaceDir string, timeoutSec int32) (Limits, error) {
+// app-layer predicate answer from the same list. extraAllowRoots are the
+// turn's §2 A5/A6 runtime allowances — God Mode keeps its free reach for
+// them too, and they arrive BEFORE the denial (D3) as Runtime-marked input,
+// so one pointing at protected inventory is dropped rather than honoured.
+func godFloorLimits(workspaceDir string, timeoutSec int32, extraAllowRoots []fspolicy.AllowRoot) (Limits, error) {
 	base := turnPolicyBase.Load()
 	if base == nil || !GodModeAvailable {
 		return Limits{}, nil
@@ -112,6 +115,9 @@ func godFloorLimits(workspaceDir string, timeoutSec int32) (Limits, error) {
 	}
 	in := *base
 	in.Floor = true
+	if len(extraAllowRoots) > 0 {
+		in.AllowRoots = append(append([]fspolicy.AllowRoot(nil), base.AllowRoots...), extraAllowRoots...)
+	}
 	policy := DeriveKernelPolicy(authored, in)
 	return Limits{
 		TimeoutSeconds: timeoutSec,
