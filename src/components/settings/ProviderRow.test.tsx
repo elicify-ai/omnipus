@@ -6,13 +6,13 @@
  * (FR-034): "Sign in" for a row that has never connected (or errored),
  * "Manage" once it has (`signed_in` / `expired`). `ProvidersSection.test.tsx`
  * covers what clicking Manage actually opens (dispatch to ManageSignInDialog
- * / ReSignInDialog / SignInDialog) — this file is the row's own rendering
- * contract in isolation.
+ * / SignInDialog) — this file is the row's own rendering contract in
+ * isolation.
  */
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { ProviderRow, cliKindOf, isSignInCapable, type ProviderRowProps } from './ProviderRow'
+import { ProviderRow, isSignInCapable, type ProviderRowProps } from './ProviderRow'
 import type { CatalogProvider, Provider } from '@/lib/api/generated/openapi-types'
 
 function baseProvider(overrides: Partial<Provider> = {}): Provider {
@@ -101,18 +101,18 @@ describe('ProviderRow — six-value status badge (FR-038)', () => {
 
   it('expired: icon + "Session expired"', () => {
     renderRow({
-      provider: baseProvider({ id: 'codex-cli', status: 'expired', auth_method: 'sign_in' }),
+      provider: baseProvider({ id: 'openai-chatgpt', status: 'expired', auth_method: 'sign_in' }),
     })
-    const badge = screen.getByTestId('expired-badge-codex-cli')
+    const badge = screen.getByTestId('expired-badge-openai-chatgpt')
     expect(badge).toHaveTextContent('Session expired')
     expect(badge.querySelector('svg')).toBeInTheDocument()
   })
 
   it('disconnected + sign-in capable (never connected): "Not signed in"', () => {
     renderRow({
-      provider: baseProvider({ id: 'codex-cli', status: 'disconnected', auth_method: 'sign_in' }),
+      provider: baseProvider({ id: 'openai-chatgpt', status: 'disconnected', auth_method: 'sign_in' }),
     })
-    const badge = screen.getByTestId('not-signed-in-badge-codex-cli')
+    const badge = screen.getByTestId('not-signed-in-badge-openai-chatgpt')
     expect(badge).toHaveTextContent('Not signed in')
   })
 })
@@ -120,9 +120,9 @@ describe('ProviderRow — six-value status badge (FR-038)', () => {
 describe('ProviderRow — Sign-in / Manage action (FR-034)', () => {
   it('a never-connected sign-in row reads "Sign in" and calls onSignIn', () => {
     const { onSignIn, onManage } = renderRow({
-      provider: baseProvider({ id: 'codex-cli', status: 'disconnected', auth_method: 'sign_in' }),
+      provider: baseProvider({ id: 'openai-chatgpt', status: 'disconnected', auth_method: 'sign_in' }),
     })
-    const btn = screen.getByTestId('sign-in-btn-codex-cli')
+    const btn = screen.getByTestId('sign-in-btn-openai-chatgpt')
     expect(btn).toHaveTextContent('Sign in')
     btn.click()
     expect(onSignIn).toHaveBeenCalledTimes(1)
@@ -131,9 +131,9 @@ describe('ProviderRow — Sign-in / Manage action (FR-034)', () => {
 
   it('an errored sign-in row still reads "Sign in" (not Manage)', () => {
     renderRow({
-      provider: baseProvider({ id: 'codex-cli', status: 'error', auth_method: 'sign_in', error: 'boom' }),
+      provider: baseProvider({ id: 'openai-chatgpt', status: 'error', auth_method: 'sign_in', error: 'boom' }),
     })
-    expect(screen.getByTestId('sign-in-btn-codex-cli')).toHaveTextContent('Sign in')
+    expect(screen.getByTestId('sign-in-btn-openai-chatgpt')).toHaveTextContent('Sign in')
   })
 
   it('a signed_in row reads "Manage" and calls onManage, not onSignIn', () => {
@@ -154,9 +154,9 @@ describe('ProviderRow — Sign-in / Manage action (FR-034)', () => {
 
   it('an expired row reads "Manage" and calls onManage', () => {
     const { onManage } = renderRow({
-      provider: baseProvider({ id: 'codex-cli', status: 'expired', auth_method: 'sign_in' }),
+      provider: baseProvider({ id: 'openai-chatgpt', status: 'expired', auth_method: 'sign_in' }),
     })
-    const btn = screen.getByTestId('manage-btn-codex-cli')
+    const btn = screen.getByTestId('manage-btn-openai-chatgpt')
     expect(btn).toHaveTextContent('Manage')
     btn.click()
     expect(onManage).toHaveBeenCalledTimes(1)
@@ -173,34 +173,26 @@ describe('ProviderRow — Sign-in / Manage action (FR-034)', () => {
   })
 })
 
-describe('cliKindOf / isSignInCapable', () => {
-  const codexEntry: CatalogProvider = {
-    id: 'codex-cli',
-    name: 'Codex CLI',
-    company: 'Codex CLI',
-    api: 'codex',
-    protocol: 'cli',
+describe('isSignInCapable', () => {
+  const chatgptEntry: CatalogProvider = {
+    id: 'openai-chatgpt',
+    name: 'ChatGPT',
+    company: 'ChatGPT',
+    api: 'https://chatgpt.com/backend-api/codex',
+    protocol: 'openai-compatible',
     tier: 'standard',
     auth_methods: ['sign_in'],
     aliases: [],
-    locality: 'local',
-    cli_kind: 'codex',
+    locality: 'cloud',
     models: [],
   }
 
-  it('resolves cli_kind from the catalog entry first', () => {
-    expect(cliKindOf(baseProvider({ id: 'codex-cli' }), codexEntry)).toBe('codex')
-  })
-
-  it('falls back to the configured row own cli_kind when no entry resolved', () => {
-    expect(cliKindOf(baseProvider({ id: 'codex-cli', cli_kind: 'copilot' }))).toBe('copilot')
-  })
-
-  it('is undefined for a device_code row (no cli_kind either side)', () => {
-    expect(cliKindOf(baseProvider({ id: 'openai-chatgpt', auth_method: 'sign_in' }))).toBeUndefined()
-  })
-
   it('isSignInCapable prefers the catalog entry auth_methods over the row field', () => {
-    expect(isSignInCapable(baseProvider({ auth_method: 'api_key' }), { ...codexEntry, auth_methods: ['sign_in'] })).toBe(true)
+    expect(isSignInCapable(baseProvider({ auth_method: 'api_key' }), { ...chatgptEntry, auth_methods: ['sign_in'] })).toBe(true)
+  })
+
+  it('isSignInCapable falls back to the row auth_method when no entry resolved', () => {
+    expect(isSignInCapable(baseProvider({ id: 'openai-chatgpt', auth_method: 'sign_in' }))).toBe(true)
+    expect(isSignInCapable(baseProvider({ auth_method: 'api_key' }))).toBe(false)
   })
 })

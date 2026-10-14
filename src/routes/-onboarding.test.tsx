@@ -487,28 +487,11 @@ describe('OnboardingWizard — step 4 renders the shared provider picker (FR-021
     expect(screen.getAllByText('Step 4 of 4').length).toBeGreaterThan(0)
   })
 
-  it('switching the auth segment to API key reveals the key field and hides the sign-in radios', async () => {
-    await goToStep4()
-    // GitHub is the fixture's company that offers BOTH methods (github-copilot
-    // sign-in beside the github-models key row), so it is where the segmented
-    // control exists at all.
-    await openPanelForCompany('GitHub', 'github')
-
-    // Sign-in is pre-selected where offered (FR-005).
-    expect(screen.getByTestId('provider-detail-panel-auth-segment-sign_in')).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    )
-    expect(screen.getByTestId('provider-detail-panel-auth-signin')).toBeInTheDocument()
-    expect(screen.queryByTestId('provider-detail-panel-api-key-input')).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByTestId('provider-detail-panel-auth-segment-api_key'))
-
-    expect(screen.getByTestId('provider-detail-panel-api-key-input')).toBeInTheDocument()
-    expect(screen.queryByTestId('provider-detail-panel-auth-signin')).not.toBeInTheDocument()
-    // Still four steps — the whole point of FR-028.
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '4')
-  })
+  // (The "switching the auth segment to API key" case was removed with WU-24:
+  // its only fixture trigger was the retired GitHub Copilot sign-in row
+  // sitting beside the github-models key row — no catalog company offers both
+  // methods any more. The FR-028 segment behaviour itself is retained and
+  // unit-covered in AuthMethodControl.test.tsx.)
 
   it('the confirmed row renders the subtitle and endpoint derived from the fetched document (US-7 parity)', async () => {
     await goToStep4()
@@ -724,11 +707,14 @@ describe('OnboardingWizard — model field (FR-029)', () => {
 // =====================================================================
 
 describe('OnboardingWizard — sign-in path', () => {
-  const CODEX_MODEL = CATALOG_PROVIDERS.find((e) => e.id === 'codex-cli')!.models![0]!.id
+  // WU-24 (founder 2026-10-14): the retired CLI sign-in rows are gone, so the
+  // sign-in path runs through the one remaining sign_in catalog row,
+  // openai-chatgpt (company "ChatGPT").
+  const SIGNIN_MODEL = CATALOG_PROVIDERS.find((e) => e.id === 'openai-chatgpt')!.models![0]!.id
 
-  async function chooseCodexCli() {
+  async function chooseChatGptSignIn() {
     await goToStep4()
-    await openPanelForCompany('Codex CLI', 'codex')
+    await openPanelForCompany('ChatGPT', 'chatgpt')
     // Sign-in only: no segment, no key field, sign-in pre-selected (FR-005).
     expect(screen.queryByTestId('provider-detail-panel-auth-segment')).not.toBeInTheDocument()
     expect(screen.queryByTestId('provider-detail-panel-api-key-input')).not.toBeInTheDocument()
@@ -737,21 +723,21 @@ describe('OnboardingWizard — sign-in path', () => {
   }
 
   it('Check sign-in probes auth: sign_in with the chosen model and NO api_key', async () => {
-    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: CODEX_MODEL })
-    await chooseCodexCli()
-    await pickModel(CODEX_MODEL)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: SIGNIN_MODEL })
+    await chooseChatGptSignIn()
+    await pickModel(SIGNIN_MODEL)
     await waitFor(() => expect(probeProvider).toHaveBeenCalled())
 
     const req = lastProbeRequest()
-    expect(req.id).toBe('codex-cli')
+    expect(req.id).toBe('openai-chatgpt')
     expect(req.auth).toBe('sign_in')
-    expect(req.model).toBe(CODEX_MODEL)
+    expect(req.model).toBe(SIGNIN_MODEL)
     expect(Object.prototype.hasOwnProperty.call(req, 'api_key')).toBe(false)
   })
 
   it('the check button is labelled Check sign-in on the sign-in path', async () => {
     vi.mocked(probeProvider).mockResolvedValue({ success: false, error: 'not signed in' })
-    await chooseCodexCli()
+    await chooseChatGptSignIn()
     expect(screen.getByTestId('onboarding-probe-button')).toHaveTextContent('Check sign-in')
 
     fireEvent.click(screen.getByTestId('onboarding-probe-button'))
@@ -759,24 +745,10 @@ describe('OnboardingWizard — sign-in path', () => {
     expect(lastProbeRequest().auth).toBe('sign_in')
   })
 
-  it('a missing CLI binary reads as "codex not found on this machine", not as a key error', async () => {
-    vi.mocked(probeProvider).mockResolvedValue({
-      success: false,
-      error: 'exec: "codex": executable file not found in $PATH',
-    })
-    await chooseCodexCli()
-    fireEvent.click(screen.getByTestId('onboarding-probe-button'))
-
-    await waitFor(() => screen.getByTestId('onboarding-cli-missing'))
-    expect(screen.getByTestId('onboarding-cli-missing').textContent).toContain(
-      'codex not found on this machine',
-    )
-  })
-
   it('completion sends the OnboardingProviderSignIn variant — auth_method sign_in, no api_key', async () => {
-    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: CODEX_MODEL })
-    await chooseCodexCli()
-    await pickModel(CODEX_MODEL)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: SIGNIN_MODEL })
+    await chooseChatGptSignIn()
+    await pickModel(SIGNIN_MODEL)
     await waitFor(() => expect(finishButton()).not.toBeDisabled())
 
     fireEvent.click(finishButton())
@@ -785,8 +757,8 @@ describe('OnboardingWizard — sign-in path', () => {
     const body = vi.mocked(completeOnboardingTransaction).mock.calls[0]![0]
     expect(body.provider).toEqual({
       auth_method: 'sign_in',
-      id: 'codex-cli',
-      model: CODEX_MODEL,
+      id: 'openai-chatgpt',
+      model: SIGNIN_MODEL,
     })
     expect(Object.prototype.hasOwnProperty.call(body.provider, 'api_key')).toBe(false)
   })
