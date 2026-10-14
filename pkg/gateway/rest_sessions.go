@@ -930,6 +930,9 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, agentMustBeNamed)
 		return
 	}
+	// CHECK F01: a case spelling of the system agent is the system agent for
+	// every guard below.
+	agentID = foldSystemAgentID(agentID)
 	// FR-005: Omnipus has exactly one conversation — its main chat in the
 	// default workspace. A second one is refused with that main's id.
 	if msg, _, err := omnipusSecondConversationRefusal(a.agentLoop.GetSessionStore(), a.homePath, agentID); err != nil {

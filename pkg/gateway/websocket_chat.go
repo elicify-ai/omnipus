@@ -622,15 +622,44 @@ func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.Transcri
 // rejected as before.
 func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 	hcm.targetAgentID = strings.TrimSpace(hcm.agentID)
-	if hcm.targetAgentID == "" && hcm.frameSessionID != "" {
-		// An existing session keeps its canonical owner. An unknown session
-		// id resolves to nothing here; the session checks below reject it.
-		if store := hcm.h.agentLoop.GetSessionStore(); store != nil {
-			if meta, err := store.GetMeta(hcm.frameSessionID); err == nil && meta != nil {
-				hcm.targetAgentID = meta.AgentID
-			}
+	if hcm.targetAgentID != "" {
+		if err := validateEntityID(hcm.targetAgentID); err != nil {
+			logsafeWarn("ws: invalid agent_id in message frame; rejecting", "agent_id", hcm.targetAgentID, "error", err)
+			hcm.sendResolveRefusal("invalid agent_id")
+			return true
 		}
-		return false
+	}
+	// CHECK F01: a case spelling of the system agent is the system agent for
+	// every guard and write below.
+	hcm.targetAgentID = foldSystemAgentID(hcm.targetAgentID)
+	hcm.agentID = hcm.targetAgentID
+	if hcm.frameSessionID != "" {
+		// §6.4: an existing session runs under its canonical owner. An empty
+		// or matching agent_id proceeds under that owner; a different one —
+		// or an owner that no longer exists — is refused before anything is
+		// saved, naming the agents (CHECK F02). An unknown session id
+		// resolves no owner here; the session checks below reject it.
+		if owner := hcm.existingSessionOwner(); owner != "" {
+			if hcm.targetAgentID != "" && !strings.EqualFold(hcm.targetAgentID, owner) {
+				logsafeWarn("ws: rejecting message frame whose agent_id conflicts with the session owner",
+					"agent_id", hcm.targetAgentID, "owner", owner, "session_id", hcm.frameSessionID)
+				hcm.sendResolveRefusal(sessionOwnerConflictRefusal(owner, hcm.targetAgentID))
+				return true
+			}
+			if _, registered := hcm.h.agentLoop.GetRegistry().GetAgent(owner); !registered {
+				logsafeWarn("ws: rejecting message to a session whose owner no longer exists",
+					"owner", owner, "session_id", hcm.frameSessionID)
+				hcm.sendResolveRefusal(sessionOwnerMissingRefusal(owner))
+				return true
+			}
+			if hcm.targetAgentID == "" {
+				hcm.targetAgentID = owner
+				return false
+			}
+			hcm.targetAgentID = owner
+		} else if hcm.targetAgentID == "" {
+			return false
+		}
 	}
 	if hcm.targetAgentID == "" {
 		logsafeWarn("ws: rejecting new-chat frame that names no agent",
@@ -656,6 +685,35 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 		return true
 	}
 	return false
+}
+
+// existingSessionOwner returns the stored owner of the frame's existing session,
+// or "" when the session cannot be found or read.
+func (hcm *wsHandlerHandleChatMessage) existingSessionOwner() string {
+	store := hcm.h.agentLoop.ResolveSessionStore(hcm.frameSessionID)
+	if store == nil {
+		return ""
+	}
+	meta, err := store.GetMeta(hcm.frameSessionID)
+	if err != nil || meta == nil {
+		return ""
+	}
+	return strings.TrimSpace(meta.AgentID)
+}
+
+// sendResolveRefusal sends a target-agent refusal as an error frame, tagged
+// with the frame's session id when it named one.
+func (hcm *wsHandlerHandleChatMessage) sendResolveRefusal(message string) {
+	var sidPtr *string
+	if hcm.frameSessionID != "" {
+		sidCopy := hcm.frameSessionID
+		sidPtr = &sidCopy
+	}
+	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+		Type:      string(generated.WsFrameTypeError),
+		Message:   message,
+		SessionId: sidPtr,
+	})
 }
 
 // validateFrameIDs validates the client-supplied agent_id/session_id formats up front and rejects kickoff frames that carry a session_id or have no resolved workspace, dropping an unknown workspace binding.

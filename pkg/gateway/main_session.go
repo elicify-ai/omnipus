@@ -144,6 +144,36 @@ const omnipusStandaloneRefusal = "Omnipus's chats live in the default workspace;
 // (omnipus-system-agent FR-122, §6.4): there is no default agent.
 const agentMustBeNamed = "an agent must be named"
 
+// sessionOwnerConflictRefusal is the visible refusal for a message that names
+// an agent other than the existing session's canonical owner (spec §6.4,
+// CHECK F02): the session keeps its owner, and the conflict is refused,
+// naming both agents.
+func sessionOwnerConflictRefusal(owner, named string) string {
+	return fmt.Sprintf("this chat belongs to %s; a message naming %s cannot run in it", owner, named)
+}
+
+// foldSystemAgentID returns the system agent's canonical id for any letter-case
+// spelling of it, and id unchanged otherwise (CHECK F01). The system agent's
+// guards — one conversation (FR-005), its placement (FR-003) — compare against
+// the canonical id, while the registry also answers to a case alias, so an
+// alias must become the canonical id at the door. Only the system agent is
+// folded: an agent imported with a mixed-case id (OpenClaw migration stores
+// the source id as-is) keeps its exact spelling, and every other id keeps its
+// existing handling.
+func foldSystemAgentID(id string) string {
+	if strings.EqualFold(id, string(coreagent.IDOmnipus)) {
+		return string(coreagent.IDOmnipus)
+	}
+	return id
+}
+
+// sessionOwnerMissingRefusal is the visible refusal for a message to an
+// existing session whose owner agent no longer exists (§6.4): the session
+// never falls back to another agent.
+func sessionOwnerMissingRefusal(owner string) string {
+	return fmt.Sprintf("the session's owner agent %s no longer exists", owner)
+}
+
 // omnipusSecondConversationRefusal enforces FR-005: Omnipus has exactly one
 // conversation, its main chat, so any request to mint another chat with it is
 // refused with that main's id (never a dead end). The id is the existing main
