@@ -44,6 +44,31 @@ func (ts *turnState) markTurnFailed() {
 	ts.mu.Unlock()
 }
 
+// reportSessionSaveFailure is the shared body of the #1178 / amendment
+// L1-AMENDMENTS-20261013.md §4.2 handling for a failed SessionWriter write on
+// an active turn: markTurnFailed, the existing could-not-save notice event
+// (messageNotSavedReply — no new copy) and the classified transcript error via
+// appendClassifiedError, so the failure survives reload. The caller wraps the
+// store error in *messageNotSavedError and ends the turn through its own
+// existing exit; nothing here ends the turn.
+func (al *AgentLoop) reportSessionSaveFailure(ts *turnState, wrapped error) LLMError {
+	ts.markTurnFailed()
+	llm := TranslateTurnError(wrapped)
+	al.emitEvent(
+		EventKindError,
+		ts.eventMeta("runTurn", "turn.error"),
+		ErrorPayload{
+			Stage: "session_save", ChatID: ts.opts.ChatID,
+			Code: string(llm.Code), Message: llm.Message,
+			SessionID: string(ts.routingSessionID),
+		},
+	)
+	// US-1: persist the save failure to the JSONL transcript so the replay
+	// path re-renders it after reload (see appendErrorTranscript docstring).
+	ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+	return llm
+}
+
 func (ts *turnState) clearProviderCancel(_ context.CancelFunc) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()

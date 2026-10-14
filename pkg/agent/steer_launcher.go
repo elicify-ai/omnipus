@@ -791,7 +791,12 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 
 	if req.Task != "" {
 		firstMessage := firstMessageWithSnapshot(req)
-		sessions.AddMessage(childID, "user", firstMessage)
+		// #1178 (amendment §4.2): the mandatory first message must reach the
+		// model history or the launch is refused — a child whose first
+		// instruction is missing must never start.
+		if addErr := sessions.AddMessage(childID, "user", firstMessage); addErr != nil {
+			return fmt.Errorf("steer: launch: %w: task history: %w", steer.ErrStoreWrite, addErr)
+		}
 		taskEntry := session.TranscriptEntry{
 			ID:        childID + "-task",
 			Role:      "user",

@@ -67,7 +67,16 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setFinalContent(rz.rc.rx.finalContent)
 	if !rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory {
 		finalMsg := providers.Message{Role: "assistant", Content: rz.rc.rx.finalContent}
-		rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddMessage(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, finalMsg.Role, finalMsg.Content)
+		// #1178 (amendment §4.2): a failed final write is a failed turn,
+		// never a false success. Wrap with the existing assistant
+		// save-error wrapper, run the session_save error path below and
+		// markTurnFailed — DoneStats.TurnFailed must be true.
+		if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddMessage(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, finalMsg.Role, finalMsg.Content); addErr != nil {
+			notSaved := &messageNotSavedError{role: finalMsg.Role, cause: addErr}
+			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
+			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+			return turnResult{}, notSaved
+		}
 		if err := rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.Save(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); err != nil {
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
 			// Wave 1: never surface raw err.Error() (session-save is a
@@ -121,6 +130,37 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	}
 
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.autoTitleAfterFirstReply(rz.rc.rx.finalContent)
+
+	// #1178 (amendment §4.1, re-CHECK F01 engine boundary): the streamed
+	// turn's late transcript write and done frame happen inside the
+	// streamer's Finalize. Run it HERE — before the completed result is built
+	// and before runTurn's defers emit turn.end — so a failed late write
+	// becomes the turn's real outcome: markTurnFailed, TurnEndStatusError and
+	// the gateway's error returned to the caller instead of a false success.
+	// The gateway's own could-not-save notice already went out exactly once,
+	// so nothing is emitted here; finalizeStreamer's WARN stays as operator
+	// detail. runTurn's deferred finalizeStreamer call is a no-op after this
+	// (ts.lastStreamer is nil once it has run); on a non-streamed turn the
+	// call is a no-op too (no streamer).
+	//
+	// Re-CHECK R2-F01 (round 3): because this inline call publishes done, the
+	// turn must already be RETIRED when done goes out — done must never
+	// advertise or leave a cancellable, snapshot-visible active turn. Run the
+	// same pre-finalize sequence runTurn's LIFO defers executed before this
+	// inline call existed: clearActiveTurn (registered after
+	// finalizeStreamer → fired before it; the ordering active_turn_info.go's
+	// IsAlive gate documents) then preserveTruncatedAccumulator (same LIFO
+	// position), THEN the finalize that publishes. Both are idempotent and
+	// runTurn's own defers re-run them harmlessly.
+	rz.rc.rx.rr.rq.ri.rf.rt.al.clearActiveTurn(rz.rc.rx.rr.rq.ri.rf.rt.ts)
+	rz.rc.rx.rr.rq.ri.rf.rt.al.preserveTruncatedAccumulator(rz.rc.rx.rr.rq.ri.rf.rt.ts)
+	if finErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.finalizeStreamer(rz.rc.rx.ctx); finErr != nil {
+		notSaved := &messageNotSavedError{role: "assistant", cause: finErr}
+		rz.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+		rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+		return turnResult{status: TurnEndStatusError, turnFailed: true}, notSaved
+	}
+
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseCompleted)
 	return turnResult{
 		finalContent: rz.rc.rx.finalContent,
@@ -831,7 +871,18 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		}
 		syntheticDenyMsg := providers.Message{Role: "system", Content: denyMsg}
 		if !rq.ri.rf.rt.ts.opts.NoHistory {
-			rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rq.ri.rf.rt.ts.sessionKey, syntheticDenyMsg)
+			// #1178 (amendment §4.2): a failed window write ends the turn —
+			// the denial never reached the archive, so reporting it as a
+			// persisted denial would be a second false statement. Same
+			// messageNotSavedError wrap, markTurnFailed and existing exit.
+			if addErr := rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rq.ri.rf.rt.ts.sessionKey, syntheticDenyMsg); addErr != nil {
+				notSaved := &messageNotSavedError{role: syntheticDenyMsg.Role, cause: addErr}
+				rq.ri.rf.rt.al.reportSessionSaveFailure(rq.ri.rf.rt.ts, notSaved)
+				rq.ri.turnStatus = TurnEndStatusError
+				rq.ret0 = turnResult{status: TurnEndStatusError, finalContent: messageNotSavedReply}
+				rq.ret1 = notSaved
+				return agentLoopRunTurnRequestReturn
+			}
 		}
 		// ADR-058 §3.2/§10.A3: this branch used to also invoke FR-084's
 		// per-turn synthetic-deny counter-and-abort helper before

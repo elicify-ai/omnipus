@@ -25,19 +25,31 @@ type SessionReader interface {
 }
 
 // SessionWriter defines the mutating persistence operations used by the
-// agent loop, plus lifecycle management (Save, Close). Write methods (Add*,
-// Set*) are fire-and-forget: they do not return errors.
-// Implementations should log failures internally. This matches the original
-// SessionManager contract that the agent loop relies on.
+// agent loop, plus lifecycle management (Save, Close). Every write method
+// (Add*, Set*) returns the error of its own write (#1178, amendment
+// L1-AMENDMENTS-20261013.md §4.2): a failed archive, validation or metadata
+// write is reported to the caller, never only logged — the caller decides
+// how the turn ends. Implementations still log failures for the operator.
 type SessionWriter interface {
-	// AddMessage appends a simple role/content message to the session.
-	AddMessage(sessionKey, role, content string)
-	// AddFullMessage appends a complete message including tool calls.
-	AddFullMessage(sessionKey string, msg providers.Message)
+	// AddMessage appends a simple role/content message to the session and
+	// returns the append's error.
+	AddMessage(sessionKey, role, content string) error
+	// AddFullMessage appends a complete message including tool calls and
+	// returns the append's error.
+	AddFullMessage(sessionKey string, msg providers.Message) error
 	// SetProjectionState records capped | emptied for one
-	// (tool_call_id, archive_line) (FR-019); re-marking overwrites.
-	SetProjectionState(key string, pk memory.ProjectionKey, state memory.ProjectionState)
+	// (tool_call_id, archive_line) (FR-019); re-marking overwrites. It
+	// returns the validation, metadata-read or metadata-write error.
+	SetProjectionState(key string, pk memory.ProjectionKey, state memory.ProjectionState) error
 	// Save persists any pending state to durable storage.
+	//
+	// Save contract (§4.2): appends are synchronous and fsynced — every
+	// write already reported its own failure above — so there is no pending
+	// state to flush and nil is truthful. Save holds no sticky error state:
+	// a session whose earlier write failed reports that failure from the
+	// write itself, and the same session can write successfully after the
+	// fault is repaired.
+	//
 	// context-paging: Save MUST NOT compact the JSONL file (FR-005).
 	Save(key string) error
 	// Close releases resources held by the store.

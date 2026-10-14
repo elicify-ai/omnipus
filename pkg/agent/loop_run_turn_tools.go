@@ -2085,10 +2085,17 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 			if ok && result != nil && result.ForLLM != "" {
 				content := ex.rx.rr.rq.ri.cfg.FilterSensitiveData(result.ForLLM)
 				msg := providers.Message{Role: "user", Content: fmt.Sprintf("[SubTurn Result] %s", content)}
-				ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, msg)
+				// #1178 (amendment §4.2): a failed SubTurn window write ends
+				// the turn through the existing context-window exit — the
+				// result is never installed for the next request, and the
+				// turn is marked failed before the exit reports it.
 				if !ex.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory {
-					ex.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey, msg)
+					if addErr := ex.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey, msg); addErr != nil {
+						ex.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+						return ex.contextWindowExit(&messageNotSavedError{role: msg.Role, cause: addErr})
+					}
 				}
+				ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, msg)
 			}
 		default:
 			// No results available

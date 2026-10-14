@@ -93,10 +93,21 @@ func RecoverOrphanedToolCalls(
 			`{"type":"turn_canceled_restart","tool_call_id":%q,"reason":"ungraceful_shutdown_recovery"}`,
 			o.ToolCallID,
 		)
-		store.AddMessage(sessionKey, "system", syntheticContent)
+		// #1178 (amendment §4.2): the recovery report must be truthful — a
+		// failed marker write is logged with the session_key and the error,
+		// and is never reported as written/appended; the audit deny event and
+		// the success log fire only when the marker actually landed. The
+		// returned history still contains the orphan: an attempted marker is
+		// not a committed cancellation.
+		if addErr := store.AddMessage(sessionKey, "system", syntheticContent); addErr != nil {
+			slog.Error("agent: SIGKILL recovery — failed to write turn_canceled_restart marker",
+				"session_key", sessionKey, "tool_call_id", o.ToolCallID, "error", addErr)
+			continue
+		}
 		if err := store.Save(sessionKey); err != nil {
 			slog.Error("agent: failed to persist turn_canceled_restart entry",
 				"session_key", sessionKey, "tool_call_id", o.ToolCallID, "error", err)
+			continue
 		}
 
 		// Emit audit event (FR-069).

@@ -121,6 +121,13 @@ func (ts *turnState) appendWindowMessage(msg providers.Message, producer windowP
 // log, never into this text.
 const messageNotSavedReply = "Sorry, I couldn't save your message \u2014 please try again later."
 
+// MessageNotSavedReply is the exported form of messageNotSavedReply for a
+// surface outside pkg/agent that must show the SAME fixed notice \u2014 the
+// gateway's late streamed-transcript write failure (#1178, amendment
+// L1-AMENDMENTS-20261013.md \u00a74.1). One copy, two readers: rewording either
+// side is a founder-visible copy change, not a local edit.
+const MessageNotSavedReply = messageNotSavedReply
+
 // messageNotSavedError marks a refused turn: the sender's own message could not
 // be appended to the session. Error() keeps the operator-facing detail; the
 // sender-facing text is messageNotSavedReply.

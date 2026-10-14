@@ -318,7 +318,15 @@ type streamOwnershipReleaser interface {
 	ReleaseStreamOwnership()
 }
 
-func (ts *turnState) finalizeStreamer(ctx context.Context) {
+// finalizeStreamer hands the turn's stats, failure flag, truncation reason and
+// final content to the turn's streamer and runs its Finalize — the late write
+// that persists the streamed answer and publishes the done frame. It returns
+// that Finalize's error (#1178, amendment §4.1): finalizeTurn calls it BEFORE
+// building the completed result, so a failed late write becomes the turn's
+// real outcome; runTurn's deferred call (the other exits) discards the error —
+// those turns already end failed/aborted, and the WARN below stays as
+// operator detail there.
+func (ts *turnState) finalizeStreamer(ctx context.Context) error {
 	// B4: if the turn has been abandoned, suppress the final "done" frame so
 	// a stuck goroutine cannot send a spurious done signal to the frontend.
 	if ts.abandoned.Load() {
@@ -337,7 +345,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 				releaser.ReleaseStreamOwnership()
 			}
 		}
-		return
+		return nil
 	}
 	ts.mu.Lock()
 	s := ts.lastStreamer
@@ -402,7 +410,12 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// silently failed against a closed sendCh, leaving the streamer
 		// without any tokens to record.
 		if err := s.Finalize(ctx, finalContent); err != nil {
+			// #1178 (amendment §4.1): the late write's error is returned to the
+			// caller — the turn loop decides the outcome from it. The WARN
+			// stays as operator detail.
 			logger.WarnCF("agent", "Turn-end streaming finalize error", map[string]any{"error": err.Error()})
+			return err
 		}
 	}
+	return nil
 }
