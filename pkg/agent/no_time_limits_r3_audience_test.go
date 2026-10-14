@@ -30,9 +30,9 @@ func r3DamagedConclusionAudience(t *testing.T, missingJournal bool) {
 	if class, err := classifier.Classify(context.Background(), child.SessionID); err != nil || class != steer.ClassSteered {
 		t.Fatalf("SETUP real Launch must classify as steered before damage: class=%q err=%v", class, err)
 	}
-	metaBefore, err := store.GetMeta(child.SessionID)
-	if err != nil || metaBefore.ParentSessionID != root.SessionID {
-		t.Fatalf("SETUP Launch must have persisted the real parent: meta=%+v err=%v", metaBefore, err)
+	metaBefore, beforeErr := store.GetMeta(child.SessionID)
+	if beforeErr != nil || metaBefore.ParentSessionID != root.SessionID {
+		t.Fatalf("SETUP Launch must have persisted the real parent: meta=%+v err=%v", metaBefore, beforeErr)
 	}
 	if missingJournal {
 		if err := os.Remove(filepath.Join(ls.Dir(), child.SessionID+".jsonl")); err != nil {
@@ -49,9 +49,9 @@ func r3DamagedConclusionAudience(t *testing.T, missingJournal bool) {
 			t.Fatalf("SETUP remove modern steering edge: %v", err)
 		}
 	}
-	metaAfter, err := store.GetMeta(child.SessionID)
-	if err != nil || metaAfter.ParentSessionID != metaBefore.ParentSessionID || metaAfter.Type != metaBefore.Type {
-		t.Fatalf("SETUP parent metadata was not preserved: before=%+v after=%+v err=%v", metaBefore, metaAfter, err)
+	metaAfter, afterErr := store.GetMeta(child.SessionID)
+	if afterErr != nil || metaAfter.ParentSessionID != metaBefore.ParentSessionID || metaAfter.Type != metaBefore.Type {
+		t.Fatalf("SETUP parent metadata was not preserved: before=%+v after=%+v err=%v", metaBefore, metaAfter, afterErr)
 	}
 	if audience, class, err := resolver.Audience(context.Background(), child.SessionID); err != nil ||
 		audience != steer.AudienceNone || class != steer.ClassDamagedChild {

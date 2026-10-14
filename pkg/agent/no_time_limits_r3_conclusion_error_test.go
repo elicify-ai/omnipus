@@ -113,8 +113,8 @@ func TestR3ConclusionFailure_SaveReadAndUpdateUseTypedSafeWireNotice(t *testing.
 					if err != nil {
 						t.Fatalf("SETUP marshal damaged reference: %v", err)
 					}
-					if err := os.WriteFile(filepath.Join(gs.Dir(), g.goalID+".json"), body, 0o600); err != nil {
-						t.Fatalf("SETUP damage goal reference: %v", err)
+					if writeErr := os.WriteFile(filepath.Join(gs.Dir(), g.goalID+".json"), body, 0o600); writeErr != nil {
+						t.Fatalf("SETUP damage goal reference: %v", writeErr)
 					}
 					cur, err := activeGoalForSession(sid)
 					if err != nil || cur == nil || cur.GoalID != rec.GoalID {

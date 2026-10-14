@@ -136,7 +136,7 @@ func r3GoalOuterLimit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadTranscript(goal): %v", err)
 		}
-		var texts []string
+		texts := make([]string, 0, len(entries))
 		for _, entry := range entries {
 			texts = append(texts, entry.Content)
 		}

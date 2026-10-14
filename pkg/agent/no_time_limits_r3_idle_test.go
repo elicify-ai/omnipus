@@ -116,7 +116,10 @@ func (h *r3IdleHarness) assertOwnRunningIdentity(t *testing.T, sid, root string)
 	if !ok {
 		t.Fatal("SETUP real Dispatch registered no helper turn")
 	}
-	ts := v.(*turnState)
+	ts, typed := v.(*turnState)
+	if !typed {
+		t.Fatalf("SETUP registered helper turn has type %T, want *turnState", v)
+	}
 	if ts.transcriptSessionID != sid || string(ts.routingSessionID) != root || sid == root || !ts.IsAlive() {
 		t.Fatalf("SETUP helper identity/live = own:%q routing:%q alive:%v, want own=%q root=%q (distinct)",
 			ts.transcriptSessionID, ts.routingSessionID, ts.IsAlive(), sid, root)
