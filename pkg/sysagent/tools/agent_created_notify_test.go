@@ -220,6 +220,8 @@ func TestAgentCreate_NotifyFiresOnlyAfterAgentIsListable(t *testing.T) {
 // createHomePartialResult emits), not just a generic IsError + zero-notify
 // proof, so it actually proves the InitAgentHome branch was reached.
 func TestAgentCreate_InitAgentHomeFailure_DoesNotNotifyAgentCreated(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 	provider := &reloadTestProvider{}
 	al := buildSysagentFastUpsertTestLoop(t, home, provider, nil)
@@ -336,6 +338,8 @@ func TestAgentCreate_NilNotifyAgentCreatedIsSafe(t *testing.T) {
 // permission bits). toSlug("Hb Notify Fail Agent") deterministically yields
 // "hb-notify-fail-agent".
 func TestAgentCreate_HeartbeatWriteFailure_DoesNotNotifyAgentCreated(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 	provider := &reloadTestProvider{}
 	al := buildSysagentFastUpsertTestLoop(t, home, provider, nil)

@@ -92,6 +92,8 @@ func TestSysagentAgentTools_MaxToolIterations_UpdateAboveGlobalRefused(t *testin
 
 // Scenario "System agent creates with an own value" (US-8 AS-2).
 func TestSysagentAgentTools_MaxToolIterations_CreateWithOwnValue(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, cfg := newTestDeps(t)
 	cfg.Agents.Defaults.MaxToolIterations = 200
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{

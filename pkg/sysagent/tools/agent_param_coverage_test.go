@@ -137,6 +137,8 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 // provider and max_tool_iterations parameters are not just schema-declared
 // but actually persisted onto the entity record.
 func TestAgentCreate_AppliesProviderAndMaxToolIterations(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 

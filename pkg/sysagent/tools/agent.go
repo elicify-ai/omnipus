@@ -34,9 +34,10 @@ import (
 // as the REST create path does (pkg/gateway/rest_agents_create.go). No agent
 // id is ever derived from its name — the name is a free label kept verbatim,
 // and two agents may share one (founder decision 2026-10-14). Built-in agents
-// keep their fixed ids. A variable only so tests that must plant a fault at
-// the new agent's paths can choose the id.
-var newAgentID = func() string { return uuid.New().String() }
+// keep their fixed ids. Production ignores the name argument; it exists only
+// so tests whose fixtures are keyed by a known id (or that plant a fault at
+// the new agent's paths) can choose the id per created agent.
+var newAgentID = func(_ string) string { return uuid.New().String() }
 
 // canonicalAgentColor applies the REST colour rule (coreagent.CanonicalColor,
 // AgentColor.yaml): a palette value in any letter-case is returned uppercase and
@@ -352,7 +353,7 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	if _, _, err := parseOptionalHeartbeat(ac.args); err != nil {
 		return fieldErrorResult(err), true
 	}
-	ac.id = newAgentID()
+	ac.id = newAgentID(ac.name)
 	if err := validateID(ac.id); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "")), true
 	}

@@ -53,6 +53,8 @@ func TestCreateAgent_RejectsNonStringHeartbeatWithoutWrite(t *testing.T) {
 }
 
 func TestCreateAgent_InitAgentHomeFailureReportsPartial(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	id := "home-fault"
 	sessions := filepath.Join(deps.Home, "agents", id, "sessions")
@@ -95,6 +97,8 @@ func TestCreateAgent_InitAgentHomeFailureReportsPartial(t *testing.T) {
 }
 
 func TestCreateAgent_HeartbeatWriteFailureReportsPartial(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	id := "hb-fault"
 	hbDir := filepath.Join(deps.Home, "agents", id, "HEARTBEAT.md")
@@ -123,6 +127,8 @@ func TestCreateAgent_HeartbeatWriteFailureReportsPartial(t *testing.T) {
 }
 
 func TestCreateAgent_HeartbeatFileModeIsPrivate(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	args := createNativeArgs("Hb Mode")
 	args["heartbeat"] = "stay brief"

@@ -118,6 +118,8 @@ func TestSysagentUpdateAgent_GlobalLoweredBeforeWrite_Refused(t *testing.T) {
 // Control: with no lowering in flight, the same value is accepted — proves
 // the refusal above comes from the write-time read, not from the seam.
 func TestSysagentCreateUpdate_NoLoweringInFlight_Accepted(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	lowerDuringWrite(deps, "persistAndJoin", 300, 300)
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{

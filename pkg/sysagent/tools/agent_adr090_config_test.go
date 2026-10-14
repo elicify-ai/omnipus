@@ -94,6 +94,8 @@ func containsField(fields []string, want string) bool {
 // the patch on top of custom-agent defaults in the same persist, before
 // publication.
 func TestCreateAgent_AppliesInitialSkillsMCPAndPolicyPatchAtomically(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, _ := newTestDeps(t)
 	_, _, mailHook := mailLiveInventory()
 	draftAndMail := testInventory([]string{"draft"}, nil)

@@ -5,6 +5,8 @@
 package systools
 
 import (
+	"strings"
+
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -48,12 +50,35 @@ func WithCurrentRevisionForTest(tool tools.Tool, args map[string]any) map[string
 	return out
 }
 
-// SetAgentIDGeneratorForTest makes create_agent use gen for new agent ids for
-// the rest of the test, so a test that must plant a fault at the new agent's
-// paths (or assert an id collision) knows the id in advance. Production ids
-// are random UUIDs.
-func SetAgentIDGeneratorForTest(t interface{ Cleanup(func()) }, gen func() string) {
+// SetAgentIDGeneratorForTest makes create_agent use gen (given the requested
+// name) for new agent ids for the rest of the test, so a test whose fixture
+// is keyed by a known id, or that must plant a fault at the new agent's
+// paths, knows the id in advance. Production ids are random UUIDs and never
+// depend on the name. Not safe with t.Parallel.
+func SetAgentIDGeneratorForTest(t interface{ Cleanup(func()) }, gen func(name string) string) {
 	prev := newAgentID
 	newAgentID = gen
 	t.Cleanup(func() { newAgentID = prev })
+}
+
+// UseNameKeyedAgentIDsForTest gives each created agent the id its tests were
+// written against before ids became generated UUIDs (founder decision
+// 2026-10-14): the lowercase name with runs of other characters turned into
+// single hyphens. Test fixtures only — production never derives an id from a
+// name. Tests OF the id rule do not call this.
+func UseNameKeyedAgentIDsForTest(t interface{ Cleanup(func()) }) {
+	SetAgentIDGeneratorForTest(t, func(name string) string {
+		var b strings.Builder
+		hyphen := false
+		for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+				b.WriteRune(r)
+				hyphen = false
+			} else if !hyphen && b.Len() > 0 {
+				b.WriteByte('-')
+				hyphen = true
+			}
+		}
+		return strings.TrimSuffix(b.String(), "-")
+	})
 }
