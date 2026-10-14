@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -249,52 +247,12 @@ func mcpEnabledEnvSensitiveValues(cfg *config.Config, store *credentials.Store) 
 	return values
 }
 
-// resolveAllRefPattern extracts the credential ref name that
-// credentials.ResolveAll embeds in every per-ref resolution error:
-// `fmt.Errorf("ResolveAll: credential %q: %w", ref, err)`. The capture group
-// is the full Go-quoted (%q) literal, including its surrounding double
-// quotes and any backslash escapes — decoded via strconv.Unquote below so a
-// ref name containing a quote or backslash (however unlikely) round-trips
-// correctly instead of truncating the match early.
-var resolveAllRefPattern = regexp.MustCompile(`credential ("(?:[^"\\]|\\.)*"):`)
-
-// enabledRefFromBundleError attributes a non-NotFoundError credential bundle
-// resolution error (wrong master key, corrupted store entry, decrypt
-// failure, ...) to the currently-in-use ref in enabledRefs — an enabled
-// channel's ref or an in-use non-channel ref (voice, web-search tool, skill
-// marketplace; see buildEnabledRefMap).
-//
-// This parses the ref name directly out of ResolveAll's wrap format via
-// resolveAllRefPattern instead of doing a Contains-loop over every enabled
-// ref. The Contains-loop approach was ambiguous: if two enabled refs are
-// substrings of each other's names (e.g. "sec" and "my_secret_token", both
-// enabled), a failure on "my_secret_token" could match "sec" first — Go map
-// iteration order is randomized, so the misattribution was nondeterministic
-// across runs. The escalation path (fatal boot / rejected reload) still
-// fired correctly either way — this was a misdirection bug for the operator
-// reading the error, not a missed-detection bug. Parsing the exact ref out
-// of the error message removes the ambiguity entirely: there is exactly one
-// ref embedded in the message, and we look it up in enabledRefs rather than
-// searching enabledRefs for a substring match against the message.
-//
-// Returns ("", false) when the error doesn't match ResolveAll's wrap format,
-// or when the parsed ref is not present in enabledRefs (e.g. it belongs to a
-// disabled channel or a provider key — Warn is sufficient for those, as
-// today).
-func enabledRefFromBundleError(err error, enabledRefs map[string]bool) (string, bool) {
-	match := resolveAllRefPattern.FindStringSubmatch(err.Error())
-	if match == nil {
-		return "", false
-	}
-	ref, unquoteErr := strconv.Unquote(match[1])
-	if unquoteErr != nil {
-		return "", false
-	}
-	if !enabledRefs[ref] {
-		return "", false
-	}
-	return ref, true
-}
+// resolveAllRefPattern and enabledRefFromBundleError were deleted with the
+// #1277 store-class rework (CHECK F1/F2): bundle-resolution errors are now
+// classified by TYPE — storeLevelCredentialFailure refuses store-level
+// shapes, splitEntryAuthFailures scopes entry-auth failures by the store's
+// own readability witness, and NotFoundError degrades per reference — so no
+// caller parses ref names out of ResolveAll's message wrapping any more.
 
 // reportInjectionErrors logs every credentials.InjectFromConfig failure at
 // ERROR and returns the ones that must stop the caller (boot or reload) —
@@ -395,9 +353,9 @@ func reportInjectionErrors(errs []error, phase string) (fatal []error, deferredA
 
 // splitEntryAuthFailures extracts the subset of errs whose cause is an
 // entry-authentication failure (*credentials.EntryAuthError, which unwraps to
-// ErrWrongKey) — the ambiguous class #1277 scopes by bundle evidence: a wrong
-// whole-store master key fails every entry (nothing resolves), a single
-// tampered entry fails only itself (the rest of the bundle still decrypts).
+// ErrWrongKey) — the ambiguous class #1277 scopes by the store's own
+// readability witness: a wrong whole-store master key fails every entry, a
+// single tampered entry fails only itself.
 func splitEntryAuthFailures(errs []error) (auth, rest []error) {
 	for _, e := range errs {
 		var entryAuth *credentials.EntryAuthError
@@ -408,6 +366,31 @@ func splitEntryAuthFailures(errs []error) (auth, rest []error) {
 		rest = append(rest, e)
 	}
 	return auth, rest
+}
+
+// storeLevelCredentialFailure returns the first bundle-resolution error that
+// is a STORE-level failure rather than a per-integration one: a locked store,
+// a whole-file corruption or I/O failure, or an unclassified shape.
+//
+// A store.Get failure says something about ONE integration only when the
+// store itself answered — *credentials.NotFoundError (the referenced entry is
+// absent) or *credentials.EntryAuthError (this one entry does not decrypt).
+// Every other cause means the store document itself could not be read, and
+// that refuses boot, reload and REST refresh alike (#1277; CHECK F2) — the
+// same store-level class an Unlock failure aborts boot with.
+func storeLevelCredentialFailure(errs []error) error {
+	for _, e := range errs {
+		var notFound *credentials.NotFoundError
+		if errors.As(e, &notFound) {
+			continue
+		}
+		var entryAuth *credentials.EntryAuthError
+		if errors.As(e, &entryAuth) {
+			continue
+		}
+		return e
+	}
+	return nil
 }
 
 // fatalStoreWideAuthFailure builds the boot/reload-fatal error for the
@@ -560,12 +543,23 @@ func bootCredentials(
 
 	// #1277 (founder decision 2026-10-12): one integration's missing or
 	// unreadable secret never aborts boot — only that integration degrades,
-	// visibly. The one exception is the STORE-LEVEL failure class: when every
-	// configured credential failed entry authentication and nothing resolved,
-	// the vault itself is unreadable (wrong master key / replaced
-	// credentials.json) and boot stays fatal. See splitEntryAuthFailures.
+	// visibly. The exceptions are the STORE-LEVEL failure classes:
+	//
+	//   - locked / whole-file corrupt / unclassified store errors (a failure
+	//     the store itself raised, not one entry's) — refused by
+	//     storeLevelCredentialFailure below;
+	//   - a whole-store entry-auth failure, decided from the STORE's own
+	//     readability witness (credentials.Store.HasDecryptableEntry) and not
+	//     from whether any CONFIGURED reference happened to resolve (CHECK
+	//     F1): when no entry in the vault decrypts, the master key is wrong or
+	//     credentials.json was replaced and boot stays fatal.
 	bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
-	if len(bundleAuth) > 0 && len(bundle) == 0 {
+	if storeErr := storeLevelCredentialFailure(bundleErrs); storeErr != nil {
+		return nil, nil, nil, fmt.Errorf(
+			"fatal: credential store unreadable (locked, corrupted, or otherwise unreadable — "+
+				"a store-level failure, not a single integration's secret): %w", storeErr)
+	}
+	if len(bundleAuth) > 0 && !credStore.HasDecryptableEntry() {
 		return nil, nil, nil, fatalStoreWideAuthFailure(append(append([]error{}, deferredAuth...), bundleAuth...))
 	}
 	logScopedCredentialFailures("boot", deferredAuth)
@@ -597,20 +591,9 @@ func bootCredentials(
 			slog.Info("credential not found (not currently enabled/in use)", "ref", notFound.Name)
 			continue
 		}
-		// Any error other than "ref not found" or an entry-auth failure (an
-		// env failure, an unclassified future shape, ...) means the ref IS
-		// configured but unreadable in a way nobody has classified. On
-		// something that is actually ENABLED/in-use this stays fatal: the
-		// unknown-shape posture is unchanged by #1277 — only the classified
-		// missing (NotFoundError) and entry-auth (bundle-backed) classes
-		// degrade.
-		if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
-			return nil, nil, nil, fmt.Errorf(
-				"fatal: enabled credential %q failed to resolve (not simply "+
-					"missing — check OMNIPUS_MASTER_KEY / credentials.json integrity): %w",
-				ref, e,
-			)
-		}
+		// Unreachable by construction: splitEntryAuthFailures moved the
+		// entry-auth errors aside and storeLevelCredentialFailure refused
+		// every other non-NotFound shape above.
 		slog.Warn("credential bundle resolution error", "error", e)
 	}
 

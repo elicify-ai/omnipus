@@ -415,6 +415,30 @@ func (s *Store) List() ([]string, error) {
 	return names, nil
 }
 
+// HasDecryptableEntry reports whether at least one stored entry decrypts
+// under the store's current key — the store's own readability witness.
+//
+// #1277 (CHECK F1): a whole-store failure must be decided from the STORE, not
+// from whether any CONFIGURED reference resolved. EntryAuthError's doc comment
+// says the discriminating evidence is scope — a wrong master key fails EVERY
+// entry, a single tampered or swapped entry fails only itself — and a store
+// whose unreferenced entries still decrypt is demonstrably readable even when
+// every configured reference happens to fail. A locked or unreadable store
+// document yields no witness (false): callers treat that as the store-level
+// fatal class, which is exactly what it is.
+func (s *Store) HasDecryptableEntry() bool {
+	names, err := s.List()
+	if err != nil {
+		return false
+	}
+	for _, name := range names {
+		if _, err := s.Get(name); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // Delete removes the credential named name from the store atomically.
 // Implements US-12 AC3.
 func (s *Store) Delete(name string) error {

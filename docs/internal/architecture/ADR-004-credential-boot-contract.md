@@ -135,8 +135,11 @@ web-search key) is NOT boot-fatal since #1277 (founder decision 2026-10-12,
 amended here 2026-10-13): boot continues, and only that integration degrades —
 logged at ERROR naming the reference, not started (channels) or reported
 unusable (providers, mailboxes, connectors), with the ref-naming reason
-visible in Settings and in doctor. The operator fixes the credential in the
-running gateway and the next reload or restart restores the integration.
+visible in the integration's Settings row (Doctor lists degraded channel
+connections). Whole-store readability is decided from the store itself
+(whether any entry decrypts), never from whether configured references
+resolve. The operator fixes the credential in the running gateway and the
+next reload or restart restores the integration.
 
 ### Reload-time failures (rollback + degraded)
 

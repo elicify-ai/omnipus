@@ -575,12 +575,24 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	// secret on an enabled integration no longer rejects the in-memory refresh
 	// — only that integration degrades (the channel manager records its
 	// ref-naming failure; Settings shows it), while the operator's actual edit
-	// applies. A bundle that resolved nothing despite entry-auth failures is
-	// the whole-store wrong-master-key class and still rejects.
+	// applies. The STORE-LEVEL classes still reject and keep the old config
+	// (CHECK F2, the same class boot and reload refuse on): a locked store, a
+	// whole-file corruption, or any other store-level fault, and — decided
+	// from the store's own readability witness, never from whether any
+	// configured reference resolved (CHECK F1) — a whole-store entry-auth
+	// failure where no entry decrypts.
 	enabledRefs := buildEnabledRefMap(newCfg)
 	bundle, bundleErrs := credentials.ResolveBundle(newCfg, a.credStore)
 	bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
-	if len(bundleAuth) > 0 && len(bundle) == 0 {
+	if storeErr := storeLevelCredentialFailure(bundleErrs); storeErr != nil {
+		refreshErr := fmt.Errorf(
+			"refresh rejected: credential store unreadable (locked, corrupted, or otherwise "+
+				"unreadable — a store-level failure, not a single integration's secret): %w", storeErr)
+		slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
+			"store-level credential failure", "error", refreshErr)
+		return refreshErr
+	}
+	if len(bundleAuth) > 0 && !a.credStore.HasDecryptableEntry() {
 		refreshErr := fmt.Errorf("refresh rejected: %w", fatalStoreWideAuthFailure(bundleAuth))
 		slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
 			"whole-store credential failure", "error", refreshErr)
@@ -604,19 +616,9 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 				"ref", notFound.Name)
 			continue
 		}
-		// An unclassified resolution-error shape on an enabled/in-use ref keeps
-		// the reject path (unknown-shape posture unchanged by #1277).
-		if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
-			refreshErr := fmt.Errorf(
-				"enabled credential %q failed to resolve (not simply missing — check "+
-					"OMNIPUS_MASTER_KEY / credentials.json integrity): %w", ref, e,
-			)
-			slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
-				"enabled credential failed to resolve", "ref", ref, "error", e)
-			return refreshErr
-		}
-		// Non-fatal: a disabled channel / unused feature missing its cred is
-		// acceptable here.
+		// Unreachable by construction: splitEntryAuthFailures moved the
+		// entry-auth errors aside and storeLevelCredentialFailure refused
+		// every other non-NotFound shape above.
 		slog.Warn("refreshConfigAndRewireServices: bundle resolution error", "error", e)
 	}
 	// Replace (not append) the entire sensitive-values set so rotated secrets

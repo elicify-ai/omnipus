@@ -517,11 +517,22 @@ func prepareReloadConfig(newCfg *config.Config, runningServices *services) error
 		// overlay) instead of rejecting the whole reload — a rejection rolled
 		// back every other edit in the same save and kept the deleted
 		// credential's stale value live on the still-running old instance.
+		//
+		// The STORE-LEVEL classes still reject: a locked / whole-file-corrupt /
+		// unclassified store error refuses the reload, and a whole-store
+		// entry-auth failure is decided from the store's own readability
+		// witness (credentials.Store.HasDecryptableEntry), never from whether
+		// any configured reference happened to resolve (CHECK F1/F2).
 		enabledRefs := buildEnabledRefMap(newCfg)
 		newBundle, bundleErrs := credentials.ResolveBundle(newCfg, cs)
 		bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
-		if len(bundleAuth) > 0 && len(newBundle) == 0 {
-			// Whole-store entry-auth failure: the vault itself is unreadable.
+		if storeErr := storeLevelCredentialFailure(bundleErrs); storeErr != nil {
+			return fmt.Errorf(
+				"reload rejected: credential store unreadable (locked, corrupted, or otherwise "+
+					"unreadable — a store-level failure, not a single integration's secret): %w", storeErr)
+		}
+		if len(bundleAuth) > 0 && !cs.HasDecryptableEntry() {
+			// Whole-store entry-auth failure: no entry in the vault decrypts.
 			return fmt.Errorf("reload rejected: %w", fatalStoreWideAuthFailure(
 				append(append([]error{}, deferredAuth...), bundleAuth...)))
 		}
@@ -548,16 +559,9 @@ func prepareReloadConfig(newCfg *config.Config, runningServices *services) error
 				slog.Info("reload: credential not found (not currently enabled/in use)", "ref", notFound.Name)
 				continue
 			}
-			// An unclassified resolution-error shape on an enabled/in-use ref
-			// keeps the historical reject-and-rollback mechanism (the unknown
-			// shape posture is unchanged by #1277).
-			if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
-				reloadErr := fmt.Errorf(
-					"reload rejected: enabled credential %q failed to resolve: %w",
-					ref, e,
-				)
-				return reloadErr
-			}
+			// Unreachable by construction: splitEntryAuthFailures moved the
+			// entry-auth errors aside and storeLevelCredentialFailure refused
+			// every other non-NotFound shape above.
 			slog.Warn("reload: credential bundle resolution error", "error", e)
 		}
 		runningServices.bundle = newBundle
