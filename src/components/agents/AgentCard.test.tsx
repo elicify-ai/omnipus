@@ -105,6 +105,29 @@ describe('AgentCard — slide-over open (test #12)', () => {
 // deleted, and the server PUT 400s any body carrying `default`. The seven
 // sprint/258 star tests were deleted with the feature, not loosened.
 
+describe('AgentCard — no retired default-agent surface (B1 / FR-120)', () => {
+  it.each([
+    { id: 'ray', name: 'Ray', type: 'Main', locked: false },
+    { id: 'mia', name: 'Mia', type: 'core', locked: true },
+    { id: 'omnipus', name: 'Omnipus', type: 'core', locked: true },
+    { id: 'judge', name: 'Judge', type: 'system', locked: true },
+    { id: 'worker', name: 'Worker', type: 'Subagent', locked: false },
+    { id: 'external-worker', name: 'External Worker', type: 'subagent_3p', locked: false },
+  ] as const)('$type $name has no default marker, star action or toggle', (fixture) => {
+    // F07 / S01: mount the actual card. Positive name/action checks prevent
+    // an empty component from manufacturing an absence-only green.
+    render(<AgentCard agent={makeAgent(fixture)} />)
+    expect(screen.getByText(fixture.name)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: new RegExp(fixture.name) })).toBeInTheDocument()
+    expect(screen.queryByLabelText(/default agent|set as default|make default/i)).not.toBeInTheDocument()
+    expect(screen.queryByTitle(/default agent|set as default|make default/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Default(?: agent)?$/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /set.*default|make.*default/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: /default/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /default/i })).not.toBeInTheDocument()
+  })
+})
+
 // T068-28 — ADR-068 FR-014 (SPA half): "needs a model" / "needs a provider" copy.
 // Traces to: adr-068-providers-ux-spec.md — Scenario: Dependents are listed and
 // left without a model (final And: the agent list renders the copy on both rows);

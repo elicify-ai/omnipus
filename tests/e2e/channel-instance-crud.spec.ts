@@ -65,6 +65,11 @@
 
 import { expect, type Page, type Route } from '@playwright/test'
 import { test } from './fixtures/console-errors'
+import type { components } from '../../src/lib/api/generated/openapi-types'
+
+type RoutingState = components['schemas']['ChannelRouting']
+type RoutingWrite = components['schemas']['ChannelRoutingUpdateRequest']
+const UNBOUND_ROUTING: RoutingState = { workspace_id: '', default_agent_id: '', bound: false }
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 void BASE_URL // used only for reference; actual calls are via page.goto
@@ -154,6 +159,7 @@ const AGENT_MIA = {
   // W1-5: the generated Agent schema requires both identity fields.
   figure: 'Omnipus',
   role: 'general',
+  memory_enabled: true,
   type: 'core',
   locked: true,
   status: 'active',
@@ -168,7 +174,7 @@ const AGENT_MIA = {
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,
   revision: STUB_REVISION,
-}
+} satisfies components['schemas']['Agent']
 const AGENTS_FIXTURE = [AGENT_MIA]
 
 // ── Workspace route predicates (URL-based — see header docstring) ───────────
@@ -281,15 +287,23 @@ async function registerBaseRoutes(
   // (ChannelInstanceRow) fire fetchChannelRouting(instanceId) per rendered row
   // to resolve their workspace→agent binding title, and CreateChannelSheet
   // fires setChannelRouting(newId, ...) right after a successful create.
-  // Defaults to an unbound instance on GET ({}) and a 200 echo of the body on
-  // PUT; individual tests may override with a more specific page.route()
+  // K14: unbound GET is the truthful empty pair + bound:false, and a
+  // successful PUT returns the complete pair + bound:true; individual tests
+  // may override with a more specific page.route()
   // after calling this helper (e.g. to capture + assert the PUT body).
+  const routingByInstance = new Map<string, RoutingState>()
   await page.route('**/api/v1/channels/*/routing', async (route: Route) => {
     const req = route.request()
+    const id = req.url().split('/api/v1/channels/')[1]?.split('/routing')[0] ?? ''
     if (req.method() === 'GET') {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(routingByInstance.get(id) ?? UNBOUND_ROUTING) })
     } else if (req.method() === 'PUT') {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: req.postData() ?? '{}' })
+      const pair = JSON.parse(req.postData() ?? '{}') as RoutingWrite
+      expect(pair.workspace_id.trim()).not.toBe('')
+      expect(pair.default_agent_id.trim()).not.toBe('')
+      const state: RoutingState = { ...pair, bound: true }
+      routingByInstance.set(id, state)
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(state) })
     } else {
       await route.continue()
     }
@@ -417,14 +431,22 @@ test(
 
     // Capture the post-create PUT .../routing so we can assert the ADR-029
     // binding chosen in the Sheet was persisted with the right ids.
+    const routingByInstance = new Map<string, RoutingState>([
+      ['telegram.us-sales', { workspace_id: 'ws-us', default_agent_id: 'mia', bound: true }],
+    ])
     await page.route('**/api/v1/channels/*/routing', async (route: Route) => {
       const req = route.request()
+      const id = req.url().split('/api/v1/channels/')[1]?.split('/routing')[0] ?? ''
       if (req.method() === 'GET') {
-        await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(routingByInstance.get(id) ?? UNBOUND_ROUTING) })
       } else if (req.method() === 'PUT') {
-        capturedPutId = req.url().split('/api/v1/channels/')[1]?.split('/routing')[0] ?? null
+        capturedPutId = id
         capturedPutBody = req.postData()
-        await route.fulfill({ status: 200, contentType: 'application/json', body: req.postData() ?? '{}' })
+        const pair = JSON.parse(capturedPutBody ?? '{}') as RoutingWrite
+        expect(pair).toEqual({ workspace_id: 'ws-eu', default_agent_id: 'mia' })
+        const state: RoutingState = { ...pair, bound: true }
+        routingByInstance.set(id, state)
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(state) })
       } else {
         await route.continue()
       }
@@ -478,7 +500,7 @@ test(
       })
       .not.toBeNull()
 
-    const postBody = JSON.parse(capturedPostBody!) as { type?: string; slug?: string }
+    const postBody = JSON.parse(capturedPostBody!) as components['schemas']['ChannelCreateRequest']
     expect(postBody.type).toBe('telegram')
     expect(postBody.slug).toBe('eu-sales')
 
@@ -491,9 +513,9 @@ test(
       })
       .not.toBeNull()
     expect(capturedPutId).toBe('telegram.eu-sales')
-    const putBody = JSON.parse(capturedPutBody!) as { workspace_id?: string; default_agent_id?: string }
-    expect(putBody.workspace_id).toBe('ws-eu')
-    expect(putBody.default_agent_id).toBe('mia')
+    const putBody = JSON.parse(capturedPutBody!) as RoutingWrite
+    expect(putBody).toEqual({ workspace_id: 'ws-eu', default_agent_id: 'mia' })
+    expect(routingByInstance.get('telegram.us-sales')).toEqual({ workspace_id: 'ws-us', default_agent_id: 'mia', bound: true })
 
     // Dialog should close after success
     await expect(dialog).not.toBeVisible({ timeout: 5_000 })
@@ -508,6 +530,8 @@ test(
     // Pre-existing instance must still be listed (two-per-type assertion)
     await expect(existingCard).toBeVisible()
     await expect(existingCard).toContainText('telegram.us-sales')
+    await expect(page.getByTestId('channel-binding-telegram.eu-sales')).toContainText('EU Sales → Mia')
+    await expect(page.getByTestId('channel-binding-telegram.us-sales')).toContainText('US Sales → Mia')
 
     // TDD #31 / US-9, AS-1: instances group under their channel type — one
     // "telegram" group header contains BOTH per-instance rows, not two
@@ -693,7 +717,7 @@ test(
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ workspace_id: 'ws1', default_agent_id: 'mia' }),
+          body: JSON.stringify({ workspace_id: 'ws1', default_agent_id: 'mia', bound: true } satisfies RoutingState),
         })
       } else {
         await route.continue()
@@ -724,6 +748,7 @@ test(
         // W1-5: the generated Agent schema requires both identity fields.
         figure: 'Omnipus',
         role: 'general',
+        memory_enabled: true,
         type: 'core',
         locked: true,
         status: 'active',

@@ -55,7 +55,7 @@
 
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
@@ -1521,6 +1521,77 @@ function renderWithWorkspace(opts: {
     </QueryClientProvider>,
   )
 }
+
+describe('ChannelConfigPanel — valid routing save reaches the API (K14 / FR-127)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('saves one complete picker pair after debounce and reloads the accepted binding', async () => {
+    // F08 / S03: drive the real pickers and doSaveRoutingDebounced, rather
+    // than only checking that invalid or partial states did not call the API.
+    vi.clearAllMocks()
+    const { addToast } = mockUiStore()
+    Element.prototype.scrollIntoView = vi.fn()
+    let persisted: Awaited<ReturnType<typeof fetchChannelRouting>> = {
+      workspace_id: '', default_agent_id: '', bound: false,
+    }
+    vi.mocked(setChannelRouting).mockImplementation(async (_id, pair) => {
+      persisted = { ...pair, bound: true }
+      return persisted
+    })
+    renderWithWorkspace()
+    vi.mocked(fetchChannelRouting).mockImplementation(async () => persisted)
+    await waitFor(() => expect(screen.getByTestId('routing-unbound-hint')).toBeInTheDocument())
+    expect(setChannelRouting).not.toHaveBeenCalled()
+
+    const workspacePicker = within(screen.getByTestId('routing-workspace-select')).getByRole('combobox')
+    fireEvent.click(workspacePicker)
+    fireEvent.click(await screen.findByRole('option', { name: /^Sales$/ }))
+    await waitFor(() => {
+      expect(within(screen.getByTestId('routing-agent-select')).getByRole('combobox')).toBeEnabled()
+      expect(screen.getByTestId('routing-agent-required-hint')).toBeInTheDocument()
+    })
+    // Only instrument the debounce timer, not the async query/network edges.
+    // 400ms is the current scheduling seam, not a product latency assertion.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await act(async () => { await vi.advanceTimersByTimeAsync(400) })
+    expect(setChannelRouting).not.toHaveBeenCalled()
+
+    fireEvent.click(within(screen.getByTestId('routing-agent-select')).getByRole('combobox'))
+    fireEvent.click(screen.getByRole('option', { name: /^Ray$/ }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(399) })
+    expect(setChannelRouting).not.toHaveBeenCalled()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+      // Flush queued query notifications before restoring real timers; simply
+      // dropping the fake clock would strand the accepted-read hydration.
+      await vi.runOnlyPendingTimersAsync()
+    })
+    expect(setChannelRouting).toHaveBeenCalledExactlyOnceWith('telegram', {
+      workspace_id: 'sales', default_agent_id: 'ray',
+    })
+    vi.useRealTimers()
+    await waitFor(() => {
+      // Supplemental copy characterization, not the K14 correctness oracle:
+      // the spec oracle is the exact complete API pair and hydrated read-back.
+      expect(addToast).toHaveBeenCalledWith({ message: 'Routing saved', variant: 'success' })
+      expect(fetchChannelRouting).toHaveBeenCalledWith('telegram')
+      expect(within(screen.getByTestId('routing-workspace-select')).getByRole('combobox')).toHaveTextContent('Sales')
+      expect(within(screen.getByTestId('routing-agent-select')).getByRole('combobox')).toHaveTextContent('Ray')
+      // Wait for server read-back hydration, not the already-optimistic picker.
+      expect(screen.queryByTestId('routing-unbound-hint')).not.toBeInTheDocument()
+    })
+    expect(persisted).toEqual({ workspace_id: 'sales', default_agent_id: 'ray', bound: true })
+    expect(screen.queryByTestId('routing-unbound-hint')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('routing-agent-required-hint')).not.toBeInTheDocument()
+    // This call happens again only after the real success handler invalidates
+    // the read query; the complete response drives picker hydration.
+    expect(fetchChannelRouting).toHaveBeenCalledTimes(2)
+    expect(setChannelRouting).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('ChannelConfigPanel — workspace selector renders (US-1 / FR-001)', () => {
   beforeEach(() => {
