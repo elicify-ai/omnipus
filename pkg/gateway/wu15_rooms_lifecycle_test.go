@@ -145,17 +145,29 @@ func TestWU15Rooms_AddParticipantStartsEmptyAndLeavesOriginMainUnchanged(t *test
 	require.Equal(t, "mia", meta.AgentID, "origin stays one-to-one")
 }
 
+// Oracle correction authorized by Chief Q5 A: FR-172 requires a new receipt
+// for each mutation, not a global ban on extra legitimate audit events.
 func TestWU15Rooms_CreateMembershipMuteDeleteAreAudited(t *testing.T) {
 	h := wu15NewHarness(t)
+	before := wu15ReadAuditLines(t, h.home)
 	room := h.create("squad", "Audit sentinel", "mia", "jim")
+	wu15RequireMutationAudit(t, before, wu15ReadAuditLines(t, h.home), room.Id, []string{"mia", "jim"}, "create")
 	for _, step := range []struct{ action, id string }{{"add", "researcher2"}, {"remove", "researcher2"}, {"mute", "jim"}, {"unmute", "jim"}} {
+		before = wu15ReadAuditLines(t, h.home)
 		status, body := h.http(http.MethodPatch, "/api/v1/rooms/"+room.Id+"/members", gen.RoomMembersUpdateRequest{Action: gen.RoomMembersUpdateRequestAction(step.action), AgentIds: []string{step.id}})
 		require.Equal(t, http.StatusOK, status, "FR-172: %s: %s", step.action, body)
+		wu15RequireMutationAudit(t, before, wu15ReadAuditLines(t, h.home), room.Id, []string{step.id}, step.action)
 	}
+	before = wu15ReadAuditLines(t, h.home)
 	status, body := h.http(http.MethodDelete, "/api/v1/rooms/"+room.Id, nil)
 	require.Equal(t, http.StatusNoContent, status, "FR-172: delete: %s", body)
-	var rows []audit.Entry
-	err := filepath.WalkDir(h.home, func(path string, info fs.DirEntry, walkErr error) error {
+	wu15RequireMutationAudit(t, before, wu15ReadAuditLines(t, h.home), room.Id, []string{"mia", "jim"}, "delete")
+}
+
+func wu15ReadAuditLines(t *testing.T, home string) [][]byte {
+	t.Helper()
+	var rows [][]byte
+	err := filepath.WalkDir(home, func(path string, info fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -167,35 +179,47 @@ func TestWU15Rooms_CreateMembershipMuteDeleteAreAudited(t *testing.T) {
 			return readErr
 		}
 		for _, line := range bytes.Split(data, []byte("\n")) {
-			if len(bytes.TrimSpace(line)) == 0 {
-				continue
-			}
-			var entry audit.Entry
-			if decodeErr := json.Unmarshal(line, &entry); decodeErr != nil {
-				return decodeErr
-			}
-			encoded, encodeErr := json.Marshal(entry.Details)
-			if encodeErr != nil {
-				return encodeErr
-			}
-			if bytes.Contains(encoded, []byte(room.Id)) {
-				rows = append(rows, entry)
+			if len(bytes.TrimSpace(line)) != 0 {
+				rows = append(rows, append([]byte(nil), line...))
 			}
 		}
 		return nil
 	})
 	require.NoError(t, err)
-	require.Len(t, rows, 6, "FR-172: create/add/remove/mute/unmute/delete each has one actual audit row")
-	expectedAgents := [][]string{{"mia", "jim"}, {"researcher2"}, {"researcher2"}, {"jim"}, {"jim"}, {"mia", "jim"}}
-	for index, entry := range rows {
-		require.Equal(t, "wu15-tester", entry.User, "FR-172: actual authenticated caller, never the agent")
-		require.False(t, entry.Timestamp.IsZero(), "FR-172: when")
-		require.NotEmpty(t, entry.Details, "FR-172: caller and changed agents recorded, not bare event")
-		encoded, err := json.Marshal(entry.Details)
+	return rows
+}
+
+func wu15RequireMutationAudit(t *testing.T, before, after [][]byte, roomID string, agents []string, action string) {
+	t.Helper()
+	old := map[string]int{}
+	for _, line := range before {
+		old[string(line)]++
+	}
+	matched := false
+	for _, line := range after {
+		if old[string(line)] > 0 {
+			old[string(line)]--
+			continue
+		}
+		var entry audit.Entry
+		require.NoError(t, json.Unmarshal(line, &entry), "FR-172: actual audit row parses")
+		if entry.User != "wu15-tester" || entry.Timestamp.IsZero() || entry.Event == "" {
+			continue
+		}
+		details, err := json.Marshal(entry.Details)
 		require.NoError(t, err)
-		require.Contains(t, string(encoded), room.Id, "FR-172: which room")
-		for _, id := range expectedAgents[index] {
-			require.Contains(t, string(encoded), `"`+id+`"`, "FR-172: exact affected agent id")
+		if !bytes.Contains(details, []byte(`"`+roomID+`"`)) {
+			continue
+		}
+		allAgents := true
+		for _, id := range agents {
+			if !bytes.Contains(details, []byte(`"`+id+`"`)) {
+				allAgents = false
+			}
+		}
+		if allAgents {
+			matched = true
 		}
 	}
+	require.True(t, matched, "FR-172: %s appended a new attributed audit receipt for room %s and affected agents %v", action, roomID, agents)
 }
