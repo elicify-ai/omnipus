@@ -83,6 +83,9 @@ func r4RunParentPolls(t *testing.T, actions []string, newInformation bool) (stri
 	}
 	p.script.WithText("SCRIPT-FINISHED-R4: polling is complete.")
 	if newInformation {
+		// Permit this finite script's twelve actual updates; the default
+		// ten-per-minute send limiter is independent of the polling guard.
+		h.al.GetMessageInboxStore().ChildSendRatePerMinute = len(actions)
 		p.before = func(step int) error {
 			if step <= len(actions) {
 				return r4AppendFreshProgress(h, child, step)
