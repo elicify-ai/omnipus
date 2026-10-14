@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
@@ -96,7 +95,7 @@ func NewAgentCreateTool(d *Deps) *AgentCreateTool { return &AgentCreateTool{deps
 func (t *AgentCreateTool) Name() string           { return "create_agent" }
 func (t *AgentCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentCreateTool) Description() string {
-	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description and model are required; soul is required for native agents ('Main'/'Subagent') and must be omitted for 'subagent_3p' (an external CLI worker has no soul; supplying one is refused). An optional cli_path must be an existing executable file when set; leave it empty to use the CLI's default binary on PATH. color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
+	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague) and 'Subagent' (native delegation-only worker) require soul; 'subagent_3p' is a delegation-only worker on an external CLI — it takes no soul, requires cli, and its cli_path is optional (empty means the CLI's default binary on PATH). name, description and model are required; soul is required for native agents ('Main'/'Subagent') and must be omitted for 'subagent_3p' (an external CLI worker has no soul; supplying one is refused). A set cli_path must name an executable file this machine can run for the current user (an existing regular file with execute access on Unix; a PATHEXT-admitted extension on Windows); leave it empty to use the CLI's default binary on PATH. color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
 }
 
 func (t *AgentCreateTool) Parameters() map[string]any {
@@ -124,7 +123,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			"agent_type": map[string]any{
 				"type":        "string",
 				"enum":        []any{"Main", "Subagent", "subagent_3p"},
-				"description": "Agent type. 'Main' (default) = native chat colleague on the Omnipus engine. 'Subagent' = native delegation-only worker. 'subagent_3p' = delegation-only worker that runs on an EXTERNAL CLI (requires cli + cli_path).",
+				"description": "Agent type. 'Main' (default) = native chat colleague on the Omnipus engine; 'Subagent' = native delegation-only worker — both native types require soul. 'subagent_3p' = delegation-only worker on an EXTERNAL CLI: requires cli, while cli_path is optional (leave it empty to use the CLI's default binary on PATH; set it only for a wrapper or a non-standard install location).",
 			},
 			"cli": map[string]any{
 				"type":        "string",
@@ -133,7 +132,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"cli_path": map[string]any{
 				"type":        "string",
-				"description": "Optional. Absolute path to the external CLI binary. Leave EMPTY to use the CLI's default binary on $PATH (claude / codex / opencode). Set it only when this machine invokes the CLI via a wrapper or a non-standard path — and derive the real path on this system, never hardcode a guess. When set, the path must be an existing executable file (not a directory); anything else is refused.",
+				"description": "Optional. Absolute path to the external CLI binary. Leave EMPTY to use the CLI's default binary on $PATH (claude / codex / opencode). Set it only when this machine invokes the CLI via a wrapper or a non-standard path — and derive the real path on this system, never hardcode a guess. When set, it must name an existing regular file this machine can execute for the current user (Unix: the user holds execute access; Windows: the extension is in PATHEXT); a missing path, a directory, or a non-executable file is refused.",
 			},
 			"provider": map[string]any{
 				"type":        "string",
@@ -354,10 +353,11 @@ func refuseManagementGrants(args map[string]any) (*tools.ToolResult, bool) {
 	return nil, false
 }
 
-// validateExternalCLIPath refuses a supplied cli_path the OS could not execute:
-// a missing path, a path that is not a regular file (e.g. a directory), or —
-// outside Windows, where the execute bit is not meaningful — a file with no
-// execute permission (issue #1274). The refusal names cli_path, the exact
+// validateExternalCLIPath refuses a supplied cli_path the current user could
+// not execute: a missing path, a path that is not a regular file (e.g. a
+// directory), or a file the platform would not run — on Unix faccessat
+// (AT_EACCESS, X_OK) for the effective user, on Windows a PATHEXT-admitted
+// extension (issue #1274, fix round 1). The refusal names cli_path, the exact
 // supplied path and the specific fault so the model can correct it. Symlinks
 // are resolved by os.Stat, matching what the driver would exec. An empty path
 // is the caller's "use the CLI's default binary on PATH" request and never
@@ -370,8 +370,8 @@ func validateExternalCLIPath(path string) error {
 	if !fi.Mode().IsRegular() {
 		return fieldErr("cli_path", fmt.Sprintf("%q is a directory, not a regular file: point cli_path at the CLI executable itself, or leave it empty to use the CLI's default binary on PATH", path))
 	}
-	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o111 == 0 {
-		return fieldErr("cli_path", fmt.Sprintf("%q is not executable (no execute permission): make the file executable or leave cli_path empty to use the CLI's default binary on PATH", path))
+	if err := currentUserCanExecute(path); err != nil {
+		return fieldErr("cli_path", fmt.Sprintf("%q is not executable: %v. Point cli_path at a file this machine can execute, or leave it empty to use the CLI's default binary on PATH", path, err))
 	}
 	return nil
 }
