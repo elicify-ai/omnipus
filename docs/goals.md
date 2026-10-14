@@ -94,11 +94,13 @@ A goal ends one of four ways — met, tries exhausted, expired, cleared by you �
 - On a task, tries bound the work inside one run; attempts bound how many runs the task gets. The task card shows both, for example "attempt 1 of 3 · try 5 of 20".
 - Unproven counts as unmet. Finished work can be sent back when the Judge could not verify it; the reason names the evidence that was missing.
 - Verdict speed follows the Judge's model — a fast one keeps verdicts quick.
-- The work itself has no time limit; the Judge's check does (`judge.timeout_sec`, 420 seconds by default, at most 900). When it runs out, the message names the Judge's own time limit — not a model provider failure. When the Judge cannot finish its check after its retries, the check always ends with a visible conclusion — never silence. It says **Not verified — the check could not complete** with the reason, and carries the work result so nothing is lost:
-  - in a chat goal, the conclusion is added to the chat and the goal stays active, so the agent can claim completion again later;
-  - for a helper working on a goal, its parent agent receives the conclusion together with the helper's result;
-  - for a task, the task ends **Failed** with the conclusion and the worker's result in its result text, and no attempt is used; re-run it once the Judge is available;
-  - for a plan, the plan's handover explains that the plan judge could not finish the round, and the plan retries or parks for a correction.
+- The work itself has no wall-clock lifetime limit. The Judge's verification turn does: `judge.timeout_sec`, 420 seconds by default and at most 900. When that limit ends the verification turn, the message names the Judge's own check time limit, not a model provider failure.
+- If checking is abandoned because the Judge is unavailable, chat, helper and task paths produce **Not verified — the check could not complete**, with the reason and the worker's claimed result labelled **The work result, unverified:**. The embedded result is limited to 8,000 bytes; longer results end with **[truncated]**. Do not treat that conclusion as a complete copy of a long result.
+  - In a chat goal, the conclusion is added to the chat and the goal stays active, so the agent can claim completion again later.
+  - For a helper working on a goal, its parent agent receives the conclusion with the helper's claimed result.
+  - For a task, an unavailable-Judge exit ends the task **Failed**, with the conclusion in its result text and no attempt used. Re-run it after fixing the Judge or once it is available.
+  - For a plan, a separate handover explains that the plan judge could not finish the round. The engine retries or parks the plan for a correction; the handover does not use the chat/task conclusion's exact label.
+- An unverified criterion is different from an unavailable Judge. A review that ran but still could not verify a criterion can produce an **unmet** verdict, including after repeated failures following real review progress. That can consume a goal try, send the worker back to work, and eventually consume a task attempt if the run fails. Storage or delivery failures are reported separately; a helper conclusion is not routed to a guessed parent when its saved record cannot be read.
 - Ending a goal never erases it, but goal records are swept by the same retention rule as sessions. Keep what you need somewhere durable.
 
 ## Related pages
