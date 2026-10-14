@@ -1258,27 +1258,56 @@ func RunAgentDeleteCascade(omnipusHome, agentID, revision string, sessions Agent
 // cascadeDeleteAgentCarryForwardFiles removes this agent's end-of-chat summary
 // file — workspaces/<id>/.omnipus/carry-forward/<agentID>.md — in every
 // workspace under $OMNIPUS_HOME (WU-21 / #1197, amendment §3.2(6)). It returns
-// one warning per file it could not remove (an FR-037 cleanup failure: the
-// caller keeps the entity record for retry) and none when there was nothing
-// to remove. Membership-only removal never reaches this function.
+// one warning per failure (an FR-037 cleanup failure: the caller keeps the
+// entity record for retry) and none when there was nothing to remove.
+// Enumeration is done with per-workspace ReadDir, not filepath.Glob: Glob
+// silently skips subtrees it cannot read, so a permission-denied carry-forward
+// directory would be indistinguishable from an empty one and the agent record
+// would be deleted while its summary survived. A subtree that cannot be
+// scanned is therefore a warning naming the owning workspace, never a silent
+// skip; a workspace with no carry-forward room yet is the normal empty case.
+// Each warning labels the owning workspace id, so the diagnostic names the
+// owner and not merely a path buried in wrapped OS error text.
+// Membership-only removal never reaches this function.
 func cascadeDeleteAgentCarryForwardFiles(omnipusHome, agentID string) []string {
 	if err := validation.EntityID(agentID); err != nil {
 		return []string{fmt.Sprintf("carry-forward cleanup skipped: invalid agent id: %v", err)}
 	}
-	pattern := filepath.Join(omnipusHome, memrooms.WorkspacesDirName, "*", memrooms.OmnipusRoomDir, "carry-forward", agentID+".md")
-	matches, err := filepath.Glob(pattern)
+	workspacesDir := filepath.Join(omnipusHome, memrooms.WorkspacesDirName)
+	entries, err := os.ReadDir(workspacesDir)
 	if err != nil {
-		return []string{fmt.Sprintf("carry-forward cleanup failed: cannot scan workspaces: %v", err)}
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // no workspaces exist, so no workspace-owned summary can.
+		}
+		return []string{fmt.Sprintf("carry-forward cleanup failed: cannot enumerate workspaces: %v", err)}
 	}
 	var warnings []string
-	for _, path := range matches {
-		// os.Remove deliberately refuses a directory: a non-file at the pair
-		// path is reported, never recursively erased.
-		if rmErr := os.Remove(path); rmErr != nil {
-			// path = <home>/workspaces/<ws>/.omnipus/carry-forward/<agent>.md —
-			// name the owning workspace in the warning.
-			ws := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(path)))))
-			warnings = append(warnings, fmt.Sprintf("carry-forward cleanup failed for workspace %q: %v", ws, rmErr))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue // workspace records (workspaces/<id>.json) are not rooms.
+		}
+		workspaceID := entry.Name()
+		carryForwardDir := filepath.Join(workspacesDir, workspaceID, memrooms.OmnipusRoomDir, "carry-forward")
+		files, err := os.ReadDir(carryForwardDir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue // this workspace holds no carry-forward room yet.
+			}
+			// An unscannable subtree is a cleanup failure, never evidence of
+			// an empty directory: report it instead of silently skipping the
+			// agent's owned data there.
+			warnings = append(warnings, fmt.Sprintf("carry-forward cleanup failed for workspace %q: cannot enumerate: %v", workspaceID, err))
+			continue
+		}
+		for _, file := range files {
+			if file.Name() != agentID+".md" {
+				continue // only this agent's own summary; siblings stay.
+			}
+			// os.Remove deliberately refuses a directory: a non-file at the
+			// pair path is reported, never recursively erased.
+			if rmErr := os.Remove(filepath.Join(carryForwardDir, file.Name())); rmErr != nil {
+				warnings = append(warnings, fmt.Sprintf("carry-forward cleanup failed for workspace %q: remove %s: %v", workspaceID, file.Name(), rmErr))
+			}
 		}
 	}
 	return warnings
