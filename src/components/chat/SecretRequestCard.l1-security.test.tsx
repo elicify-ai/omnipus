@@ -156,9 +156,14 @@ describe('Secret card — isolated values and bounded submit (FR-062/071/075)', 
     const pending = deferred<Response>()
     installNetwork(() => pending.promise)
     mount()
-    fireEvent.change(labelledControl('Weather token'), { target: { value: SENTINEL } })
+    const input = labelledControl('Weather token')
+    fireEvent.change(input, { target: { value: SENTINEL } })
     const submit = screen.getByRole('button', { name: /submit|save/i })
     fireEvent.click(submit)
+    // CHECK2 B-S2-submit-inflight / B-S2-refusal-inflight: FR-075 S2
+    // clears at handoff, before any response or eventual disposal can help.
+    expect(input).toHaveValue('')
+    expect(JSON.parse(requests[0].body!)).toEqual({ values: { token: SENTINEL } })
     fireEvent.click(submit)
     await waitFor(() => expect(submit).toBeDisabled())
     expect(requests).toHaveLength(1)
@@ -169,11 +174,17 @@ describe('Secret card — isolated values and bounded submit (FR-062/071/075)', 
   })
 
   it('FR-074/075: cancel sends cancel only, even when the field already contains a secret', async () => {
-    installNetwork(() => jsonResponse({ ...saved, state: 'cancelled', reference_names: undefined }))
+    const pending = deferred<Response>()
+    installNetwork(() => pending.promise)
     mount()
     const input = labelledControl('Weather token')
     fireEvent.change(input, { target: { value: SENTINEL } })
     fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
+    // CHECK2 B-S2-submit-cancel: do not wait for terminal cleanup.
+    expect(input).toHaveValue('')
+    expect(requests.map(c => JSON.parse(c.body!))).toEqual([{ cancel: true }])
+    assertNoLeak()
+    await act(async () => pending.resolve(jsonResponse({ ...saved, state: 'cancelled', reference_names: undefined })))
     await waitFor(() => expect(surface.store.getState().byId['sec-l1'].request.state).toBe('cancelled'))
     expect(requests.map(c => JSON.parse(c.body!))).toEqual([{ cancel: true }])
     expect(input).toHaveValue('')
@@ -181,10 +192,18 @@ describe('Secret card — isolated values and bounded submit (FR-062/071/075)', 
   })
 
   it('FR-075: confirmed REST submit clears the detached value control as well as shared state', async () => {
+    const pending = deferred<Response>()
+    installNetwork(() => pending.promise)
     mount()
     const input = labelledControl('Weather token')
     fireEvent.change(input, { target: { value: SENTINEL } })
     fireEvent.click(screen.getByRole('button', { name: /submit|save/i }))
+    // CHECK2 B-S2-submit-success: observe before the redundant disposal wipe.
+    expect(input).toHaveValue('')
+    expect(requests).toHaveLength(1)
+    expect(JSON.parse(requests[0].body!)).toEqual({ values: { token: SENTINEL } })
+    assertNoLeak()
+    await act(async () => pending.resolve(jsonResponse(saved)))
     await waitFor(() => expect(surface.store.getState().byId[frame.request_id].request.state).toBe('submitted'))
     expect(input).toHaveValue('')
     expect(requests.filter(c => c.method === 'POST')).toHaveLength(1)
