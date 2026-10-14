@@ -7,7 +7,6 @@ import { queryClient } from '@/lib/queryClient'
 import type { EligibleRow } from '@/lib/nav/eligibleMains'
 import { useSelectSession } from '@/components/chat/useSelectSession'
 import { useOpenOmnipus } from '@/hooks/useOpenOmnipus'
-import { OMNIPUS_AGENT_ID } from '@/lib/omnipus'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ErrorState } from '@/components/ui/error-state'
@@ -362,15 +361,6 @@ function AgentMainRow({
 
   const confirmExtra = () => {
     const asked = useSessionStore.getState().newChatPrompt
-    // FR-005: Omnipus has one conversation. An extra would be refused by the
-    // server at the mint ("Omnipus has one conversation; continue it in its
-    // main chat (session <id>)") — route to that main chat instead, and clear
-    // the now-answered prompt.
-    if (row.agentId === OMNIPUS_AGENT_ID) {
-      dismissNewChatPrompt()
-      openMain()
-      return
-    }
     beginPairExtra(workspace.id, row.agentId, navigate, onOverlayClose, 'confirm', asked?.clientMessageId)
   }
 
