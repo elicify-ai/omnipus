@@ -9,12 +9,15 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -180,5 +183,220 @@ func TestJudgeUnavailable_TaskResultCarriesVerdictAndWorkResult(t *testing.T) {
 		if !strings.Contains(final.Result, want) {
 			t.Errorf("task result %q is missing %q", final.Result, want)
 		}
+	}
+}
+
+// assertTaskConclusionKeepsResult checks a task that ended on a Judge failure:
+// Failed, no attempt used, the plain Judge reason first, and the
+// "Not verified" conclusion carrying the worker's own evidence (issue #1306,
+// CR F2 / SFH F3: every terminal Judge failure keeps the work result).
+func assertTaskConclusionKeepsResult(t *testing.T, final *task.Task, evidence string) {
+	t.Helper()
+	if final.Status != task.StatusFailed || final.AttemptCount != 0 {
+		t.Fatalf("status=%q attempts=%d, want failed with no attempt used (result: %s)", final.Status, final.AttemptCount, final.Result)
+	}
+	if !strings.HasPrefix(final.Result, "The Judge could not run: ") {
+		t.Errorf("result %q must lead with the plain Judge reason", final.Result)
+	}
+	for _, want := range []string{"Not verified", evidence} {
+		if !strings.Contains(final.Result, want) {
+			t.Errorf("task result %q is missing %q — the worker's result was discarded", final.Result, want)
+		}
+	}
+}
+
+func TestJudgeMisconfigured_TaskResultKeepsTheWorkResult(t *testing.T) {
+	e7RecordJudgeBackoffWaits(t)
+	worker := newClaimingWorker(turnClaimMet("RESULT-1306-MISCONF wrote report.md"))
+	al, _ := newGoalLoopTestLoop(t, worker, e7BreakJudgeModel)
+	tk := newRunLoopTask(t, al, nil)
+	assertTaskConclusionKeepsResult(t, runTaskUntilTerminal(t, al, tk.ID, 1), "RESULT-1306-MISCONF wrote report.md")
+}
+
+func TestJudgeTruncatedVerdict_TaskResultKeepsTheWorkResult(t *testing.T) {
+	e7RecordJudgeBackoffWaits(t)
+	worker := newClaimingWorker(turnClaimMet("RESULT-1306-TRUNC wrote report.md"))
+	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{Content: e7CutOffVerdict, FinishReason: "length"}, nil
+	}}
+	tk := newRunLoopTask(t, al, nil)
+	assertTaskConclusionKeepsResult(t, runTaskUntilTerminal(t, al, tk.ID, 1), "RESULT-1306-TRUNC wrote report.md")
+}
+
+func TestJudgeNotRegistered_TaskResultKeepsTheWorkResult(t *testing.T) {
+	worker := newClaimingWorker(turnClaimMet("RESULT-1306-NOJUDGE wrote report.md"))
+	al, _ := newGoalLoopTestLoop(t, worker, nil)
+	if !al.GetRegistry().RemoveAgent(string(coreagent.IDJudge)) {
+		t.Fatal("SETUP: the Judge agent was not registered to begin with")
+	}
+	tk := newRunLoopTask(t, al, nil)
+	assertTaskConclusionKeepsResult(t, runTaskUntilTerminal(t, al, tk.ID, 1), "RESULT-1306-NOJUDGE wrote report.md")
+}
+
+// noJudgeWait makes every Judge retry/backoff wait return at once.
+func noJudgeWait(t *testing.T) {
+	t.Helper()
+	origSleep, origBackoff := judgeSleepFn, judgeRetryBackoff
+	t.Cleanup(func() { judgeSleepFn, judgeRetryBackoff = origSleep, origBackoff })
+	judgeRetryBackoff = []time.Duration{time.Millisecond}
+	judgeSleepFn = func(context.Context, time.Duration) error { return errors.New("test: no wait") }
+}
+
+// newChannelGoal starts an interactive /goal on the given channel/chat and
+// breaks the Judge so every adjudication is unavailable.
+func newChannelGoal(t *testing.T, channel, chatID string) (*AgentLoop, *AgentInstance, *session.UnifiedStore, string) {
+	t.Helper()
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	store, sid := newGoalTestSession(t, al, agentInst.ID)
+	opts := processOptions{
+		TranscriptStore: store, TranscriptSessionID: sid,
+		Channel: channel, ChatID: chatID, SessionKey: "sk-" + channel, UserInitiated: true,
+	}
+	al.applyGoalCommandPrompt(context.Background(),
+		bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
+	activatePendingGoal(t, al, agentInst, &opts)
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return nil, errors.New("simulated judge outage")
+	}}
+	return al, agentInst, store, sid
+}
+
+// goalConclusionErrors returns the goal_conclusion error events published so far.
+func goalConclusionErrors(sub EventSubscription) []string {
+	var msgs []string
+	for {
+		select {
+		case evt, ok := <-sub.C:
+			if !ok {
+				return msgs
+			}
+			if p, isErr := evt.Payload.(ErrorPayload); isErr && p.Stage == "goal_conclusion" {
+				msgs = append(msgs, p.Message)
+			}
+		default:
+			return msgs
+		}
+	}
+}
+
+// CR F3: a /goal started on Telegram gets the Not-verified conclusion on
+// Telegram — not only in the web transcript and the web pill.
+func TestJudgeUnavailable_ChannelGoalConclusionReachesItsChannel(t *testing.T) {
+	noJudgeWait(t)
+	al, agentInst, _, sid := newChannelGoal(t, "telegram", "tg-1306")
+	drainOutbound(al.bus)
+
+	al.redriveGoalAdjudication(&goalDeferredAdjudicationWork{
+		agentInst: agentInst, sessionID: sid, claimText: "RESULT-1306-TG all tests pass",
+	})
+
+	var delivered *bus.OutboundMessage
+	for _, msg := range drainOutbound(al.bus) {
+		if msg.Channel == "telegram" && strings.Contains(msg.Content, "Not verified") {
+			m := msg
+			delivered = &m
+		}
+	}
+	if delivered == nil {
+		t.Fatal("no Not-verified conclusion was published to the goal's Telegram chat")
+	}
+	if delivered.ChatID != "tg-1306" || !strings.Contains(delivered.Content, "RESULT-1306-TG all tests pass") {
+		t.Fatalf("conclusion delivered as %+v, want chat tg-1306 carrying the claimed result", delivered)
+	}
+}
+
+// SFH F4: when the conclusion cannot be saved to the transcript, that failure
+// is raised visibly, and the conclusion still lands durably on the goal record
+// (which a reconnect rehydrates) and on the goal's channel.
+func TestJudgeUnavailable_ConclusionSaveFailureIsVisibleAndStillDurable(t *testing.T) {
+	noJudgeWait(t)
+	orig := appendGoalConclusionFn
+	t.Cleanup(func() { appendGoalConclusionFn = orig })
+	appendGoalConclusionFn = func(*AgentLoop, *session.UnifiedStore, string, string, string) error {
+		return errors.New("disk full")
+	}
+	al, agentInst, _, sid := newChannelGoal(t, "webchat", "c1")
+	sub := al.SubscribeEvents(256)
+	defer al.UnsubscribeEvents(sub.ID)
+	drainOutbound(al.bus)
+
+	al.redriveGoalAdjudication(&goalDeferredAdjudicationWork{
+		agentInst: agentInst, sessionID: sid, claimText: "RESULT-1306-SAVE all tests pass",
+	})
+
+	errs := goalConclusionErrors(sub)
+	found := false
+	for _, m := range errs {
+		if strings.Contains(m, "could not be saved") && strings.Contains(m, "disk full") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a failed conclusion save was not raised visibly; goal_conclusion errors = %q", errs)
+	}
+	g := mustActiveGoalForSession(t, sid)
+	if g == nil || !strings.Contains(g.LatestReason, "Not verified") || !strings.Contains(g.LatestReason, "RESULT-1306-SAVE") {
+		t.Fatalf("goal record latest reason = %q, want the durable Not-verified conclusion with the result", g.LatestReason)
+	}
+	published := false
+	for _, msg := range drainOutbound(al.bus) {
+		if strings.Contains(msg.Content, "Not verified") {
+			published = true
+		}
+	}
+	if !published {
+		t.Error("the conclusion was not delivered to the goal's chat")
+	}
+}
+
+// SFH F1: a steered helper whose lifecycle record exists but cannot be read
+// must not be treated as a parentless chat. The conclusion is recorded with
+// the reason it could not be delivered, and the failure is raised visibly.
+func TestJudgeUnavailable_UnreadableAudienceIsReportedNotGuessed(t *testing.T) {
+	noJudgeWait(t)
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	lifecycleDir := t.TempDir()
+	lifecycle := session.NewLifecycleStore(lifecycleDir)
+	al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), lifecycle)
+	wireSteerCompletionDeps(t, al)
+	parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
+	if err != nil {
+		t.Fatalf("NewSession(parent): %v", err)
+	}
+	child := launchGoalBearingChild947(t, al, parentMeta.ID, "call-1306-unreadable")
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return nil, errors.New("simulated judge outage")
+	}}
+	if werr := os.WriteFile(filepath.Join(lifecycleDir, child.SessionID+".jsonl"), []byte("{not a lifecycle record\n"), 0o600); werr != nil {
+		t.Fatalf("SETUP: corrupt the lifecycle record: %v", werr)
+	}
+	if _, lerr := lifecycle.Load(child.SessionID); lerr == nil || errors.Is(lerr, session.ErrLifecycleNotFound) {
+		t.Fatalf("SETUP: want an unreadable (not missing) lifecycle record, Load err = %v", lerr)
+	}
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	sub := al.SubscribeEvents(256)
+	defer al.UnsubscribeEvents(sub.ID)
+
+	al.redriveGoalAdjudication(&goalDeferredAdjudicationWork{
+		agentInst: agentInst, sessionID: child.SessionID, claimText: "RESULT-1306-AUD shipped the parser",
+	})
+
+	entries, err := al.GetSessionStore().ReadTranscript(child.SessionID)
+	if err != nil {
+		t.Fatalf("ReadTranscript(child): %v", err)
+	}
+	var note string
+	for _, e := range entries {
+		if strings.Contains(e.Content, "Not verified") {
+			note = e.Content
+		}
+	}
+	if !strings.Contains(note, "could not be delivered") || !strings.Contains(note, "RESULT-1306-AUD shipped the parser") {
+		t.Fatalf("child transcript conclusion = %q, want the result plus why it could not be delivered", note)
+	}
+	if errs := goalConclusionErrors(sub); len(errs) == 0 {
+		t.Error("the undeliverable conclusion was not raised as a visible error")
 	}
 }

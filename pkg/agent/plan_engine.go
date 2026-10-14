@@ -467,6 +467,20 @@ type PlanEngine struct {
 	// races its transcript/cost writes against teardown.
 	wakeWG sync.WaitGroup
 
+	// planTurnsInFlight counts dispatchPlanTurn turns (owner and supervisor
+	// wakes) still running per plan, so the idle-expiry sweep can tell a quiet
+	// plan from one whose agent is working (issue #1306). Guarded by
+	// planTurnsMu.
+	planTurnsMu       sync.Mutex
+	planTurnsInFlight map[string]int
+
+	// judgeRoundReadFault, when non-nil, is consulted before each of the
+	// judge round's two input reads ("plan" reload, "members" list) and a
+	// non-nil return stands in for that read failing. A test seam only —
+	// production leaves it nil — so the round's input-failure branches can be
+	// driven without breaking the store underneath (issue #1306, T3).
+	judgeRoundReadFault func(stage string) error
+
 	subID     uint64
 	stopCh    chan struct{}
 	stoppedWG sync.WaitGroup
@@ -1533,11 +1547,70 @@ func (pe *PlanEngine) idleExpireOneLocked(planID string, cfg config.PlanningConf
 	if now.Sub(last) < time.Duration(maxDays)*24*time.Hour {
 		return
 	}
+	// Issue #1306 (no clock ends work): idle expiry ends only a plan with
+	// nothing in flight. A member task running or queued to run, a plan judge
+	// round, or an owner/supervisor turn still working means the plan is not
+	// idle, however long ago its last recorded activity was.
+	if busy, why := pe.planWorkInFlight(p.ID); busy {
+		logger.InfoCF("plan_engine", "idle sweep: plan past its idle bound but work is in flight — not expiring",
+			map[string]any{"plan_id": p.ID, "work": why})
+		return
+	}
 	handover := fmt.Sprintf(
 		"Plan %q idle-expired after %d day(s) with no activity (last activity: %s).",
 		p.Title, maxDays, last.Format(time.RFC3339),
 	)
 	pe.failPlanLocked(p.ID, plan.FailedReasonIdleExpired, handover)
+}
+
+// notePlanTurnStarted / notePlanTurnSettled bracket one dispatchPlanTurn turn.
+func (pe *PlanEngine) notePlanTurnStarted(planID string) {
+	pe.planTurnsMu.Lock()
+	defer pe.planTurnsMu.Unlock()
+	if pe.planTurnsInFlight == nil {
+		pe.planTurnsInFlight = map[string]int{}
+	}
+	pe.planTurnsInFlight[planID]++
+}
+
+func (pe *PlanEngine) notePlanTurnSettled(planID string) {
+	pe.planTurnsMu.Lock()
+	defer pe.planTurnsMu.Unlock()
+	if pe.planTurnsInFlight[planID] <= 1 {
+		delete(pe.planTurnsInFlight, planID)
+		return
+	}
+	pe.planTurnsInFlight[planID]--
+}
+
+// planWorkInFlight reports whether planID has agent work running or queued
+// to run, and what it is: a member task in progress or next (dispatchable),
+// a plan judge round, a supervision claim, or an owner/supervisor turn. A
+// member list that cannot be read counts as in flight — the sweep must not
+// end a plan it cannot see into.
+func (pe *PlanEngine) planWorkInFlight(planID string) (bool, string) {
+	pe.planTurnsMu.Lock()
+	turns := pe.planTurnsInFlight[planID]
+	pe.planTurnsMu.Unlock()
+	if turns > 0 {
+		return true, "a plan owner or supervisor turn is running"
+	}
+	if _, held := pe.registry().Lookup(verifierUnitForPlan(planID)); held {
+		return true, "a plan judge round is running"
+	}
+	if pe.supervisionTurnInFlight(planID) {
+		return true, "a supervision turn is running"
+	}
+	members, err := pe.taskStore.List(task.Filter{PlanID: planID})
+	if err != nil {
+		return true, "member tasks could not be read: " + err.Error()
+	}
+	for _, m := range members {
+		if m.Status == task.StatusInProgress || m.Status == task.StatusNext {
+			return true, "member task " + m.ID + " is " + string(m.Status)
+		}
+	}
+	return false, ""
 }
 
 // goalAndLoopIdleExpirySweep drives the /goal and /loop idle-expiry calendar
@@ -1855,8 +1928,10 @@ func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourc
 	al := pe.agentLoop
 	sessionKey := fmt.Sprintf("agent:%s:session:%s", agentID, sessionID)
 	pe.wakeWG.Add(1)
+	pe.notePlanTurnStarted(planID)
 	go func() {
 		defer pe.wakeWG.Done()
+		defer pe.notePlanTurnSettled(planID)
 		// Released once the turn SETTLES (this goroutine's own end), not at
 		// dispatch — see this function's doc comment on onTurnSettled. Ordered
 		// so it still runs on the panic-recovered path (a panicking turn must

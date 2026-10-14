@@ -299,6 +299,14 @@ func (s *LoopScheduler) IdleExpirySweep(cfg config.PlanningConfig, now time.Time
 		if now.Sub(last) < time.Duration(maxDays)*24*time.Hour {
 			continue
 		}
+		// Issue #1306 (no clock ends work): a loop whose session still has a
+		// live turn (a run that is taking longer than the idle bound) is not
+		// idle — its activity stamp is only written after the run returns.
+		if s.al.sessionHasLiveTurn(sessionID) {
+			logger.InfoCF("agent", "loop idle sweep: loop past its idle bound but a run is still working — not expiring",
+				map[string]any{"session_id": sessionID, "job_id": job.ID})
+			continue
+		}
 		s.RemoveJob(job.ID)
 		// stopLoop Releases the "loop" R5 admission-cap slot (paired with the
 		// Admit("loop") call at set time) as part of its shared body.

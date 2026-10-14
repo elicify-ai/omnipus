@@ -711,6 +711,9 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	// the plan, and the park at the bound — never a silent return that
 	// leaves the plan in "judging" with nothing watching it.
 	p, err := pe.planStore.Get(planID)
+	if err == nil && pe.judgeRoundReadFault != nil {
+		err = pe.judgeRoundReadFault("plan")
+	}
 	if err != nil {
 		logger.WarnCF("plan_engine", "judge round: could not reload plan",
 			map[string]any{"plan_id": planID, "error": err.Error()})
@@ -720,6 +723,9 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	}
 
 	tasks, err := pe.taskStore.List(task.Filter{PlanID: planID})
+	if err == nil && pe.judgeRoundReadFault != nil {
+		err = pe.judgeRoundReadFault("members")
+	}
 	if err != nil {
 		logger.WarnCF("plan_engine", "judge round: could not list member tasks",
 			map[string]any{"plan_id": planID, "error": err.Error()})

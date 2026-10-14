@@ -2,8 +2,11 @@ package openai_compat
 
 import (
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -15,8 +18,10 @@ import (
 // connection surfaces as an error the turn can retry — it does not hang the
 // turn forever.
 func TestProvider_RequestTimeoutStillEndsAHungCall(t *testing.T) {
+	var reached atomic.Bool
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
 		select {
 		case <-r.Context().Done():
 		case <-release:
@@ -40,6 +45,13 @@ func TestProvider_RequestTimeoutStillEndsAHungCall(t *testing.T) {
 	case chatErr := <-done:
 		if chatErr == nil {
 			t.Fatal("Chat against a provider that never answers returned no error; want the request timeout to end it")
+		}
+		if !reached.Load() {
+			t.Fatalf("the request never reached the server; the error is unrelated: %v", chatErr)
+		}
+		var ne net.Error
+		if !errors.As(chatErr, &ne) || !ne.Timeout() {
+			t.Fatalf("error = %v, want a network timeout from the request timeout", chatErr)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Chat against a hung provider did not return within 10s: the per-call request timeout no longer applies")

@@ -506,8 +506,11 @@ func (te *TaskExecutor) adjudicateRunClaim(
 
 	if needsJudgeAgent(judged) {
 		if _, ok := te.agentLoop.GetRegistry().GetAgent(string(coreagent.IDJudge)); !ok {
+			// Issue #1306 (founder): the Judge must conclude WITH the work
+			// result — every terminal Judge failure keeps the worker's evidence.
 			te.endTaskWithoutAttempt(t, taskSessionID,
-				"The Judge could not run: the Judge agent is not registered, so this claim cannot be checked.", run)
+				"The Judge could not run: the Judge agent is not registered, so this claim cannot be checked."+
+					"\n\n"+notVerifiedConclusion("the Judge agent is not registered", "Register the Judge, then re-run the task.", evidence), run)
 			return runStepEnded, "", ""
 		}
 	}
@@ -556,7 +559,8 @@ func (te *TaskExecutor) adjudicateRunClaim(
 		if judgeUnavailableNeedsOperator(result.Reason) {
 			logger.ErrorCF("task_executor", "goal: the Judge cannot run until an operator fixes it — failing the task, no attempt used",
 				map[string]any{"task_id": t.ID, "reason": result.Reason})
-			te.endTaskWithoutAttempt(t, taskSessionID, "The Judge could not run: "+judgeOperatorFix(result.Reason), run)
+			te.endTaskWithoutAttempt(t, taskSessionID, "The Judge could not run: "+judgeOperatorFix(result.Reason)+
+				"\n\n"+notVerifiedConclusion("the Judge cannot run until its settings are fixed", "Fix the Judge settings named above, then re-run the task.", evidence), run)
 			return runStepEnded, "", ""
 		}
 		logger.WarnCF("task_executor", "goal: the Judge is unavailable — retrying the same claim, no try used",

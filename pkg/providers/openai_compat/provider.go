@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -37,6 +38,13 @@ type Provider struct {
 	httpClient         *http.Client
 	extraBody          map[string]any // Additional fields to inject into request body
 	streamStallTimeout time.Duration  // streaming silence limit; 0 = common.DefaultStreamStallTimeout
+
+	// streamTransportOnce/streamTransport hold the streaming client's
+	// transport: the request client's transport plus a response-header
+	// connection guard (see streamingTransport). Built once so streaming
+	// calls keep sharing a connection pool.
+	streamTransportOnce sync.Once
+	streamTransport     http.RoundTripper
 }
 
 type Option func(*Provider)
@@ -257,9 +265,13 @@ func (p *Provider) ChatStream(
 	}
 
 	// Use a client without http.Client.Timeout for streaming — that timeout covers
-	// the entire request lifecycle including body reads, which would kill long streams.
-	// Context cancellation from the caller (turn timeout) provides the safety net.
-	streamClient := &http.Client{Transport: p.httpClient.Transport}
+	// the entire request lifecycle including body reads, which would kill long
+	// streams. There is no turn timeout to fall back on (issue #1306), so the
+	// transport carries a CONNECTION guard instead: the response headers must
+	// arrive within the request timeout (streamingTransport). Once they have
+	// arrived, only the stream-stall watcher below applies — a stream that keeps
+	// delivering is never cut.
+	streamClient := &http.Client{Transport: p.streamingTransport()}
 	//nolint:bodyclose // body is closed via defer resp.Body.Close() below; goroutine also closes to unblock scanner on ctx cancel
 	resp, err := streamClient.Do(req)
 	if err != nil {
@@ -288,6 +300,39 @@ func (p *Provider) ChatStream(
 	defer watch.Stop()
 
 	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, watch)
+}
+
+// streamingTransport returns the request client's transport with
+// ResponseHeaderTimeout set to the request timeout (issue #1306 connection
+// guard): a provider that accepts a streaming request but never sends response
+// headers fails with a retryable timeout instead of hanging the turn. It bounds
+// only the wait for headers, never the body. A transport that is not an
+// *http.Transport (a test double) is returned unchanged.
+func (p *Provider) streamingTransport() http.RoundTripper {
+	p.streamTransportOnce.Do(func() {
+		base := p.httpClient.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		t, ok := base.(*http.Transport)
+		if !ok {
+			p.streamTransport = base
+			return
+		}
+		guarded := t.Clone()
+		guarded.ResponseHeaderTimeout = p.connectionGuardTimeout()
+		p.streamTransport = guarded
+	})
+	return p.streamTransport
+}
+
+// connectionGuardTimeout is the request timeout (request_timeout, default
+// 120 s) reused as the streaming response-header guard.
+func (p *Provider) connectionGuardTimeout() time.Duration {
+	if p.httpClient != nil && p.httpClient.Timeout > 0 {
+		return p.httpClient.Timeout
+	}
+	return defaultRequestTimeout
 }
 
 // parseStreamResponse parses an OpenAI-compatible SSE stream. watch, when

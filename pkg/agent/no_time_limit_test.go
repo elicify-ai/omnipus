@@ -60,6 +60,10 @@ type gatedFinalProvider struct {
 	enterOnce sync.Once
 	entered   chan struct{}
 	release   chan struct{}
+	// hadDeadline records whether the first call's context carried a
+	// deadline: a stopwatch cannot tell "no limit" from "a longer limit",
+	// the context can.
+	hadDeadline bool
 }
 
 func newGatedFinalProvider() *gatedFinalProvider {
@@ -67,7 +71,10 @@ func newGatedFinalProvider() *gatedFinalProvider {
 }
 
 func (p *gatedFinalProvider) Chat(ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
-	p.enterOnce.Do(func() { close(p.entered) })
+	p.enterOnce.Do(func() {
+		_, p.hadDeadline = ctx.Deadline()
+		close(p.entered)
+	})
 	select {
 	case <-p.release:
 		return &providers.LLMResponse{Content: "finished after a long time"}, nil
@@ -119,6 +126,9 @@ func TestNoTimeLimit_WakeWithExpiredOldBudgetRunsToCompletion(t *testing.T) {
 		t.Fatalf("woken child ended before its provider was reached: err=%v (a stale lifetime budget stopped it)", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("woken child never reached its provider")
+	}
+	if provider.hadDeadline {
+		t.Fatal("the woken child's model call carries a deadline — delegated work has no time limit (issue #1306)")
 	}
 	// The turn is in flight. Nothing time-based may end it: give any timer
 	// a chance to fire, then confirm the turn is still running.
