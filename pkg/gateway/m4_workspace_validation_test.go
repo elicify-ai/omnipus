@@ -47,7 +47,6 @@ func mintedSessionMetaWorkspace(
 		nil,         // mediaRefs
 		"",          // modelName
 		workspaceID, // workspaceID under test
-		false,       // setupKickoff
 		wc,
 	)
 	var sessionID string

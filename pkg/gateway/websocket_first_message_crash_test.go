@@ -135,7 +135,7 @@ func issue1090PauseFirstAppend(t *testing.T, handler *WSHandler, wc *wsConn, con
 		defer close(done)
 		handler.handleChatMessageWithClientID(
 			context.Background(), "issue-1090-chat", "", content, "mia", nil,
-			"", "", false, clientMessageID, nil, wc,
+			"", "", clientMessageID, nil, wc,
 		)
 	}()
 	issue1090Await(t, gate.entered, "transcript-entry entropy gate")

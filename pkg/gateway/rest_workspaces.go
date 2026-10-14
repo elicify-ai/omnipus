@@ -904,15 +904,15 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		ws.CoreTeam = deduplicateStrings(*req.CoreTeam)
 	} else {
 		// No explicit team (nil, or an explicit empty array): a new
-		// user-created workspace starts with an empty team. Ava, who used to
-		// be seeded here to run the setup interview, is retired
-		// (omnipus-system-agent FR-008); Omnipus builds the team from its own
-		// chat (W1/W18), so there is no in-workspace interview agent and
-		// setup_pending stays false. This deliberately does NOT mirror
+		// user-created workspace starts with an empty team (Ava, who used to
+		// be seeded here, is retired — omnipus-system-agent FR-008) and is
+		// pending setup: once the 201 is out, the server posts the setup
+		// offer into Omnipus's main (FR-047, K9; postWorkspaceSetupOffer),
+		// which clears the flag. This deliberately does NOT mirror
 		// ensureDefaultWorkspace's full-roster seed, which remains reserved
 		// for the auto-created boot default workspace.
 		ws.CoreTeam = nil
-		ws.SetupPending = false
+		ws.SetupPending = true
 	}
 	// Seed default delegation edges from each team agent's seeded role (M5),
 	// restricted to edges whose endpoints are both on this workspace's team so a
@@ -988,6 +988,17 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	jsonCreated(w, wire)
+	if ws.SetupPending {
+		// FR-047: the response above reports the workspace as created and
+		// pending setup. Flush it, then post the setup offer into Omnipus's
+		// main on this goroutine with a context detached from the request, so
+		// a client that has already gone does not cancel it and nothing
+		// outlives the handler.
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		a.postWorkspaceSetupOffer(ws.ID, c.Username)
+	}
 }
 
 func writeWorkspaceReadError(w http.ResponseWriter, err error) {

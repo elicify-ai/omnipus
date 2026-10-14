@@ -58,7 +58,7 @@ func issue1090SendSessionless(t *testing.T, handler *WSHandler, principal, chatI
 	t.Cleanup(wc.close)
 	handler.handleChatMessageWithClientID(
 		context.Background(), chatID, "", content, "mia", nil,
-		"", "", false, clientID, nil, wc,
+		"", "", clientID, nil, wc,
 	)
 	return wc, issue1090DrainQueuedFrames(t, wc)
 }

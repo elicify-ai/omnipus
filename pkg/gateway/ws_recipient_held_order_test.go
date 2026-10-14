@@ -24,7 +24,7 @@ func TestRecipient_AHeldTickThatArrivesAfterWorkingIsDropped(t *testing.T) {
 	statusStates(t, wc, 50*time.Millisecond)
 
 	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
-	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray wake up", "ann", nil, "", "ws-1", false, "held-cid-n3", nil, &to, wc)
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray wake up", "ann", nil, "", "ws-1", "held-cid-n3", nil, &to, wc)
 	require.Equal(t, []string{"received", "held"}, statusStates(t, wc, 300*time.Millisecond))
 
 	h.announceHeldRequestDelivered(sid, "held-cid-n3") // the recipient resumed and took it
