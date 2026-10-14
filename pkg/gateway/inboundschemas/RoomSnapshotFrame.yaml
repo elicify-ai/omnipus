@@ -1,10 +1,10 @@
 title: RoomSnapshotFrame
 description: >
   Server → client (spec omnipus-system-agent K45, K26, K27). The answer to
-  attach_room: the room entries after the cursor in order, the members,
-  mutes, member states, pause state, generation and allocated cost.
-  `complete` is false when the server could not serve every entry after the
-  cursor. THIS FILE EXISTS for the Constraint #8 5-step process and the
+  attach_room: the room entries after the cursor in seq order (at most the
+  newest 10,000; `has_older` is true when older entries after the cursor
+  were left out), the members, mutes, member states, pause state,
+  generation and allocated cost. THIS FILE EXISTS for the Constraint #8 5-step process and the
   pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
   schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
   Landing 1, WU-15 produces it.
@@ -80,3 +80,9 @@ properties:
     type: boolean
   complete:
     type: boolean
+    description: always true; reserved.
+  has_older:
+    type: boolean
+    description: >
+      True when entries after the cursor older than the ones served were
+      left out (a snapshot carries at most the newest 10,000 entries).

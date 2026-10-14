@@ -5,6 +5,8 @@
 package rooms
 
 import (
+	"sort"
+
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
@@ -27,41 +29,63 @@ func (s *Service) Attach(roomID string, afterSeq int64, deliver func(generated.R
 	return nil
 }
 
-// snapshot builds the RoomSnapshotFrame. `complete` is false when more
-// entries follow the cursor than one snapshot carries. The caller holds r.mu.
+// snapshot builds the RoomSnapshotFrame (architect ruling 2026-10-14): the
+// NEWEST entries after the cursor, at most maxSnapshotEntries, in seq order,
+// with has_older set when older ones after the cursor were left out;
+// `complete` is always true (reserved). The caller holds r.mu.
 func (s *Service) snapshot(r *room, ws Workspace, afterSeq int64) generated.RoomSnapshotFrame {
 	view := s.roomView(r, ws)
 	out := generated.RoomSnapshotFrame{
 		Type: string(generated.WsFrameTypeRoomSnapshot), RoomId: r.rec.ID, Seq: r.seq,
 		Entries: []generated.RoomEntry{}, Members: view.Members, Muted: view.Muted,
-		MemberStates: []generated.RoomDeliveryState{}, Paused: view.Paused, Generation: view.Generation,
+		MemberStates: memberStates(r, maxSnapshotEntries), Paused: view.Paused, Generation: view.Generation,
 		ReadOnlyReason:        view.ReadOnlyReason,
 		AllocatedCostMicroUsd: view.AllocatedCostMicroUsd, AllocatedCostUnpriced: view.AllocatedCostUnpriced,
 		Complete: true,
 	}
-	if afterSeq < 0 {
-		afterSeq = 0
+	// r.entries is in seq order: find the first entry after the cursor.
+	first := sort.Search(len(r.entries), func(i int) bool { return r.entries[i].Entry.Seq > afterSeq })
+	if len(r.entries)-first > maxSnapshotEntries {
+		first = len(r.entries) - maxSnapshotEntries
+		hasOlder := true
+		out.HasOlder = &hasOlder
 	}
-	for _, se := range r.entries {
-		if se.Entry.Seq <= afterSeq {
-			continue
-		}
-		if len(out.Entries) >= maxSnapshotEntries {
-			out.Complete = false
-			break
-		}
+	for _, se := range r.entries[first:] {
 		out.Entries = append(out.Entries, entryWire(r, se))
 	}
+	return out
+}
+
+// memberStates is every non-terminal delivery state plus the latest terminal
+// state of each member, in first-seen order. Over max, the OLDEST terminal
+// states are dropped; a live (non-terminal) state never is.
+func memberStates(r *room, limit int) []generated.RoomDeliveryState {
 	latest := latestByMember(r)
+	terminalKept := 0
+	for _, id := range r.order {
+		if d := r.deliveries[id]; terminal(d.State) && latest[d.AgentID] == d {
+			terminalKept++
+		}
+	}
+	liveCount := 0
+	for _, id := range r.order {
+		if !terminal(r.deliveries[id].State) {
+			liveCount++
+		}
+	}
+	dropTerminal := liveCount + terminalKept - limit
+	out := make([]generated.RoomDeliveryState, 0, liveCount+terminalKept)
 	for _, id := range r.order {
 		d := r.deliveries[id]
-		if !terminal(d.State) || latest[d.AgentID] == d {
-			if len(out.MemberStates) >= maxSnapshotEntries {
-				out.Complete = false
-				break
-			}
-			out.MemberStates = append(out.MemberStates, deliveryWire(d))
+		switch {
+		case !terminal(d.State):
+		case latest[d.AgentID] != d:
+			continue
+		case dropTerminal > 0:
+			dropTerminal--
+			continue
 		}
+		out = append(out, deliveryWire(d))
 	}
 	return out
 }

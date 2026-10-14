@@ -3,6 +3,7 @@ package rooms
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -545,4 +546,68 @@ func countOf(in []string, v string) int {
 		}
 	}
 	return n
+}
+
+// bigRoom is an in-memory room with n entries (seq 1..n).
+func bigRoom(n int) *room {
+	r := newRoom()
+	r.rec = roomRecord{ID: "big", WorkspaceID: "sales", Kind: KindAdhoc, Name: "Big", Members: []string{"mia", "jim"}, Muted: []string{}}
+	for i := 1; i <= n; i++ {
+		r.addEntry(storedEntry{Entry: generated.RoomEntry{
+			Id: fmt.Sprintf("e%d", i), RoomId: "big", Seq: int64(i), Text: fmt.Sprintf("m%d", i),
+			Author: generated.RoomEntryAuthor{Kind: "user"}, Addressees: []string{}, Timestamp: "2026-10-14T00:00:00Z",
+		}})
+	}
+	return r
+}
+
+// Architect ruling (Q3): a snapshot serves the NEWEST <= 10,000 entries after
+// the cursor, in seq order, complete always true, has_older when entries were
+// left out.
+func TestSnapshot_NewestEntriesWithHasOlder(t *testing.T) {
+	f := newFixture(t)
+	r := bigRoom(10050)
+	ws, _, _ := f.deps.Workspace("sales")
+	snap := f.svc.snapshot(r, ws, 0)
+	if len(snap.Entries) != 10000 || snap.Entries[0].Seq != 51 || snap.Entries[9999].Seq != 10050 {
+		t.Fatalf("got %d entries, first seq %d, last seq %d; want 10000, 51..10050",
+			len(snap.Entries), snap.Entries[0].Seq, snap.Entries[len(snap.Entries)-1].Seq)
+	}
+	if !snap.Complete || snap.HasOlder == nil || !*snap.HasOlder {
+		t.Fatalf("complete=%v has_older=%v, want both true", snap.Complete, snap.HasOlder)
+	}
+	near := f.svc.snapshot(r, ws, 10040)
+	if len(near.Entries) != 10 || near.Entries[0].Seq != 10041 || (near.HasOlder != nil && *near.HasOlder) || !near.Complete {
+		t.Fatalf("near-head cursor: %d entries, has_older=%v", len(near.Entries), near.HasOlder)
+	}
+}
+
+// Over the cap, member_states drops the oldest terminal states, never a live
+// one.
+func TestSnapshot_MemberStatesNeverDropLiveStates(t *testing.T) {
+	r := bigRoom(1)
+	// The live states are the OLDEST, so an "oldest first, any kind" cut
+	// would hit them first.
+	for i := 0; i < 20; i++ {
+		r.putDelivery(&deliveryRecord{RequestID: fmt.Sprintf("l%02d", i), EntryID: "e1", AgentID: fmt.Sprintf("live%02d", i), State: StateAdmitted})
+	}
+	for i := 0; i < 10040; i++ {
+		r.putDelivery(&deliveryRecord{RequestID: fmt.Sprintf("t%05d", i), EntryID: "e1", AgentID: fmt.Sprintf("a%05d", i), State: StateAnswered})
+	}
+	states := memberStates(r, maxSnapshotEntries)
+	live, newest, oldest := 0, false, false
+	for _, d := range states {
+		switch {
+		case d.State == StateAdmitted:
+			live++
+		case d.RequestId == "t10039":
+			newest = true
+		case d.RequestId == "t00000":
+			oldest = true
+		}
+	}
+	if len(states) != maxSnapshotEntries || live != 20 || !newest || oldest {
+		t.Fatalf("%d states, %d live, newest terminal kept=%v, oldest kept=%v; want 10000, all 20 live, newest kept, oldest dropped",
+			len(states), live, newest, oldest)
+	}
 }

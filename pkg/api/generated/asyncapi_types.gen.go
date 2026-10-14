@@ -1172,14 +1172,17 @@ type RoomRef struct {
 	RoomName string `json:"room_name"`
 }
 
-// RoomSnapshotFrame — Server → client (spec omnipus-system-agent K45, K26, K27). The answer to attach_room: the room entries after the cursor in order, the members, mutes, member states, pause state, generation and allocated cost. `complete` is false when the server could not serve every entry after the cursor. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
+// RoomSnapshotFrame — Server → client (spec omnipus-system-agent K45, K26, K27). The answer to attach_room: the room entries after the cursor in seq order (at most the newest 10,000; `has_older` is true when older entries after the cursor were left out), the members, mutes, member states, pause state, generation and allocated cost. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
 type RoomSnapshotFrame struct {
 	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
 	AllocatedCostUnpriced bool  `json:"allocated_cost_unpriced"`
-	Complete              bool  `json:"complete"`
+	// always true; reserved.
+	Complete bool `json:"complete"`
 	// Entries after the cursor, in seq order. Never null.
 	Entries    []RoomEntry `json:"entries"`
 	Generation int64       `json:"generation"`
+	// True when entries after the cursor older than the ones served were left out (a snapshot carries at most the newest 10,000 entries).
+	HasOlder *bool `json:"has_older,omitempty"`
 	// Current delivery states of outstanding requests. Never null.
 	MemberStates   []RoomDeliveryState `json:"member_states"`
 	Members        []string            `json:"members"`

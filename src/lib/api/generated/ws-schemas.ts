@@ -175,6 +175,7 @@ export const RoomSnapshotFrame = z
     allocated_cost_micro_usd: z.number().int().min(0),
     allocated_cost_unpriced: z.boolean(),
     complete: z.boolean(),
+    has_older: z.boolean().optional(),
   })
   .strict();
 
