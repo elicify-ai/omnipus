@@ -16898,7 +16898,7 @@ This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-
     method: "get",
     path: "/workspaces/:id/rooms",
     alias: "listWorkspaceRooms",
-    description: `Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+    description: `Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md). A storage or read failure is an explicit 500 with the error body, never 200 with an empty list (#1314).
 `,
     requestFormat: "json",
     parameters: [
@@ -16923,6 +16923,11 @@ This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],

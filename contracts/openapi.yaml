@@ -13011,7 +13011,8 @@ paths:
       operationId: listWorkspaceRooms
       summary: List a workspace's rooms
       description: >
-        Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+        Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md). A storage or
+        read failure is an explicit 500 with the error body, never 200 with an empty list (#1314).
       tags:
       - Rooms
       security:
@@ -13038,6 +13039,8 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
     post:
       operationId: createRoom
       summary: Create a squad or an ad-hoc room

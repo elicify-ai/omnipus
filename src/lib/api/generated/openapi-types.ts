@@ -4017,7 +4017,7 @@ export interface paths {
         };
         /**
          * List a workspace's rooms
-         * @description Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+         * @description Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md). A storage or read failure is an explicit 500 with the error body, never 200 with an empty list (#1314).
          */
         get: operations["listWorkspaceRooms"];
         put?: never;
@@ -27152,6 +27152,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
         };
     };
     createRoom: {
