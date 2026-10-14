@@ -28,16 +28,28 @@ func r4AdvertisedResultReadActions(t *testing.T, h *r4DelegateHarness) []string 
 	if err != nil {
 		t.Fatalf("read delegate's public schema: %v", err)
 	}
-	var schema struct {
-		Properties map[string]struct {
-			Enum []string `json:"enum"`
-		} `json:"properties"`
+	var schema map[string]any // registry metadata only, not a hand-written wire-format type
+	if decodeErr := json.Unmarshal(body, &schema); decodeErr != nil {
+		t.Fatalf("decode delegate's public action enum: %v", decodeErr)
 	}
-	if err := json.Unmarshal(body, &schema); err != nil {
-		t.Fatalf("decode delegate's public action enum: %v", err)
+	properties, propertiesOK := schema["properties"].(map[string]any)
+	if !propertiesOK {
+		t.Fatalf("SETUP public delegate properties type=%T, want object", schema["properties"])
+	}
+	action, actionOK := properties["action"].(map[string]any)
+	if !actionOK {
+		t.Fatalf("SETUP public action schema type=%T, want object", properties["action"])
+	}
+	enum, enumOK := action["enum"].([]any)
+	if !enumOK {
+		t.Fatalf("SETUP public action enum type=%T, want array", action["enum"])
 	}
 	actions := []string{"status"}
-	for _, name := range schema.Properties["action"].Enum {
+	for _, raw := range enum {
+		name, nameOK := raw.(string)
+		if !nameOK {
+			t.Fatalf("SETUP public action name type=%T, want string", raw)
+		}
 		if strings.Contains(name, "result") && name != "status" {
 			actions = append(actions, name)
 		}
@@ -90,9 +102,10 @@ func r4CompletedAnswerStillReadable(t *testing.T) {
 		t.Fatalf("SETUP completed child's final is still unconsumed: unacked=%d err=%v", count, err)
 	}
 
-	var results []string
+	actions := r4AdvertisedResultReadActions(t, h)
+	results := make([]string, 0, len(actions))
 	retrievable := false
-	for _, action := range r4AdvertisedResultReadActions(t, h) {
+	for _, action := range actions {
 		result := h.publicDelegate(map[string]any{"action": action, "session_id": child.SessionID})
 		results = append(results, action+": "+result.ContentForLLM())
 		if !result.IsError && strings.Contains(result.ContentForLLM(), answer) {
