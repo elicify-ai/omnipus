@@ -6,6 +6,7 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchProviders } from '@/lib/api'
 import { isProviderUsable } from '@/lib/providerStatus'
+import { resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
 import { cn } from '@/lib/utils'
 
 /**
@@ -31,6 +32,9 @@ export function ModelPicker({
 }) {
   const messages = useChatStore((s) => s.messages)
   const nextModel = useChatStore((s) => s.nextModel)
+  // H6 (provider hotfix 2026-10-13): the provider row an explicit pick was
+  // made under — the (provider, model) selection identity. null = seeded.
+  const nextModelProvider = useChatStore((s) => s.nextModelProvider)
   const setNextModel = useChatStore((s) => s.setNextModel)
   const addToast = useUiStore((s) => s.addToast)
   const modelSelectorOpen = useUiStore((s) => s.modelSelectorOpen)
@@ -49,9 +53,23 @@ export function ModelPicker({
   // vanish from the picker.
   const usableProviders = providers.filter((p) => isProviderUsable(p.status))
   const availableModels = usableProviders.flatMap((p) => p.models ?? [])
+  // H6: `providerId` on each group is what makes the selector's
+  // `resolveProviderId`/`onPairChange` emit the real routing key — without it
+  // every pick emitted provider:'' and the picked provider was unknowable.
   const providerGroups = usableProviders
     .filter((p) => (p.models ?? []).length > 0)
-    .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
+    .map((p) => ({
+      providerName: p.display_name ?? p.name ?? p.id,
+      providerId: p.id,
+      models: p.models ?? [],
+    }))
+  // H6 R2 (review round 1 — F3): display-provider resolution for SEEDED
+  // values resolves a provider only when EXACTLY ONE usable provider serves
+  // the slug. First-wins (the old lookup) presented list order as if it were
+  // a recorded choice — the wrong row showed the check whenever two
+  // providers advertise the same model. Ambiguous → no row chosen (unknown).
+  // The AGENT-default seed no longer goes through this at all: the agent
+  // response carries an explicit provider, passed through in the seed below.
 
   const transcriptLastModel = useMemo<string | null>(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -69,6 +87,17 @@ export function ModelPicker({
     const agent = agents.find((a) => a.id === activeAgentId)
     if (!agent || typeof agent.model !== 'string') return null
     const trimmed = agent.model.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }, [agents, activeAgentId])
+
+  // H6 R2 (review round 1 — F3): the agent's own provider routing key. The
+  // Agent response carries an explicit `provider` field; an agent-default
+  // seed must carry it through instead of dropping it and letting the
+  // display guess.
+  const activeAgentProvider = useMemo<string | null>(() => {
+    const agent = agents.find((a) => a.id === activeAgentId)
+    if (!agent || typeof agent.provider !== 'string') return null
+    const trimmed = agent.provider.trim()
     return trimmed.length > 0 ? trimmed : null
   }, [agents, activeAgentId])
 
@@ -125,10 +154,21 @@ export function ModelPicker({
       // PRECEDENCE RULE.
       return
     }
-    setNextModel(transcriptLastModel ?? activeAgentModel ?? null)
-  }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, setNextModel])
+    // H6 R2 (review round 1 — F3): the seed's provider depends on its SOURCE.
+    // An agent-default seed carries the agent's own provider (the Agent
+    // response has the field — dropping it made the display guess a
+    // different provider's row). A transcript seed genuinely has none — the
+    // display then resolves a row only when exactly one provider serves the
+    // slug, and otherwise shows no selection rather than a guess.
+    setNextModel(
+      transcriptLastModel ?? activeAgentModel ?? null,
+      transcriptLastModel ? null : activeAgentProvider,
+    )
+  }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, activeAgentProvider, setNextModel])
 
   function onPickerChange(model: string) {
+    // provider clears here (omitted second arg → null); a grouped pick's
+    // onPairChange (below) immediately re-sets it in the same handler tick.
     setNextModel(model || null)
     // Either a non-empty pick (pin this model) or an explicit revert to ''
     // (hand back to auto-follow) is the user's OWN action, not a derived
@@ -138,6 +178,18 @@ export function ModelPicker({
     if (model === '') {
       addToast({ message: 'Reverted to agent default for next message', variant: 'default' })
     }
+  }
+
+  // H6 (provider hotfix 2026-10-13): the pick is the (provider, model) PAIR —
+  // record which provider row it was made under so only that row shows the
+  // check when two providers serve the same slug. NOT called for free-text
+  // picks (none exist here — the picker is constrained to the catalog).
+  // The wire carries model only today (`metadata.model_name`); see the
+  // nextModelProvider store comment for the field this becomes if the
+  // contract gains `metadata.provider`.
+  function onPickerPairChange(pair: { model: string; provider: string }) {
+    if (!pair.model) return
+    setNextModel(pair.model, pair.provider)
   }
 
   return (
@@ -154,7 +206,13 @@ export function ModelPicker({
         variant="ghost"
         models={availableModels}
         value={nextModel ?? ''}
+        // H6: the picked provider when there is one (explicit pick, or the
+        // agent-default seed's carried provider); a provider-less seed
+        // resolves a row only when exactly one provider serves the slug —
+        // ambiguous seeds show NO chosen row instead of a first-listed guess.
+        valueProvider={nextModelProvider ?? resolveUniqueModelProvider(usableProviders, nextModel ?? '')}
         onChange={onPickerChange}
+        onPairChange={onPickerPairChange}
         placeholder={activeAgentModel ?? 'Select a model…'}
         providerGroups={providerGroups}
         triggerTestId="composer-model-selector"

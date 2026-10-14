@@ -107,6 +107,30 @@ type Catalog struct {
 	degradedTransport  bool
 	degradedReleaseErr error
 	onApplied          []func()
+
+	// signInGate, when set (WithSignInGate), decides which rows' declared
+	// `sign_in` survives into the SERVED projection. Set at construction,
+	// never mutated afterwards. The Document itself is never altered.
+	signInGate SignInGate
+}
+
+// SignInGate reports whether the running build can actually exercise a
+// sign-in for a provider row (provider hotfix H1). The catalog cannot know
+// this from registry data alone — which ids own a device-code sign-in is a
+// fact about the binary, not the document — so the gateway supplies it.
+type SignInGate func(Provider) bool
+
+// Option configures a Catalog at construction (New, NewCatalog, Boot).
+type Option func(*Catalog)
+
+// WithSignInGate makes the served projection (GET /providers/catalog) drop
+// `sign_in` from any row the gate rejects, as long as another auth method
+// remains — the contract requires at least one, and a sign-in-only row with
+// no mechanism is left as declared (every sign-in route still refuses it).
+// The parsed Document, Provider and Resolve are unaffected: they stay a
+// faithful mirror of the registry.
+func WithSignInGate(gate SignInGate) Option {
+	return func(c *Catalog) { c.signInGate = gate }
 }
 
 // now returns the injected clock, defaulting to time.Now.
@@ -125,8 +149,11 @@ func New() *Catalog {
 
 // NewCatalog parses data as a 2.0.0 document and returns a catalog serving
 // it. A rejected document yields a nil catalog and the parse error.
-func NewCatalog(data []byte) (*Catalog, error) {
+func NewCatalog(data []byte, opts ...Option) (*Catalog, error) {
 	c := New()
+	for _, opt := range opts {
+		opt(c)
+	}
 	if err := c.Apply(data); err != nil {
 		return nil, err
 	}
@@ -151,7 +178,7 @@ func (c *Catalog) Apply(data []byte) error {
 // publishes both as one atomic snapshot swap.
 func (c *Catalog) applyDoc(doc *Document, from ServedFrom) error {
 	s := index(doc)
-	pair, err := buildServed(doc, from, c.now())
+	pair, err := buildServed(doc, from, c.now(), c.signInGate)
 	if err != nil {
 		return err
 	}

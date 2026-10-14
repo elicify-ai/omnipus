@@ -184,6 +184,14 @@ func lookupWindowRow(cfg *config.Config, provider string) windowRow {
 func ResolveWindow(cfg *config.Config, provider, model, agentID string) WindowResolution {
 	provider = strings.TrimSpace(provider)
 	model = strings.TrimSpace(model)
+
+	// A subagent_3p agent (external-CLI executor) runs on its own engine:
+	// its CLI manages its own context, exactly like a cli_kind row below
+	// (provider hotfix H4). Keyed by the agent's executor, never by an id.
+	if agentID != "" && cfg.IsExternalCLIWorkerID(agentID) {
+		return WindowResolution{Exempt: true}
+	}
+
 	row := lookupWindowRow(cfg, provider)
 
 	if row.exempt {
@@ -255,6 +263,28 @@ func ResolveWindow(cfg *config.Config, provider, model, agentID string) WindowRe
 			"floor":    cloudWindowFloor,
 		})
 	return WindowResolution{Window: cloudWindowFloor, Source: WindowSourceFloor}
+}
+
+// RuntimeWindowPair returns the (provider, model) pair ResolveWindow must be
+// keyed by for a configured primary reference (provider, model) — the pair
+// the agent's turns actually run on (provider hotfix H4).
+//
+// A pinned provider is taken verbatim. An EMPTY provider (an agent whose
+// model was stored without one) is resolved exactly as NewAgentInstance
+// resolves it: through the candidate builder, whose primary goes through
+// the FR-040 resolver (resolveModelPair — a bare id offered by exactly one
+// configured provider resolves to that provider). Without this, the gateway
+// keyed the ladder by ("", model): a guaranteed catalog miss, the 128,000
+// cloud floor, and a clamp WARN for a model the catalog sizes at 1,048,576.
+func RuntimeWindowPair(cfg *config.Config, provider, model string) (string, string) {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider != "" || model == "" || cfg == nil {
+		return provider, model
+	}
+	defaultProvider := cfg.Agents.Defaults.DefaultModel.Provider
+	candidates := resolveAgentCandidatesWithPrimaryProvider(cfg, defaultProvider, model, "", nil, nil)
+	return primaryWindowPair(candidates, defaultProvider, model)
 }
 
 // operatorWindow walks rungs 1–3 and returns the first present override

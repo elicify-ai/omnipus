@@ -32,6 +32,29 @@ type LLMResponse struct {
 	Usage            *UsageInfo        `json:"usage,omitempty"`
 	Reasoning        string            `json:"reasoning"`
 	ReasoningDetails []ReasoningDetail `json:"reasoning_details"`
+	// Diagnostics is a content-free summary of what the provider's stream
+	// delivered, for the agent loop's empty-answer warning (provider hotfix
+	// H5). In-process only: never serialised, never shown to a user. nil
+	// when the provider does not record one.
+	Diagnostics *ResponseDiagnostics `json:"-"`
+}
+
+// ResponseDiagnostics describes the SHAPE of one provider answer — never
+// its content and never a credential — so an empty answer can be told
+// apart from a parsing defect after the fact.
+type ResponseDiagnostics struct { // not-wire-format: in-process log summary only
+
+	// EventCounts counts each stream event type the provider received.
+	EventCounts map[string]int
+	// OutputItemTypes lists the output item types the answer was built
+	// from, in order.
+	OutputItemTypes []string
+	// OutputSource names where those items came from: "completed" (the
+	// terminal event), "output_item.done", or "none".
+	OutputSource string
+	// Status and IncompleteReason are the terminal response's own fields.
+	Status           string
+	IncompleteReason string
 }
 
 type ReasoningDetail struct {

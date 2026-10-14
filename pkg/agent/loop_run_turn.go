@@ -1598,6 +1598,7 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		// the response (may differ from the agent's primary model
 		// when a fallback candidate was used).
 		rt.ts.setLastProducedModel(fbResult.Model)
+		rt.ts.setLastProducedProvider(fbResult.Provider)
 		rt.ts.markLastStreamerProducedModel(fbResult.Model)
 		return fbResult.Response, nil
 	}

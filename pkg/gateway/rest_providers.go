@@ -392,6 +392,13 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 			p.Error = &credErrMsg
 		} else if copilotHint != "" {
 			p.Error = &copilotHint
+		} else if agg.authMethod[name] == config.AuthMethodSignIn {
+			// H1: a row saved with sign_in on a provider that cannot sign
+			// in (before the PUT gate existed) never connects — say where
+			// the sign-in really lives instead of a silent "disconnected".
+			if msg := a.misplacedSignInRowMsg(name); msg != "" {
+				p.Error = &msg
+			}
 		}
 	}
 	return p
@@ -542,8 +549,9 @@ func (a *restAPI) providerPutAdmit(w http.ResponseWriter, r *http.Request, sub s
 			return nil, false
 		}
 		if _, ok := a.signInMethodFor(p.providerID); !ok {
-			jsonErrField(w, http.StatusBadRequest,
-				"provider does not support sign-in", "auth_method")
+			// H1: name the row that CAN sign in when the catalog has one
+			// (e.g. OpenAI sign-in lives on ChatGPT (subscription)).
+			jsonErrField(w, http.StatusBadRequest, a.signInRefusalMsg(p.providerID), "auth_method")
 			return nil, false
 		}
 	}
