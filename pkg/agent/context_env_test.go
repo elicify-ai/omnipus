@@ -206,64 +206,14 @@ func TestRestConfigChange_InvalidatesAllContextBuilders(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// #23 — TestContextBuilder_SourcePaths_IncludesLastSession
-// Traces to: env-awareness-and-memory-spec.md FR-021
-// sourcePaths() must include the private room's last-session.md.
-// ---------------------------------------------------------------------------
-
-func TestContextBuilder_SourcePaths_IncludesLastSession(t *testing.T) {
-	dir := t.TempDir()
-	cb := NewContextBuilder(dir)
-
-	paths := cb.sourcePaths()
-
-	found := false
-	for _, p := range paths {
-		if strings.HasSuffix(p, "last-session.md") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("sourcePaths() does not include last-session.md; got: %v", paths)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// #24 — TestContextBuilder_Cache_InvalidatesOnLastSessionWrite
-// Traces to: env-awareness-and-memory-spec.md FR-021
-// Writing LAST_SESSION.md must cause the cache to rebuild.
-// ---------------------------------------------------------------------------
-
-func TestContextBuilder_Cache_InvalidatesOnLastSessionWrite(t *testing.T) {
-	dir := t.TempDir()
-	cb := NewContextBuilder(dir)
-
-	// Prime the cache.
-	first := cb.BuildSystemPromptWithCache()
-	if first == "" {
-		t.Fatal("first BuildSystemPromptWithCache returned empty")
-	}
-
-	// Write last-session.md — this should mark the cache stale.
-	ms := NewMemoryStore(dir, t.TempDir())
-	t.Cleanup(ms.Close)
-	if err := ms.WriteLastSession("## Last session\nWe did useful things."); err != nil {
-		t.Fatalf("WriteLastSession: %v", err)
-	}
-
-	// The cache must detect the change on the next call. sourceFilesChangedLocked
-	// is called under a read lock inside BuildSystemPromptWithCache; a new mtime
-	// on LAST_SESSION.md must trigger a rebuild.
-	cb.systemPromptMutex.RLock()
-	stale := cb.sourceFilesChangedLocked()
-	cb.systemPromptMutex.RUnlock()
-
-	if !stale {
-		t.Error("cache should be stale after writing LAST_SESSION.md, but sourceFilesChangedLocked() returned false")
-	}
-}
+// TestContextBuilder_SourcePaths_IncludesLastSession and
+// TestContextBuilder_Cache_InvalidatesOnLastSessionWrite were retired with the
+// removed agent-wide last-session API (WU-21 / #1197, amendment §3.2(5)/(7)):
+// sourcePaths() no longer lists the retired file, and per-workspace prompt
+// variants instead track their own carry-forward pair path — pinned by
+// TestWU21_RecapInvalidatesOnlyOwnWorkspaceVariant,
+// TestWU21_OldSummaryNeverInvalidatesWorkspaceVariants and
+// TestWU21_NoWorkspaceRecapHasNoAgentWideFallback.
 
 // ---------------------------------------------------------------------------
 // #63 — TestSteeredChild_ContextBuilderPointerShared
@@ -419,36 +369,24 @@ func TestContextBuilder_Rule4_PreservesOtherRules(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// #20 — TestContextBuilder_GetMemoryContext_BothSections
-// Traces to: env-awareness-and-memory-spec.md FR-019
-// Pre-seed the last-session summary and a per-memory entry; both markers
-// appear in BuildSystemPrompt.
-// ---------------------------------------------------------------------------
-
-func TestContextBuilder_GetMemoryContext_BothSections(t *testing.T) {
-	dir := t.TempDir()
-	ms := NewMemoryStore(dir, t.TempDir())
-	t.Cleanup(ms.Close)
-
-	if err := ms.WriteLastSession("## Last session\nSomething useful happened."); err != nil {
-		t.Fatalf("WriteLastSession: %v", err)
+// Successor to TestContextBuilder_GetMemoryContext_BothSections: preserve its
+// assembled-prompt long-term-memory oracle, without resurrecting the retired
+// agent-wide Last Session API (§3.2(4)/(7)).
+func TestContextBuilder_GetMemoryContext_LongTermSection(t *testing.T) {
+	f := wu21New(t)
+	const note = "use flock for writes"
+	if err := f.ag.ContextBuilder.Memory().AppendLongTerm(note, "lesson_learned"); err != nil {
+		t.Fatalf("long-term prompt control could not be saved: %v", err)
 	}
-	if err := ms.AppendLongTerm("use flock for writes", "lesson_learned"); err != nil {
-		t.Fatalf("AppendLongTerm: %v", err)
+	prompt := f.ag.ContextBuilder.BuildSystemPrompt()
+	if count := strings.Count(prompt, "## Long-term memory\n"); count != 1 {
+		t.Errorf("§3.2(4): assembled prompt long-term heading count=%d want 1", count)
 	}
-
-	cb := NewContextBuilder(dir)
-	prompt := cb.BuildSystemPrompt()
-
-	if !strings.Contains(prompt, "## Last Session") {
-		t.Errorf("prompt missing '## Last Session' from memory context;\nfirst 500 chars: %s", truncateStr(prompt, 500))
+	if count := strings.Count(prompt, note); count != 1 {
+		t.Errorf("assembled prompt saved-note count=%d want 1", count)
 	}
-	if !strings.Contains(prompt, "## Long-term memory") {
-		t.Errorf(
-			"prompt missing '## Long-term memory' from memory context;\nfirst 500 chars: %s",
-			truncateStr(prompt, 500),
-		)
+	if strings.Contains(prompt, "## Last Session") {
+		t.Error("§3.2(4): no-workspace prompt rendered a carry-forward heading")
 	}
 }
 

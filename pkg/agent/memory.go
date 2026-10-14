@@ -942,23 +942,66 @@ func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
 	})
 }
 
-// WriteLastSession atomically writes content to the private room's last-session.md.
-// last-session.md is a private-room-only artifact (D19); the shared workspace
-// room has no last-session.md.
-func (ms *MemoryStore) WriteLastSession(content string) error {
-	path := filepath.Join(ms.privateRoom.Root, memrooms.LastSessionFile)
-	return fileutil.WriteFileAtomic(path, []byte(content), 0o600)
+// CarryForwardScope is the immutable (agent, workspace) identity a recap
+// summary is stored under (WU-21 / #1197, amendment §3.2(1)). It is carried as
+// a value so a scope resolved from one session's meta can never be retargeted
+// by the MemoryStore's mutable shared-room pointer. An empty WorkspaceID means
+// "no carry-forward" — nothing is read, written or tracked for it; there is no
+// agent-wide fallback.
+type CarryForwardScope struct {
+	AgentID     string
+	WorkspaceID string
 }
 
-// ReadLastSession returns the contents of last-session.md, or "" if absent.
-func (ms *MemoryStore) ReadLastSession() (string, error) {
-	path := filepath.Join(ms.privateRoom.Root, memrooms.LastSessionFile)
-	data, err := os.ReadFile(path)
+// validateCarryForwardScope rejects scopes whose ids are not safe entity ids,
+// so the path below can never escape $OMNIPUS_HOME/workspaces via a crafted id.
+func validateCarryForwardScope(scope CarryForwardScope) error {
+	if err := validation.EntityID(scope.AgentID); err != nil {
+		return fmt.Errorf("memory: carry-forward agent %w", err)
+	}
+	if err := validation.EntityID(scope.WorkspaceID); err != nil {
+		return fmt.Errorf("memory: carry-forward workspace %w", err)
+	}
+	return nil
+}
+
+// carryForwardPath returns the workspace-owned summary file for scope:
+// $OMNIPUS_HOME/workspaces/<workspace_id>/.omnipus/carry-forward/<agent_id>.md
+// (amendment §3.2(2)). Workspace-owned data: workspace deletion removes the
+// whole directory, so the cascade there is free.
+func (ms *MemoryStore) carryForwardPath(scope CarryForwardScope) string {
+	return filepath.Join(
+		ms.omnipusHome, memrooms.WorkspacesDirName, scope.WorkspaceID,
+		memrooms.OmnipusRoomDir, "carry-forward", scope.AgentID+".md",
+	)
+}
+
+// WriteCarryForward atomically publishes content as the pair summary for
+// scope (0600, temp-file + rename via fileutil.WriteFileAtomic). The scope is
+// validated before any filesystem side effect, so an invalid pair never
+// creates directories.
+func (ms *MemoryStore) WriteCarryForward(scope CarryForwardScope, content string) error {
+	if err := validateCarryForwardScope(scope); err != nil {
+		return err
+	}
+	if err := fileutil.WriteFileAtomic(ms.carryForwardPath(scope), []byte(content), 0o600); err != nil {
+		return fmt.Errorf("memory: write carry-forward: %w", err)
+	}
+	return nil
+}
+
+// ReadCarryForward returns the pair summary for scope, or "" when the agent
+// has no summary in that workspace yet (first session in the workspace).
+func (ms *MemoryStore) ReadCarryForward(scope CarryForwardScope) (string, error) {
+	if err := validateCarryForwardScope(scope); err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(ms.carryForwardPath(scope))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
 		}
-		return "", fmt.Errorf("memory: read last-session.md: %w", err)
+		return "", fmt.Errorf("memory: read carry-forward: %w", err)
 	}
 	return string(data), nil
 }
@@ -977,16 +1020,13 @@ func (ms *MemoryStore) ReadLastSession() (string, error) {
 const maxMemoryContextChars = 8000
 
 // GetMemoryContext returns a formatted memory context string for the system prompt.
-// Reads last-session.md + the most recent N memories from the default scope,
-// capped at maxMemoryContextChars with oldest-first eviction.
+// Reads the most recent N memories from the default scope, capped at
+// maxMemoryContextChars with oldest-first eviction. The end-of-chat summary is
+// NOT part of this string: since WU-21 (#1197) it is workspace-scoped and is
+// rendered by buildSystemPromptForShelf from the turn's own carry-forward pair
+// file, so a no-workspace prompt build correctly gets no block at all.
 func (ms *MemoryStore) GetMemoryContext() string {
 	var sb strings.Builder
-
-	lastSession, err := ms.ReadLastSession()
-	if err == nil && strings.TrimSpace(lastSession) != "" {
-		sb.WriteString("## Last Session\n")
-		sb.WriteString(lastSession)
-	}
 
 	entries, err := ms.SearchEntries("", 20)
 	if err == nil && len(entries) > 0 {

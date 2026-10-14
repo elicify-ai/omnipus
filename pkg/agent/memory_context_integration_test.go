@@ -5,7 +5,9 @@
 //
 //  1. AutoInject20Recent — GetMemoryContext injects EXACTLY 20 of 25 written memories.
 //  2. RecallSpansThreeScopes — recall_memory search + GetMemoryContext coverage of
-//     long-term memory, last-session.md, and retrospectives.
+//     long-term memory and retrospectives (the end-of-chat summary left
+//     GetMemoryContext in WU-21 / #1197: it is workspace-scoped and rendered
+//     by the workspace-scoped prompt build instead).
 //  3. ContextWindowTrimOverflow — windowTrim fires and produces a well-formed
 //     (non-corrupt) reduced history without writing a compression summary.
 //
@@ -105,24 +107,23 @@ func TestIntegration_AutoInject20Recent(t *testing.T) {
 // BDD:
 //   Given a MemoryStore with:
 //     - a long-term memory containing "ctxIT_topic_flock"
-//     - a last-session.md containing "ctxIT_topic_flock"
 //     - a retrospective containing "ctxIT_topic_flock"
 //   When recall_memory is called for query "ctxIT_topic_flock"
 //   Then long-term memory results are returned (via SearchEntries)
 //   AND matching retrospectives are ALSO returned (finding #1 fix: recall spans
 //     long-term + retros via the tools.RetroSearcher path)
-//   AND when GetMemoryContext is called, long-term + last-session content appears
+//   AND when GetMemoryContext is called, long-term content appears
 //   AND retrospectives do NOT appear in GetMemoryContext (they stay out of the
 //     per-turn auto-inject; they are recall-only, surfaced on demand).
 //
 // This locks in the finding #1 fix: recall_memory now searches retrospectives
 // (RetroSearcher on the adapter), so the tool matches its "spans long-term +
-// retrospectives" contract. last-session is auto-injected each turn, so it is
-// always in context rather than searched by recall.
+// retrospectives" contract. (The end-of-chat summary left GetMemoryContext in
+// WU-21 / #1197: it is workspace-scoped and auto-injected per workspace.)
 //
 // Traces to: pkg/tools/memory.go (RecallMemoryTool + RetroSearcher)
 //            pkg/agent/memory_adapter.go (MemoryStoreAdapter.SearchRetros)
-//            pkg/agent/memory.go (GetMemoryContext — long-term + last-session)
+//            pkg/agent/memory.go (GetMemoryContext — long-term)
 // ---------------------------------------------------------------------------
 
 func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
@@ -141,10 +142,10 @@ func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
 		t.Fatalf("AppendLongTerm: %v", err)
 	}
 
-	// 2. Seed a last-session.md.
-	if err := ms.WriteLastSession("## Last session\nWe applied " + needle + " everywhere."); err != nil {
-		t.Fatalf("WriteLastSession: %v", err)
-	}
+	// 2. (WU-21 #1197) The retired last-session.md seed is gone: the
+	// end-of-chat summary is workspace-scoped and no longer part of
+	// GetMemoryContext (amendment §3.2(4)); recall/long-term coverage below is
+	// unchanged.
 
 	// 3. Seed a retrospective.
 	sessionID := "ctxIT-session-001"
@@ -186,20 +187,23 @@ func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
 	assert.NotContains(t, recallResultOther.ForLLM, needle,
 		"recall_memory must not return memories for an unrelated query (differentiation test)")
 
-	// -- Section B: GetMemoryContext covers long-term + last-session -----------
+	// -- Section B: GetMemoryContext covers long-term memory --------------------
+	// (WU-21 #1197: the "## Last Session" section moved out of
+	// GetMemoryContext to the workspace-scoped prompt build; long-term coverage
+	// here is unchanged.)
 	memCtx := ms.GetMemoryContext()
 
-	assert.Contains(t, memCtx, "## Last Session",
-		"GetMemoryContext must include the ## Last Session section")
 	assert.Contains(t, memCtx, needle,
-		"GetMemoryContext must surface needle from both last-session and long-term memory")
+		"GetMemoryContext must surface needle from long-term memory")
 	assert.Contains(t, memCtx, "## Long-term memory",
 		"GetMemoryContext must include the ## Long-term memory section")
+	assert.NotContains(t, memCtx, "## Last Session",
+		"§3.2(4): generic memory must not render a workspace carry-forward heading")
 
 	// -- Section C: retros are recall-only, not in the per-turn auto-inject ------
 	// After the finding #1 fix, recall_memory spans long-term + retrospectives
 	// (asserted in Section A). The per-turn GetMemoryContext auto-inject still
-	// covers long-term + last-session only — retros stay out of the always-on
+	// covers long-term only — retros stay out of the always-on
 	// context and are surfaced on demand via recall_memory / ReadRetros.
 	assert.NotContains(t, memCtx, "ctxIT-session-001",
 		"GetMemoryContext (auto-inject) does NOT include retrospective content — retros are recall-only")
