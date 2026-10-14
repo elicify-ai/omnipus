@@ -423,6 +423,8 @@ func coreAgentSkills(id CoreAgentID) []string {
 		return []string{"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
 	case IDJim:
 		return []string{"interview", "orchestrate", "plan", "define-goal"}
+	case IDOmnipus:
+		return []string{"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team", "mcp-install", "provider-setup", "channel-setup", "doctor"}
 	case IDPlanner:
 		return []string{"plan", "define-goal"}
 	case IDResearcher:
