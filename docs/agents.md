@@ -6,7 +6,7 @@ Agents do the work in Omnipus. Omnipus ships three built-in chat colleagues—Mi
 
 Open **Agents** in the sidebar and the roster has four sections:
 
-- **Built-in roster** — Mia, Jim and Omnipus. Their identity and base instructions are protected, and Mia is the initial default.
+- **Built-in roster** — Mia, Jim and Omnipus. Their identity and base instructions are protected.
 - **Main agents** — chat colleagues you create yourself.
 - **Sub-agent workers** — shipped and user-created workers. They are not chat colleagues; other agents delegate work to them, and you can assign workspace tasks to workers on the team.
 - **System** — Judge and Plan Supervisor, internal engine agents that cannot be selected for chat or delegation.
@@ -15,7 +15,6 @@ A filter above the roster narrows the list to one [workspace](workspaces.md) tea
 
 ## When you would use it
 
-- You want to change who answers when no agent is named. Set the default.
 - You want a colleague with a fixed job and personality. Create a Main agent.
 - You want focused labor behind your main agents. Create a worker.
 - You already run a command-line agent tool and want Omnipus to delegate to it. Create an external worker.
@@ -76,7 +75,7 @@ To change an agent, open its card. The edit slide-over saves as you type. Its ta
 
 ## How to delete an agent
 
-**Delete agent** asks you to confirm twice: the first step explains that the agent and its chats, memory and related data are removed permanently, the second is the final confirmation. Dismissing either step deletes nothing. A locked core agent, a System Agent, and an agent that owns an active plan cannot be deleted — set another agent as the default, or stop/reassign the plan, first.
+**Delete agent** asks you to confirm twice: the first step explains that the agent and its chats, memory and related data are removed permanently, the second is the final confirmation. Dismissing either step deletes nothing. A locked core agent, a System Agent, and an agent that owns an active plan cannot be deleted — stop or reassign the plan first.
 
 Deletion cleans the agent's own data first — its chats, its task assignments, and its references in workspaces — and removes the agent record last. If any part of that cleanup fails, the agent stays in the list and the message says it is only partly deleted; press **Delete agent** again to finish. Nothing is lost by retrying.
 
