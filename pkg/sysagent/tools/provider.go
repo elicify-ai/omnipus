@@ -7,6 +7,7 @@ package systools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -83,14 +84,17 @@ func (t *ProviderConfigureTool) Name() string           { return "configure_prov
 func (t *ProviderConfigureTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *ProviderConfigureTool) Description() string {
 	return "Store an LLM provider's API key in the encrypted credential store and wire it into config.json " +
-		"so the provider becomes usable. Does NOT contact the provider — the key is stored and referenced, " +
-		"never validated against the live API, so a wrong or revoked key is accepted here without complaint; " +
-		"call list_models afterwards to confirm the key actually works. name must be a catalog provider id " +
+		"so the provider becomes usable, then check the SAVED entry: the configured endpoint is asked for its " +
+		"model list over the provider's protocol with the saved credential (local providers need no key). " +
+		"The result's outcome says whether that check passed; it does not prove that a chosen model runs. " +
+		"name must be a catalog provider id " +
 		"(list_models or the Settings → Providers screen show the valid ids; note the ids are " +
 		"'amazon-bedrock' and 'google', not 'bedrock' or 'gemini'). api_key is required for every cloud " +
 		"provider and optional only for local ones (ollama, lmstudio, vllm). api_base is optional and " +
-		"overrides the catalog's default endpoint; it must be a full http:// or https:// URL with a host.\n" +
-		"Parameters: name (required), api_key, api_base."
+		"overrides the catalog's default endpoint; it must be a full http:// or https:// URL with a host. " +
+		"expected_revision is the provider's revision from list_providers (\"absent\" when it is not configured yet); " +
+		"the write is refused if the provider changed since. dry_run checks the input shape only and saves nothing.\n" +
+		"Parameters: name (required), api_key, api_base, expected_revision (required unless dry_run), dry_run."
 }
 
 func (t *ProviderConfigureTool) Parameters() map[string]any {
@@ -100,36 +104,43 @@ func (t *ProviderConfigureTool) Parameters() map[string]any {
 			"name":     map[string]any{"type": "string"},
 			"api_key":  map[string]any{"type": "string"},
 			"api_base": map[string]any{"type": "string"},
+			expectedRevisionParam: map[string]any{
+				"type":        "string",
+				"description": "The provider's revision from list_providers; \"absent\" for a provider that is not configured yet.",
+			},
+			"dry_run": map[string]any{
+				"type":        "boolean",
+				"description": "Validate the provider id, key shape and api_base shape only; save nothing and make no network call.",
+			},
 		},
 		"required": []string{"name"},
 	}
 }
 
-func (t *ProviderConfigureTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	name, _ := args["name"].(string)
-	if name == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
+// providerCheckTimeout bounds configure_provider's model-listing check.
+const providerCheckTimeout = 15 * time.Second
+
+// providerConfigureInput is configure_provider's validated input.
+type providerConfigureInput struct {
+	name    string
+	row     catalog.Provider
+	isLocal bool
+	apiKey  string
+	apiBase string
+}
+
+func (t *ProviderConfigureTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
+	in, refusal := validateProviderConfigureInput(args)
+	if refusal != nil {
+		return refusal
 	}
-	row, known, isLocal := catalogProviderLocality(name)
-	if !known {
-		return tools.ErrorResult(errorJSON("UNKNOWN_PROVIDER",
-			fmt.Sprintf("%q is not a known provider id", name),
-			"Use the catalog id (e.g. 'amazon-bedrock', not 'bedrock'; 'google', not 'gemini')",
-		))
+	if dry, _ := args["dry_run"].(bool); dry {
+		return providerDryRunResult(in)
 	}
-	apiKey, _ := args["api_key"].(string)
-	apiBase, _ := args["api_base"].(string)
-	if apiBase != "" {
-		if err := validateAPIBase(apiBase); err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(),
-				`Provide a full URL with scheme, e.g. "https://api.openai.com/v1"`))
-		}
-	}
-	if !isLocal && apiKey == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			fmt.Sprintf("api_key is required for cloud provider %q", name),
-			"Provide your API key for this provider",
-		))
+	expected, missing := expectedRevisionArg(args, "list_providers")
+	if missing != nil {
+		return missing
 	}
 
 	// The credential store is the single source of truth; a provider's key is
@@ -138,103 +149,283 @@ func (t *ProviderConfigureTool) Execute(_ context.Context, args map[string]any) 
 	// onboarding convention "<provider>_API_KEY". If the provider already has a
 	// config entry carrying a ref, we update the key under that same ref so we
 	// don't strand the existing reference.
-	ref := name + "_API_KEY"
-	for _, p := range t.deps.GetCfg().Providers {
-		if p == nil {
-			continue
+	ref := in.name + "_API_KEY"
+	keyStored := false
+	writeErr := t.deps.withSharedResourceWrite(sharedProvider, in.name, expected, func() error {
+		if rep := representativeProviderRow(t.deps.GetCfg(), in.name); rep != nil && rep.APIKeyRef != "" {
+			ref = rep.APIKeyRef
 		}
-		if providerNameOf(p) == name && p.APIKeyRef != "" {
-			ref = p.APIKeyRef
-			break
+		if in.apiKey != "" {
+			if t.deps.CredStore == nil {
+				return &providerStepError{step: "credential", err: fmt.Errorf("no credential store is configured")}
+			}
+			if err := t.deps.CredStore.Set(ref, in.apiKey); err != nil {
+				return &providerStepError{step: "credential", err: err}
+			}
+			keyStored = true
 		}
-	}
-
-	if apiKey != "" {
-		if t.deps.CredStore == nil {
-			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
-				"Failed to store API key: no credential store is configured",
-				"Check that the credential store is unlocked",
-			))
-		}
-		if err := t.deps.CredStore.Set(ref, apiKey); err != nil {
-			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
-				"Failed to store API key: "+err.Error(),
-				"Check that the credential store is unlocked",
-			))
-		}
-	}
-
-	// Wire the config so the stored key is actually referenced (not orphaned):
-	// set APIKeyRef on the provider's entries and persist. Without this the key
-	// sat in the store unreferenced — never injected, never resolved.
-	if err := t.deps.WithConfig(func(cfg *config.Config) error {
-		wired := false
-		for _, p := range cfg.Providers {
-			if p == nil || providerNameOf(p) != name {
-				continue
-			}
-			if apiKey != "" && p.APIKeyRef == "" {
-				p.APIKeyRef = ref
-			}
-			if apiBase != "" {
-				p.APIBase = apiBase
-			}
-			wired = true
-		}
-		if !wired {
-			np := &config.ModelConfig{Provider: name, Model: name}
-			if apiKey != "" {
-				np.APIKeyRef = ref
-			}
-			if apiBase != "" {
-				np.APIBase = apiBase
-			}
-			cfg.Providers = append(cfg.Providers, np)
+		// Wire the config so the stored key is actually referenced (not orphaned).
+		if err := t.deps.WithConfig(func(cfg *config.Config) error {
+			wireProviderEntry(cfg, in, ref)
+			return nil
+		}); err != nil {
+			return &providerStepError{step: "config", err: err}
 		}
 		return nil
-	}); err != nil {
-		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED",
-			"Stored the key but failed to wire it into config: "+err.Error(),
-			"The provider key is saved; retry to finish configuring it",
-		))
+	})
+	if r, ok := revisionConflictResult(writeErr, "list_providers"); ok {
+		return r
+	}
+	if writeErr != nil {
+		return providerWriteFailureResult(in.name, ref, keyStored, writeErr)
 	}
 
 	// Apply immediately: re-injects provider credentials into the environment and
 	// rebuilds the agent loop so the provider is usable without a restart. A
-	// reload failure does NOT undo the store/config writes above (the key really
-	// is saved), so this is still reported as a success — but with a
-	// publish_warning naming the failure, mirroring the pattern adopted for
-	// create_agent/update_agent/delete_agent: an unqualified success response
-	// would tell the caller the provider is live when it is not yet usable.
+	// reload failure does NOT undo the store/config writes above.
 	var publishWarning string
 	if t.deps.ReloadFunc != nil {
 		if err := t.deps.ReloadFunc(); err != nil {
 			slog.Warn("sysagent: configure_provider: reload after provider configure failed — provider available after restart",
-				"provider", name, "error", err)
+				"provider", in.name, "error", err)
 			publishWarning = fmt.Sprintf(
 				"provider %q was configured but is not yet live: reload failed (%s); it will become usable "+
-					"after the next config reload or gateway restart", name, err.Error())
+					"after the next config reload or gateway restart", in.name, err.Error())
 		}
 	}
 
-	// api_key_stored reflects whether a key now resolves under ref, not merely
-	// whether this call was passed one — a repeat call with only api_base set
-	// still has a previously-stored key.
-	apiKeyStored := apiKey != "" || credentialPresent(t.deps.CredStore, ref)
-	resolvedAPIBase := apiBase
-	if resolvedAPIBase == "" {
-		resolvedAPIBase = row.API
-	}
-
+	cfg := t.deps.GetCfg()
+	rep := representativeProviderRow(cfg, in.name)
+	apiKeyStored := keyStored || (rep != nil && credentialPresent(t.deps.CredStore, rep.APIKeyRef))
 	result := map[string]any{
-		"name":           name,
+		"name":           in.name,
 		"api_key_stored": apiKeyStored,
-		"api_base":       resolvedAPIBase,
+		"api_base":       in.row.API,
+		"revision":       providerRevision(cfg, in.name),
+		"changed_fields": providerChangedFields(in),
+	}
+	verdict := t.checkSavedProvider(ctx, rep)
+	if ep, err := effectiveProviderEndpoint(rep); err == nil {
+		result["api_base"], result["protocol"] = ep.API, string(ep.Protocol)
 	}
 	if publishWarning != "" {
 		result["publish_warning"] = publishWarning
+		verdict = partlySaved(publishWarning, verdict.CheckScope, []string{"live reload"}, verdict.NotTested...)
 	}
-	return tools.NewToolResult(successJSON(result))
+	return changeSuccess(result, verdict)
+}
+
+// validateProviderConfigureInput checks configure_provider's arguments before
+// any write or network call. It is the whole of a dry run's check.
+func validateProviderConfigureInput(args map[string]any) (providerConfigureInput, *tools.ToolResult) {
+	var in providerConfigureInput
+	in.name, _ = args["name"].(string)
+	if in.name == "" {
+		return in, tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", "Provide a catalog provider id"))
+	}
+	var known bool
+	in.row, known, in.isLocal = catalogProviderLocality(in.name)
+	if !known {
+		return in, tools.ErrorResult(errorJSON("UNKNOWN_PROVIDER",
+			fmt.Sprintf("%q is not a known provider id", in.name),
+			"Use the catalog id (e.g. 'amazon-bedrock', not 'bedrock'; 'google', not 'gemini')",
+		))
+	}
+	in.apiKey, _ = args["api_key"].(string)
+	in.apiBase, _ = args["api_base"].(string)
+	if in.apiBase != "" {
+		if err := validateAPIBase(in.apiBase); err != nil {
+			return in, tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(),
+				`Provide a full URL with scheme, e.g. "https://api.openai.com/v1"`))
+		}
+	}
+	if !in.isLocal && in.apiKey == "" {
+		return in, tools.ErrorResult(errorJSON("INVALID_INPUT",
+			fmt.Sprintf("api_key is required for cloud provider %q", in.name),
+			"Provide your API key for this provider",
+		))
+	}
+	if in.apiKey != "" {
+		if err := validateAPIKeyShape(in.apiKey); err != nil {
+			return in, tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(),
+				"Paste the whole key exactly as the provider shows it"))
+		}
+	}
+	return in, nil
+}
+
+// validateAPIKeyShape refuses a key no provider issues: one containing
+// whitespace or control characters (a paste that picked up a newline or a
+// label). It does not judge length or prefix — formats differ per provider.
+func validateAPIKeyShape(key string) error {
+	for _, r := range key {
+		if r <= ' ' || r == 0x7f {
+			return fmt.Errorf("api_key contains whitespace or a control character")
+		}
+	}
+	return nil
+}
+
+// providerDryRunResult is configure_provider's validate-only answer (#1060):
+// the input passed the shape checks; nothing was saved and nothing was called.
+func providerDryRunResult(in providerConfigureInput) *tools.ToolResult {
+	return tools.NewToolResult(successJSON(map[string]any{
+		"name":        in.name,
+		"dry_run":     true,
+		"valid":       true,
+		"saved":       false,
+		"check_scope": "shape only; no network",
+		"not_tested": []string{
+			"the API key against the provider's live API",
+			"the endpoint answering a model listing",
+		},
+		"missing_parts": []string{},
+	}))
+}
+
+// providerStepError names the configure_provider write step that failed.
+type providerStepError struct {
+	step string // "credential" or "config"
+	err  error
+}
+
+func (e *providerStepError) Error() string { return e.step + ": " + e.err.Error() }
+func (e *providerStepError) Unwrap() error { return e.err }
+
+// providerWriteFailureResult reports a failed configure_provider write
+// truthfully: a key already stored when the config write failed is a partly
+// saved change (BDD-9.6), never "nothing saved".
+func providerWriteFailureResult(name, ref string, keyStored bool, err error) *tools.ToolResult {
+	var se *providerStepError
+	if !errors.As(err, &se) {
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+	}
+	if se.step == "credential" {
+		return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
+			"Failed to store API key: "+se.err.Error(), "Check that the credential store is unlocked"))
+	}
+	if !keyStored {
+		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED",
+			"Failed to save the provider configuration: "+se.err.Error(), "Read list_providers and retry"))
+	}
+	return changeErrorWithOutcome(map[string]any{
+		"success": false,
+		"error": map[string]any{
+			"code":       "CONFIG_SAVE_FAILED",
+			"message":    "Stored the key but failed to wire it into config: " + se.err.Error(),
+			"suggestion": "The key is saved under " + ref + "; read list_providers, then retry to finish configuring it",
+		},
+		"name":           name,
+		"changed_fields": []string{"api_key"},
+	}, partlySaved("the API key was stored under "+ref+" but the provider entry was not written: "+se.err.Error(),
+		"", []string{"provider configuration entry"}))
+}
+
+// providerChangedFields lists the parts this call wrote.
+func providerChangedFields(in providerConfigureInput) []string {
+	fields := []string{"provider_entry"}
+	if in.apiKey != "" {
+		fields = append(fields, "api_key")
+	}
+	if in.apiBase != "" {
+		fields = append(fields, "api_base")
+	}
+	return fields
+}
+
+// wireProviderEntry sets the credential reference and api_base on every row
+// of the provider, or appends a row when none exists.
+func wireProviderEntry(cfg *config.Config, in providerConfigureInput, ref string) {
+	wired := false
+	for _, p := range cfg.Providers {
+		if p == nil || providerNameOf(p) != in.name {
+			continue
+		}
+		if in.apiKey != "" && p.APIKeyRef == "" {
+			p.APIKeyRef = ref
+		}
+		if in.apiBase != "" {
+			p.APIBase = in.apiBase
+		}
+		wired = true
+	}
+	if !wired {
+		np := &config.ModelConfig{Provider: in.name, Model: in.name}
+		if in.apiKey != "" {
+			np.APIKeyRef = ref
+		}
+		if in.apiBase != "" {
+			np.APIBase = in.apiBase
+		}
+		cfg.Providers = append(cfg.Providers, np)
+	}
+}
+
+// providerCheckNotTested is what a passing model listing does not prove.
+var providerCheckNotTested = []string{"model execution", "quota", "tool support"}
+
+// checkSavedProvider is the FR-031 check: it resolves the SAVED effective entry
+// (configured api_base, credential, protocol) exactly as runtime does and asks
+// the endpoint for its model list through the protocol-aware listing. A local
+// provider is checked without a key.
+func (t *ProviderConfigureTool) checkSavedProvider(ctx context.Context, rep *config.ModelConfig) changeOutcome {
+	if rep == nil {
+		return savedNotWorking("the saved provider entry could not be read back", "")
+	}
+	ep, err := effectiveProviderEndpoint(rep)
+	if err != nil {
+		return savedNotWorking("the saved entry does not resolve to an endpoint: "+err.Error(), "")
+	}
+	scope := fmt.Sprintf("model listing: the saved endpoint %s was asked for its model list over the %s protocol "+
+		"with the saved credential", ep.API, ep.Protocol)
+	if !providerListable(ep.Protocol) {
+		return savedNotWorking(fmt.Sprintf("not checked: the %s protocol has no model listing", ep.Protocol), "",
+			append([]string{"the endpoint", "the credential"}, providerCheckNotTested...)...)
+	}
+	key := rep.APIKey()
+	if key == "" && rep.APIKeyRef != "" && t.deps.CredStore != nil {
+		if v, gerr := t.deps.CredStore.Get(rep.APIKeyRef); gerr == nil {
+			key = v
+		}
+	}
+	local := ep.Locality == catalog.LocalityLocal
+	if key == "" && !local && ep.Protocol != catalog.ProtocolOllama {
+		return savedNotWorking("no credential resolves for this provider", scope, providerCheckNotTested...)
+	}
+	var checker providers.URLChecker = providers.NoopChecker{}
+	if !local && t.deps.URLChecker != nil {
+		checker = t.deps.URLChecker
+		if cerr := checker.CheckURL(ctx, ep.API); cerr != nil {
+			return savedNotWorking("the endpoint is not allowed by the outbound-request guard: "+cerr.Error(),
+				scope, providerCheckNotTested...)
+		}
+	}
+	cctx, cancel := context.WithTimeout(ctx, providerCheckTimeout)
+	defer cancel()
+	list := providers.ListModels
+	if t.deps.ListProviderModels != nil {
+		list = t.deps.ListProviderModels
+	}
+	models, lerr := list(cctx, ep.Protocol, ep.API, key, checker)
+	if lerr != nil {
+		var se *providers.UpstreamStatusError
+		reason := "the endpoint could not be reached"
+		if errors.As(lerr, &se) {
+			reason = fmt.Sprintf("the endpoint answered the model listing with status %d", se.Status)
+		}
+		slog.Warn("configure_provider: saved-entry check failed", "endpoint", ep.API, "error", lerr)
+		return savedNotWorking(reason, scope, providerCheckNotTested...)
+	}
+	return working(fmt.Sprintf("%s; it listed %d model(s)", scope, len(models)), providerCheckNotTested...)
+}
+
+// providerListable reports whether a protocol has an HTTP model listing.
+func providerListable(p catalog.Protocol) bool {
+	switch p {
+	case catalog.ProtocolOpenAICompatible, catalog.ProtocolGoogle, catalog.ProtocolAnthropic, catalog.ProtocolOllama:
+		return true
+	}
+	return false
 }
 
 // providerNameOf returns a provider entry's canonical name — the explicit
@@ -269,15 +460,28 @@ func (t *ProviderListTool) Execute(_ context.Context, _ map[string]any) *tools.T
 	type providerSummary struct {
 		Name   string `json:"name"`
 		Status string `json:"status"`
+		// Endpoint and Protocol are the saved entry's EFFECTIVE base URL and
+		// wire protocol, resolved exactly as runtime does (catalog row,
+		// protocol selection, api_base override). Empty when the row cannot
+		// be resolved; Unresolved then carries the reason.
+		Endpoint   string `json:"endpoint"`
+		Protocol   string `json:"protocol"`
+		Unresolved string `json:"unresolved,omitempty"`
+		// APIKeyRef is the credential REFERENCE NAME (never the value).
+		APIKeyRef string `json:"api_key_ref"`
+		// Revision is the FR-088 token configure_provider's expected_revision
+		// must carry; it changes whenever the endpoint, protocol or reference does.
+		Revision string `json:"revision"`
 	}
 	// Enumerate providers from config's model_list, redacting credentials.
 	// providerNameOf (not the bare providerFromModelRef fallback) is used so
 	// an entry configured via configure_provider — which sets the explicit
 	// Provider field rather than a "provider/model" Model slug — is not
 	// silently skipped here.
-	var list []providerSummary
+	cfg := t.deps.GetCfg()
+	list := []providerSummary{}
 	seen := map[string]bool{}
-	for _, m := range t.deps.GetCfg().Providers {
+	for _, m := range cfg.Providers {
 		if m == nil {
 			continue
 		}
@@ -286,13 +490,37 @@ func (t *ProviderListTool) Execute(_ context.Context, _ map[string]any) *tools.T
 			continue
 		}
 		seen[p] = true
+		rep := representativeProviderRow(cfg, p)
 		status := "no_credentials"
-		if credentialPresent(t.deps.CredStore, m.APIKeyRef) {
+		if credentialPresent(t.deps.CredStore, rep.APIKeyRef) {
 			status = "key_present"
 		}
-		list = append(list, providerSummary{Name: p, Status: status})
+		summary := providerSummary{Name: p, Status: status, APIKeyRef: rep.APIKeyRef, Revision: providerRevision(cfg, p)}
+		if ep, err := effectiveProviderEndpoint(rep); err == nil {
+			summary.Endpoint, summary.Protocol = ep.API, string(ep.Protocol)
+		} else {
+			summary.Unresolved = err.Error()
+		}
+		list = append(list, summary)
 	}
 	return tools.NewToolResult(successJSON(map[string]any{"providers": list}))
+}
+
+// representativeProviderRow is the row runtime and the tools treat as a
+// provider's entry: the first row carrying a credential reference, else the
+// first row. Seed scaffolding rows carry no reference, so the configured row
+// wins when both exist. Returns nil when no row names the provider.
+func representativeProviderRow(cfg *config.Config, id string) *config.ModelConfig {
+	rows := providerRows(cfg, id)
+	for _, r := range rows {
+		if r.APIKeyRef != "" {
+			return r
+		}
+	}
+	if len(rows) > 0 {
+		return rows[0]
+	}
+	return nil
 }
 
 // ---- test_provider ----

@@ -7,6 +7,7 @@ package systools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // newProviderTestDeps builds a Deps wired to an in-memory config + an unlocked
@@ -32,6 +35,12 @@ func newProviderTestDeps(t *testing.T, cfg *config.Config) (*Deps, *credentials.
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:        store,
 		ReloadFunc:       func() error { reloaded = true; return nil },
+		// FR-031: configure_provider checks the saved entry with a model
+		// listing. Unit tests never reach a real provider endpoint; a test of
+		// the check itself replaces this stub or points api_base at a local server.
+		ListProviderModels: func(context.Context, catalog.Protocol, string, string, providers.URLChecker) ([]string, error) {
+			return nil, errors.New("model listing disabled in this unit test")
+		},
 	}
 	return deps, store, &reloaded
 }
@@ -57,11 +66,11 @@ func TestProviderConfigure_WiresAPIKeyRef(t *testing.T) {
 	}}
 	deps, store, reloaded := newProviderTestDeps(t, cfg)
 
-	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 		"name":     "openrouter",
 		"api_key":  "sk-or-test",
 		"api_base": "https://openrouter.ai/api/v1",
-	})
+	}))
 	require.False(t, res.IsError, "configure should succeed: %s", res.ForLLM)
 
 	v, err := store.Get("openrouter_API_KEY")
@@ -84,9 +93,9 @@ func TestProviderConfigure_ReusesExistingRef(t *testing.T) {
 	deps, store, _ := newProviderTestDeps(t, cfg)
 	require.NoError(t, store.Set("ANTHROPIC_API_KEY", "old"))
 
-	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 		"name": "anthropic", "api_key": "new-key",
-	})
+	}))
 	require.False(t, res.IsError)
 
 	v, _ := store.Get("ANTHROPIC_API_KEY")
@@ -100,9 +109,9 @@ func TestProviderConfigure_AppendsEntryForNewProvider(t *testing.T) {
 	cfg := &config.Config{}
 	deps, store, _ := newProviderTestDeps(t, cfg)
 
-	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 		"name": "cohere", "api_key": "sk-co",
-	})
+	}))
 	require.False(t, res.IsError)
 
 	require.Len(t, cfg.Providers, 1)
@@ -373,11 +382,11 @@ func TestProviderConfigure_APIBaseIsStored(t *testing.T) {
 	cfg := &config.Config{}
 	deps, _, _ := newProviderTestDeps(t, cfg)
 
-	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 		"name":     "openai",
 		"api_key":  "sk-test",
 		"api_base": "https://api.openai.com/v1",
-	})
+	}))
 	require.False(t, res.IsError, "configure with valid api_base should succeed: %s", res.ForLLM)
 
 	// Verify api_base was wired into the config entry.
@@ -395,10 +404,10 @@ func TestProviderConfigure_CloudProviderRequiresAPIKey(t *testing.T) {
 	deps, _, _ := newProviderTestDeps(t, cfg)
 
 	// anthropic is a cloud provider — api_key is required.
-	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 		"name": "anthropic",
 		// no api_key
-	})
+	}))
 	require.True(t, res.IsError, "cloud provider without api_key should fail: %s", res.ForLLM)
 
 	m := unmarshalProviderResult(t, res.ForLLM)
@@ -475,7 +484,7 @@ func TestProviderConfigure_APIBaseValidation(t *testing.T) {
 				args["api_base"] = tc.apiBase
 			}
 
-			res := NewProviderConfigureTool(deps).Execute(context.Background(), args)
+			res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), args))
 
 			if tc.wantError {
 				require.True(t, res.IsError,
@@ -571,10 +580,10 @@ func TestProviderConfigure_WideCatalogProviderConfigures(t *testing.T) {
 			cfg := &config.Config{}
 			deps, store, _ := newProviderTestDeps(t, cfg)
 
-			res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+			res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 				"name":    name,
 				"api_key": "sk-test-" + name,
-			})
+			}))
 			require.False(t, res.IsError, "%s should be a known catalog provider and configure: %s", name, res.ForLLM)
 
 			v, err := store.Get(name + "_API_KEY")
@@ -610,10 +619,10 @@ func TestProviderConfigure_LegacyAliasIdsRejected(t *testing.T) {
 			cfg := &config.Config{}
 			deps, _, _ := newProviderTestDeps(t, cfg)
 
-			res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+			res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 				"name":    tc.name,
 				"api_key": "sk-test",
-			})
+			}))
 			if tc.wantError {
 				require.True(t, res.IsError, "%q is not a real catalog id and must be rejected: %s", tc.name, res.ForLLM)
 				m := unmarshalProviderResult(t, res.ForLLM)
@@ -632,10 +641,10 @@ func TestProviderConfigure_UnknownProviderRejected(t *testing.T) {
 	cfg := &config.Config{}
 	deps, _, _ := newProviderTestDeps(t, cfg)
 
-	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 		"name":    "totally-not-a-real-provider",
 		"api_key": "sk-test",
-	})
+	}))
 	require.True(t, res.IsError)
 	m := unmarshalProviderResult(t, res.ForLLM)
 	errBlock, _ := m["error"].(map[string]any)
@@ -653,9 +662,9 @@ func TestProviderConfigure_NoFakeStatusFields(t *testing.T) {
 	cfg := &config.Config{}
 	deps, _, _ := newProviderTestDeps(t, cfg)
 
-	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 		"name": "anthropic", "api_key": "sk-ant-test",
-	})
+	}))
 	require.False(t, res.IsError, "%s", res.ForLLM)
 
 	m := unmarshalProviderResult(t, res.ForLLM)
@@ -680,9 +689,9 @@ func TestProviderConfigure_PublishWarningOnReloadFailure(t *testing.T) {
 	deps, _, _ := newProviderTestDeps(t, cfg)
 	deps.ReloadFunc = func() error { return fmt.Errorf("reload boom") }
 
-	res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+	res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 		"name": "anthropic", "api_key": "sk-ant-test",
-	})
+	}))
 	require.False(t, res.IsError, "a reload failure must not turn a real success into a tool error: %s", res.ForLLM)
 
 	m := unmarshalProviderResult(t, res.ForLLM)
@@ -691,14 +700,21 @@ func TestProviderConfigure_PublishWarningOnReloadFailure(t *testing.T) {
 	require.Contains(t, warning, "reload boom")
 }
 
-// TestProviderConfigure_DescriptionDisclosesNoNetworkCall proves the
-// description no longer promises a connection status it never measures.
-func TestProviderConfigure_DescriptionDisclosesNoNetworkCall(t *testing.T) {
+// TestProviderConfigure_DescriptionDisclosesSavedEntryCheck replaces the
+// former "Does NOT contact the provider" oracle: omnipus-system-agent FR-031
+// makes configure_provider check the SAVED entry with a model listing, so the
+// description must say what is checked and what is not proved.
+func TestProviderConfigure_DescriptionDisclosesSavedEntryCheck(t *testing.T) {
 	deps, _, _ := newProviderTestDeps(t, &config.Config{})
 	desc := NewProviderConfigureTool(deps).Description()
 
-	if !strings.Contains(desc, "Does NOT contact the provider") {
-		t.Errorf("Description() must disclose that configure_provider never contacts the provider: %q", desc)
+	for _, want := range []string{"check the SAVED entry", "model list", "does not prove that a chosen model runs"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("Description() must state %q: %q", want, desc)
+		}
+	}
+	if strings.Contains(desc, "Does NOT contact the provider") {
+		t.Errorf("Description() still claims no contact although the saved entry is checked: %q", desc)
 	}
 	if !strings.Contains(desc, "amazon-bedrock") || !strings.Contains(desc, "google") {
 		t.Errorf("Description() should name the correct catalog ids for the two known alias traps: %q", desc)
@@ -772,9 +788,9 @@ func TestProviderConfigureThenList_EndToEnd(t *testing.T) {
 	cfg := &config.Config{}
 	deps, _, _ := newProviderTestDeps(t, cfg)
 
-	configureRes := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+	configureRes := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 		"name": "xai", "api_key": "sk-xai-test",
-	})
+	}))
 	require.False(t, configureRes.IsError, "%s", configureRes.ForLLM)
 
 	listRes := NewProviderListTool(deps).Execute(context.Background(), nil)
@@ -833,9 +849,9 @@ func TestProviderConfigure_NilCredStoreLocalProviderNoPanic(t *testing.T) {
 	deps.CredStore = nil // simulate an unwired test/scaffolding Deps
 
 	require.NotPanics(t, func() {
-		res := NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+		res := NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 			"name": "ollama",
-		})
+		}))
 		require.False(t, res.IsError, "configure_provider for a local provider should not fail: %s", res.ForLLM)
 		m := unmarshalProviderResult(t, res.ForLLM)
 		require.Equal(t, false, m["api_key_stored"], "no key was provided and CredStore is nil, so nothing resolves")
@@ -852,9 +868,9 @@ func TestProviderConfigure_NilCredStoreWithAPIKeyNoPanic(t *testing.T) {
 	deps.CredStore = nil
 
 	require.NotPanics(t, func() {
-		NewProviderConfigureTool(deps).Execute(context.Background(), map[string]any{
+		NewProviderConfigureTool(deps).Execute(context.Background(), WithCurrentRevisionForTest(NewProviderConfigureTool(deps), map[string]any{
 			"name": "ollama", "api_key": "does-not-matter-locally",
-		})
+		}))
 	})
 }
 

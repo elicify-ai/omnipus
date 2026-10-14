@@ -70,8 +70,9 @@ func (t *MCPAddTool) Description() string {
 		"sse/http URLs must be https, or http only for loopback addresses (localhost, 127.x.x.x, ::1). " +
 		"Adding a server when MCP is globally disabled and no other server is enabled will turn tools.mcp.enabled ON — an install-wide change; if another server is already enabled the global flag is left alone and the new server will not connect until an operator enables it. " +
 		"A name that already exists is refused, not updated — remove it first with remove_mcp_server. " +
-		"Tools the server exposes register with no tool policy and cannot be called until an operator assigns one.\n" +
-		"Parameters: name (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env."
+		"Tools the server exposes register with no tool policy and cannot be called until an operator assigns one. " +
+		"expected_revision must be \"absent\" (the name's revision from list_mcp_servers); the write is refused if a server of that name appeared since.\n" +
+		"Parameters: name (required), expected_revision (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env."
 }
 
 func (t *MCPAddTool) Parameters() map[string]any {
@@ -84,8 +85,12 @@ func (t *MCPAddTool) Parameters() map[string]any {
 			"args":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"url":       map[string]any{"type": "string"},
 			"env":       map[string]any{"type": "object"},
+			expectedRevisionParam: map[string]any{
+				"type":        "string",
+				"description": "The server name's revision from list_mcp_servers: \"absent\" for a new server.",
+			},
 		},
-		"required": []string{"name"},
+		"required": []string{"name", expectedRevisionParam},
 	}
 }
 
@@ -99,26 +104,48 @@ type mcpAddToolExecute struct {
 	command             string
 	urlStr              string
 	envRefs             map[string]string
+	expectedRevision    string
 	entry               config.MCPServerConfig
 	flippedGlobalEnable bool
 	gatedGlobalDisabled bool
 }
 
-func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	mat := &mcpAddToolExecute{t: t, ctx: ctx, args: args}
 
 	if r0, stop := mat.validateInput(); stop {
 		return r0
 	}
-	// Coerce optional args/env into typed values.
-	if r0, stop := mat.prepareEntry(); stop {
-		return r0
+	expected, missing := expectedRevisionArg(args, "list_mcp_servers")
+	if missing != nil {
+		return missing
 	}
+	mat.expectedRevision = expected
 
-	if r0, stop := mat.persistConfig(); stop {
-		return r0
+	// FR-085: the duplicate check, the credential writes and the config write
+	// all run under the gateway config write lock, after the revision check —
+	// a refused or colliding add never writes a credential.
+	var stopResult *tools.ToolResult
+	writeErr := t.deps.withSharedResourceWrite(sharedMCPServer, mat.name, mat.expectedRevision, func() error {
+		if r0, stop := mat.prepareEntry(); stop {
+			stopResult = r0
+			return nil
+		}
+		if r0, stop := mat.persistConfig(); stop {
+			stopResult = r0
+		}
+		return nil
+	})
+	if r, ok := revisionConflictResult(writeErr, "list_mcp_servers"); ok {
+		return r
 	}
-
+	if writeErr != nil {
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", writeErr.Error(), ""))
+	}
+	if stopResult != nil {
+		return stopResult
+	}
 	return mat.reconcileAndRespond()
 }
 
@@ -281,28 +308,47 @@ func (mat *mcpAddToolExecute) persistConfig() (*tools.ToolResult, bool) {
 		}
 		return nil
 	}); err != nil {
+		// Any env credentials written in Phase 1 belong to a request that is
+		// being rejected (a name-collision race or a save failure): remove
+		// them so the failure stores nothing and never hijacks the
+		// credentials of a same-named server.
+		if rollbackFailed := mat.rollbackEnvCredentials(); len(rollbackFailed) > 0 {
+			return changeErrorWithOutcome(map[string]any{
+				"success": false,
+				"error": map[string]any{
+					"code":    "SAVE_FAILED",
+					"message": "the server was not saved: " + err.Error(),
+				},
+				"name": mat.name,
+			}, partlySaved("the server entry was not saved, but stored env credentials could not be removed: "+
+				strings.Join(rollbackFailed, ", "), "", []string{"mcp server entry"})), true
+		}
 		if strings.Contains(err.Error(), "already exists") {
-			// Race-guard fired: a same-named server was created concurrently,
-			// between the pre-check above and this WithConfig call. Any env
-			// credentials written in Phase 1 above were written under THIS
-			// call's name/key combination and must be rolled back now — they
-			// belong to a request that is being rejected, and leaving them in
-			// place would hijack the credentials of the server that won the
-			// race, exactly like the bug this whole fix closes. Best-effort:
-			// a delete failure here is logged, not fatal — the request still
-			// fails with ALREADY_EXISTS either way.
-			for envKey, credKey := range mat.envRefs {
-				if delErr := mat.t.deps.CredStore.Delete(credKey); delErr != nil {
-					slog.Warn("add_mcp_server: name-collision race — failed to roll back env credential",
-						"server", mat.name, "env_key", envKey, "cred_key", credKey, "error", delErr)
-				}
-			}
 			return tools.ErrorResult(errorJSON("ALREADY_EXISTS", err.Error(),
 				"Use list_mcp_servers to see existing servers, or remove it first with remove_mcp_server")), true
 		}
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), "")), true
 	}
 	return nil, false
+}
+
+// rollbackEnvCredentials deletes the env credentials this call stored and
+// returns the credential keys it could not delete (each also logged).
+func (mat *mcpAddToolExecute) rollbackEnvCredentials() []string {
+	var failed []string
+	for envKey, credKey := range mat.envRefs {
+		if mat.t.deps.CredStore == nil {
+			failed = append(failed, credKey)
+			continue
+		}
+		if delErr := mat.t.deps.CredStore.Delete(credKey); delErr != nil {
+			slog.Warn("add_mcp_server: failed to roll back env credential",
+				"server", mat.name, "env_key", envKey, "cred_key", credKey, "error", delErr)
+			failed = append(failed, credKey)
+		}
+	}
+	sort.Strings(failed)
+	return failed
 }
 
 // reconcileAndRespond reconciles the live server state and returns an honest connection result.
@@ -323,11 +369,16 @@ func (mat *mcpAddToolExecute) reconcileAndRespond() *tools.ToolResult {
 	}
 
 	result := map[string]any{
-		"name":      mat.name,
-		"transport": mat.transport,
-		"enabled":   true,
+		"name":           mat.name,
+		"transport":      mat.transport,
+		"enabled":        true,
+		"revision":       mcpServerRevision(mat.t.deps.GetCfg(), mat.name),
+		"changed_fields": mat.changedFields(),
 	}
+	const scope = "live connection: the server's status after reconciliation and the number of tools it registered"
+	notTested := []string{"calling the server's tools", "tool policies (none are assigned yet)"}
 	var note string
+	var verdict changeOutcome
 	if mat.t.deps.MCPStatus != nil {
 		status, toolCount, errMsg := mat.t.deps.MCPStatus(mat.name)
 		result["status"] = status
@@ -336,43 +387,53 @@ func (mat *mcpAddToolExecute) reconcileAndRespond() *tools.ToolResult {
 			result["tool_count"] = toolCount
 			note = fmt.Sprintf(
 				"Server connected; %d tool(s) registered and awaiting tool-policy assignment.", toolCount)
+			verdict = working(scope, notTested...)
 		case "error":
 			// The config write DID succeed — only the live connection failed.
 			note = fmt.Sprintf(
 				"Server saved but connection failed: %s. Fix the config and try again.", errMsg)
+			verdict = savedNotWorking("connection failed: "+errMsg, scope, notTested...)
 		default: // "disconnected"
 			note = "Server saved but not currently connected " +
 				"(server disabled, or live reconciliation is unavailable)."
+			verdict = savedNotWorking("the server is not connected", scope, notTested...)
 		}
 	} else if reconcileAttempted && reconcileErr != nil {
 		// Reconciliation actually ran and failed, but there is no MCPStatus
-		// readback to report a live status from. Say so explicitly rather
-		// than falling back to the "connects on next reload" note below,
-		// which would silently swallow a real reconcile error.
+		// readback to report a live status from.
 		note = fmt.Sprintf(
 			"Server saved but live reconciliation failed: %s. Connection status is unknown.", reconcileErr)
+		verdict = savedNotWorking("live reconciliation failed: "+reconcileErr.Error(), "", "the live connection")
 	} else {
-		// Either live reconciliation isn't wired at all (tests, or a
-		// partially wired gateway), or it ran and succeeded but there is no
-		// MCPStatus readback available. Reload now actually connects MCP
-		// servers (see AgentLoop.ReconcileMCP), so this note remains
-		// accurate even without a live status readback.
+		// Live status readback is not wired (tests, or a partially wired
+		// gateway): the connection was not checked.
 		note = "Server added to config. It connects on the next agent-loop reload."
+		verdict = savedNotWorking("not checked: live connection status is unavailable", "", "the live connection")
 	}
 
-	// Surface the global-kill-switch outcome honestly: an operator reading
-	// only the note above would otherwise have no way to tell a genuine
-	// connect failure apart from "saved, but MCP is globally disabled and
-	// nothing was even attempted."
+	// Surface the global-kill-switch outcome honestly.
 	switch {
 	case mat.flippedGlobalEnable:
 		note += " Global MCP enable was off — turned on."
+		result["changed_fields"] = append(mat.changedFields(), "tools.mcp.enabled")
 	case mat.gatedGlobalDisabled:
 		note += " MCP is globally disabled — an operator must enable tools.mcp.enabled for this server to connect."
+		if verdict.Outcome == outcomeWorking {
+			verdict = savedNotWorking("MCP is globally disabled", scope, notTested...)
+		}
 	}
 	result["note"] = note
 
-	return tools.NewToolResult(successJSON(result))
+	return changeSuccess(result, verdict)
+}
+
+// changedFields lists the durable parts add_mcp_server wrote.
+func (mat *mcpAddToolExecute) changedFields() []string {
+	fields := []string{"mcp_server_entry"}
+	if len(mat.envRefs) > 0 {
+		fields = append(fields, "env_credentials")
+	}
+	return fields
 }
 
 // ---- system.mcp.remove ----
@@ -383,8 +444,9 @@ func NewMCPRemoveTool(d *Deps) *MCPRemoveTool   { return &MCPRemoveTool{deps: d}
 func (t *MCPRemoveTool) Name() string           { return "remove_mcp_server" }
 func (t *MCPRemoveTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *MCPRemoveTool) Description() string {
-	return "Remove an MCP server from the configuration (tools.mcp.servers) and persist the change.\n" +
-		"Parameters: name (required), confirm (bool, must be true)."
+	return "Remove an MCP server from the configuration (tools.mcp.servers) and persist the change. " +
+		"expected_revision is the server's revision from list_mcp_servers; the removal is refused if the server changed since.\n" +
+		"Parameters: name (required), confirm (bool, must be true), expected_revision (required)."
 }
 
 func (t *MCPRemoveTool) Parameters() map[string]any {
@@ -393,12 +455,17 @@ func (t *MCPRemoveTool) Parameters() map[string]any {
 		"properties": map[string]any{
 			"name":    map[string]any{"type": "string"},
 			"confirm": map[string]any{"type": "boolean"},
+			expectedRevisionParam: map[string]any{
+				"type":        "string",
+				"description": "The server's revision from list_mcp_servers.",
+			},
 		},
-		"required": []string{"name", "confirm"},
+		"required": []string{"name", "confirm", expectedRevisionParam},
 	}
 }
 
-func (t *MCPRemoveTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *MCPRemoveTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	name, _ := args["name"].(string)
 	confirm, _ := args["confirm"].(bool)
 	if name == "" {
@@ -411,6 +478,10 @@ func (t *MCPRemoveTool) Execute(ctx context.Context, args map[string]any) *tools
 		return tools.ErrorResult(errorJSON("CONFIRMATION_REQUIRED",
 			"confirm must be true to remove an MCP server", ""))
 	}
+	expected, missing := expectedRevisionArg(args, "list_mcp_servers")
+	if missing != nil {
+		return missing
+	}
 
 	// removedEnvRefs captures the outgoing entry's EnvRefs (credential-store
 	// keys, mcp_<name>_<envKey>) so they can be cleaned up AFTER the config
@@ -418,18 +489,23 @@ func (t *MCPRemoveTool) Execute(ctx context.Context, args map[string]any) *tools
 	// write is confirmed would risk destroying secrets for a removal that
 	// then fails to persist.
 	var removedEnvRefs map[string]string
-	if err := t.deps.WithConfig(func(cfg *config.Config) error {
-		if cfg.Tools.MCP.Servers == nil {
-			return fmt.Errorf("NOT_FOUND")
-		}
-		existing, exists := cfg.Tools.MCP.Servers[name]
-		if !exists {
-			return fmt.Errorf("NOT_FOUND")
-		}
-		removedEnvRefs = existing.EnvRefs
-		delete(cfg.Tools.MCP.Servers, name)
-		return nil
+	if err := t.deps.withSharedResourceWrite(sharedMCPServer, name, expected, func() error {
+		return t.deps.WithConfig(func(cfg *config.Config) error {
+			if cfg.Tools.MCP.Servers == nil {
+				return fmt.Errorf("NOT_FOUND")
+			}
+			existing, exists := cfg.Tools.MCP.Servers[name]
+			if !exists {
+				return fmt.Errorf("NOT_FOUND")
+			}
+			removedEnvRefs = existing.EnvRefs
+			delete(cfg.Tools.MCP.Servers, name)
+			return nil
+		})
 	}); err != nil {
+		if r, ok := revisionConflictResult(err, "list_mcp_servers"); ok {
+			return r
+		}
 		if strings.Contains(err.Error(), "NOT_FOUND") {
 			return tools.ErrorResult(errorJSON("MCP_SERVER_NOT_FOUND",
 				fmt.Sprintf("No MCP server named %q", name),
@@ -464,7 +540,9 @@ func (t *MCPRemoveTool) Execute(ctx context.Context, args map[string]any) *tools
 	// its tools evicted from the per-agent and central registries) instead of
 	// only being dropped from config.json. Nil in tests or when the gateway
 	// hasn't wired live MCP reconciliation.
+	const scope = "live disconnect: reconciliation after the config removal"
 	note := "Server removed from config. Its tools are unregistered on the next agent-loop reload."
+	verdict := savedNotWorking("not checked: live reconciliation is unavailable", "", "the live disconnect")
 	if t.deps.ReconcileMCP != nil {
 		rctx, cancel := context.WithTimeout(ctx, mcpReconcileTimeout)
 		reconcileErr := t.deps.ReconcileMCP(rctx)
@@ -476,21 +554,27 @@ func (t *MCPRemoveTool) Execute(ctx context.Context, args map[string]any) *tools
 			// not actually observe.
 			slog.Warn("remove_mcp_server: live MCP reconciliation failed", "server", name, "error", reconcileErr)
 			note = fmt.Sprintf("Removed from config; live disconnect may not have completed: %s", reconcileErr)
+			verdict = savedNotWorking("live disconnect not confirmed: "+reconcileErr.Error(), scope)
 		} else {
 			note = "Server disconnected and removed."
+			verdict = working(scope)
 		}
 	}
 
 	result := map[string]any{
-		"name":    name,
-		"removed": true,
-		"note":    note,
+		"name":           name,
+		"removed":        true,
+		"note":           note,
+		"revision":       revisionAbsent,
+		"changed_fields": []string{"mcp_server_entry"},
 	}
 	if credCleanupFailed {
 		result["cred_cleanup_warning"] = "the server was removed but one or more of its stored env " +
 			"credentials could not be deleted and may remain orphaned in the credential store"
+		verdict = partlySaved("the server was removed but some of its stored env credentials could not be deleted",
+			verdict.CheckScope, []string{"env credential deletion"}, verdict.NotTested...)
 	}
-	return tools.NewToolResult(successJSON(result))
+	return changeSuccess(result, verdict)
 }
 
 // ---- system.mcp.list ----
@@ -525,25 +609,23 @@ func (t *MCPListTool) Execute(_ context.Context, _ map[string]any) *tools.ToolRe
 		// Omitted (empty) when deps.MCPStatus is not wired (tests, or a
 		// gateway that hasn't wired live MCP status).
 		Status string `json:"status,omitempty"`
+		// Revision is the FR-088 token remove_mcp_server's expected_revision
+		// must carry (secret-free: names, transport, command/args or URL,
+		// enabled state and credential reference names only).
+		Revision string `json:"revision"`
 	}
 	servers := make([]serverInfo, 0, len(cfg.Tools.MCP.Servers))
 	for name, srv := range cfg.Tools.MCP.Servers {
-		transport := srv.Type
-		if transport == "" {
-			// Default inference matches the MCP manager: stdio if a command is set,
-			// sse if a url is set.
-			if srv.Command != "" {
-				transport = "stdio"
-			} else if srv.URL != "" {
-				transport = "sse"
-			}
-		}
+		// Default inference matches the MCP manager: stdio if a command is
+		// set, sse if a url is set.
+		transport := mcpEffectiveTransport(srv)
 		info := serverInfo{
 			Name:      name,
 			Transport: transport,
 			Enabled:   srv.Enabled,
 			Command:   srv.Command,
 			URL:       srv.URL,
+			Revision:  mcpServerRevision(cfg, name),
 		}
 		if t.deps.MCPStatus != nil {
 			status, _, _ := t.deps.MCPStatus(name)

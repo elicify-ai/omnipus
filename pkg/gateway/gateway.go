@@ -1345,8 +1345,12 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		SaveConfigLocked: func(c *config.Config) error {
 			return config.SaveConfig(rc.configPath, c)
 		},
-		CredStore:  rc.credStore,
-		ReloadFunc: rc.reloadTrigger,
+		// omnipus-system-agent FR-085: tool writes to providers, MCP servers
+		// and channel instances take the Settings config write lock first
+		// (config lock -> agent-loop lock, the Settings order).
+		LockConfigWrites: func() func() { return lockConfigWrites(rc.runningServices) },
+		CredStore:        rc.credStore,
+		ReloadFunc:       rc.reloadTrigger,
 		// EnsureWorkspaceMains (final-gate H2): create_agent's team join gives the
 		// new member its main chat through the workspace-save path.
 		EnsureWorkspaceMains: rc.runningServices.ensureWorkspaceMains,
@@ -1449,6 +1453,13 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		AgentActiveRevision: func(id string) string {
 			return sysagentAgentActiveRevision(rc.agentLoop, rc.homePath, id)
 		},
+	}
+	// FR-031: configure_provider's model-listing check calls an operator- or
+	// agent-supplied endpoint; it goes through the same SSRF guard as the
+	// gateway's own provider listings. Assigned only when non-nil so a
+	// disabled guard is never a typed-nil interface.
+	if chk := agent.GetSSRFChecker(rc.agentLoop); chk != nil {
+		sysAgentDeps.URLChecker = chk
 	}
 	rc.agentLoop.WireSysagentDeps(sysAgentDeps)
 
