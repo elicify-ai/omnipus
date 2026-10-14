@@ -1,117 +1,43 @@
-// ToolApprovalModal — FR-011, FR-082, FR-052, FR-073
+// ToolApprovalPanel — the inline tool-approval card (omnipus-system-agent K7;
+// L1 amendment §1.2 R6, §1.5; #1263; FR-011, FR-082, FR-052, FR-073; ADR-092 D4).
 //
-// Renders a modal for pending tool-policy approval requests. Driven by the
-// useToolApprovalStore queue. Shows one approval at a time; subsequent
-// approvals queue behind the visible one.
+// Replaces the app-wide ToolApprovalModal. An approval renders INLINE, docked
+// above the composer, in the chat it belongs to: the root of the acting
+// session's chain (`approvalChatId` = root_session_id, else the acting
+// session). A helper's approval therefore appears in its parent chat — an
+// Omnipus helper's in the Omnipus chat, whatever workspace is active.
+// Elsewhere the "waiting in another chat" banner (CrossWorkspaceApprovalBanner)
+// points to that chat.
 //
-// Countdown uses expires_in_ms (relative on receipt) — stored as an absolute
-// local timestamp (expiresAt = Date.now() + expires_in_ms) so the countdown
-// is independent of gateway clock skew.
+// Safety floor (amendment R6, binding):
+//   - The card never takes focus when it appears, and no action is a default
+//     Enter target: typing in the composer never resolves it.
+//   - Escape does not resolve it (Stop already cancels pending approvals).
+//   - It resolves only through POST /api/v1/tool-approvals/{approval_id} on an
+//     explicit click: no auto-submit, no grace timer; a timeout is the
+//     server's deny (shown as expired here).
+//   - The composer stays unlocked.
 //
-// Buttons — wire action values renamed by ADR-092 D4:
-//   Approve Once → POST /api/v1/tool-approvals/{id} {action:"allow_once"}
-//   Always Allow → POST /api/v1/tool-approvals/{id} {action:"allow", scope}
-//   Deny         → POST /api/v1/tool-approvals/{id} {action:"deny"}
-//   Cancel       → POST /api/v1/tool-approvals/{id} {action:"cancel"}
-// "Approve" was relabelled "Approve Once" (review finding, post-D4) — as a
-// backend lane makes allow_once record NO grant, "Approve" alone read as
-// ambiguous next to "Always Allow"; the label must say one-time on its face.
-// The action mapping itself (Approve Once → allow_once, Always Allow →
-// allow) was already correct and is unchanged.
+// Actions — wire values from ADR-092 D4:
+//   Approve Once → {action:"allow_once"}; Always Allow → {action:"allow", scope}
+//   (bash: exact or the server-suggested prefix); Deny → {action:"deny"};
+//   Cancel → {action:"cancel"}.
 //
-// ADR-092 D4 status: the wire-value rename (L0: approve→allow_once,
-// always→allow) landed first so the component compiled against the current
-// ToolApprovalActionRequest enum. This pass adds the two pieces that were
-// still open:
-//   - Grant scope (FR-024): for a shell (`bash`) command only, a RadioGroup
-//     ("Allow this exact command" / "Allow commands starting with <server-
-//     suggested prefix>") appears above the buttons whenever Always Allow is
-//     offered; the selected scope is sent on `allow` only (omitted for every
-//     other action/tool, matching the contract's default). The "prefix"
-//     option only ever appears once the server has actually supplied a
-//     suggested prefix (CommandSegmentInfo.suggested_prefix) — never guessed
-//     client-side.
-//   - Per-segment display (FR-025/FR-027): when the frame carried
-//     ToolApprovalRequiredFrame.segments (a chained command the D3 matcher
-//     could not fully resolve), each segment's command text is shown
-//     separately with its resolved binary highlighted, in the generic
-//     (non-`replace`-mode) tool-info area.
-// The four-button layout (including the rendered Cancel button) is
-// UNCHANGED by this pass — D4's UI-presentation note describing a
-// [Deny][Allow once][Allow]-only layout with no rendered Cancel button is
-// not implemented here; `cancel` already behaves as a distinct wire value
-// from `deny` per FR-023, which is the part of that note this modal's own
-// resolution test (ToolApprovalModal.resolution.test.tsx) depends on.
+// Error handling: 401 → forced logout; 403 → admin-only toast; 404/410 → the
+// approval is no longer pending (markResolved; allow/allow_once also warns
+// that it was not applied).
 //
-// Accessibility (C2 — this is a SECURITY-CRITICAL control):
-//   - Built on the shadcn/Radix Dialog primitive, which provides a focus trap,
-//     focus restoration on close, role="dialog", aria-modal="true", and
-//     labelled/described associations (DialogTitle / DialogDescription).
-//   - Default keyboard focus lands on the DENY button — the SAFE default. An
-//     inadvertent Enter keypress on open therefore DENIES the tool call; it
-//     never auto-approves.
-//   - Escape and overlay/outside interaction map to the safe default: they
-//     submit a DENY (when the approval can still be acted on), never an
-//     approval and never a silent dismissal that would leave the agent
-//     hanging. The only exception is the expired state, where the decision is
-//     already made server-side and Escape merely dismisses the notice.
-//   - Every button carries visible text, so each has an accessible name.
-//
-// Error handling:
-//   401 → re-auth toast (user must log in again)
-//   403 → "you must be an admin to approve this tool" toast
-//   404 / 410 → the approval is no longer pending server-side (410 inside the
-//         registry's retention window, 404 after it) → markResolved: the
-//         card goes and cannot come back; allow_once/allow also gets a
-//         warning that it was not applied
-//
-// Dismissal: Cancel and Close/Escape/overlay remove the card from this tab
-// FIRST and unconditionally, then send their request — a failing request can
-// never leave a dialog the user cannot get rid of. Server-made resolutions
-// (another tab, timeout, Stop, agent deletion) arrive as tool_approval_resolved
-// frames and are applied by src/store/chat.ts → markResolved.
-//
-// Scope: only approvals whose workspace matches the active workspace (or that
-// have no workspace) are shown — see isApprovalInScope. Out-of-scope approvals
-// stay queued and appear when the user switches to their workspace.
-//
-// ADR-036 §3.4 note: this is now the ONLY tool-approval UI — the dedicated
-// exec-only flow (ExecApprovalBlock/ExecApprovalTool, WS
-// exec_approval_request/response/expired frames) was retired in favor of
-// this generic modal for every tool, `bash` included. Before deleting that
-// flow, its rendering was compared against this one:
-//   - PORTED: the readable "binary highlighted, env-prefix separated"
-//     command preview + working-dir line ExecApprovalBlock showed for shell
-//     commands. Now lives in approvalPreviews/BashApprovalPreview.tsx,
-//     registered under the 'bash' key in approvalPreviews/registry.ts as an
-//     'additive' entry — rendered whenever toolName is "bash" and
-//     args.command is a string, in addition to (not instead of) the generic
-//     Arguments JSON dump. See the per-tool preview registry note below.
-//   - PORTED: ExecApprovalBlock's 3-way decision (Allow / Deny / "Always
-//     Allow") is now fully available here too — the Allow button posts
-//     {action:"allow"}, which the gateway resolves by approving the call AND
-//     recording a session-scoped grant via ApprovalGrantStore.Record
-//     (pkg/gateway/rest_tool_registry.go, commit 35447760). The wire contract
-//     (ToolApprovalActionRequest.action) carries "allow" for every tool, not
-//     just bash — closing the gap that used to make grant-inheritance
-//     (agent-delegation-spec.md FR-D8) reachable only via the retired
-//     exec-only flow.
+// Reconnect stub (until bundle B3 makes the snapshot complete): an entry with
+// empty toolCallId/turnId came from a snapshot without the request details —
+// it offers Deny only. See src/store/toolApproval.ts.
 
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { ArrowSquareOut, CheckCircle, XCircle, ProhibitInset, Shield, Lock, WarningCircle } from '@phosphor-icons/react'
 import { useRouter } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog'
-import { useToolApprovalStore, isApprovalInScope } from '@/store/toolApproval'
-import { useWorkspacesStore } from '@/store/workspacesStore'
+import { approvalChatId, useToolApprovalStore, type PendingToolApproval } from '@/store/toolApproval'
 import { submitToolApproval, isApiError, fetchAgents } from '@/lib/api'
 import type { Agent } from '@/lib/api'
 import type { ToolApprovalActionRequest } from '@/lib/api/generated/openapi-types'
@@ -230,6 +156,10 @@ interface ToolApprovalCardProps {
    * own doc comment (src/store/toolApproval.ts).
    */
   segments?: CommandSegmentInfo[]
+  /** K7: the acting agent's display name (a helper names itself). */
+  actingAgentName?: string
+  /** K7 / §6.18: server-derived turn origin, shown for a non-web origin. */
+  originLabel?: string
 }
 
 function ToolApprovalCard({
@@ -243,6 +173,8 @@ function ToolApprovalCard({
   turnId,
   sessionId,
   segments,
+  actingAgentName,
+  originLabel,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
   const markResolved = useToolApprovalStore((s) => s.markResolved)
@@ -251,9 +183,6 @@ function ToolApprovalCard({
   const viewedSessionId = useSessionStore((s) => s.activeSessionId)
   const [submitting, setSubmitting] = useState(false)
   const { remainingMs, progressPct } = useCountdown(expiresAt)
-  // Default-focus target: the Deny button (the safe default). Focusing Deny
-  // means a stray Enter on open denies rather than approves.
-  const denyButtonRef = useRef<HTMLButtonElement>(null)
 
   const hasExpired = remainingMs <= 0
 
@@ -402,23 +331,6 @@ function ToolApprovalCard({
     [approvalId, dequeue, markResolved, addToast, submitting, isShellCommand, scope],
   )
 
-  // Safe-default handler for Escape / overlay-click / X close. The Dialog
-  // primitive requests a close; we translate that into the SAFE decision:
-  //   - not expired  → dismiss the card locally AND submit a DENY (never an
-  //     approve, never a silent dismiss that leaves the agent hanging). The
-  //     local dismissal is unconditional: a close must always close, even
-  //     when the deny request fails.
-  //   - expired      → the decision is already made server-side; just dismiss
-  //     the notice from the local queue.
-  const handleDismissRequest = useCallback(() => {
-    if (submitting) return
-    if (hasExpired) {
-      dequeue(approvalId)
-    } else {
-      void handleAction('deny', { dismissFirst: true })
-    }
-  }, [submitting, hasExpired, dequeue, approvalId, handleAction])
-
   const argsJson = JSON.stringify(args, null, 2)
   const titleId = `tool-approval-title-${approvalId}`
   const descId = `tool-approval-desc-${approvalId}`
@@ -455,7 +367,9 @@ function ToolApprovalCard({
   const cachedAgentName = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name
   const [fetchedAgentName, setFetchedAgentName] = useState<string | undefined>(undefined)
   useEffect(() => {
-    if (cachedAgentName) return
+    // K7: a server-supplied acting_agent_name already names the actor — no
+    // roster read is needed for it.
+    if (cachedAgentName || actingAgentName) return
     let cancelled = false
     queryClient
       .ensureQueryData({ queryKey: ['agents'], queryFn: fetchAgents })
@@ -470,8 +384,8 @@ function ToolApprovalCard({
     return () => {
       cancelled = true
     }
-  }, [agentId, cachedAgentName])
-  const resolvedAgentName = cachedAgentName || fetchedAgentName || agentId
+  }, [agentId, cachedAgentName, actingAgentName])
+  const resolvedAgentName = actingAgentName || cachedAgentName || fetchedAgentName || agentId
   const previewEntry = TOOL_APPROVAL_PREVIEWS[toolName]
   const replaceEntry = previewEntry?.mode === 'replace' ? previewEntry : undefined
   const previewCtx: ToolApprovalPreviewContext = {
@@ -490,32 +404,16 @@ function ToolApprovalCard({
   const showCancelButton = replaceEntry ? (replaceEntry.showCancel ?? true) : true
 
   return (
-    <Dialog
-      open
-      onOpenChange={(next) => {
-        // The dialog only ever transitions open→closed here (Escape, overlay
-        // click, or the X button). Route every such close through the safe
-        // default rather than letting Radix dismiss silently.
-        if (!next) handleDismissRequest()
-      }}
+    // Inline, not a dialog (amendment R6): no focus trap, no focus on
+    // appearance, no Escape resolution — only an explicit click decides.
+    <section
+      data-testid="tool-approval-panel"
+      aria-labelledby={titleId}
+      aria-describedby={descId}
+      className="my-[var(--space-2)] overflow-hidden rounded-[var(--radius-medium)] border border-[var(--color-warning)]/40 bg-[var(--color-surface-1)]"
     >
-      <DialogContent
-        className="max-w-lg border-[var(--color-warning)]/40 p-0 overflow-hidden gap-0"
-        aria-labelledby={titleId}
-        aria-describedby={descId}
-        // Land focus on Deny (safe default) instead of Radix's first-focusable
-        // heuristic (which would be the X close button).
-        onOpenAutoFocus={(e) => {
-          if (denyButtonRef.current) {
-            e.preventDefault()
-            denyButtonRef.current.focus()
-          }
-        }}
-        // Escape and outside-pointer both resolve through onOpenChange above;
-        // no special-casing needed here beyond letting the default close fire.
-      >
         {/* Header */}
-        <DialogHeader className="flex flex-row items-center gap-[var(--space-2-5)] space-y-0 px-[var(--space-3)] py-[var(--space-3)] border-b border-[var(--color-border)] text-left">
+        <div className="flex flex-row items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-3)] border-b border-[var(--color-border)] text-left">
           <Shield
             size={20}
             weight="bold"
@@ -523,13 +421,13 @@ function ToolApprovalCard({
             aria-hidden="true"
           />
           <div className="flex-1 min-w-0">
-            <DialogTitle
+            <h3
               id={titleId}
               className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] font-headline"
             >
               {isReconnectStub ? 'Approval Details Unavailable' : dialogTitleText}
-            </DialogTitle>
-            <DialogDescription id={descId} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate">
+            </h3>
+            <p id={descId} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate">
               {isReconnectStub ? (
                 "This page can't show what's being asked — see below."
               ) : replaceEntry ? (
@@ -540,14 +438,19 @@ function ToolApprovalCard({
                   is requesting permission to run a tool.
                 </>
               )}
-            </DialogDescription>
+            </p>
+            {originLabel && (
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid="tool-approval-origin">
+                {originLabel}
+              </p>
+            )}
           </div>
           {queueLength > 1 && (
             <span className="shrink-0 text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-0-5)] rounded-full">
               +{queueLength - 1} more
             </span>
           )}
-        </DialogHeader>
+        </div>
 
         {/* FR-034: a helper or run asked, not the chat in front of the user.
             Names where it is acting and opens that run's own session. */}
@@ -756,7 +659,6 @@ function ToolApprovalCard({
               // — approving a request this page cannot show would be a
               // blind decision.
               <Button
-                ref={denyButtonRef}
                 size="sm"
                 variant="outline"
                 onClick={() => handleAction('deny')}
@@ -779,8 +681,7 @@ function ToolApprovalCard({
                   {primaryLabel}
                 </Button>
                 <Button
-                  ref={denyButtonRef}
-                  size="sm"
+                    size="sm"
                   variant="outline"
                   onClick={() => handleAction('deny')}
                   disabled={submitting}
@@ -831,22 +732,23 @@ function ToolApprovalCard({
             </Button>
           </div>
         )}
-      </DialogContent>
-    </Dialog>
+    </section>
   )
 }
 
-// ToolApprovalModal renders the front-of-queue approval that belongs to the
-// active workspace, if any. Out-of-scope approvals stay queued (not dropped)
-// and surface when the user switches to their workspace.
-export function ToolApprovalModal() {
+/**
+ * The approval for the chat that is open: the front approval whose root chat
+ * (`approvalChatId`) is the active session. Approvals for other chats stay
+ * queued and are announced by the "waiting in another chat" banner.
+ */
+export function ToolApprovalPanel() {
   const queue = useToolApprovalStore((s) => s.queue)
-  const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
-  const visible = queue.filter((a) => isApprovalInScope(a, activeWorkspaceId))
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const visible: PendingToolApproval[] = activeSessionId
+    ? queue.filter((a) => approvalChatId(a) === activeSessionId)
+    : []
   const first = visible[0]
-
   if (!first) return null
-
   return (
     <ToolApprovalCard
       key={first.approvalId}
@@ -860,6 +762,17 @@ export function ToolApprovalModal() {
       turnId={first.turnId}
       sessionId={first.sessionId}
       segments={first.segments}
+      actingAgentName={first.actingAgentName}
+      originLabel={first.originLabel}
     />
+  )
+}
+
+/** Docked mount above the composer (next to the question and secret cards). */
+export function ToolApprovalThreadTail() {
+  return (
+    <div className="mx-auto w-full max-w-3xl px-[var(--space-3)]" data-testid="tool-approval-thread-tail">
+      <ToolApprovalPanel />
+    </div>
   )
 }

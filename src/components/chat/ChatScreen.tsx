@@ -39,6 +39,7 @@ import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
 import { SecretRequestThreadTail } from './SecretRequestCard'
+import { ToolApprovalThreadTail } from '@/components/agents/ToolApprovalPanel'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { ModelPicker } from './composer/ModelPicker'
@@ -3272,7 +3273,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           <RestartInterruptedNotice />
 
           {/* Rate-limit indicator — shown above composer. Tool-approval requests
-              (including `bash`) are handled by the global ToolApprovalModal
+              (including `bash`) are handled by the inline ToolApprovalPanel
               (ADR-036 §3.4 retired the dedicated exec-only approval flow). */}
           {rateLimitEvent && (
             <div className="px-[var(--space-3)] space-y-[var(--space-2)] pb-[var(--space-2)]">
@@ -3343,6 +3344,11 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           {/* Secure secret card (omnipus-system-agent K1, FR-061/FR-074):
               pending cards rooted in this chat, plus the latest result. */}
           <SecretRequestThreadTail />
+
+          {/* Inline tool approvals rooted in this chat (#1263, L1 amendment
+              §1.2 R6): never focused on appearance, never resolved by the
+              composer's Enter or by Escape. */}
+          <ToolApprovalThreadTail />
 
           {/* Composer — centered, ChatGPT-style floating layout. The context
               row and ActivityBar pills render bare on the shell (above /

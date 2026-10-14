@@ -5,7 +5,6 @@ import { AgentProfile } from '@/components/agents/AgentProfile'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
 import { Button } from '@/components/ui/button'
-import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { CrossWorkspaceApprovalBanner } from '@/components/layout/CrossWorkspaceApprovalBanner'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
 import { SearchModal } from '@/components/search/SearchModal'
@@ -270,11 +269,11 @@ export function AppShell() {
                 </div>
               )}
 
-              {/* Cross-workspace tool-approval notice — founder decision
-              2026-09-14. Ambient, non-blocking: an approval waiting in a
-              workspace other than the one open right now is otherwise
-              invisible (ToolApprovalModal below only shows in-scope
-              approvals). See CrossWorkspaceApprovalBanner.tsx. */}
+              {/* "Waiting in another chat" notice (L1 amendment §1.2 R6).
+              Ambient, non-blocking: an approval whose root chat is not the
+              one open right now is otherwise invisible, because the inline
+              card renders only in its root chat. See
+              CrossWorkspaceApprovalBanner.tsx. */}
               <CrossWorkspaceApprovalBanner />
 
               {/* Screen content — relative so children can use absolute inset-0 for bounded scrolling */}
@@ -299,8 +298,8 @@ export function AppShell() {
       {/* Global toast notifications */}
       <ToastContainer />
 
-      {/* Tool approval modal — FR-011, FR-082 */}
-      <ToolApprovalModal />
+      {/* Tool approvals render inline in their root chat (ChatScreen's
+          ToolApprovalThreadTail, L1 amendment §1.2 R6) — no app-wide modal. */}
 
       {/* Notification center panel — #264 */}
       <NotificationPanel />

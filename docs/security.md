@@ -252,7 +252,9 @@ None of these ever shows a live approval card, even to an operator who happens t
 
 ### Approve a request
 
-When an approval card appears, read what it says, then choose:
+An approval card appears **inside the chat it belongs to**, above the message box — for work a helper does for a chat, in that chat (an Omnipus helper's approvals appear in the Omnipus chat, whatever workspace you are in). The card names the agent that asks and, when the work did not start in the web app, where it came from (for example "while answering Anna on tg-1"); **Open run** opens the helper's own session. The card never takes the cursor when it appears, and pressing **Enter** or **Escape** in the message box never answers it — only a click on one of its buttons does. Nothing is approved for you: if nobody answers, the request expires after ten minutes and the agent is told nobody answered. When a card is waiting in a chat you are not looking at, a notice at the top of the screen says, for example, **1 approval waiting in Jim's chat in Sales**; **Go there** opens that chat. After a reload the card comes back complete when the server sends the full request.
+
+Read what the card says, then choose:
 
 | Button | What it does |
 |---|---|
