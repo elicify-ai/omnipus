@@ -228,7 +228,6 @@ function armUnconfirmed(activeAgentId: string) {
         status: 'unconfirmed',
       },
       abandonedFirstSendIds: [],
-      pendingKickoff: null,
       isStreaming: false,
       sessionsById: {},
     })
@@ -352,7 +351,6 @@ describe('WorkspaceAgentList + New chat (FR-005, BDD-03.1, BDD-E02, N09)', () =>
           status: 'unconfirmed',
         },
         abandonedFirstSendIds: [],
-        pendingKickoff: null,
         isStreaming: false,
         sessionsById: {},
       })
@@ -403,7 +401,6 @@ describe('WorkspaceAgentList + New chat (FR-005, BDD-03.1, BDD-E02, N09)', () =>
       useChatStore.setState({
         pendingFirstSend: null,
         abandonedFirstSendIds: [],
-        pendingKickoff: null,
         isStreaming: false,
         sessionsById: {},
       })
