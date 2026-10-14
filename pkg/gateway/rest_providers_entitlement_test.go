@@ -185,12 +185,6 @@ func entitlementCatalogJSON() []byte {
 				"auth_methods": ["api_key"],
 				"models": []
 			},
-			{
-				"id": "codex-cli", "name": "Codex CLI", "company": "OpenAI",
-				"api": "", "protocol": "cli", "cli_kind": "codex",
-				"tier": "standard", "auth_methods": ["sign_in"],
-				"models": []
-			}
 		]
 	}`)
 }
@@ -303,11 +297,6 @@ func TestRestProviders_Entitlement_PerProtocol(t *testing.T) {
 				name: "ollama → GET /api/tags",
 				id:   "ollama", protocol: "ollama", apiBaseSfx: "/v1",
 				wantStatus: http.StatusOK, wantPath: "/api/tags", wantCalls: 1,
-			},
-			{
-				name: "codex-cli — protocol cli → 409, nothing dialled",
-				id:   "codex-cli", protocol: "cli",
-				wantStatus: http.StatusConflict, wantCalls: 0,
 			},
 			{
 				name: "my-proxy — a custom row → 409, nothing dialled",

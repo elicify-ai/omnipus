@@ -4,18 +4,18 @@
 
 // rest_sign_in.go implements the ADR-068 §8b (2026-08-23 amendment) sign-in
 // routes: POST /providers/{id}/sign-in (FR-008), GET .../sign-in/status
-// (FR-009), POST .../sign-in/poll (FR-044), POST
-// /providers/openai-chatgpt/sign-in/import (FR-047), and DELETE
-// .../sign-in (FR-048, sign out). Two sign-in shapes exist:
+// (FR-009), POST .../sign-in/poll (FR-044), and DELETE .../sign-in
+// (FR-048, sign out). One sign-in shape exists:
 //
-//   - cli_login (codex-cli, github-copilot): Omnipus never performs or
-//     stores the vendor login itself. It reads the vendor CLI's own saved
-//     login file read-only and never refreshes it (FR-007).
 //   - device_code (openai-chatgpt, and xai once configured): Omnipus
 //     requests and polls its own device-code session and stores the
 //     resulting tokens in its own encrypted credential store under
-//     "<vendor>_OAUTH" — never config.json, never the vendor's own
+//     "<vendor>_OAUTH" — never config.json, never a vendor's own
 //     credential file (FR-007/FR-046).
+//
+// The former vendor-CLI sign-in shape and the openai-chatgpt auth.json
+// import route were deleted outright with the CLI-backed model providers
+// (WU-24, founder 2026-10-14): only actual model providers sign in here.
 package gateway
 
 import (
@@ -236,14 +236,14 @@ func newDeviceAuthHandle() (string, error) {
 	return "das_" + base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-// signInMethodFor returns "cli_login" | "device_code" for providerID and
-// whether sign-in is supported at all. Prefers the ADR-067 catalog's
-// auth_methods when a document is loaded; falls back to a small built-in
-// set otherwise (the catalog's auth_methods wiring for these specific rows
-// is still landing on this branch — GET /providers already tolerates a
-// nil/undocumented catalog the same way, see its own comment). xai is
-// device_code only once auth.XAIOAuthConfig() actually resolves — with no
-// client id configured it is unsupported, never a forward-looking stub.
+// signInMethodFor returns the sign-in shape for providerID — always
+// "device_code", the one shape this build has — and whether sign-in is
+// supported at all. Prefers the ADR-067 catalog's auth_methods when a
+// document is loaded; falls back to a small built-in set otherwise (GET
+// /providers already tolerates a nil/undocumented catalog the same way, see
+// its own comment). xai is supported only once auth.XAIOAuthConfig()
+// actually resolves — with no client id configured it is unsupported, never
+// a forward-looking stub.
 func (a *restAPI) signInMethodFor(providerID string) (method string, ok bool) {
 	if a.providerCatalog != nil && a.providerCatalog.Document() != nil {
 		if p, known := a.providerCatalog.Provider(providerID); known {
@@ -260,12 +260,10 @@ func (a *restAPI) signInMethodFor(providerID string) (method string, ok bool) {
 			if !supportsSignIn || !providers_pkg.HasSignInMechanism(p) {
 				return "", false
 			}
-			return builtinSignInMethodShape(providerID), true
+			return "device_code", true
 		}
 	}
 	switch providerID {
-	case "codex-cli", "github-copilot":
-		return "cli_login", true
 	case "openai-chatgpt":
 		return "device_code", true
 	case "xai":
@@ -275,26 +273,6 @@ func (a *restAPI) signInMethodFor(providerID string) (method string, ok bool) {
 		return "", false
 	default:
 		return "", false
-	}
-}
-
-// builtinSignInMethodShape names the sign-in SHAPE (not whether it is
-// supported — the caller already established that) for a catalog-known id.
-func builtinSignInMethodShape(providerID string) string {
-	if providerID == "openai-chatgpt" || providerID == "xai" {
-		return "device_code"
-	}
-	return "cli_login"
-}
-
-// cliLoginCommand returns the vendor CLI login command + instructions for a
-// cli_login provider (FR-008).
-func cliLoginCommand(providerID string) (command, instructions string) {
-	switch providerID {
-	case "github-copilot":
-		return "copilot login", "Run `copilot login` in a terminal, then click Check sign-in."
-	default: // codex-cli and any future cli_login row
-		return "codex login", "Run `codex login` in a terminal, then click Check sign-in."
 	}
 }
 
@@ -461,28 +439,12 @@ func (a *restAPI) handleProviderSignInStart(w http.ResponseWriter, r *http.Reque
 		jsonErr(w, http.StatusBadRequest, "invalid provider id")
 		return
 	}
-	method, ok := a.signInMethodFor(providerID)
-	if !ok {
+	if _, ok := a.signInMethodFor(providerID); !ok {
 		jsonErr(w, http.StatusBadRequest, "provider does not support sign-in")
 		return
 	}
 
-	if method == "cli_login" {
-		command, instructions := cliLoginCommand(providerID)
-		resp := gen.SignInStartResponseCliLogin{
-			Command:      command,
-			Instructions: instructions,
-		}
-		var wire gen.SignInStartResponse
-		if err := wire.FromSignInStartResponseCliLogin(resp); err != nil {
-			jsonErr(w, http.StatusInternalServerError, "failed to encode response")
-			return
-		}
-		jsonOK(w, wire)
-		return
-	}
-
-	// device_code
+	// device_code — the only sign-in shape this build has.
 	oauthCfg, err := oauthConfigFor(providerID)
 	if err != nil {
 		jsonErr(w, http.StatusBadRequest, "provider does not support sign-in")
@@ -515,17 +477,14 @@ func (a *restAPI) handleProviderSignInStart(w http.ResponseWriter, r *http.Reque
 		intervalSeconds:    interval,
 	})
 
-	resp := gen.SignInStartResponseDeviceCode{
+	// The response IS the device-code shape since the vendor-CLI variant was
+	// deleted with the CLI-backed model providers (WU-24).
+	wire := gen.SignInStartResponse{
 		VerificationUrl: info.VerifyURL,
 		UserCode:        info.UserCode,
 		DeviceAuthId:    handle,
 		ExpiresAt:       expiresAt,
 		IntervalSeconds: interval,
-	}
-	var wire gen.SignInStartResponse
-	if err := wire.FromSignInStartResponseDeviceCode(resp); err != nil {
-		jsonErr(w, http.StatusInternalServerError, "failed to encode response")
-		return
 	}
 	jsonOK(w, wire)
 }
@@ -636,82 +595,6 @@ func (a *restAPI) handleProviderSignInPoll(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-// jwtUnverifiedExpiry decodes a JWT's payload segment (no signature
-// verification — display/expiry-estimation only, never a trust decision)
-// and returns its "exp" claim as a time.Time. ok is false when the token is
-// not a 3-part JWT or carries no numeric exp claim.
-func jwtUnverifiedExpiry(token string) (t time.Time, ok bool) {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return time.Time{}, false
-	}
-	payload := parts[1]
-	switch len(payload) % 4 {
-	case 2:
-		payload += "=="
-	case 3:
-		payload += "="
-	}
-	decoded, err := base64.StdEncoding.DecodeString(strings.NewReplacer("-", "+", "_", "/").Replace(payload))
-	if err != nil {
-		return time.Time{}, false
-	}
-	var claims struct {
-		Exp float64 `json:"exp"`
-	}
-	if err := json.Unmarshal(decoded, &claims); err != nil || claims.Exp == 0 {
-		return time.Time{}, false
-	}
-	return time.Unix(int64(claims.Exp), 0), true
-}
-
-// cliLoginStatus computes GET .../sign-in/status for a cli_login provider
-// (FR-009). Only codex-cli's ~/.codex/auth.json is a real, read-only source
-// here. github-copilot's status route is handleCopilotSignInStatus
-// (rest_signin_copilot.go) and its provider row uses cliLoginRowStatus; any
-// other id falls back to not_signed_in like "no saved login".
-func cliLoginStatus(providerID string) gen.SignInStatus {
-	if providerID != "codex-cli" {
-		return gen.SignInStatus{State: gen.SignInStatusStateNotSignedIn}
-	}
-	token, accountID, mtimeExpiry, err := providers_pkg.ReadCodexCliCredentials()
-	if err != nil {
-		return gen.SignInStatus{State: gen.SignInStatusStateNotSignedIn}
-	}
-	state := gen.SignInStatusStateSignedIn
-	var expiresAt *time.Time
-	if exp, ok := jwtUnverifiedExpiry(token); ok {
-		e := exp
-		expiresAt = &e
-		if time.Now().After(exp) {
-			state = gen.SignInStatusStateExpired
-		}
-	} else {
-		e := mtimeExpiry
-		expiresAt = &e
-		if time.Now().After(mtimeExpiry) {
-			state = gen.SignInStatusStateExpired
-		}
-	}
-	resp := gen.SignInStatus{State: state, ExpiresAt: expiresAt}
-	if accountID != "" {
-		resp.AccountLabel = &accountID
-	}
-	return resp
-}
-
-// cliLoginRowStatus is what a cli_login provider ROW may report without any
-// vendor call, and whether it knows anything at all. codex-cli reads its saved
-// login file. github-copilot has no such file — its only oracle is a paid CLI
-// run — so its row reports the operator's most recent explicit Check sign-in
-// while that answer is recent (copilotRowSignInStatus), and nothing otherwise.
-func (a *restAPI) cliLoginRowStatus(providerID string) (gen.SignInStatus, bool) {
-	if providerID == copilotProviderID {
-		return a.copilotRowSignInStatus()
-	}
-	return cliLoginStatus(providerID), true
-}
-
 // deviceCodeStatus computes GET .../sign-in/status for a device_code
 // provider (FR-009/FR-046): read from our OWN stored OAuth entry, never the
 // vendor. expired means the access token is past exp AND a refresh attempt
@@ -764,38 +647,13 @@ func (a *restAPI) deviceCodeStatus(providerID string) gen.SignInStatus {
 // refresh attempt and no network I/O (providers_pkg.PeekStoreOAuthCred, in
 // contrast to deviceCodeStatus/NewStoreOAuthTokenSource which may refresh
 // against the vendor — that cost belongs to the explicit sign-in status
-// poll, never a list render). cli_login providers use cliLoginRowStatus:
-// codex-cli reads its local login file, and github-copilot reports the
-// result of the operator's most recent explicit Check sign-in while it is
-// recent — never a CLI run of its own, because the real Copilot check spends
-// a PREMIUM request against the operator's subscription (see
-// rest_signin_copilot.go's handleCopilotSignInStatus doc comment), a cost
-// that belongs exclusively to that explicit action. known is false whenever
-// this cheap path has nothing more to say than the row's key-derived default
-// (not signed in / unsupported provider / no recent Copilot check) — callers
-// must leave the row's existing status untouched.
+// poll, never a list render). known is false whenever this cheap path has
+// nothing more to say than the row's key-derived default (not signed in /
+// unsupported provider) — callers must leave the row's existing status
+// untouched.
 func (a *restAPI) cheapSignInRowStatus(providerID string) (state gen.ProviderStatus, accountLabel string, known bool) {
-	method, ok := a.signInMethodFor(providerID)
-	if !ok {
+	if _, ok := a.signInMethodFor(providerID); !ok {
 		return "", "", false
-	}
-	if method == "cli_login" {
-		st, rowKnows := a.cliLoginRowStatus(providerID)
-		if !rowKnows {
-			return "", "", false
-		}
-		label := ""
-		if st.AccountLabel != nil {
-			label = *st.AccountLabel
-		}
-		switch st.State {
-		case gen.SignInStatusStateSignedIn:
-			return gen.ProviderStatusSignedIn, label, true
-		case gen.SignInStatusStateExpired:
-			return gen.ProviderStatusExpired, label, true
-		default:
-			return "", "", false
-		}
 	}
 	// device_code: peek the stored credential only — no refresh, no vendor call.
 	store, err := a.resolveSignInCredStore()
@@ -818,8 +676,7 @@ func (a *restAPI) handleProviderSignInStatus(w http.ResponseWriter, r *http.Requ
 		jsonErr(w, http.StatusBadRequest, "invalid provider id")
 		return
 	}
-	method, ok := a.signInMethodFor(providerID)
-	if !ok {
+	if _, ok := a.signInMethodFor(providerID); !ok {
 		jsonErr(w, http.StatusBadRequest, "provider does not support sign-in")
 		return
 	}
@@ -834,73 +691,7 @@ func (a *restAPI) handleProviderSignInStatus(w http.ResponseWriter, r *http.Requ
 		}
 		return st
 	}
-	if method == "cli_login" {
-		jsonOK(w, stripLabelIfAnonymous(r, cliLoginStatus(providerID)))
-		return
-	}
 	jsonOK(w, stripLabelIfAnonymous(r, a.deviceCodeStatus(providerID)))
-}
-
-// handleProviderSignInImport implements POST /providers/openai-chatgpt/sign-in/import (FR-047).
-func (a *restAPI) handleProviderSignInImport(w http.ResponseWriter, r *http.Request) {
-	token, accountID, mtimeExpiry, err := providers_pkg.ReadCodexCliCredentials()
-	if err != nil {
-		jsonErr(w, http.StatusNotFound, "no codex login found")
-		return
-	}
-	store, storeErr := a.resolveSignInCredStore()
-	if storeErr != nil {
-		jsonErr(w, http.StatusServiceUnavailable, "credential store unavailable")
-		return
-	}
-	// Prefer the JWT's own exp claim; fall back to
-	// ReadCodexCliCredentials' auth.json-mtime+1h estimate (its documented
-	// contract — see that function's doc comment) rather than leaving
-	// expiresAt at its zero value. A zero ExpiresAt makes
-	// needsOAuthRefresh treat the imported credential as "never needs
-	// refresh" by design, so a non-JWT token would be reported signed-in
-	// forever and only surface as a raw 401 from CodexProvider.Chat once it
-	// actually expired — never routed through ErrProviderNeedsSignIn. If
-	// somehow neither source produces a usable expiry, reject the import
-	// outright rather than silently persisting an unbounded credential.
-	expiresAt := mtimeExpiry
-	if exp, ok := jwtUnverifiedExpiry(token); ok {
-		expiresAt = exp
-	}
-	if expiresAt.IsZero() {
-		jsonErr(w, http.StatusUnprocessableEntity, "could not establish an expiry for the imported credential")
-		return
-	}
-	if setErr := providers_pkg.WriteStoreOAuthCredential("openai-chatgpt", store, providers_pkg.OAuthCredential{
-		// FR-047: no refresh token is imported — this session ends at exp.
-		AccessToken: token,
-		AccountID:   accountID,
-		ExpiresAt:   expiresAt,
-	}); setErr != nil {
-		jsonErr(w, http.StatusInternalServerError, "failed to store credential")
-		return
-	}
-	a.reRegisterOAuthSensitiveValues(store)
-	if configErr := a.ensureSignedInProviderRow("openai-chatgpt"); configErr != nil {
-		slog.Error("rest: configure imported signed-in provider", "provider", "openai-chatgpt", "error", configErr)
-		jsonErr(w, http.StatusInternalServerError, "failed to configure signed-in provider")
-		return
-	}
-	if a.auditor != nil {
-		if logErr := a.auditor.Log(&audit.Entry{
-			Event:    "provider.signed_in",
-			Decision: audit.DecisionAllow,
-			User:     auditActor(r),
-			Details: map[string]any{
-				"provider":  "openai-chatgpt",
-				"via":       "codex_cli_import",
-				"source_ip": a.clientIPWithLiveFallback(r),
-			},
-		}); logErr != nil {
-			slogWarnAuditFailed("provider.signed_in", logErr)
-		}
-	}
-	jsonOK(w, a.deviceCodeStatus("openai-chatgpt"))
 }
 
 // handleProviderSignOut implements DELETE /providers/{id}/sign-in (FR-048).
@@ -963,4 +754,15 @@ func (a *restAPI) handleProviderSignOut(w http.ResponseWriter, r *http.Request, 
 // throughout rest.go's other audit.Log call sites).
 func slogWarnAuditFailed(event string, err error) {
 	slog.Warn("audit write failed", "event", event, "error", err)
+}
+
+// auditActor returns the authenticated gateway principal's username for an
+// audit entry, or "" when the request is anonymous — which is exactly what an
+// FR-050 pre-auth call is. Empty is audit.Entry.User's documented default for
+// an unauthenticated path and is never filled with a guess.
+func auditActor(r *http.Request) string {
+	if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && user != nil {
+		return user.Username
+	}
+	return ""
 }

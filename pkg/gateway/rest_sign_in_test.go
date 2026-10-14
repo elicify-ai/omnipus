@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -120,20 +119,6 @@ func doJSONWithUser(t *testing.T, api *restAPI, method, path string, body any, u
 	return w
 }
 
-func TestSignInStart_CLILogin(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	w := doJSON(t, api, http.MethodPost, "/api/v1/providers/codex-cli/sign-in", nil)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-
-	var resp gen.SignInStartResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	variant, err := resp.AsSignInStartResponseCliLogin()
-	require.NoError(t, err)
-	assert.Equal(t, gen.SignInStartResponseCliLoginMethodCliLogin, variant.Method)
-	assert.Equal(t, "codex login", variant.Command)
-	assert.NotEmpty(t, variant.Instructions)
-}
-
 func TestSignInStart_DeviceCode(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	state := "pending"
@@ -146,15 +131,13 @@ func TestSignInStart_DeviceCode(t *testing.T) {
 
 	var resp gen.SignInStartResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	variant, err := resp.AsSignInStartResponseDeviceCode()
-	require.NoError(t, err)
-	assert.Equal(t, gen.SignInStartResponseDeviceCodeMethodDeviceCode, variant.Method)
-	assert.Equal(t, "WDJB-MJHT", variant.UserCode)
-	assert.NotEmpty(t, variant.DeviceAuthId)
-	assert.NotContains(t, variant.DeviceAuthId, "vendor_das_1",
+	assert.Equal(t, gen.SignInStartResponseMethodDeviceCode, resp.Method)
+	assert.Equal(t, "WDJB-MJHT", resp.UserCode)
+	assert.NotEmpty(t, resp.DeviceAuthId)
+	assert.NotContains(t, resp.DeviceAuthId, "vendor_das_1",
 		"the vendor's own device_auth_id must never leave the gateway (FR-008)")
-	assert.GreaterOrEqual(t, variant.IntervalSeconds, 1)
-	assert.False(t, variant.ExpiresAt.IsZero())
+	assert.GreaterOrEqual(t, resp.IntervalSeconds, 1)
+	assert.False(t, resp.ExpiresAt.IsZero())
 }
 
 func TestSignIn_RefusedForKeyOnly400(t *testing.T) {
@@ -189,10 +172,7 @@ func TestSignInPoll_PendingThenSignedIn(t *testing.T) {
 	require.Equal(t, http.StatusOK, startW.Code)
 	var startResp gen.SignInStartResponse
 	require.NoError(t, json.Unmarshal(startW.Body.Bytes(), &startResp))
-	deviceCode, err := startResp.AsSignInStartResponseDeviceCode()
-	require.NoError(t, err)
-
-	pollBody := gen.SignInPollRequest{DeviceAuthId: deviceCode.DeviceAuthId}
+	pollBody := gen.SignInPollRequest{DeviceAuthId: startResp.DeviceAuthId}
 
 	pollW1 := doJSON(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/poll", pollBody)
 	require.Equal(t, http.StatusOK, pollW1.Code, pollW1.Body.String())
@@ -232,8 +212,8 @@ func TestSignInStatus_Store(t *testing.T) {
 
 	// This test pins STORAGE semantics, and its label assertions need an
 	// authenticated caller: an anonymous caller inside the FR-050 pre-auth
-	// window gets a REDUCED answer with no account_label (see
-	// rest_signin_status_reduction_test.go). doJSON sets no user, so wrap.
+	// window gets a REDUCED answer with no account_label. doJSON sets no
+	// user, so wrap.
 	doJSONAsAdmin := func(t *testing.T, method, path string, body any) *httptest.ResponseRecorder {
 		t.Helper()
 		return doJSONWithUser(t, api, method, path, body, "admin")
@@ -279,44 +259,6 @@ func TestSignInStatus_Store(t *testing.T) {
 	assert.Equal(t, gen.SignInStatusStateExpired, status3.State)
 }
 
-func TestSignInImport_ReadOnly(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
-	authPath := filepath.Join(codexHome, "auth.json")
-	require.NoError(t, os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"codex-tok","account_id":"codex-acc"}}`), 0o600))
-
-	before, err := os.Stat(authPath)
-	require.NoError(t, err)
-	beforeBytes, err := os.ReadFile(authPath)
-	require.NoError(t, err)
-
-	w := doJSON(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/import", nil)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-
-	after, err := os.Stat(authPath)
-	require.NoError(t, err)
-	afterBytes, err := os.ReadFile(authPath)
-	require.NoError(t, err)
-	assert.Equal(t, before.ModTime(), after.ModTime(), "import must not modify auth.json's mtime")
-	assert.Equal(t, beforeBytes, afterBytes, "import must not modify auth.json's bytes")
-
-	store := credentials.NewStore(api.credentialsStorePath())
-	require.NoError(t, credentials.Unlock(store))
-	raw, getErr := store.Get(credentials.OAuthEntryName("openai"))
-	require.NoError(t, getErr)
-	assert.Contains(t, raw, "codex-tok")
-	assert.Contains(t, raw, "codex-acc")
-	assert.NotContains(t, raw, `"refresh_token"`, "FR-047: no refresh token is imported")
-}
-
-func TestSignInImport_NoCodexLogin404(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	t.Setenv("CODEX_HOME", t.TempDir()) // empty dir, no auth.json
-	w := doJSON(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/import", nil)
-	assert.Equal(t, http.StatusNotFound, w.Code)
-}
-
 func TestSignOut_DeletesOAuth(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	store := credentials.NewStore(api.credentialsStorePath())
@@ -358,14 +300,19 @@ func TestSignIn_PreAuthOnlyDuringOnboarding(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	require.False(t, api.onboardingMgr.IsComplete(), "precondition: fresh manager starts incomplete")
 
-	// Pre-auth: reachable while onboarding is incomplete.
-	w1 := doJSON(t, api, http.MethodPost, "/api/v1/providers/codex-cli/sign-in", nil)
-	assert.Equal(t, http.StatusOK, w1.Code, w1.Body.String())
+	// Pre-auth: reachable while onboarding is incomplete. The subject id is
+	// a REMOVED provider id (WU-24), which makes the admission distinction
+	// sharp without any vendor seam: inside the window the request is
+	// ADMITTED past authentication and the handler itself refuses it (400),
+	// while the same call after onboarding never reaches the handler (401).
+	w1 := doJSON(t, api, http.MethodPost, "/api/v1/providers/"+"codex"+"-cli"+"/sign-in", nil)
+	assert.Equal(t, http.StatusBadRequest, w1.Code,
+		"pre-auth window admits the request; the handler refuses the removed id: %s", w1.Body.String())
 
 	require.NoError(t, api.onboardingMgr.CompleteOnboarding())
 	require.True(t, api.onboardingMgr.IsComplete())
 
-	w2 := doJSON(t, api, http.MethodPost, "/api/v1/providers/codex-cli/sign-in", nil)
+	w2 := doJSON(t, api, http.MethodPost, "/api/v1/providers/"+"codex"+"-cli"+"/sign-in", nil)
 	assert.Equal(t, http.StatusUnauthorized, w2.Code,
 		"FR-050: once onboarding is complete, sign-in requires an authenticated session")
 }

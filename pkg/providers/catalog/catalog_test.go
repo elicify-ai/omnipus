@@ -819,7 +819,6 @@ func TestCatalog_LocalityPredicate(t *testing.T) {
 		{"custom unparsable", "my-proxy", ProtocolOpenAICompatible, true, "::not a url::", LocalityCloud},
 		{"zai", "zai", ProtocolOpenAICompatible, false, "https://api.z.ai/api/paas/v4", LocalityCloud},
 		{"openai-chatgpt", "openai-chatgpt", ProtocolOpenAICompatible, false, "https://chatgpt.com/backend-api/codex", LocalityCloud},
-		{"codex-cli", "codex-cli", ProtocolCLI, false, "", LocalityCloud},
 		{"hosted row with private host is still cloud (rejected elsewhere)", "zai", ProtocolOpenAICompatible, false, "https://10.0.0.5/v1", LocalityCloud},
 		{"unsupported", "cloud-iam-example", "", false, "", LocalityCloud},
 	}

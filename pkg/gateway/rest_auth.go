@@ -239,9 +239,9 @@ var (
 	taskReadLimiter = newReadSizedAPIRateLimiter(240, 1*time.Minute)
 	// /api/v1/providers/{id}/sign-in — 10 requests/minute per IP. ADR-068
 	// FR-008: "rate-limited like the auth endpoints" — matches
-	// reauthLimiter's ceiling. Starting a NEW device-code (or reading a
-	// cli_login instruction) is rare in legitimate use; unlike polling it
-	// has no ongoing-cadence requirement.
+	// reauthLimiter's ceiling. Starting a NEW device-code session is rare
+	// in legitimate use; unlike polling it has no ongoing-cadence
+	// requirement.
 	signInStartLimiter = newAPIRateLimiter(10, 1*time.Minute)
 	// /api/v1/providers/{id}/sign-in/poll — 60 requests/minute per IP. A
 	// DEDICATED, more generous limiter (FR-044 sets no explicit rate but a
@@ -255,24 +255,14 @@ var (
 	// This route looked read-only enough to leave unlimited and is not:
 	// for a device_code provider it reaches the stored-OAuth token source,
 	// which REFRESHES against the vendor when the stored token is within 5
-	// minutes of expiry (ADR-068 FR-046), and for github-copilot it spawns
-	// a bounded Copilot CLI invocation (T068-15) — so an unauthenticated
-	// caller (FR-050 makes it pre-auth reachable while onboarding is
-	// incomplete) could drive outbound vendor traffic or process spawns at
-	// will. Shares signInPollLimiter's ceiling rather than the tighter
-	// start/auth one because the sign-in dialog legitimately re-reads
-	// status alongside every poll. Read-sized: both status routes are GET,
-	// and the ceiling bounds vendor refreshes and CLI spawns, so an
-	// authenticated caller must not get 5x of it.
+	// minutes of expiry (ADR-068 FR-046) — so an unauthenticated caller
+	// (FR-050 makes it pre-auth reachable while onboarding is incomplete)
+	// could drive outbound vendor traffic at will. Shares signInPollLimiter's
+	// ceiling rather than the tighter start/auth one because the sign-in
+	// dialog legitimately re-reads status alongside every poll. Read-sized:
+	// the status routes are GET, and the ceiling bounds vendor refreshes, so
+	// an authenticated caller must not get 5x of it.
 	signInStatusLimiter = newReadSizedAPIRateLimiter(60, 1*time.Minute)
-	// /api/v1/providers/openai-chatgpt/sign-in/import — 10 requests/minute
-	// per IP (M2). This route was called BARE while its four FR-050 siblings
-	// were all wrapped. It is the most write-heavy of the five: every call
-	// re-reads the Codex CLI credential, rewrites the whole encrypted
-	// credentials.json, and re-registers every OAuth value with the
-	// sensitive-value replacer. Matches signInStartLimiter's ceiling — an
-	// import is a one-off operator action with no polling cadence at all.
-	signInImportLimiter = newAPIRateLimiter(10, 1*time.Minute)
 	// DELETE /api/v1/providers/{id}/sign-in — 10 requests/minute per IP
 	// (M2). Also previously bare. Each sign-out nils the process-wide
 	// sensitive-data replacer cache, so the next scrub pays a full

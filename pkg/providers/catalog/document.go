@@ -9,13 +9,15 @@ const SchemaVersion = "2.0.0"
 // dispatches on it (ADR-067 D11); vendor ids never appear in Go code.
 type Protocol string
 
-// The closed protocol set (FR-002).
+// The closed protocol set (FR-002). The former `cli` protocol (subprocess
+// model providers) was deleted outright with the CLI-backed model providers
+// (WU-24, founder 2026-10-14); a catalog feed that still carries such rows
+// has them skipped per-row by ParseDocument's unknown-protocol path.
 const (
 	ProtocolOpenAICompatible Protocol = "openai-compatible"
 	ProtocolAnthropic        Protocol = "anthropic"
 	ProtocolGoogle           Protocol = "google"
 	ProtocolOllama           Protocol = "ollama"
-	ProtocolCLI              Protocol = "cli"
 	ProtocolBedrock          Protocol = "bedrock"
 )
 
@@ -177,10 +179,6 @@ type Provider struct {
 	// Aliases are search-only strings for the picker's filter (A-9). They
 	// never participate in resolution, validation, or construction.
 	Aliases []string
-	// CLIKind is codex | copilot on protocol cli rows (X-14).
-	CLIKind string
-	// TokenSource is e.g. codex-auth-json (X-41).
-	TokenSource string
 	// Custom marks an operator-typed row (FR-035). The published snapshot
 	// never carries one; the flag exists so a custom row can be classified
 	// by DeriveLocality and URL-checked for parseability only (F-03).

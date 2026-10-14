@@ -28,9 +28,9 @@ import (
 // (OpenClaw, OpenCode, Hermes) ships, so the flow is restored here — Omnipus
 // requests and polls its own device-code session and stores the result in
 // its OWN encrypted credential store (pkg/credentials, never the vendor's
-// `~/.codex/auth.json`, never config.json). Reading that file stays
-// available separately as a read-only IMPORT (FR-047,
-// pkg/providers/codex_cli_credentials.go) — it is no longer the only source.
+// `~/.codex/auth.json`, never config.json). The former read-only import of
+// that file (FR-047) was deleted with the CLI-backed model providers
+// (WU-24, founder 2026-10-14); this flow is the only OpenAI sign-in source.
 type OAuthProviderConfig struct {
 	Issuer   string
 	ClientID string

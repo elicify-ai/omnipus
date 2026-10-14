@@ -172,29 +172,28 @@ func signInStatusFromIP(t *testing.T, api *restAPI, providerID, remoteAddr strin
 // TestSignInStatus_RateLimited — Given the sign-in status route, When one
 // unauthenticated client exceeds the per-IP ceiling, Then it is refused with
 // 429 and a Retry-After header, instead of being able to drive an unbounded
-// number of vendor refreshes / CLI spawns.
+// number of vendor refreshes.
 //
-// codex-cli is used as the subject because its status is computed from a
-// local file (no vendor traffic in the test) — the limiter is wired on the
-// route, not per provider shape.
+// openai-chatgpt is the subject because an empty credential store makes its
+// status answer not_signed_in locally — no vendor traffic in the test. The
+// limiter is wired on the route, not per provider shape.
 func TestSignInStatus_RateLimited(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
-	t.Setenv("CODEX_HOME", t.TempDir()) // empty: not_signed_in, no I/O beyond a stat
 
 	limit := signInStatusLimiter.limit
 	require.Equal(t, 60, limit, "the status ceiling matches the poll route's (see signInStatusLimiter)")
 
 	const ip = "203.0.113.77:5555"
 	for i := 0; i < limit; i++ {
-		w := signInStatusFromIP(t, api, "codex-cli", ip)
+		w := signInStatusFromIP(t, api, "openai-chatgpt", ip)
 		require.Equal(t, http.StatusOK, w.Code, "request %d within the ceiling must pass: %s", i, w.Body.String())
 	}
-	w := signInStatusFromIP(t, api, "codex-cli", ip)
+	w := signInStatusFromIP(t, api, "openai-chatgpt", ip)
 	require.Equal(t, http.StatusTooManyRequests, w.Code,
 		"the request past the ceiling must be refused — an unlimited status route is an unbounded vendor-refresh amplifier")
 	assert.NotEmpty(t, w.Header().Get("Retry-After"))
 
 	// A different client is unaffected: the bucket is per IP, not global.
-	other := signInStatusFromIP(t, api, "codex-cli", "203.0.113.78:5555")
+	other := signInStatusFromIP(t, api, "openai-chatgpt", "203.0.113.78:5555")
 	assert.Equal(t, http.StatusOK, other.Code)
 }

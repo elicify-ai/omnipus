@@ -142,25 +142,6 @@ export const ONBOARDING_MODEL_LABEL = 'Default model'
 // `catalogEntryById` in `@/lib/catalogDisplay` — one exact-match helper shared
 // with Settings (ADR-067 FR-011), never a second copy here.
 
-/**
- * The CLI binary name a sign-in row drives (`codex`, `copilot`), used for the
- * FR-036 / §8b hint *"`codex` not found on this machine"*. Undefined for a
- * sign-in row that is not CLI-backed (device-code providers own no binary).
- */
-export function cliBinaryName(entry: CatalogProvider | undefined): string | undefined {
-  return entry?.cli_kind
-}
-
-/**
- * True when a failed sign-in probe failed because the vendor CLI is not on
- * PATH, rather than because nobody is signed in. The gateway reports the two
- * differently in prose; the SPA must not conflate them, because the fix is
- * different (install the CLI vs run its login command).
- */
-export function probeErrorIsMissingCli(message: string): boolean {
-  return /not found|not installed|no such file|executable file not found/i.test(message)
-}
-
 // Lightweight, dependency-free password strength heuristic (LOCAL MODE ONLY —
 // WP5, ADR-0010, restored verbatim from upstream merge base 184d7247 for the
 // admin-account password PasswordStep below). Scores on length plus
@@ -1416,10 +1397,6 @@ function ProviderStep({
   const isLocal = entry?.locality === 'local'
   // The connection probe's own state (idle/testing/success/error), not a task status.
   const isProbeError = probeStatus === 'error'
-  const missingCli =
-    signIn && isProbeError && probeErrorIsMissingCli(probeError)
-      ? cliBinaryName(entry)
-      : undefined
 
   // FR-029: Finish needs a model AND a passed probe FOR THAT MODEL.
   const modelChosen = selectedModel.trim() !== ''
@@ -1608,14 +1585,7 @@ function ProviderStep({
               <div className="min-w-0 space-y-[var(--space-1)]">
                 <span>
                   <span className="sr-only">Error: </span>
-                  {missingCli ? (
-                    <span data-testid="onboarding-cli-missing">
-                      <code>{missingCli}</code> not found on this machine — install it, then check
-                      again.
-                    </span>
-                  ) : (
-                    friendlyProbeError(probeError, providerDisplayName)
-                  )}
+                  {friendlyProbeError(probeError, providerDisplayName)}
                 </span>
                 {probeError && (
                   <details className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>

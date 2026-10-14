@@ -114,20 +114,19 @@ describe('TestPickerModel', () => {
     })
 
     // ADR-068 FR-006 — UAT-confirmed defect on a real running instance: the
-    // popular OpenAI tile carried data-testid "picker-popular-codex-cli"
-    // instead of "picker-popular-openai". Root cause: the served catalog's
-    // providers[] array sorts alphabetically by id, which is an assembly-job
-    // presentation detail (not a spec decision) and put the standard-tier
-    // "codex-cli" ahead of the popular-tier "openai" within the OpenAI
-    // company group — `primary` used to mean "first in that array", so it
-    // silently inherited the wrong row.
+    // popular OpenAI tile carried the wrong picker-popular testid (a retired
+    // standard-tier row's, removed since WU-24) instead of
+    // "picker-popular-openai". Root cause: the served catalog sorts its
+    // providers[] alphabetically by id, so a standard-tier row sorting ahead
+    // of the popular-tier "openai" silently became `primary`. The ordering
+    // dataset keeps a neutral stand-in id that sorts before "openai".
     it('picks the tier: popular variant as primary even when it is not first in catalog order (FR-006)', () => {
       const row = toCompanyRows([
-        catalogProvider({ id: 'codex-cli', name: 'Codex CLI', company: 'OpenAI', tier: 'standard', auth_methods: ['sign_in'] }),
+        catalogProvider({ id: 'acme-openai-proxy', name: 'Acme OpenAI proxy', company: 'OpenAI', tier: 'standard', auth_methods: ['sign_in'] }),
         catalogProvider({ id: 'openai', name: 'OpenAI', company: 'OpenAI', tier: 'popular', auth_methods: ['api_key'] }),
         catalogProvider({ id: 'openai-chatgpt', name: 'ChatGPT (subscription)', company: 'OpenAI', tier: 'standard', auth_methods: ['sign_in'] }),
       ])[0]
-      expect(row.variants.map((v) => v.id)).toEqual(['codex-cli', 'openai', 'openai-chatgpt'])
+      expect(row.variants.map((v) => v.id)).toEqual(['acme-openai-proxy', 'openai', 'openai-chatgpt'])
       expect(row.primary.id).toBe('openai')
     })
 
@@ -144,7 +143,7 @@ describe('TestPickerModel', () => {
       const popularEntries = catalog.providers.filter((p) => p.tier === 'popular').length
       expect(popularEntries).toBe(12)
       expect(model.allProvidersCount).toBe(catalog.providers.length - popularEntries)
-      expect(model.allProvidersCount).toBe(178)
+      expect(model.allProvidersCount).toBe(176)
     })
   })
 

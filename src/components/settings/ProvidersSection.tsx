@@ -79,10 +79,9 @@ import { DRAFT_DISCARD_PROMPT, draftCloseDecision, type DraftCloseAction } from 
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
-import { ProviderRow, cliKindOf, isEntitlementEligible } from './ProviderRow'
+import { ProviderRow, isEntitlementEligible } from './ProviderRow'
 import { SignInDialog } from '@/components/providers/SignInDialog'
 import { ManageSignInDialog } from '@/components/providers/ManageSignInDialog'
-import { ReSignInDialog } from '@/components/providers/ReSignInDialog'
 import { DefaultModelCard } from './DefaultModelCard'
 import { RemoveProviderDialog } from './RemoveProviderDialog'
 import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
@@ -744,16 +743,14 @@ export function ProvidersSection() {
   const [signInTarget, setSignInTarget] = useState<{ id: string; label: string } | null>(null)
   const [signInOpen, setSignInOpen] = useState(false)
 
-  // Manage / re-sign-in dialog state (ADR-068 FR-034, T068-26) — the two
-  // surfaces a sign-in row's Manage action can open once it has connected at
-  // least once: ManageSignInDialog for `signed_in` (account + Sign out),
-  // ReSignInDialog for `expired` `cli_login` rows (static re-sign-in copy,
-  // status-only Check — see ReSignInDialog.tsx's file header for why this is
-  // not just SignInDialog again). An `expired` `device_code` row (no
-  // cli_kind) falls back to the ordinary SignInDialog via handleManage below,
-  // since it genuinely needs a fresh device-code approval.
+  // Manage dialog state (ADR-068 FR-034, T068-26) — the surface a sign-in
+  // row's Manage action opens once it has connected at least once:
+  // ManageSignInDialog for `signed_in` (account + Sign out). An `expired` row
+  // opens the ordinary SignInDialog via handleManage below (WU-24, founder
+  // 2026-10-14: the re-sign-in status surface shipped only for the retired
+  // CLI model providers — deleted outright), since an expired device-code
+  // session genuinely needs a fresh approval.
   const [manageTarget, setManageTarget] = useState<{ id: string; label: string; accountLabel?: string } | null>(null)
-  const [reSignInTarget, setReSignInTarget] = useState<{ id: string; label: string; cliKind: 'codex' | 'copilot' } | null>(null)
 
   const { data: providers = [], isLoading, isError: providersError } = useQuery({
     queryKey: ['providers'],
@@ -982,29 +979,20 @@ export function ProvidersSection() {
 
   // ADR-068 FR-034 — the Manage action for a sign-in row that has connected
   // at least once. `signed_in` opens the account/sign-out view; `expired`
-  // opens the status-only re-sign-in dialog for cli_login rows (codex-cli,
-  // github-copilot) or, for a device_code row (openai-chatgpt/xai — no
-  // cli_kind), falls back to a fresh SignInDialog since an expired
-  // device-code session needs a brand new approval, not a status re-check.
+  // opens a fresh SignInDialog, since an expired device-code session needs a
+  // brand new approval, not a status re-check (WU-24, founder 2026-10-14:
+  // the status-only re-sign-in dialog existed only for the retired CLI
+  // model providers and is deleted outright).
   const handleManage = (provider: Provider, label: string) => {
-    const entry = catalogEntryById(catalog, provider.id)
     if (provider.status === 'signed_in') {
       setManageTarget({ id: provider.id, label, accountLabel: provider.account_label })
       return
     }
-    if (provider.status === 'expired') {
-      const cliKind = cliKindOf(provider, entry)
-      if (cliKind) {
-        setReSignInTarget({ id: provider.id, label, cliKind })
-      } else {
-        openSignInDialog(provider.id, label)
-      }
-      return
-    }
-    // Defensive fallback: signInActionLabel() maps `connected`/
-    // `unknown-provider` to "Manage" too for exhaustiveness, but a sign-in
-    // row never actually carries either status. Route to the ordinary
-    // sign-in flow rather than leaving the click inert.
+    // Defensive fallback: signInActionLabel() maps `connected` to "Manage"
+    // for exhaustiveness, but a sign-in row never actually carries it — and
+    // since WU-24 an `unknown-provider` sign-in row renders no action at all
+    // (ProviderRow), so it cannot reach here. Route to the ordinary sign-in
+    // flow rather than leaving the click inert.
     openSignInDialog(provider.id, label)
   }
 
@@ -1417,19 +1405,6 @@ export function ProvidersSection() {
           accountLabel={manageTarget.accountLabel}
           onSignOut={() => doSignOut(manageTarget.id)}
           signingOut={isSigningOut}
-        />
-      )}
-
-      {reSignInTarget && (
-        <ReSignInDialog
-          open
-          onOpenChange={(o) => { if (!o) setReSignInTarget(null) }}
-          providerId={reSignInTarget.id}
-          providerLabel={reSignInTarget.label}
-          cliKind={reSignInTarget.cliKind}
-          onSignedIn={() => {
-            queryClient.invalidateQueries({ queryKey: ['providers'] })
-          }}
         />
       )}
     </div>

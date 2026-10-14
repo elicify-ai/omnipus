@@ -74,7 +74,7 @@ func TestPutProvider_SignInOnRowWithoutMechanism400(t *testing.T) {
 // persisted the dead row: completing onboarding with the plain `openai` row
 // and auth_method sign_in is refused before anything is written, pointing at
 // the row that can sign in. (The valid sign-in completion control is
-// rest_onboarding_complete_test.go's codex-cli case.)
+// rest_onboarding_complete_test.go's sign_in completion case.)
 func TestOnboardingComplete_SignInOnRowWithoutMechanism400(t *testing.T) {
 	withEdition(t, config.EditionHosted)
 	api, tmpDir := newAuthMethodOnboardingAPI(t)
@@ -194,10 +194,15 @@ func TestProvidersCatalog_ServedHidesSignInWithoutMechanism(t *testing.T) {
 	assert.Equal(t, []gen.CatalogProviderAuthMethods{A}, methods["openai"],
 		"openai has no sign-in mechanism: only openai-chatgpt can source an OpenAI login")
 	assert.Equal(t, []gen.CatalogProviderAuthMethods{S}, methods["openai-chatgpt"])
-	assert.Equal(t, []gen.CatalogProviderAuthMethods{S}, methods["codex-cli"])
-	assert.Equal(t, []gen.CatalogProviderAuthMethods{S}, methods["github-copilot"])
 	assert.Equal(t, []gen.CatalogProviderAuthMethods{A, S}, methods["xai"],
 		"xai owns a device-code sign-in (OAuthEntryOwner) and keeps both methods")
+	// WU-24 (founder 2026-10-14): the subprocess model-provider rows are
+	// gone from the served catalog entirely. Ids assembled from fragments:
+	// this file must not spell them (scripts/check-no-cli-model-providers.sh).
+	for _, id := range []string{"codex" + "-cli", "github" + "-copilot"} {
+		_, present := methods[id]
+		assert.False(t, present, "retired model provider %q is still served", id)
+	}
 
 	// The parsed document stays a faithful registry mirror: only the
 	// served projection is filtered.

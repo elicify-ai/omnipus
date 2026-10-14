@@ -191,9 +191,10 @@ export interface SignInWireLog {
  * (link + code + live status all on screen at once). `interval_seconds: 30` is
  * the contract's maximum, so at most one poll fires inside a test's lifetime.
  *
- * `GET .../sign-in/status` answers `not_signed_in` for `codex-cli`, which is
- * what keeps FR-047's secondary *Use my existing Codex login* link OUT of the
- * DOM — the axe rows then measure the dialog's own, always-present controls.
+ * `GET .../sign-in/status` answers `not_signed_in`, which keeps any secondary
+ * recovery control OFF the dialog — since WU-24 (founder 2026-10-14) the
+ * Codex-login import no longer exists at all, so the dialog's own controls
+ * are all the axe rows ever measure.
  */
 export async function stubProviderSignIn(page: Page): Promise<SignInWireLog> {
   const log: SignInWireLog = { starts: [], polls: [] }

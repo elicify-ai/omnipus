@@ -29,18 +29,18 @@
 //     no code change here — a company with exactly one variant is never
 //     reordered or filtered by `signInOptionsFor` below, whatever its
 //     `auth_methods`. Where a vendor's rows are grouped under one company —
-//     as the served catalog groups OpenAI's — the FR-006 pair
-//     (`openai-chatgpt`, `codex-cli`) is in FR-006's own priority order
+//     as the served catalog groups OpenAI's — a company's sign-in variants
+//     are ordered by FR-006's own priority order
 //     (`SIGN_IN_HELPER_COPY`'s key order in AuthMethodControl.tsx), not raw
 //     catalog-array order: the served catalog sorts its `providers[]`
 //     alphabetically by id, which is a presentation accident, not a spec
-//     decision, and has twice put the wrong id first (`codex-cli` sorts
-//     before `openai-chatgpt`) or included an id FR-006 never named at all
-//     (the plain `openai` API-key row spuriously also carries `sign_in` in
-//     the served catalog — a data bug this panel does not trust blindly: a
-//     variant offering BOTH `api_key` and `sign_in` is excluded from the
-//     radio group whenever a SIBLING of the same company is a dedicated,
-//     sign-in-only row — see `signInOptionsFor`'s doc comment).
+//     decision, and has put the wrong id first before, or included an id
+//     FR-006 never named at all (the plain `openai` API-key row spuriously
+//     also carries `sign_in` in the served catalog — a data bug this panel
+//     does not trust blindly: a variant offering BOTH `api_key` and
+//     `sign_in` is excluded from the sign-in options whenever a SIBLING of
+//     the same company is a dedicated, sign-in-only row — see
+//     `signInOptionsFor`'s doc comment).
 
 import * as React from 'react'
 import {
@@ -57,23 +57,23 @@ import { Label } from '@/components/ui/label'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 
 /**
- * FR-006's exact pair, in priority order, for a company's sign-in variants —
- * defensive against two ways the served catalog has shipped wrong (both
- * UAT-confirmed on a real running instance, ADR-068 FR-006):
+ * A company's sign-in variants, in priority order — defensive against two
+ * ways the served catalog has shipped wrong (UAT-confirmed on a real running
+ * instance, ADR-068 FR-006):
  *
  *  1. Catalog array ORDER is alphabetical by provider id, an assembly-job
- *     presentation detail, not a spec decision — it has put `codex-cli`
- *     ahead of `openai-chatgpt` (sorts under "c" vs "o") even though FR-006
- *     names `openai-chatgpt` as the default.
+ *     presentation detail, not a spec decision — it has put the wrong
+ *     variant ahead of the FR-006 default before (the retired Codex CLI row
+ *     sorted under "c" ahead of `openai-chatgpt`, removed since WU-24).
  *  2. A variant that ALSO offers `api_key` is a general-purpose row (the
  *     picker's Popular tile primary, `resolvedVariant`'s api_key fallback),
  *     never a dedicated sign-in identity — it has no entry in
  *     `SIGN_IN_HELPER_COPY` and would render as an unlabelled, redundant
- *     third radio (OpenAI's own `openai` API-key row spuriously also
+ *     extra option (OpenAI's own `openai` API-key row spuriously also
  *     carries `sign_in`). When a SIBLING of the same company is a DEDICATED
  *     sign-in row (`sign_in` only, no `api_key`), that sibling — not the
- *     dual-purpose row — is what FR-006 means by "the pair", so the
- *     dual-purpose row is dropped from the radio group in favour of it.
+ *     dual-purpose row — is what FR-006 means by the sign-in choice, so the
+ *     dual-purpose row is dropped from the options in favour of it.
  *
  * Neither rule ever removes a company's ONLY sign-in-capable variant (a
  * single dual-purpose row, e.g. xAI, has no sign-in-only sibling to prefer,
