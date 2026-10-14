@@ -67,7 +67,6 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"),
 		r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"),
 		r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"),
-		r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import",
 		r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in"):
 		a.postProviderSignInHTTP(w, r, sub, path)
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/entitlement"):
@@ -974,7 +973,7 @@ func (a *restAPI) providerPutRespond(p *providerPut) {
 	jsonOK(p.w, providerResp)
 }
 
-// postProviderSignInHTTP serves the HandleProviders route `r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"), r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"), r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"), r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import", r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in")`.
+// postProviderSignInHTTP serves the HandleProviders route `r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"), r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"), r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"), r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in")`.
 // ADR-068 FR-008/FR-009/FR-044/FR-047/FR-048 (§8b amendment,
 // 2026-08-23; T068-14). FR-050: these five routes are reachable
 // PRE-AUTH only while onboarding is incomplete (mirrors the /test

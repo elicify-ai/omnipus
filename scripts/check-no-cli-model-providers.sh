@@ -42,6 +42,12 @@ patterns = (
     re.compile(r"cli_login|cli_kind|CliLogin|CliKind|ProtocolCLI|NewCliProviderForKind", re.I),
     re.compile(r"(?:codex|copilot)_cli_provider|(?:Codex|Copilot)CliProvider", re.I),
     re.compile(r"ReadCodexCliCredentials|CreateCodexCliTokenSource|CodexCliAuth|resolveCodexAuthPath|CodexHomeEnvVar"),
+    # WU-24 CHECK F2: the deleted auth.json credential-copy route and its
+    # handler/UI helpers are banned spellings too, in Go and TS alike — a
+    # resurrection must never answer 200 as if the operation still existed.
+    # The runner allow-list below is symbol-only and does not cover these.
+    re.compile(r"sign-in/import", re.I),
+    re.compile(r"handleProviderSignInImport|importCodexLogin", re.I),
 )
 # Explicit founder KEEP boundary: these credential-reader symbols may move
 # INTO the runner package, where TestConnection still needs them. A provider
