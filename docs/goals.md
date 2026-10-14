@@ -72,7 +72,7 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 | done | Every criterion was judged met | Read the verdict |
 | failed | Tries ran out with work unmet | Restate or raise the budget |
 | cleared | You stopped it | Restart if needed |
-| expired | Quiet for seven days | Restart it |
+| expired | Quiet for seven days with nothing running — a goal whose agent or helper is still working never expires | Restart it |
 
 ## What controls a goal
 
@@ -83,7 +83,7 @@ These numbers shape a goal's life:
 | Tries per goal | 20 by default | Settings, Performance, "Goal completion budget" |
 | Task attempts | 3 by default | On the task |
 | Question rounds | 1 per goal | Fixed |
-| Idle expiry | 7 days | Server setting |
+| Idle expiry | 7 days, never while work is running | Server setting |
 | Active chat goals | 16 at a time | Server setting; tasks count separately |
 
 A goal ends one of four ways — met, tries exhausted, expired, cleared by you — and the record is kept in each: what was wanted, and how it was judged, stays readable.
@@ -94,7 +94,7 @@ A goal ends one of four ways — met, tries exhausted, expired, cleared by you �
 - On a task, tries bound the work inside one run; attempts bound how many runs the task gets. The task card shows both, for example "attempt 1 of 3 · try 5 of 20".
 - Unproven counts as unmet. Finished work can be sent back when the Judge could not verify it; the reason names the evidence that was missing.
 - Verdict speed follows the Judge's model — a fast one keeps verdicts quick.
-- The work itself has no time limit; the Judge's check does. When the Judge cannot finish its check after its retries, the check always ends with a visible conclusion — never silence. It says **Not verified — the check could not complete** with the reason, and carries the work result so nothing is lost:
+- The work itself has no time limit; the Judge's check does (`judge.timeout_sec`, 420 seconds by default, at most 900). When it runs out, the message names the Judge's own time limit — not a model provider failure. When the Judge cannot finish its check after its retries, the check always ends with a visible conclusion — never silence. It says **Not verified — the check could not complete** with the reason, and carries the work result so nothing is lost:
   - in a chat goal, the conclusion is added to the chat and the goal stays active, so the agent can claim completion again later;
   - for a helper working on a goal, its parent agent receives the conclusion together with the helper's result;
   - for a task, the task ends **Failed** with the conclusion and the worker's result in its result text, and no attempt is used; re-run it once the Judge is available;

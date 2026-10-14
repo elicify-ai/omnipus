@@ -191,7 +191,7 @@ If a helper is waiting for a slot, separate notifications that wake it are kept 
 
 An instruction that reaches a helper just as its turn is ending is still delivered to that same helper, in a short follow-up step of the same working session. Omnipus saves the exact instruction text in the helper's own transcript before it counts the instruction as delivered, so opening the helper's chat shows what it was told. A repeated delivery of the same instruction is saved once, and the helper is not run a second time for it.
 
-The exact caps on all of this — how deep a chain may go, how many may run at once, and how long a child may run — live on the Performance tab; see [settings](settings.md#delegation-limits) for the values and their defaults.
+The limits on all of this — how many may run at once (Performance tab) and how deep a chain may go (`performance.max_delegation_depth` in `config.json`; a workspace **Team** edge can tighten it per agent pair) — are described in [settings](settings.md#delegation-limits). There is no time limit: a child runs until it finishes or someone stops it.
 
 A worker has its own settings — its model, its tools, its limits. The delegating agent hands over the task; the worker supplies everything else. Delegation itself is a per-workspace decision: which agent may delegate to which is set in that [workspace](workspaces.md) **Team** panel, and that rule applies only there.
 

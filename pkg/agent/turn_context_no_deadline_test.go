@@ -47,13 +47,13 @@ func (p *deadlineRecordingProvider) Chat(ctx context.Context, _ []providers.Mess
 
 func (p *deadlineRecordingProvider) GetDefaultModel() string { return "deadline-recorder" }
 
-func (p *deadlineRecordingProvider) sawDeadline() (calls int, any bool) {
+func (p *deadlineRecordingProvider) sawDeadline() (calls int, sawAny bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, d := range p.deadlines {
-		any = any || d
+		sawAny = sawAny || d
 	}
-	return len(p.deadlines), any
+	return len(p.deadlines), sawAny
 }
 
 // TestTurnContext_NoDeadlineOnNativeRootTaskOrScheduledTurns pins issue #1306
@@ -116,6 +116,12 @@ func TestPlanSupervision_RealTurnHasNoDeadlineAndHoldsItsClaimUntilItSettles(t *
 		t.Fatal("supervisor agent not registered")
 	}
 	supervisorInst.Provider = provider
+	// Release the gated model on every exit path (registered after the
+	// harness, so it runs before the harness drains its wake turns) — a failed
+	// assertion must end the test, not hang it.
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(provider.gate) }) }
+	t.Cleanup(release)
 	h.parkPlanAtSupervision(t, "p1", runningPlanWithDoD("p1", "telegram", "chat-1"))
 
 	select {
@@ -149,7 +155,7 @@ func TestPlanSupervision_RealTurnHasNoDeadlineAndHoldsItsClaimUntilItSettles(t *
 		t.Fatal("the claim was released while the supervision turn was still working")
 	}
 
-	close(provider.gate)
+	release()
 	h.pe.wakeWG.Wait()
 	if h.pe.supervisionTurnInFlight("p1") {
 		t.Fatal("the supervision claim is still held after the turn settled")
