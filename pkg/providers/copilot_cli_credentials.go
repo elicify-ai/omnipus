@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // CopilotSignInState is the sign-in state of the GitHub Copilot CLI's own
@@ -175,6 +177,9 @@ func CopilotSignIn(ctx context.Context, command, workspace string) CopilotSignIn
 	}
 
 	cmd := exec.CommandContext(ctx, command, args...)
+	// FR-239: the sign-in probe child starts from the closed child allowlist;
+	// the gateway environment is never inherited wholesale.
+	cmd.Env = sandbox.ScrubGatewayEnv()
 	if workspace != "" {
 		cmd.Dir = workspace
 	}

@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 const (
@@ -105,9 +105,12 @@ func NewProcessHook(ctx context.Context, name string, opts ProcessHookOptions) (
 
 	cmd := exec.Command(opts.Command[0], opts.Command[1:]...)
 	cmd.Dir = opts.Dir
-	if len(opts.Env) > 0 {
-		cmd.Env = append(os.Environ(), opts.Env...)
-	}
+	// FR-239: the hook child starts from the closed child allowlist (the
+	// hook binary is third-party code; the gateway environment must never
+	// reach it) plus the operator-declared additions in opts.Env — the only
+	// values that reach the child beyond the allowlist are the ones the
+	// operator named explicitly in the hook's configuration.
+	cmd.Env = append(sandbox.ScrubGatewayEnv(), opts.Env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("create process hook stdin: %w", err)
