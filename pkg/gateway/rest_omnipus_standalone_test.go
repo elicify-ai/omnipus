@@ -105,7 +105,8 @@ func TestOmnipusStandalone_WebSocketMessageToTheMainIsAccepted(t *testing.T) {
 	env.seedWorkspace(t, ws, true, "mia", "omnipus") // this workspace IS the default
 	main, err := env.store(t).GetOrCreateMainSession(ws, "omnipus")
 	require.NoError(t, err)
-	h := newWSHandler(bus.NewMessageBus(), env.api.agentLoop, "")
+	msgBus := bus.NewMessageBus()
+	h := newWSHandler(msgBus, env.api.agentLoop, "")
 	t.Cleanup(h.Wait)
 	wc := makeTestConn()
 
@@ -115,4 +116,41 @@ func TestOmnipusStandalone_WebSocketMessageToTheMainIsAccepted(t *testing.T) {
 	assert.NotContains(t, frames, `"type":"error"`,
 		"a message to Omnipus's main in the default workspace must be accepted, not refused: %s", frames)
 	assert.Zero(t, omnipusSessionCount(t, env), "no extra Omnipus chat is minted")
+	// F04 / M29: absence of an error is not acceptance. Pin the exact echo,
+	// durable user entry and synchronous real bus publication independently.
+	var echoes []gen.UserMessageFrame
+	for _, line := range strings.Split(strings.TrimSpace(frames), "\n") {
+		if line == "" {
+			continue
+		}
+		var head map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &head))
+		if head["type"] == "user_message" {
+			var echo gen.UserMessageFrame
+			require.NoError(t, json.Unmarshal([]byte(line), &echo))
+			echoes = append(echoes, echo)
+		}
+	}
+	if assert.Len(t, echoes, 1, "existing-main positive control must echo exactly one accepted input") {
+		assert.Equal(t, main.ID, echoes[0].SessionId)
+		assert.Equal(t, "hello omnipus", echoes[0].Content)
+		require.NotNil(t, echoes[0].AgentId)
+		assert.Equal(t, "omnipus", *echoes[0].AgentId)
+	}
+	entries, err := env.store(t).ReadTranscript(main.ID)
+	require.NoError(t, err)
+	if assert.Len(t, entries, 1, "the accepted input must be durable, not silently dropped") {
+		assert.Equal(t, "user", entries[0].Role)
+		assert.Equal(t, "omnipus", entries[0].AgentID)
+		assert.Equal(t, "hello omnipus", entries[0].Content)
+	}
+	select {
+	case msg := <-msgBus.InboundChan():
+		assert.Equal(t, main.ID, msg.SessionID)
+		assert.Equal(t, "omnipus", msg.Metadata["agent_id"])
+		assert.Equal(t, "hello omnipus", msg.Content)
+	default:
+		t.Error("accepted existing-main input did not reach real inbound dispatch")
+	}
+	l1WU1AssertNoInbound(t, msgBus)
 }

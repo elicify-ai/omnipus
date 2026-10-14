@@ -70,11 +70,13 @@ func TestL1WU1EngineExistingSession_ConflictingMetadataRefusesBeforeTurn(t *test
 				}
 				assert.Nil(t, owner, "no admitted/returned substitute owner")
 				assert.Empty(t, answer)
-				assert.Equal(t, before, l1WU1OwnerSnapshot(t, store), "no transcript/model-window/session metadata writes")
+				assert.Equal(t, before, l1WU1OwnerSnapshot(t, store), "no transcript/session metadata writes")
 				for _, id := range []string{"mia", "jim"} {
 					inst, ok := al.GetRegistry().GetAgent(id)
 					require.True(t, ok)
-					assert.Empty(t, inst.Provider.(interface{ AllRequests() [][]providers.Message }).AllRequests(), "no provider dispatch to %s", id)
+					capture, hasCapture := inst.Provider.(interface{ AllRequests() [][]providers.Message })
+					require.True(t, hasCapture, "provider fixture must expose request capture for %s", id)
+					assert.Empty(t, capture.AllRequests(), "no provider dispatch to %s", id)
 				}
 				return
 			}
@@ -133,8 +135,8 @@ func TestL1WU1ExistingSessionRouting_CanonicalNonMiaOwnerNeverSubstituted(t *tes
 			if ownerID == "deleted" {
 				assert.EqualError(t, err, "the session's owner agent deleted no longer exists")
 				assert.Nil(t, owner)
-				_, dispatchedOwner, err := al.processMessage(context.Background(), msg)
-				assert.EqualError(t, err, "the session's owner agent deleted no longer exists")
+				_, dispatchedOwner, dispatchErr := al.processMessage(context.Background(), msg)
+				assert.EqualError(t, dispatchErr, "the session's owner agent deleted no longer exists")
 				assert.Nil(t, dispatchedOwner)
 				assert.Equal(t, before, l1WU1OwnerSnapshot(t, store))
 				return
