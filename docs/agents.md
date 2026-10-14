@@ -43,6 +43,10 @@ Omnipus replaces the earlier Ava and Admin agents. It lives in your default work
 
 When an agent changes another agent through its tools, permissions are a separate step: `update_agent` changes identity, model and skills, while per-agent tool permissions and connector assignments change only through `set_agent_permissions`, which always asks you first. A saved permission or connector-assignment change, from the agent's settings or through `set_agent_permissions`, applies to the agent's next request and next tool call without a restart. A newly created agent can never be granted a management tool (agent, workspace, skill, connector, provider, channel, permission, secret or settings changes) — those stay with Omnipus.
 
+When an agent creates an external worker through its tools, the soul rule differs from the create form: a native agent (Main or Subagent) needs a soul, but an external worker takes none — it runs on its own command-line tool and has no persona prompt, and supplying one is refused with the reason shown. If that request names a `cli_path`, it must point at an existing file this machine can actually run: on macOS and Linux the user running Omnipus must hold execute permission on it, and on Windows its file extension must be one Windows recognizes as runnable (the PATHEXT list — .exe, .cmd and similar). A missing path, a directory, or a file failing this check is refused with the path named in the reason. Leaving `cli_path` out uses the tool's own launcher on the host's PATH.
+
+On Windows, this check uses the `PATHEXT` environment variable, a semicolon-separated list of runnable file extensions. Entries work with or without a leading dot and are matched without regard to letter case: `EXE;CMD` accepts `.exe` and `.cmd` files, just like `.EXE;.CMD`. Empty entries are ignored. A custom list controls which extensions are accepted; when the list is unset or blank, the check uses `.COM;.EXE;.BAT;.CMD`.
+
 ## How a conversation finds its agent
 
 Every conversation names its agent — there is no global default agent any more.
