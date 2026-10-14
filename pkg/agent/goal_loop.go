@@ -486,6 +486,10 @@ type goalDeferredAdjudicationWork struct {
 	goalID          string
 	goalPrompt      string
 	claimRecordedAt time.Time
+	// answer is the claiming turn's work result for the parent (all its
+	// assistant text, goal_upward_answer.go). claimText stays what the
+	// Judge judges (JUDGE-FR-094); answer is only what travels upward.
+	answer string
 }
 
 // goalDeferredAdjudicationDoneFn is a TEST SEAM ONLY — production leaves it
@@ -952,6 +956,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 			agentInst: gl.agentInst, workspaceID: gl.opts.WorkspaceID,
 			sessionID: gl.sessionID, claimText: claimText,
 			goalID: gl.rec.GoalID, goalPrompt: gl.rec.Prompt, claimRecordedAt: time.Now().UTC(),
+			answer: goalTurnAnswer(gl.store, gl.sessionID, gl.result.turnID, gl.result.finalContent),
 		}
 		if d := gl.opts.executionDisposition; d != nil {
 			work.producer = d.claim

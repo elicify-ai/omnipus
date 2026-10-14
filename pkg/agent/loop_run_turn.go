@@ -128,6 +128,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		followUps:    append([]bus.InboundMessage(nil), rz.rc.rx.rr.rq.ri.rf.rt.ts.followUps...),
 		turnFailed:   rz.rc.rx.rr.rq.ri.rf.rt.ts.turnFailed,
 		stopped:      rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load(),
+		turnID:       rz.rc.rx.rr.rq.ri.rf.rt.ts.turnID,
 	}, nil
 }
 

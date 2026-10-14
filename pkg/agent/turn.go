@@ -80,6 +80,10 @@ type turnResult struct {
 	// this turn's own finalContent — see goalDeferredAdjudicationWork's own
 	// doc comment (goal_loop.go) for the full contract.
 	goalDeferredAdjudication *goalDeferredAdjudicationWork
+	// turnID is the producing turn's ID (its transcript entries carry it as
+	// TurnID). Lets a goal claim gather everything the claiming turn wrote
+	// for the parent (goal_upward_answer.go). Empty when not set.
+	turnID string
 }
 
 type turnState struct {
@@ -675,6 +679,10 @@ type turnState struct {
 	toolRepeatSig        string
 	toolRepeatRun        int
 	toolRepeatStopNotice string
+	// delegatePolls tracks, per polled child session, what each delegate
+	// polling action last returned and how many times new information was
+	// seen (delegate_poll_guard.go). Guarded by mu; per-turn, never persisted.
+	delegatePolls map[string]*delegatePollState
 }
 
 // atomicToolCallProgress is the atomics-based store for turnState's live

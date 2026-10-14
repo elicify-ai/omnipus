@@ -113,7 +113,8 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 		// Issue #1306 R2-4: the outer round clock is the Judge's own check time
 		// limit too — a later attempt inheriting this earlier deadline must be
 		// reported as ErrJudgeTimeLimit, never as a provider timeout.
-		ctx, cancel := context.WithTimeoutCause(withGoalProducer(context.Background(), work.producer), goalJudgeRoundTimeout, ErrJudgeTimeLimit)
+		ctx, cancel := context.WithTimeoutCause(withGoalAnswer(withGoalProducer(context.Background(), work.producer), work.answer),
+			goalJudgeRoundTimeout, ErrJudgeTimeLimit)
 		met, unavailable := al.runGoalAdjudication(ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText,
 			al.idleSteerDeliverer(work.sessionID, rec.GoalID, goalClaimDeferredSourceKind))
 		cancel()
@@ -129,7 +130,7 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 	// verdict AND carries the worker's claim, so the parent (or the chat user)
 	// gets the actual work result with "not verified" — never a bare failure.
 	conclusion := notVerifiedConclusion(reason,
-		"The goal stays active: claim completion again once the Judge is available.", work.claimText)
+		"The goal stays active: claim completion again once the Judge is available.", work.upwardAnswer())
 	// SFH F1: the audience is decided from the lifecycle record; a read
 	// failure is retried and then reported loudly — it never silently picks
 	// the interactive (no-parent) audience.

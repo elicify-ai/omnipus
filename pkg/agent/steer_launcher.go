@@ -706,9 +706,10 @@ func launchGoalCriteria(in []steer.Criterion, authorAgentID string) []task.Accep
 	out := make([]task.AcceptanceCriterion, 0, len(in))
 	for _, criterion := range in {
 		mapped := task.AcceptanceCriterion{
-			Kind:     task.CriterionKind(criterion.Kind),
-			Judgment: task.JudgmentKind(criterion.Judgment),
-			Text:     criterion.Text,
+			Kind:       task.CriterionKind(criterion.Kind),
+			Judgment:   task.JudgmentKind(criterion.Judgment),
+			Provenance: task.CriterionProvenance(criterion.Provenance),
+			Text:       criterion.Text,
 			Author: task.CriterionAuthor{
 				Kind: task.AuthorKindAgent,
 				ID:   authorAgentID,

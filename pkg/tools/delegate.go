@@ -655,6 +655,10 @@ func delegateCriterionItemSchema() map[string]any {
 				"enum":        []string{"boolean", "quantitative", "artifact"},
 				"description": "How this criterion is scored. Optional, defaults to boolean.",
 			},
+			"provenance": map[string]any{
+				"type": "string",
+				"enum": []string{"stated", "workspace", "floor", "inferred"},
+			},
 		},
 		"required": []string{"text"},
 	}
@@ -682,7 +686,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"action": map[string]any{
 				"type": "string",
-				"enum": []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "stop_all", "clear_goal", "resume", "redirect", "peek"},
+				"enum": []string{"run", "status", "result", "inbox", "inbox_ack", "steer", "respond", "stop_all", "clear_goal", "resume", "redirect", "peek"},
 				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"inbox\" " +
 					"drains child->parent messages. \"inbox_ack\" acknowledges them. \"steer\" injects an " +
 					"instruction. \"respond\" answers one of the child's open questions. \"stop_all\" stops the " +
@@ -828,9 +832,11 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any) *ToolRe
 		return t.executeRedirect(ctx, args)
 	case "peek":
 		return t.executePeek(ctx, args)
+	case "result":
+		return t.executeResult(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf(
-			"invalid action %q: must be one of run, status, inbox, inbox_ack, steer, respond, stop_all, clear_goal, resume, redirect, peek",
+			"invalid action %q: must be one of run, status, result, inbox, inbox_ack, steer, respond, stop_all, clear_goal, resume, redirect, peek",
 			action,
 		))
 	}

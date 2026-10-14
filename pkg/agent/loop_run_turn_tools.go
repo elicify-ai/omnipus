@@ -1473,12 +1473,18 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		// Identical SUCCESSFUL repetition (tool_failure_circuit_breaker.go):
 		// warn the model, and at the stop threshold end the turn after
 		// this round (the takeToolRepeatStop check after the tool loop).
-		switch run := ex.rx.rr.rq.ri.rf.rt.ts.recordToolSuccessRepeat(ex.toolCBSig); {
-		case run >= toolRepeatStopThreshold:
-			ex.rx.rr.rq.ri.rf.rt.ts.requestToolRepeatStop(toolRepeatStopNotice(ex.toolName, run))
-			ex.toolResult.ForLLM = ex.toolResult.ContentForLLM() + toolRepeatWarnNotice(ex.toolName, run)
-		case run >= toolRepeatWarnThreshold:
-			ex.toolResult.ForLLM = ex.toolResult.ContentForLLM() + toolRepeatWarnNotice(ex.toolName, run)
+		// Delegate status/peek/inbox polling of one child with no new
+		// information shares one run (delegate_poll_guard.go).
+		repeatSig, poll := ex.rx.rr.rq.ri.rf.rt.ts.toolRepeatSignature(ex.toolName, ex.toolArgs, ex.toolCBSig, ex.toolResult.ContentForLLM())
+		if run := ex.rx.rr.rq.ri.rf.rt.ts.recordToolSuccessRepeat(repeatSig); run >= toolRepeatWarnThreshold {
+			warn, stop := toolRepeatWarnNotice(ex.toolName, run), toolRepeatStopNotice(ex.toolName, run)
+			if poll {
+				warn, stop = toolPollRepeatWarnNotice(run), toolPollRepeatStopNotice(run)
+			}
+			if run >= toolRepeatStopThreshold {
+				ex.rx.rr.rq.ri.rf.rt.ts.requestToolRepeatStop(stop)
+			}
+			ex.toolResult.ForLLM = ex.toolResult.ContentForLLM() + warn
 		}
 	}
 	return agentLoopRunTurnToolsExecuteNext
