@@ -70,7 +70,10 @@ describe('#1076 per-entry roster resilience', () => {
   it('#1076 diagnostics name the bad agent and field, not a supposed server-version mismatch', async () => {
     const warnings = vi.spyOn(console, 'warn')
     const errors = vi.spyOn(console, 'error')
-    serve([MIA, agent('broken', { name: 'n'.repeat(101) }), JIM])
+    // #1076 / CHECK F3: this id is used by no earlier boundary case, so the
+    // page-life report dedup deliberately starts fresh without a helper mock.
+    const invalidId = 'broken-warning-delivery'
+    serve([MIA, agent(invalidId, { name: 'n'.repeat(101) }), JIM])
     await expect(queryClient.fetchQuery({ queryKey: ['agents', 'wu10-resilience'], queryFn: fetchAgents, retry: false })).resolves.toEqual(expect.arrayContaining([MIA, JIM]))
     // Logging is an explicit issue requirement; recording spies call through.
     await act(async () => { await Promise.resolve() })
@@ -79,6 +82,16 @@ describe('#1076 per-entry roster resilience', () => {
       expect(logged).toMatch(/broken/)
       expect(logged).toMatch(/name/)
       expect(logged).toMatch(/invalid|validation/i)
+    })
+    // Positive actual delivery, not a formatter/log or a vacuous empty negative.
+    // The real rendered warning is also pinned through AppShell.warning1076.
+    await waitFor(() => {
+      const delivered = useUiStore.getState().toasts.filter((toast) =>
+        toast.variant === 'warning' && toast.message.includes(invalidId))
+      expect(delivered).toHaveLength(1)
+      expect(delivered[0].message).toContain(invalidId)
+      expect(delivered[0].message).toMatch(/\bname\b/)
+      expect(delivered[0].message).toMatch(/invalid/i)
     })
     const messages = useUiStore.getState().toasts.map((toast) => toast.message).join('\n')
     expect(messages).not.toMatch(/different version|please refresh/i)
