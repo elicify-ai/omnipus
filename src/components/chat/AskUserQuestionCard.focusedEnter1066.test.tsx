@@ -74,3 +74,76 @@ describe('#1066 direct Enter on an unanswered final option', () => {
     expect(send.mock.calls).toEqual([[expected]])
   })
 })
+
+// Founder decision 2026-10-14 (team-lead relay), alongside #1066:
+// once answered, Enter confirms the EARLIER answer even if focus moved to a
+// different option. A click changes the answer; focus movement alone does not.
+// New helper is used only by these added cases; the original RED matrix above
+// and all its expectations remain unchanged.
+async function openAnsweredFinalQuestion(card: AskCard = CARD) {
+  const user = userEvent.setup()
+  render(<AskUserQuestionCard card={card} />)
+  await user.click(screen.getByRole('button', { name: /^Sales$/i }))
+  await user.click(screen.getByRole('button', { name: /^(next|confirm|continue)(?: question| selection| answer)?$/i }))
+  expect(screen.getByText('How should we continue?')).toBeVisible()
+  expect(send.mock.calls).toEqual([])
+  const options = {
+    Go: screen.getByRole('button', { name: /^go(?:\s*recommended)?$/i }),
+    Change: screen.getByRole('button', { name: /^Change$/i }),
+    'Cancel plan': screen.getByRole('button', { name: /^Cancel plan$/i }),
+  }
+  for (const option of Object.values(options)) expect(option).toHaveAttribute('aria-pressed', 'false')
+  return { user, options }
+}
+function expectExplicitFinalAnswer(selected: string[]) {
+  const expected: AskUserAnswerFrame = {
+    type: 'ask_user_answer', card_id: CARD.card_id, session_id: CARD.session_id,
+    answers: [{ header: 'Area', selected: ['Sales'] }, { header: 'Apply', selected }],
+  }
+  expect(send.mock.calls).toEqual([[expected]])
+}
+
+describe('#1066 already-answered Enter — founder decision 2026-10-14 (team-lead relay)', () => {
+  it.each([
+    { earlier: 'Go', focused: 'Change', arrows: '{ArrowDown}' },
+    { earlier: 'Change', focused: 'Go', arrows: '{ArrowUp}' },
+    { earlier: 'Cancel plan', focused: 'Change', arrows: '{ArrowUp}' },
+  ] as const)('K-Answered retains earlier "$earlier" when Enter confirms a different focused "$focused"', async ({ earlier, focused, arrows }) => {
+    const { user, options } = await openAnsweredFinalQuestion()
+    await user.click(options[earlier])
+    expect(options[earlier]).toHaveAttribute('aria-pressed', 'true')
+    await user.keyboard(arrows)
+    expect(options[focused]).toHaveFocus()
+    expect(options[focused]).toHaveAttribute('aria-pressed', 'false')
+    expect(options[earlier]).toHaveAttribute('aria-pressed', 'true')
+    expect(send.mock.calls).toEqual([])
+    await user.keyboard('{Enter}')
+    expectExplicitFinalAnswer([earlier])
+  })
+  it('K-Answered multi-choice Enter retains the earlier set, not the other focused option', async () => {
+    const card: AskCard = { ...CARD, questions: [CARD.questions[0], { ...CARD.questions[1], multi_select: true }] }
+    const { user, options } = await openAnsweredFinalQuestion(card)
+    await user.click(options.Go)
+    await user.click(options['Cancel plan'])
+    expect(options.Go).toHaveAttribute('aria-pressed', 'true')
+    expect(options['Cancel plan']).toHaveAttribute('aria-pressed', 'true')
+    await user.keyboard('{ArrowUp}')
+    expect(options.Change).toHaveFocus()
+    expect(options.Change).toHaveAttribute('aria-pressed', 'false')
+    expect(send.mock.calls).toEqual([])
+    await user.keyboard('{Enter}')
+    expectExplicitFinalAnswer(['Go', 'Cancel plan'])
+  })
+  it('K-Click-change clicking Change replaces an earlier Go before Enter confirms it', async () => {
+    const { user, options } = await openAnsweredFinalQuestion()
+    await user.click(options.Go)
+    expect(options.Go).toHaveAttribute('aria-pressed', 'true')
+    await user.click(options.Change)
+    expect(options.Go).toHaveAttribute('aria-pressed', 'false')
+    expect(options.Change).toHaveAttribute('aria-pressed', 'true')
+    expect(options.Change).toHaveFocus()
+    expect(send.mock.calls).toEqual([])
+    await user.keyboard('{Enter}')
+    expectExplicitFinalAnswer(['Change'])
+  })
+})

@@ -225,9 +225,9 @@ describe('WsConnection + reattachActiveSession — reconnect re-attach (ADR-082 
     conn.disconnect()
   })
 
-  it('does NOT send attach_session on reopen for the "__pending" kickoff sentinel — sending it would be a protocol violation (chat.ts ~L1281 guard)', () => {
+  it('does NOT send attach_session on reopen for an unowned "__pending" sentinel — sending it would be a protocol violation', () => {
     useSessionStore.setState({ activeSessionId: '__pending', activeAgentId: 'ava', activeAgentType: 'core' })
-    useChatStore.setState({ pendingKickoff: { workspaceId: 'ws-1' } } as never)
+    useChatStore.setState({ pendingFirstSend: null })
 
     const connRef: { current: WsConnection | null } = { current: null }
     const setConnectionError = vi.fn()
@@ -238,8 +238,8 @@ describe('WsConnection + reattachActiveSession — reconnect re-attach (ADR-082 
     lastWsInstance.onopen?.()
 
     expect(attachFrames(lastWsInstance)).toHaveLength(0)
-    // The dead kickoff is torn down instead — not left wedged.
-    expect(useChatStore.getState().pendingKickoff).toBeNull()
+    // FR-047/K9 retires the client kickoff slot. The generic protocol
+    // guarantee above stays; a local sentinel never reaches attach_session.
 
     conn.disconnect()
   })

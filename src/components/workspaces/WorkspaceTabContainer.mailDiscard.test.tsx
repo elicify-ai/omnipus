@@ -125,10 +125,6 @@ vi.mock('@/components/chat/ChatControls', () => ({
   ChatControls: () => <div data-testid="chat-controls-mock">ChatControls</div>,
 }))
 
-vi.mock('@/hooks/useWorkspaceSetupKickoff', () => ({
-  useWorkspaceSetupKickoff: vi.fn(),
-}))
-
 // The one mock specific to this file: the shell's active-panel slice.
 // WorkspaceTabContainer reads this ONLY via `useUiStore.getState()` (never as
 // a hook) — see grep evidence: lines 99, 126, 130 of the component file.

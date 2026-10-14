@@ -1,0 +1,1102 @@
+{
+  "qa_parent": "80225e097ec783d8a65d50e62666d2f8d5b81116",
+  "records": [
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.workspace-setup-kickoff.test.ts",
+      "old_declarations": 31,
+      "new_declarations": 8,
+      "cases": [
+        {
+          "old_title": "produces the exact kickoff instruction text with the workspace name interpolated",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "253b068b11a71b10deb2a40dc77a618ae6679b30ae817e9984d971a1f2632747",
+          "old_matchers": 1,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "interpolates a SECOND, different workspace name correctly (not a fixture-frozen constant)",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "e246d91a6e2a41d51923ebe7aa44c21b453ccc81447409da1358c7b6ef646523",
+          "old_matchers": 1,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "sends the exact frame: metadata carries workspace_id + workspace_setup_kickoff:true, no session_id",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "9bda04ceb3b7a6bb2712827f61967d3767b76528848e9ec087c314e1093db61c",
+          "old_matchers": 4,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "a DIFFERENT input tuple (workspace/agent) produces a correspondingly different payload — not a fixture-frozen shape",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "636e92af8d9b987001a279121963ce5f56ca32f52d87d96282148215ac2c4ed2",
+          "old_matchers": 6,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "appends NO user message bubble — only the streaming assistant placeholder",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "0c65fa98ce3fdd78cd5085333a861d98664fd8f0a46b7e5f6f543c6ddd7ffe12",
+          "old_matchers": 3,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "sets up isStreaming and activates the pending session, like a normal new turn",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "504dbec8830851ba521106c74b41cfd340226f7c649b7579677e3bc95d18e8e6",
+          "old_matchers": 2,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "sets the active agent (id + type) so the composer/thread header show it",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "88b6d73af3f6e73a3220de55fb5e6e9aecfd66b95d54883a015b2898bcaed829",
+          "old_matchers": 2,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "bails (returns false, no send) when disconnected",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "951f4cdf91146ed8625b1aa545f77b74e6ab6719516d7c26eef332cdab754e9f",
+          "old_matchers": 3,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "bails (returns false, no send) when a turn is already streaming",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "ddfd2b03290b38f13c5bbaeaaa413c393dc0cb62ecce27c0ae49d08a4aad0f1c",
+          "old_matchers": 2,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "bails (returns false, no send) when a conversation already exists (activeSessionId !== null)",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "8f8c6d6d7f79021c17498e0cb9f85c1928e46756ea8652422170ee543aba88a9",
+          "old_matchers": 3,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "rolls back the placeholder and surfaces a connection error when send() fails",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "5778cbb55a3bf7d1c155343efaa785792edece978c8edfef29e2cd4e6d6c67d1",
+          "old_matchers": 5,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "never records the \"__pending\" sentinel in sessionByWorkspace",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "d28cde4cd4285fddc9a6b0b7f7645256a9fce17f110e7f42c2deb8aca621c1f8",
+          "old_matchers": 2,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "claims the single in-flight-kickoff slot on send (pendingKickoff)",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "eeb6a01ec79ab3288f72d2305453fd7d29461967305127f455fc42def5fbb356",
+          "old_matchers": 1,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "bails (returns false, no send) when a DIFFERENT kickoff is already in flight",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "f7a58259de753ad3823aa98b93c682d98c4fe3634404a4e27ca8f6ac79661d94",
+          "old_matchers": 2,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "does NOT write a sessionByWorkspace descriptor for the optimistic \"__pending\" no-session turn",
+          "new_title": "does NOT write a sessionByWorkspace descriptor for the optimistic \"__pending\" no-session turn",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "resets activeSessionId to null and clears pendingKickoff on send failure, unblocking a retry",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "4efe95a5308499a2dfd6d1090ff5f96d9b787c55fcf115b28ab38a961eea4240",
+          "old_matchers": 6,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "treats a stuck \"__pending\" + not-streaming session as no-active-session: fresh turn, no session_id on the wire",
+          "new_title": "treats a stuck \"__pending\" + not-streaming session as no-active-session: fresh turn, no session_id on the wire",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 3,
+          "required_original_matchers": 3,
+          "new_matchers": 3,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "does NOT apply the guard while the \"__pending\" session is still streaming (mid-turn steering unaffected)",
+          "new_title": "does NOT apply the guard while the \"__pending\" session is still streaming (mid-turn steering unaffected)",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "fully cleans up when the server rejects the kickoff as a DUPLICATE (already-ran, benign) — informational toast",
+          "new_title": "mixed-19: an ordinary fresh send after reset omits the pending sentinel",
+          "disposition": "retarget-mixed-keep-ordinary-oracles",
+          "reason": "Deleted kickoff prelude/slot/attempt/toast/special migration assertions retired; ordinary fresh-send, session-local error or offline queue assertions are preserved under explicit Mia fixture (FR-122).",
+          "original_matchers": 13,
+          "required_original_matchers": 2,
+          "new_matchers": 3,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": false,
+          "expected_retired_oracle_expressions": [
+            "expect(useSessionStore.getState().activeSessionId).toBe('__pending')",
+            "expect(useChatStore.getState().pendingKickoff).toEqual({ workspaceId: WORKSPACE_ID })",
+            "expect(useSessionStore.getState().activeSessionId).toBeNull()",
+            "expect(useChatStore.getState().pendingKickoff).toBeNull()",
+            "expect(useChatStore.getState().sessionsById['__pending']).toBeUndefined()",
+            "expect(useChatStore.getState().messages).toHaveLength(0)",
+            "expect(useChatStore.getState().isStreaming).toBe(false)",
+            "expect(toasts.length).toBeGreaterThanOrEqual(1)",
+            "expect(toasts.some((t) => /workspace setup already ran/i.test(t.message))).toBe(true)",
+            "expect(toasts.some((t) => t.variant === 'default')).toBe(true)",
+            "expect(toasts.some((t) => /could not start the workspace setup interview/i.test(t.message))).toBe(false)"
+          ],
+          "verified": true
+        },
+        {
+          "old_title": "fully cleans up when the server rejects the kickoff for a GENUINE failure — warning toast, distinct from the duplicate wording",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "c3e4da7bd72fe5a8dad4a5db76eb158fe1977a6ef9119552390df78c85ba96f7",
+          "old_matchers": 4,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "marks kickoffAttemptStatus \"failed\" for the rejected workspace",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "81413f48d38cc397738a59c4a32c8d2fc6ee7e629f963d6351d8737f67d504b2",
+          "old_matchers": 1,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "does NOT trigger the kickoff-reject cleanup for an ordinary message-turn error (no kickoff pending)",
+          "new_title": "does NOT trigger the kickoff-reject cleanup for an ordinary message-turn error (no kickoff pending)",
+          "disposition": "remove-only-retired-field-oracles",
+          "reason": "Only explicitly retired-field preconditions/oracles are removed; every remaining original matcher expression and value is retained. Removed expressions are listed in the machine ledger.",
+          "original_matchers": 3,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": false,
+          "expected_retired_oracle_expressions": [
+            "expect(useChatStore.getState().pendingKickoff).toBeNull()"
+          ],
+          "verified": true
+        },
+        {
+          "old_title": "does NOT foreground the kickoff session when the user navigated to a different workspace before the ack",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "90417b01fe71a2d4b6aea94485e13b4a5e7b37245717ff5715f3f5201891ca3c",
+          "old_matchers": 8,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "forgrounds normally when the ack arrives while the user is still on the originating workspace",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "404b8d8b917659e0744a43a3c5808a0a15755f1184afacd94987a02f42026619",
+          "old_matchers": 4,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "plain sendMessage session_started ack is unaffected (no pendingKickoff involved)",
+          "new_title": "plain sendMessage session_started ack is unaffected (no pendingKickoff involved)",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 3,
+          "required_original_matchers": 3,
+          "new_matchers": 3,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "clearStreamingState (WS disconnect) clears pendingKickoff, drops the orphaned __pending bucket, and marks kickoffAttemptStatus failed",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "727a5c0864a513396f25792a3e2f8db0ed17dff837ad54399c030530c2420e1e",
+          "old_matchers": 7,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "is a no-op when no kickoff is outstanding",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "7e432bc1fd8281eac0fe0790edc997daec7ddab59ce0e1f5bcb36386d9fc259c",
+          "old_matchers": 2,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "clears the slot quietly and does NOT disturb an unrelated conversation that is now foreground",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "f3475ea511ecf098c60b2003a00dca199b2c65abdcdd880e1ac97fe493e34e28",
+          "old_matchers": 10,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "a tagged error frame leaves pendingKickoff untouched and runs the generic C8 handling instead, even while a kickoff is pending",
+          "new_title": "mixed-29: a tagged ordinary error stays in its named chat without workspace-setup side effects",
+          "disposition": "retarget-mixed-keep-ordinary-oracles",
+          "reason": "Deleted kickoff prelude/slot/attempt/toast/special migration assertions retired; ordinary fresh-send, session-local error or offline queue assertions are preserved under explicit Mia fixture (FR-122).",
+          "original_matchers": 6,
+          "required_original_matchers": 3,
+          "new_matchers": 3,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": false,
+          "expected_retired_oracle_expressions": [
+            "expect(useChatStore.getState().pendingKickoff).toEqual({ workspaceId: WORKSPACE_ID })",
+            "expect(useChatStore.getState().pendingKickoff).toEqual({ workspaceId: WORKSPACE_ID })",
+            "expect(useChatStore.getState().kickoffAttemptStatus[WORKSPACE_ID]).toBeUndefined()"
+          ],
+          "verified": true
+        },
+        {
+          "old_title": "sendMessage enqueues (does not send, does not create a second __pending bucket) while a kickoff is pending",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "58c26bdbb62db8cfa4710a792f4fe5c6d0fc09a45228acd65ec1f04ac593417e",
+          "old_matchers": 6,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "end-to-end: the queued message survives and is sent separately once the kickoff resolves (via the wrong-workspace migration branch)",
+          "new_title": "mixed-31: a queued ordinary message survives disconnection and drains as one fresh turn without a sentinel session id",
+          "disposition": "retarget-mixed-keep-ordinary-oracles",
+          "reason": "Deleted kickoff prelude/slot/attempt/toast/special migration assertions retired; ordinary fresh-send, session-local error or offline queue assertions are preserved under explicit Mia fixture (FR-122).",
+          "original_matchers": 12,
+          "required_original_matchers": 9,
+          "new_matchers": 9,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": false,
+          "expected_retired_oracle_expressions": [
+            "expect(useChatStore.getState().pendingKickoff).toBeNull()",
+            "expect(useSessionStore.getState().sessionByWorkspace[WORKSPACE_ID]).toEqual({\n      id: 'sess-kickoff-real',\n      type: 'chat',\n      title: null,\n      agentId: AGENT_ID,\n    })",
+            "expect(useSessionStore.getState().activeSessionId).toBe('__pending')"
+          ],
+          "verified": true
+        }
+      ],
+      "unexpected_new_cases": [],
+      "final_sha256": "6e535049d59cf5342930e37405a053a89a4964222f28738ca4c74ee171bf5bd0"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.first-message-gaps.test.ts",
+      "old_declarations": 12,
+      "new_declarations": 12,
+      "cases": [
+        {
+          "old_title": "D8 / FR-005: confirming + New chat clears the old pending bucket and recovery request, making old Retry inert",
+          "new_title": "D8 / FR-005: confirming + New chat clears the old pending bucket and recovery request, making old Retry inert",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 11,
+          "required_original_matchers": 11,
+          "new_matchers": 11,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D8: late old $label after confirmed + New chat cannot change the new pending chat",
+          "new_title": "D8: late old $label after confirmed + New chat cannot change the new pending chat",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 12,
+          "required_original_matchers": 12,
+          "new_matchers": 12,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D7: a locally unsuccessful first send keeps the exact request and shows Delivery not confirmed, not Generate again",
+          "new_title": "D7: a locally unsuccessful first send keeps the exact request and shows Delivery not confirmed, not Generate again",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 6,
+          "required_original_matchers": 6,
+          "new_matchers": 6,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D7: a locally unsuccessful delivery Retry returns to unconfirmed without duplicating the bubble or changing its request",
+          "new_title": "D7: a locally unsuccessful delivery Retry returns to unconfirmed without duplicating the bubble or changing its request",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 8,
+          "required_original_matchers": 8,
+          "new_matchers": 8,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D7: recovered attach returning false keeps the message with Could not check this chat; Retry attaches the known chat only",
+          "new_title": "D7: recovered attach returning false keeps the message with Could not check this chat; Retry attaches the known chat only",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 6,
+          "required_original_matchers": 6,
+          "new_matchers": 6,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D7: recovered acknowledgement with %s keeps the saved bubble and a disabled check Retry",
+          "new_title": "D7: recovered acknowledgement with %s keeps the saved bubble and a disabled check Retry",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D7: recovered $label preserves the original saved message and permits only a check Retry",
+          "new_title": "D7: recovered $label preserves the original saved message and permits only a check Retry",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 3,
+          "required_original_matchers": 3,
+          "new_matchers": 3,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D7: recovered catch-up with an existing active turn stays streaming and does not offer Generate again",
+          "new_title": "D7: recovered catch-up with an existing active turn stays streaming and does not offer Generate again",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 9,
+          "required_original_matchers": 9,
+          "new_matchers": 9,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D7: recovered catch-up with an existing answer keeps the answer and never labels the original message unfinished",
+          "new_title": "D7: recovered catch-up with an existing answer keeps the answer and never labels the original message unfinished",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 8,
+          "required_original_matchers": 8,
+          "new_matchers": 8,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D5/D7: a recovered received receipt cannot downgrade an %s or reopen delivery Retry",
+          "new_title": "D5/D7: a recovered received receipt cannot downgrade an %s or reopen delivery Retry",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 10,
+          "required_original_matchers": 10,
+          "new_matchers": 10,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D7: successful unanswered recovery releases the request so delivery Retry cannot send again",
+          "new_title": "D7: successful unanswered recovery releases the request so delivery Retry cannot send again",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 5,
+          "required_original_matchers": 5,
+          "new_matchers": 5,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D7: an ordinary unknown_position snapshot without first-send recovery is not globally treated as unfinished",
+          "new_title": "D7: an ordinary unknown_position snapshot without first-send recovery is not globally treated as unfinished",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 7,
+          "required_original_matchers": 7,
+          "new_matchers": 7,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        }
+      ],
+      "unexpected_new_cases": [],
+      "final_sha256": "e8a4f8f622e33e286d1a68b5d59034ccf73e868a193507410336f111dec7e7a7"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.first-message-recovery.test.ts",
+      "old_declarations": 7,
+      "new_declarations": 7,
+      "cases": [
+        {
+          "old_title": "T8: drop before session_started keeps the bubble, removes the empty reply and shows Delivery not confirmed + Retry only",
+          "new_title": "T8: drop before session_started keeps the bubble, removes the empty reply and shows Delivery not confirmed + Retry only",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 11,
+          "required_original_matchers": 11,
+          "new_matchers": 11,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "T9: pressing Retry twice resends the exact original frame once with the same ID and shows Checking delivery…",
+          "new_title": "T9: pressing Retry twice resends the exact original frame once with the same ID and shows Checking delivery…",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 5,
+          "required_original_matchers": 5,
+          "new_matchers": 5,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "T10: recovered:true attaches without a cursor and replays one server entry, then offers Generate again only after catch-up",
+          "new_title": "T10: recovered:true attaches without a cursor and replays one server entry, then offers Generate again only after catch-up",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 13,
+          "required_original_matchers": 13,
+          "new_matchers": 13,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "T11: tagged $kind shows \"$copy\" + Retry without Generate again",
+          "new_title": "T11: tagged $kind shows \"$copy\" + Retry without Generate again",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 7,
+          "required_original_matchers": 7,
+          "new_matchers": 7,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "T12: answer_not_started shows Message saved, but no answer started; Generate again sends one fresh-ID turn with original media in the known session",
+          "new_title": "T12: answer_not_started shows Message saved, but no answer started; Generate again sends one fresh-ID turn with original media in the known session",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 10,
+          "required_original_matchers": 10,
+          "new_matchers": 10,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "T12: recovered unfinished Generate again uses neither the original client ID nor the re-keyed server ID and keeps original media",
+          "new_title": "T12: recovered unfinished Generate again uses neither the original client ID nor the re-keyed server ID and keeps original media",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 9,
+          "required_original_matchers": 9,
+          "new_matchers": 9,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "T12 characterization control: general resendMessage for an unrelated known-session message keeps its ID, media and single bubble",
+          "new_title": "T12 characterization control: general resendMessage for an unrelated known-session message keeps its ID, media and single bubble",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 5,
+          "required_original_matchers": 5,
+          "new_matchers": 5,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        }
+      ],
+      "unexpected_new_cases": [],
+      "final_sha256": "1dfd7fb37d0893c740ee9472317c5e82a109ca811061f37cd1ca33a0c59324f9"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.first-message-crash.test.ts",
+      "old_declarations": 2,
+      "new_declarations": 2,
+      "cases": [
+        {
+          "old_title": "T3: reconnect retains the first user message in the store AND the active foreground",
+          "new_title": "T3: reconnect retains the first user message in the store AND the active foreground",
+          "disposition": "remove-only-retired-field-oracles",
+          "reason": "Only explicitly retired-field preconditions/oracles are removed; every remaining original matcher expression and value is retained. Removed expressions are listed in the machine ledger.",
+          "original_matchers": 8,
+          "required_original_matchers": 7,
+          "new_matchers": 7,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": false,
+          "expected_retired_oracle_expressions": [
+            "expect(useChatStore.getState().pendingKickoff,\n      'T3 fixture is an ordinary first message, NOT a workspace-setup kickoff',\n    ).toBeNull()"
+          ],
+          "verified": true
+        },
+        {
+          "old_title": "T4: confirmed + New chat and its first send do not inherit the failed chat's stale pending message",
+          "new_title": "T4: confirmed + New chat and its first send do not inherit the failed chat's stale pending message",
+          "disposition": "remove-only-retired-field-oracles",
+          "reason": "Only explicitly retired-field preconditions/oracles are removed; every remaining original matcher expression and value is retained. Removed expressions are listed in the machine ledger.",
+          "original_matchers": 7,
+          "required_original_matchers": 6,
+          "new_matchers": 6,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": false,
+          "expected_retired_oracle_expressions": [
+            "expect(useChatStore.getState().pendingKickoff).toBeNull()"
+          ],
+          "verified": true
+        }
+      ],
+      "unexpected_new_cases": [],
+      "final_sha256": "1f32ba0a18c7ac01e98501671280dc9d8cbaa3e48491c8cb1277efcf398fe0d5"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.first-message-saved-label.test.ts",
+      "old_declarations": 3,
+      "new_declarations": 3,
+      "cases": [
+        {
+          "old_title": "(a) an untagged session_started alone must not mark the first message saved",
+          "new_title": "(a) an untagged session_started alone must not mark the first message saved",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 4,
+          "required_original_matchers": 4,
+          "new_matchers": 4,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "(b) an untagged session_started followed by tagged not_saved must show Could not save message · Retry",
+          "new_title": "(b) an untagged session_started followed by tagged not_saved must show Could not save message · Retry",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 6,
+          "required_original_matchers": 6,
+          "new_matchers": 6,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "(c) control: a client-ID-tagged session_started acknowledgement marks the matching first message saved",
+          "new_title": "(c) control: a client-ID-tagged session_started acknowledgement marks the matching first message saved",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 5,
+          "required_original_matchers": 5,
+          "new_matchers": 5,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        }
+      ],
+      "unexpected_new_cases": [],
+      "final_sha256": "a3ff23351f308c3156795db1bc4633b752c0c5d11d453485a21e99a3aeeb01b3"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.first-message-foreign-ids.test.ts",
+      "old_declarations": 2,
+      "new_declarations": 2,
+      "cases": [
+        {
+          "old_title": "F1/S4: message B's acknowledgement cannot save A, discard its request or resend; normal B binding still runs",
+          "new_title": "F1/S4: message B's acknowledgement cannot save A, discard its request or resend; normal B binding still runs",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 15,
+          "required_original_matchers": 15,
+          "new_matchers": 15,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "F2/A5: session B's error cannot fail session A's check, expose Retry or change its receipt, request, queue or traffic",
+          "new_title": "F2/A5: session B's error cannot fail session A's check, expose Retry or change its receipt, request, queue or traffic",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 18,
+          "required_original_matchers": 18,
+          "new_matchers": 18,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        }
+      ],
+      "unexpected_new_cases": [],
+      "final_sha256": "e9bfca90fe575558d6b935a000ac3768b158290892e597380f8b5e214dc1ee40"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.llm-error.test.ts",
+      "old_declarations": 16,
+      "new_declarations": 15,
+      "cases": [
+        {
+          "old_title": "shows the controller-authored delegated-task limit notice in the default bubble",
+          "new_title": "shows the controller-authored delegated-task limit notice in the default bubble",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 3,
+          "required_original_matchers": 3,
+          "new_matchers": 3,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "renders the translated code→display copy (NOT the raw wire message) on a fresh error bubble",
+          "new_title": "renders the translated code→display copy (NOT the raw wire message) on a fresh error bubble",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 7,
+          "required_original_matchers": 7,
+          "new_matchers": 7,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "stamps errorDetail when verbose is on AND payload carries detail",
+          "new_title": "stamps errorDetail when verbose is on AND payload carries detail",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "omits errorDetail when verbose is off, even if payload carries detail",
+          "new_title": "omits errorDetail when verbose is off, even if payload carries detail",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "stamps errorEntryId when the frame carries entry_id",
+          "new_title": "stamps errorEntryId when the frame carries entry_id",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 1,
+          "required_original_matchers": 1,
+          "new_matchers": 1,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "renders frame.message verbatim when payload.llm_error is absent",
+          "new_title": "renders frame.message verbatim when payload.llm_error is absent",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 4,
+          "required_original_matchers": 4,
+          "new_matchers": 4,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D5/U5: sanitizes internal jargon in a fresh bubble without a global connection banner",
+          "new_title": "D5/U5: sanitizes internal jargon in a fresh bubble without a global connection banner",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 4,
+          "required_original_matchers": 4,
+          "new_matchers": 4,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "D5/U5: passes a non-jargon legacy error unchanged in its chat, never globally",
+          "new_title": "D5/U5: passes a non-jargon legacy error unchanged in its chat, never globally",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 3,
+          "required_original_matchers": 3,
+          "new_matchers": 3,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "replays the controller-authored delegated-task limit notice with its identifiers",
+          "new_title": "replays the controller-authored delegated-task limit notice with its identifiers",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 3,
+          "required_original_matchers": 3,
+          "new_matchers": 3,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "pushes a fresh error bubble with the translated copy when no trailing assistant bubble exists",
+          "new_title": "pushes a fresh error bubble with the translated copy when no trailing assistant bubble exists",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 6,
+          "required_original_matchers": 6,
+          "new_matchers": 6,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "coalesces into a trailing streaming assistant bubble instead of pushing a fresh one",
+          "new_title": "coalesces into a trailing streaming assistant bubble instead of pushing a fresh one",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 7,
+          "required_original_matchers": 7,
+          "new_matchers": 7,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "falls back to frame.message for legacy replay_error frames without typed payload",
+          "new_title": "falls back to frame.message for legacy replay_error frames without typed payload",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "a live error then a replay_error with the SAME entry_id yields ONE bubble",
+          "new_title": "a live error then a replay_error with the SAME entry_id yields ONE bubble",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 4,
+          "required_original_matchers": 4,
+          "new_matchers": 4,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "two live errors with DIFFERENT entry_ids both render (dedup is per-entry-id, not a global cap)",
+          "new_title": "two live errors with DIFFERENT entry_ids both render (dedup is per-entry-id, not a global cap)",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 1,
+          "required_original_matchers": 1,
+          "new_matchers": 1,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "a kickoff-reject (no session_id) still routes to abandonPendingKickoffInternal + toast, not the typed-payload branch",
+          "new_title": null,
+          "disposition": "retired-deleted-client-contract",
+          "old_case_sha256": "fb8848fa9ad378a7c7d1ec2d98ceda566e90edc68c5f59775e65b2eeac24c549",
+          "old_matchers": 3,
+          "reason": "FR-047/K9 and chief BDD-5.8 retire this deleted producer/hook/reject/collision contract; exact title/reason is in KICKOFF-RETIREMENTS.json."
+        },
+        {
+          "old_title": "a cancel-ack error (message matches /turn.cancel/i) still resolves to interrupted status, not error",
+          "new_title": "a cancel-ack error (message matches /turn.cancel/i) still resolves to interrupted status, not error",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 3,
+          "required_original_matchers": 3,
+          "new_matchers": 3,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        }
+      ],
+      "unexpected_new_cases": [],
+      "final_sha256": "9f70f8f4ba203f8f09bd1b7a072e073c4c0655db08d307331780b72c52fa8a3e"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/session.agent-precedence.test.ts",
+      "old_declarations": 13,
+      "new_declarations": 13,
+      "cases": [
+        {
+          "old_title": "a session attach sets the immutable owner, and a later same-session hint does not move the next message",
+          "new_title": "a session attach sets the immutable owner, and a later same-session hint does not move the next message",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 5,
+          "required_original_matchers": 5,
+          "new_matchers": 5,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "a newly activated session adopts the owner passed to setActiveSession",
+          "new_title": "a newly activated session adopts the owner passed to setActiveSession",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "setActiveAgentType records the type of the attached owner",
+          "new_title": "setActiveAgentType records the type of the attached owner",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "starting a new chat keeps the attached owner and drops the session id",
+          "new_title": "starting a new chat keeps the attached owner and drops the session id",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "with no explicit selection, attaching a session adopts that session's agent, and the next message goes to it",
+          "new_title": "with no explicit selection, attaching a session adopts that session's agent, and the next message goes to it",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "with no explicit selection, setActiveSession adopts the session agent and its type",
+          "new_title": "with no explicit selection, setActiveSession adopts the session agent and its type",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "an attach still adopts its agent when the pick was made but there is no agent yet (a pin on \"no agent\" is meaningless)",
+          "new_title": "an attach still adopts its agent when the pick was made but there is no agent yet (a pin on \"no agent\" is meaningless)",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 1,
+          "required_original_matchers": 1,
+          "new_matchers": 1,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "there is no picker action that can point the composer at a second agent",
+          "new_title": "there is no picker action that can point the composer at a second agent",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "entering another workspace restores that workspace session's owner, not a picker pin",
+          "new_title": "entering another workspace restores that workspace session's owner, not a picker pin",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 3,
+          "required_original_matchers": 3,
+          "new_matchers": 3,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "re-entering the same workspace restores the session owner, not a picker pin",
+          "new_title": "re-entering the same workspace restores the session owner, not a picker pin",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "a later hint for the same session does not replace the attached owner (FR-009)",
+          "new_title": "a later hint for the same session does not replace the attached owner (FR-009)",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 3,
+          "required_original_matchers": 3,
+          "new_matchers": 3,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "attaching records the session owner on the workspace pointer",
+          "new_title": "attaching records the session owner on the workspace pointer",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 2,
+          "required_original_matchers": 2,
+          "new_matchers": 2,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        },
+        {
+          "old_title": "there is no picker action that detaches the session or wipes the Task banner",
+          "new_title": "there is no picker action that detaches the session or wipes the Task banner",
+          "disposition": "preserve-all-oracles",
+          "reason": "All original matcher expressions and values retained; only removed-unit fixture scaffolding may differ.",
+          "original_matchers": 4,
+          "required_original_matchers": 4,
+          "new_matchers": 4,
+          "missing_required_matchers": [],
+          "old_test_body_bytes_preserved": true,
+          "expected_retired_oracle_expressions": [],
+          "verified": true
+        }
+      ],
+      "unexpected_new_cases": [],
+      "final_sha256": "d884ca3bf7d36df5dc5a729124479fd57e66376dcfb5aa7cf1374d43cfdc3d91"
+    }
+  ],
+  "pass": true
+}
