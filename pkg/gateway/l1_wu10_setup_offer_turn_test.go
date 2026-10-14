@@ -102,7 +102,7 @@ func TestL1WU10RESTCreate_SetupTurnKeepsDefaultWorkspaceContext(t *testing.T) {
 			newCount++
 			memory, readErr := memrooms.ReadMemoryFile(defaultRoom.MemoriesDir, id)
 			require.NoError(t, readErr)
-			assert.Equal(t, "setup anchor from real turn", memory.Body)
+			assert.Equal(t, "setup anchor from real turn\n", memory.Body)
 			assert.Equal(t, "omnipus", memory.Frontmatter.Author)
 		}
 	}
