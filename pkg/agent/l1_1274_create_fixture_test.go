@@ -194,21 +194,24 @@ func l11274Executable(t *testing.T, home, cli string, executable bool) string {
 	}
 	name, content, mode := cli, "#!/bin/sh\nprintf '9.9.9\\n'\n", os.FileMode(0o700)
 	if runtime.GOOS == "windows" {
+		// A controlled executable-extension policy: .cmd is permitted, .txt
+		// is not. Do not inherit an operator's custom .txt association.
+		t.Setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
 		name, content = name+".cmd", "@echo off\r\necho 9.9.9\r\n"
 	}
 	if !executable {
-		name, mode = name+".txt", 0o600
+		name, content, mode = cli+".txt", "Plain data, not an external CLI program.\n", 0o600
 	}
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, []byte(content), mode); err != nil {
 		t.Fatal(err)
 	}
+	// CHECK F02: Windows LookPath accepts an existing .txt file. It is not
+	// a negative executable oracle: return the data fixture to the product.
 	if executable {
 		if _, err := exec.LookPath(path); err != nil {
 			t.Fatalf("SETUP: positive executable-path instrument: %v", err)
 		}
-	} else if _, err := exec.LookPath(path); err == nil {
-		t.Fatalf("SETUP: non-executable fixture %q unexpectedly passes executable lookup", path)
 	}
 	return path
 }

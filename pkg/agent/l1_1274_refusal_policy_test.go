@@ -39,7 +39,7 @@ func TestL11274InvalidCLIPathsRefuseWithModelVisiblePathAndReason(t *testing.T) 
 				}
 				result := f.execute(t, "create_agent", l11274CreateArgs("Rejected worker", cli, path))
 				message := l11274ModelRefusalReason(t, result)
-				if !strings.Contains(message, "cli_path") || !strings.Contains(message, path) {
+				if !strings.Contains(message, "cli_path") || !l11274ReasonNamesPath(message, path) {
 					t.Errorf("refusal must identify cli_path %q in the model-facing reason, got %q", path, message)
 				}
 				matched := false
