@@ -1,7 +1,6 @@
 package openclaw
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,7 +8,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/migrate/internal"
 )
 
@@ -143,13 +141,10 @@ func (o *OpenclawHandler) ExecuteConfigMigration(srcConfigPath, dstConfigPath st
 // write-then-verifies durability internally (ADR-054 D6 corollary), so a nil
 // error from Store.Create means the record is confirmed on disk.
 //
-// Re-running the migration (the config-conversion step has no --force gate
-// of its own — config.SaveConfig below always unconditionally overwrites
-// dstConfigPath) must not fail just because a previous run already created
-// the same agent IDs: an ErrAlreadyExists falls back to Update, overwriting
-// the existing record's fields with the freshly re-converted ones while
-// preserving its original ID/CreatedAt, mirroring the "always clobber on
-// re-migrate" semantics config.json itself already has.
+// Every imported agent carries a freshly generated id (convertAgents), so a
+// re-run imports the roster again as new agents; it never overwrites an
+// agent created by an earlier run (founder decision 2026-10-14: imported
+// agents get generated ids, old ids are not kept).
 func persistMigratedAgents(dstConfigPath string, agents []config.AgentConfig) error {
 	if len(agents) == 0 {
 		return nil
@@ -161,20 +156,7 @@ func persistMigratedAgents(dstConfigPath string, agents []config.AgentConfig) er
 			continue
 		}
 		if err := store.Create(ac.ID, &ac); err != nil {
-			if errors.Is(err, entity.ErrAlreadyExists) {
-				if _, updateErr := store.Update(ac.ID, func(existing *config.AgentConfig) error {
-					createdAt := existing.CreatedAt
-					id := existing.ID
-					*existing = ac
-					existing.ID = id
-					existing.CreatedAt = createdAt
-					return nil
-				}); updateErr != nil {
-					return fmt.Errorf("update existing agent entity %q: %w", ac.ID, updateErr)
-				}
-				continue
-			}
-			return fmt.Errorf("create agent entity %q: %w", ac.ID, err)
+			return fmt.Errorf("create agent entity %q (%s): %w", ac.ID, ac.Name, err)
 		}
 	}
 	return nil

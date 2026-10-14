@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -80,34 +82,51 @@ func (t *AgentGetToolsTool) Parameters() map[string]any {
 		"type": "object", "additionalProperties": false,
 		"properties": map[string]any{
 			"id":             map[string]any{"type": "string", "description": "Existing agent ID; omit for creation preview."},
-			"new_agent_type": map[string]any{"type": "string", "enum": []string{"Main", "Subagent"}, "description": "Preview native creation defaults without creating an agent; mutually exclusive with id."},
+			"name":           map[string]any{"type": "string", "description": "Existing agent's exact display name, instead of id (#1032). Several agents with that name are refused as ambiguous."},
+			"new_agent_type": map[string]any{"type": "string", "enum": []string{"Main", "Subagent"}, "description": "Preview native creation defaults without creating an agent; mutually exclusive with id and name."},
 		},
 	}
 }
 func (t *AgentGetToolsTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	id, _ := args["id"].(string)
 	rawType, preview := args["new_agent_type"]
+	_, hasID := args["id"]
+	_, hasName := args["name"]
+	selectors := 0
+	for _, present := range []bool{preview, hasID, hasName} {
+		if present {
+			selectors++
+		}
+	}
+	if selectors != 1 {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT",
+			"Supply exactly one of: an existing agent's id, its exact name, or new_agent_type Main/Subagent", ""))
+	}
 	var state *agentstore.State
+	var id string
 	if preview {
 		kind, ok := rawType.(string)
-		_, hasID := args["id"]
-		if hasID || !ok || (kind != "Main" && kind != "Subagent") {
+		if !ok || (kind != "Main" && kind != "Subagent") {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", "Supply exactly one existing id or new_agent_type Main/Subagent", ""))
 		}
 		// Both native types use this same constructor in agentCreateToolExecute.
 		// Preview in memory without touching the agent store.
 		state = &agentstore.State{Agent: &config.AgentConfig{Tools: coreagent.NewCustomAgentToolsCfg()}}
 	} else {
-		if err := validateID(id); err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
-		}
 		home, err := resolveOmnipusHome(t.deps.Home)
 		if err != nil {
 			return tools.ErrorResult(errorJSON("WORKSPACE_ERROR", err.Error(), ""))
 		}
-		state, err = agentstore.New(home).ReadState(id)
-		if err != nil {
-			return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND", err.Error(), "Use list_agents"))
+		if hasName {
+			var refusal *tools.ToolResult
+			if id, refusal = agentIDByExactName(home, args["name"]); refusal != nil {
+				return refusal
+			}
+		} else {
+			id, _ = args["id"].(string)
+		}
+		var refusal *tools.ToolResult
+		if state, refusal = readAgentStateExact(home, id); refusal != nil {
+			return refusal
 		}
 	}
 
@@ -223,7 +242,7 @@ func wireAgentType(a config.AgentConfig) string {
 }
 
 func editableDescriptors(a config.AgentConfig) []map[string]any {
-	// update_agent also writes HEARTBEAT.md and AGENT.md (#1064).
+	// update_agent also writes AGENT.md (#1064).
 	descriptors := append(agentmutation.FieldDescriptors(a), agentmutation.MetadataFileDescriptors(a)...)
 	out := make([]map[string]any, 0, len(descriptors))
 	for _, descriptor := range descriptors {
@@ -245,4 +264,75 @@ func editableDescriptors(a config.AgentConfig) []map[string]any {
 		out = append(out, d)
 	}
 	return out
+}
+
+// readAgentStateExact reads an agent's state by its EXACT id (#1032 F-2,
+// chief ruling 2026-10-14): the id must be a valid agent id, and agentstore
+// compares it with the stored id, so "OMNIPUS" never opens omnipus.json on a
+// case-insensitive filesystem. Refusals are tool results.
+func readAgentStateExact(home, id string) (*agentstore.State, *tools.ToolResult) {
+	if err := agentstore.ValidateAgentID(id); err != nil {
+		return nil, tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Use an id from list_agents"))
+	}
+	// agentstore compares the stored id exactly, so a case variant is not found.
+	state, err := agentstore.New(home).ReadState(id)
+	if err != nil {
+		if errors.Is(err, entity.ErrNotFound) {
+			return nil, tools.ErrorResult(errorJSON("AGENT_NOT_FOUND", fmt.Sprintf("No agent with ID %q", id), "Use list_agents"))
+		}
+		return nil, tools.ErrorResult(errorJSON("READ_FAILED", err.Error(), "Use list_agents"))
+	}
+	return state, nil
+}
+
+// agentRecordExistsExact reports whether the agent entity store holds a record
+// whose file name is exactly id + ".json" (byte-exact, whatever the
+// filesystem's case rules).
+func agentRecordExistsExact(home, id string) (bool, error) {
+	entries, err := os.ReadDir(agentstore.New(home).Dir())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read the agent store: %w", err)
+	}
+	want := id + ".json"
+	for _, e := range entries {
+		if !e.IsDir() && e.Name() == want {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// agentIDByExactName resolves an agent's exact display name to its id
+// (#1032; ruling Q4): no fuzzy or case-insensitive match. Names are free
+// labels, so two agents may share one — that is refused as AMBIGUOUS with
+// the candidate ids.
+func agentIDByExactName(home string, raw any) (string, *tools.ToolResult) {
+	name, ok := raw.(string)
+	if !ok || strings.TrimSpace(name) == "" {
+		return "", tools.ErrorResult(errorJSON("INVALID_INPUT", "name must be a non-empty string", "Use a name from list_agents"))
+	}
+	agents, _, err := agentstore.New(home).List()
+	if err != nil {
+		return "", tools.ErrorResult(errorJSON("READ_FAILED", fmt.Sprintf("the agent list could not be read: %v", err), "Retry list_agents"))
+	}
+	var ids []string
+	for _, a := range agents {
+		if a.Name == name {
+			ids = append(ids, a.ID)
+		}
+	}
+	sort.Strings(ids)
+	switch len(ids) {
+	case 0:
+		return "", tools.ErrorResult(errorJSON("AGENT_NOT_FOUND", fmt.Sprintf("No agent is named %q", name),
+			"Use list_agents to see the agents' names and ids"))
+	case 1:
+		return ids[0], nil
+	}
+	return "", tools.ErrorResult(errorJSON("AMBIGUOUS",
+		fmt.Sprintf("%d agents are named %q: %s", len(ids), name, strings.Join(ids, ", ")),
+		"Call get_agent_tools with one of these ids"))
 }

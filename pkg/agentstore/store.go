@@ -147,10 +147,17 @@ func (s *Store) Dir() string { return s.inner.Dir() }
 // Get returns the agent record for id. Returns an error wrapping
 // entity.ErrNotFound when absent (errors.Is(err, entity.ErrNotFound) still
 // works through this wrapper, per fmt.Errorf's %w).
+//
+// Agent ids match exactly (chief ruling 2026-10-14): the loaded record's id
+// must equal id, so a differently cased spelling that a case-insensitive
+// filesystem resolves to another agent's file is entity.ErrNotFound.
 func (s *Store) Get(id string) (*config.AgentConfig, error) {
 	cfg, err := s.inner.Get(id)
 	if err != nil {
 		return nil, fmt.Errorf("agentstore: get %q: %w", id, err)
+	}
+	if cfg.ID != id {
+		return nil, fmt.Errorf("agentstore: get %q: %w", id, entity.ErrNotFound)
 	}
 	return cfg, nil
 }

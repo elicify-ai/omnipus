@@ -122,6 +122,16 @@ omitting it means "my own current workspace". Reading a workspace other than
 your own returns only the read-only status and identity of the tasks you
 created or are assigned there — never their content, results or plans.
 
+## When an agent changes a workspace
+
+Omnipus can change a workspace's name, description, team and delegation lines with `update_workspace`, using the workspace's current revision from `get_workspace`:
+
+- An empty name is refused ("name is required"); leaving the name out keeps it.
+- A team member must be a real agent — an id that names no agent is refused, and so is a delegation line to an agent outside the team. Nothing is saved in either case.
+- After saving, the tool reads the workspace back from disk and checks that the delegation graph is valid and that every new line joins two team members. If not, the result says `saved but not working` with the reason. See [tools](tools.md#what-a-change-tool-reports) for the four outcomes.
+- The result carries the workspace's new `revision`, so the next change does not need another read. A change that would alter nothing writes nothing and keeps the revision.
+- Every workspace result has the same fields, with lists that are empty rather than missing.
+
 ## Limits and things to watch
 
 - **No line, no delegation.** Adding an agent to the team does not trust them for handoffs. Draw the line.

@@ -6,12 +6,9 @@ package systools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -453,10 +450,16 @@ func (t *ProviderListTool) Description() string {
 }
 
 func (t *ProviderListTool) Parameters() map[string]any {
-	return map[string]any{"type": "object", "properties": map[string]any{}}
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"name": map[string]any{
+			"type": "string",
+			"description": "Optional exact provider id. A configured provider is returned alone; one that is not " +
+				"configured comes back as {name, revision: \"absent\"} (FR-088).",
+		},
+	}}
 }
 
-func (t *ProviderListTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
+func (t *ProviderListTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
 	type providerSummary struct {
 		Name   string `json:"name"`
 		Status string `json:"status"`
@@ -479,6 +482,8 @@ func (t *ProviderListTool) Execute(_ context.Context, _ map[string]any) *tools.T
 	// Provider field rather than a "provider/model" Model slug — is not
 	// silently skipped here.
 	cfg := t.deps.GetCfg()
+	only, _ := args["name"].(string)
+	only = strings.TrimSpace(only)
 	list := []providerSummary{}
 	seen := map[string]bool{}
 	for _, m := range cfg.Providers {
@@ -486,7 +491,7 @@ func (t *ProviderListTool) Execute(_ context.Context, _ map[string]any) *tools.T
 			continue
 		}
 		p := providerNameOf(m)
-		if p == "" || seen[p] {
+		if p == "" || seen[p] || (only != "" && p != only) {
 			continue
 		}
 		seen[p] = true
@@ -502,6 +507,12 @@ func (t *ProviderListTool) Execute(_ context.Context, _ map[string]any) *tools.T
 			summary.Unresolved = err.Error()
 		}
 		list = append(list, summary)
+	}
+	if only != "" && len(list) == 0 {
+		// FR-088: a named entry that is not configured has the token "absent".
+		return tools.NewToolResult(successJSON(map[string]any{
+			"providers": []map[string]any{{"name": only, "revision": revisionAbsent}},
+		}))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{"providers": list}))
 }
@@ -567,17 +578,29 @@ func (t *ProviderTestTool) Execute(_ context.Context, args map[string]any) *tool
 	// entry APIKeyRef, falling back to the conventional <provider>_API_KEY
 	// ref (used by both onboarding and provider.configure).
 	ref := name + "_API_KEY"
-	for _, p := range t.deps.GetCfg().Providers {
-		if p != nil && providerNameOf(p) == name && p.APIKeyRef != "" {
-			ref = p.APIKeyRef
-			break
+	_, known, isLocal := catalogProviderLocality(name)
+	// #1060 F2: one provider identity — every id list_providers reports (a
+	// configured row, custom rows included) is testable here, resolved the
+	// way runtime resolves it.
+	if rep := representativeProviderRow(t.deps.GetCfg(), name); rep != nil {
+		known = true
+		if rep.APIKeyRef != "" {
+			ref = rep.APIKeyRef
+		}
+		if ep, err := effectiveProviderEndpoint(rep); err == nil {
+			isLocal = ep.Locality == catalog.LocalityLocal
+		} else {
+			return tools.NewToolResult(successJSON(map[string]any{
+				"name":          name,
+				"status":        "error",
+				"error_message": "the configured entry does not resolve to an endpoint: " + err.Error(),
+			}))
 		}
 	}
-	_, known, isLocal := catalogProviderLocality(name)
 	if !known {
 		return tools.ErrorResult(errorJSON("UNKNOWN_PROVIDER",
 			fmt.Sprintf("%q is not a known provider id", name),
-			"Use the catalog id (e.g. 'amazon-bedrock', not 'bedrock'; 'google', not 'gemini')",
+			"Use list_providers for the configured ids, or the catalog id (e.g. 'amazon-bedrock', not 'bedrock'; 'google', not 'gemini')",
 		))
 	}
 	if !isLocal && !credentialPresent(t.deps.CredStore, ref) {
@@ -625,8 +648,9 @@ func (t *ModelsListTool) Parameters() map[string]any {
 	}
 }
 
-func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *ModelsListTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	filterProvider, _ := args["provider"].(string)
+	filterProvider = strings.TrimSpace(filterProvider)
 	cfg := t.deps.GetCfg()
 
 	type modelEntry struct {
@@ -634,80 +658,53 @@ func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.
 		Provider string `json:"provider"`
 		Default  bool   `json:"default,omitempty"`
 	}
-
 	defaultModel := cfg.Agents.Defaults.DefaultModel
 
-	// Collect unique providers and resolve their API keys.
-	type providerInfo struct {
-		name   string
-		apiKey string
-	}
-	providersSeen := map[string]*providerInfo{}
+	// One provider identity across the provider tools (#1060 F2): the
+	// configured rows list_providers reports, each resolved to its effective
+	// endpoint and protocol exactly as runtime does.
+	var names []string
+	seenName := map[string]bool{}
 	for _, p := range cfg.Providers {
 		if p == nil {
 			continue
 		}
-		name := p.Provider
-		if name == "" {
-			name = providerFromModelRef(p.Model)
-		}
-		if name == "" {
+		name := providerNameOf(p)
+		if name == "" || seenName[name] {
 			continue
 		}
-		if filterProvider != "" && name != filterProvider {
-			continue
-		}
-		// The credential store (referenced by APIKeyRef) is the single source of
-		// truth for a provider's key; APIKey() returns the value boot-injected
-		// into the environment from that same ref. A provider name can appear in
-		// config multiple times — seed scaffolding entries carry an empty
-		// APIKeyRef while the onboarded/configured entry carries the ref. We must
-		// therefore select the entry that actually resolves a key rather than the
-		// first one encountered (the previous bug: the keyless seed entry won and
-		// models.list reported "no API key configured").
-		apiKey := p.APIKey()
-		if apiKey == "" && p.APIKeyRef != "" && t.deps.CredStore != nil {
-			if v, err := t.deps.CredStore.Get(p.APIKeyRef); err == nil {
-				apiKey = v
-			}
-		}
-		if existing := providersSeen[name]; existing != nil && (existing.apiKey != "" || apiKey == "") {
-			continue
-		}
-		providersSeen[name] = &providerInfo{name: name, apiKey: apiKey}
+		seenName[name] = true
+		names = append(names, name)
 	}
+	if filterProvider != "" {
+		if !seenName[filterProvider] {
+			// #1060 F1: a filter that names no configured provider is an error,
+			// never an empty list that looks like a provider without models.
+			return unknownProviderFilterResult(filterProvider)
+		}
+		names = []string{filterProvider}
+	}
+	sort.Strings(names)
 
-	// Fetch models from each provider's upstream API.
-	var models []modelEntry
+	models := []modelEntry{}
 	seen := map[string]bool{}
 	var warnings []string
-	for _, pi := range providersSeen {
-		// ADR-067 FR-012: the base URL is the catalog row's, never a
-		// hand-typed per-vendor switch.
-		baseURL := providers.APIBaseFor(pi.name)
-		if baseURL == "" {
-			warnings = append(warnings, fmt.Sprintf("%s: no API base URL configured", pi.name))
-			continue
-		}
-		if pi.apiKey == "" {
-			warnings = append(warnings, fmt.Sprintf("%s: no API key configured", pi.name))
-			continue
-		}
-		upstream, err := fetchProviderModels(baseURL, pi.apiKey)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("%s: could not fetch model list", pi.name))
-			slog.Warn("list_models: failed to fetch models", "provider", pi.name, "error", err)
+	for _, name := range names {
+		upstream, warning := t.listProviderModels(ctx, cfg, name)
+		if warning != "" {
+			warnings = append(warnings, warning)
 			continue
 		}
 		for _, m := range upstream {
-			if seen[m] {
+			key := name + "\x00" + m
+			if seen[key] {
 				continue
 			}
-			seen[m] = true
+			seen[key] = true
 			models = append(models, modelEntry{
 				Model:    m,
-				Provider: pi.name,
-				Default:  pi.name == defaultModel.Provider && m == defaultModel.Model,
+				Provider: name,
+				Default:  name == defaultModel.Provider && m == defaultModel.Model,
 			})
 		}
 	}
@@ -721,6 +718,70 @@ func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.
 		result["warnings"] = warnings
 	}
 	return tools.NewToolResult(successJSON(result))
+}
+
+// unknownProviderFilterResult refuses a list_models filter that names no
+// configured provider, saying whether the id is unknown or only unconfigured.
+func unknownProviderFilterResult(name string) *tools.ToolResult {
+	if _, known, _ := catalogProviderLocality(name); known {
+		return tools.ErrorResult(errorJSON("PROVIDER_NOT_CONFIGURED",
+			fmt.Sprintf("provider %q is not configured", name),
+			"Use list_providers to see the configured providers (ids are case-sensitive), or configure it first"))
+	}
+	return tools.ErrorResult(errorJSON("UNKNOWN_PROVIDER",
+		fmt.Sprintf("%q is not a configured provider id", name),
+		"Use list_providers to see the configured providers (ids are case-sensitive)"))
+}
+
+// listProviderModels lists one configured provider's models through its saved
+// effective endpoint and protocol (the same resolution configure_provider's
+// check uses). A non-empty warning explains why the provider was skipped.
+func (t *ModelsListTool) listProviderModels(ctx context.Context, cfg *config.Config, name string) ([]string, string) {
+	rep := representativeProviderRow(cfg, name)
+	if rep == nil {
+		return nil, fmt.Sprintf("%s: no configured entry", name)
+	}
+	ep, err := effectiveProviderEndpoint(rep)
+	if err != nil {
+		return nil, fmt.Sprintf("%s: the configured entry does not resolve to an endpoint (%v)", name, err)
+	}
+	if strings.TrimSpace(ep.API) == "" {
+		return nil, fmt.Sprintf("%s: no API base URL configured", name)
+	}
+	if !providerListable(ep.Protocol) {
+		return nil, fmt.Sprintf("%s: the %s protocol has no model listing", name, ep.Protocol)
+	}
+	// The credential store (referenced by APIKeyRef) is the single source of
+	// truth for a provider's key; APIKey() is the value boot-injected from it.
+	key := rep.APIKey()
+	if key == "" && rep.APIKeyRef != "" && t.deps.CredStore != nil {
+		if v, gerr := t.deps.CredStore.Get(rep.APIKeyRef); gerr == nil {
+			key = v
+		}
+	}
+	local := ep.Locality == catalog.LocalityLocal
+	if key == "" && !local && ep.Protocol != catalog.ProtocolOllama {
+		return nil, fmt.Sprintf("%s: no API key configured", name)
+	}
+	var checker providers.URLChecker = providers.NoopChecker{}
+	if !local && t.deps.URLChecker != nil {
+		checker = t.deps.URLChecker
+		if cerr := checker.CheckURL(ctx, ep.API); cerr != nil {
+			return nil, fmt.Sprintf("%s: the endpoint is not allowed by the outbound-request guard", name)
+		}
+	}
+	lctx, cancel := context.WithTimeout(ctx, providerCheckTimeout)
+	defer cancel()
+	list := providers.ListModels
+	if t.deps.ListProviderModels != nil {
+		list = t.deps.ListProviderModels
+	}
+	upstream, lerr := list(lctx, ep.Protocol, ep.API, key, checker)
+	if lerr != nil {
+		slog.Warn("list_models: failed to fetch models", "provider", name, "error", lerr)
+		return nil, fmt.Sprintf("%s: could not fetch model list", name)
+	}
+	return upstream, ""
 }
 
 // validateAPIBase checks that s is a valid http:// or https:// URL with a non-empty host.
@@ -737,48 +798,4 @@ func validateAPIBase(s string) error {
 		return fmt.Errorf("api_base %q has no host — provide a full URL, e.g. https://api.example.com/v1", s)
 	}
 	return nil
-}
-
-// fetchProviderModels fetches models from an OpenAI-compatible /models endpoint.
-func fetchProviderModels(baseURL, apiKey string) ([]string, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest("GET", strings.TrimSuffix(baseURL, "/")+"/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("X-Api-Key", apiKey)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-
-	models := make([]string, 0, len(result.Data))
-	for _, m := range result.Data {
-		if m.ID != "" {
-			models = append(models, m.ID)
-		}
-	}
-	sort.Strings(models)
-	return models, nil
 }

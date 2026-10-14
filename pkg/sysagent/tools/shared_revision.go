@@ -96,6 +96,9 @@ func providerRows(cfg *config.Config, id string) []*config.ModelConfig {
 // Provider field may be empty (a "provider/model" reference), so the resolved
 // name is set on a copy first.
 func effectiveProviderEndpoint(p *config.ModelConfig) (providers.EffectiveEndpoint, error) {
+	if p == nil {
+		return providers.EffectiveEndpoint{}, fmt.Errorf("no configured entry")
+	}
 	row := *p
 	row.Provider = providerNameOf(p)
 	return providers.ResolveEndpoint(&row)

@@ -152,8 +152,11 @@ func updateVerdict(activation agentstore.ActivationStatus, message string) chang
 
 // agentMetadataFile maps update_agent's metadata arguments to their files
 // (#1064). SOUL.md stays with the record (soul, under the revision check).
+// HEARTBEAT.md is deliberately absent: heartbeats are per workspace
+// (member_configs, pkg/gateway/heartbeat_schedule.go) and no runtime path
+// reads an agent's HEARTBEAT.md, so writing it would report a change that
+// does nothing.
 var agentMetadataFile = []struct{ arg, file string }{
-	{"heartbeat", "HEARTBEAT.md"},
 	{"agent_md", "AGENT.md"},
 }
 

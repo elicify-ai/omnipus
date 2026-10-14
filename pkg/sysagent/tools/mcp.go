@@ -592,10 +592,18 @@ func (t *MCPListTool) Description() string {
 }
 
 func (t *MCPListTool) Parameters() map[string]any {
-	return map[string]any{"type": "object", "properties": map[string]any{}}
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"name": map[string]any{
+			"type": "string",
+			"description": "Optional exact server name. A configured server is returned alone; one that is not " +
+				"configured comes back as {name, revision: \"absent\"} (FR-088).",
+		},
+	}}
 }
 
-func (t *MCPListTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
+func (t *MCPListTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+	only, _ := args["name"].(string)
+	only = strings.TrimSpace(only)
 	cfg := t.deps.GetCfg()
 	type serverInfo struct {
 		Name      string `json:"name"`
@@ -616,6 +624,9 @@ func (t *MCPListTool) Execute(_ context.Context, _ map[string]any) *tools.ToolRe
 	}
 	servers := make([]serverInfo, 0, len(cfg.Tools.MCP.Servers))
 	for name, srv := range cfg.Tools.MCP.Servers {
+		if only != "" && name != only {
+			continue
+		}
 		// Default inference matches the MCP manager: stdio if a command is
 		// set, sse if a url is set.
 		transport := mcpEffectiveTransport(srv)
@@ -634,5 +645,11 @@ func (t *MCPListTool) Execute(_ context.Context, _ map[string]any) *tools.ToolRe
 		servers = append(servers, info)
 	}
 	sort.Slice(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
+	if only != "" && len(servers) == 0 {
+		// FR-088: a named server that is not configured has the token "absent".
+		return tools.NewToolResult(successJSON(map[string]any{
+			"servers": []map[string]any{{"name": only, "revision": revisionAbsent}},
+		}))
+	}
 	return tools.NewToolResult(successJSON(map[string]any{"servers": servers}))
 }

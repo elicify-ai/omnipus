@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
@@ -830,6 +832,12 @@ func (c *OpenClawConfig) convertChannels(warnings *[]string) ChannelsConfig {
 	return channels
 }
 
+// newImportedAgentID returns the id of an imported agent: a random UUID, the
+// same as every newly created agent (founder decision 2026-10-14). The
+// OpenClaw id is not kept — it only becomes the display name when the source
+// agent has none. A variable only so tests can pin it.
+var newImportedAgentID = func() string { return uuid.New().String() }
+
 func (c *OpenClawConfig) convertAgents(warnings *[]string) []AgentConfig {
 	var agents []AgentConfig
 
@@ -849,7 +857,7 @@ func (c *OpenClawConfig) convertAgents(warnings *[]string) []AgentConfig {
 		}
 
 		agentCfg := AgentConfig{
-			ID:      agentID,
+			ID:      newImportedAgentID(),
 			Name:    agentName,
 			Default: len(agents) == 0,
 		}

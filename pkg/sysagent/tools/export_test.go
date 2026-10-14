@@ -47,3 +47,13 @@ func WithCurrentRevisionForTest(tool tools.Tool, args map[string]any) map[string
 	out[expectedRevisionParam] = sharedRevision(d.GetCfg(), kind, key)
 	return out
 }
+
+// SetAgentIDGeneratorForTest makes create_agent use gen for new agent ids for
+// the rest of the test, so a test that must plant a fault at the new agent's
+// paths (or assert an id collision) knows the id in advance. Production ids
+// are random UUIDs.
+func SetAgentIDGeneratorForTest(t interface{ Cleanup(func()) }, gen func() string) {
+	prev := newAgentID
+	newAgentID = gen
+	t.Cleanup(func() { newAgentID = prev })
+}

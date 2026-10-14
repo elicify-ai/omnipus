@@ -23,7 +23,7 @@ var agentUpdateArgNames = map[string]struct{}{
 	"max_tool_iterations": {}, "skills": {},
 	"memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
-	"heartbeat": {}, "agent_md": {}, // metadata files (#1064), written beside the record
+	"agent_md": {}, // AGENT.md (#1064), written beside the record
 }
 
 // permissionFieldNames are the capability fields only set_agent_permissions

@@ -20,10 +20,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // TestExecuteConfigMigration_PersistsAgentsAsEntityRecords proves both bugs'
@@ -78,30 +80,36 @@ func TestExecuteConfigMigration_PersistsAgentsAsEntityRecords(t *testing.T) {
 	assert.False(t, hasList, "config.json must NOT carry agents.list after migration")
 
 	// 2. Every migrated agent must be readable as its own entity record
-	// under $OMNIPUS_HOME/entities/agents/<id>.json (Bug 2's fix).
+	// under $OMNIPUS_HOME/entities/agents/<id>.json (Bug 2's fix). Founder
+	// decision 2026-10-14: the ids are generated UUIDs (the OpenClaw ids
+	// "sales"/"support" are not kept) and the names are kept verbatim.
 	store := agentstore.New(dstHome)
+	agents, skipped, err := store.List()
+	require.NoError(t, err)
+	assert.Empty(t, skipped, "no entity record should have failed to load")
+	require.Len(t, agents, 2, "both migrated agents must be listed from the entity store")
+	byName := map[string]config.AgentConfig{}
+	for _, a := range agents {
+		_, parseErr := uuid.Parse(a.ID)
+		assert.NoError(t, parseErr, "imported agent %q must have a generated UUID id, got %q", a.Name, a.ID)
+		assert.NotContains(t, []string{"sales", "support"}, a.ID, "the OpenClaw id must not be kept")
+		byName[a.Name] = a
+	}
 
-	sales, err := store.Get("sales")
-	require.NoError(t, err, "sales agent must be readable from the entity store")
-	assert.Equal(t, "sales", sales.ID)
-	assert.Equal(t, "Sales Bot", sales.Name)
-	assert.Equal(t, "~/.omnipus/workspace/sales", sales.Home)
-	require.NotNil(t, sales.Model)
-	assert.Equal(t, "openai/gpt-4o", sales.Model.Primary)
+	sales, ok := byName["Sales Bot"]
+	require.True(t, ok, "the Sales Bot name must be kept verbatim")
+	got, err := store.Get(sales.ID)
+	require.NoError(t, err, "sales agent must be readable from the entity store by its new id")
+	assert.Equal(t, "~/.omnipus/workspace/sales", got.Home)
+	require.NotNil(t, got.Model)
+	assert.Equal(t, "openai/gpt-4o", got.Model.Primary)
 
-	support, err := store.Get("support")
-	require.NoError(t, err, "support agent must be readable from the entity store")
-	assert.Equal(t, "support", support.ID)
-	assert.Equal(t, "Support Bot", support.Name)
+	support, ok := byName["Support Bot"]
+	require.True(t, ok, "the Support Bot name must be kept verbatim")
 	require.NotNil(t, support.Model)
 	assert.Equal(t, "anthropic/claude-opus", support.Model.Primary)
 	assert.Equal(t, []string{"haiku"}, support.Model.Fallbacks)
 	assert.Equal(t, []string{"triage"}, support.Skills)
-
-	agents, skipped, err := store.List()
-	require.NoError(t, err)
-	assert.Empty(t, skipped, "no entity record should have failed to load")
-	assert.Len(t, agents, 2, "both migrated agents must be listed from the entity store")
 }
 
 // TestExecuteConfigMigration_NoAgents_NoOp proves persistMigratedAgents is a
@@ -127,13 +135,12 @@ func TestExecuteConfigMigration_NoAgents_NoOp(t *testing.T) {
 	assert.Empty(t, agents)
 }
 
-// TestExecuteConfigMigration_RerunUpdatesExistingEntityRecords proves
-// re-running the migration (e.g. an operator re-invoking `omnipus migrate`
-// after editing their openclaw config) does not hard-fail with
-// entity.ErrAlreadyExists — it refreshes the existing record's fields while
-// preserving its original ID/CreatedAt, mirroring the "always clobber on
-// re-migrate" semantics config.json's own SaveConfig already has.
-func TestExecuteConfigMigration_RerunUpdatesExistingEntityRecords(t *testing.T) {
+// TestExecuteConfigMigration_RerunImportsAgain proves a re-run of the
+// migration never overwrites an agent an earlier run created: every imported
+// agent gets a freshly generated id (founder decision 2026-10-14 — old ids
+// are not kept, so there is nothing to match a re-run against), so the second
+// run adds a second agent and the first keeps its fields.
+func TestExecuteConfigMigration_RerunImportsAgain(t *testing.T) {
 	srcHome := t.TempDir()
 	srcConfigPath := filepath.Join(srcHome, "openclaw.json")
 	require.NoError(t, os.WriteFile(srcConfigPath, []byte(`{
@@ -145,25 +152,18 @@ func TestExecuteConfigMigration_RerunUpdatesExistingEntityRecords(t *testing.T) 
 
 	dstHome := t.TempDir()
 	dstConfigPath := filepath.Join(dstHome, "config.json")
-
 	require.NoError(t, handler.ExecuteConfigMigration(srcConfigPath, dstConfigPath))
 
-	store := agentstore.New(dstHome)
-	first, err := store.Get("sales")
-	require.NoError(t, err)
-	require.NotNil(t, first.CreatedAt)
-	firstCreatedAt := *first.CreatedAt
-
-	// Edit the source and re-run.
 	require.NoError(t, os.WriteFile(srcConfigPath, []byte(`{
 		"agents": {"list": [{"id": "sales", "name": "Sales Bot Renamed"}]}
 	}`), 0o644))
 	require.NoError(t, handler.ExecuteConfigMigration(srcConfigPath, dstConfigPath))
 
-	second, err := store.Get("sales")
+	agents, _, err := agentstore.New(dstHome).List()
 	require.NoError(t, err)
-	assert.Equal(t, "sales", second.ID, "re-migration must not change the agent's ID")
-	assert.Equal(t, "Sales Bot Renamed", second.Name, "re-migration must refresh the agent's fields")
-	require.NotNil(t, second.CreatedAt)
-	assert.True(t, firstCreatedAt.Equal(*second.CreatedAt), "re-migration must preserve the original CreatedAt")
+	require.Len(t, agents, 2, "a re-run imports the roster again as new agents")
+	names := []string{agents[0].Name, agents[1].Name}
+	assert.ElementsMatch(t, []string{"Sales Bot", "Sales Bot Renamed"}, names,
+		"the first run's agent keeps its name; the re-run adds its own")
+	assert.NotEqual(t, agents[0].ID, agents[1].ID, "each imported agent gets its own generated id")
 }

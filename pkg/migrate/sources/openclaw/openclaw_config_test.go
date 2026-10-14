@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
@@ -254,8 +256,16 @@ func TestConvertToOmnipus(t *testing.T) {
 	if len(omnipusCfg.Agents.List) != 2 {
 		t.Errorf("expected 2 agents, got %d", len(omnipusCfg.Agents.List))
 	}
-	if omnipusCfg.Agents.List[0].ID != "main" {
-		t.Errorf("expected first agent id 'main', got '%s'", omnipusCfg.Agents.List[0].ID)
+	// Founder decision 2026-10-14: imported agents get a generated UUID id;
+	// the OpenClaw id is not kept, the name is preserved verbatim.
+	if _, err := uuid.Parse(omnipusCfg.Agents.List[0].ID); err != nil || omnipusCfg.Agents.List[0].ID == "main" {
+		t.Errorf("expected a generated UUID id for the first agent, got '%s'", omnipusCfg.Agents.List[0].ID)
+	}
+	if omnipusCfg.Agents.List[0].Name != "Main Agent" {
+		t.Errorf("expected the first agent's name 'Main Agent' kept verbatim, got '%s'", omnipusCfg.Agents.List[0].Name)
+	}
+	if omnipusCfg.Agents.List[0].ID == omnipusCfg.Agents.List[1].ID {
+		t.Errorf("two imported agents share the id %q", omnipusCfg.Agents.List[0].ID)
 	}
 	if omnipusCfg.Agents.List[1].Skills == nil || len(omnipusCfg.Agents.List[1].Skills) != 2 {
 		t.Errorf("expected 2 skills for assistant agent")

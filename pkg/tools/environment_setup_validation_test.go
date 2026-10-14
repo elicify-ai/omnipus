@@ -11,7 +11,7 @@
 // Oracle: every expected limit is derived from the ES-FR-02 canonical input
 // table (command ≤65,536 UTF-8 bytes; purpose nonblank ≤500 characters;
 // scope workspace|shared; action run|poll|read|kill; timeout_seconds integer
-// 1..3600 default 1800; target_workspace canonical workspace ID, never a
+// 1..3600 default 1800; workspace_id canonical workspace ID, never a
 // filesystem path; foreign targets need authority), never from the
 // implementation.
 package tools
@@ -148,13 +148,13 @@ var envSetupValidationCases = []struct {
 	{"rejects string timeout", func(a map[string]any) { a["timeout_seconds"] = "1800" }, "timeout_seconds", false},
 	{"rejects bool timeout", func(a map[string]any) { a["timeout_seconds"] = true }, "timeout_seconds", false},
 
-	// target_workspace — "Optional canonical workspace ID ... never a
+	// workspace_id — "Optional canonical workspace ID ... never a
 	// filesystem path"; ES-BDD-03: forged cross-workspace/path requests fail
 	// before changes.
-	{"rejects path-like target relative traversal", func(a map[string]any) { a["target_workspace"] = "../escape" }, "target_workspace", false},
-	{"rejects path-like target absolute host path", func(a map[string]any) { a["target_workspace"] = "/tmp/omnipus-evil" }, "target_workspace", false},
-	{"rejects wrong-type target", func(a map[string]any) { a["target_workspace"] = 123 }, "target_workspace", false},
-	{"rejects unauthorized cross-workspace target", func(a map[string]any) { a["target_workspace"] = "workspace-b" }, "target_workspace", false},
+	{"rejects path-like target relative traversal", func(a map[string]any) { a["workspace_id"] = "../escape" }, "workspace_id", false},
+	{"rejects path-like target absolute host path", func(a map[string]any) { a["workspace_id"] = "/tmp/omnipus-evil" }, "workspace_id", false},
+	{"rejects wrong-type target", func(a map[string]any) { a["workspace_id"] = 123 }, "workspace_id", false},
+	{"rejects unauthorized cross-workspace target", func(a map[string]any) { a["workspace_id"] = "workspace-b" }, "workspace_id", false},
 
 	// Boundary-acceptance probe: the purpose limit counts CHARACTERS (the
 	// spec deliberately says BYTES for command, CHARACTERS for purpose), so
@@ -249,7 +249,7 @@ func TestEnvironmentSetupValidationParametersSchema(t *testing.T) {
 		t.Fatalf("Parameters() must declare an object schema with properties; got: %#v", schema)
 	}
 
-	for _, field := range []string{"action", "command", "purpose", "scope", "target_workspace", "session_id", "timeout_seconds"} {
+	for _, field := range []string{"action", "command", "purpose", "scope", "workspace_id", "session_id", "timeout_seconds"} {
 		if _, present := props[field]; !present {
 			t.Errorf("Parameters() is missing the ES-FR-02 field %q", field)
 		}

@@ -9,11 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -30,19 +30,13 @@ import (
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-// slugRegexp matches characters that should be replaced in agent name → ID conversion.
-var slugRegexp = regexp.MustCompile(`[^a-z0-9]+`)
-
-// toSlug converts a display name to a URL-safe slug ID.
-func toSlug(name string) string {
-	s := strings.ToLower(strings.TrimSpace(name))
-	s = slugRegexp.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	if s == "" {
-		s = fmt.Sprintf("agent-%d", rand.Intn(99999))
-	}
-	return s
-}
+// newAgentID returns the id of a newly created agent: a random UUID, exactly
+// as the REST create path does (pkg/gateway/rest_agents_create.go). No agent
+// id is ever derived from its name — the name is a free label kept verbatim,
+// and two agents may share one (founder decision 2026-10-14). Built-in agents
+// keep their fixed ids. A variable only so tests that must plant a fault at
+// the new agent's paths can choose the id.
+var newAgentID = func() string { return uuid.New().String() }
 
 // canonicalAgentColor applies the REST colour rule (coreagent.CanonicalColor,
 // AgentColor.yaml): a palette value in any letter-case is returned uppercase and
@@ -358,7 +352,7 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	if _, _, err := parseOptionalHeartbeat(ac.args); err != nil {
 		return fieldErrorResult(err), true
 	}
-	ac.id = toSlug(ac.name)
+	ac.id = newAgentID()
 	if err := validateID(ac.id); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "")), true
 	}
@@ -1083,11 +1077,10 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 			// (applyContextWindow/jsonInt) still refuses non-integers.
 			"context_window_override": map[string]any{"type": []string{"integer", "null"}, "description": "Positive token override. JSON null clears the override."},
 			"model_params":            modelParamsParameters(),
-			// #1064: the other two agent metadata files, beside soul.
-			"heartbeat": map[string]any{
-				"type":        "string",
-				"description": "New proactive scheduling instructions (overwrites HEARTBEAT.md).",
-			},
+			// #1064: AGENT.md, the agent definition file read on every turn,
+			// beside soul. (Heartbeats are per workspace and live in the
+			// workspace's member settings, not in a file, so there is no
+			// heartbeat field here.)
 			"agent_md": map[string]any{
 				"type":        "string",
 				"description": "New AGENT.md content (overwrites the agent's AGENT.md).",
