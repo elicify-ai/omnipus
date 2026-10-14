@@ -525,7 +525,9 @@ func (te *TaskExecutor) adjudicateRunClaim(
 
 	var result JudgeCriteriaResult
 	for judgeTry := 1; ; judgeTry++ {
-		judgeCtx, cancel := context.WithTimeout(ctx, goalJudgeRoundTimeout)
+		// Issue #1306 R2-4: the outer round clock is the Judge's own check
+		// time limit, so its expiry is never reported as a provider timeout.
+		judgeCtx, cancel := context.WithTimeoutCause(ctx, goalJudgeRoundTimeout, ErrJudgeTimeLimit)
 		result = te.agentLoop.JudgeCriteria(judgeCtx, JudgeCriteriaInput{
 			Scope:           task.VerdictScopeTask,
 			TaskID:          t.ID,

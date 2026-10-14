@@ -302,9 +302,9 @@ func (s *LoopScheduler) IdleExpirySweep(cfg config.PlanningConfig, now time.Time
 		// Issue #1306 (no clock ends work): a loop whose session still has a
 		// live turn (a run that is taking longer than the idle bound) is not
 		// idle — its activity stamp is only written after the run returns.
-		if s.al.sessionHasLiveTurn(sessionID) {
+		if busy, why := s.al.sessionWorkInFlight(sessionID); busy {
 			logger.InfoCF("agent", "loop idle sweep: loop past its idle bound but a run is still working — not expiring",
-				map[string]any{"session_id": sessionID, "job_id": job.ID})
+				map[string]any{"session_id": sessionID, "job_id": job.ID, "why": why})
 			continue
 		}
 		s.RemoveJob(job.ID)

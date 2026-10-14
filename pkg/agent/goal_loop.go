@@ -477,6 +477,15 @@ type goalDeferredAdjudicationWork struct {
 	// completion tail commits as that execution only (never a same-
 	// generation replacement). Empty for a turn with no admission.
 	producer executionClaim
+	// goalID / goalPrompt identify the goal and definition this claim was
+	// made against, and claimRecordedAt when the claim was put on its record
+	// (issue #1306 R2-2). A re-drive judges and concludes only that goal: a
+	// goal cleared, replaced or restated meanwhile — or a newer claim on it —
+	// is never painted with this claim's conclusion. Empty goalID (a caller
+	// that did not capture it) binds to the first goal the re-drive reads.
+	goalID          string
+	goalPrompt      string
+	claimRecordedAt time.Time
 }
 
 // goalDeferredAdjudicationDoneFn is a TEST SEAM ONLY — production leaves it
@@ -942,6 +951,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		work := &goalDeferredAdjudicationWork{
 			agentInst: gl.agentInst, workspaceID: gl.opts.WorkspaceID,
 			sessionID: gl.sessionID, claimText: claimText,
+			goalID: gl.rec.GoalID, goalPrompt: gl.rec.Prompt, claimRecordedAt: time.Now().UTC(),
 		}
 		if d := gl.opts.executionDisposition; d != nil {
 			work.producer = d.claim
@@ -1344,13 +1354,14 @@ func (al *AgentLoop) sessionHasLiveTurn(sessionID string) bool {
 	return live
 }
 
-// goalWorkInFlight reports whether a goal still has agent work running: a
-// live turn on its session or a delegated descendant, or — for a task-owned
-// goal — its task still in progress. A task that cannot be read counts as in
+// goalWorkInFlight reports whether a goal still has agent work running or
+// waiting to run: anything sessionWorkInFlight finds on its session (its own
+// turn, a delegated descendant's turn, queued work), or — for a task-owned
+// goal — its task still in progress. Work that cannot be read counts as in
 // flight; the sweep must not end a goal it cannot see into.
 func (al *AgentLoop) goalWorkInFlight(g *goal.Goal, sessionID string) (bool, string) {
-	if al.sessionHasLiveTurn(sessionID) {
-		return true, "a turn is running"
+	if busy, why := al.sessionWorkInFlight(sessionID); busy {
+		return true, why
 	}
 	if g.OwnerKind == generated.GoalOwnerKindTask && g.OwnerID != "" && al.taskStore != nil {
 		t, err := al.taskStore.Get(g.OwnerID)

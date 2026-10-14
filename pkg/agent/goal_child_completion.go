@@ -100,7 +100,20 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 				map[string]any{"session_id": work.sessionID, "attempt": attempt})
 			return
 		}
-		ctx, cancel := context.WithTimeout(withGoalProducer(context.Background(), work.producer), goalJudgeRoundTimeout)
+		if work.goalID == "" {
+			work.goalID, work.goalPrompt = rec.GoalID, rec.Prompt
+		}
+		if stale := work.staleFor(rec); stale != "" {
+			// Issue #1306 R2-2: the claim belongs to the goal it was made
+			// against. A replacement or restated goal is never judged on it.
+			logger.InfoCF("agent", "goal: deferred adjudication re-drive stopped — "+stale,
+				map[string]any{"session_id": work.sessionID, "goal_id": work.goalID, "active_goal_id": rec.GoalID, "attempt": attempt})
+			return
+		}
+		// Issue #1306 R2-4: the outer round clock is the Judge's own check time
+		// limit too — a later attempt inheriting this earlier deadline must be
+		// reported as ErrJudgeTimeLimit, never as a provider timeout.
+		ctx, cancel := context.WithTimeoutCause(withGoalProducer(context.Background(), work.producer), goalJudgeRoundTimeout, ErrJudgeTimeLimit)
 		met, unavailable := al.runGoalAdjudication(ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText,
 			al.idleSteerDeliverer(work.sessionID, rec.GoalID, goalClaimDeferredSourceKind))
 		cancel()
@@ -221,21 +234,18 @@ func goalWorkAgentID(work *goalDeferredAdjudicationWork) string {
 // the goal stays active so the work can be claimed again.
 func (al *AgentLoop) concludeInteractiveGoalNotVerified(store *session.UnifiedStore, work *goalDeferredAdjudicationWork, conclusion string) {
 	logger.ErrorCF("agent", "goal: the Judge could not conclude — recording a not-verified conclusion",
-		map[string]any{"session_id": work.sessionID})
+		map[string]any{"session_id": work.sessionID, "goal_id": work.goalID})
 	saveErr := appendGoalConclusionFn(al, store, work.sessionID, goalWorkAgentID(work), conclusion)
 	if saveErr != nil {
 		saveErr = appendGoalConclusionFn(al, store, work.sessionID, goalWorkAgentID(work), conclusion)
 	}
-	rec, recErr := activeGoalForSession(work.sessionID)
-	if recErr == nil && rec != nil {
-		if _, uerr := resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
-			cur.LatestReason = conclusion
-			return nil
-		}); uerr != nil {
-			saveErr = errors.Join(saveErr, fmt.Errorf("goal record: %w", uerr))
-		}
-	} else if recErr != nil {
-		saveErr = errors.Join(saveErr, fmt.Errorf("goal record read: %w", recErr))
+	// Issue #1306 R2-2: the transcript keeps the conclusion as history, but
+	// the goal's own reason and pill change only for the goal this claim was
+	// made against, re-checked under that goal's lock — a goal cleared,
+	// replaced or restated while the conclusion was being saved is untouched.
+	concluded, recErr := work.recordConclusionOnGoal(conclusion)
+	if recErr != nil {
+		saveErr = errors.Join(saveErr, fmt.Errorf("goal record: %w", recErr))
 	}
 	if saveErr != nil {
 		logger.ErrorCF("agent", "goal: the Judge conclusion could not be saved durably",
@@ -246,9 +256,58 @@ func (al *AgentLoop) concludeInteractiveGoalNotVerified(store *session.UnifiedSt
 		})
 	}
 	al.deliverGoalConclusionToRoute(work.sessionID, conclusion)
-	if rec != nil {
-		al.emitGoalStatusFrame(work.sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds, conclusion, goalPillJudgeUnavailable)
+	if concluded != nil {
+		al.emitGoalStatusFrame(work.sessionID, concluded.GoalID, concluded.Prompt, concluded.Round, concluded.MaxRounds, conclusion, goalPillJudgeUnavailable)
 	}
+}
+
+// staleFor names why the active goal rec is no longer the goal this claim
+// was made against, or returns "" while it still is (issue #1306 R2-2): a
+// different goal bound to the session, the same goal restated (the UAT E-1
+// rule: a changed prompt), or a newer claim recorded on it since.
+func (work *goalDeferredAdjudicationWork) staleFor(rec *goal.Goal) string {
+	switch {
+	case rec == nil || !rec.IsActive():
+		return "the goal has ended"
+	case rec.GoalID != work.goalID:
+		return "the goal was replaced by another goal"
+	case rec.ActiveSessionID != "" && rec.ActiveSessionID != work.sessionID:
+		return "the goal is no longer bound to this session"
+	case strings.TrimSpace(rec.Prompt) != strings.TrimSpace(work.goalPrompt):
+		return "the goal was restated, so the claim was made against a superseded definition"
+	case !work.claimRecordedAt.IsZero() && rec.LatestClaim != nil && rec.LatestClaim.ClaimedAt.After(work.claimRecordedAt):
+		return "a newer claim was recorded on the goal"
+	}
+	return ""
+}
+
+// recordConclusionOnGoal writes conclusion as the goal's latest reason only
+// while the goal is still the one this claim was made against, checked under
+// the goal's own lock. It returns the updated goal when written, nil when the
+// goal was no longer applicable (not an error: the transcript keeps the
+// conclusion as history), and an error when the record could not be updated.
+func (work *goalDeferredAdjudicationWork) recordConclusionOnGoal(conclusion string) (*goal.Goal, error) {
+	if work.goalID == "" {
+		return nil, errors.New("the adjudicated goal was never identified")
+	}
+	applied := false
+	updated, err := resolveGoalRecordStore().Update(work.goalID, func(cur *goal.Goal) error {
+		if stale := work.staleFor(cur); stale != "" {
+			logger.InfoCF("agent", "goal: the Judge conclusion is kept in the transcript only — "+stale,
+				map[string]any{"session_id": work.sessionID, "goal_id": work.goalID})
+			return nil
+		}
+		cur.LatestReason = conclusion
+		applied = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !applied {
+		return nil, nil //nolint:nilnil // nil goal + nil error means "no longer applicable", documented above.
+	}
+	return updated, nil
 }
 
 // deliverGoalConclusionToRoute publishes the conclusion to the channel/chat

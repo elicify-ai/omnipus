@@ -682,13 +682,17 @@ func (pe *PlanEngine) beginPlanJudgeRound(p *plan.Plan, tasks []task.Task) {
 	}
 
 	pe.judgeWG.Add(1)
-	go pe.runPlanJudgeRound(p.ID, release)
+	// The admission snapshot is the round's fallback identity: if the plan
+	// record becomes unreadable mid-round, the round still concludes visibly
+	// through it (issue #1306 T3) instead of dropping its outcome.
+	snapshot := *p
+	go pe.runPlanJudgeRound(p.ID, &snapshot, release)
 }
 
 // runPlanJudgeRound performs ONE plan-level judge round. It ALWAYS clears
 // its judgeSema slot, verifier-registry entry, and judgeWG count on return
 // (defers below), regardless of outcome.
-func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
+func (pe *PlanEngine) runPlanJudgeRound(planID string, snapshot *plan.Plan, release func()) {
 	defer pe.judgeWG.Done()
 	defer release()
 	defer pe.registry().Unregister(verifierUnitForPlan(planID))
@@ -702,7 +706,9 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	// guarded inside, so it can never clear an owner-disabled pause.
 	defer pe.clearJudgeUnavailablePause(planID)
 
-	ctx, cancel := context.WithTimeout(context.Background(), planJudgeRoundTimeout)
+	// Issue #1306 R2-4: the outer round clock is the Judge's own check time
+	// limit, so its expiry is never reported as a provider timeout.
+	ctx, cancel := context.WithTimeoutCause(context.Background(), planJudgeRoundTimeout, ErrJudgeTimeLimit)
 	defer cancel()
 
 	// Issue #1306 (founder): the Judge must conclude. A round that cannot
@@ -717,10 +723,11 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	if err != nil {
 		logger.WarnCF("plan_engine", "judge round: could not reload plan",
 			map[string]any{"plan_id": planID, "error": err.Error()})
-		pe.applyJudgeRoundOutcome(planID, JudgeCriteriaResult{Unavailable: true,
+		pe.applyJudgeRoundOutcomeFor(planID, snapshot, JudgeCriteriaResult{Unavailable: true,
 			Reason: "the plan record could not be reloaded for the judge round: " + err.Error()}, false, "")
 		return
 	}
+	snapshot = p
 
 	tasks, err := pe.taskStore.List(task.Filter{PlanID: planID})
 	if err == nil && pe.judgeRoundReadFault != nil {
@@ -729,7 +736,7 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	if err != nil {
 		logger.WarnCF("plan_engine", "judge round: could not list member tasks",
 			map[string]any{"plan_id": planID, "error": err.Error()})
-		pe.applyJudgeRoundOutcome(planID, JudgeCriteriaResult{Unavailable: true,
+		pe.applyJudgeRoundOutcomeFor(planID, snapshot, JudgeCriteriaResult{Unavailable: true,
 			Reason: "the plan's member tasks could not be listed for the judge round: " + err.Error()}, false, "")
 		return
 	}
@@ -755,7 +762,7 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 		// the real-verdict path below, not a bespoke unlocked shortcut.
 		// nothingToJudge always trusts completion (never UNMET), so
 		// terminalSig is passed through but never recorded.
-		pe.applyJudgeRoundOutcome(planID, JudgeCriteriaResult{}, true, terminalSig)
+		pe.applyJudgeRoundOutcomeFor(planID, snapshot, JudgeCriteriaResult{}, true, terminalSig)
 		return
 	}
 
@@ -799,7 +806,7 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	// instant this call returns. Delegate to applyJudgeRoundOutcome,
 	// which re-checks State==running and applies the outcome as ONE atomic
 	// critical section under planDecisionMu.
-	pe.applyJudgeRoundOutcome(planID, result, false, terminalSig)
+	pe.applyJudgeRoundOutcomeFor(planID, snapshot, result, false, terminalSig)
 }
 
 // noteJudgeUnavailable stamps Plan.PausedReason so an in-flight D7 backoff
@@ -928,10 +935,23 @@ func buildJudgeUnavailableRetryHandover(judgeReason string) string {
 // don't re-judge until it changes" marker so a later unchanged idle tick's
 // processPlan skips re-invoking beginPlanJudgeRound.
 func (pe *PlanEngine) applyJudgeRoundOutcome(planID string, result JudgeCriteriaResult, nothingToJudge bool, terminalSig string) {
+	pe.applyJudgeRoundOutcomeFor(planID, nil, result, nothingToJudge, terminalSig)
+}
+
+// applyJudgeRoundOutcomeFor is applyJudgeRoundOutcome with the round's last
+// good view of the plan (snapshot, possibly nil). The snapshot is used only
+// when the plan record cannot be read here: the round then concludes through
+// concludeUnreadableJudgeRoundLocked instead of being dropped as if a Stop
+// had landed (issue #1306 T3).
+func (pe *PlanEngine) applyJudgeRoundOutcomeFor(planID string, snapshot *plan.Plan, result JudgeCriteriaResult, nothingToJudge bool, terminalSig string) {
 	pe.planDecisionMu.Lock()
 	defer pe.planDecisionMu.Unlock()
 
 	current, err := pe.planStore.Get(planID)
+	if err != nil && !errors.Is(err, plan.ErrNotFound) {
+		pe.concludeUnreadableJudgeRoundLocked(planID, snapshot, result, nothingToJudge, err)
+		return
+	}
 	if err != nil || current.State != plan.StateRunning {
 		logger.InfoCF("plan_engine",
 			"plan judge round outcome dropped: plan left running during adjudication (Stop landed concurrently)",
