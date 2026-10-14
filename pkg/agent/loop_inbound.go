@@ -17,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/constants"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/routing"
@@ -346,10 +347,26 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		return routing.ResolvedRoute{AgentID: pinned, SessionKey: sk}, agent, nil
 	}
 
-	// Explicit agent_id in message metadata takes top priority: the user
-	// switching the SPA dropdown to a different agent is an authoritative
-	// re-targeting.
-	if explicitID := inboundMetadata(msg, "agent_id"); explicitID != "" {
+	// Explicit agent_id in message metadata names the agent for a new chat.
+	// For an existing session it may only name that session's canonical
+	// owner (§6.4): a different agent is refused, naming both, never
+	// re-targeted (CHECK F02).
+	if rawExplicitID := inboundMetadata(msg, "agent_id"); rawExplicitID != "" {
+		// CHECK F01: a case spelling of the system agent is the system agent.
+		explicitID := strings.TrimSpace(rawExplicitID)
+		if strings.EqualFold(explicitID, string(coreagent.IDOmnipus)) {
+			explicitID = string(coreagent.IDOmnipus)
+		}
+		if owner := al.existingSessionOwner(msg); owner != "" {
+			if !strings.EqualFold(owner, explicitID) {
+				logger.WarnCF("agent", "Explicit agent_id conflicts with the session owner; refused",
+					map[string]any{"agent_id": explicitID, "owner": owner, "session_id": msg.SessionID})
+				return routing.ResolvedRoute{}, nil, fmt.Errorf(
+					"this chat belongs to %s; a message naming %s cannot run in it", owner, explicitID)
+			}
+			// A matching id runs under the owner's stored spelling.
+			explicitID = owner
+		}
 		if agent, ok := registry.GetAgent(explicitID); ok {
 			// A worker is a delegation-only labor tier — never a chat target,
 			// and there is no default agent to fall back to (FR-120): refuse.

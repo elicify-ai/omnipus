@@ -139,6 +139,24 @@ func (al *AgentLoop) routeToSessionOwner(registry *AgentRegistry, msg bus.Inboun
 	return routing.ResolvedRoute{AgentID: agent.ID, SessionKey: agentSessionKey(agent.ID, msg), MatchedBy: "session.owner"}, agent, nil
 }
 
+// existingSessionOwner returns the stored owner of msg's existing session, or ""
+// when msg names no session, is a system message, or its session cannot be
+// found or read (the session-owner route then reports that itself).
+func (al *AgentLoop) existingSessionOwner(msg bus.InboundMessage) string {
+	if msg.SessionID == "" || msg.Channel == "system" {
+		return ""
+	}
+	store := al.ResolveSessionStore(msg.SessionID)
+	if store == nil {
+		return ""
+	}
+	meta, err := store.GetMeta(msg.SessionID)
+	if err != nil || meta == nil {
+		return ""
+	}
+	return strings.TrimSpace(meta.AgentID)
+}
+
 // recordRouteDrop is the single side-effecting record of a dropped channel
 // message (FR-121): an error-level log, one audit entry and the instance's
 // routing degradation (K15).

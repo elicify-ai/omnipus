@@ -475,8 +475,14 @@ describe('ChannelsScreen — degraded channel state', () => {
       expect(screen.getByText(/bind this channel to an agent in a workspace/)).toBeInTheDocument()
     })
     const row = screen.getByText(/bind this channel to an agent in a workspace/).closest('p')
-    expect(row?.textContent).toContain('last dropped')
-    expect(row?.textContent).toContain('2026')
+    // F09 / S09: derive the local display independently with the documented
+    // Intl medium-date/short-time format, never the production helper or its
+    // observed output. Another date in 2026 must not satisfy the oracle.
+    const suppliedTime = new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium', timeStyle: 'short',
+    }).format(new Date('2026-10-14T09:30:00Z'))
+    expect(row).not.toBeNull()
+    expect(row?.textContent).toBe(`bind this channel to an agent in a workspace · last dropped ${suppliedTime}`)
   })
 
   it('does not show a drop time when last_dropped_at is absent (K15)', async () => {

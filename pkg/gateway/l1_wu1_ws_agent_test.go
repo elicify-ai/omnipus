@@ -96,24 +96,31 @@ func TestL1WU1WebSocketNewChat_RequiresNamedAgentValidationOnOff(t *testing.T) {
 }
 
 func TestL1WU1WebSocketOmnipus_NoSecondConversationAndRefusalNamesMain(t *testing.T) {
-	// FR-005 / BDD-1.7.
-	handler, _, al := newTestWSHandlerWithAgent(t, "omnipus")
-	main, err := al.GetSessionStore().GetOrCreateMainSession("default", "omnipus")
-	require.NoError(t, err)
-	before, err := al.GetSessionStore().ListSessions()
-	require.NoError(t, err)
-	srv := httptest.NewServer(handler)
-	conn := dialTestWS(t, srv)
-	defer func() { require.NoError(t, conn.Close()); srv.Close(); handler.Wait() }()
-	sendWSAuthFrameDevMode(t, conn)
-	// Auth is the first ordered socket frame; this legacy path sends no auth acknowledgement.
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"message","content":"second chat","agent_id":"omnipus"}`)))
-	outcome := l1WU1WSMintOutcome(t, conn)
-	assert.Equal(t, "error", outcome["type"], "FR-005: %v", outcome)
-	text, err := json.Marshal(outcome)
-	require.NoError(t, err)
-	assert.Contains(t, string(text), main.ID, "refusal must point to Omnipus's existing main")
-	after, err := al.GetSessionStore().ListSessions()
-	require.NoError(t, err)
-	assert.Equal(t, before, after, "no second Omnipus chat may be minted")
+	// FR-005 / BDD-1.7 / F04 / M27: an explicitly supplied default
+	// workspace cannot bypass the one-conversation guard, in either mode.
+	for _, validation := range []bool{false, true} {
+		for _, workspace := range []string{"", "default"} {
+			mode := map[bool]string{false: "off", true: "on"}[validation]
+			t.Run(mode+"/workspace_"+workspace, func(t *testing.T) {
+				handler, msgBus, al := l1WU1IdentitySocket(t, validation)
+				main, err := al.GetSessionStore().GetOrCreateMainSession("default", "omnipus")
+				require.NoError(t, err)
+				conn, finish := l1WU1OpenSocket(t, handler)
+				body := map[string]any{"type": "message", "content": "second chat", "agent_id": "omnipus"}
+				if workspace != "" {
+					l1WU1AssertWorkspaceReceived(t, conn, al, msgBus, workspace)
+					body["metadata"] = map[string]string{"workspace_id": workspace}
+				}
+				before := l1WU1SessionSnapshot(t, al.GetSessionStore())
+				require.NoError(t, conn.WriteJSON(body))
+				outcome := l1WU1WSMintOutcome(t, conn)
+				finish()
+				assert.Equal(t, "error", outcome["type"], "FR-005: %v", outcome)
+				assert.Contains(t, outcome["message"], "Omnipus has one conversation")
+				assert.Contains(t, outcome["message"], main.ID, "refusal must point to Omnipus's existing main")
+				assert.Equal(t, before, l1WU1SessionSnapshot(t, al.GetSessionStore()), "zero session/transcript writes")
+				l1WU1AssertNoInbound(t, msgBus)
+			})
+		}
+	}
 }

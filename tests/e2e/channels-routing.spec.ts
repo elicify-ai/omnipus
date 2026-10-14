@@ -8,7 +8,7 @@
  *       /#/connectors.
  *   (b) Channel feed renders cards from the real gateway GET /api/v1/channels.
  *   (c) Opening Configure opens the ChannelConfigPanel sheet for a channel.
- *   (d) Setting a Default agent now goes through the workspace-scoped
+ *   (d) Choosing a bound main agent goes through the workspace-scoped
  *       routing flow (ADR-029 / channel-instance-workspace-binding-spec.md
  *       US-1..3): the operator selects a WORKSPACE first (the agent picker
  *       is disabled until then), then an agent from that workspace's
@@ -16,12 +16,8 @@
  *       {workspace_id, default_agent_id}, and a subsequent
  *       GET /api/v1/channels/{id}/routing (fired by the panel's own
  *       post-save cache invalidation) reflects the persisted value.
- *   (e) Clearing a bound channel's routing is done by selecting "No workspace
- *       (global default routing)" in the WORKSPACE picker — the bound flow's
- *       agent picker has no standalone "(Global default)" option (US-3 /
- *       FR-003). This issues PUT with both default_agent_id and
- *       workspace_id omitted, and the cleared state is reflected on the
- *       next GET read-back.
+ *   (e) Bound routing has no "No workspace"/global-default unbind option
+ *       (omnipus-system-agent K14 / B2). Opening a picker saves nothing.
  *
  * Architecture:
  *   - Global storageState provides a pre-authenticated session.
@@ -40,6 +36,11 @@
 import { expect, type Locator, type Page, type Route } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { selectNativeOptionByLabel } from './fixtures/selectors'
+import type { components } from '../../src/lib/api/generated/openapi-types'
+
+type RoutingState = components['schemas']['ChannelRouting']
+type RoutingWrite = components['schemas']['ChannelRoutingUpdateRequest']
+const UNBOUND_ROUTING: RoutingState = { workspace_id: '', default_agent_id: '', bound: false }
 
 // ── (a) Connectors sidebar item ───────────────────────────────────────────────
 // BDD: Given the user is logged in,
@@ -135,7 +136,7 @@ test('(c) clicking Configure opens the channel config panel sheet', async ({ pag
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({}),
+        body: JSON.stringify(UNBOUND_ROUTING),
       })
     } else {
       await route.continue()
@@ -179,13 +180,16 @@ test('(c) clicking Configure opens the channel config panel sheet', async ({ pag
 // WORKSPACE (routing-workspace-select), then pick an agent from that
 // workspace's core_team (routing-agent-select, disabled until a workspace is
 // chosen, and with no standalone "(Global default)" option once bound).
-// Clearing a binding is done by re-selecting "No workspace (global default
-// routing)" in the WORKSPACE picker, not in the agent picker.
+// K14 / B2 removes the unbind option entirely: every routing write requires
+// a workspace and its bound main agent.
 //
 // The SPA validates every response against its generated zod schema and
 // drops payloads missing required fields (Constraint #8), so these stubs
 // carry every schema-required key (mirrors channel-routing.spec.ts's stubs).
 const ROUTING_AGENT_REQUIRED = {
+  figure: 'Omnipus' as const,
+  role: 'general' as const,
+  memory_enabled: true,
   status: 'idle' as const,
   soul: 'stub soul',
   timeout_seconds: 300,
@@ -208,7 +212,7 @@ const ROUTING_STUB_REVISION = 'a'.repeat(64)
 const ROUTING_STUB_AGENTS = [
   { id: 'mia', name: 'Mia', type: 'core', locked: true, revision: ROUTING_STUB_REVISION, ...ROUTING_AGENT_REQUIRED },
   { id: 'ray', name: 'Ray', type: 'core', locked: true, revision: ROUTING_STUB_REVISION, ...ROUTING_AGENT_REQUIRED },
-]
+] satisfies components['schemas']['Agent'][]
 const ROUTING_WS_REQUIRED = {
   pinned: false,
   pin_order: 0,
@@ -235,15 +239,12 @@ const ROUTING_STUB_CHANNEL = {
   description: '',
 }
 
-type RoutingState = { workspace_id?: string; default_agent_id?: string }
-
 /**
  * Register the route stubs for the workspace-scoped routing tests. PUTs to
  * the routing sub-resource mutate the same in-memory `state` that GETs read
- * back from (a full-replace resource — an omitted field means "cleared", per
- * ChannelConfigPanel's own unbind comment), so a GET issued after a PUT (the
- * panel's post-save `invalidateQueries` triggers exactly this) proves the
- * value actually persisted server-side rather than merely echoing the request.
+ * back from. K14 requires a complete nonblank pair on every write; omitted
+ * fields are refused, never interpreted as unbind. A post-save GET observes
+ * the network-edge stub state; real backend persistence is covered in Go.
  */
 async function registerRoutingRoutes(
   page: Page,
@@ -281,9 +282,12 @@ async function registerRoutingRoutes(
     } else if (method === 'PUT') {
       const raw = route.request().postData() ?? '{}'
       putBodies.push(raw)
-      // Full replace, not a patch — an omitted key means "cleared" (matches
-      // ChannelConfigPanel's unbind path, which sends {} on purpose).
-      state = JSON.parse(raw) as RoutingState
+      const pair = JSON.parse(raw) as RoutingWrite
+      if (!pair.workspace_id?.trim() || !pair.default_agent_id?.trim()) {
+        await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'bind this channel to an agent in a workspace' }) })
+        return
+      }
+      state = { ...pair, bound: true }
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(state) })
     } else {
       await route.continue()
@@ -365,20 +369,6 @@ async function chooseSmartSelectOption(page: Page, container: Locator, label: Re
   }
 }
 
-/** Select "No workspace (global default routing)" by its stable `__none__`
- *  value (avoids escaping the parenthesised label text as a regex). */
-async function chooseNoWorkspace(page: Page, container: Locator) {
-  const native = container.locator('select')
-  if ((await native.count()) > 0) {
-    await native.selectOption({ value: '__none__' })
-  } else {
-    const trigger = container.locator('button').first()
-    await expect(trigger).toBeVisible({ timeout: 5_000 })
-    await trigger.click()
-    await page.getByRole('option', { name: /no workspace/i }).first().click()
-  }
-}
-
 // ── (d) Binding a workspace + agent calls PUT /channels/{id}/routing ────────
 // BDD: Given the ChannelConfigPanel is open for "telegram" and unbound,
 //      When the user selects the "Sales" workspace (US-1) and then "Mia"
@@ -401,7 +391,7 @@ async function chooseNoWorkspace(page: Page, container: Locator) {
 test(
   '(d) selecting a workspace then an agent calls PUT /channels/{id}/routing with workspace_id + default_agent_id, and it persists on GET read-back',
   async ({ page }) => {
-    const { putBodies, getSnapshots } = await registerRoutingRoutes(page, {})
+    const { putBodies, getSnapshots } = await registerRoutingRoutes(page, UNBOUND_ROUTING)
 
     const sheet = await openTelegramConfigPanel(page)
 
@@ -431,9 +421,9 @@ test(
       })
       .toBeGreaterThan(0)
 
-    const putBody = JSON.parse(putBodies[putBodies.length - 1]) as RoutingState
-    expect(putBody.workspace_id).toBe('sales')
-    expect(putBody.default_agent_id).toBe('mia')
+    expect(putBodies).toHaveLength(1)
+    const putBody = JSON.parse(putBodies[0]) as RoutingWrite
+    expect(putBody).toEqual({ workspace_id: 'sales', default_agent_id: 'mia' })
 
     // Persistence: the panel invalidates the routing query on save success,
     // firing a real subsequent GET. That GET must reflect what was actually
@@ -442,7 +432,7 @@ test(
       .poll(
         () => {
           const last = getSnapshots[getSnapshots.length - 1]
-          return last?.workspace_id === 'sales' && last?.default_agent_id === 'mia'
+          return last?.workspace_id === 'sales' && last?.default_agent_id === 'mia' && last.bound === true
         },
         {
           timeout: 5_000,
@@ -453,76 +443,31 @@ test(
   },
 )
 
-// ── (e) Clearing a bound channel via "No workspace" omits both routing ids ───
-// BDD: Given the channel is already bound to workspace "sales" / agent "mia",
-//      When the user selects "No workspace (global default routing)" in the
-//           WORKSPACE picker (there is no equivalent "(Global default)"
-//           option in the bound flow's agent picker — US-3/FR-003),
-//      Then a PUT /api/v1/channels/telegram/routing is sent with both
-//           default_agent_id and workspace_id omitted,
-//      And the agent picker reverts to its disabled, unbound state, and a
-//           subsequent GET read-back reflects the cleared binding.
-//
-// Traces to: channel-instance-workspace-binding-spec.md US-3 (ADR-029). This
-// supersedes the test's original "(Global default)" agent-picker option —
-// that standalone option was intentionally REMOVED from the bound flow by
-// the workspace-scoped redesign; unbinding now happens one level up, via the
-// workspace picker.
-
+// ── (e) K14: bound routing has no unbind/global-default option ─────────────
+// F03: replace the retired unbind success requirement, not the whole spec.
 test(
-  '(e) selecting "No workspace" on a bound channel calls PUT with default_agent_id + workspace_id omitted, and it persists on GET read-back',
+  '(e) bound channel offers only workspaces, never an unbind or global-default option',
   async ({ page }) => {
-    const { putBodies, getSnapshots } = await registerRoutingRoutes(page, {
-      workspace_id: 'sales',
-      default_agent_id: 'mia',
-    })
-
+    const bound: RoutingState = { workspace_id: 'sales', default_agent_id: 'mia', bound: true }
+    const { putBodies, getSnapshots } = await registerRoutingRoutes(page, bound)
     const sheet = await openTelegramConfigPanel(page)
-
-    // Pre-condition: the panel loads already bound (workspace + agent shown).
     const wsContainer = sheet.locator('[data-testid="routing-workspace-select"]')
-    await expect(wsContainer).toBeVisible({ timeout: 10_000 })
     await expect(wsContainer).toContainText('Sales', { timeout: 8_000 })
-    const agentContainer = sheet.locator('[data-testid="routing-agent-select"]')
-    await expect(agentContainer).toContainText('Mia', { timeout: 8_000 })
-
-    // Unbind: select "No workspace (global default routing)" in the
-    // WORKSPACE picker — there is no equivalent option in the agent picker
-    // once bound (US-3/FR-003).
-    await chooseNoWorkspace(page, wsContainer)
-
-    await expect
-      .poll(() => putBodies.length, {
-        timeout: 5_000,
-        message: 'PUT /channels/telegram/routing was not called for unbind',
-      })
-      .toBeGreaterThan(0)
-
-    const putBody = JSON.parse(putBodies[putBodies.length - 1]) as RoutingState
-    expect(putBody.workspace_id ?? '').toBe('')
-    expect(putBody.default_agent_id ?? '').toBe('')
-
-    // The agent picker reverts to the disabled, unbound state.
-    const agentNativeSelect = agentContainer.locator('select')
-    if ((await agentNativeSelect.count()) > 0) {
-      await expect(agentNativeSelect).toBeDisabled({ timeout: 5_000 })
+    await expect(sheet.locator('[data-testid="routing-agent-select"]')).toContainText('Mia')
+    const native = wsContainer.locator('select')
+    if ((await native.count()) > 0) {
+      const options = await native.locator('option').allTextContents()
+      expect(options).toContain('Sales') // nonempty instrument control
+      expect(options.some((text) => /no workspace|global default/i.test(text))).toBe(false)
+      await expect(native.locator('option[value="__none__"]')).toHaveCount(0)
     } else {
-      await expect(agentContainer.locator('button').first()).toBeDisabled({ timeout: 5_000 })
+      await wsContainer.getByRole('combobox').click()
+      await expect(page.getByRole('option', { name: 'Sales', exact: true })).toBeVisible()
+      await expect(page.getByRole('option', { name: /no workspace|global default/i })).toHaveCount(0)
+      await page.keyboard.press('Escape')
     }
-
-    // Persistence: the post-save invalidation fires a real GET; it must
-    // reflect the CLEARED state, not the pre-unbind {sales, mia} binding.
-    await expect
-      .poll(
-        () => {
-          const last = getSnapshots[getSnapshots.length - 1]
-          return (last?.workspace_id ?? '') === '' && (last?.default_agent_id ?? '') === ''
-        },
-        {
-          timeout: 5_000,
-          message: 'no GET /channels/telegram/routing read-back reflected the cleared binding',
-        },
-      )
-      .toBe(true)
+    await expect(sheet.getByText(/global default routing/i)).toHaveCount(0)
+    expect(putBodies).toEqual([])
+    expect(getSnapshots.at(-1)).toEqual(bound)
   },
 )

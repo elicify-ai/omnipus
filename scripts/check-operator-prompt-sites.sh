@@ -67,7 +67,7 @@
 #      server-generated owner wake into Omnipus's main — owner-wake marker,
 #      never OperatorPrompt, never UserInitiated (pinned by
 #      pkg/agent/workspace_setup_offer_test.go). It brings the census to ten.
-#      Status: pending security-lead ruling at gate S1.
+#      Status: S1 security review waived by founder 2026-10-14.
 #
 # Per C-77: do NOT scan pkg/gateway/websocket.go's ADR-057 FR-089 "W5 audit
 # classification artefact" comment block for OperatorPrompt assignments. That

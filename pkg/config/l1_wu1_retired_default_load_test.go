@@ -46,6 +46,20 @@ func TestL1WU1ConfigLoad_OldDefaultAgentKeyIsInertAndWarnedOnEachLoad(t *testing
 			newLines := string(after[len(before):])
 			assert.Contains(t, newLines, "default_agent_id", "each load must visibly name the ignored key")
 			assert.Contains(t, strings.ToLower(newLines), "ignored", "the warning must say the setting is inert")
+			notices := 0
+			for _, line := range strings.Split(newLines, "\n") {
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				var event map[string]any
+				require.NoError(t, json.Unmarshal([]byte(line), &event))
+				if event["key"] == "agents.defaults.default_agent_id" {
+					notices++
+					assert.Equal(t, "warn", event["level"], "K17 / M22: each load/reload notice must be WARN, not INFO")
+					assert.Contains(t, event["message"], "ignored")
+				}
+			}
+			assert.Equal(t, 1, notices, "each load emits exactly one structured ignored-key warning")
 		})
 	}
 }

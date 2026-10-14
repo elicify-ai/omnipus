@@ -2717,11 +2717,10 @@ components:
               type: boolean
               description: 'Retired client kickoff marker (omnipus-system-agent K9, FR-047). The server is the only producer
                 of the workspace-setup offer: right after a workspace is created with an empty team it posts the offer into
-                Omnipus''s existing main chat and clears that workspace''s `setup_pending` exactly once. A client frame that carries
-                this key is refused with an error frame and has no other effect — true is refused as a client kickoff ("workspace
-                setup is started by the server when a workspace is created; a client kickoff is refused", with session_id echoed
-                only when the frame carried one), and any other value, false included, is refused as malformed. Absent for ordinary
-                messages.
+                Omnipus''s existing main chat and clears that workspace''s `setup_pending` exactly once. A client frame with this
+                key set to true is refused with an error frame and has no other effect ("workspace setup is started by the server
+                when a workspace is created; a client kickoff is refused", with session_id echoed only when the frame carried one);
+                a non-boolean value is refused as malformed. Absent or false for ordinary messages.
 
                 '
               example: true
