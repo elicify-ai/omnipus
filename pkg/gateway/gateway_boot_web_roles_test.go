@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,11 +70,11 @@ func TestBootCredentials_WebSearchMigrationFollowsInject(t *testing.T) {
 		before, err := os.ReadFile(configPath)
 		require.NoError(t, err)
 
-		bootCfg, _, _, bootErr := bootCredentials(home, configPath)
-		// The missing enabled ref is fatal at ResolveBundle (ADR-004), which
-		// runs AFTER the migration. Defer must already have written nothing.
-		require.Error(t, bootErr)
-		require.Nil(t, bootCfg, "a fatal boot returns no config")
+		bootCfg, _, bootStore, bootErr := bootCredentials(home, configPath)
+		// #1277 founder decision 2026-10-12: one missing integration key never aborts boot.
+		require.NoError(t, bootErr)
+		require.False(t, bootCfg.Tools.Web.UsableSearchProvider("tavily"))
+		issue1277RequireSearchRefError(t, bootCfg, bootStore, g2TavilyRef)
 
 		after, err := os.ReadFile(configPath)
 		require.NoError(t, err)
@@ -91,7 +92,12 @@ func TestBootCredentials_WebSearchMigrationFollowsInject(t *testing.T) {
 func writeBootWebRolesConfig(t *testing.T) (home, configPath string) {
 	t.Helper()
 	home = t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("OMNIPUS_HOME", home)
 	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
+	t.Setenv("OMNIPUS_KEY_FILE", "")
+	previousStore := providers.DefaultCredentialStore
+	t.Cleanup(func() { providers.SetDefaultCredentialStore(previousStore) })
 	configPath = filepath.Join(home, "config.json")
 	writeBootTestFile(t, configPath, `{
 		"version": 1,

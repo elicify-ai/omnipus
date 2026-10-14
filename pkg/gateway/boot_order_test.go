@@ -36,7 +36,7 @@ import (
 // fails GCM tag authentication (credentials.ErrWrongKey) — this simulates a
 // corrupted store entry / wrong-master-key scenario, which is a fundamentally
 // different failure mode than "ref not present in the store"
-// (credentials.NotFoundError, covered by TestGatewayBoot_MissingCredentialRefFailsFast
+// (credentials.NotFoundError, covered by TestGatewayBoot_MissingChannelCredentialDegradesWithoutAborting
 // above). The salt is unused by the OMNIPUS_MASTER_KEY unlock path (it only
 // matters for passphrase-derived keys) but is included so the file matches
 // the documented on-disk schema (pkg/credentials/store.go's package doc).
@@ -128,153 +128,44 @@ func TestGatewayBoot_UnsupportedConfigVersionFailsFast(t *testing.T) {
 	}
 }
 
-// TestGatewayBoot_MissingCredentialRefFailsFast verifies that:
-//  1. bootCredentials returns a fatal error when a credential ref is missing for
-//     an ENABLED channel — the gateway must not start with broken enabled channels.
-//  2. bootCredentials succeeds when the same ref is missing but the channel is DISABLED.
-//  3. ResolveBundle itself surfaces a NotFoundError for missing refs, regardless
-//     of enabled state — the enabled/disabled fatality gate lives in bootCredentials.
-//
-// Boot order invariant: ResolveBundle MUST run after LoadConfigWithStore and
-// MUST return an error (not silently ignore) for missing refs.
-// This test exercises bootCredentials so it cannot drift from gateway.Run behavior.
-func TestGatewayBoot_MissingCredentialRefFailsFast(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
-
-	// --- Sub-test 1: enabled channel with missing ref → fatal. ---
-	enabledConfigPath := filepath.Join(tmpDir, "config_enabled.json")
-	writeBootTestFile(t, enabledConfigPath, `{
-		"version": 1,
-		"channels": {
-			"telegram": {
-				"enabled": true,
-				"token_ref": "TELEGRAM_TOKEN"
-			}
-		},
-		"gateway": { "host": "127.0.0.1", "port": 19998 }
-	}`)
-
-	enabledErr := bootCredentialsError(tmpDir, enabledConfigPath)
-	if enabledErr == nil {
-		t.Fatal("bootCredentials must fail when an enabled channel's credential ref is missing from the store")
+// #1277 founder decision 2026-10-12: missing enabled-channel secrets degrade only that integration.
+func TestGatewayBoot_MissingChannelCredentialDegradesWithoutAborting(t *testing.T) {
+	f := newIssue1277Fixture(t)
+	cfg, bundle, store := f.boot(t)
+	if bundle.GetString(issue1277BrokenRef) != "" {
+		t.Fatal("missing credential must not be present in the boot bundle")
 	}
-	if !strings.Contains(enabledErr.Error(), "TELEGRAM_TOKEN") {
-		t.Errorf("error must mention the missing ref; got: %q", enabledErr.Error())
-	}
-
-	// --- Sub-test 2: disabled channel with missing ref → not fatal. ---
-	disabledConfigPath := filepath.Join(tmpDir, "config_disabled.json")
-	writeBootTestFile(t, disabledConfigPath, `{
-		"version": 1,
-		"channels": {
-			"telegram": {
-				"enabled": false,
-				"token_ref": "TELEGRAM_TOKEN"
-			}
-		},
-		"gateway": { "host": "127.0.0.1", "port": 19997 }
-	}`)
-
-	_, disabledBundle, disabledStore, disabledErr := bootCredentials(tmpDir, disabledConfigPath)
-	if disabledErr != nil {
-		t.Fatalf("bootCredentials must NOT fail for a disabled channel with missing ref; got: %v", disabledErr)
-	}
-	// Bundle must not carry the missing ref.
-	if disabledBundle.GetString("TELEGRAM_TOKEN") != "" {
-		t.Error("bundle must not carry a value for a missing credential ref")
-	}
-
-	// --- Sub-test 3: ResolveBundle itself surfaces NotFoundError for missing refs. ---
-	// This pins the invariant that ResolveBundle reports errors independent of bootCredentials.
-	directCfg, err2 := config.LoadConfigWithStore(disabledConfigPath, disabledStore)
-	if err2 != nil {
-		t.Fatalf("LoadConfigWithStore: %v", err2)
-	}
-	_, bundleErrs := credentials.ResolveBundle(directCfg, disabledStore)
-	if len(bundleErrs) == 0 {
-		t.Fatal("ResolveBundle must return errors when a configured ref is absent from the store")
-	}
-
-	// At least one error must mention the missing ref name.
-	found := false
-	for _, e := range bundleErrs {
-		if strings.Contains(e.Error(), "TELEGRAM_TOKEN") {
-			found = true
-			break
+	// Resolution remains loud, independent of the boot fatal-vs-degrade gate.
+	_, errs := credentials.ResolveBundle(cfg, store)
+	missing := 0
+	for _, err := range errs {
+		var nf *credentials.NotFoundError
+		if errors.As(err, &nf) && nf.Name == issue1277BrokenRef {
+			missing++
 		}
 	}
-	if !found {
-		t.Errorf("bundleErrs must contain the missing ref name TELEGRAM_TOKEN; got: %v", bundleErrs)
+	if missing != 1 {
+		t.Fatalf("resolver must report exactly one NotFoundError naming %q, got %v", issue1277BrokenRef, errs)
 	}
-
-	// At least one error must be a NotFoundError.
-	hasNotFound := false
-	for _, e := range bundleErrs {
-		var nfe *credentials.NotFoundError
-		if errors.As(e, &nfe) {
-			hasNotFound = true
-			break
-		}
-	}
-	if !hasNotFound {
-		t.Errorf("bundleErrs must contain a NotFoundError; got: %v", bundleErrs)
-	}
+	api, svc, _, _ := f.startRuntime(t, cfg, bundle)
+	issue1277RequireDegradedChannel(t, api, svc.ChannelManager)
+	issue1277RequireHealthyPeer(t, f, api, svc.ChannelManager)
 }
 
-// TestGatewayBoot_CorruptedCredentialForEnabledChannelFailsFast verifies that
-// bootCredentials aborts boot (fatal error, not merely a slog.Warn) when an
-// ENABLED channel's credential ref IS present in the store but fails to
-// decrypt — a corrupted store entry / wrong-master-key scenario. This is a
-// worse failure than a simple NotFoundError (already covered by
-// TestGatewayBoot_MissingCredentialRefFailsFast): the operator believes the
-// channel is configured correctly, so silently continuing with a Warn would
-// let the channel start without a usable credential. This pins the
-// enabledRefFromBundleError escalation branch added alongside the
-// NotFoundError-on-enabled-channel fatal branch in bootCredentials.
-func TestGatewayBoot_CorruptedCredentialForEnabledChannelFailsFast(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
-
-	credsPath := filepath.Join(tmpDir, "credentials.json")
-	writeCorruptedCredentialsFile(t, credsPath, "TELEGRAM_TOKEN")
-
-	configPath := filepath.Join(tmpDir, "config.json")
-	writeBootTestFile(t, configPath, `{
-		"version": 1,
-		"channels": {
-			"telegram": {
-				"enabled": true,
-				"token_ref": "TELEGRAM_TOKEN"
-			}
-		},
-		"gateway": { "host": "127.0.0.1", "port": 19996 }
-	}`)
-
-	err := bootCredentialsError(tmpDir, configPath)
-	if err == nil {
-		t.Fatal(
-			"bootCredentials must fail when an enabled channel's credential ref fails to decrypt (corrupted store entry)",
-		)
+// #1277 founder decision 2026-10-12: one unreadable secret degrades its channel, not the gateway.
+func TestGatewayBoot_UnreadableChannelCredentialDegradesWithoutAborting(t *testing.T) {
+	f := newIssue1277Fixture(t)
+	if err := f.store.Set(issue1277BrokenRef, "qa1277-before-tamper"); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "TELEGRAM_TOKEN") {
-		t.Errorf("error must mention the failing ref TELEGRAM_TOKEN; got: %q", err.Error())
+	issue1277TamperSingleEntry(t, f, issue1277BrokenRef)
+	if value, err := f.store.Get(issue1277ProviderRef); err != nil || value != issue1277ProviderValue {
+		t.Fatalf("positive control: the store key and healthy provider must still resolve, err=%v", err)
 	}
-	// Must route through the enabledRefFromBundleError escalation branch
-	// ("failed to resolve" / "not simply missing"), not the NotFoundError
-	// branch ("not found in store — ensure the credential is stored").
-	if !strings.Contains(err.Error(), "failed to resolve") {
-		t.Errorf(
-			"error must indicate the ref failed to resolve (decrypt failure), not merely be missing; got: %q",
-			err.Error(),
-		)
-	}
-	if strings.Contains(err.Error(), "not found in store") {
-		t.Errorf(
-			"error must NOT be attributed to the NotFoundError branch (ref IS present, just undecryptable); got: %q",
-			err.Error(),
-		)
-	}
+	cfg, bundle, _ := f.boot(t)
+	api, svc, _, _ := f.startRuntime(t, cfg, bundle)
+	issue1277RequireDegradedChannel(t, api, svc.ChannelManager)
+	issue1277RequireHealthyPeer(t, f, api, svc.ChannelManager)
 }
 
 // TestGatewayBoot_LockedStoreFailsBeforeConfig verifies that when

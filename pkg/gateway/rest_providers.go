@@ -149,6 +149,24 @@ func (a *restAPI) listProvidersHTTP(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, providers)
 }
 
+// providerCredentialRefError builds the operator-facing cred error for one
+// provider row's unresolvable api_key_ref, naming the EXACT reference so the
+// row says which secret to fix (#1277, founder decision 2026-10-12) — never
+// the secret value. The classified classes mirror
+// describeCredentialResolutionError; the ref prefix is what that helper's
+// messages lacked.
+func providerCredentialRefError(ref string, err error) string {
+	var entryAuth *credentials.EntryAuthError
+	if errors.As(err, &entryAuth) {
+		return fmt.Sprintf("credential reference %q is unreadable (failed authentication) — re-enter the API key", ref)
+	}
+	var notFound *credentials.NotFoundError
+	if errors.As(err, &notFound) {
+		return fmt.Sprintf("credential reference %q is missing from the credential vault — re-enter the API key", ref)
+	}
+	return fmt.Sprintf("credential reference %q: %s", ref, describeCredentialResolutionError(err))
+}
+
 // providerAggregate is what the GET list collects from the configured provider rows
 // before building the wire rows: first row, user models, resolved keys, credential
 // errors, latest update stamp and auth method per provider, in first-seen order.
@@ -213,23 +231,20 @@ func (a *restAPI) aggregateProviderRows(cfg *config.Config) providerAggregate {
 		if len(m.Models) > 0 {
 			agg.userModels[providerName] = append(agg.userModels[providerName], m.Models...)
 		}
-		// Resolve API key for upstream model fetching.
-		// APIKeyRef is resolved via process environment (set by InjectFromConfig).
-		if _, hasKey := agg.apiKeys[providerName]; !hasKey {
-			resolved := m.APIKey()
-			if resolved == "" && m.APIKeyRef != "" {
-				if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
-					slog.Warn("rest: could not resolve provider credential", "ref", m.APIKeyRef, "error", err)
-					var notFound *credentials.NotFoundError
-					if !errors.As(err, &notFound) {
-						agg.credErrors[providerName] = describeCredentialResolutionError(err)
-					}
-				} else {
-					resolved = v
-				}
-			}
-			if resolved != "" {
-				agg.apiKeys[providerName] = resolved
+		// Resolve API key for upstream model fetching. The credential STORE is
+		// the SOLE authority for a row with an api_key_ref (#1277): the process
+		// environment only ever mirrors the store (InjectFromConfig writes it
+		// from the vault and never unsets), so a stale mirror — a value left
+		// from before the entry was deleted or emptied — must never promote the
+		// row to "connected". A missing or unreadable reference is the row's
+		// cred error, naming the exact ref; an entry that exists but stores an
+		// empty value is "not configured" (disconnected) — not an error state.
+		if _, hasKey := agg.apiKeys[providerName]; !hasKey && m.APIKeyRef != "" {
+			if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
+				slog.Warn("rest: could not resolve provider credential", "ref", m.APIKeyRef, "error", err)
+				agg.credErrors[providerName] = providerCredentialRefError(m.APIKeyRef, err)
+			} else if strings.TrimSpace(v) != "" {
+				agg.apiKeys[providerName] = v
 			}
 		}
 	}

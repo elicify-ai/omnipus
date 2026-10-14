@@ -572,42 +572,49 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 		return fmt.Errorf("agent roster population failed: %w", rosterErr)
 	}
 	// Build a ref→in-use map so a resolution failure on something actually
-	// enabled/in-use (fatal — surfaced as a failed request) can be
-	// distinguished from one on a disabled channel or unused feature
-	// (Warn + continue), matching bootCredentials/executeReload.
+	// enabled/in-use can be distinguished from one on a disabled channel or
+	// unused feature, matching bootCredentials/executeReload.
+	//
+	// #1277 (founder decision 2026-10-12; round-3 chief ruling 2026-10-14):
+	// a missing or single-entry-unreadable secret on an enabled integration
+	// no longer rejects the in-memory refresh — only that integration degrades
+	// (the channel manager records its ref-naming failure; Settings shows it),
+	// while the operator's actual edit applies. ONE store-level health
+	// decision, made from the store itself and independent of which reference
+	// kinds the config holds (CHECK F1/F2), still rejects and keeps the old
+	// config: a wrong master key, a corrupt/undecodable file, or a locked
+	// vault — including on MCP-only and reference-free configurations.
 	enabledRefs := buildEnabledRefMap(newCfg)
 	bundle, bundleErrs := credentials.ResolveBundle(newCfg, a.credStore)
-	for _, e := range bundleErrs {
+	bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
+	if healthErr := a.credStore.HealthCheck(); healthErr != nil {
+		refreshErr := fmt.Errorf("refresh rejected: %w",
+			fatalStoreWideAuthFailure(healthErr, bundleAuth))
+		slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
+			"store-level credential failure", "error", refreshErr)
+		return refreshErr
+	}
+	for _, e := range bundleAuth {
+		slog.Error("refreshConfigAndRewireServices: credential unusable — "+
+			"the referencing entry will not work until it is fixed, the rest of the system continues",
+			"error", e)
+	}
+	for _, e := range bundleRest {
 		var notFound *credentials.NotFoundError
 		if errors.As(e, &notFound) {
 			if enabledRefs[notFound.Name] {
-				refreshErr := fmt.Errorf(
-					"enabled credential %q not found in store: %w", notFound.Name, e,
-				)
-				slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
-					"enabled credential not found", "ref", notFound.Name, "error", e)
-				return refreshErr
+				slog.Error("refreshConfigAndRewireServices: credential unusable — "+
+					"the referencing entry will not work until it is fixed, the rest of the system continues",
+					"credential_ref", notFound.Name, "error", e)
+				continue
 			}
 			slog.Info("refreshConfigAndRewireServices: credential not found (not currently enabled/in use)",
 				"ref", notFound.Name)
 			continue
 		}
-		// Any error other than "not found" on an enabled/in-use ref is worse
-		// than a simple missing ref (the credential exists but can't be
-		// read) — escalate exactly like the NotFoundError-on-enabled case
-		// above instead of a log-only Warn.
-		if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
-			refreshErr := fmt.Errorf(
-				"enabled credential %q failed to resolve (not simply missing — check "+
-					"OMNIPUS_MASTER_KEY / credentials.json integrity): %w", ref, e,
-			)
-			slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
-				"enabled credential failed to resolve", "ref", ref, "error", e)
-			return refreshErr
-		}
-		// Non-fatal: a disabled channel / unused feature missing its cred is
-		// acceptable here.
-		slog.Warn("refreshConfigAndRewireServices: bundle resolution error", "error", e)
+		// Resolution may observe a file/lock failure between the two reads.
+		// Preserve it rather than accepting a partial refresh with only a log.
+		return fmt.Errorf("refresh rejected: %w", fatalStoreWideAuthFailure(e, nil))
 	}
 	// Replace (not append) the entire sensitive-values set so rotated secrets
 	// are evicted and the scrubber reflects the current config refs plus every

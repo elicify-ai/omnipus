@@ -262,8 +262,7 @@ func (s *Store) UnlockWithPassphrase(passphrase string) error {
 	// passphrase derives afterwards no longer opens pre-upgrade entries (see
 	// store_migrate.go, "Residual risk"). The second Argon2id run is paid only
 	// when the lock-free probe sees a legacy file.
-	// A probe error is not reported here: the key is installed and
-	// loadFileInternal reports an unreadable file on first use.
+	// Probe errors are returned by installKeyLocked before it installs the key.
 	if sf, present, probeErr := s.readStoreVersionFile(); probeErr != nil || !present || sf.Version != legacyStoreVersion {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -413,6 +412,56 @@ func (s *Store) List() ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// HealthCheck checks the store independently of configured credential refs.
+// A locked, unreadable or undecodable store is unhealthy. A nonempty store must
+// have at least one decryptable entry (referenced or not); otherwise its entry
+// errors are returned, preserving ErrWrongKey and any decoding causes. A
+// readable witness leaves individual missing/unreadable refs to their consumers.
+// An absent file or an empty current-format store is healthy and is not written.
+func (s *Store) HealthCheck() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.key == nil {
+		return ErrStoreLocked
+	}
+
+	// Read once while holding the key stable. Do not use Exists: a failed stat
+	// can mean an inaccessible path, not an absent file. loadFileInternal only
+	// treats os.ErrNotExist as an empty store and preserves other read errors.
+	sf, err := s.loadFileInternal()
+	if err != nil {
+		return err
+	}
+	if len(sf.Credentials) == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, len(sf.Credentials))
+	for name := range sf.Credentials {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	entryErrs := make([]error, 0, len(names))
+	for _, name := range names {
+		entry := sf.Credentials[name]
+		// GCM.Open panics on the wrong nonce length. A malformed envelope is
+		// unreadable evidence, not a reason for the health probe to panic.
+		nonce, decodeErr := base64.StdEncoding.DecodeString(entry.Nonce)
+		if decodeErr == nil && len(nonce) != nonceLen {
+			entryErrs = append(entryErrs, fmt.Errorf(
+				"credentials: entry %q is malformed: nonce must be %d bytes, got %d", name, nonceLen, len(nonce)))
+			continue
+		}
+		if _, decryptErr := decrypt(s.key, name, entry); decryptErr != nil {
+			entryErrs = append(entryErrs, decryptErr)
+		} else {
+			return nil
+		}
+	}
+	return fmt.Errorf("credentials: no store entry could be decrypted (wrong master key or corrupted entries): %w",
+		errors.Join(entryErrs...))
 }
 
 // Delete removes the credential named name from the store atomically.

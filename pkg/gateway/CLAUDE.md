@@ -67,4 +67,7 @@ restart; `gateway.public_url` is restart-gated and drives
 ## Credential boot order
 
 `NewStore → Unlock → LoadConfigWithStore → InjectFromConfig → ResolveBundle →
-RegisterSensitiveValues → NewManager → Start` — any failure aborts boot (ADR-004).
+Store.HealthCheck → RegisterSensitiveValues → NewManager → Start` (ADR-004).
+Store-level failures abort boot or reject reload/REST refresh even with only MCP
+refs or no refs. A missing entry, or a single entry-auth failure when another
+stored entry decrypts, degrades only that integration (#1277).
