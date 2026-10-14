@@ -9,7 +9,7 @@ import {
   Outlet, RouterProvider,
 } from '@tanstack/react-router'
 import { vi } from 'vitest'
-import type { Agent, Room, Workspace } from '@/lib/api/generated/openapi-types'
+import type { Agent, AgentActivityRun, Room, SandboxStatus, SessionPage, Workspace } from '@/lib/api/generated/openapi-types'
 import type {
   ClientFrame, RoomDeliveryState, RoomEntry, RoomSnapshotFrame, ServerFrame,
 } from '@/lib/api/generated/asyncapi-types'
@@ -150,7 +150,20 @@ export class Network {
     this.respond('GET', '/api/v1/agents', () => json(this.roster))
     this.respond('GET', '/api/v1/workspaces', () => json(this.workspaces))
     this.respond('GET', `/api/v1/workspaces/${WS}`, () => json(this.workspaces[0]))
-    this.respond('GET', '/api/v1/sessions', () => json([]))
+    const emptySessions: SessionPage = { sessions: [] }
+    this.respond('GET', '/api/v1/sessions', () => json(emptySessions))
+    // Existing ChatScreen siblings query these even while the participant
+    // dialog is closed. Keep exact routes: any other request still fails.
+    const sandboxStatus: SandboxStatus = {
+      backend: 'fallback', available: false, kernel_level: false,
+      policy_applied: false, seccomp_enabled: false, bind_ports_count: 0,
+      kernel_sandbox_active: false, auto_approve_effective: false,
+      god_mode_active: false,
+    }
+    const noActivityRuns: AgentActivityRun[] = []
+    this.respond('GET', '/api/v1/security/sandbox-status', () => json(sandboxStatus))
+    this.respond('GET', '/api/v1/agents/mia/activity-runs', () => json(noActivityRuns))
+    this.respond('GET', '/api/v1/agents/omnipus/activity-runs', () => json(noActivityRuns))
     this.respond('GET', `/api/v1/workspaces/${WS}/rooms`, () => json(this.rooms))
     this.respond('GET', `/api/v1/rooms/${ROOM_ID}`, () => json(this.currentRoom))
     this.respond('POST', `/api/v1/rooms/${ROOM_ID}/messages`, () => new Response(null, { status: 202 }))
