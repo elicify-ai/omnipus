@@ -22,7 +22,12 @@ func TestWU23R1_OperatorReadPatternsRespectHomeInventory(t *testing.T) {
 	fixture.Write(t, permitted, "OPERATOR_PERMITTED_EXACT\n")
 	fixture.Write(t, unmatched, "UNMATCHED_PRIVATE\n")
 	protected := filepath.Join(f.Home, "sessions", "private.txt")
-	patterns := []*regexp.Regexp{regexp.MustCompile("^" + regexp.QuoteMeta(permitted) + "$"), regexp.MustCompile("^" + regexp.QuoteMeta(protected) + "$")}
+	otherUpload := filepath.Join(f.Home, "uploads", "other", "private.txt")
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile("^" + regexp.QuoteMeta(permitted) + "$"),
+		regexp.MustCompile("^" + regexp.QuoteMeta(protected) + "$"),
+		regexp.MustCompile("^" + regexp.QuoteMeta(otherUpload) + "$"),
+	}
 	reader := NewReadFileTool(f.AgentHome, true, MaxReadFileSize, patterns)
 	ctx := wu23Context(f)
 	policy, err := ResolveTurnFSPolicy(ctx, f.AgentHome, true)
@@ -39,6 +44,36 @@ func TestWU23R1_OperatorReadPatternsRespectHomeInventory(t *testing.T) {
 		res := reader.Execute(ctx, map[string]any{"path": protected})
 		if !res.IsError || !errors.Is(res.Err, ErrCarveOut) || strings.Contains(res.ForLLM, fixture.Sentinel) {
 			t.Fatalf("pattern must not open inventory: error=%v output=%s", res.Err, res.ForLLM)
+		}
+	})
+	// R1M06: sessions already have a second structural veto. Other-session
+	// uploads exercise the InventoryGuarded-only pattern-grant boundary (A4).
+	t.Run("pattern_matched_other_session_upload_still_refused", func(t *testing.T) {
+		res := reader.Execute(ctx, map[string]any{"path": otherUpload})
+		if !res.IsError || !errors.Is(res.Err, ErrCarveOut) || strings.Contains(res.ForLLM, fixture.Sentinel) {
+			t.Errorf("§2 D2 minus A4: exact pattern must not disclose another session's upload: error=%v output=%s", res.Err, res.ForLLM)
+		}
+		handle, resolveErr := ResolvePathAllowingPatterns(ctx, policy, "read_file", "r2-other-upload", FSOpRead, otherUpload, patterns)
+		if handle != nil {
+			handle.Close()
+			t.Error("another session's protected upload produced an open handle")
+		}
+		if !errors.Is(resolveErr, ErrCarveOut) {
+			t.Errorf("other-session upload pattern must retain ErrCarveOut: %v", resolveErr)
+		}
+	})
+	t.Run("acting_and_root_upload_positive", func(t *testing.T) {
+		for _, session := range []string{"acting", "root"} {
+			path := filepath.Join(f.Home, "uploads", session, "allowed.txt")
+			handle, resolveErr := ResolvePathAllowingPatterns(ctx, policy, "read_file", "r2-own-upload", FSOpRead, path, patterns)
+			if resolveErr != nil {
+				t.Fatalf("A4 %s upload control was refused: %v", session, resolveErr)
+			}
+			data, readErr := handle.ReadFile()
+			handle.Close()
+			if readErr != nil || string(data) != "WU23_ALLOWED_CONTROL\n" {
+				t.Fatalf("A4 %s exact upload bytes=%q err=%v", session, data, readErr)
+			}
 		}
 	})
 	t.Run("unmatched_neighbor_still_refused", func(t *testing.T) {
