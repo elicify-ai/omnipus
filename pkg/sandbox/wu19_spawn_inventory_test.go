@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"errors"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -37,7 +38,7 @@ func wu19LoadInventory(t *testing.T, root string) *wu19Inventory {
 	p := wu19NewInventory()
 	for _, tree := range []string{"pkg", "cmd", "internal"} {
 		base := filepath.Join(root, tree)
-		if _, err := os.Stat(base); os.IsNotExist(err) {
+		if _, err := os.Stat(base); errors.Is(err, os.ErrNotExist) {
 			continue // optional tree; root/go.mod and production discovery are checked.
 		}
 		err := filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {

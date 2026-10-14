@@ -1,13 +1,24 @@
 package sandbox
 
-import "go/ast"
+import (
+	"go/ast"
+	"go/token"
+)
 
 // A helper called after the initial Env assignment may not reopen inheritance.
-// Inspect actual helper bodies; no method-name allowlist blesses a raw mutator.
+// One identity trace follows locals, fields and nested parameter bindings; no
+// local name or helper name can grant a fourth God environment exception.
 func (p *wu19Inventory) commandMutationSafe(caller *wu19Function, call *ast.CallExpr, command *ast.Object, seen map[string]bool) bool {
+	root := &ast.Ident{Name: command.Name, Obj: command}
+	trace := wu19CommandTrace{command, wu19Reference{caller, &ast.SelectorExpr{X: root, Sel: ast.NewIdent("Env")}, call.Pos(), nil}}
+	return p.commandCallSafe(caller, call, nil, trace, seen)
+}
+
+func (p *wu19Inventory) commandCallSafe(caller *wu19Function, call *ast.CallExpr, callerBindings map[*ast.Object]wu19Reference, trace wu19CommandTrace, seen map[string]bool) bool {
 	key := p.resolvedCallIdentity(caller, call.Fun)
 	if seen[key] {
-		return true
+		p.unresolved["recursive command handoff: "+key] = true
+		return false // an unproved cycle is not a safe mutation boundary.
 	}
 	list := p.funcs[key]
 	if len(list) == 0 {
@@ -15,58 +26,77 @@ func (p *wu19Inventory) commandMutationSafe(caller *wu19Function, call *ast.Call
 			return p.browserModifierCallbacksPreserveEnv()
 		}
 		p.unresolved["command helper: "+key+" in "+caller.key] = true
-		return false // unknown command-pointer handoff is not a verified mutation boundary.
+		return false
 	}
 	seen[key] = true
 	defer delete(seen, key)
 	for _, callee := range list {
 		bindings := map[*ast.Object]wu19Reference{}
-		commandParams := map[*ast.Object]bool{}
 		for i, parameter := range wu19Parameters(callee) {
 			if i < len(call.Args) {
-				bindings[parameter.Obj] = wu19Reference{caller, call.Args[i], call.Pos(), nil}
-				commandParams[parameter.Obj] = wu19SameCommand(call.Args[i], command, caller.decl.Body, map[*ast.Object]bool{})
+				bindings[parameter.Obj] = wu19Reference{caller, call.Args[i], call.Pos(), callerBindings}
 			}
 		}
-		safe := true
-		ast.Inspect(callee.decl.Body, func(n ast.Node) bool {
-			if conditional, ok := n.(*ast.IfStmt); ok && wu19NilCommandEnvGuard(conditional.Cond, commandParams) {
-				// The caller's rooted, unconditional Env assignment is known
-				// non-nil; this fallback materialization branch cannot run.
-				return false
-			}
-			if assignment, ok := n.(*ast.AssignStmt); ok && len(assignment.Lhs) == len(assignment.Rhs) {
-				for i, lhs := range assignment.Lhs {
-					field, ok := lhs.(*ast.SelectorExpr)
-					if !ok || field.Sel.Name != "Env" {
-						continue
-					}
-					param, ok := field.X.(*ast.Ident)
-					if !ok || !commandParams[param.Obj] {
-						continue
-					}
-					origin := p.origin(callee, assignment.Rhs[i], assignment.Pos(), bindings, map[string]bool{})
-					// The God exception belongs to exactly three constructor
-					// assignments, not to an arbitrary command-pointer mutator.
-					if origin&(wu19Bad|wu19MayBeNil|wu19GodException) != 0 || origin&(wu19Generic|wu19Runner) == 0 {
-						safe = false
-					}
-				}
-			}
-			if nested, ok := n.(*ast.CallExpr); ok {
-				for _, arg := range nested.Args {
-					if id, ok := arg.(*ast.Ident); ok && commandParams[id.Obj] {
-						safe = safe && p.commandMutationSafe(callee, nested, id.Obj, seen)
-					}
-				}
-			}
-			return true
-		})
-		if !safe {
+		if !p.commandBodySafe(callee, bindings, trace, seen) {
 			return false
 		}
 	}
 	return true
+}
+
+func (p *wu19Inventory) commandBodySafe(fn *wu19Function, bindings map[*ast.Object]wu19Reference, trace wu19CommandTrace, seen map[string]bool) bool {
+	safe := true
+	identity := func(expr ast.Expr, before token.Pos) wu19CommandIdentity {
+		return p.commandIdentity(fn, expr, before, bindings, trace, map[string]bool{})
+	}
+	var visit func(ast.Node) bool
+	visit = func(n ast.Node) bool {
+		if conditional, ok := n.(*ast.IfStmt); ok && wu19NilCommandEnvGuard(conditional.Cond, conditional.Pos(), identity) {
+			// A rooted Env is non-nil. Only its nil fallback is unreachable;
+			// the else branch must still be checked, including through aliases.
+			if conditional.Else != nil {
+				ast.Inspect(conditional.Else, visit)
+			}
+			return false
+		}
+		if assignment, ok := n.(*ast.AssignStmt); ok {
+			for i, lhs := range assignment.Lhs {
+				field, partial := wu19CommandEnvTarget(lhs)
+				if field == nil {
+					continue
+				}
+				if len(assignment.Lhs) != len(assignment.Rhs) {
+					safe = false
+					continue
+				}
+				if !p.commandEnvWriteSafe(fn, field, assignment.Rhs[i], partial, assignment.Pos(), bindings, trace) {
+					safe = false
+				}
+			}
+		}
+		if nested, ok := n.(*ast.CallExpr); ok {
+			if builtin, ok := nested.Fun.(*ast.Ident); ok && builtin.Obj == nil && builtin.Name == "copy" && len(nested.Args) == 2 {
+				if field, _ := wu19CommandEnvTarget(nested.Args[0]); field != nil && !p.commandEnvWriteSafe(fn, field, nested.Args[1], true, nested.Pos(), bindings, trace) {
+					safe = false
+				}
+			}
+			for index, arg := range nested.Args {
+				kind := identity(arg, nested.Pos())
+				if kind&wu19TrackedCommand == 0 {
+					if kind&wu19UnprovedCommand != 0 && p.commandArgumentType(fn, nested, index, arg) {
+						safe = false
+					}
+					continue // scalar/environment arguments are not pointer handoffs.
+				}
+				if kind != wu19TrackedCommand || !p.commandCallSafe(fn, nested, bindings, trace, seen) {
+					safe = false
+				}
+			}
+		}
+		return true
+	}
+	ast.Inspect(fn.decl.Body, visit)
+	return safe
 }
 
 // The existing allocator callback is an explicit attribute-only handoff. Inspect
@@ -114,17 +144,13 @@ func (p *wu19Inventory) browserModifierCallbacksPreserveEnv() bool {
 	return safe && count > 0
 }
 
-func wu19NilCommandEnvGuard(expr ast.Expr, commandParams map[*ast.Object]bool) bool {
+func wu19NilCommandEnvGuard(expr ast.Expr, before token.Pos, identity func(ast.Expr, token.Pos) wu19CommandIdentity) bool {
 	condition, ok := expr.(*ast.BinaryExpr)
-	if !ok || condition.Op.String() != "==" {
+	if !ok || condition.Op != token.EQL {
 		return false
 	}
 	field, ok := condition.X.(*ast.SelectorExpr)
-	if !ok || field.Sel.Name != "Env" {
-		return false
-	}
-	command, ok := field.X.(*ast.Ident)
-	if !ok || !commandParams[command.Obj] {
+	if !ok || field.Sel.Name != "Env" || identity(field.X, before) != wu19TrackedCommand {
 		return false
 	}
 	nilValue, ok := condition.Y.(*ast.Ident)

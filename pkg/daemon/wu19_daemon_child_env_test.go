@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -129,7 +130,7 @@ func wu19SpawnDaemonSnapshot(t *testing.T, exe, home string) (wu19envprobe.Snaps
 	}
 	t.Cleanup(func() {
 		// No test leaves a detached child behind after a failed assertion.
-		if err := process.Kill(); err != nil && !os.IsNotExist(err) && err != os.ErrProcessDone {
+		if err := process.Kill(); err != nil && !errors.Is(err, os.ErrNotExist) && err != os.ErrProcessDone {
 			t.Errorf("daemon fixture cleanup kill failed: %v", err)
 		}
 	})
