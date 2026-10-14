@@ -604,7 +604,7 @@ func TestParseSetupKickoffMetadata(t *testing.T) {
 		{"empty metadata map", map[string]any{}, false, false},
 		{"key absent, other keys present", map[string]any{"workspace_id": "ws1"}, false, false},
 		{"boolean true — the only valid kickoff signal", map[string]any{"workspace_setup_kickoff": true}, true, false},
-		{"boolean false — present but wrong value", map[string]any{"workspace_setup_kickoff": false}, false, true},
+		{"boolean false — an ordinary message", map[string]any{"workspace_setup_kickoff": false}, false, false},
 		{"string \"true\" — JSON type drift", map[string]any{"workspace_setup_kickoff": "true"}, false, true},
 		{"number 1 — JSON type drift", map[string]any{"workspace_setup_kickoff": float64(1)}, false, true},
 		{"nil value — key present, no value", map[string]any{"workspace_setup_kickoff": nil}, false, true},
