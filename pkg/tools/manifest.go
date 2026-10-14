@@ -187,9 +187,16 @@ var administrativeToolNames = map[string]struct{}{
 // reset_*/destroy_* name, or the literal "set_config") but is deliberately
 // NOT in administrativeToolNames — so a future tool matching the pattern
 // fails the build until a human records why it's exempt, rather than
-// silently passing it through. Empty today: every current catalog name
-// matching the pattern is already in administrativeToolNames.
-var administrativeExemptNames = map[string]string{}
+// silently passing it through.
+var administrativeExemptNames = map[string]string{
+	// Forward-reserved by WU-2 in the static catalogue; the tool itself is
+	// implemented later (omnipus-system-agent FR-077). Until then it has no
+	// executable tool and no manifest entry, so ToolSearch cannot surface it,
+	// and its guard is policy: it ships ask and is on the Auto ask-list
+	// (FR-021). Re-adjudicate it into administrativeToolNames when the tool
+	// lands.
+	"remove_secret": "forward-reserved, not yet implemented (FR-077); guarded by ask + Auto ask-list (FR-021)",
+}
 
 // isAdministrativeToolName reports whether name is in the drift-tested
 // destructive-and-install-wide set (ADR-071 §3.2.1).
