@@ -106,12 +106,13 @@ func (al *AgentLoop) boundMemberRefusal(workspaceID, agentID string) string {
 	if err != nil {
 		return fmt.Sprintf("the bound workspace %s could not be read: %v", workspaceID, err)
 	}
-	for _, member := range state.Workspace.CoreTeam {
+	ws := state.Workspace
+	for _, member := range ws.CoreTeam {
 		if routing.NormalizeAgentID(member) == routing.NormalizeAgentID(agentID) {
 			return ""
 		}
 	}
-	name := strings.TrimSpace(state.Workspace.Name)
+	name := strings.TrimSpace(ws.Name)
 	if name == "" {
 		name = workspaceID
 	}

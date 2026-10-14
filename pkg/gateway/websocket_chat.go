@@ -975,8 +975,7 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 	// main chat's id, before anything is minted.
 	if msg, _, err := omnipusSecondConversationRefusal(hcm.h.agentLoop.GetSessionStore(), home, hcm.targetAgentID); err != nil || msg != "" {
 		if err != nil {
-			logsafeError("ws: could not check Omnipus's conversation", "error", err)
-			msg = "could not check Omnipus's conversation"
+			msg = serverFailureText("could not check Omnipus's conversation", err)
 		}
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),

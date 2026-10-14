@@ -306,6 +306,8 @@ func TestSessionWorker_DifferentScopesGetIndependentWorkers(t *testing.T) {
 		},
 	}
 
+	msg1 = al.addressToPrimaryForTest(msg1) // no default agent: the fixture names its agent
+	msg2 = al.addressToPrimaryForTest(msg2)
 	scope1, _, ok1 := al.resolveSteeringTarget(msg1)
 	scope2, _, ok2 := al.resolveSteeringTarget(msg2)
 	if !ok1 || !ok2 {

@@ -32,7 +32,7 @@ func TestQueueWorkingStatus_FansOutToAllSessionConnections(t *testing.T) {
 
 	wcSender := makeTestConn()
 	handler.handleChatMessageWithClientID(
-		context.Background(), "chat-fanout", "", "hello", "", nil,
+		context.Background(), "chat-fanout", "", "hello", "mia", nil,
 		"", "", false, "client-fanout-1", nil, wcSender,
 	)
 
@@ -118,7 +118,7 @@ func TestPendingMessageStatus_LeftoverEntry_FlushedAndClearedAtTurnEnd(t *testin
 
 	wc := makeTestConn()
 	handler.handleChatMessageWithClientID(
-		context.Background(), "chat-leftover", "", "hello", "", nil,
+		context.Background(), "chat-leftover", "", "hello", "mia", nil,
 		"", "", false, "client-leftover-1", nil, wc,
 	)
 

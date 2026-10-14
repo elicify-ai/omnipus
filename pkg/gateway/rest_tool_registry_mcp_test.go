@@ -69,6 +69,7 @@ func newTestRestAPIWithMCPRegistry(t *testing.T, toolName string) (*restAPI, *to
 	require.Empty(t, collisions, "test MCP tool registration must not produce collisions")
 
 	api.mcpRegistry = mcpReg
+	api.builtinRegistry = builtins // FR-125: listings read the central registry
 	return api, mcpReg
 }
 
@@ -149,7 +150,9 @@ func TestREST_GetTools_MCPToolServerId(t *testing.T) {
 	}, builtins)
 	require.Empty(t, collisions, "test MCP tool registration must not produce collisions")
 	api.mcpRegistry = mcpReg
-	// Leave builtinRegistry nil so only the MCP path is exercised.
+	// An EMPTY central builtin registry (FR-125: listings need it wired) so
+	// only the MCP path contributes entries.
+	api.builtinRegistry = builtins
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
 	r = withAdminRole(r)

@@ -232,7 +232,7 @@ func TestTurn_ContinuesWhenOnlyConnectionCloses(t *testing.T) {
 	conn := dialTestWS(t, srv)
 	sendWSAuthFrameDevMode(t, conn)
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "stream 200 tokens please"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "stream 200 tokens please", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
@@ -302,7 +302,7 @@ func TestReconnectMidTurn_CatchUpThenLive(t *testing.T) {
 	connA := dialTestWS(t, srv)
 	sendWSAuthFrameDevMode(t, connA)
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "stream then reconnect"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "stream then reconnect", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, connA.WriteMessage(websocket.TextMessage, data))
@@ -496,7 +496,7 @@ func TestTurn_NextRoundStreamsAfterDisconnect(t *testing.T) {
 	conn := dialTestWS(t, srv)
 	sendWSAuthFrameDevMode(t, conn)
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "check my tasks"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "check my tasks", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))

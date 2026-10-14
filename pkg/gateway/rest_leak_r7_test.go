@@ -222,7 +222,7 @@ func TestR7_F4_DeleteWithStuckTurnDoesNotPrintSessionIDs(t *testing.T) {
 	conn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
-	data, err := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: "start stubborn turn"})
+	data, err := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: "start stubborn turn", AgentID: "mia"})
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 	sessionID := readFrameOfType(t, conn, "session_started", 5*time.Second).SessionID

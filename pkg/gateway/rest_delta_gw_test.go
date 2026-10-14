@@ -29,15 +29,13 @@ const (
 	deltaOtherWS = "01JDELTAGWOTHERWS000000002"
 )
 
-// deltaOmnipusChat creates an Omnipus chat in the default workspace and returns its id.
+// deltaOmnipusChat returns Omnipus's chat in the default workspace — its one
+// conversation, the main chat (omnipus-system-agent FR-005).
 func deltaOmnipusChat(t *testing.T, env *u1Env) string {
 	t.Helper()
-	code, body := sf1Do(env, http.MethodPost, "/api/v1/sessions",
-		`{"type":"chat","agent_id":"omnipus","workspace_id":"`+deltaDefWS+`"}`)
-	require.Equal(t, http.StatusCreated, code, body)
-	var s gen.Session
-	require.NoError(t, json.Unmarshal([]byte(body), &s))
-	return s.Id
+	main, err := env.store(t).GetOrCreateMainSession(deltaDefWS, "omnipus")
+	require.NoError(t, err)
+	return main.ID
 }
 
 // Finding 1: an existing Omnipus chat must not be re-bound to another workspace by
@@ -119,11 +117,13 @@ func TestDeltaGW_OmnipusRefusal_ServerFaultOverWebSocketIsTheFixedText(t *testin
 	r5AssertClean(t, frames, env.home)
 }
 
-func TestDeltaGW_OmnipusRefusal_NoDefaultWorkspaceYetIsStillThe400Refusal(t *testing.T) {
+// FR-005: a request for another Omnipus chat is refused with Omnipus's main
+// (409) — never a new chat, and never a dead end.
+func TestDeltaGW_OmnipusRefusal_ExtraChatIsThe409WithTheMain(t *testing.T) {
 	env := u1NewEnv(t, false)
 	code, body := sf1Do(env, http.MethodPost, "/api/v1/sessions", `{"type":"chat","agent_id":"omnipus"}`)
-	assert.Equal(t, http.StatusBadRequest, code, body)
-	assert.Contains(t, body, "default workspace")
+	assert.Equal(t, http.StatusConflict, code, body)
+	assert.Contains(t, body, "main chat")
 }
 
 // deltaCorruptSession writes a session directory whose meta.json cannot be parsed.

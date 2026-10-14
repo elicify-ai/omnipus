@@ -50,7 +50,7 @@ func TestHandleChatMessage_AcknowledgesPersistenceBeforeTurnStart(t *testing.T) 
 	wc := makeTestConn()
 
 	handler.handleChatMessageWithClientID(
-		context.Background(), "chat-message-status", "", "hello", "", nil,
+		context.Background(), "chat-message-status", "", "hello", "mia", nil,
 		"", "", false, "client-message-1", nil, wc,
 	)
 
@@ -81,7 +81,7 @@ func TestHandleChatMessage_PublishFailureMarksClientMessageFailed(t *testing.T) 
 	wc := makeTestConn()
 
 	handler.handleChatMessageWithClientID(
-		context.Background(), "chat-message-status-failed", "", "hello", "", nil,
+		context.Background(), "chat-message-status-failed", "", "hello", "mia", nil,
 		"", "", false, "client-message-failed", nil, wc,
 	)
 
@@ -210,7 +210,7 @@ func TestHandleChatMessage_StampsWorkspaceOnSession(t *testing.T) {
 		"chat-m4-1", // chatID
 		"",          // frameSessionID (empty → mint a new session)
 		"do it",     // content
-		"",          // agentID
+		"mia",       // agentID — a new chat names its agent (FR-122)
 		nil,         // mediaRefs
 		"",          // modelName
 		wantWS,      // workspaceID (active workspace)
@@ -341,7 +341,7 @@ func TestHandleChatMessage_ForwardsModelNameToBus(t *testing.T) {
 		"chat-model-1",     // chatID
 		"",                 // frameSessionID (empty → mint a new session)
 		"hello",            // content
-		"",                 // agentID (no per-message agent override → default)
+		"mia",              // agentID — a new chat names its agent (FR-122)
 		nil,                // mediaRefs
 		"z-ai/glm-5-turbo", // modelName
 		"",                 // workspaceID (no active workspace)
@@ -374,7 +374,7 @@ func TestHandleChatMessage_EmptyModelName_DoesNotSetKey(t *testing.T) {
 		"chat-model-2",
 		"",
 		"hello",
-		"",
+		"mia",
 		nil,
 		"",    // empty modelName
 		"",    // workspaceID (no active workspace)
@@ -408,7 +408,7 @@ func TestHandleChatMessage_WhitespaceModelName_DoesNotSetKey(t *testing.T) {
 		"chat-model-3",
 		"",
 		"hello",
-		"",
+		"mia",
 		nil,
 		"   \t\n", // whitespace only
 		"",        // workspaceID (no active workspace)
@@ -441,7 +441,7 @@ func TestHandleChatMessage_TrimsModelName(t *testing.T) {
 		"chat-model-4",
 		"",
 		"hello",
-		"",
+		"mia",
 		nil,
 		"  z-ai/glm-5-turbo  ", // surrounding whitespace
 		"",                     // workspaceID (no active workspace)
@@ -939,7 +939,7 @@ func TestHandleChatMessage_NormalMessage_RegressionUnaffected(t *testing.T) {
 		"chat-normal-regression",
 		"",
 		content,
-		"",
+		"mia",
 		nil,
 		"",
 		"",    // workspaceID

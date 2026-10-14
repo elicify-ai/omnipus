@@ -28,6 +28,7 @@
         {
           "dir": "client→server",
           "frame": {
+            "agent_id": "mia",
             "client_message_id": "client-1",
             "content": "stream then reload",
             "type": "message"

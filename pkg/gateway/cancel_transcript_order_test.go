@@ -151,7 +151,7 @@ func TestRunTurn_CancelMidStream_TranscriptOrderAssistantBeforeTurnCanceled(t *t
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
 
-	msg := wsClientFrameTestHelper{Type: "message", Content: "please write a long essay"}
+	msg := wsClientFrameTestHelper{Type: "message", Content: "please write a long essay", AgentID: "mia"}
 	data, err := json.Marshal(msg)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))

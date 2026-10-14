@@ -176,6 +176,7 @@ func TestSessionWorker_Continue_UnrelatedActiveSession_MustNotStrandOwnQueuedFol
 		Content: "first message for B",
 		Peer:    bus.Peer{Kind: bus.PeerDirect, ID: "user-b"},
 	}
+	msgB = al.addressToPrimaryForTest(msgB) // no default agent: the fixture names its agent
 
 	target, err := al.buildContinuationTarget(msgB)
 	if err != nil {
@@ -408,6 +409,7 @@ func setupPersistentContinueFailureFixture(t *testing.T) (*AgentLoop, *bus.Messa
 		Content: "first message",
 		Peer:    bus.Peer{Kind: bus.PeerDirect, ID: "user-a"},
 	}
+	msg = al.addressToPrimaryForTest(msg) // no default agent: the fixture names its agent
 
 	target, err := al.buildContinuationTarget(msg)
 	if err != nil {
@@ -777,6 +779,7 @@ func TestSessionWorker_DrainLoop_PostDequeueContinueFailure_MustNotSilentlyDropM
 		Content: "first message for the post-dequeue failure test",
 		Peer:    bus.Peer{Kind: bus.PeerDirect, ID: "user-d"},
 	}
+	msg = al.addressToPrimaryForTest(msg) // no default agent: the fixture names its agent
 
 	target, err := al.buildContinuationTarget(msg)
 	if err != nil {
