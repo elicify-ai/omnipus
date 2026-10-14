@@ -2,7 +2,7 @@
 // Real Sidebar/controls/stores. Navigation and network/socket transport are boundaries.
 import type { ReactNode } from 'react'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Sidebar } from './Sidebar'
@@ -86,6 +86,14 @@ describe('WU-10 fixed Omnipus entry', () => {
   it('FR-100 is a single fixed entry before Workspaces, never a duplicate team row', async () => {
     renderSidebar()
     const button = await entry()
+    // FR-004 / CHECK F2: collapsed Default made the negative row oracle blind.
+    // Open the actual disclosure; ordinary Mia proves its rows really render.
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Show Default agents' }))
+    expect(screen.getByRole('button', { name: 'Hide Default agents' })).toHaveAttribute('aria-expanded', 'true')
+    const defaultRows = screen.getByRole('group', { name: 'Default' })
+    expect(await within(defaultRows).findByRole('button', { name: /^mia$/i })).toBeVisible()
+    expect(within(defaultRows).queryByRole('button', { name: /^omnipus(?:\s|$)/i })).not.toBeInTheDocument()
+    expect(within(defaultRows).queryByRole('group', { name: /^omnipus$/i })).not.toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /^omnipus(?:\s|$)/i })).toHaveLength(1)
     const heading = screen.getByText(/^workspaces$/i)
     expect(button.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
