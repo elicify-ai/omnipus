@@ -936,7 +936,9 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		validSeedEdges = append(validSeedEdges, edge)
 	}
 
-	createUnlock := workspace.LockID(ws.ID)
+	// Released once: by the deferred call, or earlier, before the setup offer
+	// below, whose claim takes this same per-workspace lock.
+	createUnlock := sync.OnceFunc(workspace.LockID(ws.ID))
 	defer createUnlock()
 	workspacePath := filepath.Join(a.homePath, "workspaces", ws.ID+".json")
 	if _, err := os.Stat(workspacePath); err == nil {
@@ -997,6 +999,10 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		if flusher, ok := w.(http.Flusher); ok {
 			flusher.Flush()
 		}
+		// The workspace is fully written; release the create lock first, or
+		// the offer's claim (consumeWorkspaceSetupKickoff, same lock) blocks
+		// on this goroutine for ever.
+		createUnlock()
 		a.postWorkspaceSetupOffer(ws.ID, c.Username)
 	}
 }

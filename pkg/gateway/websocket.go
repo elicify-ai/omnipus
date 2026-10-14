@@ -1309,11 +1309,11 @@ func (wh *wsHandlerReadLoop) handleMessageFrame(data []byte) wsHandlerReadLoopFl
 	}
 	// Workspace-setup kickoff: the server is the only producer of the setup
 	// offer (omnipus-system-agent FR-047, K9 — workspace_setup_offer.go posts
-	// it into Omnipus's main when a workspace is created). Every client frame
-	// that carries metadata.workspace_setup_kickoff is refused here, before
-	// any session work: true is a client kickoff, and any other value is
-	// malformed. Kickoff intent is read by KEY PRESENCE, not a loose type
-	// assertion — see parseSetupKickoffMetadata's doc comment.
+	// it into Omnipus's main when a workspace is created). A client frame
+	// whose metadata.workspace_setup_kickoff is true is refused here, before
+	// any session work, and a non-boolean value is refused as malformed;
+	// false or absent is an ordinary message. The marker is read by KEY
+	// PRESENCE, not a loose type assertion — see parseSetupKickoffMetadata.
 	setupKickoff, malformedKickoff := parseSetupKickoffMetadata(f.Metadata)
 	if malformedKickoff {
 		slog.Warn("ws: malformed workspace_setup_kickoff metadata — rejecting",

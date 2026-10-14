@@ -33,30 +33,25 @@ import (
 //
 // A naive `metadata["workspace_setup_kickoff"].(bool)` type assertion
 // silently reads ANY non-bool value — the string "true", a JSON number, an
-// object — as ok=false, which used to make setupKickoff=false and silently
-// demote a malformed kickoff frame into an ordinary chat message: the
-// synthetic interview instruction would then persist as a user-authored
-// transcript entry with a content-derived title, instead of ever being
-// recognized as an attempted (but malformed) kickoff.
+// object — as ok=false, which would demote a malformed marker into an
+// ordinary chat message instead of refusing it.
 //
-// Returns (setupKickoff=false, malformed=false) when the key is absent
-// entirely — an ordinary message, handled normally. Returns
-// (setupKickoff=true, malformed=false) only when the key is present AND its
-// value is the JSON boolean true. Returns (setupKickoff=false,
-// malformed=true) for every other case where the key IS present — including
-// an explicit `false` — signaling the caller to reject the frame outright
-// (error frame, never processed as a normal message) rather than silently
-// falling back to non-kickoff handling.
+// Returns (setupKickoff=false, malformed=false) when the key is absent or is
+// the JSON boolean false — an ordinary message, handled normally (the
+// contract's "absent/false for ordinary messages"). Returns
+// (setupKickoff=true, malformed=false) when the value is the JSON boolean
+// true. Returns (setupKickoff=false, malformed=true) for any non-boolean
+// value, signaling the caller to reject the frame outright.
 func parseSetupKickoffMetadata(metadata map[string]any) (setupKickoff bool, malformed bool) {
 	raw, present := metadata["workspace_setup_kickoff"]
 	if !present {
 		return false, false
 	}
 	b, isBool := raw.(bool)
-	if !isBool || !b {
+	if !isBool {
 		return false, true
 	}
-	return true, false
+	return b, false
 }
 
 // wsHandlerHandleChatMessage carries the shared state of handleChatMessage across its stages.
@@ -254,7 +249,6 @@ func (h *WSHandler) handleChatMessageToRecipient(
 	}
 	hcm.admitted = true
 	hcm.markWorkingIfTurnAlreadyActive()
-
 }
 
 // prepareMessage validates and durably records intake. True means rejected
