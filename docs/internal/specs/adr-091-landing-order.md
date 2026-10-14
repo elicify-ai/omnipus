@@ -56,6 +56,8 @@ type BoundaryObserver  interface { Observe(boundary Boundary, sessionID string, 
 
 ### I-1 — The steered-by edge (WP-A → everyone)
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. I-1's **`SteeredBy.Limits` row below is superseded and removed**, not renamed or moved. There is no creator-set lifetime ceiling or default to restore on entry. Authority, depth, parent/root/report identity, tool exclusions and explicit Stop remain. Old saved edge limits decode inertly and are omitted on re-persist. Source: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/session/lifecycle_edge.go`::SteeredBy; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/steer/types.go`::LaunchRequest. The timeout-producing row in I-5 and any lifetime acceptance references are historical only; deadline-free first dispatch/re-entry and readable old outcomes replace them.
+
 Persisted on `session/lifecycle.go::LifecycleRecord`: one new field `SteeredBy` (nil for a session nobody steers), one new field `Origin` (every record), one new field `Stop` (every record), and the **existing** `Generation` field with changed semantics.
 
 | Field | Type | Meaning |
@@ -79,6 +81,8 @@ Invariants WP-A enforces and WP-G's fixtures assert: parentage immutable; no cyc
 Derived at creation and kept in step (existing readers depend on them): `UnifiedMeta.ParentSessionID` = `SteeringSessionID`; `UnifiedMeta.Owner` copied from the steering session; `UnifiedMeta.WorkspaceID` and `Title` stamped; `LifecycleRecord.ParentAgentID` = the steering session's agent (for both fronts — tasks left it empty).
 
 ### I-2 — The session launcher (WP-A → WP-C, task executor, WP-G)
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** `LaunchRequest`'s **`Limits` member** in the joint `Limits, ToolExclusions` row below is removed; `ToolExclusions` remains. No launcher or fixture reinstates a lifetime field or a configured delegation default. Source: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/steer/types.go`::LaunchRequest.
 
 `steer.SessionLauncher`, implemented in `pkg/agent`, injected at gateway boot into the delegate tool, the task executor and the I-7 fixture.
 
@@ -139,6 +143,8 @@ Every entry path — first run, wake after a child completes, follow-up, boot re
 - ADR-057 FR-047 (zero references to the two status frames in `src/`, guarded by `src/lib/__adr057__noSubagentMessageOrStateReferences.test.ts`) is superseded by ADR-091 D7; WP-E deletes the guard in the commit that adds the consumer.
 
 ### I-5 — Audience and upward delivery (WP-B → everyone)
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the **timed-out outcome row** below is history/recovery vocabulary, not an obligation to end a new worker on a lifetime timer. Preserve old timeout record decoding/delivery, explicit Stop, ordinary failure, durable final ownership and the one upward operation. No new work timeout is installed to exercise that row.
 
 **Audience.** `steer.AudienceResolver.Audience(ctx, sessionID) (Audience, Class, error)` — implemented in `pkg/agent` on top of I-8, injected into every package that hosts a boundary (`pkg/agent` itself, `pkg/tools` for boundary 8, `pkg/channels` for boundary 7, `pkg/gateway` for boundary 6, `pkg/askuser` for boundary 12) at gateway boot. `Audience` ∈ `AudienceUser`, `AudienceSteeringSession`, `AudienceNone`: `ordinary_root` → user; `steered` → steering session; every other class, a missing record for a session that should have one, or an error → none, and the boundary logs a diagnostic. Every boundary in the inventory (§6) calls the resolver, then calls `steer.BoundaryObserver.Observe(boundary, sessionID, audience)` (a no-op in production; the I-7 recorder in tests, which is how "boundary exercised and blocked" is told apart from "never exercised"), and only then acts.
 

@@ -1,5 +1,7 @@
 # ADR-042 — Extend Task Execution to `subagent_3p` (External-CLI) Workers
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. The shared timeout/default prescription in §2.4, dispatch safety-net in §2.8, and timeout-knob consequence are **superseded** beside the old text below. The shared runner, worker identity/workspace, cancellation registration and CLI turn-count cap remain. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/task_executor_run.go`::processTaskDirectExternalCLI; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/external_dispatch.go`::startAndDrain. Original July implementation observations remain dated history, not instructions to restore a kill timer.
+
 **Status:** Accepted (operator decision, 2026-07-13)
 **Date:** 2026-07-13
 **Deciders:** Daniel Piatkowski (product owner); architect (ratified)
@@ -54,6 +56,8 @@ This matters because external CLIs have no `task_update` tool call available to 
 
 ### 2.4 Timeout: reuse the sub-turn default, no new config key
 
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** the timeout requirement, five-minute shared default and recommendation to raise it below are retired. External task/delegate work uses no dispatch lifetime deadline and leaves the runner's optional `TimeoutSeconds` unset. That option remains usable for a bounded diagnostic smoke test, not agent work. Reuse the runner and its cancel/identity/workspace/count-cap machinery; do not add a replacement duration setting.
+
 The external-CLI run needs a timeout bound (`runExternalCLISubTurn`'s `timeout time.Duration` parameter). Rather than introduce a task-specific timeout config, the branch reuses `SubTurn.DefaultTimeoutMinutes` — `getSubTurnConfig` (`pkg/agent/subturn.go:47`) already resolves this to `defaultSubTurnTimeout` (5 minutes, `:31`) when unset (`:70-73`). **Accepted trade-off:** task assignments are conceptually longer-running work than a single `delegate` call, and a 5-minute default is a tight ceiling for that use case. An operator running long external-CLI tasks needs to raise `SubTurn.DefaultTimeoutMinutes` globally (it is not currently overridable per-task or per-agent) — this is a known limitation, not silently accepted risk: it is written here so the first "my external-CLI task timed out" report is diagnosed against this ADR, not treated as a new bug.
 
 ### 2.5 Guards removed
@@ -95,6 +99,8 @@ All four resolve through one core chain: `buildDelegationDenyChecker` (`loop.go:
 
 ### 2.8 Post-decision corrections (7-reviewer gate, 2026-07-13)
 
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the **“No Go-level timeout bound existed”** correction below remains evidence of the July fix, but its instruction to wrap task dispatch in `context.WithTimeout` and pass a driver kill timer is retired. Current task/CLI work is deadline-free and retains registered explicit cancellation. No elapsed-time guarantee now protects a dispatch slot from a worker that keeps running; the founder accepts that consequence. The other historical corrections are not silently rewritten.
+
 §§2.2–2.3 above describe the design as originally decided. A review pass on the landed implementation found the built `processTaskDirectExternalCLI` diverged from that design in three ways that are corrected now, not deferred:
 
 - **Persona/soul composition was missing.** §2.2 says the ephemeral `turnState`'s `agent` field carries "the delegate's identity" — but the run's actual *input* originally passed `runExternalCLISubTurn` the bare task prompt, unlike `spawnSubTurn`'s agent-to-agent delegation path, which composes the target's soul/persona ahead of the task via `composeDelegateInput(al, task, actualSystem, targetAgentID)` (`pkg/agent/subturn.go:307`, producing a `"## System\n\n<soul>\n\n## Task\n\n<task>"` string, or the bare task when the target has no soul — the worker case). A task run now routes through the identical `composeDelegateInput` call (`processTaskDirectExternalCLI`, `pkg/agent/loop.go`) so an external-CLI worker's own configured persona travels with a task assignment exactly as it already did for a `delegate` call — the assignee's identity was resolved correctly (agent, workspace, model) but its *voice* was silently dropped for the task-run path specifically.
@@ -114,6 +120,8 @@ All four resolve through one core chain: `buildDelegationDenyChecker` (`loop.go:
 - Five call sites of duplicated fail-closed logic (REST guard, two sysagent-tool guards, one shared-tool-plumbing field, two wiring call sites) are deleted rather than left to rot now that their premise no longer holds.
 
 ### Negative / accepted
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the **five-minute mismatch / raise the global timeout / add a task timeout knob** consequence below is retired. Work may run indefinitely until completion, failure or explicit Stop; a held runner/workspace slot has no age-based release guarantee. Count caps and command/provider/check guards remain separate. Do not solve that accepted trade-off by restoring a process lifetime timer.
 
 - **5-minute default timeout is a real mismatch for task-shaped work.** Tasks are the product's "assign it and come back later" primitive; a `SubTurn.DefaultTimeoutMinutes`-sourced bound (5m default) is tuned for a `delegate` call, not a task. Accepted per §2.4 — operators running long external-CLI tasks must raise the global `SubTurn.DefaultTimeoutMinutes`, since there is no per-task or per-agent override today. A follow-up to give tasks (or `subagent_3p` executor config) their own timeout knob is reasonable but out of scope here.
 - **No mid-run task visibility/update from the external CLI itself.** A native agent can call `task_update` mid-run (e.g., to record partial progress or fail itself with a specific reason); an external-CLI task run cannot, by construction — it only ever reaches a terminal state via `finishTaskRun`'s post-hoc auto-complete/fail-task logic after the whole run returns. This is consistent with how `delegate`-driven external-CLI sub-turns already behave (they don't have Omnipus tool access either), so it is not a new asymmetry this ADR introduces, but it is more visible for tasks, where "check in on long-running work" is a more natural expectation than for a single `delegate` call.

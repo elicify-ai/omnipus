@@ -491,6 +491,8 @@ handler"* holds when **all** writers should obey the invariant. Here the engine 
 exempt, so the **external mutation boundary (REST) is the correct place** — and it is
 already guarded.
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. The **idle-expiry budget rationale below is superseded**, as are any references in this ADR to that calendar brake as a bounds safeguard. `planning.idle_expiry_days` and per-plan active overrides are retired by the order; count/round bounds remain mutable under the existing ownership rule. A plan's running supervisor turn has no work deadline. The surviving supervision observation interval starts at its wake and is never evaluated while that turn's claim is held; it is not a post-settlement clock. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/plan_engine.go`::dispatchPlanTurn / idleExpireOneLocked; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/plan_engine_supervise.go`::evaluateSupervisionDeadlineLocked / supervisionTurnInFlight. The idle-expiry path is still present at frozen `7c148ca00` and assigned round-1 removal, not certified implemented by this note.
+
 **Do not touch `Bounds`.** The same code comment records a deliberate exemption: *"an
 operator may legitimately want to extend a running plan's idle-expiry/judge-round
 budget"* `[FACT]`. v1 would have silently reversed it — and under D4 that budget now also
