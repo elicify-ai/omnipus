@@ -18,9 +18,10 @@ func TestL11274NativeSoulRequiredForMainAndSubagent(t *testing.T) {
 			t.Run(agentType+"/"+supplied, func(t *testing.T) {
 				f := newL11274Fixture(t, "", false)
 				args := l11274Fix1NativeArgs(agentType)
-				if supplied == "empty" {
+				switch supplied {
+				case "empty":
 					args["soul"] = ""
-				} else if supplied == "whitespace" {
+				case "whitespace":
 					args["soul"] = " \t\n "
 				}
 				before := l11274Fix1ReadResources(t, f)

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"go/ast"
+	"go/types"
 	"strings"
 )
 
@@ -34,16 +35,16 @@ func (p *wu19Inventory) declaredType(fn *wu19Function, expr ast.Expr) ast.Expr {
 		}
 		for _, field := range fields {
 			for _, name := range field.Names {
-				if e.Obj != nil && name.Obj == e.Obj {
+				if fn.file.object(e) != nil && fn.file.object(name) == fn.file.object(e) {
 					return field.Type
 				}
 			}
 		}
-		if e.Obj != nil {
-			if spec, ok := e.Obj.Decl.(*ast.ValueSpec); ok {
+		if fn.file.object(e) != nil {
+			if spec, ok := fn.file.declarations[fn.file.object(e)].(*ast.ValueSpec); ok {
 				return spec.Type
 			}
-			if assignment, ok := e.Obj.Decl.(*ast.AssignStmt); ok && len(assignment.Rhs) == 1 {
+			if assignment, ok := fn.file.declarations[fn.file.object(e)].(*ast.AssignStmt); ok && len(assignment.Rhs) == 1 {
 				if call, ok := assignment.Rhs[0].(*ast.CallExpr); ok {
 					for _, producer := range p.funcs[p.resolvedCallIdentity(fn, call.Fun)] {
 						if producer.decl.Type.Results != nil && len(producer.decl.Type.Results.List) > 0 {
@@ -94,11 +95,11 @@ func (fn *wu19Function) typeIdentity(expr ast.Expr) string {
 	return ""
 }
 
-func (p *wu19Inventory) scalarTupleVariable(fn *wu19Function, object *ast.Object) bool {
+func (p *wu19Inventory) scalarTupleVariable(fn *wu19Function, object types.Object) bool {
 	if object == nil {
 		return false
 	}
-	assignment, ok := object.Decl.(*ast.AssignStmt)
+	assignment, ok := fn.file.declarations[object].(*ast.AssignStmt)
 	if !ok || len(assignment.Rhs) != 1 {
 		return false
 	}
@@ -108,7 +109,7 @@ func (p *wu19Inventory) scalarTupleVariable(fn *wu19Function, object *ast.Object
 	}
 	index := -1
 	for i, lhs := range assignment.Lhs {
-		if id, ok := lhs.(*ast.Ident); ok && id.Obj == object {
+		if id, ok := lhs.(*ast.Ident); ok && fn.file.object(id) == object {
 			index = i
 		}
 	}

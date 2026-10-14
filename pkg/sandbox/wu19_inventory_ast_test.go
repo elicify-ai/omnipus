@@ -3,15 +3,20 @@ package sandbox
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
+	"go/types"
 	"path"
 	"strconv"
 	"strings"
 )
 
 type wu19File struct {
-	path, pkg string
-	ast       *ast.File
-	imports   map[string]string
+	path, pkg      string
+	ast            *ast.File
+	imports        map[string]string
+	identities     *types.Info
+	declarations   map[types.Object]ast.Node
+	identityErrors []error
 }
 
 type wu19Function struct {
@@ -29,15 +34,16 @@ type wu19Inventory struct {
 	types         map[string]ast.Expr
 	typeOwners    map[ast.Expr]*wu19File
 	globals       map[string]wu19Reference
-	globalObjects map[*ast.Object]bool
+	globalObjects map[types.Object]bool
 }
 
 func wu19NewInventory() *wu19Inventory {
-	return &wu19Inventory{funcs: map[string][]*wu19Function{}, unresolved: map[string]bool{}, types: map[string]ast.Expr{}, typeOwners: map[ast.Expr]*wu19File{}, globals: map[string]wu19Reference{}, globalObjects: map[*ast.Object]bool{}}
+	return &wu19Inventory{funcs: map[string][]*wu19Function{}, unresolved: map[string]bool{}, types: map[string]ast.Expr{}, typeOwners: map[ast.Expr]*wu19File{}, globals: map[string]wu19Reference{}, globalObjects: map[types.Object]bool{}}
 }
 
-func (p *wu19Inventory) addFile(name, pkg string, file *ast.File) {
+func (p *wu19Inventory) addFile(name, pkg string, file *ast.File, fset *token.FileSet) {
 	s := &wu19File{path: name, pkg: pkg, ast: file, imports: map[string]string{}}
+	s.resolveObjects(fset)
 	for _, imp := range file.Imports {
 		actual, err := strconv.Unquote(imp.Path.Value)
 		if err != nil {
@@ -64,7 +70,7 @@ func (p *wu19Inventory) addFile(name, pkg string, file *ast.File) {
 						if i < len(value.Values) {
 							context := &wu19Function{file: s, key: pkg + "." + name.Name, decl: &ast.FuncDecl{Type: &ast.FuncType{}, Body: &ast.BlockStmt{}}}
 							p.globals[pkg+"."+name.Name] = wu19Reference{context, value.Values[i], value.End(), nil}
-							p.globalObjects[name.Obj] = true
+							p.globalObjects[s.object(name)] = true
 						}
 					}
 				}
@@ -98,11 +104,11 @@ func wu19TypeName(e ast.Expr) string {
 
 func (f *wu19Function) callIdentity(e ast.Expr) string {
 	if id, ok := e.(*ast.Ident); ok {
-		if id.Obj == nil && f.file.imports["."] == "os/exec" && (id.Name == "Command" || id.Name == "CommandContext") {
+		if f.file.object(id) == nil && f.file.imports["."] == "os/exec" && (id.Name == "Command" || id.Name == "CommandContext") {
 			return "os/exec." + id.Name
 		}
-		if id.Obj != nil {
-			if alias, ok := id.Obj.Decl.(*ast.AssignStmt); ok && len(alias.Rhs) == 1 {
+		if f.file.object(id) != nil {
+			if alias, ok := f.file.declarations[f.file.object(id)].(*ast.AssignStmt); ok && len(alias.Rhs) == 1 {
 				if selector, ok := alias.Rhs[0].(*ast.SelectorExpr); ok {
 					return f.callIdentity(selector)
 				}
@@ -118,13 +124,13 @@ func (f *wu19Function) callIdentity(e ast.Expr) string {
 	if !ok {
 		return ""
 	}
-	if imported := f.file.imports[id.Name]; imported != "" && id.Obj == nil {
+	if imported := f.file.imports[id.Name]; imported != "" && f.file.object(id) == nil {
 		return imported + "." + s.Sel.Name
 	}
 	if f.decl.Recv != nil {
 		for _, receiver := range f.decl.Recv.List {
 			for _, name := range receiver.Names {
-				if name.Obj == id.Obj {
+				if f.file.object(name) == f.file.object(id) {
 					return f.typeIdentity(receiver.Type) + "." + s.Sel.Name
 				}
 			}
@@ -133,7 +139,7 @@ func (f *wu19Function) callIdentity(e ast.Expr) string {
 	if f.decl.Type.Params != nil {
 		for _, field := range f.decl.Type.Params.List {
 			for _, name := range field.Names {
-				if name.Obj == id.Obj {
+				if f.file.object(name) == f.file.object(id) {
 					return f.typeIdentity(field.Type) + "." + s.Sel.Name
 				}
 			}
@@ -167,14 +173,15 @@ func (p *wu19Inventory) scan() (int, []wu19Finding) {
 	return count, findings
 }
 
-func wu19AssignedObject(body *ast.BlockStmt, constructor *ast.CallExpr) *ast.Object {
-	var object *ast.Object
+func wu19AssignedObject(fn *wu19Function, constructor *ast.CallExpr) types.Object {
+	body := fn.decl.Body
+	var object types.Object
 	ast.Inspect(body, func(n ast.Node) bool {
 		if a, ok := n.(*ast.AssignStmt); ok {
 			for i, rhs := range a.Rhs {
 				if rhs == constructor && i < len(a.Lhs) {
 					if id, ok := a.Lhs[i].(*ast.Ident); ok {
-						object = id.Obj
+						object = fn.file.object(id)
 					}
 				}
 			}
@@ -184,27 +191,27 @@ func wu19AssignedObject(body *ast.BlockStmt, constructor *ast.CallExpr) *ast.Obj
 	return object
 }
 
-func wu19SameCommand(e ast.Expr, object *ast.Object, body *ast.BlockStmt, seen map[*ast.Object]bool) bool {
+func wu19SameCommand(fn *wu19Function, e ast.Expr, object types.Object, body *ast.BlockStmt, seen map[types.Object]bool) bool {
 	id, ok := e.(*ast.Ident)
-	if !ok || id.Obj == nil || seen[id.Obj] {
+	if !ok || fn.file.object(id) == nil || seen[fn.file.object(id)] {
 		return false
 	}
-	if id.Obj == object {
+	if fn.file.object(id) == object {
 		return true
 	}
-	seen[id.Obj] = true
+	seen[fn.file.object(id)] = true
 	var source ast.Expr
 	ast.Inspect(body, func(n ast.Node) bool {
 		if a, ok := n.(*ast.AssignStmt); ok && len(a.Lhs) == len(a.Rhs) {
 			for i, lhs := range a.Lhs {
-				if v, ok := lhs.(*ast.Ident); ok && v.Obj == id.Obj {
+				if v, ok := lhs.(*ast.Ident); ok && fn.file.object(v) == fn.file.object(id) {
 					source = a.Rhs[i]
 				}
 			}
 		}
 		return true
 	})
-	return source != nil && wu19SameCommand(source, object, body, seen)
+	return source != nil && wu19SameCommand(fn, source, object, body, seen)
 }
 
 func wu19EnclosingBlock(body *ast.BlockStmt, node ast.Node) *ast.BlockStmt {
@@ -219,7 +226,7 @@ func wu19EnclosingBlock(body *ast.BlockStmt, node ast.Node) *ast.BlockStmt {
 }
 
 func (p *wu19Inventory) checkConstructor(fn *wu19Function, call *ast.CallExpr) string {
-	cmd := wu19AssignedObject(fn.decl.Body, call)
+	cmd := wu19AssignedObject(fn, call)
 	if cmd == nil {
 		return "exec constructor has no verifiable command identity/environment assignment"
 	}
@@ -229,7 +236,7 @@ func (p *wu19Inventory) checkConstructor(fn *wu19Function, call *ast.CallExpr) s
 	ast.Inspect(fn.decl.Body, func(n ast.Node) bool {
 		if a, ok := n.(*ast.AssignStmt); ok && len(a.Lhs) == len(a.Rhs) {
 			for i, lhs := range a.Lhs {
-				if s, ok := lhs.(*ast.SelectorExpr); ok && s.Sel.Name == "Env" && wu19SameCommand(s.X, cmd, fn.decl.Body, map[*ast.Object]bool{}) {
+				if s, ok := lhs.(*ast.SelectorExpr); ok && s.Sel.Name == "Env" && wu19SameCommand(fn, s.X, cmd, fn.decl.Body, map[types.Object]bool{}) {
 					assignments = append(assignments, a)
 					environments = append(environments, a.Rhs[i])
 				}
@@ -237,13 +244,13 @@ func (p *wu19Inventory) checkConstructor(fn *wu19Function, call *ast.CallExpr) s
 		}
 		if ret, ok := n.(*ast.ReturnStmt); ok {
 			for _, e := range ret.Results {
-				if wu19SameCommand(e, cmd, fn.decl.Body, map[*ast.Object]bool{}) && ret.Pos() < boundary {
+				if wu19SameCommand(fn, e, cmd, fn.decl.Body, map[types.Object]bool{}) && ret.Pos() < boundary {
 					boundary = ret.Pos()
 				}
 			}
 		}
 		if c, ok := n.(*ast.CallExpr); ok {
-			if s, ok := c.Fun.(*ast.SelectorExpr); ok && wu19SameCommand(s.X, cmd, fn.decl.Body, map[*ast.Object]bool{}) {
+			if s, ok := c.Fun.(*ast.SelectorExpr); ok && wu19SameCommand(fn, s.X, cmd, fn.decl.Body, map[types.Object]bool{}) {
 				switch s.Sel.Name {
 				case "Start", "Run", "Output", "CombinedOutput":
 					if c.Pos() < boundary {
@@ -254,7 +261,7 @@ func (p *wu19Inventory) checkConstructor(fn *wu19Function, call *ast.CallExpr) s
 			// Returning/passing a command into another subsystem is also a
 			// boundary. Unknown helpers cannot be assumed not to start it.
 			for _, arg := range c.Args {
-				if wu19SameCommand(arg, cmd, fn.decl.Body, map[*ast.Object]bool{}) && c.Pos() < boundary && !p.nonStartingCommandHelper(fn.callIdentity(c.Fun), map[string]bool{}) {
+				if wu19SameCommand(fn, arg, cmd, fn.decl.Body, map[types.Object]bool{}) && c.Pos() < boundary && !p.nonStartingCommandHelper(fn.callIdentity(c.Fun), map[string]bool{}) {
 					boundary = c.Pos()
 				}
 			}
@@ -306,7 +313,7 @@ func (p *wu19Inventory) checkConstructor(fn *wu19Function, call *ast.CallExpr) s
 	ast.Inspect(fn.decl.Body, func(n ast.Node) bool {
 		if c, ok := n.(*ast.CallExpr); ok && c.Pos() > a.Pos() {
 			for _, arg := range c.Args {
-				if wu19SameCommand(arg, cmd, fn.decl.Body, map[*ast.Object]bool{}) && !p.commandMutationSafe(fn, c, cmd, map[string]bool{}) {
+				if wu19SameCommand(fn, arg, cmd, fn.decl.Body, map[types.Object]bool{}) && !p.commandMutationSafe(fn, c, cmd, map[string]bool{}) {
 					unsafeHandoff = true
 					p.unresolved["unsafe command transfer: "+p.resolvedCallIdentity(fn, c.Fun)+" from "+fn.key] = true
 				}
