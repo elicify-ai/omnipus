@@ -3,18 +3,20 @@ package sandbox
 import (
 	"go/ast"
 	"go/token"
+	"go/types"
 )
 
 // A helper called after the initial Env assignment may not reopen inheritance.
 // One identity trace follows locals, fields and nested parameter bindings; no
 // local name or helper name can grant a fourth God environment exception.
-func (p *wu19Inventory) commandMutationSafe(caller *wu19Function, call *ast.CallExpr, command *ast.Object, seen map[string]bool) bool {
-	root := &ast.Ident{Name: command.Name, Obj: command}
+func (p *wu19Inventory) commandMutationSafe(caller *wu19Function, call *ast.CallExpr, command types.Object, seen map[string]bool) bool {
+	root := ast.NewIdent(command.Name())
+	caller.file.identities.Uses[root] = command
 	trace := wu19CommandTrace{command, wu19Reference{caller, &ast.SelectorExpr{X: root, Sel: ast.NewIdent("Env")}, call.Pos(), nil}}
 	return p.commandCallSafe(caller, call, nil, trace, seen)
 }
 
-func (p *wu19Inventory) commandCallSafe(caller *wu19Function, call *ast.CallExpr, callerBindings map[*ast.Object]wu19Reference, trace wu19CommandTrace, seen map[string]bool) bool {
+func (p *wu19Inventory) commandCallSafe(caller *wu19Function, call *ast.CallExpr, callerBindings map[types.Object]wu19Reference, trace wu19CommandTrace, seen map[string]bool) bool {
 	key := p.resolvedCallIdentity(caller, call.Fun)
 	if seen[key] {
 		p.unresolved["recursive command handoff: "+key] = true
@@ -31,10 +33,10 @@ func (p *wu19Inventory) commandCallSafe(caller *wu19Function, call *ast.CallExpr
 	seen[key] = true
 	defer delete(seen, key)
 	for _, callee := range list {
-		bindings := map[*ast.Object]wu19Reference{}
+		bindings := map[types.Object]wu19Reference{}
 		for i, parameter := range wu19Parameters(callee) {
 			if i < len(call.Args) {
-				bindings[parameter.Obj] = wu19Reference{caller, call.Args[i], call.Pos(), callerBindings}
+				bindings[callee.file.object(parameter)] = wu19Reference{caller, call.Args[i], call.Pos(), callerBindings}
 			}
 		}
 		if !p.commandBodySafe(callee, bindings, trace, seen) {
@@ -44,7 +46,7 @@ func (p *wu19Inventory) commandCallSafe(caller *wu19Function, call *ast.CallExpr
 	return true
 }
 
-func (p *wu19Inventory) commandBodySafe(fn *wu19Function, bindings map[*ast.Object]wu19Reference, trace wu19CommandTrace, seen map[string]bool) bool {
+func (p *wu19Inventory) commandBodySafe(fn *wu19Function, bindings map[types.Object]wu19Reference, trace wu19CommandTrace, seen map[string]bool) bool {
 	safe := true
 	identity := func(expr ast.Expr, before token.Pos) wu19CommandIdentity {
 		return p.commandIdentity(fn, expr, before, bindings, trace, map[string]bool{})
@@ -75,7 +77,7 @@ func (p *wu19Inventory) commandBodySafe(fn *wu19Function, bindings map[*ast.Obje
 			}
 		}
 		if nested, ok := n.(*ast.CallExpr); ok {
-			if builtin, ok := nested.Fun.(*ast.Ident); ok && builtin.Obj == nil && builtin.Name == "copy" && len(nested.Args) == 2 {
+			if builtin, ok := nested.Fun.(*ast.Ident); ok && fn.file.object(builtin) == nil && builtin.Name == "copy" && len(nested.Args) == 2 {
 				if field, _ := wu19CommandEnvTarget(nested.Args[0]); field != nil && !p.commandEnvWriteSafe(fn, field, nested.Args[1], true, nested.Pos(), bindings, trace) {
 					safe = false
 				}

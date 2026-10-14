@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 )
 
 // Whole-slice, element and copy writes use the same pointer/provenance rules.
@@ -28,7 +29,7 @@ func wu19CommandEnvTarget(expr ast.Expr) (*ast.SelectorExpr, bool) {
 	}
 }
 
-func (p *wu19Inventory) commandEnvWriteSafe(fn *wu19Function, field *ast.SelectorExpr, value ast.Expr, partial bool, before token.Pos, bindings map[*ast.Object]wu19Reference, trace wu19CommandTrace) bool {
+func (p *wu19Inventory) commandEnvWriteSafe(fn *wu19Function, field *ast.SelectorExpr, value ast.Expr, partial bool, before token.Pos, bindings map[types.Object]wu19Reference, trace wu19CommandTrace) bool {
 	kind := p.commandIdentity(fn, field.X, before, bindings, trace, map[string]bool{})
 	if kind == wu19OtherValue {
 		return true // a known non-command configuration field is not this Env.
@@ -48,11 +49,11 @@ func (p *wu19Inventory) commandEnvWriteSafe(fn *wu19Function, field *ast.Selecto
 // Env reads through any proven command alias carry the original scrub root.
 // Environment data from an unproved command alias is bad, not an explicit site
 // addition. Other expressions retain the existing import-resolved provenance.
-func (p *wu19Inventory) commandEnvOrigin(fn *wu19Function, expr ast.Expr, before token.Pos, bindings map[*ast.Object]wu19Reference, trace wu19CommandTrace) wu19Origin {
+func (p *wu19Inventory) commandEnvOrigin(fn *wu19Function, expr ast.Expr, before token.Pos, bindings map[types.Object]wu19Reference, trace wu19CommandTrace) wu19Origin {
 	return p.commandEnvValue(fn, expr, before, bindings, trace, map[string]bool{})
 }
 
-func (p *wu19Inventory) commandEnvValue(fn *wu19Function, expr ast.Expr, before token.Pos, bindings map[*ast.Object]wu19Reference, trace wu19CommandTrace, seen map[string]bool) wu19Origin {
+func (p *wu19Inventory) commandEnvValue(fn *wu19Function, expr ast.Expr, before token.Pos, bindings map[types.Object]wu19Reference, trace wu19CommandTrace, seen map[string]bool) wu19Origin {
 	switch e := expr.(type) {
 	case *ast.SelectorExpr:
 		if e.Sel.Name == "Env" {
@@ -66,7 +67,7 @@ func (p *wu19Inventory) commandEnvValue(fn *wu19Function, expr ast.Expr, before 
 			}
 		}
 	case *ast.Ident:
-		key := fmt.Sprintf("%s:%p:%d", fn.key, e.Obj, before)
+		key := fmt.Sprintf("%s:%p:%d", fn.key, fn.file.object(e), before)
 		if seen[key] {
 			return 0 // append-self adds no new provenance; other operands are checked.
 		}
@@ -74,11 +75,11 @@ func (p *wu19Inventory) commandEnvValue(fn *wu19Function, expr ast.Expr, before 
 		defer delete(seen, key)
 		var out wu19Origin
 		found := false
-		if ref, ok := bindings[e.Obj]; ok {
+		if ref, ok := bindings[fn.file.object(e)]; ok {
 			found = true
 			out |= p.commandEnvValue(ref.fn, ref.expr, ref.pos, ref.bindings, trace, seen)
 		}
-		for _, ref := range wu19CommandDefinitions(fn, e.Obj, before) {
+		for _, ref := range wu19CommandDefinitions(fn, fn.file.object(e), before) {
 			found = true
 			out |= p.commandEnvValue(fn, ref.expr, ref.pos, bindings, trace, seen)
 		}
@@ -86,7 +87,7 @@ func (p *wu19Inventory) commandEnvValue(fn *wu19Function, expr ast.Expr, before 
 			return out
 		}
 	case *ast.CallExpr:
-		if builtin, ok := e.Fun.(*ast.Ident); ok && builtin.Name == "append" && builtin.Obj == nil {
+		if builtin, ok := e.Fun.(*ast.Ident); ok && builtin.Name == "append" && fn.file.object(builtin) == nil {
 			var out wu19Origin
 			for _, arg := range e.Args {
 				out |= p.commandEnvValue(fn, arg, before, bindings, trace, seen)

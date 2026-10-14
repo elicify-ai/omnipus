@@ -12,10 +12,12 @@ import (
 // which Env writes and nested handoffs must preserve the strict scrub root.
 // Expectations come from the round-2 brief; P01 forbids banning all aliases.
 func TestWU19_CommandAliasInstrument(t *testing.T) {
-	cases := []struct {
+	type aliasCase struct {
 		name, helper string
 		unsafe       bool
-	}{
+	}
+	cases := make([]aliasCase, 0, 37) // 36 table cases plus the derived long chain below.
+	cases = append(cases, []aliasCase{
 		{"local_raw", `func mutate(c *exec.Cmd) { copied := c; copied.Env = os.Environ() }`, true},
 		{"local_legacy_god", `func mutate(c *exec.Cmd) { copied := c; copied.Env = append(copied.Env, scrubbedEnv(os.Environ())...) }`, true},
 		{"transitive_raw", `func mutate(c *exec.Cmd) { first := c; second := first; second.Env = append(second.Env, os.Environ()...) }`, true},
@@ -52,7 +54,7 @@ func TestWU19_CommandAliasInstrument(t *testing.T) {
 		{"safe_nested_field_addition", `func mutate(c *exec.Cmd) { box := struct{ process *exec.Cmd }{process: c}; nested(box.process) }; func nested(c *exec.Cmd) { copied := c; copied.Env = append(copied.Env, "SITE=explicit") }`, false},
 		{"safe_declared_alias", `func mutate(c *exec.Cmd) { var copied *exec.Cmd = c; copied.Env = append(copied.Env, "SITE=explicit") }`, false},
 		{"safe_alias_nil_fallback", `func mutate(c *exec.Cmd) { copied := c; if copied.Env == nil { copied.Env = os.Environ() }; copied.Env = append(copied.Env, "SITE=explicit") }`, false},
-	}
+	}...)
 	// Sixteen hops are a representative long chain, not a supported-depth cap.
 	// The same resolver must handle every hop; there is no source-name exception.
 	var chain strings.Builder
@@ -61,10 +63,7 @@ func TestWU19_CommandAliasInstrument(t *testing.T) {
 		fmt.Fprintf(&chain, "node%d := node%d; ", i, i-1)
 	}
 	chain.WriteString("node16.Env = os.Environ() }")
-	cases = append(cases, struct {
-		name, helper string
-		unsafe       bool
-	}{"long_transitive_chain", chain.String(), true})
+	cases = append(cases, aliasCase{"long_transitive_chain", chain.String(), true})
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			wu19AssertCommandAliasClassification(t, tc.helper, tc.unsafe)
@@ -77,11 +76,12 @@ func wu19AssertCommandAliasClassification(t *testing.T, helper string, unsafe bo
 	const imports = `import ("os"; "os/exec"; "github.com/elicify-ai/omnipus/pkg/sandbox")`
 	const constructor = `func probe() { cmd := exec.Command("x"); cmd.Env = sandbox.ScrubGatewayEnv(); mutate(cmd); cmd.Run() }`
 	p := wu19NewInventory()
-	file, err := parser.ParseFile(token.NewFileSet(), "aliases.go", "package tools; "+imports+"; "+constructor+"; "+helper, 0)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "aliases.go", "package tools; "+imports+"; "+constructor+"; "+helper, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatalf("alias instrument source must parse: %v", err)
 	}
-	p.addFile("aliases.go", "github.com/elicify-ai/omnipus/pkg/tools", file)
+	p.addFile("aliases.go", "github.com/elicify-ai/omnipus/pkg/tools", file, fset)
 	sites, findings := p.scan()
 	if sites != 1 || (len(findings) != 0) != unsafe {
 		t.Fatalf("command alias classification: sites=%d findings=%v; want sites=1 unsafe=%t", sites, findings, unsafe)
