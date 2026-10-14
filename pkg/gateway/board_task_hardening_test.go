@@ -158,16 +158,28 @@ func TestReconcileStuckTasks(t *testing.T) {
 	assert.NotEqual(t, gotInProg.Status, gotDone.Status,
 		"in_progress and done tasks must produce different outcomes (not both set to failed)")
 
-	// Empty-directory no-op: a fresh api with no tasks dir must not error.
+	// Empty-directory no-op: a fresh api with no tasks must not error, and
+	// reconcile must change nothing in tasks/. The fresh home's tasks/ is not
+	// empty since #1284 (b4e2204f3, L1-AMENDMENTS-20261013.md §2 D8 / T-INV):
+	// the task-store migration sentinels live there, so the no-op is proven
+	// as "unchanged by reconcile", not as "empty".
 	apiEmpty := newTestRestAPIWithHome(t)
-	apiEmpty.reconcileStuckTasks() // must not panic or error
-
 	emptyTasksDir := filepath.Join(apiEmpty.homePath, "tasks")
-	entries, readDirErr := os.ReadDir(emptyTasksDir)
-	if readDirErr != nil && !errors.Is(readDirErr, os.ErrNotExist) {
-		require.NoError(t, readDirErr)
+	readTasksDir := func() []string {
+		t.Helper()
+		entries, readDirErr := os.ReadDir(emptyTasksDir)
+		if readDirErr != nil && !errors.Is(readDirErr, os.ErrNotExist) {
+			require.NoError(t, readDirErr)
+		}
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return names
 	}
-	assert.Empty(t, entries, "empty tasks dir must remain empty after reconcile no-op")
+	before := readTasksDir()
+	apiEmpty.reconcileStuckTasks() // must not panic or error
+	assert.Equal(t, before, readTasksDir(), "reconcile on an install with no tasks must leave tasks/ unchanged")
 }
 
 // ── REC2: reconcileOrphanBlockedByEdges ──────────────────────────────────────
