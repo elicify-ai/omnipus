@@ -40,16 +40,14 @@ func TestWU3_1063_MCPToolsCallableByHolder(t *testing.T) {
 		t.Fatalf("#1063: list_mcp_servers must return a servers array, got %s", res.ForLLM)
 	}
 
-	// Negative control: the same path refuses a tool Omnipus does NOT hold
-	// (set_config is an explicit per-agent deny, spec §6.5), so a green above
-	// is not an enforcement path that lets everything through.
-	if _, registered := omnipus.Tools.Get("set_config"); registered {
-		denied := omnipus.Tools.ExecuteWithContext(tools.WithToolCallID(f.ctx, "1063-control"), "set_config",
-			map[string]any{"key": "gateway.port", "value": 1}, "webchat", "1063-chat", nil)
-		if denied == nil || !denied.IsError {
-			t.Fatalf("instrument: a denied tool was not refused on the same path: %+v", denied)
+	// Negative control: the same policy readback reports deny for a tool
+	// Omnipus does not hold (set_config is an explicit per-agent deny, spec
+	// §6.5), so the "allow" above is not a readback that says allow for
+	// everything. (The registry's ExecuteWithContext does not apply policy —
+	// the agent loop gates calls on exactly this effective policy.)
+	if tool, registered := omnipus.Tools.Get("set_config"); registered {
+		if got := tools.EffectiveToolPolicy(omnipus.LoadToolPolicy(), tool.Scope(), omnipus.AgentType, "set_config"); got != "deny" {
+			t.Fatalf("instrument: Omnipus's effective policy for set_config = %q, want deny", got)
 		}
-	} else {
-		t.Log("control: set_config is not even registered on Omnipus (deny by registration)")
 	}
 }
