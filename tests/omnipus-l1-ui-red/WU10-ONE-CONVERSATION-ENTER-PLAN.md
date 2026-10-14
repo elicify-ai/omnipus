@@ -1,0 +1,58 @@
+# WU-10 one-conversation guarantee and focused-Enter regression
+
+QA branch: work/omnipus-l1-ui-red-wu10, starting at 81baa90a565332e0ad2a3e47d564bbbd57ae67a6.
+
+This is RED authoring, not CHECK. Team-lead corrected Q1=A: tests only; no author-side production mutation, even in scratch. The author executes serial healthy controls on immutable afc4b32a3ce6de1d31b7792a0a73e8003d76debb and the focused-Enter regression on immutable eb050d46e9de413d0326a6fc2c90f8de945a5c2b, then the identical Enter file on the supplied immutable implementation fix 8614f4544057260a15a46f8c597a9814d624d36c. A fresh CHECK instance owns proposed mutant execution/restored controls and the skill's proof-of-failability gate.
+
+## Independent sources read before production exploration
+
+| Authority | Expected behavior |
+|---|---|
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/docs/internal/specs/omnipus-system-agent-spec.md::US-1 acceptance 4/6, FR-004, FR-005, FR-100, FR-104, §6.2 HTTP/wire | Omnipus has exactly one main conversation; is not a workspace sidebar row/add-existing candidate; its fixed entry opens that existing main; second-session creation refused with existing id. Ordinary agents' extra conversations remain permitted |
+| Chief ruling condition / corrected team-lead dispatch, 2026-10-14 | Reachable fixed OmnipusEntry and /omnipus OmnipusChatScreen expose no new/extra-chat control or keyboard creation path. Corrected command oracle, team-lead Q1=A after WC-1 verification: typed /new is visibly refused without sending or session creation; /clear clears context in the SAME session, not another session. The original /new-as-clear instruction is rejected, not implemented |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/l1-ui-red-wu10/gap-closure/issue-1066.txt::Required behavior 2/4/5 and keyboard acceptance | Enter confirms the focused answer; on the last question it submits that explicit answer, never a different/default/automatic answer |
+| /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/l1-ui-check2/CHECK2-REPORT.md::Scope A F1; /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/l1-ui-check2/evidence/logs/C-1066-final-enter-head.log | Guide to the missed path: first question confirmed, final option still unanswered, focus non-recommended Change and press Enter. Expected exact frame comes from supplied card plus the issue, not the received faulty Go/auto_default frame |
+
+## Case derivation and boundaries
+
+| ID | Input / sequence | Independent expected observation | Proposed fresh CHECK fault |
+|---|---|---|---|
+| OC-A | Fixed Omnipus entry with healthy canonical main, active Sales and remembered Sales chat; inspect visible controls and any disclosures/context-menu affordance | No new/extra/start-another-chat button/menu item/link; entry remains operable and points to its single main | Add a new-chat action or route a fixed-entry disclosure/context-menu action through the ordinary extra-chat path |
+| OC-AK | Keyboard activation of actual fixed entry plus normal context-menu/shortcut interactions | Existing Omnipus main opens; no session-create HTTP request or session-creation frame; active workspace/remembered pointer unchanged | Route keyboard activation or context-menu shortcut through beginPairExtra/startNewSession |
+| OC-B | Mount the real OmnipusChatScreen under the actual /omnipus in-memory route with populated existing conversation | Main chat/composer are reachable; no new/extra-chat action in actual screen/header menus, buttons or links | Add a screen/header menu item or button that starts another Omnipus chat |
+| OC-C-new | Type /new into the real Omnipus composer and submit | Visible retired-command refusal, no HTTP or outbound frame caused by the command, same existing session and history | Revive /new as a clear/send or extra-chat shortcut |
+| OC-C-clear | Type /clear into the real Omnipus composer and submit; feed the public server confirmation/history response | Exactly one command message targets the existing Omnipus main; the actual cleared-context divider is visible after confirmation; canonical session remains unchanged with no null/new-session transition, second-session POST or untargeted creation frame | Replace the clear command with startNewSession/beginPairExtra, drop session_id, or clear then create a second session |
+| OC-C-control | Feed a synthetic session-create HTTP request and an untargeted message frame through the test-only network recorder/classifier, never through a production mutation | The zero-create detection instrument must flag both; a targeted /clear message is not classified as a create | None: instrument calibration. There is no visible ordinary-row new-chat button on this target, so no invented positive UI control |
+| K-Enter | Confirm first answer; do not Space-select final option; focus each final Go/Change/Cancel-plan option and press Enter | Exactly one ask_user_answer frame contains supplied first answer and exact focused final label, with no auto_default or unsolicited answer. Previous card behavior/negative guards unchanged | On eb050d46e the actual wrong-answer bug supplies RED; fresh CHECK may later reintroduce stale-draft/default substitution |
+
+Real entry/screen/card/composer, catalogued controls, router/query cache and application/session/chat stores remain real. Network, raw socket and clock/browser geometry are the only doubles; no startNewSession/beginPairExtra/clear handler/composer mock. Prefer a raw HTTP guard that records every request and fails unspecified routes; guard both HTTP and socket session-creation paths if present. Missing implementation/interface is loud BLOCKED, never skipped. Oracles and required fields above are fixed before reading implementation; exact transport/locator mechanics are confirmed by reading, not invented as product expectations.
+
+GitNexus MCP is unavailable; direct source/caller sweeps will document the fallback impact as Inferred. Before committing, review actual scope and retain all existing tests/assertion expressions. No full local suite, live instance, browser, remote gate or Documents access. One explicit test file per process, serial; save raw command, source hash, exit and named-case result against each immutable tree.
+
+## Known limits and hand-back
+
+Healthy controls prove the current reachable UI observations, not proof the new negative tests can fail. New OC-A/OC-AK/OC-B/OC-C mutation kills and restored-code controls are UNVERIFIED until fresh CHECK performs them. Skill step 4 items 2–3 and the Proof-of-failability gate are deferred to CHECK. K-Enter shows the exact wrong-answer RED on eb050d46e (all three explicit final options); the identical file passes all three on supplied fixed implementation 8614f4544. This is an author-observed healthy control, not a claim that independent CHECK is complete.
+
+**Open question, not an invented oracle:** #1066 Required behavior 2/4/5 does not explicitly settle what Enter should do when a question already has an answer and a different option is now focused. No new test mandates replacement or retention in that ambiguous case. The new regression deliberately asserts that every final option is unanswered before direct Enter. Existing Space-selection/Enter-confirm tests are untouched.
+
+The UI fixture mounts the actual OmnipusEntry and OmnipusChatScreen at an in-memory /omnipus route with the real AssistantUI runtime and application QueryClient. Dynamic module loading permits the QA branch's older production base to typecheck; an absent required module fails a named case loudly. The target's real route module was read and wires OmnipusChatScreen to /_app/omnipus; this is not a claim of full AppShell/browser execution.
+
+The command fixture supplies a real empty activity-runs HTTP response. A scrollIntoView browser-geometry adapter is restored after each test; it changes no menu/selection/send behavior. Initial missing-activity and absent-jsdom-scroll failures are retained as instrument errors, not product RED. Existing schema-skip warnings for commands/skills, router scrollTo warnings and the declared no-ResizeObserver plain-list fallback remain unsuppressed.
+
+Before final publication, author review corrected two provisional over-constraints in the already-green OC draft: a legitimate non-new-chat menu is not forbidden, so all actual disclosures are opened and their new-chat actions are forbidden instead of banning every menu/secondary control; and the independent Activity polling GET is not a command send, so only that exact read may occur while /new is typed. Zero writes, session-create requests, minting frames, additional command frames and transient replacement-session ids remain forbidden. No committed old test/assertion was edited. These are disclosed draft corrections, not a repair to a failing product oracle.
+
+Keep existing U1–U8; extend U6 to direct Enter on an unanswered non-recommended final option, and add real-shell single-conversation/clear-in-place re-drive with separate tester/validator accounts and badges. Unit/component observations do not certify browser focus announcements, gateway uniqueness enforcement or actual history persistence.
+
+## Proposed mutants for fresh independent CHECK — not executed here
+
+| Mutant | Minimal production fault in CHECK scratch only | Expected killing named test / observation |
+|---|---|---|
+| OC-M1 | Add a new/extra-chat button or menu item to OmnipusEntry; if behind a disclosure, use the real catalogued menu | OC-A: forbidden action visible after disclosure/context-menu checks; no bypass by leaving it collapsed |
+| OC-M2 | Route fixed-entry pointer/Enter/Space activation through beginPairExtra('default', 'omnipus', ...) or startNewSession instead of opening its main | OC-AK pointer/Enter/Space: missing canonical attach/route, null or replacement session history, or forbidden create request/frame |
+| OC-M3 | Add a screen/header new-chat button, link or menu item to OmnipusChatScreen | OC-B: no new-chat button/link/menuitem/option assertion; real menus are opened before checking |
+| OC-M4 | Revive the retired /new branch as a send/clear/extra-chat action | OC-C-new Enter and send-button cases: missing visible retirement refusal, changed history/session, or a captured request/frame |
+| OC-M5 | Route /clear through beginPairExtra/startNewSession or drop its session_id so the message creates an extra | OC-C-clear: wrong/missing targeted message, replacement session transition or untargeted minting frame; canonical context confirmation cannot succeed |
+| OC-M6 | Send the correct /clear and additionally POST /sessions or emit an untargeted message | OC-C-clear: raw HTTP guard / exact creation-filter zero / captured message list detects extra network activity even if the final session is restored |
+| K-M1 | Reintroduce the stale-draft answer builder or force recommended/default final choice on direct Enter | All K-Enter rows: exact ask_user_answer frame differs; Change/Cancel-plan substitute Go and Go gains forbidden auto_default |
+
+For each probe, CHECK must save the mutation patch/source hash, run one explicit test file/predicate, verify an assertion-level kill, restore immediately, and run the identical healthy control. A proposed detector is not a verified kill. The OC-instrument case proves the request/frame classifiers recognize synthetic bad inputs without modifying production; it is not mutation evidence.
