@@ -78,6 +78,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
+vi.mock('@/lib/api/rooms', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/api/rooms')>(),
+  fetchWorkspaceRooms: vi.fn().mockResolvedValue([]),
+}))
+
 const { mockSelectSession } = vi.hoisted(() => ({ mockSelectSession: vi.fn() }))
 
 vi.mock('@/components/chat/useSelectSession', () => ({
