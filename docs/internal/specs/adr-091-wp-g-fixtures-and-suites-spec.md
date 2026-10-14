@@ -52,6 +52,8 @@ Implements `steer.BoundaryObserver` — every boundary calls `Observe(boundary, 
 
 ### G-3 — Classification of existing tests
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. The appendix's **retain/thread/force-timeout obligations are superseded** by the fixture-disposition note beside it below. Fixtures carry no `SteeredBy.Limits` or default/active-time budget. Retain real authority, identity, cancel, count-cap and publication controls; replace lifetime-positive oracles with deadline-free dispatch/re-entry and legacy-record decoding cases, not weaker tests. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/session/lifecycle_edge.go`::SteeredBy / StopCauseTimeout; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/steer/types.go`::LaunchRequest. This amends the test plan only; no test execution or fixture-code change is claimed.
+
 Every one of the 49 files gets a row: **retain** (protects behaviour ADR-091 keeps — target identity, ancestor authority, parked/respond transitions, cancellation of live descendants), **update** (asserts an identity source that changes — inherited address → edge; `ParentDurableKey` → edge; ring setup → real store), or **delete** (asserts wait-inline, the ring, per-site booleans, the sibling notifier). The row names the replacing test where one exists. The classification is the appendix of this spec, filled in by this package at CP-0 before any other package deletes a test.
 
 ### G-4 — Cross-package suites
@@ -156,6 +158,8 @@ Feature: Shared fixtures and cross-package suites
 | FR-G-004 | *as a maintainer, I want every new SPA test to run in CI* | new test outside every group is caught | the `check-vitest-coverage.mjs` tripwire, exercised by scenario |
 
 ## Appendix — classification table (completed at CP-0)
+
+> **Amended 2026-10-14 — fixture/test disposition supersession (founder; PR #1311 / #1306):** the timeout prescriptions in rows **`subturn_timeout_stops_child_test.go`, `delegate_detached_timeout_test.go`, `delegate_fixwave_test.go` and `delegate_timeout_force_cancel_unix_test.go`** are historical. Do not retain a lifetime-timeout sentinel relation, thread `timeout_seconds` into the edge, or expect elapsed work to force-stop a child/shell. Replace those lifetime oracles with unbounded work contexts, ignored old delegate arguments, readable historical timeout notes and explicit Stop/detach cases. Retain separate max-tool-iteration, formatting, truthful-unwinding, authority and publication controls; document mixed-file splits rather than deleting those unrelated assertions. The old row counts and dated inspection statement below remain evidence of CP-0, not proof of today's suite.
 
 | File | Class | Reason | Replaced by |
 |---|---|---|---|

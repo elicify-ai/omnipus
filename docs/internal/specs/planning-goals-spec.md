@@ -1,5 +1,7 @@
 # Feature Specification: Planning & Goals
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. The **seven-day work-ending calendar brake**, `planning.idle_expiry_days`, active entity overrides and timeout-generated expiry expectations are superseded throughout this spec, with FR-038/FR-039/FR-064/SD-B9–10 marked locally below. Count/attempt/round/run and concurrency bounds and per-command/check limits remain independent decisions. Historical expired records remain readable; keeping history/retention is not permission to produce new age-ended work. At frozen `7c148ca00`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/plan_engine.go`::idleExpireOneLocked / goalAndLoopIdleExpirySweep still contain the old paths; their deletion is assigned PR round-1 work, not certified by these requirement amendments.
+
 > **Update 2026-09-14:** the token budgets this document rejects were later adopted as the app-level token budget (ADR-053 D12); that budget and the per-delegation token budget have since been deleted from the product by founder decision. Token usage accounting is tracked in #707.
 
 > **SUPERSEDED (flow parts) — ADR-088 / work-first-goal-flow-spec.md (2026-09-07).** The `/goal` compile→clarify→confirm FLOW described in this document is deleted (instant activation, agent-authored record via `set_goal`, steering instead of confirmation). The RECORD shape (statement / judgment-typed criteria / DoD) remains authoritative where this document defines it. Do not implement flow behavior from this file.
@@ -941,6 +943,9 @@ Boundary conditions:
 - **FR-035**: The system MUST reject creating a `type:system` agent via REST or the `create_agent` tool with a 400 raw-body sniff (mirrors `pkg/gateway/rest.go:2775`).
 - **FR-036**: The system MUST reject deleting any `type:system` agent and disabling the seeded Judge (400); only model/provider and rubric edits are accepted.
 - **FR-037**: The system MUST narrow `IsPrivilegedAgent` (`pkg/security/ratelimit.go:17-22`) to `core` only, so `type:system` agents are subject to SEC-26 rate limits and cost caps.
+
+> **Amended 2026-10-14 — FR-038/FR-039 superseded in part (founder; PR #1311 / #1306):** remove **`idle_expiry_days=7`** from the required global defaults and **`idle_expiry_days`** from active per-entity overrides below. No saved value/default is an instruction to end work by age. Preserve surviving count/concurrency/check settings and their existing ownership/validation semantics. Old expired outcomes remain history; lenient legacy duration loading must not reinstall the calendar brake.
+
 - **FR-038**: The system MUST add a `PlanningConfig` section with global defaults `task_max_attempts=3, goal_max_rounds=20, plan_judge_max_rounds=20, loop_max_runs=100, idle_expiry_days=7, global_active_loop_cap=16, check_timeout_seconds=60`, boot-validated, and MUST NOT include any token/money budget field (NFR-1).
 - **FR-039**: The system MUST support per-entity bounds overrides on Plan (`plan_judge_max_rounds`, `idle_expiry_days`) and Task (`max_attempts`), resolving per-entity-then-global; every new wire type MUST follow the 5-step spec-first process and pass `make verify-contracts`.
 
@@ -1685,6 +1690,8 @@ Reuse the deterministic cron harness in `pkg/cron/autonomy_test.go`: `fakeClock`
 
 #### Dataset: Idle expiry (all loop kinds)
 
+> **Amended 2026-10-14 — expiry oracles superseded (founder; PR #1311 / #1306):** the **7d/7d+1s expiry rows below**, `TestLoop_IdleExpiry_7d`, all calendar-positive scenarios and corresponding SC/traceability/holdout expectations are historical. Replace them with calendar advancement that causes no work termination or `/loop` job removal, while a real held turn remains stoppable and can settle. The Config-bounds dataset's fresh **seven-day default member** is likewise retired; check/round/run/concurrency defaults stay separate. Legacy expired-record reading is a distinct compatibility assertion, not generation of a new expiry.
+
 | # | Input (idle duration) | Boundary Type | Expected Output | Traces to | Notes |
 |---|-----------------------|---------------|-----------------|-----------|-------|
 | 1 | 6d23h | Max-ε | still active | Idle-expiry sweep | under 7d |
@@ -1817,6 +1824,9 @@ Reuse the deterministic cron harness in `pkg/cron/autonomy_test.go`: `fakeClock`
 - **FR-061**: All plan/loop/goal counters and timestamps MUST be persisted fields — plan counters on the Plan entity; `/goal`/`/loop` session state on the `UnifiedMeta` extension (`TaskID` precedent `unified.go:62`); the **per-task attempt counter on `Task.attempt_count`** (wire field C17, R4), NOT `UnifiedMeta` (F5 r2).
 - **FR-062**: On boot the engine MUST reconcile from the task store — task statuses authoritative, events an optimization — restoring counters from persisted fields and never blindly re-dispatching an already-`in_progress` task (D4/MAJ-004). The idempotent create/update/remove reconcile shape mirrors `ReconcileHeartbeatSchedules` (`pkg/gateway/heartbeat_schedule.go:154`) and the boot orphan-edge sweep `DropOrphanEdges` (`pkg/task/blocked_by.go:389`).
 - **FR-063**: Exactly ONE plan engine instance MUST run, guarded by a cron-style overlap guard (hot-reload safe; mirrors `CronJobState.Running` `service.go:140`).
+
+> **Amended 2026-10-14 — FR-064 superseded (founder; PR #1311 / #1306):** the seven-day wind-down requirement below is retired in full. Advancing the calendar alone must not fail/expire a plan, clear a goal, cancel live work or remove a `/loop` job. Do not add a replacement work-age threshold. Replace expiry-positive acceptance with no-age-termination checks for all three unit kinds and separate legacy-expired-record decoding; explicit Stop, real completion/failure, count bounds and retention still have their existing owners.
+
 - **FR-064**: A 7-day idle-expiry sweeper MUST run on the existing cron service and wind down (handover + expired state) any plan/goal/loop idle for ≥7 days; "idle" = no attempt, state transition, or user interaction on the unit.
 - **FR-065**: Deleting an agent that owns active plans/goal-loops MUST be rejected (400) until they are reassigned or stopped; disabling MUST pause them (plan surfaces a blocked state) and resume on re-enable (D4/R2-MIN-005).
 - **FR-066**: The Plan state machine MUST reject illegal transitions (terminal states are one-way; no backward edges) — enforced server-side (SD-B5 enumerates the legal set; wire enum owned by agent A).
@@ -1910,6 +1920,8 @@ Reuse the deterministic cron harness in `pkg/cron/autonomy_test.go`: `fakeClock`
 ---
 
 ## Spec Decisions (SD-B*) — ambiguities resolved within ADR bounds
+
+> **Amended 2026-10-14 — SD-B9/SD-B10 superseded in part (founder; PR #1311 / #1306):** **idle expiry** is removed from SD-B9's brake triggers, and SD-B10's **calendar/idle-expiry-days global and entity override** is retired. Preserve handover/owner routing for actual count exhaustion, explicit Stop/clear and other surviving outcome causes; bounded Judge checks must visibly conclude with the work result. Count/round/run, concurrency and single-check bounds keep their existing ownership. No replacement work-age setting or stopped/resumed time budget is introduced.
 
 - **SD-B1 — Claim vs terminal boundary.** A "completion claim" is any worker-turn outcome that today would terminate the task `done`: (a) an ADR-043 `TASK_STATUS: success` marker, or (b) an explicit `update_task(status:"done")`. A `failed` marker / `update_task(failed)` is an accepted give-up that counts as an `unmet` outcome for the attempt loop (consume attempt, re-dispatch or wake owner). This keeps the ADR-043 parser EXTENDED (verdict feeds the judge), never forked. *(Within D2/D5/FR-4.)*
 - **SD-B2 — Self-certification is judged.** The `task.IsTerminal(current.Status)` precedence at `task_executor.go:300` is preserved (explicit tool call wins over the marker for WHICH claim was made), but the resulting `done` claim is routed to the judge rather than accepted as terminal. This is the only ADR-compliant reading of "every task execution runs as a goal loop with a judge" (FR-4).

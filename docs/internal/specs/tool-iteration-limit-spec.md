@@ -91,6 +91,8 @@ All shapes below are added to `contracts/` and regenerated with `scripts/gen-con
 
 Must not collide with: `ContextWindowSource` (separate ladder, untouched); `Agent.timeout_seconds` (untouched); `goal_max_rounds` (separate limit on the same screen, untouched). No WebSocket (`asyncapi.yaml`) change: no new frame carries the limit.
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. **“`Agent.timeout_seconds` (untouched)” above is superseded**: the property is removed from the response/create surface and no duration control may be restored during count-cap integration. The global/per-agent tool-iteration ceiling, CLI count handoff, reset, range and override semantics remain this spec's separate decision. Source: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/contracts/components/schemas/AgentCreateRequestSubagent3p.yaml`::properties; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/external_dispatch.go`::startAndDrain.
+
 ## API and Data
 
 - **Stored data.** The global stays at `agents.defaults.max_tool_iterations` in `config.json`. Each agent's own value stays in its agent-store record (`pkg/agentstore`), key `max_tool_iterations`; "no own value" is the key absent (0 is treated as absent). Nothing new is persisted except the D6 migration marker below.

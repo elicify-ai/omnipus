@@ -1,5 +1,9 @@
 # Agent Property Matrix — `Main` / `Subagent` / `Subagent (External)`
 
+Status: Approved
+
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. Row 27 / §3.23 and duration references in the form/schema mapping are **superseded** below. `timeout_seconds` is removed for every agent type, not required, defaulted or editable; external workers have no agent-work process kill timer. Count-based tool iterations remain governed by **Tool iteration limit — one global ceiling, per-agent tightening**, not changed here. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/contracts/components/schemas/AgentCreateRequestSubagent3p.yaml`::properties; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/external_dispatch.go`::startAndDrain. The canonical Status line preserves the original Approved classification; it does not certify implementation or change the historical review-pending annotation below.
+
 **Status:** Approved (review pending)
 **Date:** 2026-06-18
 **Author:** Daniel Piatkowski `<10800669+daniel-piatkowski-ai@users.noreply.github.com>`
@@ -41,6 +45,8 @@ is kept for symmetry.
 ---
 
 ## 2. The matrix
+
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** matrix **row 27** is retained as history; every type's required/defaulted `timeout_seconds` cell is now **removed / not applicable**. See the §3.23 amendment for the new allocation; no form/schema mapping may require this field.
 
 Convention:
 - **R** = Required (cannot save without a value)
@@ -278,6 +284,9 @@ Whether this agent is the global default that handles unrouted inbound.
   inbound.
 
 ### 3.23 `timeout_seconds` (row 27) and `max_tool_iterations` (row 28)
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** **row 27 and the required/default-300s/hard-kill prescriptions below are retired** for all types. Neither native nor external agent work has a create/edit lifetime duration. Saved old duration fields may load inertly; that does not make them legal create properties. Row 28's count cap is separate and follows its later count-limit specification; no count semantics are changed here.
+
 Both required at the wire layer with UI default pre-selected (300s / 50).
 Same pattern as `color` and `icon` — never saveable empty.
 
@@ -429,6 +438,8 @@ wire schema where they were never load-bearing):
 
 ## 6. UI mapping (how this lands in the create/edit wizards)
 
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** every **timeout** listing in the create/edit groups below is historical and removed. No variant or locked-agent surface offers a duration input/default or sends a lifetime property. Other field mappings retain their own later amendments.
+
 ### 6.1 Create wizard — step 0 (type picker)
 
 | Type | Subsequent steps |
@@ -484,6 +495,8 @@ seeded at gateway boot."*).
 ---
 
 ## 9. Test coverage requirements
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the **required create-payload timeout assertion** below is retired. Assert valid per-type payloads omit the duration property and strict external-create rejects an explicitly sent retired field; saved-entity compatibility is separate. Count-cap, identity and other field controls stay.
 
 For each row of the matrix, there must be at least one test that
 asserts:

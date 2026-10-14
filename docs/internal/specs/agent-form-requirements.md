@@ -1,5 +1,7 @@
 # Agent Create & Edit Forms — Requirements
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. Row 27 / §4.23, Advanced groups, edit wireframes and duration test/contract instructions are **superseded only for `timeout_seconds`**. Remove the field and its 300-second default from every create/edit variant and payload; do not rename it into an executor kill setting. Keep the separately ratified count-cap control. Strict external-create decoding rejects the retired property. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/contracts/components/schemas/AgentCreateRequestSubagent3p.yaml`::properties; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/gateway/rest_agents_create.go`::decodeAgentCreateVariant. Other old form decisions and dated wireframes are not silently modernized.
+
 **Status:** Approved (review pending)
 **Date:** 2026-06-18
 **Author:** Daniel Piatkowski `<10800669+daniel-piatkowski-ai@users.noreply.github.com>`
@@ -82,6 +84,8 @@ Convention:
 - **external editor** = Edited in a dedicated UI surface (not the agent form)
 
 ### 3.1 The full matrix
+
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** **row 27** below is retained as historical allocation. All required/defaulted `timeout_seconds` cells are now **removed / not applicable**. The §4.23 amendment governs create/edit and locked-agent surfaces; count caps are separate.
 
 **Naming convention used in this matrix and throughout the doc:**
 - `type: Main` (monospace) refers to the **wire enum value**.
@@ -391,6 +395,9 @@ seed DTO. The struck text is kept only as a record of the removed surface.
 **Main only** — the G3 toggle. Workers never default.
 
 ### 4.23 `timeout_seconds` (row 27) and `max_tool_iterations` (row 28)
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** **row 27 and the required/default-300s/CLI-wait duration below are retired** for every type. Remove the create/edit duration control and payload property. The count-based row 28 is not a lifetime limit and retains its later separately ratified semantics.
+
 R at the wire layer with UI default pre-selected (300s / 50).
 
 For Subagent (External), `timeout_seconds` bounds the Omnipus wait for
@@ -502,6 +509,8 @@ The `type` (and `cli`, for External) is shown as a locked chip at the top.
 
 ### 5.3 Wizard — `Main` (3 steps + Advanced)
 
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** **`timeout_seconds` (default 300)** in this Advanced group is removed. Do not render or submit an agent-work duration; leave the separately specified count-cap control.
+
 | Step | Visible fields |
 |---|---|
 | **① Identity** | `color` (default: `Verdant`), `icon` (default: `Robot`), `name` *, `description`, `model` * (picker) |
@@ -511,6 +520,8 @@ The `type` (and `cli`, for External) is shown as a locked chip at the top.
 
 ### 5.4 Wizard — `Subagent` (3 steps + Advanced)
 
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** remove **`timeout_seconds`** from this Advanced group and its submitted payload. Native worker work has no lifetime duration. Count caps remain separate.
+
 | Step | Visible fields |
 |---|---|
 | **① Identity** | `color`, `icon`, `name` *, **`description` * (required for routing)**, `model` * (picker) |
@@ -519,6 +530,8 @@ The `type` (and `cli`, for External) is shown as a locked chip at the top.
 | **Advanced** | `model_params`, `sandbox_profile`, `shell_policy`, `rate_limits`, `timeout_seconds`, `max_tool_iterations` (no steering_mode, no delegation_policy [field removed entirely — ADR-037], no Heartbeat, no Voice) |
 
 ### 5.5 Wizard — `Subagent (External)` (3 steps + Advanced)
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** remove **`timeout_seconds`** from this Advanced group and every external-create payload. Retain valid CLI path/arguments/environment authoring and the separately specified turn-count cap; none is a lifetime kill timer.
 
 | Step | Visible fields |
 |---|---|
@@ -682,6 +695,8 @@ Identical to Main, except:
 ```
 
 ### 6.5 Edit — `built-in Main` (Mia, Jim, Ava, Ray)
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the wireframe's **Timeout_seconds** and the operator-tunable subset's **`timeout_seconds`** below are removed, not locked/read-only replacements. Built-in editability does not keep a retired lifetime setting. Other runtime controls retain their existing field rules.
 
 Same shape as Main, but every field that would be R/O is rendered `ro`
 with a tooltip: *"Locked agent — seeded at gateway boot."*
@@ -848,6 +863,8 @@ requirement.
 ---
 
 ## 9. Acceptance criteria
+
+> **Amended 2026-10-14 — duration acceptance superseded (founder; PR #1311 / #1306):** any **timeout required/defaulted/editable** contract, locked-agent or desktop/mobile assertion below is retired. Valid create/edit payloads omit the duration, strict external-create rejects an explicitly supplied retired property, and no variant renders the input. Count-cap, authoring, identity/read-only and layout assertions remain their separately amended requirements. The later “Defaults” tab suggestion's Timeouts member is historical, not a new control to implement. User-doc TODO for the implementing lead/docs-verifier in PR #1311: remove duration controls/defaults from the Using Omnipus UI and Settings guides, keeping explicit Stop and count-limit guidance.
 
 ### 9.1 Wire contract
 

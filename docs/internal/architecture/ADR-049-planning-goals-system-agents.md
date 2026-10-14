@@ -1,5 +1,7 @@
 # ADR-049: Planning & Goals — Plan entity, evidence-ladder judge, goal loops, System Agents
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. The supersession header's **“7-day idle-expiry sweeper stand[s]”**, D2/D4's idle-expiry backstop and D7's calendar brake are **superseded**. Remove work-ending `planning.idle_expiry_days` and entity overrides; do not generate new expired goal/plan/loop outcomes from inactivity. Historical expired outcomes remain readable; storage retention is not work expiry. Count/attempt/round/run, concurrency and machine-check bounds remain separate decisions. At frozen PR head `7c148ca00`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/plan_engine.go`::idleExpireOneLocked / goalAndLoopIdleExpirySweep still implement the old paths; their removal is assigned PR round-1 work, not a completion claim made by this dated amendment.
+
 > **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
 
 > **Update 2026-09-14:** the token budgets this document rejects were later adopted as the app-level token budget (ADR-053 D12); that budget and the per-delegation token budget have since been deleted from the product by founder decision. Token usage accounting is tracked in #707.
@@ -264,6 +266,8 @@ per judgment cost more and pollute the delegation surface; execution stays a
 no-tools structured call under the System-Agent identity.
 
 ### D4–D8 — remaining ratified decisions (chosen → rejected)
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** D4's **seven-day sweeper** and D7's **calendar-only brake / configurable idle-expiry / Judge-unavailable calendar exit** below are retired. Keep the separate count and concurrency bounds and bounded machine/Judge checks. A check that cannot complete concludes visibly with the work result through its outcome owner, rather than waiting for an idle-age termination. No inactivity period, stopped-time credit, resume reset or replacement calendar setting ends work. These are revised requirements, not evidence that round-1 removal has already landed.
 
 - **D4 Coordinator = hybrid.** Server-side plan engine dispatches ready tasks as the
   `blocked_by` DAG clears (extends `AdvanceBlockedDependents` + `TaskExecutor`); the
