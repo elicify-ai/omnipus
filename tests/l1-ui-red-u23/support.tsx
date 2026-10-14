@@ -54,7 +54,10 @@ export function installNetwork(handler: (call: CapturedRequest) => Response | Pr
     static CLOSED = 3
     readyState = 1
     onopen: ((event: Event) => void) | null = null
-    constructor(_url: string) { queueMicrotask(() => this.onopen?.(new Event('open'))) }
+    constructor(url: string) {
+      void url // Socket destination is intentionally not contacted by this boundary double.
+      queueMicrotask(() => this.onopen?.(new Event('open')))
+    }
     send(data: string) { socketSends.push(data) }
     close() { this.readyState = 3 }
     addEventListener() {}
@@ -143,7 +146,10 @@ export function resetSharedState(sessionId = 'sess-001') {
   window.location.hash = ''
 }
 export function toasts() {
-  return useUiStore.getState().toasts.map(({ id: _id, ...toast }) => toast)
+  return useUiStore.getState().toasts.map(({ id, ...toast }) => {
+    void id // Compare only the toast payload, never the generated display identity.
+    return toast
+  })
 }
 export function approvalPosts() {
   return requests.filter(c => c.method === 'POST' && c.path.startsWith('/api/v1/tool-approvals/'))
