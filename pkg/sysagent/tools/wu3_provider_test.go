@@ -77,7 +77,7 @@ func TestWU3ConfigureProviderKeylessLocalRunsNativeListing(t *testing.T) {
 
 func TestWU3ConfigureProviderUsesSavedNonOpenAIProtocol(t *testing.T) {
 	d, cfg := wu3Deps(t)
-	cfg.Providers = []*config.ModelConfig{{Provider: "openai", Model: "fixture-model", APIBase: "https://protocol.wu3.invalid", Protocol: "anthropic", APIKeyRef: "protocol-ref"}}
+	cfg.Providers = []*config.ModelConfig{{Provider: "anthropic", Model: "fixture-model", APIBase: "https://protocol.wu3.invalid", Protocol: "anthropic", APIKeyRef: "protocol-ref"}}
 	require.NoError(t, d.CredStore.Set("protocol-ref", "wu3-old-key"))
 	calls := 0
 	wu3Network(t, func(r *http.Request) (*http.Response, error) {
@@ -89,8 +89,8 @@ func TestWU3ConfigureProviderUsesSavedNonOpenAIProtocol(t *testing.T) {
 		assert.NotEmpty(t, r.Header.Get("Anthropic-Version"), "protocol requires version header")
 		return wu3HTTPResponse(r, 200, `{"data":[{"id":"fixture-model"}]}`), nil
 	})
-	result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{"name": "openai", "api_key": "wu3-new-key", "expected_revision": wu3SharedRow(t, d, "provider", "openai")["revision"]})
-	assert.Equal(t, 1, calls, "saved Protocol override must drive the live listing")
+	result := systools.NewProviderConfigureTool(d).Execute(context.Background(), map[string]any{"name": "anthropic", "api_key": "wu3-new-key", "expected_revision": wu3SharedRow(t, d, "provider", "anthropic")["revision"]})
+	assert.Equal(t, 1, calls, "saved non-OpenAI protocol must drive the live listing")
 	wu3Outcome(t, result, "working")
 }
 

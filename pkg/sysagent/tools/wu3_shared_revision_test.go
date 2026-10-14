@@ -193,6 +193,16 @@ func TestWU3SharedWritesRejectStaleAndMissingRevisionsBeforeSideEffects(t *testi
 				memoryAfter, err := json.Marshal(cfg)
 				require.NoError(t, err)
 				assert.Equal(t, memoryBefore, memoryAfter, "winner live state survives")
+				if condition == "stale" {
+					body := wu3Error(t, result, "CONFLICT")
+					resource, _ := args["name"].(string)
+					if resource == "" {
+						resource, _ = args["id"].(string)
+					}
+					assert.Contains(t, body["message"], resource, "conflict names stale resource")
+				} else {
+					assert.Contains(t, result.ForLLM, "expected_revision", "missing precondition names required field")
+				}
 				wu3Outcome(t, result, "failed: nothing saved")
 			})
 		}

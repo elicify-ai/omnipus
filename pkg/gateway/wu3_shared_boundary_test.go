@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -34,21 +35,46 @@ func wu3RegisteredTool(t *testing.T, api *restAPI, name string) tools.Tool {
 // stopwatch oracle: completion while the lock is held is an immediate defect;
 // otherwise its stack must wait on the gateway-config lock, not a loop lock.
 func TestWU3SharedToolWaitsOnSettingsLockBeforeLoopMutation(t *testing.T) {
+	for _, verb := range []string{"disable_channel", "remove_mcp_server", "configure_provider"} {
+		t.Run(verb, func(t *testing.T) { wu3SharedLockProbe(t, verb) })
+	}
+}
+
+func wu3SharedLockProbe(t *testing.T, verb string) {
+	t.Helper()
 	api := wu3WiredAPI(t, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"models":[{"name":"fixture-model"}]}`)
+	}))
+	defer server.Close()
 	require.NoError(t, api.agentLoop.MutateConfig(func(cfg *config.Config) error {
 		cfg.Channels = map[string]config.ChannelInstanceConfig{"telegram": {Type: "telegram", Enabled: true}}
+		cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{"notion": {Type: "stdio", Command: "inert", Enabled: false}}
+		cfg.Providers = []*config.ModelConfig{{Provider: "ollama", Model: "fixture-model", APIBase: server.URL + "/v1"}}
 		return config.SaveConfig(api.configPath(), cfg)
 	}))
-	list := wu3RegisteredTool(t, api, "list_channels").Execute(context.Background(), nil)
+	readName, array, key, id, typeName := "list_channels", "channels", "id", "telegram", "ChannelDisableTool"
+	args := map[string]any{"id": "telegram"}
+	if verb == "remove_mcp_server" {
+		readName, array, key, id, typeName = "list_mcp_servers", "servers", "name", "notion", "MCPRemoveTool"
+		args = map[string]any{"name": "notion", "confirm": true}
+	}
+	if verb == "configure_provider" {
+		readName, array, key, id, typeName = "list_providers", "providers", "name", "ollama", "ProviderConfigureTool"
+		args = map[string]any{"name": "ollama", "api_base": server.URL + "/v1"}
+	}
+	list := wu3RegisteredTool(t, api, readName).Execute(context.Background(), nil)
 	var projection map[string]any
 	require.NoError(t, json.Unmarshal([]byte(list.ForLLM), &projection))
-	var revision any
-	for _, raw := range projection["channels"].([]any) {
+	for _, raw := range projection[array].([]any) {
 		row := raw.(map[string]any)
-		if row["id"] == "telegram" {
-			revision = row["revision"]
+		if row[key] == id {
+			args["expected_revision"] = row["revision"]
 		}
 	}
+	before, err := json.Marshal(api.agentLoop.GetConfig())
+	require.NoError(t, err)
 	api.configMu.Lock()
 	locked := true
 	defer func() {
@@ -57,10 +83,8 @@ func TestWU3SharedToolWaitsOnSettingsLockBeforeLoopMutation(t *testing.T) {
 		}
 	}()
 	done := make(chan *tools.ToolResult, 1)
-	tool := wu3RegisteredTool(t, api, "disable_channel")
-	go func() {
-		done <- tool.Execute(context.Background(), map[string]any{"id": "telegram", "expected_revision": revision})
-	}()
+	tool := wu3RegisteredTool(t, api, verb)
+	go func() { done <- tool.Execute(context.Background(), args) }()
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
 	blockedOnConfig := false
@@ -76,10 +100,12 @@ func TestWU3SharedToolWaitsOnSettingsLockBeforeLoopMutation(t *testing.T) {
 			buffer := make([]byte, 1<<20)
 			n := runtime.Stack(buffer, true)
 			for _, stack := range strings.Split(string(buffer[:n]), "\n\n") {
-				if !strings.Contains(stack, "wu3_shared_boundary_test.go") || !strings.Contains(stack, "ChannelDisableTool") {
+				if !strings.Contains(stack, "wu3_shared_boundary_test.go") || !strings.Contains(stack, typeName) {
 					continue
 				}
-				if strings.Contains(stack, "internal/sync.(*Mutex).lockSlow") && !strings.Contains(stack, "AgentLoop.MutateConfig") {
+				// The address of the real, currently held Settings mutex, not an
+				// invented internal helper name or a timing proxy.
+				if strings.Contains(stack, fmt.Sprintf("(%p)", &api.configMu)) {
 					blockedOnConfig = true
 				}
 			}
@@ -90,7 +116,11 @@ func TestWU3SharedToolWaitsOnSettingsLockBeforeLoopMutation(t *testing.T) {
 	probe := make(chan error, 1)
 	go func() {
 		probe <- api.agentLoop.MutateConfig(func(cfg *config.Config) error {
-			assert.True(t, cfg.Channels["telegram"].Enabled, "waiting tool has not mutated live state")
+			after, marshalErr := json.Marshal(cfg)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			assert.Equal(t, before, after, "waiting tool has not mutated live state")
 			return nil
 		})
 	}()

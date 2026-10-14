@@ -100,7 +100,10 @@ func TestWU3MCPManagementAllowedPolicyMatchesDiscoveryAndRealExecution(t *testin
 	provider := testutil.NewScenario().WithToolCall("list_mcp_servers", `{}`).WithToolCall("add_mcp_server", `{"name":"fixture","transport":"stdio","expected_revision":"absent"}`).WithText("checked")
 	api := wu3WiredAPI(t, provider)
 	al := api.agentLoop
-	require.NoError(t, al.MutateConfig(func(cfg *config.Config) error { cfg.Sandbox.ToolPolicies["add_mcp_server"] = "allow"; return nil }))
+	clone, err := al.GetConfig().Clone()
+	require.NoError(t, err)
+	clone.Sandbox.ToolPolicies["add_mcp_server"] = "allow"
+	require.NoError(t, al.ReloadProviderAndConfig(context.Background(), provider, clone))
 	inst, ok := al.GetRegistry().GetAgent("omnipus")
 	require.True(t, ok)
 	search, ok := inst.Tools.Get("ToolSearch")
@@ -113,7 +116,7 @@ func TestWU3MCPManagementAllowedPolicyMatchesDiscoveryAndRealExecution(t *testin
 		require.Equal(t, "allow", policy)
 		assert.Contains(t, loaded.ForLLM, name)
 	}
-	_, err := al.GetSessionStore().GetOrCreateMainSession("default", "omnipus")
+	_, err = al.GetSessionStore().GetOrCreateMainSession("default", "omnipus")
 	require.NoError(t, err)
 	mainID, err := session.MainSessionID("default", "omnipus")
 	require.NoError(t, err)
@@ -121,7 +124,7 @@ func TestWU3MCPManagementAllowedPolicyMatchesDiscoveryAndRealExecution(t *testin
 	require.NoError(t, err)
 	listed := wu3ToolResultFromTurn(t, provider, "list_mcp_servers-0")
 	assert.Equal(t, []any{}, listed["servers"], "real tool invocation returns empty configured list")
-	refused := wu3ToolResultFromTurn(t, provider, "add_mcp_server-1")
+	refused := wu3ToolResultFromTurn(t, provider, "add_mcp_server-0")
 	errBody, ok := refused["error"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "INVALID_INPUT", errBody["code"], "real validation reached, not permission_denied/policy_denied")
