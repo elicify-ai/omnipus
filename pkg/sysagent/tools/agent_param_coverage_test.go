@@ -55,6 +55,7 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 		"color": true, "agent_type": true, "cli": true,
 		"cli_path": true, "provider": true, "fallback_models": true,
 		"heartbeat": true, "max_tool_iterations": true,
+		"figure": true, "role": true, // read in validate (resolveCreateVisual) and the shared apply step (#1303)
 		"skills": true, "mcp_servers": true, "tool_policy_changes": true,
 		"memory_enabled": true, "voice": true,
 		"context_window_override": true, "model_params": true,
@@ -102,6 +103,7 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 		"id": true, "revision": true, "name": true, "description": true, "soul": true,
 		"model": true, "fallback_models": true, "provider": true,
 		"color": true, "skills": true,
+		"figure": true, "role": true, // read in validateVisualUpdateArgs and the shared apply step (#1303)
 		"max_tool_iterations": true,
 		"memory_enabled":      true, "voice": true,
 		"context_window_override": true, "model_params": true,
