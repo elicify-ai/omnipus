@@ -213,10 +213,12 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 }
 
 // omnipusGodModeNote is the one-line God Mode note Omnipus's per-turn context
-// carries while God Mode is active (omnipus-system-agent FR-015). PLACEHOLDER
-// wording until WU-9 wires the prometheus-authored note
-// (docs/internal/specs/omnipus-wu9-draft/core-prompt.md, omnipusGodModeNote).
-const omnipusGodModeNote = "God Mode is active: post the plan summary as an ordinary message and proceed without the Go question and without tool approvals; clarification questions and secret cards still appear."
+// carries while God Mode is active (omnipus-system-agent FR-015). Wording per
+// the founder's 2026-10-14 ruling: the note discloses what God Mode does —
+// approvals skipped, writes and network open, internal files still protected
+// (L1 amendment §2.2 D7 floor), and started programs see the gateway
+// environment including API keys (accepted risk).
+const omnipusGodModeNote = "God Mode is active: approvals are skipped — post the plan summary as an ordinary message and proceed without the Go question and without tool approvals, including changes another agent asked for. Clarification questions for genuinely missing information still appear. You can write anywhere on this machine and use the network, and programs you start see the gateway environment, including API keys. Omnipus's internal files stay protected."
 
 // wireModeNoteInjectors installs the per-turn mode-note callback: Omnipus gets
 // the God Mode note while GodModeActive reads true for the live config, and no
