@@ -4,8 +4,11 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
@@ -57,6 +60,43 @@ func compareChannels(old, news map[string]string) (added, removed []string) {
 		}
 	}
 	return added, removed
+}
+
+// credentialSignature summarizes which of one enabled instance's configured
+// credential references were present (non-empty) in the supplied bundle —
+// never their values (#1277). Sorted so the signature is deterministic; a
+// signature change between boot/reloads means the instance's secret set
+// changed (deleted, rotated away, unreadable, or restored) even though its
+// config bytes did not, and Reload must re-initialize that one instance.
+func credentialSignature(inst config.ChannelInstanceConfig, secrets credentials.SecretBundle) string {
+	refs := inst.CredentialRefs()
+	parts := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if strings.TrimSpace(ref) == "" {
+			continue
+		}
+		state := "absent"
+		if secrets.GetString(ref) != "" {
+			state = "present"
+		}
+		parts = append(parts, ref+"="+state)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
+// credentialSignatures maps every enabled instanceID to its
+// credentialSignature. Mirrors toChannelHashes' key space (enabled instances
+// only) so Reload can diff the two maps in lockstep.
+func credentialSignatures(cfg *config.Config, secrets credentials.SecretBundle) map[string]string {
+	result := make(map[string]string)
+	for instanceID, inst := range cfg.Channels {
+		if !inst.Enabled {
+			continue
+		}
+		result[instanceID] = credentialSignature(inst, secrets)
+	}
+	return result
 }
 
 // toChannelConfig returns the subset of cfg.Channels whose instanceIDs appear

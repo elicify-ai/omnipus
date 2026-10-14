@@ -386,15 +386,6 @@ func providerWireLocality(l catalog.Locality) *gen.ProviderLocality {
 	return &v
 }
 
-// providerWireCLIKind maps a catalog row's cli_kind onto the wire enum.
-func providerWireCLIKind(kind string) *gen.ProviderCliKind {
-	v := gen.ProviderCliKind(strings.TrimSpace(kind))
-	if !v.Valid() {
-		return nil
-	}
-	return &v
-}
-
 // applyProviderIdentity stamps the ADR-067 identity fields onto a
 // providers[] entry being written by PUT /api/v1/providers/{id}: the
 // explicit base URL, the selected protocol, the custom flag (X-13 —

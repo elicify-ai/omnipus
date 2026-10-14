@@ -67,7 +67,6 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"),
 		r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"),
 		r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"),
-		r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import",
 		r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in"):
 		a.postProviderSignInHTTP(w, r, sub, path)
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/entitlement"):
@@ -150,6 +149,24 @@ func (a *restAPI) listProvidersHTTP(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, providers)
 }
 
+// providerCredentialRefError builds the operator-facing cred error for one
+// provider row's unresolvable api_key_ref, naming the EXACT reference so the
+// row says which secret to fix (#1277, founder decision 2026-10-12) — never
+// the secret value. The classified classes mirror
+// describeCredentialResolutionError; the ref prefix is what that helper's
+// messages lacked.
+func providerCredentialRefError(ref string, err error) string {
+	var entryAuth *credentials.EntryAuthError
+	if errors.As(err, &entryAuth) {
+		return fmt.Sprintf("credential reference %q is unreadable (failed authentication) — re-enter the API key", ref)
+	}
+	var notFound *credentials.NotFoundError
+	if errors.As(err, &notFound) {
+		return fmt.Sprintf("credential reference %q is missing from the credential vault — re-enter the API key", ref)
+	}
+	return fmt.Sprintf("credential reference %q: %s", ref, describeCredentialResolutionError(err))
+}
+
 // providerAggregate is what the GET list collects from the configured provider rows
 // before building the wire rows: first row, user models, resolved keys, credential
 // errors, latest update stamp and auth method per provider, in first-seen order.
@@ -214,23 +231,20 @@ func (a *restAPI) aggregateProviderRows(cfg *config.Config) providerAggregate {
 		if len(m.Models) > 0 {
 			agg.userModels[providerName] = append(agg.userModels[providerName], m.Models...)
 		}
-		// Resolve API key for upstream model fetching.
-		// APIKeyRef is resolved via process environment (set by InjectFromConfig).
-		if _, hasKey := agg.apiKeys[providerName]; !hasKey {
-			resolved := m.APIKey()
-			if resolved == "" && m.APIKeyRef != "" {
-				if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
-					slog.Warn("rest: could not resolve provider credential", "ref", m.APIKeyRef, "error", err)
-					var notFound *credentials.NotFoundError
-					if !errors.As(err, &notFound) {
-						agg.credErrors[providerName] = describeCredentialResolutionError(err)
-					}
-				} else {
-					resolved = v
-				}
-			}
-			if resolved != "" {
-				agg.apiKeys[providerName] = resolved
+		// Resolve API key for upstream model fetching. The credential STORE is
+		// the SOLE authority for a row with an api_key_ref (#1277): the process
+		// environment only ever mirrors the store (InjectFromConfig writes it
+		// from the vault and never unsets), so a stale mirror — a value left
+		// from before the entry was deleted or emptied — must never promote the
+		// row to "connected". A missing or unreadable reference is the row's
+		// cred error, naming the exact ref; an entry that exists but stores an
+		// empty value is "not configured" (disconnected) — not an error state.
+		if _, hasKey := agg.apiKeys[providerName]; !hasKey && m.APIKeyRef != "" {
+			if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
+				slog.Warn("rest: could not resolve provider credential", "ref", m.APIKeyRef, "error", err)
+				agg.credErrors[providerName] = providerCredentialRefError(m.APIKeyRef, err)
+			} else if strings.TrimSpace(v) != "" {
+				agg.apiKeys[providerName] = v
 			}
 		}
 	}
@@ -283,9 +297,7 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 	// real status/account_label, using ONLY the cheap local check —
 	// no vendor fan-out for a background list render. Skipped when
 	// unknown-provider already won above (nothing to look up for an
-	// id the catalog does not carry) — cheapSignInRowStatus's own
-	// doc comment covers why github-copilot never pays a premium
-	// request here.
+	// id the catalog does not carry).
 	//
 	// C1: skipped entirely for an ANONYMOUS caller. account_label is
 	// the operator's own vendor account identifier (Provider.yaml:
@@ -303,18 +315,6 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 			}
 		}
 	}
-	// ADR-068 FR-009 (T068-15): a `github-copilot` row is backed by
-	// the vendor CLI, not an API key, so the key-derived status above
-	// says nothing useful about it. When the CLI is absent from this
-	// machine the row stays `disconnected` and carries the operator
-	// hint. Whether the operator is SIGNED IN is never computed by
-	// running the CLI here — that check costs a premium request, so
-	// it stays the explicit Check sign-in action's alone. The row
-	// CAN still say signed_in/expired for github-copilot — from the
-	// cached result of the operator's last explicit Check
-	// (copilotRowSignInStatus, never a probe), codex-cli from its
-	// saved login file.
-	copilotHint := copilotRowHint(name)
 	hasEndpointCopy := hasEndpoint
 	// ADR-068 T068-08: the row's auth method comes from the config row
 	// (closed set api_key | sign_in — Validate rejects anything else);
@@ -371,7 +371,6 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 			displayCopy := display
 			p.DisplayName = &displayCopy
 		}
-		p.CliKind = providerWireCLIKind(src.row.CLIKind)
 	}
 	if modelFetchWarning != "" {
 		p.Warning = &modelFetchWarning
@@ -390,8 +389,6 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 		if credErrMsg, ok := agg.credErrors[name]; ok {
 			p.Status = gen.ProviderStatusError
 			p.Error = &credErrMsg
-		} else if copilotHint != "" {
-			p.Error = &copilotHint
 		} else if agg.authMethod[name] == config.AuthMethodSignIn {
 			// H1: a row saved with sign_in on a provider that cannot sign
 			// in (before the PUT gate existed) never connects — say where
@@ -991,7 +988,7 @@ func (a *restAPI) providerPutRespond(p *providerPut) {
 	jsonOK(p.w, providerResp)
 }
 
-// postProviderSignInHTTP serves the HandleProviders route `r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"), r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"), r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"), r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import", r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in")`.
+// postProviderSignInHTTP serves the HandleProviders route `r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"), r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"), r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"), r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in")`.
 // ADR-068 FR-008/FR-009/FR-044/FR-047/FR-048 (§8b amendment,
 // 2026-08-23; T068-14). FR-050: these five routes are reachable
 // PRE-AUTH only while onboarding is incomplete (mirrors the /test
@@ -1016,20 +1013,6 @@ func (a *restAPI) postProviderSignInHTTP(w http.ResponseWriter, r *http.Request,
 	}
 	a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		// github-copilot has its own CLI-status-aware handlers (T067-07/
-		// T068-15): a real state via one bounded Copilot CLI invocation,
-		// cost-aware about premium requests. Routed first so they win
-		// over the generic cli_login path below, which would otherwise
-		// also match github-copilot's routes (signInMethodFor classifies
-		// it cli_login) with only a hardcoded command string and no real
-		// status check.
-		case r.Method == http.MethodPost && sub == copilotProviderID+"/sign-in":
-			a.handleCopilotSignInStart(w, r)
-		case r.Method == http.MethodGet && sub == copilotProviderID+"/sign-in/status":
-			// Rate-limited for the same reason as the generic status
-			// route below — this one spawns a Copilot CLI process per
-			// call (see signInStatusLimiter's doc comment).
-			withRateLimit(signInStatusLimiter, a.handleCopilotSignInStatus)(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"):
 			// FR-044: no explicit rate-limit requirement, but a device-code
 			// dialog polls repeatedly by design — signInPollLimiter is a
@@ -1038,17 +1021,9 @@ func (a *restAPI) postProviderSignInHTTP(w http.ResponseWriter, r *http.Request,
 			withRateLimit(signInPollLimiter, func(w http.ResponseWriter, r *http.Request) {
 				a.handleProviderSignInPoll(w, r, strings.TrimSuffix(sub, "/sign-in/poll"))
 			})(w, r)
-		case r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import":
-			// M2: this route was called BARE while its four FR-050
-			// siblings were all wrapped. Every call rewrites the whole
-			// encrypted credentials.json and re-registers every OAuth
-			// value with the sensitive-value replacer — see
-			// signInImportLimiter (rest_auth.go).
-			withRateLimit(signInImportLimiter, a.handleProviderSignInImport)(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"):
-			// FR-008: "rate-limited like the auth endpoints". codex-cli,
-			// openai-chatgpt, and any other sign_in row land here —
-			// github-copilot is already routed above.
+			// FR-008: "rate-limited like the auth endpoints". openai-chatgpt,
+			// and any other sign_in row land here.
 			withRateLimit(signInStartLimiter, func(w http.ResponseWriter, r *http.Request) {
 				a.handleProviderSignInStart(w, r, strings.TrimSuffix(sub, "/sign-in"))
 			})(w, r)
@@ -1063,14 +1038,12 @@ func (a *restAPI) postProviderSignInHTTP(w http.ResponseWriter, r *http.Request,
 			})(w, r)
 		case r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in"):
 			// FR-048 sign-out: harmless no-op (NotFound = success) for a
-			// cli_login provider like github-copilot, which never has a
-			// "<id>_OAUTH" entry to begin with — Omnipus never sees or
-			// stores its credential.
+			// provider id that never wrote a "<id>_OAUTH" entry.
 			//
-			// M2: also previously bare. Not harmless in aggregate — each
-			// call nils the process-wide sensitive-data replacer cache,
-			// so the next scrub pays a full reflection walk of Config
-			// under a write lock. See signInSignOutLimiter (rest_auth.go).
+			// M2: not harmless in aggregate — each call nils the
+			// process-wide sensitive-data replacer cache, so the next scrub
+			// pays a full reflection walk of Config under a write lock. See
+			// signInSignOutLimiter (rest_auth.go).
 			withRateLimit(signInSignOutLimiter, func(w http.ResponseWriter, r *http.Request) {
 				a.handleProviderSignOut(w, r, strings.TrimSuffix(sub, "/sign-in"))
 			})(w, r)

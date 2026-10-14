@@ -55,14 +55,7 @@ type OnboardingPreferences = {
   tone: "direct" | "warm" | "formal";
   detail: "brief" | "thorough";
 };
-type SignInStartResponse =
-  | SignInStartResponseCliLogin
-  | SignInStartResponseDeviceCode;
-type SignInStartResponseCliLogin = {
-  method: "cli_login";
-  command: string;
-  instructions: string;
-};
+type SignInStartResponse = SignInStartResponseDeviceCode;
 type SignInStartResponseDeviceCode = {
   method: "device_code";
   verification_url: string;
@@ -1668,20 +1661,12 @@ type Provider = {
     | "signed_in"
     | "expired";
   protocol?:
-    | (
-        | "openai-compatible"
-        | "anthropic"
-        | "google"
-        | "ollama"
-        | "cli"
-        | "bedrock"
-      )
+    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "bedrock")
     | undefined;
   custom?: boolean | undefined;
   company?: string | undefined;
   region?: string | undefined;
   locality?: ("local" | "cloud") | undefined;
-  cli_kind?: ("codex" | "copilot") | undefined;
   auth_method: "api_key" | "sign_in";
   account_label?: string | undefined;
   dependents: Array<ProviderDependent>;
@@ -1749,14 +1734,7 @@ type CatalogProvider = {
   company: string;
   api: string;
   protocol?:
-    | (
-        | "openai-compatible"
-        | "anthropic"
-        | "google"
-        | "ollama"
-        | "cli"
-        | "bedrock"
-      )
+    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "bedrock")
     | undefined;
   protocols?: Array<CatalogProtocol> | undefined;
   env?: Array<string> | undefined;
@@ -1770,19 +1748,11 @@ type CatalogProvider = {
   auth_methods: Array<"api_key" | "sign_in">;
   aliases: Array<string>;
   locality: "local" | "cloud";
-  cli_kind?: ("codex" | "copilot") | undefined;
-  token_source?: string | undefined;
   resize_limits?: CatalogResizeLimits | undefined;
   models: Array<CatalogModel>;
 };
 type CatalogProtocol = {
-  protocol:
-    | "openai-compatible"
-    | "anthropic"
-    | "google"
-    | "ollama"
-    | "cli"
-    | "bedrock";
+  protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "bedrock";
   api: string;
 };
 type CatalogProviderRegion = {
@@ -4789,20 +4759,12 @@ export const Provider: z.ZodType<Provider> = z.object({
     "expired",
   ]),
   protocol: z
-    .enum([
-      "openai-compatible",
-      "anthropic",
-      "google",
-      "ollama",
-      "cli",
-      "bedrock",
-    ])
+    .enum(["openai-compatible", "anthropic", "google", "ollama", "bedrock"])
     .optional(),
   custom: z.boolean().optional(),
   company: z.string().optional(),
   region: z.string().optional(),
   locality: z.enum(["local", "cloud"]).optional(),
-  cli_kind: z.enum(["codex", "copilot"]).optional(),
   auth_method: z.enum(["api_key", "sign_in"]),
   account_label: z.string().max(128).optional(),
   dependents: z.array(ProviderDependent),
@@ -4825,7 +4787,6 @@ export const CatalogProtocol: z.ZodType<CatalogProtocol> = z.object({
     "anthropic",
     "google",
     "ollama",
-    "cli",
     "bedrock",
   ]),
   api: z.string(),
@@ -4860,14 +4821,7 @@ export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
   company: z.string().min(1),
   api: z.string(),
   protocol: z
-    .enum([
-      "openai-compatible",
-      "anthropic",
-      "google",
-      "ollama",
-      "cli",
-      "bedrock",
-    ])
+    .enum(["openai-compatible", "anthropic", "google", "ollama", "bedrock"])
     .optional(),
   protocols: z.array(CatalogProtocol).optional(),
   env: z.array(z.string()).optional(),
@@ -4881,8 +4835,6 @@ export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
   auth_methods: z.array(z.enum(["api_key", "sign_in"])).min(1),
   aliases: z.array(z.string()),
   locality: z.enum(["local", "cloud"]),
-  cli_kind: z.enum(["codex", "copilot"]).optional(),
-  token_source: z.string().optional(),
   resize_limits: CatalogResizeLimits.optional(),
   models: z.array(CatalogModel),
 });
@@ -4915,7 +4867,6 @@ export const ProviderUpdateRequest = z
       "anthropic",
       "google",
       "ollama",
-      "cli",
       "bedrock",
     ]),
     auth_method: z.enum(["api_key", "sign_in"]),
@@ -4936,12 +4887,6 @@ export const ProviderDeleteResponse: z.ZodType<ProviderDeleteResponse> =
     default_changed: z.boolean(),
     new_default: DefaultModelUpdateRequest.optional(),
   });
-export const SignInStartResponseCliLogin =
-  z.object({
-    method: z.literal("cli_login"),
-    command: z.string().min(1).max(256),
-    instructions: z.string().min(1).max(1024),
-  }) satisfies z.ZodType<SignInStartResponseCliLogin>;
 export const SignInStartResponseDeviceCode =
   z.object({
     method: z.literal("device_code"),
@@ -4952,10 +4897,7 @@ export const SignInStartResponseDeviceCode =
     interval_seconds: z.number().int().gte(1).lte(30),
   }) satisfies z.ZodType<SignInStartResponseDeviceCode>;
 export const SignInStartResponse =
-  z.discriminatedUnion("method", [
-    SignInStartResponseCliLogin,
-    SignInStartResponseDeviceCode,
-  ]) satisfies z.ZodType<SignInStartResponse>;
+  SignInStartResponseDeviceCode satisfies z.ZodType<SignInStartResponse>;
 export const SignInStatus = z.object({
   state: z.enum(["not_signed_in", "pending", "signed_in", "expired"]),
   account_label: z.string().max(128).optional(),
@@ -12397,7 +12339,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "post",
     path: "/providers/:id/sign-in",
     alias: "startProviderSignIn",
-    description: `For &#x60;codex-cli&#x60; / &#x60;github-copilot&#x60;: Omnipus never performs or stores the vendor login itself — returns the one instruction the operator needs, the vendor CLI&#x27;s own login command, so the SPA can show it beside a *Check sign-in* button (&#x60;method: cli_login&#x60;). For &#x60;openai-chatgpt&#x60; (and &#x60;xai&#x60; once its catalog row carries &#x60;sign_in&#x60;): Omnipus requests a device code from the vendor itself and returns the verification link, user code, and an opaque &#x60;device_auth_id&#x60; to poll (&#x60;method: device_code&#x60;, FR-044) — the vendor&#x27;s device code and any PKCE verifier never leave the gateway. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; when the provider&#x27;s catalog row does not list &#x60;sign_in&#x60; in &#x60;auth_methods&#x60;, and for &#x60;xai&#x60; specifically when no client id is configured. Rate-limited like the auth endpoints. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, because onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can mint a real device code or trigger a vendor CLI login prompt exactly as an authenticated caller could.
+    description: `Omnipus requests a device code from the vendor itself and returns the verification link, user code, and an opaque &#x60;device_auth_id&#x60; to poll (&#x60;method: device_code&#x60;, FR-044) — the vendor&#x27;s device code and any PKCE verifier never leave the gateway. (The former vendor-CLI sign-in variant was deleted with the CLI-backed providers — WU-24, founder 2026-10-14.) Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; when the provider&#x27;s catalog row does not list &#x60;sign_in&#x60; in &#x60;auth_methods&#x60;, and for &#x60;xai&#x60; specifically when no client id is configured. Rate-limited like the auth endpoints. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, because onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can mint a real device code exactly as an authenticated caller could.
 `,
     requestFormat: "json",
     parameters: [
@@ -12407,7 +12349,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: z.string(),
       },
     ],
-    response: SignInStartResponse,
+    response: SignInStartResponseDeviceCode,
     errors: [
       {
         status: 400,
@@ -12435,7 +12377,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "delete",
     path: "/providers/:id/sign-in",
     alias: "signOutProvider",
-    description: `Deletes the &#x60;&lt;id&gt;_OAUTH&#x60; encrypted credential entry (a missing entry is success), emits audit event &#x60;provider.signed_out&#x60;, and the row returns to &#x60;not_signed_in&#x60;. Only meaningful for &#x60;device_code&#x60; providers — &#x60;cli_login&#x60; providers hold no Omnipus-side credential to delete and this is a no-op success for them too. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its POST sibling is (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can revoke another account&#x27;s vendor sign-in before any admin account exists.
+    description: `Deletes the &#x60;&lt;id&gt;_OAUTH&#x60; encrypted credential entry (a missing entry is success), emits audit event &#x60;provider.signed_out&#x60;, and the row returns to &#x60;not_signed_in&#x60;. Only meaningful for &#x60;device_code&#x60; providers; any other id is a no-op success. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its POST sibling is (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can revoke another account&#x27;s vendor sign-in before any admin account exists.
 `,
     requestFormat: "json",
     parameters: [
@@ -12511,7 +12453,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "get",
     path: "/providers/:id/sign-in/status",
     alias: "getProviderSignInStatus",
-    description: `For &#x60;cli_login&#x60; providers (codex-cli, github-copilot): reads the vendor CLI&#x27;s saved login (codex &#x60;auth.json&#x60; — only &#x60;tokens.access_token&#x60; for the unverified &#x60;exp&#x60; claim and &#x60;tokens.account_id&#x60; for the label; the Copilot CLI&#x27;s own auth-status) — the file is never modified and no refresh request is ever made (FR-007). For &#x60;device_code&#x60; providers (openai-chatgpt, and xai once its catalog row carries &#x60;sign_in&#x60;): reads the stored &#x60;&lt;id&gt;_OAUTH&#x60; entry in Omnipus&#x27;s own encrypted credential store; &#x60;expired&#x60; means the access token is past &#x60;exp&#x60; AND a refresh attempt failed or no refresh token is available (FR-046). Maps to &#x60;not_signed_in | pending | signed_in | expired&#x60;; &#x60;pending&#x60; only while an open device-code session awaits approval. A missing CLI binary is reported on the Provider row as &#x60;disconnected&#x60;, not here. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; for providers without &#x60;sign_in&#x60;. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds.
+    description: `Reads the stored &#x60;&lt;id&gt;_OAUTH&#x60; entry in Omnipus&#x27;s own encrypted credential store (device_code providers: openai-chatgpt, and xai once its catalog row carries &#x60;sign_in&#x60;); &#x60;expired&#x60; means the access token is past &#x60;exp&#x60; AND a refresh attempt failed or no refresh token is available (FR-046). Maps to &#x60;not_signed_in | pending | signed_in | expired&#x60;; &#x60;pending&#x60; only while an open device-code session awaits approval. (The former vendor-CLI-file status reads were deleted with the CLI-backed model providers — WU-24, founder 2026-10-14.) Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; for providers without a sign-in mechanism. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds.
 `,
     requestFormat: "json",
     parameters: [
@@ -12536,11 +12478,6 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 429,
         description: `Rate limit exceeded.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 500,
-        description: `Internal server error.`,
         schema: ErrorResponse,
       },
       {
@@ -12666,32 +12603,6 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 500,
         description: `Internal server error.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 503,
-        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/providers/openai-chatgpt/sign-in/import",
-    alias: "importCodexSignIn",
-    description: `Copies &#x60;tokens.access_token&#x60; + &#x60;tokens.account_id&#x60; from &#x60;~/.codex/auth.json&#x60; into the &#x60;openai_OAUTH&#x60; encrypted credential entry. No refresh token is imported — a session started this way ends at the copied token&#x27;s &#x60;exp&#x60; with no further refresh. The source file&#x27;s bytes and mtime are left unchanged (read-only, FR-007). Returns 404 &#x60;{&quot;error&quot;:&quot;no codex login found&quot;}&#x60; when the file is absent or unreadable. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can write a live vendor credential into the encrypted store before any admin account exists.
-`,
-    requestFormat: "json",
-    response: SignInStatus,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
         schema: ErrorResponse,
       },
       {

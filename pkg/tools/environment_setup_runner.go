@@ -56,11 +56,19 @@ type startPlan struct {
 // per-turn kernel policy derived from an FSPolicy whose WorkDir is the
 // authorized target work root. This makes that root's source files part of
 // the own-tree read view; write is stripped again below except for the exact
-// selected installation roots. God mode mirrors bash: no kernel policy — the
-// same operator opt-out that governs that agent's bash children.
+// selected installation roots.
+//
+// #1284 amendment §2 D3 (fix round 1): the child's allowances — the
+// already-published shared runtime generations (read+execute) and its own
+// selected installation prefix/cache/tmp (write) — ride INTO the denial as
+// TurnPolicyInput.AllowRoots, in God Mode (the floor) exactly as in normal
+// mode, never appended to a policy whose denial had already shipped. They are
+// marked as internal runtime input, so one pointing at protected inventory is
+// dropped by the enumeration rather than honoured.
 func (t *EnvironmentSetupTool) buildSetupLimits(ctx context.Context, area EnvironmentSetupTarget, targetRoot string, runtimeEnv environmentsetup.RuntimeEnv, timeoutSeconds int32) (sandbox.Limits, error) {
 	prefix := area.Prefix()
-	lim, err := sandbox.ResolveLimits(t.godMode, prefix, t.proxy, timeoutSeconds)
+	setupAllowRoots := setupAllowRoots(area, runtimeEnv)
+	lim, err := sandbox.ResolveLimits(t.godMode, prefix, t.proxy, timeoutSeconds, setupAllowRoots...)
 	if err != nil {
 		return sandbox.Limits{}, err
 	}
@@ -77,12 +85,22 @@ func (t *EnvironmentSetupTool) buildSetupLimits(ctx context.Context, area Enviro
 	}
 	authored.AllowedRoots = writableRootsOutsidePrefix(area)
 
-	policy, err := sandbox.KernelPolicyForTurn(authored)
-	if err != nil {
-		// Fail closed (mirrors turnKernelPolicy): falling back to the boot
-		// profile would hand the child the WIDER posture.
-		return sandbox.Limits{}, fmt.Errorf("derive setup kernel policy: %w", err)
-	}
+	// The setup child derives from a MODIFIED boot input: the operator's
+	// ordinary allowed_paths are not part of a setup child's posture, and its
+	// runtime/prefix allowances must be in the input BEFORE the denial, so
+	// this site derives via DeriveKernelPolicy itself rather than through
+	// KernelPolicyForTurn's as-registered base.
+	policy := func() *sandbox.SandboxPolicy {
+		base, ok := sandbox.RegisteredTurnPolicyBase()
+		if !ok {
+			return nil // documented no-per-turn fallback: the boot profile governs
+		}
+		in := base
+		in.AllowedPaths = nil // setup keeps only its selected writes (stripped again below)
+		in.AllowRoots = setupAllowRoots
+		derived := sandbox.DeriveKernelPolicy(authored, in)
+		return &derived
+	}()
 	// nil is legal: no boot-registered base means the boot profile governs,
 	// the same documented fallback bash has.
 	if policy != nil {
@@ -112,9 +130,44 @@ func (t *EnvironmentSetupTool) buildSetupLimits(ctx context.Context, area Enviro
 			policy.FilesystemRules = append(policy.FilesystemRules,
 				sandbox.PathRule{Path: filepath.Clean(root), Access: sandbox.AccessRead | sandbox.AccessExecute})
 		}
+		// The SAME access classes as branch grants, so the Linux home-rule
+		// explosion grants the target root read+execute and the selected
+		// roots read+write instead of the parent rule's broad access — the
+		// rule strip above cannot reach grants the explosion derives from
+		// the home branch itself.
+		branchRules := []sandbox.PathRule{
+			{Path: filepath.Clean(targetRoot), Access: sandbox.AccessRead | sandbox.AccessExecute},
+			{Path: filepath.Clean(area.Prefix()), Access: sandbox.AccessRead | sandbox.AccessWrite},
+		}
+		for _, root := range writableRootsOutsidePrefix(area) {
+			branchRules = append(branchRules, sandbox.PathRule{Path: filepath.Clean(root), Access: sandbox.AccessRead | sandbox.AccessWrite})
+		}
+		for _, root := range runtimeEnv.ReadExec {
+			branchRules = append(branchRules, sandbox.PathRule{Path: filepath.Clean(root), Access: sandbox.AccessRead | sandbox.AccessExecute})
+		}
+		policy.AllowedBranches = append(policy.AllowedBranches, branchRules...)
 	}
 	lim.KernelPolicy = policy
 	return lim, nil
+}
+
+// setupAllowRoots lists the setup child's §2 A5/A6 allowances: the published
+// shared runtime generations (read+execute) and its own selected
+// installation prefix/cache/tmp (write), for the input side of the denial.
+func setupAllowRoots(area EnvironmentSetupTarget, runtimeEnv environmentsetup.RuntimeEnv) []fspolicy.AllowRoot {
+	roots := make([]fspolicy.AllowRoot, 0, len(runtimeEnv.ReadExec)+3)
+	for _, root := range runtimeEnv.ReadExec {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		roots = append(roots, fspolicy.AllowRoot{Path: filepath.Clean(root), Writable: false})
+	}
+	roots = append(roots,
+		fspolicy.AllowRoot{Path: filepath.Clean(area.Prefix()), Writable: true},
+		fspolicy.AllowRoot{Path: filepath.Clean(area.Cache()), Writable: true},
+		fspolicy.AllowRoot{Path: filepath.Clean(area.Tmp()), Writable: true},
+	)
+	return roots
 }
 
 // writableRootsOutsidePrefix returns the target's writable roots that are not
@@ -255,7 +308,18 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 
 	var startErr error
 	if t.godMode {
-		startErr = cmd.Start()
+		// God Mode FLOOR (amendment §2 D7): the setup child applies the same
+		// floor bash's foreground and background paths do — ResolveLimits
+		// returned it in plan.lim.KernelPolicy; macOS renders it into the
+		// child's Seatbelt profile, Linux applies it to the spawning thread
+		// before the fork. A nil policy (sandbox off, degraded backend,
+		// nogodmode build) reproduces the pre-floor god path exactly.
+		if plan.lim.KernelPolicy != nil {
+			if err := sandbox.ApplyChildKernelPolicy(cmd, plan.lim.KernelPolicy); err != nil {
+				return setupStartAbortResult(plan.area, fmt.Sprintf("sandbox floor failed: %v", err))
+			}
+		}
+		startErr = sandbox.StartLockedWithPolicy(cmd, plan.lim.KernelPolicy)
 	} else {
 		// CRIT-1: the per-turn kernel policy must reach the Linux child —
 		// StartLocked applies only the boot-global domain on the spawning

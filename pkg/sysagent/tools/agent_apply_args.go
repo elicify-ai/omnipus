@@ -18,6 +18,7 @@ import (
 var agentUpdateArgNames = map[string]struct{}{
 	"id": {}, "revision": {}, "name": {}, "description": {}, "soul": {},
 	"model": {}, "provider": {}, "fallback_models": {}, "color": {},
+	"figure": {}, "role": {}, // visual identity (#1303); protection per ADR-090 in ValidateFields
 	"max_tool_iterations": {}, "skills": {},
 	"memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
@@ -43,6 +44,7 @@ func permissionFieldRefusal(args map[string]any) *tools.ToolResult {
 
 var agentCreateArgNames = map[string]struct{}{
 	"name": {}, "description": {}, "soul": {}, "model": {}, "color": {},
+	"figure": {}, "role": {}, // visual identity (#1303); defaults resolved in validate
 	"agent_type": {}, "cli": {}, "cli_path": {}, "provider": {}, "fallback_models": {},
 	"heartbeat": {}, "max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
 	"tool_policy_changes": {}, "memory_enabled": {}, "voice": {},
@@ -109,6 +111,9 @@ func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any, defau
 		a.Color = canon
 		return nil
 	}); err != nil {
+		return err
+	}
+	if err := applyVisualIdentityArgs(a, args); err != nil {
 		return err
 	}
 	if err := applyOptionalString(args, "model", func(v string) error {

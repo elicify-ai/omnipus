@@ -54,7 +54,6 @@ properties:
       - anthropic
       - google
       - ollama
-      - cli
       - bedrock
     description: >
       Primary wire protocol the factory dispatches on (ADR-067 D11). Absent
@@ -151,17 +150,6 @@ properties:
       - cloud
     description: Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
     example: "cloud"
-  cli_kind:
-    type: string
-    enum:
-      - codex
-      - copilot
-    description: Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
-    example: "codex"
-  token_source:
-    type: string
-    description: Optional token source for sign-in HTTP rows (e.g. "codex-auth-json" for openai-chatgpt, X-41).
-    example: "codex-auth-json"
   resize_limits:
     $ref: './CatalogResizeLimits.yaml'
   models:

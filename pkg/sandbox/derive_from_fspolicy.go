@@ -84,6 +84,27 @@ type TurnPolicyInput struct {
 	// WarnFn receives one message per rule the policy computation strips or
 	// skips. May be nil.
 	WarnFn func(msg string, path string)
+
+	// AllowRoots are the turn's allowances inside $OMNIPUS_HOME that the
+	// denial must see BEFORE it is computed (amendment §2 D3/D5, chief
+	// ruling 2026-10-13): the published runtime generations (rx) and the
+	// document runtime prefix (rx) plus the worker's document cache (rw).
+	// turnKernelPolicy resolves rt and doc before calling this function and
+	// fills this slice from them; without it the Linux expansion would
+	// silently drop the additive read+exec rules (the F01 failure) and macOS
+	// would deny a cache the turn owns.
+	//
+	// Each entry becomes one allowed branch of the deny enumeration and one
+	// PathRule with its exact access — never a post-hoc patch on a denial
+	// that already shipped.
+	AllowRoots []fspolicy.AllowRoot
+
+	// Floor renders the GOD MODE floor profile (amendment §2 D7, founder Q1
+	// answer A): filesystem rights open on everything EXCEPT the protected
+	// set, network untouched, no /tmp narrowing. God Mode keeps its meaning
+	// (no approvals, writes anywhere, open network) and never lifts the
+	// internal-file protection. Set only by the God Mode spawn paths.
+	Floor bool
 }
 
 // DeriveKernelPolicy is THE single function that turns an authored per-turn
@@ -153,6 +174,42 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 	policy := DefaultPolicyForModel(
 		in.Model, in.HomePath, allowed, in.AllowedExecPaths, in.WarnFn, in.BindPorts)
 
+	// A5/A6 allowance rules (runtime generations, document prefix, document
+	// cache) are emitted HERE, before the denial is computed, each with its
+	// exact access class — never appended after a denial that already
+	// shipped. They are recorded on AllowedBranches so the Linux grant
+	// expansion grants a branch root with ITS access rather than the parent
+	// rule's (a published generation under the RWX home rule must stay
+	// read+execute). macOS does not read AllowedBranches: its explicit
+	// denies already withhold write from these roots.
+	var allowanceRules []PathRule
+	branchRoots := make([]string, 0, len(in.AllowRoots))
+	for _, root := range in.AllowRoots {
+		clean := filepath.Clean(root.Path)
+		if clean == "" || clean == "." || !filepath.IsAbs(clean) {
+			continue
+		}
+		access := AccessRead | AccessExecute
+		if root.Writable {
+			access = AccessRead | AccessWrite
+		}
+		allowanceRules = append(allowanceRules, PathRule{Path: clean, Access: access})
+		branchRoots = append(branchRoots, clean)
+	}
+	if len(allowanceRules) > 0 {
+		policy.FilesystemRules = append(policy.FilesystemRules, allowanceRules...)
+		policy.AllowedBranches = append(policy.AllowedBranches, allowanceRules...)
+	}
+
+	// boot_epoch* — a minted boot file may not exist when the enumeration
+	// runs; the anchored prefix deny (the same mechanism the secret backups
+	// use) covers it by construction on both platforms.
+	policy.DeniedPathPrefixes = append(policy.DeniedPathPrefixes, fspolicy.HomeGlobPrefixes(in.HomePath)...)
+
+	if in.Floor {
+		return deriveFloorPolicy(authored, in, policy, branchRoots)
+	}
+
 	// Narrow the blanket /tmp WRITE grant for this turn. Reads and exec stay.
 	//
 	// DefaultPolicyForModel grants /tmp read+write+execute as a scratch space.
@@ -172,7 +229,8 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 	// which is precisely the write the authored policy says a turn may not make.
 	//
 	// The boot profile is deliberately left alone: this fixes the divergence
-	// where a divergence can exist, without changing gateway startup.
+	// where a divergence can exist, without changing gateway startup. The God
+	// Mode floor (above) skips the narrowing: God Mode keeps its free writes.
 	policy.FilesystemRules = narrowSharedTmpWrite(policy.FilesystemRules)
 
 	if in.NetworkAutoDeny {
@@ -211,53 +269,54 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 		}
 	}
 
-	// The per-turn secret set, which is where the own-tree exception lands.
-	// DefaultPolicyForModel populates the BOOT set; replacing it here is what
-	// makes agents/ and workspaces/ enforceable at the kernel layer at all,
-	// since they can only be excluded once a work dir exists to compare
-	// against.
-	//
-	// KernelDeniedPathsFor, not DeniedPathsFor: the latter re-admits a whole
-	// per-turn root once the work dir is inside it, which is exact for a
-	// workspace-rooted turn and WIDE OPEN for an agent-home-rooted one. It
-	// re-admits `agents` entirely, so every other agent's home became reachable
-	// at the kernel layer while the app layer denied it by path. That gap was
-	// executed against real children, not reasoned about: `cat` and `echo >` on
-	// another agent's SOUL.md both succeeded from `bash`. KernelDeniedPathsFor
-	// enumerates the siblings so the kernel list reproduces IsCarveOut's
-	// per-path answer (FR-3.3, "carried across EXACTLY").
-	denied, err := fspolicy.KernelDeniedPathsFor(in.HomePath, authored.WorkDir)
-	if err != nil {
+	// The per-turn deny set (amendment §2 D5): one enumeration serving both
+	// backends. Children of $OMNIPUS_HOME outside every allowed branch are
+	// denied — recursively down to the branch roots — with the named
+	// protected inventory always denied on top, and the read-only branch
+	// roots (media, read-only allowances) reported separately as
+	// write-denied. The branch set is the work dir, the mounts, the
+	// operator's allowed paths, the turn's A5/A6 allowances, and media — the
+	// same branches the app layer's HomeGuard allows speak for, minus skills,
+	// whose whole directory stays child-denied (A7, unchanged).
+	branches := kernelBranchSet(authored, in, false)
+
+	denied, writeDenied, enumErr := fspolicy.KernelDenyEnumeration(in.HomePath, authored.WorkDir, branches)
+	if enumErr != nil {
 		// FAIL CLOSED. Without the listing there is no way to tell the caller's
 		// own tree from anyone else's, so fall back to the set with NO own-tree
-		// exception at all: agents/ and workspaces/ denied wholesale.
+		// exception at all: everything the old always-set named is denied
+		// wholesale.
 		//
 		// That locks the agent out of its own working directory, which is
 		// severe — and it is the correct direction. The alternative,
-		// DeniedPathsFor's re-admission, is the WIDER answer: it would hand the
+		// re-admitting roots wholesale, is the WIDER answer: it would hand the
 		// child every agent's home precisely when we have just discovered we
 		// cannot reason about the layout. A loud, obvious breakage beats a
 		// silent widening, and the WarnFn below names the cause.
 		if in.WarnFn != nil {
 			in.WarnFn(
 				"kernel policy: could not enumerate $OMNIPUS_HOME to separate this turn's own tree "+
-					"from other agents'/workspaces'; denying agents/ and workspaces/ wholesale for this "+
-					"turn (the agent will be unable to reach its own home): "+err.Error(),
+					"from other agents'/workspaces'; denying the whole always-set wholesale for this "+
+					"turn (the agent will be unable to reach its own home): "+enumErr.Error(),
 				in.HomePath,
 			)
 		}
 		slog.Error("sandbox: per-turn deny set could not be enumerated; falling back to the strictest set",
 			"home", in.HomePath,
 			"work_dir", authored.WorkDir,
-			"error", err,
-			"effect", "agents/ and workspaces/ denied wholesale for this turn")
+			"error", enumErr,
+			"effect", "the always-set denied wholesale for this turn")
 		denied = fspolicy.SecretPaths(in.HomePath)
+		writeDenied = nil
 	}
 	policy.DeniedPaths = denied
+	policy.WriteDeniedPaths = writeDenied
 
-	// The directory NODES on the chain down to the work dir. Separate from the
-	// list above because they must stay REACHABLE (the work dir is underneath
-	// them) while the entry itself must not be writable.
+	// The directory NODES on the chain down to each allowed branch, plus the
+	// home itself (amendment §2 D5: the home is a denied node — reachable,
+	// never granted). Separate from the list above because they must stay
+	// REACHABLE (the branches live underneath them) while the entries
+	// themselves must not be writable.
 	//
 	// Without this, `mv $OMNIPUS_HOME/agents $OMNIPUS_HOME/agents-old` succeeds
 	// and every per-sibling deny computed above is bypassed in one syscall: the
@@ -267,12 +326,12 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 	// connected protects nothing, which is why KernelDeniedNodesFor is
 	// consumed HERE rather than left as a helper nobody calls.
 	//
-	// No error leg: unlike KernelDeniedPathsFor this needs no directory
-	// listing, so there is nothing that can fail. It is derived from the
-	// work-dir path alone, which means it is also correct in the fail-closed
-	// branch above (where `denied` fell back to the full set) — a node deny on
-	// a root that is already denied wholesale is redundant, never wrong.
-	policy.DeniedNodes = fspolicy.KernelDeniedNodesFor(in.HomePath, authored.WorkDir)
+	// No error leg: unlike the enumeration this needs no directory listing,
+	// so there is nothing that can fail. It is derived from the branch paths
+	// alone, which means it is also correct in the fail-closed branch above
+	// (where `denied` fell back to the full set) — a node deny on a root that
+	// is already denied wholesale is redundant, never wrong.
+	policy.DeniedNodes = fspolicy.KernelDeniedNodesFor(in.HomePath, authored.WorkDir, branchRoots...)
 
 	// PathGrants (ADR-092 D7/FR-036): each is rendered as one additional
 	// PathRule, additive to the WorkDir/AllowedRoots rendering above — the
@@ -352,6 +411,123 @@ func isSharedTmpPath(p string) bool {
 		return true
 	}
 	return false
+}
+
+// deriveFloorPolicy renders the GOD MODE floor (amendment §2 D7, founder Q1
+// answer A): God Mode keeps its documented meaning — no approvals, writes
+// anywhere, network open, no resource caps — and never lifts the protected-
+// internal-file set. Concretely:
+//
+//   - filesystem rights are open on everything EXCEPT the same D2/D3-derived
+//     deny enumeration every ordinary turn gets (one "/" RWX rule whose Linux
+//     expansion grants around the deny set; macOS renders it as blanket
+//     allows under explicit denies — the measured precedence rule does the
+//     rest);
+//   - no write-denied branches: the floor has no read-only allowances of its
+//     own, and "write anywhere" is the mode's documented meaning;
+//   - network is explicitly UNHANDLED (NetworkUnhandled): no egress filter,
+//     no port allow-list — Linux ABI v4+ then declares no net handling at
+//     all instead of deny-all-on-empty, and macOS renders blanket network
+//     allows instead of (deny network*);
+//   - the /tmp write narrowing is skipped (God Mode writes anywhere).
+//
+// The known Linux limit is measured, not assumed (T-L3): Landlock cannot punch
+// a grant out of an allowed parent, so the floor's enumerated ancestor chain
+// leaves a child unable to CREATE a new entry directly in an enumerated
+// ancestor directory. If a common God Mode flow breaks on that, the fix is to
+// document it in docs/security.md — never to weaken the floor.
+func deriveFloorPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput, policy SandboxPolicy, allowanceBranchRoots []string) SandboxPolicy {
+	// The floor's working branch is the turn's WHOLE work tree, not the
+	// exact per-turn WorkDir: a God setup child rooted at an installation
+	// prefix inside the workspace must keep reading (and writing) the
+	// workspace's own files — God Mode A opens everything except the
+	// protected set. Outside a workspace work tree the branch is unchanged.
+	floorWork := fspolicy.WorkTreeRootFor(in.HomePath, authored.WorkDir)
+
+	branches := kernelBranchSet(authored, in, true)
+
+	denied, writeDenied, enumErr := fspolicy.KernelDenyEnumeration(in.HomePath, floorWork, branches)
+	if enumErr != nil {
+		if in.WarnFn != nil {
+			in.WarnFn(
+				"god floor: could not enumerate $OMNIPUS_HOME; falling back to the strictest always-set "+
+					"for this child: "+enumErr.Error(),
+				in.HomePath,
+			)
+		}
+		slog.Error("sandbox: god floor deny set could not be enumerated; falling back to the strictest set",
+			"home", in.HomePath, "work_dir", authored.WorkDir, "error", enumErr)
+		denied = fspolicy.SecretPaths(in.HomePath)
+		writeDenied = nil
+	}
+	policy.DeniedPaths = denied
+	// Read-only branches stay read-only under the floor: God Mode A opens
+	// everything except the PROTECTED set and the amendment's read-only
+	// runtime shapes — a published shared generation is rx for a God child
+	// exactly as for an ordinary one (round-1 chief ruling; the workflow test
+	// chmods the program owner-writable so only the kernel can deny).
+	policy.WriteDeniedPaths = writeDenied
+	policy.DeniedNodes = fspolicy.KernelDeniedNodesFor(in.HomePath, floorWork, allowanceBranchRoots...)
+	// The read-only branches must also survive the LINUX grant expansion: a
+	// branch root is granted with ITS access class instead of the blanket
+	// root rule's, so a generation stays read+execute where Seatbelt's
+	// explicit write deny does the same job.
+	policy.AllowedBranches = policy.AllowedBranches[:0:0]
+	for _, root := range in.AllowRoots {
+		access := AccessRead | AccessExecute
+		if root.Writable {
+			access = AccessRead | AccessWrite
+		}
+		policy.AllowedBranches = append(policy.AllowedBranches, PathRule{
+			Path: filepath.Clean(root.Path), Access: access,
+		})
+	}
+
+	// Free, network-open, uncapped: the floor carries no port rules and the
+	// backend must not apply its default net handling.
+	policy.NetworkUnhandled = true
+	policy.BindPortRules = nil
+	policy.ConnectPortRules = nil
+
+	// Filesystem open on everything except the deny set: one root rule.
+	// Landlock expands it around the denied entries; Seatbelt renders it as
+	// blanket read/write/exec allows that the explicit deny block then beats.
+	policy.FilesystemRules = append(policy.FilesystemRules, PathRule{
+		Path:   "/",
+		Access: AccessRead | AccessWrite | AccessExecute,
+	})
+	return policy
+}
+
+// kernelBranchSet builds the enumeration's branch list: the turn's own work
+// dir and mounts, the operator's allowed paths, the §2 A5/A6 runtime
+// allowances (marked Runtime — internal runtime input never reopens
+// inventory), and the base read-only media branch. floorWiden applies the
+// God floor's work-tree widening to the work dir and mounts (a God setup
+// child rooted at an install prefix keeps its whole workspace open).
+func kernelBranchSet(authored fspolicy.FSPolicy, in TurnPolicyInput, floorWiden bool) []fspolicy.KernelBranch {
+	branches := make([]fspolicy.KernelBranch, 0, len(authored.AllowedRoots)+len(in.AllowedPaths)+len(in.AllowRoots)+2)
+	widen := func(p string) string {
+		if !floorWiden {
+			return p
+		}
+		return fspolicy.WorkTreeRootFor(in.HomePath, p)
+	}
+	for _, root := range authored.AllowedRoots {
+		branches = append(branches, fspolicy.KernelBranch{Path: widen(root), Writable: true})
+	}
+	for _, p := range in.AllowedPaths {
+		branches = append(branches, fspolicy.KernelBranch{Path: p, Writable: true})
+	}
+	for _, root := range in.AllowRoots {
+		branches = append(branches, fspolicy.KernelBranch{
+			Path:     root.Path,
+			Writable: root.Writable,
+			Runtime:  true, // internal runtime input — never reopens inventory
+		})
+	}
+	branches = append(branches, fspolicy.KernelBaseBranches(in.HomePath)...)
+	return branches
 }
 
 // pathGrantIsDenied reports whether a would-be PathGrant rule at cleanPath

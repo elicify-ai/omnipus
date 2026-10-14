@@ -25,21 +25,6 @@ const (
 	UnsupportedWithdrawn     = "withdrawn"
 )
 
-// The cli_kind vocabulary (X-14).
-const (
-	CLIKindCodex   = "codex"
-	CLIKindCopilot = "copilot"
-)
-
-// The token_source vocabulary (X-41). A row names a token_source when its
-// credential is a file some OTHER vendor tool already wrote and Omnipus only
-// reads — never one Omnipus mints, refreshes or owns.
-const (
-	// TokenSourceCodexAuthJSON — the access token in the Codex CLI's own
-	// ~/.codex/auth.json (openai-chatgpt). Read-only to Omnipus (FR-007).
-	TokenSourceCodexAuthJSON = "codex-auth-json"
-)
-
 // --- wire DTOs (the 2.0.0 document as published; never exported) ---
 
 type documentDTO struct {
@@ -76,8 +61,6 @@ type providerDTO struct {
 	UnsupportedReason string              `json:"unsupported_reason"`
 	AuthMethods       []string            `json:"auth_methods"`
 	Aliases           []string            `json:"aliases"`
-	CLIKind           string              `json:"cli_kind"`
-	TokenSource       string              `json:"token_source"`
 	ResizeLimits      *resizeLimitsDTO    `json:"resize_limits"`
 	Models            []modelDTO          `json:"models"`
 	// locality, if published, is ignored: it is derived on load (FR-039).
@@ -299,7 +282,7 @@ func parseAuthMethods(path string, values []string) ([]AuthMethod, error) {
 
 func parseProtocol(s string) (Protocol, bool) {
 	switch p := Protocol(s); p {
-	case ProtocolOpenAICompatible, ProtocolAnthropic, ProtocolGoogle, ProtocolOllama, ProtocolCLI, ProtocolBedrock:
+	case ProtocolOpenAICompatible, ProtocolAnthropic, ProtocolGoogle, ProtocolOllama, ProtocolBedrock:
 		return p, true
 	}
 	return "", false
@@ -343,25 +326,14 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		protocol = p
 	}
 
-	// cli_kind: required iff protocol cli (X-14).
-	if protocol == ProtocolCLI {
-		switch dto.CLIKind {
-		case CLIKindCodex, CLIKindCopilot:
-		default:
-			return Provider{}, invalid(path+".cli_kind", "%q is required on a cli row (codex|copilot)", dto.CLIKind)
-		}
-	} else if dto.CLIKind != "" {
-		return Provider{}, invalid(path+".cli_kind", "only allowed when protocol is cli")
-	}
-
 	// Locality is derived before the URL rule because the rule's exceptions
 	// are "locality = local" (FR-033, FR-039). Published rows are never custom.
 	locality := DeriveLocality(dto.ID, protocol, false, dto.API)
 
-	// api: empty only on unsupported or cli rows (nothing to dial).
+	// api: empty only on unsupported rows (nothing to dial).
 	if dto.API == "" {
-		if tier != TierUnsupported && protocol != ProtocolCLI {
-			return Provider{}, invalid(path+".api", "must be non-empty unless tier is unsupported or protocol is cli")
+		if tier != TierUnsupported {
+			return Provider{}, invalid(path+".api", "must be non-empty unless tier is unsupported")
 		}
 	} else if err := validateAPIURL(path+".api", dto.API, locality); err != nil {
 		return Provider{}, err
@@ -438,8 +410,6 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		UnsupportedReason: dto.UnsupportedReason,
 		AuthMethods:       auth,
 		Aliases:           append([]string(nil), dto.Aliases...),
-		CLIKind:           dto.CLIKind,
-		TokenSource:       dto.TokenSource,
 		Locality:          locality,
 		Regions:           regions,
 		ResizeLimits:      limits,

@@ -58,9 +58,9 @@ import (
 // default 192.0.2.1. A new test that exercises a rate-limited route therefore
 // spends budget the pre-existing tests need, and the package fails on
 // whichever test happens to run past the ceiling — not on the one that spent
-// it. Caught exactly that way on the CI worker: with these tests added,
-// TestSignIn_CopilotDispatchDoesNotLeakToOtherProviders saw 429 instead of
-// 200 (signInStartLimiter is 10/minute).
+// it. Caught exactly that way on the CI worker: with these tests added, a
+// sign-in test sharing the bucket saw 429 instead of 200 (signInStartLimiter
+// is 10/minute).
 //
 // TEST-NET-3 (203.0.113.0/24, RFC 5737) is reserved for documentation and is
 // never routable, so it cannot collide with a real address.
@@ -163,18 +163,18 @@ func TestEnvBearerToken_RefusedOnceAccountBasedAuthExists(t *testing.T) {
 		assert.Zero(t, sessions, "no device-code session may be opened for a refused caller")
 	})
 
-	t.Run("POST /providers/codex-cli/sign-in is 401", func(t *testing.T) {
-		// The cli_login shape reaches no network at all, so this sub-case
-		// distinguishes the gate from any incidental upstream failure: before
-		// the fix it answered 200 with the vendor login command.
+	t.Run("POST /providers/openai-chatgpt/sign-in is 401", func(t *testing.T) {
+		// Authentication refuses BEFORE the handler runs, so this sub-case
+		// cannot reach the vendor even in principle (a passed gate would
+		// answer 200/502 from the device-code start, never 401).
 		api := newOnboardedInstance(t)
 
 		w := viaRealMux(t, api, http.MethodPost,
-			"/api/v1/providers/codex-cli/sign-in", "Bearer stale-env-token")
+			"/api/v1/providers/openai-chatgpt/sign-in", "Bearer stale-env-token")
 
 		require.Equal(t, http.StatusUnauthorized, w.Code, "body=%s", w.Body.String())
-		assert.NotContains(t, w.Body.String(), "codex login",
-			"a refused caller must not be handed the sign-in instructions")
+		assert.NotContains(t, w.Body.String(), "verification",
+			"a refused caller must not be handed sign-in instructions")
 	})
 
 	t.Run("a logged-in browser is not downgraded to anonymous by a stale env token", func(t *testing.T) {
@@ -252,18 +252,20 @@ func TestEnvBearerToken_StillAuthenticatesWithNoAccountsConfigured(t *testing.T)
 			"the documented headless deployment mode must keep working; body=%s", w.Body.String())
 	})
 
-	t.Run("POST /providers/codex-cli/sign-in is served", func(t *testing.T) {
+	t.Run("POST /providers/openai-chatgpt/sign-in is served", func(t *testing.T) {
 		api := newHeadlessInstance(t)
+		state := "pending"
+		vendor := httptest.NewServer(deviceCodeVendorMux(t, &state))
+		defer vendor.Close()
+		withDeviceCodeVendor(t, vendor)
 
 		w := viaRealMux(t, api, http.MethodPost,
-			"/api/v1/providers/codex-cli/sign-in", "Bearer headless-ci-token")
+			"/api/v1/providers/openai-chatgpt/sign-in", "Bearer headless-ci-token")
 
 		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 		var resp gen.SignInStartResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		variant, err := resp.AsSignInStartResponseCliLogin()
-		require.NoError(t, err)
-		assert.Equal(t, "codex login", variant.Command)
+		assert.NotEmpty(t, resp.UserCode)
 	})
 
 	t.Run("a NON-matching token is still refused", func(t *testing.T) {

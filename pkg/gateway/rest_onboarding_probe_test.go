@@ -28,13 +28,9 @@ package gateway
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -121,39 +117,11 @@ func probeTestCatalog(t *testing.T) *catalog.Catalog {
 				"id": "openai-chatgpt", "name": "ChatGPT", "company": "OpenAI",
 				"api": "https://chatgpt.com/backend-api/codex", "protocol": "openai-compatible",
 				"env": [], "tier": "standard",
-				"auth_methods": ["sign_in"], "token_source": "codex-auth-json",
-				"models": [
-					{"id": "gpt-5.4", "name": "GPT 5.4", "tool_call": true,
-					 "context_window": 400000, "max_output_tokens": 8192,
-					 "release_date": "2026-07-01",
-					 "input_modalities": ["text"], "status": "active"}
-				]
-			},
-			{
-				"id": "codex-cli", "name": "Codex CLI", "company": "OpenAI",
-				"api": "https://chatgpt.com/backend-api/codex", "protocol": "cli",
-				"env": [], "tier": "standard", "cli_kind": "codex",
 				"auth_methods": ["sign_in"],
 				"models": [
 					{"id": "gpt-5.4", "name": "GPT 5.4", "tool_call": true,
 					 "context_window": 400000, "max_output_tokens": 8192,
 					 "release_date": "2026-07-01",
-					 "input_modalities": ["text"], "status": "active"},
-					{"id": "gpt-5.3-codex", "name": "GPT 5.3 Codex", "tool_call": true,
-					 "context_window": 400000, "max_output_tokens": 8192,
-					 "release_date": "2026-03-01",
-					 "input_modalities": ["text"], "status": "active"}
-				]
-			},
-			{
-				"id": "github-copilot", "name": "GitHub Copilot", "company": "GitHub",
-				"api": "https://api.githubcopilot.com", "protocol": "cli",
-				"env": [], "tier": "standard", "cli_kind": "copilot",
-				"auth_methods": ["sign_in"],
-				"models": [
-					{"id": "claude-opus-4.7", "name": "Claude Opus 4.7", "tool_call": true,
-					 "context_window": 200000, "max_output_tokens": 8192,
-					 "release_date": "2026-07-15",
 					 "input_modalities": ["text"], "status": "active"}
 				]
 			},
@@ -256,8 +224,8 @@ func newProbeAPI(t *testing.T) *restAPI {
 	t.Helper()
 	// HandleOnboardingProbeProvider's gate now dispatches by
 	// config.EditionAuthMode() (WP5, ADR-0010); every caller of this helper
-	// (including rest_signin_copilot_probe_wording_test.go) means the
-	// PLATFORM-mode gate, so pin it here rather than at every call site.
+	// means the PLATFORM-mode gate, so pin it here rather than at every call
+	// site.
 	withEdition(t, config.EditionHosted)
 	api, _ := newAuthMethodOnboardingAPI(t)
 	cat := probeTestCatalog(t)
@@ -528,7 +496,7 @@ func TestProbeProviderID_Validation(t *testing.T) {
 			// install. No accepted-id list, no catalog id the caller did not
 			// type, in any 4xx body.
 			for _, leak := range []string{
-				"openrouter", "zai-coding-plan", "openai-chatgpt", "codex-cli", "github-copilot",
+				"openrouter", "zai-coding-plan", "openai-chatgpt",
 			} {
 				if strings.Contains(body, `"id":"`+leak+`"`) {
 					continue
@@ -663,73 +631,14 @@ func TestProbeProviderID_NoCatalogAdmitsAnyID(t *testing.T) {
 //     `probed_model` names the model actually exercised — identical in shape to
 //     the api_key path, so the SPA needs one code path for both (FR-029).
 //
-// The mechanism is catalog data plus the device-code ownership rule, never a
-// duplicated route list: `cli_kind` (codex | copilot) spends one subprocess
-// run, while an Omnipus-owned device-code row spends one ordinary completion
-// carrying the token from the encrypted credential store.
-
-// fakeCLIDir returns a fresh directory to drop stub vendor binaries into.
-func fakeCLIDir(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	return dir
-}
-
-// writeFakeCLI drops an executable shell stub named cmd into dir.
-func writeFakeCLI(t *testing.T, dir, cmd, script string) {
-	t.Helper()
-	path := filepath.Join(dir, cmd)
-	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o700))
-}
-
-// onlyPath makes dir the ENTIRE PATH, so a vendor binary that really is
-// installed on the developer's machine cannot answer for a stub.
-func onlyPath(t *testing.T, dir string) {
-	t.Helper()
-	t.Setenv("PATH", dir)
-}
-
-// codexArgsFile is where the fake `codex` records the argv it was called with,
-// so a test can assert which model actually reached the subprocess rather than
-// trusting the response to describe it.
-const codexArgsEnv = "OMNIPUS_TEST_CLI_ARGS"
-
-// signedInCodexHome points CODEX_HOME at a directory holding a fresh
-// auth.json, which is what "signed in" means for the Codex CLI (FR-007: the
-// file is read, never written).
-func signedInCodexHome(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "auth.json"),
-		[]byte(`{"tokens":{"access_token":"saved-codex-token","account_id":"acct-1"}}`), 0o600))
-	t.Setenv(providers.CodexHomeEnvVar, dir)
-	return dir
-}
-
-// signedOutCodexHome points CODEX_HOME at a directory with no auth.json.
-func signedOutCodexHome(t *testing.T) {
-	t.Helper()
-	t.Setenv(providers.CodexHomeEnvVar, t.TempDir())
-}
-
-// installFakeCodex puts a stub `codex` on PATH that records its argv and
-// answers with the one JSONL event CodexCliProvider reads as a completion.
-// It returns the path of the argv record.
-func installFakeCodex(t *testing.T) string {
-	t.Helper()
-	dir := fakeCLIDir(t)
-	args := filepath.Join(dir, "argv.txt")
-	t.Setenv(codexArgsEnv, args)
-	writeFakeCLI(t, dir, "codex",
-		`printf '%s\n' "$*" >> "$`+codexArgsEnv+`"
-echo '{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"ok"}}'
-`)
-	onlyPath(t, dir)
-	return args
-}
+// The mechanism is the device-code ownership rule (providers.OAuthEntryOwner),
+// never a duplicated route list: an Omnipus-owned device-code row spends one
+// ordinary completion carrying the token from the encrypted credential store.
+// The subprocess and auth.json-reuse mechanisms were deleted with the
+// CLI-backed model providers (WU-24, founder 2026-10-14); rows without an
+// owned mechanism get the unavailable refusal, not 'not signed in'.
 
 func testProbeProviderOpenAIEncryptedOAuth(t *testing.T) {
-	signedOutCodexHome(t)
 	var mu sync.Mutex
 	var seenAuth []string
 	var seenModels []string
@@ -776,96 +685,13 @@ func testProbeProviderOpenAIEncryptedOAuth(t *testing.T) {
 
 func TestProbeProvider_SignIn(t *testing.T) {
 	withEdition(t, config.EditionHosted)
-	if runtime.GOOS == "windows" {
-		t.Skip("the fake vendor CLIs are POSIX shell stubs")
-	}
-
-	t.Run("codex-cli signed in probes the chosen model", func(t *testing.T) {
-		signedInCodexHome(t)
-		argv := installFakeCodex(t)
-		api := newProbeAPI(t)
-
-		w := postProbe(t, api, `{"id":"codex-cli","auth":"sign_in","model":"gpt-5.4"}`)
-
-		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-		var resp gen.ProbeProviderResponse
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.True(t, resp.Success)
-		assert.Nil(t, resp.Error)
-		assert.Nil(t, resp.Validation, "a valid outcome carries no validation object")
-		require.NotNil(t, resp.ProbedModel)
-		assert.Equal(t, "gpt-5.4", *resp.ProbedModel)
-
-		// The pick reached the subprocess — a probed_model the CLI never saw
-		// would be a green answer about a different model (FR-029).
-		recorded, err := os.ReadFile(argv)
-		require.NoError(t, err, "the sign-in probe must actually run one completion")
-		assert.Contains(t, string(recorded), "-m gpt-5.4")
-		assert.Equal(t, 1, strings.Count(string(recorded), "\n"),
-			"a sign-in probe spends exactly ONE completion")
-	})
-
-	t.Run("codex-cli signed in with no model uses the first Recommended", func(t *testing.T) {
-		signedInCodexHome(t)
-		installFakeCodex(t)
-		api := newProbeAPI(t)
-
-		w := postProbe(t, api, `{"id":"codex-cli","auth":"sign_in"}`)
-
-		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-		var resp gen.ProbeProviderResponse
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		require.NotNil(t, resp.ProbedModel)
-		// Recommended order is release_date desc: gpt-5.4 (2026-07-01) beats
-		// gpt-5.3-codex (2026-03-01).
-		assert.Equal(t, "gpt-5.4", *resp.ProbedModel)
-	})
-
-	t.Run("codex-cli with no saved login is 400 on auth and spends nothing", func(t *testing.T) {
-		signedOutCodexHome(t)
-		argv := installFakeCodex(t)
-		api := newProbeAPI(t)
-
-		w := postProbe(t, api, `{"id":"codex-cli","auth":"sign_in","model":"gpt-5.4"}`)
-
-		require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
-		body := errBody(t, w)
-		assert.Equal(t, "auth", body["field"])
-		assert.Equal(t, "not signed in", body["error"])
-
-		_, err := os.Stat(argv)
-		assert.True(t, errors.Is(err, os.ErrNotExist), "a probe with no login must not spend a subprocess run")
-	})
-
-	t.Run("codex-cli signed in but the vendor rejects the model is success=false", func(t *testing.T) {
-		signedInCodexHome(t)
-		dir := fakeCLIDir(t)
-		writeFakeCLI(t, dir, "codex", `echo "stream error: model gpt-5.4 is not available" >&2
-exit 1
-`)
-		onlyPath(t, dir)
-		api := newProbeAPI(t)
-
-		w := postProbe(t, api, `{"id":"codex-cli","auth":"sign_in","model":"gpt-5.4"}`)
-
-		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-		var resp gen.ProbeProviderResponse
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.False(t, resp.Success,
-			"a login that exists plus a vendor refusal must keep Finish disabled (FR-029)")
-		require.NotNil(t, resp.ProbedModel)
-		assert.Equal(t, "gpt-5.4", *resp.ProbedModel)
-		require.NotNil(t, resp.Error)
-		assert.Contains(t, *resp.Error, "gpt-5.4")
-		// SEC-16: the vendor's raw stderr is a server-debug detail only.
-		assert.NotContains(t, w.Body.String(), "stream error")
-	})
+	// WU-24 CHECK F6: all remaining cases use HTTP and the encrypted store;
+	// the removed shell fixtures no longer justify skipping Windows.
 
 	t.Run("openai-chatgpt with an encrypted OAuth entry probes with the saved token",
 		testProbeProviderOpenAIEncryptedOAuth)
 
 	t.Run("openai-chatgpt with no saved login is 400 on auth", func(t *testing.T) {
-		signedOutCodexHome(t)
 		up := startProbeUpstream(t)
 		api := newProbeAPI(t)
 		store := credentials.NewStore(api.credentialsStorePath())
@@ -885,87 +711,6 @@ exit 1
 			"a probe with no saved token must not call the upstream")
 	})
 
-	t.Run("github-copilot signed in probes the chosen model", func(t *testing.T) {
-		dir := fakeCLIDir(t)
-		args := filepath.Join(dir, "argv.txt")
-		t.Setenv(codexArgsEnv, args)
-		writeFakeCLI(t, dir, "copilot",
-			`printf '%s\n' "$*" >> "$`+codexArgsEnv+`"
-echo ok
-`)
-		onlyPath(t, dir)
-		api := newProbeAPI(t)
-
-		w := postProbe(t, api, `{"id":"github-copilot","auth":"sign_in","model":"claude-opus-4.7"}`)
-
-		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-		var resp gen.ProbeProviderResponse
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.True(t, resp.Success)
-		require.NotNil(t, resp.ProbedModel)
-		assert.Equal(t, "claude-opus-4.7", *resp.ProbedModel)
-
-		recorded, err := os.ReadFile(args)
-		require.NoError(t, err)
-		assert.Contains(t, string(recorded), "--model claude-opus-4.7")
-	})
-
-	t.Run("github-copilot with no login is 400 on auth", func(t *testing.T) {
-		dir := fakeCLIDir(t)
-		// The verified no-credential message of @github/copilot 1.0.80.
-		writeFakeCLI(t, dir, "copilot", `echo "Error: No authentication information found." >&2
-exit 1
-`)
-		onlyPath(t, dir)
-		api := newProbeAPI(t)
-
-		w := postProbe(t, api, `{"id":"github-copilot","auth":"sign_in","model":"claude-opus-4.7"}`)
-
-		require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
-		body := errBody(t, w)
-		assert.Equal(t, "auth", body["field"])
-		assert.Equal(t, "not signed in", body["error"])
-	})
-
-	t.Run("github-copilot signed in but the model is refused is success=false, not 'not signed in'",
-		func(t *testing.T) {
-			dir := fakeCLIDir(t)
-			// An installed CLI failing with a message that matches NO
-			// sign-in marker: the login is not what is wrong.
-			writeFakeCLI(t, dir, "copilot", `echo "model claude-opus-4.7 is not enabled for your plan" >&2
-exit 1
-`)
-			onlyPath(t, dir)
-			api := newProbeAPI(t)
-
-			w := postProbe(t, api, `{"id":"github-copilot","auth":"sign_in","model":"claude-opus-4.7"}`)
-
-			require.Equal(t, http.StatusOK, w.Code,
-				"an unrecognised CLI failure must not be reported as a missing login: body=%s",
-				w.Body.String())
-			var resp gen.ProbeProviderResponse
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-			assert.False(t, resp.Success)
-			require.NotNil(t, resp.ProbedModel)
-			assert.Equal(t, "claude-opus-4.7", *resp.ProbedModel)
-			require.NotNil(t, resp.Error)
-			assert.NotContains(t, *resp.Error, "not signed in",
-				"never send the operator to re-authenticate over a model problem")
-		})
-
-	t.Run("github-copilot with no CLI on this machine names that, not the account", func(t *testing.T) {
-		onlyPath(t, fakeCLIDir(t))
-		api := newProbeAPI(t)
-
-		w := postProbe(t, api, `{"id":"github-copilot","auth":"sign_in"}`)
-
-		require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
-		body := errBody(t, w)
-		assert.Equal(t, "auth", body["field"])
-		assert.Equal(t, providers.CopilotCLIMissingHint, body["error"],
-			"a missing binary is a machine problem, never 'you are not signed in'")
-	})
-
 	t.Run("a key-only provider refuses sign_in before any mechanism is chosen", func(t *testing.T) {
 		api := newProbeAPI(t)
 
@@ -979,9 +724,8 @@ exit 1
 
 	t.Run("a sign-in row with no mechanism says so, and never guesses 'not signed in'", func(t *testing.T) {
 		api := newProbeAPI(t)
-		// A row that declares sign_in but carries neither cli_kind nor
-		// token_source — the device-code shape, whose stored-token path is a
-		// separate, unlanded feature.
+		// A row that declares sign_in but is no first-party OAuth owner —
+		// no stored-token mechanism this build exercises.
 		doc := `{
 			"schema_version": "2.0.0",
 			"version": "v2026.8.23",

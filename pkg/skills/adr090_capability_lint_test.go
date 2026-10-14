@@ -391,7 +391,7 @@ func TestADR090_CapabilityLint_InvocationsPermittedByEffectiveSeededPolicy(t *te
 	// not read back from the seed): if SeedConfig ever stops assigning these,
 	// the shared-skill rule silently checks nothing for them, and these fail.
 	for skill, want := range map[string][]string{
-		"interview": {"admin", "ava", "jim", "mia"},
+		"interview": {"jim", "mia", "omnipus"},
 		"plan":      {"jim", "planner", "plansupervisor"},
 		"verify":    {"judge"},
 	} {

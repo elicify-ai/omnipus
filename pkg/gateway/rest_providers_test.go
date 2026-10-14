@@ -143,17 +143,9 @@ func TestHandleProvidersGET(t *testing.T) {
 
 // --- Issue #351: Provider status = Connected iff key resolves ---
 
-// TestHandleProviders_NoKey_IsDisconnected verifies that a provider listed in
-// config with no resolvable API key reports status "disconnected".
-//
-// BDD (US-2 / AC1):
-//
-//	Given a provider in config whose api_key_ref resolves empty (no cred store, no env var)
-//	When GET /api/v1/providers is called
-//	Then the provider is shown as "disconnected" (not "connected").
-//
-// Traces to: FR-104, US-2/AC1, SC-103, test dataset row: no-key → Disconnected.
-func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
+// #1277 founder decision 2026-10-12: a configured missing secret is a
+// ref-naming error, not the ordinary no-key/no-ref disconnected state.
+func TestHandleProviders_ConfiguredMissingRef_IsError(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	t.Setenv("OMNIPUS_MASTER_KEY", "")
 	t.Setenv("OMNIPUS_KEY_FILE", "")
@@ -221,12 +213,16 @@ func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
 	for _, p := range providers {
 		if id, _ := p["id"].(string); id == "anthropic" {
 			found = true
-			assert.Equal(t, "disconnected", p["status"],
-				"provider with no resolvable key must be 'disconnected' (FR-104)")
+			assert.Equal(t, "error", p["status"],
+				"#1277: a configured missing reference must be an error, not disconnected")
+			errMsg, ok := p["error"].(string)
+			require.True(t, ok, "the provider error must be a user-visible string")
+			assert.Contains(t, errMsg, "ANTHROPIC_API_KEY",
+				"#1277: the error must name the configured missing secret")
 			break
 		}
 	}
-	assert.True(t, found, "anthropic provider must appear in the list even when disconnected")
+	assert.True(t, found, "anthropic provider must remain listed even when its configured secret is missing")
 }
 
 // TestHandleProviders_EnvVarKey_IsConnected verifies that a provider with a key
@@ -247,6 +243,10 @@ func TestHandleProviders_EnvVarKey_IsConnected(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-test-key-abc123")
 
 	tmpDir := t.TempDir()
+	// A boot-injected key has a real store entry behind it. Keep the healthy
+	// connected oracle; env-only stale-ref behaviour is covered by #1277 RED.
+	credStore := newUnlockedStore(t, tmpDir)
+	require.NoError(t, credStore.Set("OPENROUTER_API_KEY", "sk-or-test-key-abc123"))
 	cfgData := map[string]any{
 		"agents": map[string]any{
 			"defaults": map[string]any{"model_name": "gpt-4o"},
@@ -286,6 +286,7 @@ func TestHandleProviders_EnvVarKey_IsConnected(t *testing.T) {
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
 		taskStore:     task.New(tmpDir + "/tasks"),
+		credStore:     credStore,
 	}
 
 	w := httptest.NewRecorder()
@@ -324,7 +325,7 @@ func TestHandleProviders_EnvVarKey_IsConnected(t *testing.T) {
 func TestHandleProviders_CredStoreRef_EmptyRef_IsDisconnected(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	t.Setenv("OMNIPUS_KEY_FILE", "")
-	// Use a fixed master key so the cred store opens but has no matching entry.
+	// Use a fixed master key so the cred store opens for the present empty entry.
 	masterKey := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
 	t.Setenv("OMNIPUS_MASTER_KEY", masterKey)
 	// Ensure the env var for the ref is not set.
@@ -364,10 +365,12 @@ func TestHandleProviders_CredStoreRef_EmptyRef_IsDisconnected(t *testing.T) {
 	}
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	// Wire a real cred store (unlocked via OMNIPUS_MASTER_KEY) with no matching entry.
+	// Wire a real cred store (unlocked via OMNIPUS_MASTER_KEY) with an empty entry.
 	credStore := credentials.NewStore(tmpDir + "/credentials.json")
 	require.NoError(t, credentials.Unlock(credStore))
-	// Do NOT set "GEMINI_API_KEY" in the store — simulates a ref that resolves empty.
+	// A present entry containing "" is distinct from a missing ref (#1277).
+	// This test's intended empty-value case must really exist in the store.
+	require.NoError(t, credStore.Set("GEMINI_API_KEY", ""))
 	api := &restAPI{
 		agentLoop:     al,
 		allowedOrigin: "http://localhost:3000",

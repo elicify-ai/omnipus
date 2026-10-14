@@ -41,6 +41,16 @@ Stop that process, or set another port in `~/.omnipus/config.json` and start aga
 
 The port is read at startup; a running gateway does not move its listener.
 
+## A connection shows a credential error (degraded)
+
+A connector, provider, mailbox, MCP server, or assistant-connector whose stored secret is missing, was deleted, or can no longer be read is shown as degraded — the row's or card's error names the exact credential reference to fix, for example `secret reference MY_BOT_TOKEN is missing from the credential store`. Only that one integration is down: the gateway still starts, still applies your settings changes, and every other connection keeps working. The reason shows where the integration lives: a chat-channel or mailbox row on the **Connectors** screen shows it under its status badge, a provider's row under **Settings → Providers** shows it as the row's error line, and an MCP server's card under **Skills & Tools → MCP Servers** shows it under the status badge. **Doctor** (Settings → Security, Security health) flags degraded chat channels only; for providers, mailboxes and MCP servers, read the reason on their own row or card.
+
+To fix it, re-enter the credential where the row points you — **Connectors** for a chat channel or mailbox, **Settings → Providers** for a model key, the Credential Vault for a raw entry — and save. The connection recovers on the next settings save or restart.
+
+A failure of the whole Credential Vault is different: a locked store, an unreadable or damaged file, or a master key that cannot decrypt any entry stops startup and rejects reloads and settings refreshes. Omnipus checks the store itself even when only MCP servers use its secrets, or no integration currently references them. A rejected update keeps the previous live configuration; a settings write may already have saved the proposed configuration to disk. Fix the store or supply its original master key before retrying. See [Saving a secret fails with "credential store locked"](#saving-a-secret-fails-with-credential-store-locked) below.
+
+A fresh install with no credential-store file and no secret references can still start normally. One missing secret, or one entry that fails authentication while another stored entry can be decrypted, remains an integration-specific error rather than a whole-vault failure.
+
 ## Every request returns 401 Unauthorized
 
 The web app signs you in once, then rides a session cookie. Scripts must present a Bearer token belonging to a configured account or the gateway's CLI token, or match `OMNIPUS_BEARER_TOKEN`.
@@ -107,6 +117,8 @@ Cron's `failed to save store`, `failed to persist skip-reschedule` and `failed t
 This is an internal retry notice, not a data-loss event: relief changes the model's view, not the admitted archive text. It keeps the original user message and media, instructions, call/result structure and unconsumed steering. If those required parts still do not fit, Omnipus returns the last real provider rejection when no further reduction is possible or the retry limit is reached. It does not stop merely because a local size estimate says the immutable remainder is too large.
 
 A storage or projection error is different. If Omnipus cannot save the window change, it stops with that genuine error instead of sending a request that disagrees with the saved state. See [memory](memory.md#how-long-conversations-stay-in-view) for what can leave the live window and what an aborted turn rolls back.
+
+The same rule now covers the agent's own reply. If Omnipus cannot save the reply (or another piece of the conversation, such as a tool result or a steering instruction) to disk, the chat shows the fixed notice **"Sorry, I couldn't save your message — please try again later."** and the turn ends as failed rather than being reported as answered. Nothing pretends to have been saved: the reply is missing from the conversation history after a reload, and the stored error re-appears when the chat is reopened. Resolve the disk, permissions or path problem, then send the request again. Operator logs carry the real storage error with the session key; in shutdown and boot-recovery reports a session whose notice could not be written is reported as failed, never as written.
 
 Turn on **Settings → Chat → Verbose chat** to see this notice and other internal-retry details; it does not appear in normal chat. Live chat, reopened history, and conversation replay all use the same Verbose chat setting to show or hide it.
 

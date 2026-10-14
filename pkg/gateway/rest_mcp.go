@@ -72,19 +72,37 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 // mcpLiveStatus maps AgentLoop.MCPServerStatus's live status string
 // ("connected"|"error"|"disconnected") to the generated McpServerStatus enum,
 // alongside the live tool_count (entries this server has in the central MCP
-// registry; 0 when unset or not connected). addMCPServer, patchMCPServer, and
-// listMCPServers all derive status/tool_count through this single path so the
-// three endpoints never disagree on what "connected" means.
-func (a *restAPI) mcpLiveStatus(name string) (gen.McpServerStatus, int) {
-	status, toolCount, _ := a.agentLoop.MCPServerStatus(name)
+// registry; 0 when unset or not connected) and the ref-naming error reason
+// (#1277) surfaced through McpServer.status_reason when the status is error.
+// addMCPServer, patchMCPServer, and listMCPServers all derive
+// status/tool_count/reason through this single path so the three endpoints
+// never disagree on what "connected" — or "error, because which secret" —
+// means.
+func (a *restAPI) mcpLiveStatus(name string) (gen.McpServerStatus, int, string) {
+	status, toolCount, reason := a.agentLoop.MCPServerStatus(name)
 	switch status {
 	case "connected":
-		return gen.McpServerStatusConnected, toolCount
+		return gen.McpServerStatusConnected, toolCount, ""
 	case "error":
-		return gen.McpServerStatusError, toolCount
+		return gen.McpServerStatusError, toolCount, reason
 	default:
-		return gen.McpServerStatusDisconnected, toolCount
+		return gen.McpServerStatusDisconnected, toolCount, ""
 	}
+}
+
+// mcpStatusReason builds the optional status_reason pointer: present only for
+// an error status, never empty, and capped to the contract's 1000-character
+// bound (WU-0a McpServer.status_reason maxLength).
+func mcpStatusReason(status gen.McpServerStatus, reason string) *string {
+	if status != gen.McpServerStatusError || strings.TrimSpace(reason) == "" {
+		return nil
+	}
+	if runes := []rune(reason); len(runes) > 1000 {
+		truncated := string(runes[:1000])
+		return &truncated
+	}
+	r := reason
+	return &r
 }
 
 // listMCPServers reads configured MCP servers from config and returns them as
@@ -121,7 +139,7 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 		// these are the SAME registry instance (gateway.go wires both to
 		// centralMCPReg), but keeping this path independent matches the existing
 		// GET /mcp-servers/{id}/tools contract, which also reads a.mcpRegistry.
-		status, _ := a.mcpLiveStatus(name)
+		status, _, reason := a.mcpLiveStatus(name)
 		toolCount := 0
 		var toolNames []string
 		if a.mcpRegistry != nil {
@@ -134,12 +152,13 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 		}
 
 		entry := gen.McpServer{
-			Id:        name,
-			Name:      name,
-			Transport: transport,
-			Status:    status,
-			ToolCount: toolCount,
-			Enabled:   &enabled,
+			Id:           name,
+			Name:         name,
+			Transport:    transport,
+			Status:       status,
+			StatusReason: mcpStatusReason(status, reason),
+			ToolCount:    toolCount,
+			Enabled:      &enabled,
 		}
 		if len(toolNames) > 0 {
 			sort.Strings(toolNames)
@@ -415,13 +434,14 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 	default:
 		respTransport = gen.McpServerTransportStdio
 	}
-	status, toolCount := a.mcpLiveStatus(req.Name)
+	status, toolCount, reason := a.mcpLiveStatus(req.Name)
 	resp := gen.McpServer{
-		Id:        req.Name,
-		Name:      req.Name,
-		Transport: respTransport,
-		Status:    status,
-		ToolCount: toolCount,
+		Id:           req.Name,
+		Name:         req.Name,
+		Transport:    respTransport,
+		Status:       status,
+		StatusReason: mcpStatusReason(status, reason),
+		ToolCount:    toolCount,
 	}
 	jsonCreated(w, resp)
 }
@@ -858,14 +878,15 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		transport = gen.McpServerTransportHttp
 	}
 	enabled := updatedEntry.Enabled
-	status, toolCount := a.mcpLiveStatus(id)
+	status, toolCount, reason := a.mcpLiveStatus(id)
 	resp := gen.McpServer{
-		Id:        id,
-		Name:      id,
-		Transport: transport,
-		Status:    status,
-		ToolCount: toolCount,
-		Enabled:   &enabled,
+		Id:           id,
+		Name:         id,
+		Transport:    transport,
+		Status:       status,
+		StatusReason: mcpStatusReason(status, reason),
+		ToolCount:    toolCount,
+		Enabled:      &enabled,
 	}
 	jsonOK(w, resp)
 }

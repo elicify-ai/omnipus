@@ -325,7 +325,9 @@ NODE_SCRIPT
 # OnboardingCompleteRequest.provider oneOf — the union is NESTED in a
 # property there, so the wrapper object itself needs the satisfies form too;
 # extended again 2026-08-23 T068-34 for the ADR-068 §8b SignInStartResponse
-# oneOf (cli_login | device_code); extended 2026-09-11 for the
+# oneOf (whose vendor-CLI variant WU-24 later deleted with the CLI-backed
+# model providers, collapsing the union to the device-code shape);
+# extended 2026-09-11 for the
 # RecordWriteRequest create|update split — the ADR-034 pattern again, this
 # time discriminated on `mode` rather than `type`).
 # The template pins every schema to its emitted TS type via
@@ -335,7 +337,7 @@ NODE_SCRIPT
 # options collapse its inference). Rewrite the union and its option schemas
 # to the `satisfies` form — the identical compile-time drift pin against the
 # emitted TS type, without widening the declared type.
-UNION_SATISFIES_SCHEMAS=${UNION_SATISFIES_SCHEMAS:-"AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p AgentCreateRequest SessionMessageProgress SessionMessageCheckpoint SessionMessageArtifact SessionMessageBlocker SessionMessageQuestion SessionMessageError SessionMessageHandback SessionMessageRevisionEntry SessionMessageGoalStatus SessionMessageSteer SessionMessageRespond SessionMessage DelegateRunAction DelegateStatusAction DelegateInboxAction DelegateInboxAckAction DelegateSteerAction DelegateRespondAction DelegateStopAllAction DelegateClearGoalAction DelegateResumeAction DelegateRedirectAction DelegatePeekAction DelegateActionRequest MessageParentProgress MessageParentCheckpoint MessageParentArtifact MessageParentBlocker MessageParentQuestion MessageParentHandback MessageParentRequest OnboardingProviderApiKey OnboardingProviderSignIn OnboardingCompleteRequest SignInStartResponseCliLogin SignInStartResponseDeviceCode SignInStartResponse RecordWriteRequestCreate RecordWriteRequestUpdate RecordWriteRequest"}
+UNION_SATISFIES_SCHEMAS=${UNION_SATISFIES_SCHEMAS:-"AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p AgentCreateRequest SessionMessageProgress SessionMessageCheckpoint SessionMessageArtifact SessionMessageBlocker SessionMessageQuestion SessionMessageError SessionMessageHandback SessionMessageRevisionEntry SessionMessageGoalStatus SessionMessageSteer SessionMessageRespond SessionMessage DelegateRunAction DelegateStatusAction DelegateInboxAction DelegateInboxAckAction DelegateSteerAction DelegateRespondAction DelegateStopAllAction DelegateClearGoalAction DelegateResumeAction DelegateRedirectAction DelegatePeekAction DelegateActionRequest MessageParentProgress MessageParentCheckpoint MessageParentArtifact MessageParentBlocker MessageParentQuestion MessageParentHandback MessageParentRequest OnboardingProviderApiKey OnboardingProviderSignIn OnboardingCompleteRequest SignInStartResponseDeviceCode SignInStartResponse RecordWriteRequestCreate RecordWriteRequestUpdate RecordWriteRequest"}
 node - "$STRICT_RAW" $UNION_SATISFIES_SCHEMAS <<'NODE_SCRIPT'
 const fs = require("fs");
 const [path, ...names] = process.argv.slice(2);

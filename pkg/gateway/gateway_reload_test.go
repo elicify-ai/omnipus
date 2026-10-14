@@ -5,7 +5,6 @@ package gateway
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -123,115 +122,29 @@ func TestExecuteReload_MarksDegradedOnCredInjectionFailure(t *testing.T) {
 	}
 }
 
-// TestExecuteReload_RejectsOnCorruptedEnabledChannelCredential verifies that
-// executeReload rejects (marks degraded, does NOT apply) a reload when an
-// ENABLED channel's credential ref is present in the store but fails to
-// decrypt — a corrupted store entry / wrong-master-key scenario, distinct
-// from (and worse than) a simple missing ref. This pins the
-// enabledRefFromBundleError escalation branch in executeReload's channel
-// credential re-resolution step (the reload-side counterpart to
-// TestGatewayBoot_CorruptedCredentialForEnabledChannelFailsFast in
-// boot_order_test.go, which covers the equivalent bootCredentials path).
-//
-// Providers is left empty so credentials.InjectFromConfig (the provider-key
-// step immediately before the channel-credential step) trivially succeeds —
-// this test isolates the channel-credential rejection branch specifically.
-func TestExecuteReload_RejectsOnCorruptedEnabledChannelCredential(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
-
-	credsPath := filepath.Join(tmpDir, "credentials.json")
-	writeCorruptedCredentialsFile(t, credsPath, "TELEGRAM_TOKEN")
-
-	credStore := credentials.NewStore(credsPath)
-	if err := credentials.Unlock(credStore); err != nil {
-		t.Fatalf("credentials.Unlock: %v", err)
-	}
-
-	msgBus := bus.NewMessageBus()
-
-	baseCfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:         tmpDir,
-				DefaultModel: config.DefaultModel{Model: "test-model"},
-				MaxTokens:    4096,
-			},
-		},
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 19987},
-	}
-
-	p := providers.LLMProvider(&restMockProvider{})
-	al := mustAgentLoop(t, baseCfg, msgBus, p)
-
-	// The new config being reloaded to: an ENABLED telegram channel pointing
-	// at the corrupted credential ref.
-	newCfg := &config.Config{
-		Agents:  baseCfg.Agents,
-		Gateway: baseCfg.Gateway,
-		Channels: map[string]config.ChannelInstanceConfig{
-			"telegram": {
-				Enabled:  true,
-				TokenRef: "TELEGRAM_TOKEN",
-			},
-		},
-	}
-
-	sentinelCM, err := channels.NewManager(baseCfg, credentials.SecretBundle{}, msgBus, nil)
-	if err != nil {
-		t.Fatalf("channels.NewManager: %v", err)
-	}
-	sentinelBundle := credentials.SecretBundle{"sentinel": "value"}
-
-	svc := &services{
-		ChannelManager: sentinelCM,
-		bundle:         sentinelBundle,
-		credStore:      credStore,
-	}
-	// Simulate the single-flight slot being held by the caller. executeReload no
-	// longer releases it — runReloadCycle owns the release, so that it can run a
-	// coalesced follow-up reload before letting triggerReloadAndWait pollers go.
-	svc.reloadInFlight = true
-
-	err = executeReload(context.Background(), al, newCfg, &p, svc, msgBus, true)
-	if err == nil {
-		t.Fatal(
-			"expected executeReload to reject the reload when an enabled channel's credential fails to decrypt, got nil error",
-		)
-	}
-	if !strings.Contains(err.Error(), "TELEGRAM_TOKEN") {
-		t.Errorf("reload error must mention the failing ref TELEGRAM_TOKEN; got: %q", err.Error())
-	}
-	if !strings.Contains(err.Error(), "failed to resolve") {
-		t.Errorf(
-			"reload error must indicate the ref failed to resolve (decrypt failure), not merely be missing; got: %q",
-			err.Error(),
-		)
-	}
-
-	// Assert degraded state is set — this is how an operator discovers the
-	// rejection via GET /health (SetDegradedFunc surfaces reloadDegraded/
-	// reloadError as a 503 "reason").
-	svc.reloadMu.Lock()
-	isDegraded := svc.reloadDegraded
-	reloadErr := svc.reloadError
-	svc.reloadMu.Unlock()
-
-	if !isDegraded {
-		t.Error("expected reloadDegraded == true after rejected reload")
-	}
-	if reloadErr == nil {
-		t.Error("expected reloadError != nil after rejected reload")
-	}
-
-	// Assert rollback: the previous ChannelManager/bundle must be restored,
-	// not replaced by anything derived from the rejected newCfg.
-	if svc.ChannelManager != sentinelCM {
-		t.Error("expected ChannelManager to be rolled back to sentinel after rejected reload")
-	}
-	if svc.bundle["sentinel"] != "value" {
-		t.Errorf("expected bundle to be rolled back; got %v", svc.bundle)
-	}
+// #1277 founder decision 2026-10-12: a single unreadable channel secret never rejects reload.
+func TestExecuteReload_UnreadableChannelCredentialAppliesWithScopedDegradation(t *testing.T) {
+	f := newIssue1277Fixture(t)
+	require.NoError(t, f.store.Set(issue1277BrokenRef, "qa1277-before-tamper"))
+	cfg, bundle, _ := f.boot(t)
+	api, svc, msgBus, provider := f.startRuntime(t, cfg, bundle)
+	issue1277TamperSingleEntry(t, f, issue1277BrokenRef)
+	value, err := f.store.Get(issue1277ProviderRef)
+	require.NoError(t, err, "positive control: this is not whole-store failure")
+	require.Equal(t, issue1277ProviderValue, value)
+	f.cfg.Gateway.LogLevel = "debug"
+	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))
+	candidate, err := config.LoadConfigWithStore(f.configPath, f.store)
+	require.NoError(t, err)
+	require.NoError(t, executeReload(context.Background(), api.agentLoop, candidate, &provider, svc, msgBus, false),
+		"one unreadable channel entry must apply reload with only that connection degraded")
+	degraded, reason := svc.reloadDegradedStatus()
+	require.False(t, degraded)
+	require.Empty(t, reason)
+	require.Equal(t, "debug", api.agentLoop.GetConfig().Gateway.LogLevel)
+	require.NotContains(t, svc.bundle, issue1277BrokenRef)
+	issue1277RequireDegradedChannel(t, api, svc.ChannelManager)
+	issue1277RequireHealthyPeer(t, f, api, svc.ChannelManager)
 }
 
 // TestRestartServices_LoopAndTaskTriggerStorePaths_MatchBootHomePath boots

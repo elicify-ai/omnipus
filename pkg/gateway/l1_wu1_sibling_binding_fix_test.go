@@ -44,8 +44,8 @@ func TestL1WU1ChannelBindingSave_SiblingConfigReadbackAndInboundStayIsolated(t *
 	}
 	diskInstance := func(id string) json.RawMessage {
 		t.Helper()
-		raw, err := os.ReadFile(api.configPath())
-		require.NoError(t, err)
+		raw, readErr := os.ReadFile(api.configPath())
+		require.NoError(t, readErr)
 		var cfg map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal(raw, &cfg))
 		var instances map[string]json.RawMessage

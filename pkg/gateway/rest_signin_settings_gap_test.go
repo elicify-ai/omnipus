@@ -9,10 +9,9 @@
 //   - GAP 1: GET /api/v1/providers never wired a configured sign_in row's
 //     real status/account_label to T068-14's sign-in status computation —
 //     it always fell back to the key-derived "disconnected". The fix must
-//     use ONLY cheap, local checks (no vendor fan-out) — computing
-//     github-copilot's real sign-in state costs a PREMIUM vendor request,
-//     and that cost belongs exclusively to the explicit "Check sign-in"
-//     action (rest_signin_copilot.go), never a background list render.
+//     use ONLY cheap, local checks (no vendor fan-out, no credential-store
+//     refresh) — that cost belongs exclusively to the explicit sign-in
+//     status poll, never a background list render.
 //   - GAP 2: PUT /api/v1/providers/{id} never read req.AuthMethod at all,
 //     so a brand-new sign_in-only row (no api_key) hard-rejected with 422
 //     "api_key is required" — a signed-in ChatGPT session could never
@@ -24,7 +23,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -108,45 +106,6 @@ func TestListProviders_NoStoredEntry_StaysDisconnected(t *testing.T) {
 	require.Len(t, provs, 1, "got %+v", provs)
 	assert.Equal(t, gen.ProviderStatusDisconnected, provs[0].Status)
 	assert.Nil(t, provs[0].AccountLabel)
-}
-
-// TestListProviders_NoCopilotVendorFanOut is the CRITICAL DESIGN CONSTRAINT
-// assertion: computing github-copilot's real sign-in state runs the vendor
-// CLI and spends one premium request against the operator's subscription
-// (rest_signin_copilot.go's handleCopilotSignInStatus). GET /providers must
-// NEVER pay that cost for a background list render. A fake `copilot` binary
-// on PATH records every run in a tally file; the test fails if the GET left
-// any run behind.
-//
-// The fake used to record its run with `touch`, which is not a bash built-in.
-// With PATH narrowed to the fake's own directory `touch` was "command not
-// found", so the sentinel was never written EVEN WHEN the CLI ran, and this
-// guard could not fail. putCountingCopilotOnPath writes its tally with a
-// built-in and proves, before this test relies on it, that one run of the
-// fake records exactly one invocation.
-func TestListProviders_NoCopilotVendorFanOut(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake CLI uses a #!/bin/bash shebang with no Windows equivalent (see #113)")
-	}
-	api := newTestRestAPIWithHome(t)
-
-	tally := putCountingCopilotOnPath(t, "ok", "", 0)
-
-	cfg := api.agentLoop.GetConfig()
-	cfg.Providers = append(cfg.Providers, &config.ModelConfig{
-		Provider: "github-copilot", Model: "default", AuthMethod: config.AuthMethodSignIn,
-	})
-
-	provs := getProviders(t, api)
-	require.Len(t, provs, 1, "got %+v", provs)
-	// The CLI is (fake-)available and never signed in via any local, costless
-	// check github-copilot supports, so the row stays at its disconnected
-	// default — never signed_in/expired, and never by running the CLI.
-	assert.Equal(t, gen.ProviderStatusDisconnected, provs[0].Status)
-	assert.Nil(t, provs[0].AccountLabel)
-
-	assert.Equal(t, 0, countInvocations(t, tally),
-		"GET /providers must never invoke the Copilot CLI — the fake recorded a run")
 }
 
 // --- GAP 2: PUT /providers/{id} auth_method: sign_in wiring --------------

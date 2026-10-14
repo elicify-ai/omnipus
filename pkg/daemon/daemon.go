@@ -286,3 +286,32 @@ func Stop(home string) (stopped bool, err error) {
 	slog.Info("daemon: gateway stopped", "pid", pid)
 	return true, nil
 }
+
+// daemonChildEnvAdditions names the values the spawned gateway child needs on
+// top of the child allowlist (FR-239):
+//
+//   - OMNIPUS_HOME: the child must use the SAME data directory the PID file
+//     was written under; without it the child would fall back to the default
+//     home and could start against the wrong data root.
+//   - OMNIPUS_MASTER_KEY / OMNIPUS_KEY_FILE: the gateway's documented
+//     non-interactive unlock modes (pkg/app/app.go::hasNonInteractiveKeyMode).
+//     The child's stdin is /dev/null, so if the operator started this process
+//     with an env-based unlock key and the key were stripped here, the
+//     restarted gateway could never unlock — headless start would break.
+//   - OMNIPUS_BEARER_TOKEN: the gateway's own web-auth bootstrap value; if the
+//     operator set it for this process, the child needs the same value for
+//     its auth posture to stay unchanged (pkg/gateway/auth.go).
+//
+// This is a deliberate, named exception at ONE spawn site, and its destination
+// is the gateway itself — the process these values exist for, not third-party
+// code. Every other key (provider keys, mailbox password, anything unknown) is
+// stripped by the allowlist at the spawn site.
+func daemonChildEnvAdditions(home string) []string {
+	additions := []string{"OMNIPUS_HOME=" + home}
+	for _, key := range []string{"OMNIPUS_MASTER_KEY", "OMNIPUS_KEY_FILE", "OMNIPUS_BEARER_TOKEN"} {
+		if value := os.Getenv(key); value != "" {
+			additions = append(additions, key+"="+value)
+		}
+	}
+	return additions
+}

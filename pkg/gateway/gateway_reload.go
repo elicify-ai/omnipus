@@ -64,6 +64,13 @@ func (s *services) markReloadDegraded(err error) {
 const reloadDegradedReasonText = "config reload failed: the configuration could not be read or was rejected. " +
 	"Fix the configuration file; details are in the server log."
 
+// reloadStoreDegradedReasonText is the fixed /health reason variant for a
+// reload rejected by the store-level credential failure class (#1277 round 3):
+// it names the store — the class the operator must fix — while still keeping
+// the underlying error detail in the log only.
+const reloadStoreDegradedReasonText = "config reload failed: the credential store could not be read " +
+	"(wrong master key, corrupted or locked store). Restore the credential store; details are in the server log."
+
 // reloadDegradedStatus is the reload half of the /health degraded check.
 func (s *services) reloadDegradedStatus() (bool, string) {
 	s.reloadMu.Lock()
@@ -72,6 +79,9 @@ func (s *services) reloadDegradedStatus() (bool, string) {
 		return false, ""
 	}
 	slog.Error("health: config reload is degraded", "error", s.reloadError)
+	if errors.Is(s.reloadError, errCredentialStoreUnreadableClass) {
+		return true, reloadStoreDegradedReasonText
+	}
 	return true, reloadDegradedReasonText
 }
 
@@ -489,9 +499,19 @@ func prepareReloadConfig(newCfg *config.Config, runningServices *services) error
 	// api_key_ref got none of their changes applied and a degraded gateway,
 	// and the same config would then refuse to boot on the next restart. A
 	// store-wide failure (locked vault) still rejects and rolls back.
+	//
+	// #1277 (founder decision 2026-10-12): one integration's missing or
+	// unreadable secret no longer rejects the reload either — the channel
+	// manager stops exactly that instance and records its ref-naming failure,
+	// while the rest of the config applies. Entry-auth failures stay deferred
+	// until the store health check: no decryptable entry in a nonempty store
+	// is the whole-store failure class and still rejects.
 	if cs := runningServices.credStore; cs != nil {
+		var deferredAuth []error
 		if errs := credentials.InjectFromConfig(newCfg, cs); len(errs) > 0 {
-			if fatal := reportInjectionErrors(errs, "reload"); len(fatal) > 0 {
+			fatal, auth := reportInjectionErrors(errs, "reload")
+			deferredAuth = append(deferredAuth, auth...)
+			if len(fatal) > 0 {
 				reloadErr := fmt.Errorf(
 					"reload rejected: provider credential injection failed: %w",
 					errors.Join(fatal...),
@@ -501,66 +521,52 @@ func prepareReloadConfig(newCfg *config.Config, runningServices *services) error
 		}
 
 		// Re-resolve the SecretBundle for channels (no os.Setenv for channel creds).
-		// enabledRefs mirrors bootCredentials: a NotFoundError (or any other
-		// resolution error) on a channel ref that IS enabled in newCfg must
-		// reject the reload — not silently continue — because "channel may be
-		// disabled" is only true if we actually check. Missing the enabled
-		// check here (unlike boot's equivalent NotFoundError-on-enabled fatal
-		// branch) would let a reload silently break an enabled channel's
-		// credentials while reporting success.
+		// enabledRefs mirrors bootCredentials: since #1277 a resolution error on
+		// a channel ref that IS enabled in newCfg degrades only that channel
+		// (loud, ref-naming, surfaced through FailedChannels and the Settings
+		// overlay) instead of rejecting the whole reload — a rejection rolled
+		// back every other edit in the same save and kept the deleted
+		// credential's stale value live on the still-running old instance.
 		//
-		// Cross-cutting interaction (intentional, fail-closed tradeoff — see
-		// the matching note on rest.go's configureChannel audit block): this
-		// check is global, not scoped to whatever channel triggered this
-		// reload. Config writes default to HotReload=true
-		// (pkg/config/defaults.go), so ANY config.json write — including an
-		// unrelated configureChannel call that only touched a different
-		// channel — runs this same all-enabled-channels credential check via
-		// the file-watcher. That means a configureChannel request can be
-		// audited as DecisionAllow (its own write succeeded) and 200 OK to
-		// the caller, and then have its effect asynchronously rolled back
-		// moments later by executeReload's markDegraded because SOME OTHER enabled
-		// channel's pre-existing credential ref fails to resolve — not the
-		// channel the caller just configured. This is deliberate: we fail
-		// closed rather than silently run an enabled channel with a broken
-		// credential. There is no correlation ID linking the earlier audit
-		// entry to this later rejection; an operator discovers it via
-		// reloadDegraded surfaced on GET /health (503, "reason": "config
-		// reload failed: …") and the "config reload failed — rolling back to
-		// previous in-memory state" / "reload rejected: enabled channel
-		// credential …" slog.Error lines emitted by markDegraded and the
-		// branches below. Making rejection scoped to only the
-		// just-edited channel would be a structural change to
-		// reload-rejection scoping and is out of scope for this hotfix pass.
+		// ONE store-level health decision, made from the store itself and
+		// independent of which reference kinds the configuration holds
+		// (#1277 round-3 chief ruling; CHECK F1/F2): a wrong master key,
+		// corrupt/undecodable file or locked vault rejects the reload whatever
+		// refs exist — including MCP-only and reference-free configs. The class
+		// sentinel lets /health's degraded reason name the store without
+		// leaking the underlying error.
 		enabledRefs := buildEnabledRefMap(newCfg)
 		newBundle, bundleErrs := credentials.ResolveBundle(newCfg, cs)
-		for _, e := range bundleErrs {
+		bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
+		if healthErr := cs.HealthCheck(); healthErr != nil {
+			return fmt.Errorf("reload rejected: %w", fatalStoreWideAuthFailure(healthErr,
+				append(append([]error{}, deferredAuth...), bundleAuth...)))
+		}
+		logScopedCredentialFailures("reload", deferredAuth)
+		for _, e := range bundleAuth {
+			slog.Error(
+				"reload: credential unusable — the referencing entry will not work until it is fixed, "+
+					"the rest of the system continues",
+				"error", e,
+			)
+		}
+		for _, e := range bundleRest {
 			var notFound *credentials.NotFoundError
 			if errors.As(e, &notFound) {
 				if enabledRefs[notFound.Name] {
-					reloadErr := fmt.Errorf(
-						"reload rejected: enabled credential %q not found in store: %w",
-						notFound.Name, e,
+					slog.Error(
+						"reload: credential unusable — the referencing entry will not work until it is fixed, "+
+							"the rest of the system continues",
+						"credential_ref", notFound.Name,
+						"error", e,
 					)
-					return reloadErr
+					continue
 				}
 				slog.Info("reload: credential not found (not currently enabled/in use)", "ref", notFound.Name)
 				continue
 			}
-			// Any error other than "not found" on an enabled/in-use ref is
-			// worse than a simple missing ref (the credential exists but can't
-			// be read) — escalate exactly like the NotFoundError-on-enabled
-			// case above, reusing the existing reject-and-rollback mechanism
-			// (executeReload's markDegraded / reloadDegraded) rather than a log-only Warn or a
-			// new degraded-signal field.
-			if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
-				reloadErr := fmt.Errorf(
-					"reload rejected: enabled credential %q failed to resolve: %w",
-					ref, e,
-				)
-				return reloadErr
-			}
-			slog.Warn("reload: credential bundle resolution error", "error", e)
+			// A file/lock failure observed between reads still rejects reload.
+			return fmt.Errorf("reload rejected: %w", fatalStoreWideAuthFailure(e, nil))
 		}
 		runningServices.bundle = newBundle
 

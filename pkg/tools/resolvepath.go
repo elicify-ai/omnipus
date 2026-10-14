@@ -47,6 +47,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -190,23 +191,19 @@ const (
 	skillShelfProject  = "project"
 )
 
-// skillInstructionFileLeaves are the filenames D10.3's narrowed Part A gates
-// — a skill's INSTRUCTIONS, not its directory. Matched case-sensitively
-// against the final path component only (the existing custom-agent-format
-// precedent: structured AGENT.md singular, with legacy AGENTS.md plural
-// still loading as fallback — see CLAUDE.md's "Custom-agent format" note).
-var skillInstructionFileLeaves = map[string]bool{
-	"SKILL.md":  true,
-	"AGENT.md":  true,
-	"AGENTS.md": true,
-}
-
 // isSkillInstructionFileLeaf reports whether rawPath's final path component
 // is one of a skill's recognised instruction filenames (D10.3). Applied only
 // to the REGISTRY shelf's classification — project-shelf paths are never
 // read-denied at all under D10.3, regardless of leaf name.
+//
+// The names are single-sourced in fspolicy.SkillInstructionLeaves, which the
+// #1284 home-guard predicate also evaluates (A7: instruction files stay
+// gated at the predicate level, with this gate keeping its specific redirect
+// message on top). Deny-side case folding: on a case-insensitive volume
+// SKILL.MD IS SKILL.md, and over-matching a distinctly-named file under the
+// registry shelf withholds only a read the Skill tool exists to route.
 func isSkillInstructionFileLeaf(rawPath string) bool {
-	return skillInstructionFileLeaves[filepath.Base(rawPath)]
+	return fspolicy.IsSkillInstructionLeaf(filepath.Base(rawPath))
 }
 
 // isSkillInstructionFile applies isSkillInstructionFileLeaf to BOTH spellings
@@ -362,6 +359,15 @@ func classifySkillsGate(rawPath, realAbs string, policy fspolicy.FSPolicy) (shel
 // here either.
 func skillsGateDenialError(rawPath string) error {
 	return fmt.Errorf("%w: %q is an installed registry skill's instruction file — load it with the Skill tool, not a file tool (ADR-072 D10.3 Part A)",
+		ErrCarveOut, rawPath)
+}
+
+// skillsRegistryListDenialError refuses a LIST whose path lands inside the
+// installed registry ($OMNIPUS_HOME/skills) — #1284 T-FT: a listing is a
+// name disclosure of whatever the directory holds, including the gated
+// instruction files.
+func skillsRegistryListDenialError(rawPath string) error {
+	return fmt.Errorf("%w: %q is inside the installed skill registry ($OMNIPUS_HOME/skills), which no file tool may list — browse skills with the Skill tool (ADR-072 D10.3; #1284)",
 		ErrCarveOut, rawPath)
 }
 
@@ -1107,8 +1113,18 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 	if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched {
 		switch rp.op {
 		case FSOpRead, FSOpList, FSOpSend:
-			if shelf == skillShelfRegistry && isSkillInstructionFile(rp.rawPath, realAbs) {
-				return nil, skillsGateDenialError(rp.rawPath)
+			if shelf == skillShelfRegistry {
+				// A LIST inside the installed registry discloses instruction-
+				// file names wholesale (#1284 T-FT: list_directory on a
+				// directory holding gated files is itself a disclosure), so
+				// the whole list op is refused — helper files stay readable
+				// individually, by exact path.
+				if rp.op == FSOpList {
+					return nil, skillsRegistryListDenialError(rp.rawPath)
+				}
+				if isSkillInstructionFile(rp.rawPath, realAbs) {
+					return nil, skillsGateDenialError(rp.rawPath)
+				}
 			}
 		case FSOpWrite, FSOpServe:
 			if shelf == skillShelfRegistry {
@@ -1576,6 +1592,29 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool, g
 			return fspolicy.FSPolicy{}, setupErr
 		}
 	}
+
+	// #1284 home guard (amendment §2 D3): the per-turn allowances ride the
+	// SAME policy object the app-layer predicate (IsCarveOut) evaluates, so
+	// every consumer — ResolvePath, grep, the bash command check, the D7
+	// pre-flight — sees the identical set. EffectiveFSPolicy already seeded
+	// the base entries (media, skills helper files); the turn adds its
+	// session-scoped upload dirs (A4) and its workspace mounts (A2). No
+	// entry can reopen a protected-inventory path: the inventory is
+	// evaluated first and always wins.
+	if policy.HomeGuard.Home != "" {
+		for _, mount := range policy.AllowedRoots {
+			if mount == "" {
+				continue
+			}
+			policy.HomeGuard.Allow = append(policy.HomeGuard.Allow, fspolicy.AllowRoot{Path: filepath.Clean(mount), Writable: true})
+		}
+		for _, sessionID := range []string{ToolTranscriptSessionID(ctx), ToolRootChatSessionID(ctx)} {
+			if dir, ok := media.SessionUploadsDir(sessionID); ok {
+				policy.HomeGuard.Allow = append(policy.HomeGuard.Allow, fspolicy.AllowRoot{Path: filepath.Clean(dir), Writable: false})
+			}
+		}
+	}
+
 	if len(grantOverlay) > 0 && len(grantOverlay[0]) > 0 {
 		policy.PathGrants = append(append([]fspolicy.PathGrant(nil), policy.PathGrants...), grantOverlay[0]...)
 	}
@@ -1684,6 +1723,18 @@ func ResolvePathAllowingPatterns(
 				// array, and no hand-computed capacity (CodeQL
 				// go/allocation-size-overflow on PR #1037).
 				granted.AllowedRoots = append(slices.Clone(policy.AllowedRoots), resolvedGrant)
+				// #1284 fix round 1 (F3): the same grant rides the home
+				// guard, which is what the default deny actually consults —
+				// an operator pattern for a NON-internal location inside
+				// $OMNIPUS_HOME keeps its permitted access instead of being
+				// refused by a guard the pattern axis never reached. The
+				// structural protected set is evaluated first and always
+				// wins, so this entry cannot reopen it (A2: operator grants
+				// never override the named inventory — uploads is
+				// D2-named-minus-A4, and the internal shapes stay guarded).
+				if granted.HomeGuard.Home != "" && !fspolicy.InventoryGuarded(granted, resolvedGrant) {
+					granted.HomeGuard.Allow = append(granted.HomeGuard.Allow, fspolicy.AllowRoot{Path: resolvedGrant, Writable: true})
+				}
 			}
 
 			return ResolvePath(ctx, granted, toolName, callID, op, rawPath)

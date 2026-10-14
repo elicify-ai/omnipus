@@ -10,11 +10,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/childenv"
 )
 
 // ExecProxy is a loopback HTTP proxy that enforces SSRF rules on child processes
@@ -152,9 +153,16 @@ func (p *ExecProxy) PrepareCmd(cmd *exec.Cmd) {
 	p.cmdCount.Add(1)
 	proxyURL := "http://" + p.addr
 
-	// Inherit current environment if not already set
+	// Inherit the scrubbed child allowlist when the caller did not set an
+	// environment. FR-239: a nil cmd.Env means os/exec would hand the child
+	// the raw gateway environment — provider keys, mailbox password and any
+	// future secret included. The closed child allowlist (pkg/childenv, the
+	// same set sandbox.ScrubGatewayEnv applies) is the base instead; the
+	// proxy vars below are appended after it, so they win. pkg/security
+	// imports pkg/childenv directly (not pkg/sandbox) because pkg/sandbox's
+	// egress proxy imports this package — the reverse edge is an import cycle.
 	if cmd.Env == nil {
-		cmd.Env = os.Environ()
+		cmd.Env = childenv.Filter()
 	}
 	cmd.Env = append(cmd.Env,
 		"HTTP_PROXY="+proxyURL,

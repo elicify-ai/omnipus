@@ -28,6 +28,7 @@ import (
 	basechannels "github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 const (
@@ -484,6 +485,10 @@ func tryTranscodeSilkToWAV(ctx context.Context, silk []byte) ([]byte, error) {
 
 			runCtx, cancel := context.WithTimeout(ctx, weixinVoiceTranscodeTimeout)
 			cmd := exec.CommandContext(runCtx, bin, decoder.args(tmpIn, tmpOut)...)
+			// FR-239: the transcode child (third-party decoder/ffmpeg) starts
+			// from the closed child allowlist; the gateway environment is
+			// never inherited wholesale.
+			cmd.Env = sandbox.ScrubGatewayEnv()
 			out, runErr := cmd.CombinedOutput()
 			cancel()
 			if runErr != nil {

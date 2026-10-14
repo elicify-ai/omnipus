@@ -6,7 +6,7 @@ Agents do the work in Omnipus. Omnipus ships three built-in chat colleagues—Mi
 
 Open **Agents** in the sidebar and the roster has four sections:
 
-- **Built-in roster** — Mia, Jim and Omnipus. Their identity and base instructions are protected, and Mia is the initial default.
+- **Built-in roster** — Mia, Jim and Omnipus. Their identity and base instructions are protected.
 - **Main agents** — chat colleagues you create yourself.
 - **Sub-agent workers** — shipped and user-created workers. They are not chat colleagues; other agents delegate work to them, and you can assign workspace tasks to workers on the team.
 - **System** — Judge and Plan Supervisor, internal engine agents that cannot be selected for chat or delegation.
@@ -15,7 +15,6 @@ A filter above the roster narrows the list to one [workspace](workspaces.md) tea
 
 ## When you would use it
 
-- You want to change who answers when no agent is named. Set the default.
 - You want a colleague with a fixed job and personality. Create a Main agent.
 - You want focused labor behind your main agents. Create a worker.
 - You already run a command-line agent tool and want Omnipus to delegate to it. Create an external worker.
@@ -42,6 +41,10 @@ Omnipus replaces the earlier Ava and Admin agents. It lives in your default work
 - **God Mode.** While God Mode is on, Omnipus is told so in every turn; it then proceeds without approvals.
 
 When an agent changes another agent through its tools, permissions are a separate step: `update_agent` changes identity, model and skills, while per-agent tool permissions and connector assignments change only through `set_agent_permissions`, which always asks you first. A saved permission or connector-assignment change, from the agent's settings or through `set_agent_permissions`, applies to the agent's next request and next tool call without a restart. A newly created agent can never be granted a management tool (agent, workspace, skill, connector, provider, channel, permission, secret or settings changes) — those stay with Omnipus.
+
+When an agent creates an external worker through its tools, the soul rule differs from the create form: a native agent (Main or Subagent) needs a soul, but an external worker takes none — it runs on its own command-line tool and has no persona prompt, and supplying one is refused with the reason shown. If that request names a `cli_path`, it must point at an existing file this machine can actually run: on macOS and Linux the user running Omnipus must hold execute permission on it, and on Windows its file extension must be one Windows recognizes as runnable (the PATHEXT list — .exe, .cmd and similar). A missing path, a directory, or a file failing this check is refused with the path named in the reason. Leaving `cli_path` out uses the tool's own launcher on the host's PATH.
+
+On Windows, this check uses the `PATHEXT` environment variable, a semicolon-separated list of runnable file extensions. Entries work with or without a leading dot and are matched without regard to letter case: `EXE;CMD` accepts `.exe` and `.cmd` files, just like `.EXE;.CMD`. Empty entries are ignored. A custom list controls which extensions are accepted; when the list is unset or blank, the check uses `.COM;.EXE;.BAT;.CMD`.
 
 ## How a conversation finds its agent
 
@@ -74,7 +77,7 @@ To change an agent, open its card. The edit slide-over saves as you type. Its ta
 
 ## How to delete an agent
 
-**Delete agent** asks you to confirm twice: the first step explains that the agent and its chats, memory and related data are removed permanently, the second is the final confirmation. Dismissing either step deletes nothing. A locked core agent, a System Agent, and an agent that owns an active plan cannot be deleted — set another agent as the default, or stop/reassign the plan, first.
+**Delete agent** asks you to confirm twice: the first step explains that the agent and its chats, memory and related data are removed permanently, the second is the final confirmation. Dismissing either step deletes nothing. A locked core agent, a System Agent, and an agent that owns an active plan cannot be deleted — stop or reassign the plan first.
 
 Deletion cleans the agent's own data first — its chats, its task assignments, and its references in workspaces — and removes the agent record last. If any part of that cleanup fails, the agent stays in the list and the message says it is only partly deleted; press **Delete agent** again to finish. Nothing is lost by retrying.
 
@@ -103,6 +106,8 @@ The editor puts the choices around one large live preview of the mark. **Role ba
 When creating an agent through the API, omitting `figure`, `role`, or `color`, or sending JSON `null` or an empty string for it, chooses that field's create default: `Omnipus`, `general`, or `#8E9196` (Pewter). This applies to Main agents, native workers, and external workers. A non-empty figure or role must match a listed value exactly; a whitespace-only string is not a default request. A listed palette hex accepts either letter case and is saved and returned uppercase, for example `#a97142` becomes `#A97142` (Bronze). An unlisted colour still rejects the request. These rules are the same with optional inbound schema validation enabled or disabled.
 
 When updating an existing agent through the API, omit `figure`, `role`, or `color` to keep its stored value. Sending JSON `null`, an empty string, or another invalid identity value rejects the whole update with HTTP 400: even valid sibling changes are not saved, and the stored fields, display timestamp, and configuration revision stay unchanged. Null does not clear an identity choice or restore a create default. To choose a default again, select it in the editor or send its actual value: `Omnipus`, `general`, or `#8E9196`. Differently capitalised or JSON-escaped field names do not bypass null rejection, and a repeated identity field cannot hide a supplied null. Listed colour hexes accept either letter case on update too and are stored uppercase.
+
+The same visual rules apply when an agent (for example Omnipus) creates or edits another agent through its `create_agent` and `update_agent` tools: the tools accept the same figure, role, and colour catalogs as the API and the editor, an omitted, null, or empty visual on create selects the same defaults (`Omnipus`, `general`, `#8E9196`), and an invalid or empty visual on update refuses the whole call without saving anything — the error names the rejected field and lists every valid choice, instead of an HTTP status code. `get_agent` returns an agent's saved figure, role, and colour, and its `editable_fields` list shows whether each visual can be changed: custom agents can, built-in and system agents cannot (see "Built-in identity is locked" below), and the permission fields `mcp_servers` and `tool_policy_changes` are never listed as editable there because they change only through `set_agent_permissions`.
 
 An incomplete or malformed agent create or update is rejected without saving. Request bodies over 1 MiB (1,048,576 bytes) return HTTP 413, even if their first part looks like complete JSON; a complete valid body at that limit is allowed. A rejected create adds no agent. A rejected update leaves the stored fields, display timestamp, and configuration revision unchanged.
 
