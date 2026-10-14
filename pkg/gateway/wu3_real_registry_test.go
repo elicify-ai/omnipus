@@ -46,7 +46,7 @@ func wu3ToolResultFromTurn(t *testing.T, provider *testutil.ScenarioProvider, ca
 		for _, message := range messages {
 			if message.Role == "tool" && message.ToolCallID == callID {
 				var body map[string]any
-				require.NoError(t, json.Unmarshal([]byte(message.Content), &body), "real tool result, not model prose")
+				require.NoError(t, json.Unmarshal([]byte(message.Content), &body), "real tool result, not model prose; call=%s result=%s", callID, message.Content)
 				return body
 			}
 		}
@@ -59,7 +59,7 @@ func wu3ToolResultFromTurn(t *testing.T, provider *testutil.ScenarioProvider, ca
 // registry + policy + tool dispatch + stores + main provisioning. Only the paid
 // model edge is scripted. It never constructs or directly invokes create_agent.
 func TestWU3ReachableChangeToolThroughRealOmnipusPolicyAndRegistry(t *testing.T) {
-	provider := testutil.NewScenario().WithToolCall("create_agent", `{"name":"Sales Partner","description":"Target fixture","soul":"Help with sales.","model":"scripted-model","workspace_id":"sales"}`).WithText("apply completed")
+	provider := testutil.NewScenario().WithToolCall("ToolSearch", `{"names":["create_agent"]}`).WithToolCall("create_agent", `{"name":"Sales Partner","description":"Target fixture","soul":"Help with sales.","model":"scripted-model","workspace_id":"sales"}`).WithText("apply completed")
 	api := wu3WiredAPI(t, provider)
 	require.NoError(t, workspace.SaveRecord(api.homePath, workspace.Workspace{ID: "sales", Name: "Sales", Status: "active"}))
 	_, err := api.agentLoop.GetSessionStore().GetOrCreateMainSession("default", "omnipus")
@@ -97,7 +97,7 @@ func TestWU3ReachableChangeToolThroughRealOmnipusPolicyAndRegistry(t *testing.T)
 // #1063 F1: the same real registry's ToolSearch/load path and execution agree
 // with the live compositor. add_mcp_server's validation path does no host work.
 func TestWU3MCPManagementAllowedPolicyMatchesDiscoveryAndRealExecution(t *testing.T) {
-	provider := testutil.NewScenario().WithToolCall("list_mcp_servers", `{}`).WithToolCall("add_mcp_server", `{"name":"fixture","transport":"stdio","expected_revision":"absent"}`).WithText("checked")
+	provider := testutil.NewScenario().WithToolCall("ToolSearch", `{"names":["list_mcp_servers","add_mcp_server"]}`).WithToolCall("list_mcp_servers", `{}`).WithToolCall("add_mcp_server", `{"name":"fixture","transport":"stdio","expected_revision":"absent"}`).WithText("checked")
 	api := wu3WiredAPI(t, provider)
 	al := api.agentLoop
 	clone, err := al.GetConfig().Clone()
@@ -108,12 +108,15 @@ func TestWU3MCPManagementAllowedPolicyMatchesDiscoveryAndRealExecution(t *testin
 	require.True(t, ok)
 	search, ok := inst.Tools.Get("ToolSearch")
 	require.True(t, ok)
-	loaded := search.Execute(tools.WithAgentID(context.Background(), "omnipus"), map[string]any{"names": []any{"list_mcp_servers", "add_mcp_server"}})
-	require.False(t, loaded.IsError, "allowed tools must be loadable: %s", loaded.ForLLM)
 	for _, name := range []string{"list_mcp_servers", "add_mcp_server"} {
 		policy, registered := al.ResolveRegisteredToolPolicy("omnipus", name)
 		require.True(t, registered)
-		require.Equal(t, "allow", policy)
+		require.Equal(t, "allow", policy, "positive live policy control before discovery")
+		t.Logf("live policy control: %s=%s", name, policy)
+	}
+	loaded := search.Execute(tools.WithAgentID(context.Background(), "omnipus"), map[string]any{"names": []any{"list_mcp_servers", "add_mcp_server"}})
+	require.False(t, loaded.IsError, "allowed tools must be loadable: %s", loaded.ForLLM)
+	for _, name := range []string{"list_mcp_servers", "add_mcp_server"} {
 		assert.Contains(t, loaded.ForLLM, name)
 	}
 	_, err = al.GetSessionStore().GetOrCreateMainSession("default", "omnipus")

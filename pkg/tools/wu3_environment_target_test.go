@@ -37,7 +37,9 @@ func TestWU3EnvironmentSetupWorkspaceIDUsesTargetWithoutMovingAnchor(t *testing.
 	}
 	require.False(t, completed.IsError, "real child must succeed, not a false target failure: %s", completed.ForLLM)
 	assert.Contains(t, completed.ForLLM, "wu3-environment-control", "positive child execution marker")
-	assert.Contains(t, start.ForLLM, workspace.WorkDir(home, "sales"), "explicit workspace_id must select Sales storage")
+	targetReal, err := filepath.EvalSymlinks(workspace.WorkDir(home, "sales"))
+	require.NoError(t, err)
+	assert.Contains(t, start.ForLLM, targetReal, "explicit workspace_id must select Sales storage by filesystem identity")
 	runtime, err := environmentsetup.RuntimeEnvPaths(home, workspace.WorkDir(home, "sales"))
 	require.NoError(t, err)
 	assert.NotEmpty(t, runtime.WorkspacePrefix, "target runtime has the real installed workspace layer")
