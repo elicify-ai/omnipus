@@ -7,6 +7,7 @@ package tools
 import (
 	"encoding/json"
 	"log/slog"
+	"strings"
 )
 
 // Truthful change-tool results (omnipus-system-agent FR-030, ADR OSA-4; field
@@ -115,7 +116,9 @@ func FinalizeChangeResult(tool string, res *ToolResult) *ToolResult {
 	}
 	var m map[string]any
 	if err := json.Unmarshal([]byte(res.ForLLM), &m); err != nil || m == nil {
-		m = map[string]any{"message": res.ForLLM}
+		// A plain-text result keeps its text verbatim; the verdict follows it
+		// as a JSON object on an "Outcome:" line.
+		return finalizePlainText(tool, res)
 	}
 	if o, has := m["outcome"]; has {
 		if o == OutcomeFailedNothingSaved && m["changed_fields"] == nil {
@@ -138,6 +141,25 @@ func FinalizeChangeResult(tool string, res *ToolResult) *ToolResult {
 			"", []string{"verification"})
 	}
 	res.ForLLM = marshalResult(o.Into(m))
+	return res
+}
+
+// finalizePlainText appends the FR-030 verdict to a plain-text result.
+func finalizePlainText(tool string, res *ToolResult) *ToolResult {
+	if strings.Contains(res.ForLLM, "\nOutcome: {") {
+		return res
+	}
+	var o ChangeOutcome
+	fields := map[string]any{}
+	if res.IsError {
+		o = ChangeOutcome{Outcome: OutcomeFailedNothingSaved, Reason: strings.TrimSpace(res.ForLLM)}
+		fields["changed_fields"] = []string{}
+	} else {
+		slog.Error("tools: change tool returned success without an FR-030 outcome", "tool", tool)
+		o = ChangePartlySaved("the tool did not report what it checked; read the affected resource before relying on it",
+			"", []string{"verification"})
+	}
+	res.ForLLM += "\n\nOutcome: " + marshalResult(o.Into(fields))
 	return res
 }
 

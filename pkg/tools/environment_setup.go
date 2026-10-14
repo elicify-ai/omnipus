@@ -369,7 +369,14 @@ func (t *EnvironmentSetupTool) execute(ctx context.Context, args map[string]any,
 	}
 	switch action {
 	case "run":
-		return t.startRun(ctx, args, cb)
+		// FR-030 (chief ruling Q3): a run refused before launch is
+		// "failed: nothing saved"; a started run reports its verdict when it
+		// finishes (environmentSetupOutcome).
+		res := t.startRun(ctx, args, cb)
+		if res != nil && res.IsError {
+			return FinalizeChangeResult(t.Name(), res)
+		}
+		return res
 	case "poll":
 		return t.executePoll(ctx, args)
 	case "read":

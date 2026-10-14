@@ -339,7 +339,7 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 				_ = cmd.Process.Kill()
 			}
 			_ = cmd.Wait()
-			return setupStartAbortResult(plan.area, fmt.Sprintf("sandbox post-start hardening failed: %v", err))
+			return setupPostStartAbortResult(plan.area, fmt.Sprintf("sandbox post-start hardening failed: %v", err))
 		}
 	}
 
@@ -446,6 +446,15 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 		}
 		notice := t.setupCompletionNotice(plan, pub)
 		completion.ForLLM += notice
+		if o, ok := environmentSetupOutcome(string(effectiveStatus), finalExitCode); ok {
+			switch pub.outcome {
+			case "commit_failed", "abort_failed":
+				o = ChangePartlySaved("the installer finished but the installation area could not be "+
+					"published or cleaned up; side effects not proven absent", o.CheckScope,
+					[]string{"published installation area"}, o.NotTested...)
+			}
+			completion.ForLLM += "\n\nOutcome: " + marshalResult(o.Into(map[string]any{}))
+		}
 		if completion.ForUser != "" {
 			completion.ForUser += notice
 		}
@@ -543,9 +552,27 @@ func (t *EnvironmentSetupTool) persistCompletionOutcome(session *ProcessSession,
 // is the only result the caller can use to inspect the partial effect.
 func setupStartAbortResult(area EnvironmentSetupTarget, cause string) *ToolResult {
 	if err := area.Abort(); err != nil {
-		return ErrorResult(cause + "; staging cleanup FAILED: " + err.Error())
+		// FR-030: the allocated area could not be cleaned up — a side effect
+		// is proven, so this is never "failed: nothing saved".
+		msg := cause + "; staging cleanup FAILED: " + err.Error()
+		return ChangeErrorResult(map[string]any{"error": msg, "changed_fields": []string{"installation area"}},
+			ChangePartlySaved(msg, "", []string{"installation area cleanup"}))
 	}
 	return ErrorResult(cause)
+}
+
+// setupPostStartAbortResult is setupStartAbortResult for a failure AFTER the
+// installer process started: it ran, however briefly, so side effects are not
+// proven absent (FR-030).
+func setupPostStartAbortResult(area EnvironmentSetupTarget, cause string) *ToolResult {
+	res := setupStartAbortResult(area, cause)
+	var m map[string]any
+	if json.Unmarshal([]byte(res.ForLLM), &m) == nil && m["outcome"] != nil {
+		return res
+	}
+	msg := cause + "; the installer process had started, so side effects are not proven absent"
+	return ChangeErrorResult(map[string]any{"error": msg, "changed_fields": []string{}},
+		ChangePartlySaved(msg, "", []string{"a successful installation"}))
 }
 
 // setupPublication is the outcome record publishTarget returns: the outcome
@@ -723,7 +750,7 @@ func (t *EnvironmentSetupTool) executePoll(ctx context.Context, args map[string]
 		Status:    session.GetStatus(),
 		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := json.Marshal(resp)
+	data, marshalErr := marshalSetupStatus(resp)
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal poll response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -747,8 +774,9 @@ func (t *EnvironmentSetupTool) executeRead(ctx context.Context, args map[string]
 		SessionID: sessionID,
 		Output:    output,
 		Status:    session.GetStatus(),
+		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := json.Marshal(resp)
+	data, marshalErr := marshalSetupStatus(resp)
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal read response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -794,7 +822,7 @@ func (t *EnvironmentSetupTool) sessionActionResult(sessionID string, session *Pr
 		Status:    status,
 		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := json.Marshal(resp)
+	data, marshalErr := marshalSetupStatus(resp)
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal session action response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -811,4 +839,44 @@ func (t *EnvironmentSetupTool) sessionActionResult(sessionID string, session *Pr
 		result.ForLLM += "\n\n" + note
 	}
 	return result
+}
+
+// environmentSetupOutcome is the FR-030 verdict of a FINISHED installation
+// (chief ruling Q3, 2026-10-15; ADR-090: exit 0 is command success, not
+// readiness). A session still running has no verdict (ok=false).
+func environmentSetupOutcome(status string, exitCode int) (ChangeOutcome, bool) {
+	const scope = "installer command exit status"
+	switch SessionStatus(status) {
+	case StatusDone:
+		if exitCode == 0 {
+			return ChangeWorking("installer command exited 0", "readiness inside the agent's sandbox"), true
+		}
+		return ChangePartlySaved(fmt.Sprintf("installer exited %d; side effects not proven absent", exitCode),
+			scope, []string{"a successful installation"}, "readiness inside the agent's sandbox"), true
+	case StatusKilled, StatusTimeout, StatusCanceled:
+		return ChangePartlySaved(fmt.Sprintf("installer was %s before it finished (exit %d); side effects not proven absent",
+			status, exitCode), scope, []string{"a successful installation"}, "readiness inside the agent's sandbox"), true
+	}
+	return ChangeOutcome{}, false
+}
+
+// marshalSetupStatus renders a poll/read/kill status; a finished session also
+// carries the FR-030 outcome fields.
+func marshalSetupStatus(resp ExecResponse) ([]byte, error) {
+	o, done := environmentSetupOutcome(resp.Status, resp.ExitCode)
+	if !done {
+		return json.Marshal(resp)
+	}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	// exitCode is omitempty on the shared response type; a finished
+	// installation always states it, 0 included.
+	m["exitCode"] = resp.ExitCode
+	return json.Marshal(o.Into(m))
 }
