@@ -609,6 +609,8 @@ func (t *DelegateTool) Description() string {
 		"replace; use steer to instruct one with a CLI run in flight, stop_all to stop it, or resume under the " +
 		"conditions above; otherwise start a new delegation). " +
 		"action=\"peek\" reads a child's latest checkpoint/progress without side effects. " +
+		"action=\"result\" returns a finished child's final result again — use it when the hand-back " +
+		"was already delivered and you need its full text; status does not repeat a delivered result. " +
 		"action=\"run\" requires agent_id — the specific agent to delegate to, which must be in " +
 		"your delegation allowlist. There is no default target and no implicit substitution of " +
 		"your own id: a caller delegating to itself passes its own agent_id explicitly."
@@ -658,6 +660,8 @@ func delegateCriterionItemSchema() map[string]any {
 			"provenance": map[string]any{
 				"type": "string",
 				"enum": []string{"stated", "workspace", "floor", "inferred"},
+				"description": "Optional authority layer, the same field set_goal uses on its dod items " +
+					"(stated, workspace, floor, inferred). Kept on the helper's goal; omit it if unsure.",
 			},
 		},
 		"required": []string{"text"},
@@ -687,7 +691,8 @@ func (t *DelegateTool) Parameters() map[string]any {
 			"action": map[string]any{
 				"type": "string",
 				"enum": []string{"run", "status", "result", "inbox", "inbox_ack", "steer", "respond", "stop_all", "clear_goal", "resume", "redirect", "peek"},
-				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"inbox\" " +
+				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"result\" " +
+					"reads a finished child's final result again, even after it was delivered. \"inbox\" " +
 					"drains child->parent messages. \"inbox_ack\" acknowledges them. \"steer\" injects an " +
 					"instruction. \"respond\" answers one of the child's open questions. \"stop_all\" stops the " +
 					"child and every helper under it. \"resume\" continues a stopped child or starts its " +
@@ -698,7 +703,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 			"session_id": map[string]any{
 				"type": "string",
 				"description": "The durable child session to target — the only way to address a " +
-					"child. Required for status/inbox/inbox_ack/steer/respond/stop_all/resume/redirect/peek." +
+					"child. Required for status/result/inbox/inbox_ack/steer/respond/stop_all/resume/redirect/peek." +
 					delegateClearGoalSessionIDDescription,
 			},
 			"criteria": map[string]any{
