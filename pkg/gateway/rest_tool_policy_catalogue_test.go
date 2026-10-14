@@ -103,6 +103,16 @@ func TestRESTBuiltinPolicyMap_CurrentCatalogue(t *testing.T) {
 					default:
 						assert.False(t, present, "a never-stored reservation must not be backfilled")
 					}
+					if route != "create" {
+						expected := make(map[string]config.ToolPolicy, len(policies)+1)
+						for name, policy := range policies {
+							expected[name] = config.ToolPolicy(policy)
+						}
+						if tc.storedFuture && tc.supplied == "" {
+							expected["remove_secret"] = config.ToolPolicyDeny
+						}
+						assert.Equal(t, expected, state.Agent.Tools.Builtin.Policies, "only supplied and previously stored reserved entries may persist")
+					}
 				})
 			}
 		}

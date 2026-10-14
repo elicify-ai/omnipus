@@ -48,6 +48,22 @@ An agent sees common tools directly and searches the rest when a task calls for 
 
 The installation-wide setting lives in **Settings → Security**, under **Advanced / technical details**, in **Tool Access — Global Policies**. What you set there applies to every agent at once. Saving a change there asks you to re-type your password.
 
+## Replacing tool policies through the API
+
+When creating an agent or replacing its built-in tool policy map through the API,
+include every implemented built-in tool returned by `GET /api/v1/tools`, using
+its exact name and an `allow`, `ask` or `deny` value. A missing implemented tool,
+an unknown name or a wildcard is refused; connected-server tools keep their
+separate `mcp_` policy rules.
+
+A tool name reserved for a later implementation does not have to appear in that
+map before the tool is available. If an existing agent already has a saved policy
+for such a name, omitting it from a replacement leaves that saved value unchanged.
+The replacement does not invent a policy for a reserved name that was never saved.
+Supplying the reserved name explicitly follows the normal replacement rules;
+on the dedicated tool-settings endpoint, `override_names` controls which supplied
+values are saved as per-agent overrides.
+
 ## Allow, ask and deny
 
 What each setting does, and what you see when it fires:
