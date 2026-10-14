@@ -72,14 +72,17 @@ func (p *wu19Inventory) commandEnvValue(fn *wu19Function, expr ast.Expr, before 
 		}
 		seen[key] = true
 		defer delete(seen, key)
+		var out wu19Origin
+		found := false
 		if ref, ok := bindings[e.Obj]; ok {
-			return p.commandEnvValue(ref.fn, ref.expr, ref.pos, ref.bindings, trace, seen)
+			found = true
+			out |= p.commandEnvValue(ref.fn, ref.expr, ref.pos, ref.bindings, trace, seen)
 		}
-		if refs := wu19CommandDefinitions(fn, e.Obj, before); len(refs) > 0 {
-			var out wu19Origin
-			for _, ref := range refs {
-				out |= p.commandEnvValue(fn, ref.expr, ref.pos, bindings, trace, seen)
-			}
+		for _, ref := range wu19CommandDefinitions(fn, e.Obj, before) {
+			found = true
+			out |= p.commandEnvValue(fn, ref.expr, ref.pos, bindings, trace, seen)
+		}
+		if found {
 			return out
 		}
 	case *ast.CallExpr:

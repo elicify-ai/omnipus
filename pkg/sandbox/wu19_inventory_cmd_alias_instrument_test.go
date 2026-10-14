@@ -41,6 +41,8 @@ func TestWU19_CommandAliasInstrument(t *testing.T) {
 		{"assigned_field_raw", `func mutate(c *exec.Cmd) { var box struct{ process *exec.Cmd }; box.process = c; copied := box.process; copied.Env = os.Environ() }`, true},
 		{"positional_field_raw", `type box struct { process *exec.Cmd }; func mutate(c *exec.Cmd) { holder := box{c}; copied := holder.process; copied.Env = os.Environ() }`, true},
 		{"nested_container_field_raw", `func mutate(c *exec.Cmd) { holder := struct{ inner struct{ process *exec.Cmd } }{inner: struct{ process *exec.Cmd }{process: c}}; copied := holder.inner.process; copied.Env = os.Environ() }`, true},
+		{"nested_env_parameter_raw_reassignment", `func mutate(c *exec.Cmd) { nested(c, []string{"SITE=explicit"}) }; func nested(c *exec.Cmd, values []string) { values = os.Environ(); copied := c; copied.Env = append(copied.Env, values...) }`, true},
+		{"safe_nested_env_parameter_reassignment", `func mutate(c *exec.Cmd) { nested(c, []string{"SITE=explicit"}) }; func nested(c *exec.Cmd, values []string) { values = []string{"SITE=changed-explicit"}; copied := c; copied.Env = append(copied.Env, values...) }`, false},
 		{"safe_alias_index", `func mutate(c *exec.Cmd) { copied := c; copied.Env[0] = "SITE=explicit" }`, false},
 		{"safe_alias_copy", `func mutate(c *exec.Cmd) { copied := c; copy(copied.Env, []string{"SITE=explicit"}) }`, false},
 		{"safe_local_addition", `func mutate(c *exec.Cmd) { copied := c; copied.Env = append(copied.Env, "SITE=explicit") }`, false},
