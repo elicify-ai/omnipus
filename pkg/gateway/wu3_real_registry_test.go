@@ -46,7 +46,9 @@ func wu3ToolResultFromTurn(t *testing.T, provider *testutil.ScenarioProvider, ca
 		for _, message := range messages {
 			if message.Role == "tool" && message.ToolCallID == callID {
 				var body map[string]any
-				require.NoError(t, json.Unmarshal([]byte(message.Content), &body), "real tool result, not model prose; call=%s result=%s", callID, message.Content)
+				if err := json.Unmarshal([]byte(message.Content), &body); err != nil {
+					t.Fatalf("WU-3 expected a structured outcome from registered %s; actual registry/schema refusal: %s (decode: %v)", callID, message.Content, err)
+				}
 				return body
 			}
 		}
