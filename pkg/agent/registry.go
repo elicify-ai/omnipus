@@ -630,6 +630,11 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 		al.cfg = cfg
 		al.registry = newRegistry
 		al.mu.Unlock()
+		// #1296: the rebuilt instance starts with no MCP tools. A full reload
+		// re-heals that through ReconcileMCP after its publish; the fast path
+		// does the same here, after al.mu is released, or the agent would lose
+		// every connector tool until the next reconcile or restart.
+		al.registerLiveMCPTools()
 		return instance, nil
 	}
 

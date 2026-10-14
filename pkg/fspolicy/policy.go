@@ -264,7 +264,10 @@ func (p FSPolicy) Validate() error {
 
 	// SetupRoots obey the same shape rule as WorkDir: absolute, and never at
 	// or above a carve-out root (a setup root at $OMNIPUS_HOME would exempt
-	// every carve-out at once).
+	// every carve-out at once). On top of that, each one must be exactly a
+	// workspace WORK directory (FR-006, L1 amendment §2.2 A8, CHECK F05) —
+	// never a whole workspace, its .omnipus room or any other entry under the
+	// workspaces/ carve-out root.
 	for _, root := range p.SetupRoots {
 		if strings.TrimSpace(root) == "" || !filepath.IsAbs(root) {
 			return fmt.Errorf("fspolicy: SetupRoots entry %q is not an absolute path", root)
@@ -274,6 +277,10 @@ func (p FSPolicy) Validate() error {
 			if CoversForDeny(cleanSetup, filepath.Clean(carve)) {
 				return fmt.Errorf("fspolicy: SetupRoots entry %q is at or above the carve-out root %q", root, carve)
 			}
+		}
+		if !isWorkspaceWorkDir(cleanSetup, p.CarveOuts) {
+			return fmt.Errorf("fspolicy: SetupRoots entry %q is not a workspace work directory (%s/<id>/%s)",
+				root, setupWorkspacesEntry, setupWorkDirName)
 		}
 	}
 
@@ -418,6 +425,41 @@ func EffectiveFSPolicyWithReadConfined(
 		AllowedRoots: nil,
 		ReadConfined: readConfined,
 	}, nil
+}
+
+// setupWorkspacesEntry and setupWorkDirName spell the only shape a setup root
+// may take: $OMNIPUS_HOME/workspaces/<id>/work. They mirror the "workspaces"
+// entry of SecretEntriesPerTurn and pkg/workspace's work-directory name; this
+// package is a stdlib-only leaf and cannot import pkg/workspace.
+const (
+	setupWorkspacesEntry = "workspaces"
+	setupWorkDirName     = "work"
+)
+
+// isWorkspaceWorkDir reports whether cleanRoot is exactly
+// <workspaces carve-out root>/<id>/work for one of carveOuts. The comparison
+// is byte-exact on cleaned paths: a setup root is a GRANT, so the strict
+// spelling is the safe direction (the same direction IsCarveOut's
+// ownTreeExempts takes through CoversForGrant). A policy with no workspaces
+// carve-out root has nothing a setup root could be exempt from, so every
+// setup root is refused there.
+func isWorkspaceWorkDir(cleanRoot string, carveOuts []string) bool {
+	if filepath.Base(cleanRoot) != setupWorkDirName {
+		return false
+	}
+	workspaceDir := filepath.Dir(cleanRoot)
+	id := filepath.Base(workspaceDir)
+	if id == "" || id == "." || id == ".." || id == string(filepath.Separator) || strings.Contains(id, "..") {
+		return false
+	}
+	parent := filepath.Dir(workspaceDir)
+	for _, carve := range carveOuts {
+		cleanCarve := filepath.Clean(carve)
+		if filepath.Base(cleanCarve) == setupWorkspacesEntry && cleanCarve == parent {
+			return true
+		}
+	}
+	return false
 }
 
 // WithSetupRoots returns a copy of p carrying roots — workspace work

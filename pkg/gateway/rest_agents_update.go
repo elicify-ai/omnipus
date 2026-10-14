@@ -768,9 +768,16 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	// single-agent rebuild for the agent's next turn to use it (D18: a
 	// running turn keeps the instance it started with).
 	maxToolIterationsChanged := uf.ru.req.MaxToolIterations != nil || uf.ru.clearsMaxToolIterations
+	// #1296: the running AgentInstance snapshots its tool policy and MCP
+	// server assignment at construction, so a permission change (sparse
+	// tool_policy_changes, a tools_cfg replacement, or an mcp_servers write)
+	// needs the same single-agent rebuild; without it the next peer request
+	// and the next tool resolution keep the old decision until a restart.
+	permissionsChanged := uf.ru.req.ToolPolicyChanges != nil || uf.ru.req.ToolsCfg != nil ||
+		uf.ru.req.McpServers != nil
 	needsReload := uf.ru.req.Soul != nil || contextWindowOverrideChanged ||
 		uf.ru.req.Skills != nil || uf.ru.req.ModelParams != nil || uf.ru.modelIdentityChanged ||
-		maxToolIterationsChanged
+		maxToolIterationsChanged || permissionsChanged
 	if needsReload {
 		// fastAgentUpsert returns a non-empty message only when neither the
 		// single-agent swap nor its full-reload fallback could publish the

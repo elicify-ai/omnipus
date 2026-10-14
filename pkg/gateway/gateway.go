@@ -745,13 +745,7 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 	//
 	// The startup pull and the 24 h ticker are NOT started here; they start
 	// after the listener is bound (see setupAndStartServices).
-	rc.providerCatalog = catalog.Boot(
-		context.Background(),
-		catalog.EmbeddedSnapshot,
-		catalog.NewGHReleasePuller(),
-		catalog.NewFileStore(rc.homePath),
-		catalogLogAdapter{},
-	)
+	rc.providerCatalog = bootProviderCatalog(rc.homePath)
 	agent.SetWindowCatalog(rc.providerCatalog)
 	// A8 mail-operation budget: install the shared per-account gate BEFORE
 	// NewAgentLoop builds every agent instance and its registerSharedTools
@@ -1733,6 +1727,22 @@ func newReloadConfigLoader(
 		}
 		return newCfg, nil
 	}
+}
+
+// bootProviderCatalog boots the ADR-067 provider catalog this gateway serves:
+// the embedded snapshot, the persisted last-known-good under homePath, and
+// the release puller the refresh ticker uses later (Boot itself does no
+// network I/O). The served projection hides `sign_in` on rows this build
+// cannot sign in with (providers.HasSignInMechanism, provider hotfix H1).
+func bootProviderCatalog(homePath string) *catalog.Catalog {
+	return catalog.Boot(
+		context.Background(),
+		catalog.EmbeddedSnapshot,
+		catalog.NewGHReleasePuller(),
+		catalog.NewFileStore(homePath),
+		catalogLogAdapter{},
+		catalog.WithSignInGate(providers.HasSignInMechanism),
+	)
 }
 
 // catalogLogAdapter routes catalog.Logger's slog-shaped

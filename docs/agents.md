@@ -41,7 +41,7 @@ Omnipus replaces the earlier Ava and Admin agents. It lives in your default work
 - **No per-agent Ask for Omnipus.** You can set any of Omnipus's tools to Deny, but not to Ask on Omnipus itself; set Ask on the global tool policy instead. Every path that changes per-agent permissions refuses it with "Omnipus takes no per-agent Ask; set Ask globally or use Deny".
 - **God Mode.** While God Mode is on, Omnipus is told so in every turn; it then proceeds without approvals.
 
-When an agent changes another agent through its tools, permissions are a separate step: `update_agent` changes identity, model and skills, while per-agent tool permissions and connector assignments change only through `set_agent_permissions`, which always asks you first. A newly created agent can never be granted a management tool (agent, workspace, skill, connector, provider, channel, permission, secret or settings changes) — those stay with Omnipus.
+When an agent changes another agent through its tools, permissions are a separate step: `update_agent` changes identity, model and skills, while per-agent tool permissions and connector assignments change only through `set_agent_permissions`, which always asks you first. A saved permission or connector-assignment change, from the agent's settings or through `set_agent_permissions`, applies to the agent's next request and next tool call without a restart. A newly created agent can never be granted a management tool (agent, workspace, skill, connector, provider, channel, permission, secret or settings changes) — those stay with Omnipus.
 
 ## How a conversation finds its agent
 
