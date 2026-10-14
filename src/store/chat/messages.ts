@@ -128,7 +128,8 @@ export function resetDuplicateIdReports(): void {
 
 /**
  * Backward-scan a bucket's message order for the id of the most recent
- * assistant message, returning null when none exists. This is the single
+ * assistant reply, skipping a Judge conclusion-handling notice and returning
+ * null when none exists. This is the single
  * shared implementation of a "find last assistant message" scan that used
  * to be hand-rolled at every WS-frame-handler / cancel / span call site in
  * this store. Takes the two order/lookup fields directly (rather than a
@@ -141,7 +142,8 @@ export function findLastAssistantMessageId(
 ): string | null {
   for (let i = order.length - 1; i >= 0; i--) {
     const id = order[i]
-    if (messagesById[id]?.role === 'assistant') return id
+    const message = messagesById[id]
+    if (message?.role === 'assistant' && message.errorCode !== 'judge_conclusion_failed') return id
   }
   return null
 }
@@ -173,7 +175,7 @@ export function findOpenAssistantMessageId(
 ): string | null {
   const tailId = order[order.length - 1]
   const tail = tailId ? messagesById[tailId] : undefined
-  if (tail?.role === 'assistant') return tailId ?? null
+  if (tail?.role === 'assistant' && tail.errorCode !== 'judge_conclusion_failed') return tailId ?? null
   const candidateId = findLastAssistantMessageId(order, messagesById)
   const candidate = candidateId ? messagesById[candidateId] : undefined
   return candidate?.isStreaming ? candidateId : null
