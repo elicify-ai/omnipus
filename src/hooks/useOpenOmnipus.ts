@@ -15,6 +15,8 @@ import { queryClient as appQueryClient } from '@/lib/queryClient'
 import type { Session, Workspace } from '@/lib/api'
 import { workspacesQueryKeys } from '@/lib/api'
 import { openOmnipusChat, type OmnipusWorkflowRequest, type OpenOmnipusOutcome } from '@/store/omnipusChat'
+// Registers the Omnipus workflow sender this hook relies on (formerly a hidden dependency via the deleted kickoff hook).
+import '@/store/chat'
 import { useUiStore } from '@/store/ui'
 
 export function useOpenOmnipus(): (workflow?: OmnipusWorkflowRequest) => OpenOmnipusOutcome {
