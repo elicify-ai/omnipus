@@ -184,7 +184,7 @@ func newIssue1277ProviderOnlyRefresh(t *testing.T) (*issue1277Fixture, *restAPI)
 func issue1277RequireVisibleRefreshRefusal(t *testing.T, api *restAPI) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPatch, "/api/v1/config", strings.NewReader(`{"gateway":{"log_level":"debug"}}`))
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/config", strings.NewReader(`{"gateway":{"log_level":"debug"}}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleConfig(w, withReAuthAdmin(t, api, r))
 	require.Equal(t, http.StatusInternalServerError, w.Code, "store-level refresh rejection must be visible, not HTTP 200")
