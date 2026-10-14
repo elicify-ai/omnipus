@@ -416,7 +416,10 @@ func (al *AgentLoop) publishCommittedFinal(ctx context.Context, rec *session.Lif
 		Outcome:        steer.Outcome(res.commit.Outcome),
 		Message:        res.message,
 	}
-	delivery, err := deliverer.Deliver(ctx, event)
+	// The completion tail is the system author of this final: its result
+	// is bounded by the hand-back contract, not by the child-send cap a
+	// child's own message_parent is held to (withSystemFinal).
+	delivery, err := deliverer.Deliver(withSystemFinal(ctx), event)
 	if err != nil {
 		return false, fmt.Errorf("steer: complete: publish committed final %q: %w", res.messageID, err)
 	}

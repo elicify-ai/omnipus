@@ -8,9 +8,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-// goalUpwardAnswerMaxBytes is the handback contract's result_so_far limit
-// (contracts/components/schemas/MessageParentHandback.yaml, maxLength 50000).
-const goalUpwardAnswerMaxBytes = 50000
+// goalUpwardAnswerMaxChars is the handback contract's result_so_far limit
+// (contracts/components/schemas/MessageParentHandback.yaml, maxLength 50000
+// — a JSON Schema maxLength counts characters, not bytes).
+const goalUpwardAnswerMaxChars = session.SystemFinalResultMaxChars
 
 // goalUpwardAnswerTruncatedMarker ends an answer cut to the handback limit.
 const goalUpwardAnswerTruncatedMarker = " … [truncated]"
@@ -47,7 +48,57 @@ func goalTurnAnswer(store *session.UnifiedStore, sessionID, turnID, finalContent
 			parts = append(parts, text)
 		}
 	}
-	return capGoalUpwardAnswer(strings.Join(parts, "\n\n"))
+	return fitGoalAnswerParts(parts)
+}
+
+// goalAnswerSeparator joins the claiming turn's messages.
+const goalAnswerSeparator = "\n\n"
+
+// fitGoalAnswerParts joins parts when they fit the hand-back limit. When
+// they do not, the deliverable is protected: the turn's longest message is
+// kept (whole when it fits on its own, otherwise its beginning with the
+// truncation marker), then the other messages are added back in their
+// original order while they still fit. When anything was left out and the
+// marker still fits, the marker ends the text. A message that fits on its
+// own is therefore never cut because a short closing remark followed it.
+func fitGoalAnswerParts(parts []string) string {
+	joined := strings.Join(parts, goalAnswerSeparator)
+	if utf8.RuneCountInString(joined) <= goalUpwardAnswerMaxChars {
+		return joined
+	}
+	longest := 0
+	for i := range parts {
+		if utf8.RuneCountInString(parts[i]) > utf8.RuneCountInString(parts[longest]) {
+			longest = i
+		}
+	}
+	if utf8.RuneCountInString(parts[longest]) > goalUpwardAnswerMaxChars {
+		return capGoalUpwardAnswer(parts[longest])
+	}
+	keep := make([]bool, len(parts))
+	keep[longest] = true
+	used := utf8.RuneCountInString(parts[longest])
+	sep := utf8.RuneCountInString(goalAnswerSeparator)
+	for i := range parts {
+		if i == longest {
+			continue
+		}
+		if n := utf8.RuneCountInString(parts[i]) + sep; used+n <= goalUpwardAnswerMaxChars {
+			keep[i] = true
+			used += n
+		}
+	}
+	kept := make([]string, 0, len(parts))
+	for i := range parts {
+		if keep[i] {
+			kept = append(kept, parts[i])
+		}
+	}
+	out := strings.Join(kept, goalAnswerSeparator)
+	if used+utf8.RuneCountInString(goalUpwardAnswerTruncatedMarker) <= goalUpwardAnswerMaxChars {
+		out += goalUpwardAnswerTruncatedMarker
+	}
+	return out
 }
 
 // stripGoalStatusLines removes GOAL_STATUS marker lines and trims the rest.
@@ -63,15 +114,21 @@ func stripGoalStatusLines(text string) string {
 	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
-// capGoalUpwardAnswer cuts answer on a UTF-8 boundary so that, with the
-// truncation marker, it stays within the handback contract limit.
+// capGoalUpwardAnswer cuts answer at a character boundary so that, with the
+// truncation marker, it stays within the handback contract limit of
+// goalUpwardAnswerMaxChars characters.
 func capGoalUpwardAnswer(answer string) string {
-	if len(answer) <= goalUpwardAnswerMaxBytes {
+	if utf8.RuneCountInString(answer) <= goalUpwardAnswerMaxChars {
 		return answer
 	}
-	cut := goalUpwardAnswerMaxBytes - len(goalUpwardAnswerTruncatedMarker)
-	for cut > 0 && !utf8.RuneStart(answer[cut]) {
-		cut--
+	keep := goalUpwardAnswerMaxChars - utf8.RuneCountInString(goalUpwardAnswerTruncatedMarker)
+	cut, n := 0, 0
+	for i := range answer {
+		if n == keep {
+			cut = i
+			break
+		}
+		n++
 	}
 	return answer[:cut] + goalUpwardAnswerTruncatedMarker
 }
@@ -110,4 +167,26 @@ func (work *goalDeferredAdjudicationWork) upwardAnswer() string {
 		return work.answer
 	}
 	return work.claimText
+}
+
+type systemFinalKey struct{}
+
+// withSystemFinal marks ctx as the completion tail publishing a child's
+// committed final hand-back. Only this package can set it (unexported key),
+// so a child's own message_parent call — which reaches the same Deliver —
+// can never claim the system-final size bound; the code path decides, never
+// the message id (issue #1306, round 4).
+func withSystemFinal(ctx context.Context) context.Context {
+	return context.WithValue(ctx, systemFinalKey{}, true)
+}
+
+func isSystemFinal(ctx context.Context) bool {
+	v, _ := ctx.Value(systemFinalKey{}).(bool)
+	return v
+}
+
+// capHandbackResult bounds a final hand-back's result text to the contract
+// limit with the truncation marker — for every helper, goal or not.
+func capHandbackResult(answer string) string {
+	return capGoalUpwardAnswer(answer)
 }

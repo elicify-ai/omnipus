@@ -850,6 +850,10 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 		if al.consumePostFinishRevival(rec.SessionID, rec.Generation) {
 			answer = postFinishRevivalPrefix + answer
 		}
+		// Issue #1306 (round 4): every final is bounded by the hand-back
+		// contract (50000 characters, truncation marked) — for every
+		// helper, goal or not.
+		answer = capHandbackResult(answer)
 		err := message.FromSessionMessageHandback(generated.SessionMessageHandback{
 			MessageId:      rec.SessionID,
 			SessionId:      rec.SessionID,
