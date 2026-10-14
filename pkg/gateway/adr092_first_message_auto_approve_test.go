@@ -167,7 +167,7 @@ func TestFirstMessageAutoApprove_GlobalOnPerChatFalse_FirstToolCallPrompts(t *te
 
 	handler.handleChatMessageWithClientID(
 		context.Background(), "adr092-chat-false", "", "go browse", "mia", nil,
-		"", "", false, "client-msg-false", boolPtr(false), wc,
+		"", "", "client-msg-false", boolPtr(false), wc,
 	)
 
 	select {
@@ -203,7 +203,7 @@ func TestFirstMessageAutoApprove_GlobalOffPerChatTrue_FirstToolCallAutoApproved(
 
 	handler.handleChatMessageWithClientID(
 		context.Background(), "adr092-chat-true", "", "go browse", "mia", nil,
-		"", "", false, "client-msg-true", boolPtr(true), wc,
+		"", "", "client-msg-true", boolPtr(true), wc,
 	)
 
 	select {

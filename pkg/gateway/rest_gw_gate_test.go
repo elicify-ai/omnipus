@@ -162,7 +162,7 @@ func TestGW_M4_RemovedMembersMainRefusesWebSocketAttachAndSend(t *testing.T) {
 	assert.NotContains(t, frames, "hello", "no transcript may be replayed")
 
 	wc2 := makeTestConn()
-	h.handleChatMessage(context.Background(), "chat-m4", mainID, "still here?", "mia", nil, "", "", false, wc2)
+	h.handleChatMessage(context.Background(), "chat-m4", mainID, "still here?", "mia", nil, "", "", wc2)
 	sent := drainConnFrames(wc2)
 	assert.Contains(t, sent, `"type":"error"`, "a send into a hidden main is refused: %s", sent)
 	entries, err := env.store(t).ReadTranscript(mainID)

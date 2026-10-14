@@ -49,7 +49,7 @@ func TestDeltaGW_OmnipusChatCannotBeRebound_ByAFrameOnAnExistingSession(t *testi
 	t.Cleanup(h.Wait)
 
 	wc := makeTestConn()
-	h.handleChatMessage(context.Background(), "chat-delta", sid, "move me", "omnipus", nil, "", deltaOtherWS, false, wc)
+	h.handleChatMessage(context.Background(), "chat-delta", sid, "move me", "omnipus", nil, "", deltaOtherWS, wc)
 
 	frames := drainConnFrames(wc)
 	assert.Contains(t, frames, `"type":"error"`, frames)
@@ -69,7 +69,7 @@ func TestDeltaGW_OmnipusChatInTheDefaultWorkspace_IsNotRefusedOnAFrame(t *testin
 	t.Cleanup(h.Wait)
 
 	wc := makeTestConn()
-	h.handleChatMessage(context.Background(), "chat-delta", sid, "hello", "omnipus", nil, "", deltaDefWS, false, wc)
+	h.handleChatMessage(context.Background(), "chat-delta", sid, "hello", "omnipus", nil, "", deltaDefWS, wc)
 
 	frames := drainConnFrames(wc)
 	assert.NotContains(t, frames, "default workspace", frames)
@@ -109,7 +109,7 @@ func TestDeltaGW_OmnipusRefusal_ServerFaultOverWebSocketIsTheFixedText(t *testin
 	t.Cleanup(h.Wait)
 
 	wc := makeTestConn()
-	h.handleChatMessage(context.Background(), "chat-delta", "", "hello", "omnipus", nil, "", deltaDefWS, false, wc)
+	h.handleChatMessage(context.Background(), "chat-delta", "", "hello", "omnipus", nil, "", deltaDefWS, wc)
 
 	frames := drainConnFrames(wc)
 	assert.Contains(t, frames, "server storage or configuration failed", frames)

@@ -92,7 +92,7 @@ func nextInbound(t *testing.T, b *bus.MessageBus, wait time.Duration) (bus.Inbou
 // mintOwnerChat mints ann's chat in ws-1 and drains the turn it publishes.
 func mintOwnerChat(t *testing.T, h *WSHandler, b *bus.MessageBus, wc *wsConn) string {
 	t.Helper()
-	h.handleChatMessage(context.Background(), "chat-owner", "", "hello", "ann", nil, "", "ws-1", false, wc)
+	h.handleChatMessage(context.Background(), "chat-owner", "", "hello", "ann", nil, "", "ws-1", wc)
 	first, ok := nextInbound(t, b, 2*time.Second)
 	require.True(t, ok, "owner chat turn not published")
 	require.NotEmpty(t, first.SessionID)
@@ -105,7 +105,7 @@ func TestRecipient_AdmitsRequestToPeerMainAndLeavesOwnerTurnUnstarted(t *testing
 	sid := mintOwnerChat(t, h, b, wc)
 
 	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
-	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray please review X", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray please review X", "ann", nil, "", "ws-1", "", nil, &to, wc)
 
 	in, ok := nextInbound(t, b, 2*time.Second)
 	require.True(t, ok, "the recipient's turn must be started")
@@ -177,7 +177,7 @@ func TestRecipient_RefusalsAdmitNothingAndSaveNoMessage(t *testing.T) {
 			require.NoError(t, err)
 			to := tc.to
 
-			h.handleChatMessageToRecipient(context.Background(), "chat-owner", tc.sessionID(sid), "@x do it", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+			h.handleChatMessageToRecipient(context.Background(), "chat-owner", tc.sessionID(sid), "@x do it", "ann", nil, "", "ws-1", "", nil, &to, wc)
 
 			_, started := nextInbound(t, b, 300*time.Millisecond)
 			assert.False(t, started, "a refused recipient must start no turn")
@@ -215,7 +215,7 @@ func TestRecipient_OverlongComputedAddressRefusedBeforeSave(t *testing.T) {
 	store := h.agentLoop.ResolveSessionStore(sid)
 	before, err := store.ReadTranscript(sid)
 	require.NoError(t, err)
-	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@long do it", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@long do it", "ann", nil, "", "ws-1", "", nil, &to, wc)
 
 	_, started := nextInbound(t, b, 300*time.Millisecond)
 	assert.False(t, started)

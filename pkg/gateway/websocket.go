@@ -1307,17 +1307,13 @@ func (wh *wsHandlerReadLoop) handleMessageFrame(data []byte) wsHandlerReadLoopFl
 	if v, ok := f.Metadata["workspace_id"].(string); ok {
 		workspaceID = strings.TrimSpace(v)
 	}
-	// Workspace-setup kickoff: the SPA sends this flag on a
-	// workspace's first open so the server records the trigger as a
-	// system-role transcript entry (not a user bubble), clears
-	// SetupPending exactly once, and gives the session a clean title —
-	// see contracts/asyncapi.yaml metadata.workspace_setup_kickoff.
-	//
-	// Kickoff intent is signaled by KEY PRESENCE, not a loose
-	// type assertion — see parseSetupKickoffMetadata's doc comment. A
-	// key that IS present but not exactly boolean true is rejected
-	// outright instead of ever reaching handleChatMessage as a normal
-	// message.
+	// Workspace-setup kickoff: the server is the only producer of the setup
+	// offer (omnipus-system-agent FR-047, K9 — workspace_setup_offer.go posts
+	// it into Omnipus's main when a workspace is created). Every client frame
+	// that carries metadata.workspace_setup_kickoff is refused here, before
+	// any session work: true is a client kickoff, and any other value is
+	// malformed. Kickoff intent is read by KEY PRESENCE, not a loose type
+	// assertion — see parseSetupKickoffMetadata's doc comment.
 	setupKickoff, malformedKickoff := parseSetupKickoffMetadata(f.Metadata)
 	if malformedKickoff {
 		slog.Warn("ws: malformed workspace_setup_kickoff metadata — rejecting",
@@ -1328,13 +1324,28 @@ func (wh *wsHandlerReadLoop) handleMessageFrame(data []byte) wsHandlerReadLoopFl
 		})
 		return wsHandlerReadLoopContinue
 	}
+	if setupKickoff {
+		slog.Warn("ws: client workspace setup kickoff refused — the server posts the setup offer",
+			"chat_id", wh.chatID, "session_id", sessionID)
+		var sidPtr *string
+		if sessionID != "" {
+			sidCopy := sessionID
+			sidPtr = &sidCopy
+		}
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:      string(generated.WsFrameTypeError),
+			Message:   clientKickoffRefusal,
+			SessionId: sidPtr,
+		})
+		return wsHandlerReadLoopContinue
+	}
 	var recipient *addressing.Pair
 	if f.Recipient != nil {
 		recipient = &addressing.Pair{WorkspaceID: f.Recipient.WorkspaceId, AgentID: f.Recipient.AgentId}
 	}
 	wh.h.handleChatMessageToRecipient(
 		wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
-		modelName, workspaceID, setupKickoff, clientMessageID, f.AutoApprove, recipient, wh.wc,
+		modelName, workspaceID, clientMessageID, f.AutoApprove, recipient, wh.wc,
 	)
 	return wsHandlerReadLoopNext
 }

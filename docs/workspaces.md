@@ -63,7 +63,9 @@ The Tasks panel shows three views of workspace work, switched with the selector 
 
 1. In the sidebar, find the **Workspaces** section and click the **+** next to its title. A name field appears in the list.
 2. Type a name and press **Enter**. The workspace opens on Chat. Press **Escape** to cancel instead.
-3. A new workspace starts with an empty team. Open the **Team** panel and add agents with **Add agent**.
+3. A new workspace starts with an empty team. Omnipus then offers, in his own chat, to set up a team for it; answer there to accept or skip the offer. You can also open the **Team** panel and add agents yourself with **Add agent**.
+
+The offer is made once per new workspace, and only for a workspace you create here, not for one Omnipus creates while helping you. If it could not be started, Omnipus's chat says so and points you to the workspace's **Team** panel.
 
 ## How to set who may delegate to whom
 

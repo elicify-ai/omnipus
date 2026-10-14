@@ -1346,6 +1346,8 @@ Generated types are not enforcement. Semantic rules (agent required for new sess
 - When received
 - Then refused
 
+*[amended 2026-10-14, chief ruling (WU-10 Q4 B): every client frame carrying the kickoff marker is refused, with or without a session id, recipient or workspace id; the server is the only producer of the setup offer.]*
+
 **BDD-5.9 Failed team load is not empty** — US-5 AS-2 — Error Path
 - Given the team request fails
 - When the Team tab renders

@@ -56,7 +56,7 @@ func provenanceSendAuthenticated(t *testing.T, handler *WSHandler, wc *wsConn, c
 	t.Helper()
 	handler.handleChatMessageWithClientID(
 		context.Background(), chatID, sessionID, content, "mia", nil,
-		"", "", false, clientID, nil, wc,
+		"", "", clientID, nil, wc,
 	)
 	return issue1090DrainQueuedFrames(t, wc)
 }

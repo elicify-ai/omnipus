@@ -52,7 +52,7 @@ func TestRecipient_RevocationDuringAskSavesNothingInTheSourceChat(t *testing.T) 
 			require.NoError(t, err)
 			to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
 
-			h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray secret request", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+			h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray secret request", "ann", nil, "", "ws-1", "", nil, &to, wc)
 
 			_, started := nextInbound(t, b, 300*time.Millisecond)
 			assert.False(t, started, "no request may be published for a revoked authorization")
@@ -78,7 +78,7 @@ func TestRecipient_ApprovedAskStillAuthorizedIsAdmitted(t *testing.T) {
 	h.agentLoop.SetToolApprover(wsRevokingApprover{revoke: func() {}})
 	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
 
-	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray please review", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray please review", "ann", nil, "", "ws-1", "", nil, &to, wc)
 
 	in, ok := nextInbound(t, b, 2*time.Second)
 	require.True(t, ok, "an approved, still-authorized request must be published")
@@ -150,7 +150,7 @@ func TestRecipient_DeniedLateAskLeavesSourceHistoryUntouched(t *testing.T) {
 	}
 	drainWC()
 
-	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray late ask", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray late ask", "ann", nil, "", "ws-1", "", nil, &to, wc)
 
 	assert.Equal(t, 1, asks, "the newly required Ask must be put to the person")
 	_, started := nextInbound(t, b, 300*time.Millisecond)
@@ -212,7 +212,7 @@ func TestRecipient_EveryLateDeniedAskLeavesNoSourceEffects(t *testing.T) {
 			userMessageEchoes(wc) // drain the owner chat's own frames
 			to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
 
-			h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray late ask", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+			h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray late ask", "ann", nil, "", "ws-1", "", nil, &to, wc)
 
 			after, err := store.ReadTranscript(sid)
 			require.NoError(t, err)
@@ -255,7 +255,7 @@ func TestRecipient_NoApprovalIsAssertedWithoutOne(t *testing.T) {
 			})
 			to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
 
-			h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray x", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+			h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray x", "ann", nil, "", "ws-1", "", nil, &to, wc)
 
 			_, started := nextInbound(t, b, 400*time.Millisecond)
 			if started && asks == 0 {

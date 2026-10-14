@@ -15083,7 +15083,7 @@ export interface components {
              */
             is_default?: boolean;
             /**
-             * @description True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise. Server-set; ignored on input (readOnly).
+             * @description True while this workspace's setup offer is pending. Set server-side when a workspace is created with an empty team; cleared server-side when the server posts the setup offer into Omnipus's main chat (omnipus-system-agent FR-047, K9), and set back to true if posting it fails. Absent/false otherwise. Server-set; ignored on input (readOnly).
              * @example false
              */
             readonly setup_pending?: boolean;

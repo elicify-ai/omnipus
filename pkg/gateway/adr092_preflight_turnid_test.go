@@ -141,7 +141,7 @@ func TestADR092Preflight_BashD7Escalation_CarriesRealTurnID(t *testing.T) {
 
 	handler.handleChatMessageWithClientID(
 		context.Background(), "adr092-turnid-chat", "", "please run the probe command",
-		adr092TurnIDTestAgentID, nil, "", "", false, "client-turnid-1", nil, callerConn,
+		adr092TurnIDTestAgentID, nil, "", "", "client-turnid-1", nil, callerConn,
 	)
 
 	// Capture the turn's real id from the event bus BEFORE consuming the

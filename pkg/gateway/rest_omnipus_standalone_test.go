@@ -88,7 +88,7 @@ func TestOmnipusStandalone_WebSocketFirstMessageWithoutWorkspaceIsRefused(t *tes
 	t.Cleanup(h.Wait)
 	wc := makeTestConn()
 
-	h.handleChatMessage(context.Background(), "chat-omnipus", "", "hello omnipus", "omnipus", nil, "", "", false, wc)
+	h.handleChatMessage(context.Background(), "chat-omnipus", "", "hello omnipus", "omnipus", nil, "", "", wc)
 
 	frames := drainConnFrames(wc)
 	assert.Contains(t, frames, `"type":"error"`, frames)
@@ -109,7 +109,7 @@ func TestOmnipusStandalone_WebSocketMessageToTheMainIsAccepted(t *testing.T) {
 	t.Cleanup(h.Wait)
 	wc := makeTestConn()
 
-	h.handleChatMessage(context.Background(), "chat-omnipus-ok", main.ID, "hello omnipus", "omnipus", nil, "", ws, false, wc)
+	h.handleChatMessage(context.Background(), "chat-omnipus-ok", main.ID, "hello omnipus", "omnipus", nil, "", ws, wc)
 
 	frames := drainConnFrames(wc)
 	assert.NotContains(t, frames, `"type":"error"`,

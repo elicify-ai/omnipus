@@ -29078,7 +29078,7 @@ type Workspace struct {
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
 
-	// SetupPending True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise. Server-set; ignored on input (readOnly).
+	// SetupPending True while this workspace's setup offer is pending. Set server-side when a workspace is created with an empty team; cleared server-side when the server posts the setup offer into Omnipus's main chat (omnipus-system-agent FR-047, K9), and set back to true if posting it fails. Absent/false otherwise. Server-set; ignored on input (readOnly).
 	SetupPending *bool `json:"setup_pending,omitempty"`
 
 	// Status Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.

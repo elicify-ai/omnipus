@@ -51,7 +51,7 @@ func TestHandleChatMessage_AcknowledgesPersistenceBeforeTurnStart(t *testing.T) 
 
 	handler.handleChatMessageWithClientID(
 		context.Background(), "chat-message-status", "", "hello", "mia", nil,
-		"", "", false, "client-message-1", nil, wc,
+		"", "", "client-message-1", nil, wc,
 	)
 
 	frames := readMessageStatusFrames(t, wc, 1)
@@ -82,7 +82,7 @@ func TestHandleChatMessage_PublishFailureMarksClientMessageFailed(t *testing.T) 
 
 	handler.handleChatMessageWithClientID(
 		context.Background(), "chat-message-status-failed", "", "hello", "mia", nil,
-		"", "", false, "client-message-failed", nil, wc,
+		"", "", "client-message-failed", nil, wc,
 	)
 
 	// T7 / B4, #1090 D5: this is a NEW session's ordinary first message.
@@ -214,7 +214,6 @@ func TestHandleChatMessage_StampsWorkspaceOnSession(t *testing.T) {
 		nil,         // mediaRefs
 		"",          // modelName
 		wantWS,      // workspaceID (active workspace)
-		false,       // setupKickoff
 		wc,
 	)
 
@@ -345,7 +344,6 @@ func TestHandleChatMessage_ForwardsModelNameToBus(t *testing.T) {
 		nil,                // mediaRefs
 		"z-ai/glm-5-turbo", // modelName
 		"",                 // workspaceID (no active workspace)
-		false,              // setupKickoff
 		wc,
 	)
 
@@ -376,9 +374,8 @@ func TestHandleChatMessage_EmptyModelName_DoesNotSetKey(t *testing.T) {
 		"hello",
 		"mia",
 		nil,
-		"",    // empty modelName
-		"",    // workspaceID (no active workspace)
-		false, // setupKickoff
+		"", // empty modelName
+		"", // workspaceID (no active workspace)
 		wc,
 	)
 
@@ -412,7 +409,6 @@ func TestHandleChatMessage_WhitespaceModelName_DoesNotSetKey(t *testing.T) {
 		nil,
 		"   \t\n", // whitespace only
 		"",        // workspaceID (no active workspace)
-		false,     // setupKickoff
 		wc,
 	)
 
@@ -445,7 +441,6 @@ func TestHandleChatMessage_TrimsModelName(t *testing.T) {
 		nil,
 		"  z-ai/glm-5-turbo  ", // surrounding whitespace
 		"",                     // workspaceID (no active workspace)
-		false,                  // setupKickoff
 		wc,
 	)
 
@@ -476,7 +471,6 @@ func TestHandleChatMessage_ModelNameWithAgentID_BothKeysSet(t *testing.T) {
 		nil,
 		"z-ai/glm-5-turbo", // per-turn model
 		"",                 // workspaceID (no active workspace)
-		false,              // setupKickoff
 		wc,
 	)
 
@@ -513,7 +507,6 @@ func TestHandleChatMessage_RejectsWorkerAgentID(t *testing.T) {
 		nil,             // mediaRefs
 		"",              // modelName (no per-turn override)
 		"",              // workspaceID (no active workspace)
-		false,           // setupKickoff
 		wc,
 	)
 
@@ -942,8 +935,7 @@ func TestHandleChatMessage_NormalMessage_RegressionUnaffected(t *testing.T) {
 		"mia",
 		nil,
 		"",
-		"",    // workspaceID
-		false, // setupKickoff
+		"", // workspaceID
 		wc,
 	)
 

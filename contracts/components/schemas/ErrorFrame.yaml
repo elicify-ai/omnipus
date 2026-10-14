@@ -51,7 +51,7 @@ properties:
       may have reached disk but durable delivery cannot be confirmed.
       answer_not_started means the entry is durably saved but turn admission
       failed, and requires its confirmed session_id. General errors and
-      workspace-setup kickoffs omit these first-send fields.
+      refused client workspace-setup kickoffs omit these first-send fields.
   payload:
     $ref: ./ErrorPayload.yaml
 

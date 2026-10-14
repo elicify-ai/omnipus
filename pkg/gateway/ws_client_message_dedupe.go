@@ -347,7 +347,7 @@ func (hcm *wsHandlerHandleChatMessage) answerRetriedMessage() bool {
 	if hcm.clientMessageID == "" {
 		return false
 	}
-	if hcm.frameSessionID == "" && !hcm.setupKickoff {
+	if hcm.frameSessionID == "" {
 		return hcm.answerRetriedFirstMessage()
 	}
 	if hcm.sessionID == "" {
