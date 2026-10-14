@@ -303,8 +303,7 @@ export function registerChatResetForReplay(fn: (sessionId: string) => void): voi
 // bucket there via resetChatBucketForReplay) and the
 // offline/no-connection branch (its own explicit call). Deliberately NOT
 // wired into setActiveSession itself — sendMessage's own pending-session
-// mint (session id '__pending') and sendWorkspaceSetupKickoff both call
-// setActiveSession too, and clearing there would erase the very choice this
+// mint (session id '__pending') calls setActiveSession too, and clearing there would erase the very choice this
 // fix exists to carry through to session_started.
 let _chatClearPendingAutoApprove: (() => void) | null = null
 

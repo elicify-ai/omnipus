@@ -134,15 +134,12 @@ export function reattachActiveSession(
   }
   // '__pending' is a local sentinel, never an attachable session ID.
   // An ordinary first send keeps its user bubble and waits for explicit
-  // delivery Retry. A synthetic setup kickoff retains its separate rollback:
-  // abandonPendingKickoff drops the placeholder and marks the attempt failed;
-  // server setup_pending truth decides whether the setup hook tries again.
+  // delivery Retry; any other stuck '__pending' is reset to "no session".
   if (activeSessionId === "__pending") {
     const chat = useChatStore.getState();
     if (getPendingFirstSend(chat)) {
       return false; // Keep the user's bubble; reconnect is not permission to resend.
     }
-    useChatStore.getState().abandonPendingKickoff();
     useSessionStore.getState().setActiveSession(null);
     return false;
   }

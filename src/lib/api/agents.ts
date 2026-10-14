@@ -154,7 +154,7 @@ export function createAgent(data: AgentCreateRequest): Promise<Agent> {
 // registered queries under TanStack's partial matching — every real list
 // query is registered as {status:'active'} / {status:'archived'} (the same
 // no-op-invalidate pitfall documented in WorkspaceTeamTab.tsx and
-// WorkspaceSettingsTab.tsx; see also useWorkspaceSetupKickoff.ts).
+// WorkspaceSettingsTab.tsx).
 //
 // Callers own the client (useQueryClient() in components, the singleton in
 // the WS frame path); fire-and-forget, returns void.

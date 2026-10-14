@@ -1,8 +1,7 @@
 // useChatAgents — shared agent-list query + scoping. The composer agent
 // picker is gone (FR-007); the `@` mention menu is BACK (founder decision
 // 2026-10-11 Q1 B) and consumes this hook again, exactly as it did before the
-// cutover. Production callers: useWorkspaceSetupKickoff and the mention menu
-// (src/hooks/useSlashMenu.ts). The query and the scoping stay in one
+// cutover. Production caller: the mention menu (src/hooks/useSlashMenu.ts). The query and the scoping stay in one
 // definition: ONE `['agents']` react-query cache entry and IDENTICAL scoping
 // (ready-to-chat status, worker exclusion, active workspace's core_team,
 // plus the ADR-090 Admin standalone-operator exemption from TEAM scoping)

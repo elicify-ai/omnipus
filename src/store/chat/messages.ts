@@ -9,17 +9,6 @@ import type { ChatMessage, ClientTruncatedResult, SessionChatState } from './typ
 // Older messages are evicted once this limit is exceeded; full transcript is preserved server-side.
 export const MAX_MESSAGES_PER_SESSION = 500
 
-// Kickoff content template for sendWorkspaceSetupKickoff — sent as
-// the (synthetic, never user-visible) first turn of a freshly-created
-// workspace. The backend records the message this content rides on as a
-// SYSTEM-role transcript entry (centered pill on replay), not a user
-// message, so this text is never shown verbatim in the UI — it only
-// instructs Ava what to do; her own reply is what the user actually reads.
-// Exported (module-level constant fn) so tests can assert on the exact
-// content without duplicating the template.
-export const buildWorkspaceSetupKickoffContent = (workspaceName: string): string =>
-  `The workspace "${workspaceName}" was just created. Introduce yourself and interview the user about this workspace's purpose so you can determine which agents and skills its team needs, then set up the team.`
-
 // Maximum byte size of a tool result stored in client state; oversized results become a sentinel.
 const MAX_TOOL_RESULT_BYTES = 50_000
 

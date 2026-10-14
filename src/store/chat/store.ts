@@ -167,60 +167,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
       return { sessionsById, ...bucketToForeground(activeBucket) }
     })
   }
-  /**
-   * Remove a bucket entirely (unlike `withBucket`, which can only
-   * patch/create). Used for FULL teardown of the `'__pending'` bucket —
-   * kickoff rollback, kickoff rejection cleanup, and the
-   * "kickoff acked while the user navigated to a different workspace"
-   * branch — none of which want a lingering empty/errored bucket
-   * left under the shared `'__pending'` key. No-op if the bucket doesn't
-   * exist. Resyncs foreground fields the same way `withBucket` does, so a
-   * delete of the CURRENTLY-foreground bucket correctly collapses to
-   * `EMPTY_BUCKET` rather than leaving stale foreground fields behind.
-   */
-  function deleteBucket(sid: string): void {
-    set((state) => {
-      if (!(sid in state.sessionsById)) return {}
-      const sessionsById = { ...state.sessionsById }
-      delete sessionsById[sid]
-      const activeSid = getActiveSid()
-      const activeBucket = (activeSid ? sessionsById[activeSid] : null) ?? EMPTY_BUCKET
-      return { sessionsById, ...bucketToForeground(activeBucket) }
-    })
-  }
-
-  /**
-   * Resolve a workspace's `kickoffAttemptStatus` slot. `'done'`
-   * deletes the entry entirely (success needs no further tracking — the
-   * server's own `setup_pending:false` already blocks a refire via the
-   * hook's ordinary guard); `'failed'` marks it so the hook's
-   * invalidate-on-failure effect can react.
-   */
-  function resolveKickoffAttempt(workspaceId: string, outcome: 'done' | 'failed'): void {
-    set((state) => {
-      const kickoffAttemptStatus = { ...state.kickoffAttemptStatus }
-      if (outcome === 'done') {
-        delete kickoffAttemptStatus[workspaceId]
-      } else {
-        kickoffAttemptStatus[workspaceId] = 'failed'
-      }
-      return { kickoffAttemptStatus }
-    })
-  }
-
-  /**
-   * Full, quiet teardown of an outstanding workspace-setup
-   * kickoff — see the public `abandonPendingKickoff` action's doc comment
-   * on the ChatStore interface for the exact contract. No-op when
-   * `pendingKickoff` is already null.
-   */
-  function abandonPendingKickoffInternal(): void {
-    const kickoff = get().pendingKickoff
-    if (kickoff === null) return
-    deleteBucket('__pending')
-    set({ pendingKickoff: null })
-    resolveKickoffAttempt(kickoff.workspaceId, 'failed')
-  }
 
   /** Re-sync foreground fields from sessionsById after an external session switch. */
   function syncForeground(): void {
@@ -303,22 +249,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
     abandonedFirstSendIds: [],
     firstSendGeneration: 0,
     ...createFirstSendActions({ set, get, withBucket }),
-
-    // No kickoff outstanding at store init.
-    pendingKickoff: null,
-    // No per-workspace kickoff attempts tracked at store init.
-    kickoffAttemptStatus: {},
-    markKickoffInFlight: (workspaceId) => {
-      set((state) => ({
-        kickoffAttemptStatus: { ...state.kickoffAttemptStatus, [workspaceId]: 'in-flight' },
-      }))
-    },
-    resolveKickoffAttempt: (workspaceId, outcome) => {
-      resolveKickoffAttempt(workspaceId, outcome)
-    },
-    abandonPendingKickoff: () => {
-      abandonPendingKickoffInternal()
-    },
 
     // Foreground selectors — derived from sessionsById[activeSessionId].
     // Initial values are the empty-session defaults projected through bucketToForeground.
@@ -798,10 +728,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     // ── Outbound queue actions ────────────────────────────────────────────────
 
-    ...createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, abandonPendingKickoffInternal, maybeDrainNext, runtime: chatRuntime }),
+    ...createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, maybeDrainNext, runtime: chatRuntime }),
     ...createOutboundResponseSlice(),
 
-    ...createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, deleteBucket, resolveKickoffAttempt, abandonPendingKickoffInternal, syncForeground, armRateLimitClear, maybeDrainNext, runtime: chatRuntime }),
+    ...createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, syncForeground, armRateLimitClear, maybeDrainNext, runtime: chatRuntime }),
   }
 })
 
