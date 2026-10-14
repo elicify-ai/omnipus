@@ -88,7 +88,7 @@ When Omnipus sets up a workspace other than the one you are chatting in, its ski
 
 Only Omnipus may name a workspace other than the current one. Each of these tools reads the written file back and reports one of the four outcomes described in [tools](tools.md#what-a-change-tool-reports).
 
-A skill installed from a GitHub link takes its folder name from the link. That name must be a valid skill name — letters, digits and single hyphens, at most 64 characters, not a reserved Windows device name such as `CON` — otherwise the install is refused before anything is written.
+A skill installed from a GitHub link takes its folder name from the link. That name must be a valid skill name — letters, digits and single hyphens, at most 64 characters, not a reserved Windows device name such as `CON` — otherwise the install is refused before anything is written. A link that hides a slash or backslash in percent-encoding (`%2F`, `%5C`, or a double-encoded form) is refused outright, before anything is downloaded.
 
 ## Limits and things to watch
 
