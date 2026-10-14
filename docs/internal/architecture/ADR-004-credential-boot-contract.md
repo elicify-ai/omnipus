@@ -99,7 +99,7 @@ Headless deployments that already have a `credentials.json` (e.g., because the k
 | `InjectFromConfig` returns an entry-auth failure for one ref | Scoped when the rest of the vault still decrypts (ERROR + that entry degrades); whole-store fatal when nothing resolves | Same — reload applies, or rejects on the whole-store class |
 | `InjectFromConfig` returns any other error (locked store, corrupt store document, env failure) | Fatal — abort boot | Reject reload, keep old config |
 | `ResolveBundle` returns `ErrNotFound` for **enabled** channel | **Amended 2026-10-13 (#1277):** ERROR log, boot continues — the channel degrades visibly (not started, ref-naming reason in Settings and doctor) | **Reload applies**; the affected channel stops and records the ref-naming failure |
-| `ResolveBundle` returns an entry-auth failure (single entry) | **Amended 2026-10-13 (#1277):** same scoped degrade, when the bundle still resolves other refs; whole-store class stays fatal | Same |
+| `ResolveBundle` returns an entry-auth failure (single entry) | **Amended 2026-10-13 (#1277):** same scoped degrade, when the store itself still decrypts at least one entry (`credentials.Store.HasDecryptableEntry`, referenced or not); whole-store class stays fatal | Same |
 | `ResolveBundle` returns `ErrNotFound` for **disabled** channel | Info log, continue | Info log, continue |
 | `RegisterSensitiveValues` (never errors) | — | — |
 | `channels.NewManager` fails on a credential-scoped factory error (#1277) | **Amended 2026-10-13:** recorded + degraded, boot continues | Reload applies; the failed instance is recorded under its instance id |
