@@ -187,6 +187,40 @@ describe('AskUserQuestionCard — pending card', () => {
     }
   })
 
+  it('renders hostile markdown context INERT through the sanitized chat pipeline', () => {
+    const hostile =
+      'Look: <img src=x onerror="window.__pwned=1"> and <script>window.__pwned=2</script> **bold ok**'
+    const card = makeCard({
+      questions: [
+        {
+          header: 'Scope',
+          question: 'Q?',
+          options: [{ label: 'A' }, { label: 'B' }],
+          context: hostile,
+        },
+      ],
+    })
+    render(<AskUserQuestionCard card={card} />)
+    const ctx = screen.getByTestId('ask-user-context')
+    // Raw HTML never materializes as elements — no img, no script.
+    expect(ctx.querySelector('img')).toBeNull()
+    expect(ctx.querySelector('script')).toBeNull()
+    expect((window as unknown as Record<string, unknown>).__pwned).toBeUndefined()
+    // Legitimate markdown still renders.
+    expect(ctx.textContent).toContain('bold ok')
+  })
+})
+
+// Split the two grace regressions out of the oversized callback. Keep the
+// same suite label, per-case setup and every test body/assertion unchanged.
+describe('AskUserQuestionCard — pending card', () => {
+  let sendSpy: ReturnType<typeof vi.fn<(answer: Omit<AskUserAnswerFrame, 'type'>) => void>>
+
+  beforeEach(() => {
+    sendSpy = vi.fn<(answer: Omit<AskUserAnswerFrame, 'type'>) => void>()
+    useChatStore.setState({ sendAskUserAnswer: sendSpy })
+  })
+
   // Stale-closure regression: the grace interval used to be keyed on
   // `allAnswered` and captured that render's drafts — once all questions were
   // first answered, a LATER edit changed the drafts but not the interval's
@@ -268,29 +302,6 @@ describe('AskUserQuestionCard — pending card', () => {
     } finally {
       vi.useRealTimers()
     }
-  })
-
-  it('renders hostile markdown context INERT through the sanitized chat pipeline', () => {
-    const hostile =
-      'Look: <img src=x onerror="window.__pwned=1"> and <script>window.__pwned=2</script> **bold ok**'
-    const card = makeCard({
-      questions: [
-        {
-          header: 'Scope',
-          question: 'Q?',
-          options: [{ label: 'A' }, { label: 'B' }],
-          context: hostile,
-        },
-      ],
-    })
-    render(<AskUserQuestionCard card={card} />)
-    const ctx = screen.getByTestId('ask-user-context')
-    // Raw HTML never materializes as elements — no img, no script.
-    expect(ctx.querySelector('img')).toBeNull()
-    expect(ctx.querySelector('script')).toBeNull()
-    expect((window as unknown as Record<string, unknown>).__pwned).toBeUndefined()
-    // Legitimate markdown still renders.
-    expect(ctx.textContent).toContain('bold ok')
   })
 })
 
