@@ -88,7 +88,7 @@ import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import { MainChatAddParticipant } from './AddParticipant'
-import { INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED } from '@/lib/featureSwitches'
+import { AGENT_PRIVATE_SECRETS_ENABLED, INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED } from '@/lib/featureSwitches'
 import { RoomTrafficMessage } from './RoomTrafficEntry'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
@@ -1489,8 +1489,9 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
             row = shouldRenderJudgeVerdictInThread(verboseChatEnabled) && msg.verdict
               ? <JudgeVerdictThreadCard verdict={msg.verdict} />
               : null
-          } else if (msg.roomRef) {
-            row = <RoomTrafficMessage message={msg} /> // FR-202: collapsed group-chat traffic
+          } else if (ROOMS_ENABLED && msg.roomRef) {
+            // FR-202: collapsed group-chat traffic — hidden until WU-15 (stage 3), #1314.
+            row = <RoomTrafficMessage message={msg} />
           } else if (msg.role === 'user') {
             row = (
               <VirtualUserMessageRow
@@ -1644,7 +1645,8 @@ function VirtualizedMessageListInner({
       if (!shouldRenderJudgeVerdictInThread(verboseChatEnabled) || !msg.verdict) return null
       return <JudgeVerdictThreadCard verdict={msg.verdict} />
     }
-    if (msg.roomRef) return <RoomTrafficMessage message={msg} /> // FR-202: collapsed group-chat traffic
+    // FR-202: collapsed group-chat traffic — hidden until WU-15 (stage 3), #1314.
+    if (ROOMS_ENABLED && msg.roomRef) return <RoomTrafficMessage message={msg} />
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
@@ -1733,7 +1735,8 @@ function VirtualizedMessageListInner({
                   const isLast = message.id === messages[messages.length - 1]?.id
                   if (!isLast) return null
                   const last = messages[messages.length - 1]
-                  if (last?.roomRef) return <RoomTrafficMessage message={last} /> // FR-202
+                  // FR-202 group-chat traffic — hidden until WU-15 (stage 3), #1314.
+                  if (ROOMS_ENABLED && last?.roomRef) return <RoomTrafficMessage message={last} />
                   if (message.role === 'user') return <UserMessage />
                   if (message.role === 'system') return <SystemMessage />
                   return <AssistantMessage />
@@ -3353,8 +3356,9 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           <AskUserQuestionThreadTail />
 
           {/* Secure secret card (omnipus-system-agent K1, FR-061/FR-074):
-              pending cards rooted in this chat, plus the latest result. */}
-          <SecretRequestThreadTail />
+              pending cards rooted in this chat, plus the latest result —
+              hidden until WU-4/5 (no secret-request server in stage 1). */}
+          {AGENT_PRIVATE_SECRETS_ENABLED && <SecretRequestThreadTail />}
 
           {/* Inline tool approvals rooted in this chat (#1263, L1 amendment
               §1.2 R6) — hidden until WU-8 (stage 2): founder design = card in
