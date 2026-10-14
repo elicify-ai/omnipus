@@ -63,6 +63,20 @@ func wu3JSON(t *testing.T, result *tools.ToolResult) map[string]any {
 	return value
 }
 
+func wu3Object(t *testing.T, value any) map[string]any {
+	t.Helper()
+	object, ok := value.(map[string]any)
+	require.True(t, ok, "expected JSON object, got %T", value)
+	return object
+}
+
+func wu3String(t *testing.T, value any) string {
+	t.Helper()
+	text, ok := value.(string)
+	require.True(t, ok, "expected JSON string, got %T", value)
+	return text
+}
+
 func wu3Success(t *testing.T, result *tools.ToolResult) map[string]any {
 	t.Helper()
 	value := wu3JSON(t, result)

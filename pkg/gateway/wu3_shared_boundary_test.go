@@ -67,8 +67,8 @@ func wu3SharedLockProbe(t *testing.T, verb string) {
 	list := wu3RegisteredTool(t, api, readName).Execute(context.Background(), nil)
 	var projection map[string]any
 	require.NoError(t, json.Unmarshal([]byte(list.ForLLM), &projection))
-	for _, raw := range projection[array].([]any) {
-		row := raw.(map[string]any)
+	for _, raw := range wu3Array(t, projection[array]) {
+		row := wu3Object(t, raw)
 		if row[key] == id {
 			args["expected_revision"] = row["revision"]
 		}
@@ -151,9 +151,9 @@ func TestWU3MCPSettingsEditInvalidatesConfirmedToolRevision(t *testing.T) {
 	list := wu3RegisteredTool(t, api, "list_mcp_servers").Execute(context.Background(), nil)
 	var data map[string]any
 	require.NoError(t, json.Unmarshal([]byte(list.ForLLM), &data))
-	servers := data["servers"].([]any)
+	servers := wu3Array(t, data["servers"])
 	require.Len(t, servers, 1)
-	old := servers[0].(map[string]any)["revision"]
+	old := wu3Object(t, servers[0])["revision"]
 	change := gen.McpServerUpdate{}
 	// Use generated type to represent a Settings change; no invented wire struct.
 	changedCommand := "settings-winner-command"

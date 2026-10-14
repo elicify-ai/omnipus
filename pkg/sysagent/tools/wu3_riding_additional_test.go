@@ -31,7 +31,7 @@ func TestWU3WorkspaceNoOpKeepsRecordAndRevisionUnchanged(t *testing.T) {
 func TestWU3WorkspaceEmptyFieldsHaveOneCanonicalShape(t *testing.T) {
 	d, _ := wu3Deps(t)
 	created := wu3Success(t, systools.NewWorkspaceCreateTool(d).Execute(context.Background(), map[string]any{"name": "Canonical fixture"}))
-	id := created["id"].(string)
+	id := wu3String(t, created["id"])
 	read := wu3Success(t, systools.NewWorkspaceGetTool(d).Execute(context.Background(), map[string]any{"id": id}))
 	updated := wu3Success(t, systools.NewWorkspaceUpdateTool(d).Execute(context.Background(), map[string]any{"id": id, "revision": read["revision"], "description": ""}))
 	listed := wu3Success(t, systools.NewWorkspaceListTool(d).Execute(context.Background(), map[string]any{}))
@@ -41,7 +41,7 @@ func TestWU3WorkspaceEmptyFieldsHaveOneCanonicalShape(t *testing.T) {
 	for _, view := range []struct {
 		name  string
 		value map[string]any
-	}{{"create", created}, {"get", read}, {"update", updated}, {"list", items[0].(map[string]any)}} {
+	}{{"create", created}, {"get", read}, {"update", updated}, {"list", wu3Object(t, items[0])}} {
 		t.Run(view.name, func(t *testing.T) {
 			assert.Equal(t, "", view.value["description"], "description always present and empty string")
 			assert.Equal(t, []any{}, view.value["core_team"], "empty roster always []")
@@ -76,7 +76,7 @@ func TestWU3PermissionWriteReportsGlobalCeilingClamp(t *testing.T) {
 	result := systools.NewAgentPermissionsTool(d).Execute(context.Background(), map[string]any{"id": id, "revision": before["revision"], "tool_policy_changes": map[string]any{"set": map[string]any{"read_file": "allow"}}})
 	wu3Success(t, result)
 	read := wu3Success(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"id": id}))
-	assert.Equal(t, "allow", read["stored_tool_overrides"].(map[string]any)["read_file"])
-	assert.Equal(t, "ask", read["effective_policies"].(map[string]any)["read_file"])
+	assert.Equal(t, "allow", wu3Object(t, read["stored_tool_overrides"])["read_file"])
+	assert.Equal(t, "ask", wu3Object(t, read["effective_policies"])["read_file"])
 	assert.Contains(t, strings.ToLower(result.ForLLM), "clamp", "correct clamping must be visible in the mutation result")
 }

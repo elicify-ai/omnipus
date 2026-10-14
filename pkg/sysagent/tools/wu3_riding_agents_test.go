@@ -46,7 +46,7 @@ func TestWU3AgentNamesEnforceContractBoundaries(t *testing.T) {
 				if row.accepted {
 					body := wu3Success(t, result)
 					if operation == "create" {
-						id = body["id"].(string)
+						id = wu3String(t, body["id"])
 					}
 					assert.Equal(t, row.name, wu3AgentRead(t, d, id)["name"], "accepted name must round-trip exactly")
 				} else {

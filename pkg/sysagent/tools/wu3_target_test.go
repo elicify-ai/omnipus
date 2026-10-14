@@ -26,7 +26,7 @@ func TestWU3CreateAgentJoinsExplicitTargetNotCallerAnchor(t *testing.T) {
 	args := wu3CreateArgs("Sales colleague")
 	args["workspace_id"] = "sales"
 	body := wu3Success(t, systools.NewAgentCreateTool(d).Execute(ctx, args))
-	id := body["id"].(string)
+	id := wu3String(t, body["id"])
 	read := wu3Success(t, systools.NewWorkspaceGetTool(d).Execute(ctx, map[string]any{"id": "sales"}))
 	assert.Equal(t, []any{id}, read["core_team"], "only target gets the new agent")
 	assert.Equal(t, anchor, wu3ReadFile(t, filepath.Join(d.Home, "workspaces", "default.json")))
@@ -146,7 +146,7 @@ func TestWU3ProjectSkillDiscoveryReadsTargetContentAndRevision(t *testing.T) {
 	items, ok := body["skills"].([]any)
 	require.True(t, ok)
 	require.Len(t, items, 1)
-	item := items[0].(map[string]any)
+	item := wu3Object(t, items[0])
 	assert.Equal(t, "crm", item["id"])
 	assert.Equal(t, "project", item["origin"])
 	assert.Contains(t, item["content"], "sales-only-body")

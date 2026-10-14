@@ -47,7 +47,7 @@ func TestWU3SharedReadNameSelectsExactlyOneExistingEntry(t *testing.T) {
 			items, ok := body[array].([]any)
 			require.True(t, ok)
 			require.Len(t, items, 1)
-			row := items[0].(map[string]any)
+			row := wu3Object(t, items[0])
 			assert.Equal(t, name, row["name"])
 			token, ok := row["revision"].(string)
 			require.True(t, ok)

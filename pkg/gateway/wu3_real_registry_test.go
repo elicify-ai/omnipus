@@ -96,6 +96,37 @@ func TestWU3ReachableChangeToolThroughRealOmnipusPolicyAndRegistry(t *testing.T)
 	assert.Equal(t, "default", anchorMeta.WorkspaceID, "Omnipus main's anchor never moves")
 }
 
+// FR-030 reachability with a baseline-supported argument schema: the real
+// turn reaches update_workspace.Execute, commits the exact requested record,
+// and must deliver its WU-3 working outcome to the model edge.
+func TestWU3WorkspaceOutcomeThroughRealOmnipusTurn(t *testing.T) {
+	provider := testutil.NewScenario()
+	api := wu3WiredAPI(t, provider)
+	require.NoError(t, workspace.SaveRecord(api.homePath, workspace.Workspace{ID: "sales", Name: "Sales", Status: "active"}))
+	before, err := workspace.ReadState(api.homePath, "sales")
+	require.NoError(t, err)
+	args, err := json.Marshal(map[string]any{"id": "sales", "revision": before.Revision, "description": "real WU3 turn write"})
+	require.NoError(t, err)
+	provider.WithToolCall("ToolSearch", `{"names":["update_workspace"]}`).WithToolCall("update_workspace", string(args)).WithText("apply completed")
+	_, err = api.agentLoop.GetSessionStore().GetOrCreateMainSession("default", "omnipus")
+	require.NoError(t, err)
+	mainID, err := session.MainSessionID("default", "omnipus")
+	require.NoError(t, err)
+	policy, registered := api.agentLoop.ResolveRegisteredToolPolicy("omnipus", "update_workspace")
+	require.True(t, registered)
+	require.Equal(t, "allow", policy)
+	answer, err := api.agentLoop.ProcessDirectAs(context.Background(), "omnipus", "Apply this confirmed workspace description.", "agent:omnipus:session:"+mainID)
+	require.NoError(t, err)
+	assert.Equal(t, "apply completed", answer)
+	result := wu3ToolResultFromTurn(t, provider, "update_workspace-0")
+	after, err := workspace.ReadState(api.homePath, "sales")
+	require.NoError(t, err)
+	assert.Equal(t, "real WU3 turn write", after.Workspace.Description, "actual registered Execute must have committed, not returned model prose")
+	assert.NotEqual(t, before.Revision, after.Revision)
+	t.Log("positive real Execute control: Sales description committed through Omnipus turn")
+	assert.Equal(t, "working", result["outcome"], "registered change tool must deliver WU-3 outcome")
+}
+
 // #1063 F1: the same real registry's ToolSearch/load path and execution agree
 // with the live compositor. add_mcp_server's validation path does no host work.
 func TestWU3MCPManagementAllowedPolicyMatchesDiscoveryAndRealExecution(t *testing.T) {

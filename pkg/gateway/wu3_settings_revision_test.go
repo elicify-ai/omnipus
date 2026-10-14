@@ -28,9 +28,9 @@ func TestWU3ProviderSettingsEditInvalidatesConfirmedToolRevision(t *testing.T) {
 	listed := wu3RegisteredTool(t, api, "list_providers").Execute(context.Background(), nil)
 	var projection map[string]any
 	require.NoError(t, json.Unmarshal([]byte(listed.ForLLM), &projection))
-	items := projection["providers"].([]any)
+	items := wu3Array(t, projection["providers"])
 	require.Len(t, items, 1)
-	old := items[0].(map[string]any)["revision"]
+	old := wu3Object(t, items[0])["revision"]
 	endpoint := "http://127.0.0.1:1/settings-winner/v1"
 	data, err := json.Marshal(gen.ProviderUpdateRequest{ApiBase: &endpoint})
 	require.NoError(t, err)
@@ -61,8 +61,8 @@ func TestWU3ChannelSettingsBindingEditInvalidatesOldToolRevision(t *testing.T) {
 	var projection map[string]any
 	require.NoError(t, json.Unmarshal([]byte(listed.ForLLM), &projection))
 	var old any
-	for _, raw := range projection["channels"].([]any) {
-		row := raw.(map[string]any)
+	for _, raw := range wu3Array(t, projection["channels"]) {
+		row := wu3Object(t, raw)
 		if row["id"] == "telegram" {
 			old = row["revision"]
 		}

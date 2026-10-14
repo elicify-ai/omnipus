@@ -143,7 +143,7 @@ func TestWU3ProviderReadToolsAgreeOnConfiguredIdentity(t *testing.T) {
 	entries, ok := listed["providers"].([]any)
 	require.True(t, ok)
 	require.Len(t, entries, 1)
-	assert.Equal(t, "grok-local", entries[0].(map[string]any)["name"])
+	assert.Equal(t, "grok-local", wu3Object(t, entries[0])["name"])
 	result := systools.NewProviderTestTool(d).Execute(context.Background(), map[string]any{"name": "grok-local"})
 	body := wu3Success(t, result)
 	assert.Equal(t, "grok-local", body["name"])
