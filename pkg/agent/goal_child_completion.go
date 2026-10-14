@@ -313,6 +313,12 @@ func (work *goalDeferredAdjudicationWork) recordConclusionOnGoal(conclusion stri
 	}
 	applied := false
 	updated, err := resolveGoalRecordStore().Update(work.goalID, func(cur *goal.Goal) error {
+		if cur.GoalID != work.goalID {
+			// The record was addressed by this goal's own ID, so a different
+			// ID inside it is damage, not a replacement goal (a replacement
+			// has its own record). Report it; never treat it as superseded.
+			return fmt.Errorf("goal record %q holds goal id %q: the record is damaged", work.goalID, cur.GoalID)
+		}
 		if stale := work.staleFor(cur); stale != "" {
 			logger.InfoCF("agent", "goal: the Judge conclusion is kept in the transcript only — "+stale,
 				map[string]any{"session_id": work.sessionID, "goal_id": work.goalID})
