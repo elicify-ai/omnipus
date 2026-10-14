@@ -948,7 +948,11 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
 			},
-			"context_window_override": map[string]any{"type": "integer", "description": "Positive token override. JSON null clears the override."},
+			// Like max_tool_iterations above: the schema admits JSON null so the
+			// documented null clear reaches Execute through the registry's type
+			// check (CHECK F1) — the tool's own validator
+			// (applyContextWindow/jsonInt) still refuses non-integers.
+			"context_window_override": map[string]any{"type": []string{"integer", "null"}, "description": "Positive token override. JSON null clears the override."},
 			"model_params":            modelParamsParameters(),
 		},
 		"required": []string{"id", "revision"},
