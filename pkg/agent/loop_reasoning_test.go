@@ -47,7 +47,7 @@ func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T
 	chManager.RegisterChannel("telegram", &fakeChannel{id: "reason-chat"})
 	al.SetChannelManager(chManager)
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",

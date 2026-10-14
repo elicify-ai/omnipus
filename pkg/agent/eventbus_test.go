@@ -491,7 +491,7 @@ func TestAgentLoop_EmitsMinimalTurnEvents(t *testing.T) {
 	provider := &scriptedToolProvider{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.RegisterTool(&mockCustomTool{})
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -655,7 +655,7 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -671,7 +671,7 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 
 	resultCh := make(chan string, 1)
 	go func() {
-		resp, _ := al.ProcessDirectWithChannel(context.Background(), "do something", "test-session", "test", "chat1")
+		resp, _ := al.processDirectWithChannelPrimaryForTest(context.Background(), "do something", "test-session", "test", "chat1")
 		resultCh <- resp
 	}()
 
@@ -853,7 +853,7 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	}
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1026,7 +1026,7 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 		followUpText:  "background result",
 		completionSig: doneCh,
 	})
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}

@@ -159,7 +159,7 @@ func TestRunTurn_QuarantineGate_ShortCircuitsAndTurnContinues(t *testing.T) {
 	sub := al.SubscribeEvents(32)
 	defer al.UnsubscribeEvents(sub.ID)
 
-	finalContent, err := al.ProcessDirect(
+	finalContent, err := al.processDirectPrimaryForTest(
 		context.Background(),
 		"please run dangerous_tool three times",
 		"test-session-quarantine-gate",
@@ -270,7 +270,7 @@ func TestRunTurn_ToolDenialBudget_AbortsAtTenNotEleven(t *testing.T) {
 	sub := al.SubscribeEvents(32)
 	defer al.UnsubscribeEvents(sub.ID)
 
-	finalContent, err := al.ProcessDirect(
+	finalContent, err := al.processDirectPrimaryForTest(
 		context.Background(),
 		"please run dangerous_tool twelve times",
 		"test-session-denial-budget",
@@ -418,7 +418,7 @@ func TestRunTurn_QuarantineGate_KeyMatchesAcrossRenamingHook(t *testing.T) {
 	approver := &countingDenyApprover{reason: "timeout"}
 	al.SetToolApprover(approver)
 
-	finalContent, err := al.ProcessDirect(
+	finalContent, err := al.processDirectPrimaryForTest(
 		context.Background(),
 		"please run the tool three times",
 		"test-session-quarantine-rename",
@@ -525,7 +525,7 @@ func TestRunTurn_QuarantineGate_SkipsBeforeToolHookOnReplay(t *testing.T) {
 	hook := &countingBeforeToolHook{}
 	require.NoError(t, al.MountHook(NamedHook("count-before-tool", hook)))
 
-	finalContent, err := al.ProcessDirect(
+	finalContent, err := al.processDirectPrimaryForTest(
 		context.Background(),
 		"please run dangerous_tool three times",
 		"test-session-quarantine-skips-beforetool",

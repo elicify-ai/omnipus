@@ -472,8 +472,11 @@ export function ChannelConfigPanel({
 
   useEffect(() => {
     if (routing === undefined) return
-    setSelectedAgentId(routing.default_agent_id ?? '__none__')
-    setSelectedWorkspaceId(routing.workspace_id ?? '')
+    // FR-128: an unbound instance is reported truthfully — `bound` false with
+    // EMPTY ids. Hydrate the pickers as "nothing chosen"; never seed them with
+    // an invented destination.
+    setSelectedWorkspaceId(routing.bound ? routing.workspace_id : '')
+    setSelectedAgentId(routing.bound ? routing.default_agent_id : '__none__')
   }, [routing])
 
   // workspace list — always loaded when panel is open (non-webchat)
@@ -494,25 +497,26 @@ export function ChannelConfigPanel({
     enabled: open && !isWebchat && selectedWorkspaceId !== '',
   })
 
-  // Bound flow: agent picker lists only the selected workspace's core_team (non-workers)
-  // Unbound flow (no workspace): all agents minus workers (legacy behaviour preserved)
+  // Agent picker lists only the selected workspace's core_team (non-workers).
+  // There is no unbound flow: a channel must name a workspace and an agent
+  // before it can route (omnipus-system-agent K14).
   const coreTeam = selectedWorkspace?.core_team ?? null
   const filteredAgents = (() => {
     const nonWorkers = agents.filter((a) => !isWorker(a))
-    if (!selectedWorkspaceId) return nonWorkers
+    if (!selectedWorkspaceId) return [] // nothing to pick from until a workspace is chosen
     if (workspaceDetailLoading || workspaceLoadError) return [] // workspace loading or errored
     if (!coreTeam) return [] // workspace loaded but core_team absent
     return nonWorkers.filter((a) => coreTeam.includes(a.id))
   })()
 
-  // Bound flow: a workspace is selected (FR-001). Agent is required but not yet chosen.
+  // A workspace is selected (FR-001). The agent is required but not yet chosen.
   const isBoundFlow = selectedWorkspaceId !== ''
 
   const { mutate: doSaveRouting } = useMutation({
-    mutationFn: (payload: { agentId: string | undefined; workspaceId: string | undefined }) =>
+    mutationFn: (payload: { agentId: string; workspaceId: string }) =>
       setChannelRouting(channelId, {
         default_agent_id: payload.agentId,
-        workspace_id: payload.workspaceId || undefined,
+        workspace_id: payload.workspaceId,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['channel-routing', channelId] })
@@ -557,7 +561,7 @@ export function ChannelConfigPanel({
   useEffect(() => () => {
     if (routingDebounceRef.current !== null) clearTimeout(routingDebounceRef.current)
   }, [])
-  const doSaveRoutingDebounced = (agentId: string | undefined, workspaceId: string | undefined) => {
+  const doSaveRoutingDebounced = (agentId: string, workspaceId: string) => {
     if (routingDebounceRef.current) clearTimeout(routingDebounceRef.current)
     routingDebounceRef.current = setTimeout(() => {
       routingDebounceRef.current = null
@@ -987,7 +991,21 @@ export function ChannelConfigPanel({
                   </p>
                 ) : (
                   <div className="space-y-[var(--space-2-5)]">
-                    {/* Workspace selector (US-1 / FR-001) */}
+                    {/* FR-128: a not-yet-bound channel is stated truthfully —
+                        there is no unbound mode to fall back on, and until the
+                        pair below is chosen every inbound message is dropped. */}
+                    {routing !== undefined && !routing.bound && (
+                      <p
+                        data-testid="routing-unbound-hint"
+                        className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed"
+                      >
+                        Not bound — choose a workspace and an agent. Until bound, inbound messages on this channel are dropped.
+                      </p>
+                    )}
+
+                    {/* Workspace selector (US-1 / FR-001). No "no workspace"
+                        option: a channel is always bound to a workspace
+                        (omnipus-system-agent K14) — there is no unbind. */}
                     <div className="space-y-[var(--space-2)]">
                       <Label
                         htmlFor="routing-workspace-select"
@@ -999,31 +1017,20 @@ export function ChannelConfigPanel({
                           value={selectedWorkspaceId || '__none__'}
                           onValueChange={(v) => {
                             const next = v === '__none__' ? '' : v
-                            const wasbound = selectedWorkspaceId !== ''
                             setSelectedWorkspaceId(next)
                             // Changing workspace clears the agent selection (member set changed)
                             setSelectedAgentId('__none__')
-                            if (next === '') {
-                              // Unbind: user selected "No workspace" on a previously-bound
-                              // channel — persist immediately with no workspace_id or
-                              // default_agent_id so the backend clears the binding (FR-001).
-                              if (wasbound) {
-                                doSaveRoutingDebounced(undefined, undefined)
-                              }
-                              // If already unbound, nothing changed — no PUT needed.
-                            }
-                            // Bound flow: do not persist until agent is also chosen (FR-001).
+                            // Never persists here: the routing PUT requires the
+                            // nonblank (workspace, agent) pair (K14) — wait until
+                            // the agent is chosen too.
                           }}
-                          placeholder="No workspace (global default routing)"
+                          placeholder="Choose a workspace"
                           ariaLabel="Workspace"
-                          items={[
-                            { value: '__none__', label: 'No workspace (global default routing)' },
-                            ...workspaces.map((ws) => ({ value: ws.id, label: ws.name })),
-                          ]}
+                          items={workspaces.map((ws) => ({ value: ws.id, label: ws.name }))}
                         />
                       </div>
                       <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
-                        Bind this channel to a workspace. Once bound, only that workspace&apos;s member agents are eligible.
+                        Bind this channel to a workspace. Only that workspace&apos;s member agents are eligible.
                       </p>
                     </div>
 
@@ -1070,30 +1077,16 @@ export function ChannelConfigPanel({
                             disabled={!isBoundFlow}
                             ariaLabel="Default agent"
                             onValueChange={(v) => {
-                              const next = v === '__none__' ? undefined : v
                               setSelectedAgentId(v)
-                              if (isBoundFlow) {
-                                if (next) {
-                                  // Both workspace and agent are chosen — persist (MAJ-001)
-                                  doSaveRoutingDebounced(next, selectedWorkspaceId)
-                                }
-                                // If bound but no agent yet, do not persist (FR-004)
-                              } else {
-                                // Unbound flow: persist on agent change (legacy auto-persist)
-                                doSaveRoutingDebounced(next, undefined)
+                              // Persist only when BOTH picks are named (MAJ-001):
+                              // the wire pair is required and nonblank (K14), so a
+                              // half-made choice never goes out.
+                              if (isBoundFlow && v !== '__none__' && v !== '') {
+                                doSaveRoutingDebounced(v, selectedWorkspaceId)
                               }
                             }}
-                            placeholder={isBoundFlow ? 'Select an agent from this workspace' : '(Global default)'}
-                            items={
-                              isBoundFlow
-                                ? // Bound flow: no "(Global default)" option (FR-003)
-                                  filteredAgents.map((a) => ({ value: a.id, label: a.name }))
-                                : [
-                                    // Unbound flow: "(Global default)" is valid (legacy path)
-                                    { value: '__none__', label: '(Global default)' },
-                                    ...filteredAgents.map((a) => ({ value: a.id, label: a.name })),
-                                  ]
-                            }
+                            placeholder="Select an agent from this workspace"
+                            items={filteredAgents.map((a) => ({ value: a.id, label: a.name }))}
                           />
                         </div>
                       )}
@@ -1106,13 +1099,6 @@ export function ChannelConfigPanel({
                           className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
                         >
                           Select an agent from this workspace to enable routing.
-                        </p>
-                      )}
-
-                      {/* Unbound flow helper text */}
-                      {!isBoundFlow && (
-                        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
-                          Which agent handles inbound messages on this channel. &quot;(Global default)&quot; falls back to the globally-configured default agent.
                         </p>
                       )}
                     </div>

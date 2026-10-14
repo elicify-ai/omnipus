@@ -45,7 +45,7 @@ func TestStopRedirectRoot_R1_ChannelChatWithoutChatIDIsRefusedAndTurnKeepsRunnin
 	}
 	turnDone := make(chan error, 1)
 	go func() {
-		_, _, perr := al.processMessage(context.Background(), first)
+		_, _, perr := al.processMessageAsPrimaryForTest(context.Background(), first)
 		turnDone <- perr
 	}()
 	r1AwaitProvider(t, provider, 0)

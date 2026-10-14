@@ -50,7 +50,7 @@ func TestBrowserAttachReplacementCancelsPendingCDP(t *testing.T) {
 	h, loop := newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		cfg.Tools.Browser.CDPURL = "ws" + strings.TrimPrefix(server.URL, "http") + "/devtools/browser/attach"
 	})
-	defaultAgent := loop.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(loop.GetRegistry())
 	if defaultAgent == nil {
 		t.Fatal("missing fixture agent")
 	}

@@ -264,6 +264,25 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request, schemaName string
 	return true
 }
 
+// decodeAndValidateStrict is decodeAndValidate for endpoints whose contract
+// forbids unknown fields in BOTH validation modes: with inbound validation
+// off it still refuses an unknown member (400 "invalid JSON body") instead of
+// silently dropping it, so a required-field rule cannot be bypassed by a
+// misspelt key. With validation on, the schema's additionalProperties:false
+// already refuses it.
+func decodeAndValidateStrict(w http.ResponseWriter, r *http.Request, schemaName string, dst any, validateEnabled bool) bool {
+	if validateEnabled {
+		return decodeAndValidate(w, r, schemaName, dst, true)
+	}
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		return false
+	}
+	return true
+}
+
 // ValidateInboundFrameJSON validates a raw WS frame body against the named schema.
 // Returns the same (msg, serverErr) shape as validateBodyAgainstSchema.
 //

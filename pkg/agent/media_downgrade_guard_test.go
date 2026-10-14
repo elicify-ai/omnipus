@@ -64,7 +64,7 @@ func TestSynthesizeImageRejection_PriorPDFDowngrade_DoesNotBlockFriendlySynthesi
 	provider := &imageRejectionProvider{model: modelName}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "expected default agent")
 
 	opts := processOptions{

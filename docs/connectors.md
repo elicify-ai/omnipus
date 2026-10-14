@@ -28,22 +28,20 @@ Email works differently. An email mailbox belongs to one agent in one workspace.
 
 ## Choosing which agent answers
 
-A workspace-bound connector sends every incoming message on that account to the agent you selected. The selected agent must remain a member of that workspace and must be able to answer chats.
+Every connector is bound to one workspace and names the agent that answers it — its main agent. Saving the binding needs both; there is no default agent to fall back to.
 
-An unbound connector can use a connector-level default agent. If that choice is empty, Omnipus uses the starred default agent from [Agents](agents.md).
+A bound connector sends every incoming message on that account to its main agent. The main agent must exist, must be able to answer chats (not a worker or a system agent) and must stay a member of that workspace.
 
-More specific rules can override the unbound connector's choice. Omnipus checks them from most specific to least specific.
+When a message cannot be routed, Omnipus drops it — no other agent ever sees it. That happens when:
 
-| Match | What it identifies | Priority |
-|---|---|---|
-| Peer | A particular person or a parent conversation | First |
-| Guild | A Discord guild | After peer |
-| Team | A Slack team | After guild |
-| Account | One account on a platform | After team |
-| Connector wildcard | Any account on one platform | After account |
-| Default agent | Messages with no matching rule | Last |
+- the connector is not bound yet ("bind this channel to an agent in a workspace");
+- its main agent no longer exists;
+- its main agent is not a chat agent;
+- its main agent is no longer on the workspace's team.
 
-The first matching rule decides which agent answers. Detailed rules are set in configuration rather than on the Connectors screen.
+Until a connector is bound, its card shows **Not bound — choose a workspace and agent**. A connector that dropped a message shows the reason and the time of the last dropped message.
+
+Each drop is written to the log as an error and to the audit log, and the connector shows as degraded on the Connectors page with the reason. Saving a valid binding clears that status, and the next message is answered normally.
 
 ## Connectors you can set up
 
@@ -96,7 +94,7 @@ Back in the workspace, select **Mail** to open the [mailbox panel](mail.md#set-u
 
 ## Related pages
 
-- [Agents](agents.md) — choose the starred default agent and manage agents that can answer chats.
+- [Agents](agents.md) — manage the agents that can answer chats.
 - [Workspaces](workspaces.md) — manage the team available to a workspace-bound connector.
 - [Security](security.md) — understand how Omnipus protects connector credentials.
 - [Tools](tools.md) — learn about the email tools agents use.

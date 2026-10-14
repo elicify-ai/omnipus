@@ -157,7 +157,8 @@ describe('AgentListScreen — base/worker partition', () => {
       expect(screen.getByTestId('worker-card-worker-1')).toBeInTheDocument()
     })
 
-    // The worker card omits the default-★ "Set as default" control.
+    // No card carries a "Set as default" control any more — the default-agent
+    // feature is removed (omnipus-system-agent K11/K12, bundle B1).
     const workerCard = screen.getByTestId('worker-card-worker-1').closest('div.relative')!
     expect(within(workerCard as HTMLElement).queryByRole('button', { name: /set .* as default/i })).not.toBeInTheDocument()
   })

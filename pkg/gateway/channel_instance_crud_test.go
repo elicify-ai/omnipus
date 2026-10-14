@@ -146,7 +146,7 @@ func newTestAPIWithAuditor(t *testing.T) (*restAPI, string) {
 func TestChannelsRouter_AcceptsInstanceID(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -210,7 +210,7 @@ func TestWorkspaceDelete_PartialCascade_AbortsIntact(t *testing.T) {
 	}
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)

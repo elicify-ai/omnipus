@@ -47,7 +47,7 @@ func newHookTestLoop(
 	}
 
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
-	agent := al.registry.GetDefaultAgent()
+	agent := al.registry.primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}

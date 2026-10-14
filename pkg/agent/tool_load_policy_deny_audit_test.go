@@ -52,7 +52,7 @@ func TestToolSearchLoad_PolicyDenyIsAudited(t *testing.T) {
 		inst.StoreToolPolicy(merged)
 	}
 
-	reply, err := al.ProcessDirectWithChannel(context.Background(),
+	reply, err := al.processDirectWithChannelPrimaryForTest(context.Background(),
 		"please load find_skills", "e2e-load-tool-deny-audit", "cli", "test")
 	require.NoError(t, err, "reply=%q", reply)
 	al.Close()

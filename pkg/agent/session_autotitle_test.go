@@ -34,7 +34,7 @@ func TestAutoTitleAfterFirstReply(t *testing.T) {
 	t.Cleanup(func() { msgBus.Close() })
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(func() { al.Close() })
-	registerAgent(t, al, home, "jim", provider, true)
+	registerAgent(t, al, home, "jim", provider)
 
 	store := al.GetSessionStore()
 	run := func(t *testing.T, id, msg string) {

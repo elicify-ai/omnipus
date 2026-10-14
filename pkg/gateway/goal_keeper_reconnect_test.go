@@ -64,7 +64,7 @@ func TestKeeperFollowUp_ReachesRebindedConnection(t *testing.T) {
 	connA := dialTestWS(t, srv)
 	sendWSAuthFrameDevMode(t, connA)
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, connA.WriteMessage(websocket.TextMessage, data))

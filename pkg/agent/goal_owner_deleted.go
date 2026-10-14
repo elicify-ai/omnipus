@@ -166,3 +166,34 @@ func (al *AgentLoop) EndGoalsOfDeletedAgent(agentID, agentName string) (int, err
 	}
 	return ended, errors.Join(errs...)
 }
+
+// goalOwnerMissingReason is the visible terminal reason for a goal whose
+// canonical owner no longer resolves (omnipus-system-agent FR-123, §6.4; chief
+// ruling 2026-10-14: the existing `failed` pill, this exact reason).
+func goalOwnerMissingReason(ownerID string) string {
+	return fmt.Sprintf("owner agent %s no longer exists", ownerID)
+}
+
+// failGoalIfOwnerMissing ends sessionID's active goal as failed with the
+// visible reason when ownerID does not resolve in the live registry, and
+// reports whether it did. A resolvable owner returns false and changes
+// nothing. A failure to end the goal is logged at error level; the goal is
+// still not dispatched (it can only run under its owner).
+func (al *AgentLoop) failGoalIfOwnerMissing(sessionID, goalID, ownerID string) bool {
+	if reg := al.GetRegistry(); reg != nil && strings.TrimSpace(ownerID) != "" {
+		if inst, ok := reg.GetAgent(ownerID); ok && inst != nil {
+			return false
+		}
+	}
+	label := strings.TrimSpace(ownerID)
+	if label == "" {
+		label = "(none)"
+	}
+	reason := goalOwnerMissingReason(label)
+	if _, ok := al.clearGoalStatus(sessionID, al.goalSessionStoreFor(sessionID), reason); !ok {
+		logger.ErrorCF("agent", "goal: canonical owner is gone and the goal could not be ended",
+			map[string]any{"session_id": sessionID, "goal_id": goalID, "owner_agent_id": ownerID})
+	}
+	al.goalMarkIdleSettling(goalID, false)
+	return true
+}

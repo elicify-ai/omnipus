@@ -99,7 +99,7 @@ func TestExecuteTask_NativeDispatch_RootsAtTaskWorkspaceID_WhenAgentBelongsToMul
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
 	bindMetSoftTierJudge(t, al)
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "expected default agent")
 	// No-default-policy model (CLAUDE.md hard constraint 6): write_file needs
 	// an explicit agent-level grant, or it fails closed to "deny" and this

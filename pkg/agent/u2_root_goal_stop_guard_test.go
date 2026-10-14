@@ -111,7 +111,7 @@ func TestU2RootGoalStopGuard_UserInitiatedStopLeavesGoalUnchanged(t *testing.T) 
 	var turnErr error
 	go func() {
 		defer close(turnDone)
-		_, _, turnErr = al.processMessage(context.Background(), bus.InboundMessage{
+		_, _, turnErr = al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 			Channel:       "webchat",
 			Sender:        bus.SenderInfo{CanonicalID: "webchat_user"},
 			ChatID:        sid,

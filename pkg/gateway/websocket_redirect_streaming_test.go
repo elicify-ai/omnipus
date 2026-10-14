@@ -182,7 +182,7 @@ func TestWSRedirect_StreamingTextTurnOverTheRealHTTPProvider(t *testing.T) {
 		require.NoError(t, conn.WriteMessage(websocket.TextMessage, raw))
 	}
 	write(wsClientFrameTestHelper{Type: "auth", Token: token})
-	write(wsClientFrameTestHelper{Type: "message", Content: "list 150 plants, one per line"})
+	write(wsClientFrameTestHelper{Type: "message", Content: "list 150 plants, one per line", AgentID: "mia"})
 	sessionID := readFrameOfType(t, conn, "session_started", 5*time.Second).SessionID
 	require.NotEmpty(t, sessionID)
 	select {

@@ -149,7 +149,7 @@ func TestWorkspaceDelegation_SessionRebindsToCurrentWorkspace(t *testing.T) {
 	wc := makeTestConn()
 
 	// Message 1: mint a session while workspace A is active.
-	handler.handleChatMessage(context.Background(), "chat-rebind", "", "first", "", nil, "", wsA, false, wc)
+	handler.handleChatMessage(context.Background(), "chat-rebind", "", "first", "mia", nil, "", wsA, false, wc)
 	var sessionID string
 	select {
 	case msg := <-msgBus.InboundChan():
@@ -168,7 +168,7 @@ func TestWorkspaceDelegation_SessionRebindsToCurrentWorkspace(t *testing.T) {
 	// Message 2: SAME session — the operator has since switched their active
 	// workspace to B (e.g. to wire a delegation edge on B's Team tab) and
 	// continues the same chat thread rather than starting a new one.
-	handler.handleChatMessage(context.Background(), "chat-rebind", sessionID, "second", "", nil, "", wsB, false, wc)
+	handler.handleChatMessage(context.Background(), "chat-rebind", sessionID, "second", "mia", nil, "", wsB, false, wc)
 	select {
 	case <-msgBus.InboundChan():
 	case <-time.After(2 * time.Second):
@@ -200,7 +200,7 @@ func TestWorkspaceDelegation_SessionRebind_IgnoresAbsentWorkspaceID(t *testing.T
 
 	wc := makeTestConn()
 
-	handler.handleChatMessage(context.Background(), "chat-keep", "", "first", "", nil, "", wsA, false, wc)
+	handler.handleChatMessage(context.Background(), "chat-keep", "", "first", "mia", nil, "", wsA, false, wc)
 	var sessionID string
 	select {
 	case msg := <-msgBus.InboundChan():
@@ -214,7 +214,7 @@ func TestWorkspaceDelegation_SessionRebind_IgnoresAbsentWorkspaceID(t *testing.T
 	require.NotNil(t, store)
 
 	// Message 2: same session, but this frame carries no workspace_id.
-	handler.handleChatMessage(context.Background(), "chat-keep", sessionID, "second", "", nil, "", "", false, wc)
+	handler.handleChatMessage(context.Background(), "chat-keep", sessionID, "second", "mia", nil, "", "", false, wc)
 	select {
 	case <-msgBus.InboundChan():
 	case <-time.After(2 * time.Second):

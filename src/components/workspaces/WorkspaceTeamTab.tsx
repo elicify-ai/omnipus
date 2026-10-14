@@ -445,17 +445,9 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
   )
   const handleRemoveMember = useCallback(
     (agentId: string) => {
-      const agent = agents.find((a) => a.id === agentId)
-      if (agent?.default) {
-        addToast({
-          variant: 'error',
-          message: `Cannot remove ${agent.name} — it is the default agent.`,
-        })
-        return
-      }
       setEditState((prev) => (prev ? removeMember(prev, agentId) : prev))
     },
-    [agents, addToast],
+    [],
   )
 
   const handleOpenAgent = useCallback(

@@ -1256,7 +1256,7 @@ func newTestRestAPIWithAvaRoster(t *testing.T) *restAPI {
 			Defaults: config.AgentDefaults{
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore},
 				{ID: "jim", Name: "Jim", Type: config.AgentTypeCore},
 				{ID: "ava", Name: "Ava", Type: config.AgentTypeCore},
 				{ID: "ray", Name: "Ray", Type: config.AgentTypeCore},
@@ -1586,7 +1586,7 @@ func newTestRestAPIWithoutAva(t *testing.T) *restAPI {
 			Defaults: config.AgentDefaults{
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore},
 				{ID: "jim", Name: "Jim", Type: config.AgentTypeCore},
 				{ID: "ray", Name: "Ray", Type: config.AgentTypeCore},
 				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker},

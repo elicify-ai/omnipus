@@ -183,7 +183,7 @@ func TestAgentLoop_Continue_NoMessages(t *testing.T) {
 		t.Fatal("expected provider to be initialized")
 	}
 
-	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
+	resp, err := al.Continue(context.Background(), "agent:mia:session:test-session", "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -229,11 +229,11 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 
 	// DEL-04: the steering queue is scoped; a message is enqueued in the scope
 	// of the session that will consume it (there is no shared fallback bucket).
-	correlationID, _, err := al.enqueueSteeringMessage("test-session", "", providers.Message{Role: "user", Content: "new direction"}, "")
+	correlationID, _, err := al.enqueueSteeringMessage("agent:mia:session:test-session", "", providers.Message{Role: "user", Content: "new direction"}, "")
 	require.NoError(t, err, "SETUP: the steering enqueue must succeed")
 	require.NotEmpty(t, correlationID, "every queued steering item is minted a correlation id")
 
-	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
+	resp, err := al.Continue(context.Background(), "agent:mia:session:test-session", "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -306,6 +306,8 @@ func TestSessionWorker_DifferentScopesGetIndependentWorkers(t *testing.T) {
 		},
 	}
 
+	msg1 = al.addressToPrimaryForTest(msg1) // no default agent: the fixture names its agent
+	msg2 = al.addressToPrimaryForTest(msg2)
 	scope1, _, ok1 := al.resolveSteeringTarget(msg1)
 	scope2, _, ok2 := al.resolveSteeringTarget(msg2)
 	if !ok1 || !ok2 {
@@ -600,7 +602,7 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -619,7 +621,7 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 	resultCh := make(chan result, 1)
 
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"do something",
 			"test-session",
@@ -714,7 +716,7 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 	// DEL-04: enqueue in the scope of the session whose turn will poll it.
 	route, _, routeErr := al.resolveMessageRoute(bus.InboundMessage{
 		Channel: "test", ChatID: "chat1", SessionKey: "test-session", Content: "initial message",
-		Sender: bus.SenderInfo{CanonicalID: "cron"},
+		Sender: bus.SenderInfo{CanonicalID: "cron"}, Metadata: map[string]string{"agent_id": "mia"},
 	})
 	if routeErr != nil {
 		t.Fatalf("resolve route: %v", routeErr)
@@ -724,7 +726,7 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 	require.NotEmpty(t, correlationID, "every queued steering item is minted a correlation id")
 
 	// Process a normal message - the initial steering poll should inject the steering message
-	_, err = al.ProcessDirectWithChannel(
+	_, err = al.processDirectWithChannelPrimaryForTest(
 		context.Background(),
 		"initial message",
 		"test-session",
@@ -804,7 +806,8 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	}()
 
 	first := bus.InboundMessage{
-		Channel: "test",
+		Channel:  "test",
+		Metadata: map[string]string{"agent_id": "mia"},
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
@@ -816,7 +819,8 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 		},
 	}
 	late := bus.InboundMessage{
-		Channel: "test",
+		Channel:  "test",
+		Metadata: map[string]string{"agent_id": "mia"},
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
@@ -962,7 +966,7 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 		err  error
 	}, 1)
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"initial request",
 			sessionKey,
@@ -1119,7 +1123,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 		t.Fatal("expected continue path to inject steering media into the provider request")
 	}
 
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1202,7 +1206,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
 	sessionKey := routing.BuildAgentMainSessionKey("mia")
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1222,7 +1226,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"do something",
 			sessionKey,
@@ -1380,7 +1384,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	al.RegisterTool(&interruptibleTool{name: "cancel_tool", started: started})
 	sessionKey := routing.BuildAgentMainSessionKey("mia")
 
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1406,7 +1410,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"do work",
 			sessionKey,
@@ -1589,7 +1593,7 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, wrappedProvider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1602,7 +1606,7 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 
 	resultCh := make(chan string, 1)
 	go func() {
-		resp, _ := al.ProcessDirectWithChannel(
+		resp, _ := al.processDirectWithChannelPrimaryForTest(
 			context.Background(), "go", "test-session", "test", "chat1",
 		)
 		resultCh <- resp
@@ -1702,7 +1706,7 @@ func stubTurnStateForCancel(t *testing.T, al *AgentLoop, sessionKey, transcriptS
 	t.Helper()
 	providerCancelledCh = make(chan struct{}, 1)
 
-	agent := al.registry.GetDefaultAgent()
+	agent := al.registry.primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}

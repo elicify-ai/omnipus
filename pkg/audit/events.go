@@ -368,6 +368,20 @@ const (
 	// {instance_id, workspace_id, intended_agent_id, chat_id, reason}.
 	EventChannelRoutingDriftDrop = "channel.routing.drift_drop"
 
+	// EventChannelMessageDropped — WARN. An inbound channel message was
+	// dropped because it could not be routed: the instance is not bound to a
+	// workspace and a main agent, or its main agent is missing, not a chat
+	// target, or not on the workspace's team (omnipus-system-agent FR-121).
+	// No agent sees the message. Fields: {instance_id, channel, chat_id,
+	// reason}.
+	EventChannelMessageDropped = "channel.message.dropped"
+
+	// EventSystemMessageDiscarded — WARN. A system message carried no
+	// addressable originating agent and was discarded rather than handed to
+	// any agent (omnipus-system-agent FR-131). Fields: {channel, chat_id,
+	// reason}.
+	EventSystemMessageDiscarded = "system.message.discarded"
+
 	// EventChannelRoutingChanged — INFO. An operator updated the workspace
 	// binding or routing configuration of a channel instance via the REST API
 	// (ADR-029 FR-029). Emitted by pkg/gateway/rest.go's channel routing PUT

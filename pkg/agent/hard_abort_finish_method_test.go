@@ -98,7 +98,7 @@ func TestRunTurn_HardAbortViaInterruptSessionHard_RecordsCancelMethodHard(t *tes
 	started := make(chan struct{})
 	al.RegisterTool(&interruptibleTool{name: "hard_abort_test_tool", started: started})
 
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "expected default agent")
 	// No-default-policy model (CLAUDE.md hard constraint 6): the test tool
 	// needs an explicit agent-level grant or it fails closed to deny before

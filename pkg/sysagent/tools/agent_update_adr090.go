@@ -55,11 +55,6 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 		}
 		soul = &v
 	}
-	if _, present := args["default"]; present {
-		if err := requireDefaultWriter(t.deps); err != nil {
-			return fieldErrorResult(err)
-		}
-	}
 	known := knownToolPolicies(t.deps)
 	inv := t.deps.currentInventory()
 	result, mutateErr := store.MutateState(id, revision, func(a *config.AgentConfig) error {
@@ -78,14 +73,6 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 	}, soul)
 	if mutateErr != nil {
 		return t.mutateErrorResult(id, result, mutateErr)
-	}
-	if raw, present := args["default"]; present {
-		if want, ok := raw.(bool); ok {
-			if err := writeDefaultSingleton(t.deps, id, want); err != nil {
-				slog.Warn("sysagent: default singleton write failed", "id", id, "error", err)
-				return defaultSingletonPartialResult(id, result.Revision, fields)
-			}
-		}
 	}
 	activation, message := publishAgentActivation(t.deps, id)
 	if _, hasVoice := args["voice"]; hasVoice && message == "" {

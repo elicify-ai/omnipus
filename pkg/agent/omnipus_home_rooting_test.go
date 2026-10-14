@@ -177,7 +177,7 @@ func TestRunTurn_OmnipusHomeRooted_WritesToOwnHomeNotForgedWorkspace(t *testing.
 	al, err := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	require.NoError(t, err, "NewAgentLoop must succeed")
 	defer al.Close()
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -186,7 +186,7 @@ func TestRunTurn_OmnipusHomeRooted_WritesToOwnHomeNotForgedWorkspace(t *testing.
 		Policies: map[string]config.ToolPolicy{"write_file": "allow"},
 	})
 
-	finalContent, err := al.ProcessDirect(context.Background(), "please write proof.txt for me", "test-session-omnipus-home")
+	finalContent, err := al.processDirectPrimaryForTest(context.Background(), "please write proof.txt for me", "test-session-omnipus-home")
 	require.NoError(t, err, "an Omnipus turn must be admissible with zero workspace memberships (omnipus-system-agent OSA-9.1: home-rooted)")
 	assert.Equal(t, "done", finalContent)
 	requests := provider.AllRequests()
@@ -245,7 +245,7 @@ func TestRunTurn_OrdinaryUnassignedAgentRefused(t *testing.T) {
 	al, err := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	require.NoError(t, err, "NewAgentLoop must succeed")
 	defer al.Close()
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -253,7 +253,7 @@ func TestRunTurn_OrdinaryUnassignedAgentRefused(t *testing.T) {
 		Policies: map[string]config.ToolPolicy{"write_file": "allow"},
 	})
 
-	_, procErr := al.ProcessDirect(context.Background(), "please write proof.txt for me", "test-session-jim-unassigned")
+	_, procErr := al.processDirectPrimaryForTest(context.Background(), "please write proof.txt for me", "test-session-jim-unassigned")
 	require.Error(t, procErr, "an ordinary unassigned agent's turn must be refused")
 	assert.True(t, errors.Is(procErr, ErrAgentNotWorkspaceMember),
 		"refusal must wrap ErrAgentNotWorkspaceMember, got: %v", procErr)

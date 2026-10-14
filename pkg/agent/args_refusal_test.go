@@ -75,7 +75,7 @@ func runArgsTurn(t *testing.T, capChars int, argsJSON string) argsTurn {
 	provider := testutil.NewScenario().
 		WithToolCall("args_tool", argsJSON).
 		WithText("done")
-	mia := registerAgent(t, al, home, "mia", provider, false)
+	mia := registerAgent(t, al, home, "mia", provider)
 	stub := &argsRecordingTool{}
 	mia.Tools.Register(stub)
 	mia.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"args_tool": "allow"}})

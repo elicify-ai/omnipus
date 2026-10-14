@@ -287,7 +287,7 @@ func runRefusedWebchatTurn(t *testing.T) []collectedFrame {
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
 
-	msg := wsClientFrameTestHelper{Type: "message", Content: "what is the weather today?"}
+	msg := wsClientFrameTestHelper{Type: "message", Content: "what is the weather today?", AgentID: "mia"}
 	data, err := json.Marshal(msg)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))

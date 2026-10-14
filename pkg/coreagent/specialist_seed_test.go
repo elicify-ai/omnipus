@@ -28,7 +28,6 @@ func TestSeedSpecialists(t *testing.T) {
 			assert.True(t, ac.IsWorker(), "IsWorker() must be true for a specialist")
 			assert.False(t, ac.IsChatTarget(), "a specialist must NOT be a chat target")
 			assert.True(t, ac.Locked, "specialist must be Locked")
-			assert.False(t, ac.Default, "specialist must never be the default agent")
 			require.NotNil(t, ac.Subagents)
 			require.NotNil(t, ac.Subagents.Executor)
 			assert.Equal(t, config.ExecutorKindNative, ac.Subagents.Executor.EffectiveKind(),

@@ -42,7 +42,6 @@ func TestQAV6RootGoal_MetStaysInOwnChatWithoutUpwardFailure(t *testing.T) {
 	}
 	al, judgeInst := newGoalLoopTestLoop(t, worker, func(cfg *config.Config) {
 		cfg.Agents.Defaults.Home = config.OmnipusHomeDir()
-		cfg.Agents.Defaults.DefaultAgentID = "native-agent"
 		cfg.Agents.Defaults.MaxTokens = 4096
 		cfg.Agents.Defaults.MaxToolIterations = 6
 		cfg.Agents.List[0].Type = "" // Ordinary chat agent, not a delegation-only worker.

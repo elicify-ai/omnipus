@@ -142,7 +142,7 @@ func TestRunTurn_IdenticalSuccessRepeat_SetTodos_StopsTurnWithVisibleNotice(t *t
 	al.RegisterTool(counter)
 	allowToolsForAllAgents(t, al, "set_todos")
 
-	finalContent, err := al.ProcessDirect(context.Background(), "/goal improve it", "test-session-repeat-set-todos")
+	finalContent, err := al.processDirectPrimaryForTest(context.Background(), "/goal improve it", "test-session-repeat-set-todos")
 	require.NoError(t, err)
 
 	require.Zero(t, counter.errors.Load(), "every set_todos call must succeed, as in the UAT")
@@ -174,7 +174,7 @@ func TestRunTurn_IdenticalSuccessRepeat_ReadOnlyPolling_StopsTurn(t *testing.T) 
 	al.RegisterTool(tasks)
 	allowToolsForAllAgents(t, al, "list_jobs", "list_tasks")
 
-	finalContent, err := al.ProcessDirect(context.Background(), "is my task done yet?", "test-session-repeat-polling")
+	finalContent, err := al.processDirectPrimaryForTest(context.Background(), "is my task done yet?", "test-session-repeat-polling")
 	require.NoError(t, err)
 
 	// The list_tasks call in between ends the first list_jobs run (3), so the
@@ -204,7 +204,7 @@ func TestRunTurn_CallsBelowRepeatStop_CompleteNormally(t *testing.T) {
 		al.RegisterTool(tasks)
 		allowToolsForAllAgents(t, al, "list_jobs", "list_tasks")
 
-		finalContent, err := al.ProcessDirect(context.Background(), "check both lists", "test-session-repeat-alternating")
+		finalContent, err := al.processDirectPrimaryForTest(context.Background(), "check both lists", "test-session-repeat-alternating")
 		require.NoError(t, err)
 		assert.Equal(t, "done", finalContent, "20 calls that never repeat back-to-back must not stop the turn")
 
@@ -256,7 +256,7 @@ func TestRunTurn_CallsBelowRepeatStop_CompleteNormally(t *testing.T) {
 		al.RegisterTool(jobs)
 		allowToolsForAllAgents(t, al, "list_jobs")
 
-		finalContent, err := al.ProcessDirect(context.Background(), "poll a few times", "test-session-repeat-seven")
+		finalContent, err := al.processDirectPrimaryForTest(context.Background(), "poll a few times", "test-session-repeat-seven")
 		require.NoError(t, err)
 		assert.Equal(t, "done", finalContent, "7 identical successes is one below the stop and must complete")
 		assert.Equal(t, int32(7), jobs.calls.Load())

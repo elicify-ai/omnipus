@@ -113,7 +113,7 @@ func newHandlerContextFixture(t *testing.T, pending bool, metricsHooks ...func(i
 		c.Tools.Browser.ExecPath = filepath.Join(dir, "no-such-chrome-binary")
 		c.Tools.Browser.ProfileDir = filepath.Join(dir, "profile")
 	})
-	agentID := al.GetRegistry().GetDefaultAgent().ID
+	agentID := primaryChatAgent(al.GetRegistry()).ID
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), agentID, "")
 	if outcome != agent.BrowserResolveOK || !mgr.CaptureVideoCapability().Capable {
 		t.Fatal("fixture browser manager is not capture capable")

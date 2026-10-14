@@ -83,7 +83,7 @@ func newQA2HelperInputFixture(t *testing.T) *qa2HelperInputFixture {
 			{Username: "qa2-other", SessionTokenHash: mustBcryptHash(t, tokens["qa2-other"])},
 		}},
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{Home: home, DefaultModel: config.DefaultModel{Model: "qa2-helper-input-model"}, DefaultAgentID: "mia", MaxTokens: 4096, MaxToolIterations: 10},
+			Defaults: config.AgentDefaults{Home: home, DefaultModel: config.DefaultModel{Model: "qa2-helper-input-model"}, MaxTokens: 4096, MaxToolIterations: 10},
 			List:     []config.AgentConfig{{ID: "mia", Type: config.AgentTypeCore}, {ID: "hans", Type: config.AgentTypeWorker}},
 		},
 	}

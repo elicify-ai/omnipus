@@ -24,7 +24,7 @@ func TestQADelegateFinal_PollAndWakeDeliverExactlyOnce(t *testing.T) {
 			defer cancel()
 			message := rootHumanMessage(f.parentID)
 			message.Content = "Check the helper status once."
-			response, _, err := f.al.processMessage(ctx, message)
+			response, _, err := f.al.processMessageAsPrimaryForTest(ctx, message)
 			if err != nil || response != "Helper status checked." {
 				t.Fatalf("SETUP: real parent poll turn = (%q, %v), want the provider's completed poll reply", response, err)
 			}

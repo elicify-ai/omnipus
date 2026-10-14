@@ -715,38 +715,6 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 		return rosterErr, true
 	}
 
-	// RELEASE BLOCKER fix follow-up (2026-07-26): on a genuinely fresh
-	// install, coreagent.SeedConfig also sets the settings singleton
-	// (cfg.Agents.Defaults.DefaultAgentID = "mia") — the ONLY field
-	// agent.AgentRegistry.GetDefaultAgent and pkg/routing's
-	// resolveDefaultAgentID consult (ADR-054 D6.4). SeedConfig is a pure
-	// in-memory struct mutation by design, with zero filesystem side effects
-	// (mirrors why seedSystemAgentEagerSouls below is a separate call site
-	// rather than living inside SeedConfig itself) — so without persisting it here,
-	// the singleton lives only in THIS process's in-memory cfg. NewAgentLoop
-	// immediately below reads it fine, so THIS boot resolves correctly, but
-	// config.json on disk never gets it: the very next restart reloads an
-	// empty default_agent_id, isFreshInstall is now false (agents already
-	// exist), SeedConfig never re-seeds it, and the two resolution ladders'
-	// differing Priority-2 fallbacks silently disagree again — reopening the
-	// exact bug this fix closes, just delayed by one restart. Persist it
-	// directly into config.json's raw JSON map (mirrors rest.go's
-	// updateConfigJSONLocked/ensureMap convention — never config.SaveConfig,
-	// which round-trips the whole typed struct and can clobber
-	// SecureString-backed API keys, CLAUDE.md's hard rule). Runs once, here,
-	// strictly before the config-file watcher starts later in this function,
-	// so there is no self-write-registry race to account for. Best-effort:
-	// a write failure only means the in-memory resolution (correct for this
-	// boot) does not survive a restart — not a boot-time fatal, since the
-	// gateway is otherwise fully healthy.
-	if rc.cfg.Agents.Defaults.DefaultAgentID != "" {
-		if persistErr := persistFreshInstallDefaultAgentID(rc.configPath, rc.cfg.Agents.Defaults.DefaultAgentID); persistErr != nil {
-			slog.Warn("gateway: could not persist fresh-install default_agent_id to config.json; "+
-				"in-memory resolution is correct for this boot but will not survive a restart",
-				"default_agent_id", rc.cfg.Agents.Defaults.DefaultAgentID, "error", persistErr)
-		}
-	}
-
 	// Eagerly seed every System Agent's SOUL.md right after SeedConfig.
 	// For the Judge this closes an operator-reported UX gap: its soul only
 	// materialized lazily on its FIRST real verifier dispatch (pkg/agent's
@@ -1644,16 +1612,6 @@ func (rc *runContextWithOptions) configureHealthAndWatcher() {
 		}
 		if degraded, reason := rc.runningServices.reloadDegradedStatus(); degraded {
 			return true, reason
-		}
-		// ADR-054 §0 R3: the configured default agent naming an entity record
-		// that failed to load is a degraded state, not a silent fallback —
-		// EvaluateDefaultAgentHealth (called from NewAgentRegistry) records it.
-		// SetDegradedFunc is a single-slot hook, so this COMPOSES with the
-		// checks above rather than replacing them.
-		if registry := rc.agentLoop.GetRegistry(); registry != nil {
-			if degraded, reason := registry.DefaultAgentDegraded(); degraded {
-				return true, reason
-			}
 		}
 		return false, ""
 	})

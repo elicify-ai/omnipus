@@ -24,42 +24,42 @@ func restoreTestDeps(t *testing.T, cfg *config.Config, save func(*config.Config)
 }
 
 // TestWithConfig_OmitemptyScalarRollback proves a save failure rolls back a
-// JSON omitempty scalar. encoding/json omits empty default_agent_id from the
+// JSON omitempty scalar. encoding/json omits an empty image_model from the
 // snapshot, so Unmarshal-into-mutated-struct would leave the new value.
 func TestWithConfig_OmitemptyScalarRollback(t *testing.T) {
 	cfg := config.DefaultConfig()
-	if cfg.Agents.Defaults.DefaultAgentID == "writer" {
+	if cfg.Agents.Defaults.ImageModel == "writer" {
 		t.Fatal("fixture must not already name writer")
 	}
-	original := cfg.Agents.Defaults.DefaultAgentID
+	original := cfg.Agents.Defaults.ImageModel
 	deps := restoreTestDeps(t, cfg, func(*config.Config) error { return errors.New("disk full") })
 
 	err := deps.WithConfig(func(cfg *config.Config) error {
-		cfg.Agents.Defaults.DefaultAgentID = "writer"
+		cfg.Agents.Defaults.ImageModel = "writer"
 		return nil
 	})
 	if err == nil {
 		t.Fatal("expected save error")
 	}
-	if cfg.Agents.Defaults.DefaultAgentID != original {
-		t.Errorf("DefaultAgentID=%q, want rolled-back %q", cfg.Agents.Defaults.DefaultAgentID, original)
+	if cfg.Agents.Defaults.ImageModel != original {
+		t.Errorf("ImageModel=%q, want rolled-back %q", cfg.Agents.Defaults.ImageModel, original)
 	}
 }
 
 func TestWithConfig_SaveConfigLockedNil_RollsBackAfterFn(t *testing.T) {
 	cfg := config.DefaultConfig()
-	original := cfg.Agents.Defaults.DefaultAgentID
+	original := cfg.Agents.Defaults.ImageModel
 	deps := restoreTestDeps(t, cfg, nil)
 
 	err := deps.WithConfig(func(cfg *config.Config) error {
-		cfg.Agents.Defaults.DefaultAgentID = "writer"
+		cfg.Agents.Defaults.ImageModel = "writer"
 		return nil
 	})
 	if err == nil {
 		t.Fatal("expected error when SaveConfigLocked is nil")
 	}
-	if cfg.Agents.Defaults.DefaultAgentID != original {
-		t.Errorf("DefaultAgentID=%q after nil saver, want rolled-back %q", cfg.Agents.Defaults.DefaultAgentID, original)
+	if cfg.Agents.Defaults.ImageModel != original {
+		t.Errorf("ImageModel=%q after nil saver, want rolled-back %q", cfg.Agents.Defaults.ImageModel, original)
 	}
 }
 
@@ -70,7 +70,7 @@ func TestWithConfig_RollbackPreservesNonSerializedRuntimeState(t *testing.T) {
 	deps := restoreTestDeps(t, cfg, func(*config.Config) error { return errors.New("disk full") })
 
 	err := deps.WithConfig(func(cfg *config.Config) error {
-		cfg.Agents.Defaults.DefaultAgentID = "writer"
+		cfg.Agents.Defaults.ImageModel = "writer"
 		return nil
 	})
 	if err == nil {

@@ -91,14 +91,14 @@ func TestAutoApprove_RuleAsk_AlwaysAllowSuppressesRepeatPrompt(t *testing.T) {
 	approver := &grantRecordingApprover{al: al, alwaysAllow: true}
 	al.SetToolApprover(approver)
 
-	_, err := al.ProcessDirect(context.Background(), "run it", "repeat-grant-session")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "run it", "repeat-grant-session")
 	require.NoError(t, err)
 	reqs := approver.requests()
 	require.Len(t, reqs, 1, "first call: exactly one dialog")
 	assert.Equal(t, "rule_ask", reqs[0].Args["adr092_kind"], "the one dialog carries the D3 context")
 	assert.Contains(t, toolResultText(t, provider, "repeat-call-1"), "repeatgrant-99", "first call runs")
 
-	_, err = al.ProcessDirect(context.Background(), "run it again", "repeat-grant-session")
+	_, err = al.processDirectPrimaryForTest(context.Background(), "run it again", "repeat-grant-session")
 	require.NoError(t, err)
 	assert.Len(t, approver.requests(), 1,
 		"second identical call in the same session must reach the approver ZERO more times — "+
@@ -118,11 +118,11 @@ func TestAutoApprove_RuleAsk_ApproveOnceDoesNotSuppressRepeatPrompt(t *testing.T
 	approver := &grantRecordingApprover{al: al, alwaysAllow: false}
 	al.SetToolApprover(approver)
 
-	_, err := al.ProcessDirect(context.Background(), "run it", "approve-once-session")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "run it", "approve-once-session")
 	require.NoError(t, err)
 	require.Len(t, approver.requests(), 1, "first call: exactly one dialog")
 
-	_, err = al.ProcessDirect(context.Background(), "run it again", "approve-once-session")
+	_, err = al.processDirectPrimaryForTest(context.Background(), "run it again", "approve-once-session")
 	require.NoError(t, err)
 	assert.Len(t, approver.requests(), 2,
 		"Approve Once records no grant, so an identical repeat call must prompt again")
@@ -144,13 +144,13 @@ func TestAutoApprove_RuleAsk_NoPlaceholderWhenGranted(t *testing.T) {
 	al.SetToolApprover(approver)
 
 	before := AskPendingPlaceholdersWritten()
-	_, err := al.ProcessDirect(context.Background(), "run it", "placeholder-session")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "run it", "placeholder-session")
 	require.NoError(t, err)
 	afterFirst := AskPendingPlaceholdersWritten()
 	assert.Equal(t, before+1, afterFirst,
 		"a call that genuinely blocks on a human writes exactly one pending placeholder")
 
-	_, err = al.ProcessDirect(context.Background(), "run it again", "placeholder-session")
+	_, err = al.processDirectPrimaryForTest(context.Background(), "run it again", "placeholder-session")
 	require.NoError(t, err)
 	afterSecond := AskPendingPlaceholdersWritten()
 	assert.Equal(t, afterFirst, afterSecond,

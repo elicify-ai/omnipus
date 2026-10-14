@@ -524,6 +524,7 @@ func TestGetTools_MCPAutoApproveMapsFromAnnotations(t *testing.T) {
 		t.Fatalf("unexpected MCP registration collisions: %v", collisions)
 	}
 	api.mcpRegistry = mcpReg
+	api.builtinRegistry = builtins // FR-125: listings read the central registry
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
 	r = withAdminRole(r)

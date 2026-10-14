@@ -200,7 +200,7 @@ func TestRetryOnStreamingReset_SingleCandidateTurnSucceeds(t *testing.T) {
 	t.Cleanup(al.Close)
 
 	ctx := context.Background()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent, "default agent must be registered")
 
 	_, err := al.runAgentLoop(ctx, agent, processOptions{
@@ -256,7 +256,7 @@ func TestRetryOnStreamingReset_GoAwayTurnSucceeds(t *testing.T) {
 	t.Cleanup(al.Close)
 
 	ctx := context.Background()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	_, err := al.runAgentLoop(ctx, agent, processOptions{
@@ -314,7 +314,7 @@ func TestRetryOnStreamingReset_ExhaustsMaxRetries(t *testing.T) {
 	t.Cleanup(al.Close)
 
 	ctx := context.Background()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	_, err := al.runAgentLoop(ctx, agent, processOptions{
@@ -366,7 +366,7 @@ func TestRetryOnStreamingReset_AuthErrorNotRetried(t *testing.T) {
 	t.Cleanup(al.Close)
 
 	ctx := context.Background()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	_, err := al.runAgentLoop(ctx, agent, processOptions{
@@ -418,7 +418,7 @@ func TestRetryOnStreamingReset_ScenarioProviderVariant(t *testing.T) {
 	t.Cleanup(al.Close)
 
 	ctx := context.Background()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	_, err := al.runAgentLoop(ctx, agent, processOptions{
@@ -499,7 +499,7 @@ func TestRetryOnStreamingReset_NothingToTrimStillRetries(t *testing.T) {
 	t.Cleanup(al.Close)
 
 	ctx := context.Background()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent, "default agent must be registered")
 
 	_, err := al.runAgentLoop(ctx, agent, processOptions{
@@ -633,7 +633,7 @@ func TestRetryOnStreamingReset_RecallSpanDropAloneStillRetries(t *testing.T) {
 	provider.al = al
 	t.Cleanup(al.Close)
 
-	agentInst := al.GetRegistry().GetDefaultAgent()
+	agentInst := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agentInst, "default agent must be registered")
 
 	// Seed a small prior turn so the persisted window has more than the

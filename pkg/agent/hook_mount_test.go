@@ -103,7 +103,7 @@ func TestAgentLoop_ProcessDirectWithChannel_AutoMountsBuiltinHook(t *testing.T) 
 	})
 	defer al.Close()
 
-	resp, err := al.ProcessDirectWithChannel(context.Background(), "hello", "session-1", "cli", "direct")
+	resp, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hello", "session-1", "cli", "direct")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestAgentLoop_ProcessDirectWithChannel_AutoMountsProcessHook(t *testing.T) 
 	})
 	defer al.Close()
 
-	resp, err := al.ProcessDirectWithChannel(context.Background(), "hello", "session-1", "cli", "direct")
+	resp, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hello", "session-1", "cli", "direct")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestAgentLoop_ProcessDirectWithChannel_InvalidConfiguredHookFails(t *testin
 	})
 	defer al.Close()
 
-	_, err := al.ProcessDirectWithChannel(context.Background(), "hello", "session-1", "cli", "direct")
+	_, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hello", "session-1", "cli", "direct")
 	if err == nil {
 		t.Fatal("expected invalid configured hook error")
 	}

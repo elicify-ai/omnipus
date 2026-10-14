@@ -140,7 +140,7 @@ func newQAUATDelegateLoop(t *testing.T, home string, provider providers.LLMProvi
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home: home, DefaultModel: config.DefaultModel{Model: "test-model"},
-				DefaultAgentID: testDefaultAgentID, MaxTokens: 4096, MaxToolIterations: 10,
+				MaxTokens: 4096, MaxToolIterations: 10,
 			},
 			List: []config.AgentConfig{
 				{ID: testDefaultAgentID, Home: home},

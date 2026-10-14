@@ -145,7 +145,6 @@ export interface TeamNodeModel {
   role: string
   /** The backing agent — its avatar is drawn with AgentMark. Undefined for a ghost. */
   agent?: Agent
-  isDefault: boolean
   isWorker: boolean
   /** True when no backing agent exists for this id (referenced but deleted). */
   isGhost: boolean
@@ -295,7 +294,6 @@ function implicitSystemNodes(
       type: 'system' as NonNullable<Agent['type']>,
       role: roleLabel(a),
       agent: a,
-      isDefault: false,
       isWorker: false,
       isGhost: false,
       isImplicit: true,
@@ -334,7 +332,6 @@ export function buildTeamGraphModel(
         type: 'Subagent' as NonNullable<Agent['type']>,
         role: 'deleted',
         agent: undefined,
-        isDefault: false,
         isWorker: false,
         isGhost: true,
         isImplicit: false,
@@ -347,7 +344,6 @@ export function buildTeamGraphModel(
       type: (a.type ?? 'Main') as NonNullable<Agent['type']>,
       role: roleLabel(a),
       agent: a,
-      isDefault: a.default === true,
       isWorker: isWorker(a),
       isGhost: false,
       isImplicit: false,

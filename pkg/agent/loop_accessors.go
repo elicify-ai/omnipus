@@ -486,14 +486,13 @@ func (al *AgentLoop) GetStartupInfo() map[string]any {
 	// validation entirely and ACCEPT unknown skill ids. A fail-open reached
 	// through three layers of indirection.
 	//
-	// Any agent answers these questions identically, so ask any.
-	agent := registry.GetDefaultAgent()
-	if agent == nil {
-		for _, id := range registry.ListAgentIDs() {
-			if ag, ok := registry.GetAgent(id); ok && ag != nil {
-				agent = ag
-				break
-			}
+	// Any agent answers these questions identically, so ask any — there is
+	// no default agent (§6.4). An empty registry gives explicit empty info.
+	var agent *AgentInstance
+	for _, id := range registry.ListAgentIDs() {
+		if ag, ok := registry.GetAgent(id); ok && ag != nil {
+			agent = ag
+			break
 		}
 	}
 	if agent == nil {
@@ -520,21 +519,12 @@ func (al *AgentLoop) GetStartupInfo() map[string]any {
 }
 
 // ListSkillsDetailed returns the full per-skill metadata (name, source,
-// description, author, version) for every installed skill, sourced from the
-// default agent's ContextBuilder skills loader — the same loader that feeds
-// GetStartupInfo's skills summary. This is the data path GET /api/v1/skills uses
-// to enrich its response beyond bare names. Returns nil when there is no default
-// agent or its ContextBuilder is unset (e.g. an uninitialized loop).
+// description, author, version) for every skill installed on this install —
+// read by the shared, install-level skill loader, never through an agent or
+// its grants (omnipus-system-agent FR-124, §6.4). This is the data path GET
+// /api/v1/skills uses to enrich its response beyond bare names.
 func (al *AgentLoop) ListSkillsDetailed() []skills.SkillInfo {
-	registry := al.GetRegistry()
-	if registry == nil {
-		return nil
-	}
-	agent := registry.GetDefaultAgent()
-	if agent == nil || agent.ContextBuilder == nil {
-		return nil
-	}
-	return agent.ContextBuilder.ListSkillsDetailed()
+	return installSkillsLoader(al.GetConfig()).ListSkills()
 }
 
 // ChannelOwnership returns the stored resolver, or nil before wiring.

@@ -8,6 +8,7 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/mcp"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -35,10 +36,10 @@ func TestRegisterServerTools_MCPCannotShadowABuiltin(t *testing.T) {
 	if registry == nil {
 		t.Fatal("agent registry is nil — cannot exercise the runtime registration path")
 	}
-	agentID := cfg.Agents.Defaults.DefaultAgentID
+	agentID := string(coreagent.IDMia)
 	inst, ok := registry.GetAgent(agentID)
 	if !ok {
-		t.Fatalf("default agent %q not registered", agentID)
+		t.Fatalf("agent %q not registered", agentID)
 	}
 
 	// A first-party tool for the MCP server to try to shadow.

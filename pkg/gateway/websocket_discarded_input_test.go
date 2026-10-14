@@ -27,7 +27,7 @@ import (
 func TestAnnounceDiscardedInput_FramesTheClientAndBlocksALaterWorkingTick(t *testing.T) {
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
-	handler.handleChatMessageWithClientID(context.Background(), "chat-u7-discard", "", "queued", "", nil,
+	handler.handleChatMessageWithClientID(context.Background(), "chat-u7-discard", "", "queued", "mia", nil,
 		"", "", false, "client-u7-1", nil, wc)
 	received := readMessageStatusFrames(t, wc, 1)
 	sessionID := received[0].SessionId
@@ -115,7 +115,7 @@ func sessionEntryForDisposition(id, content, clientID string) session.Transcript
 func TestClearNotPerformed_IsFramedAsAFailedMessageStatus(t *testing.T) {
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
-	handler.handleChatMessageWithClientID(context.Background(), "chat-s302", "", "/clear", "", nil,
+	handler.handleChatMessageWithClientID(context.Background(), "chat-s302", "", "/clear", "mia", nil,
 		"", "", false, "client-s302-1", nil, wc)
 	received := readMessageStatusFrames(t, wc, 1)
 	sessionID := received[0].SessionId
@@ -221,7 +221,7 @@ func TestCaptureSlogWarn_ConcurrentLogAndReadIsRaceFree(t *testing.T) {
 func TestAnnounceClearNotPerformed_UnresolvableRowIsLoggedNotSilent(t *testing.T) {
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
-	handler.handleChatMessageWithClientID(context.Background(), "chat-r2s2", "", "hello", "", nil,
+	handler.handleChatMessageWithClientID(context.Background(), "chat-r2s2", "", "hello", "mia", nil,
 		"", "", false, "client-r2s2-1", nil, wc)
 	sessionID := readMessageStatusFrames(t, wc, 1)[0].SessionId
 
@@ -236,7 +236,7 @@ func TestAnnounceClearNotPerformed_UnresolvableRowIsLoggedNotSilent(t *testing.T
 func TestAnnounceClearNotPerformed_RowWithoutClientIDIsLoggedNotSilent(t *testing.T) {
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
-	handler.handleChatMessageWithClientID(context.Background(), "chat-r2s2b", "", "hello", "", nil,
+	handler.handleChatMessageWithClientID(context.Background(), "chat-r2s2b", "", "hello", "mia", nil,
 		"", "", false, "client-r2s2-2", nil, wc)
 	sessionID := readMessageStatusFrames(t, wc, 1)[0].SessionId
 	store := handler.agentLoop.ResolveSessionStore(sessionID)
@@ -258,7 +258,7 @@ func TestAnnounceClearNotPerformed_RowWithoutClientIDIsLoggedNotSilent(t *testin
 func TestClearHeld_IsFramedAsAHeldMessageStatusAndNeverFollowsFailed(t *testing.T) {
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
-	handler.handleChatMessageWithClientID(context.Background(), "chat-held-clear", "", "/clear", "", nil,
+	handler.handleChatMessageWithClientID(context.Background(), "chat-held-clear", "", "/clear", "mia", nil,
 		"", "", false, "client-held-clear-1", nil, wc)
 	received := readMessageStatusFrames(t, wc, 1)
 	require.Equal(t, "received", received[0].State)
@@ -302,7 +302,7 @@ func TestClearHeld_ReleaseMovesTheRecordedStateOnAndNeverOverwritesFailed(t *tes
 	handler, _ := newTestWSHandlerForModelName(t, bus.NewMessageBus())
 	wc := makeTestConn()
 	seed := func(chatID, clientID string) (sessionID, entryID string) {
-		handler.handleChatMessageWithClientID(context.Background(), chatID, "", "/clear", "", nil,
+		handler.handleChatMessageWithClientID(context.Background(), chatID, "", "/clear", "mia", nil,
 			"", "", false, clientID, nil, wc)
 		received := readMessageStatusFrames(t, wc, 1)
 		require.Equal(t, "received", received[0].State)

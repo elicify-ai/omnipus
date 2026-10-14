@@ -102,6 +102,10 @@ func sanitizeConfigForWire(m map[string]any) {
 	if agents, ok := m["agents"].(map[string]any); ok {
 		if defaults, ok := agents["defaults"].(map[string]any); ok {
 			delete(defaults, "max_tool_iterations_env_imported")
+			// omnipus-system-agent FR-120 / K17: the retired default-agent
+			// setting is ignored (the loader warns on every load) and never
+			// served as if it still meant something.
+			delete(defaults, "default_agent_id")
 		}
 	}
 }

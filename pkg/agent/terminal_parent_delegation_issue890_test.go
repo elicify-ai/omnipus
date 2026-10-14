@@ -182,7 +182,7 @@ func TestAdr093RootRevival_HumanMessageRevivesTerminalChatAndDelegationSucceeds(
 		SessionKey: "agent:" + testDefaultAgentID + ":session:" + h.parentID,
 	}
 	go func() {
-		_, _, perr := h.al.processMessage(context.Background(), msg)
+		_, _, perr := h.al.processMessageAsPrimaryForTest(context.Background(), msg)
 		messageErr <- perr
 		close(messageDone)
 	}()

@@ -125,7 +125,7 @@ func TestRunTurn_IdenticalSuccessfulSetTodosForever_EndsAtIterationCapWithNotice
 	al.RegisterTool(counter)
 	setAskPolicyForAllAgents(t, al, "set_todos", config.ToolPolicyAllow)
 
-	finalContent, err := al.ProcessDirect(
+	finalContent, err := al.processDirectPrimaryForTest(
 		context.Background(),
 		"/goal improve it",
 		"test-session-runaway-identical-set-todos",
