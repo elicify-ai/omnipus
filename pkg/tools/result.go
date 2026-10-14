@@ -498,6 +498,16 @@ const (
 	ToolAssemblyDuplicateCode = "tool_assembly_duplicate"
 	ToolArgumentsTooLargeCode = "tool_arguments_too_large"
 	ToolResultRecallMarkCode  = "tool_result_recall_mark"
+
+	// ProtectedInternalFileCode is the #1284 (amendment §2, fix round 1)
+	// VALUE of PermissionDenied's optional `code` field: present exactly
+	// when the refusal is Omnipus's protected-internal-file denial — the
+	// never-grantable internal-file refusal, God Mode included — so a
+	// consumer distinguishes it from an ordinary workspace-scope denial
+	// without parsing the reason text. Set by the filesystem-scope producer
+	// (PermissionDeniedResult on ErrCarveOut) and by bash's protected-operand
+	// command check (ProtectedInternalFileResult).
+	ProtectedInternalFileCode = "protected_internal_file"
 )
 
 // SkillNotFoundCode is the discriminator ADR-072 FR-054 mints so a skill-slug
@@ -716,7 +726,13 @@ func SanitiseMarkField(s, fallback string) string {
 // boolean value (ClassifyDenial's DenialClass.Permanent, or "always true"
 // for a filesystem-scope denial — see PermissionDeniedResult's own comment)
 // and must pass it explicitly.
-func PermissionDeniedPayload(tool, message, reason string, permanent bool) ([]byte, error) {
+//
+// code is #1284 fix round 1's optional marker (variadic so every existing
+// caller keeps compiling): when non-empty it rides PermissionDenied's
+// optional `code` field — today exactly ProtectedInternalFileCode, marking
+// the never-grantable internal-file refusal. Omitted (absent on the wire)
+// for every other denial.
+func PermissionDeniedPayload(tool, message, reason string, permanent bool, code ...string) ([]byte, error) {
 	// The contract requires all three string fields non-empty (minLength:1).
 	// A payload violating that is schema-invalid — nothing today actually
 	// enforces the ToolCallResultFrame.result oneOf at a boundary (neither
@@ -745,6 +761,10 @@ func PermissionDeniedPayload(tool, message, reason string, permanent bool) ([]by
 		Tool:      tool,
 		Reason:    reason,
 		Permanent: permanent,
+	}
+	if len(code) > 0 && code[0] != "" {
+		marker := clampRefusalField(code[0], maxRefusalToolRunes)
+		payload.Code = &marker
 	}
 	// All three of reason, tool, and message are offered to the shrink
 	// loop, in this PRIORITY ORDER (marshalWithinBudget exhausts each field

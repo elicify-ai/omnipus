@@ -67,17 +67,52 @@ import (
 // TestExpandRulesExcluding_NeverGrantsADeniedNode, which failed on the
 // workspace shape the first time it was run. Passing them explicitly makes the
 // property hold by construction instead of by coincidence of layout.
-func ExpandRulesExcluding(rules []PathRule, deniedPaths, deniedNodes, deniedPrefixes []string) ([]PathRule, error) {
-	if len(deniedPaths) == 0 && len(deniedNodes) == 0 {
+func ExpandRulesExcluding(rules []PathRule, deniedPaths, deniedNodes, deniedPrefixes []string, allowedBranches ...[]PathRule) ([]PathRule, error) {
+	var branches []PathRule
+	if len(allowedBranches) > 0 {
+		branches = allowedBranches[0]
+	}
+	if len(deniedPaths) == 0 && len(deniedNodes) == 0 && len(branches) == 0 {
 		return rules, nil
 	}
 	denied := cleanNonEmpty(deniedPaths)
 	nodes := cleanNonEmpty(deniedNodes)
-	if len(denied) == 0 && len(nodes) == 0 {
+	if len(denied) == 0 && len(nodes) == 0 && len(branches) == 0 {
 		return rules, nil
 	}
 
 	prefixes := cleanPrefixes(deniedPrefixes)
+
+	// Allowed branch roots (amendment §2 D3/D5): enumerated siblings that ARE
+	// a branch root are granted with the branch's own access class instead of
+	// the parent rule's — how a read-only generation under the RWX home rule
+	// stays read+execute on a grant-only kernel. Entries INSIDE a branch are
+	// skipped: the branch's own rule already covers its subtree.
+	branchAccess := make(map[string]uint64, len(branches))
+	for _, b := range branches {
+		clean := filepath.Clean(b.Path)
+		if clean == "" || clean == "." {
+			continue
+		}
+		if existing, dup := branchAccess[clean]; dup {
+			// Widest access wins when the same root is named twice.
+			branchAccess[clean] = existing | b.Access
+			continue
+		}
+		branchAccess[clean] = b.Access
+	}
+	branchRootList := make([]string, 0, len(branchAccess))
+	for root := range branchAccess {
+		branchRootList = append(branchRootList, root)
+	}
+	underBranch := func(p string) bool {
+		for _, root := range branchRootList {
+			if pathIsUnder(p, root) {
+				return true
+			}
+		}
+		return false
+	}
 
 	out := make([]PathRule, 0, len(rules)+(len(denied)+len(nodes))*4)
 	for _, rule := range rules {
@@ -102,7 +137,7 @@ func ExpandRulesExcluding(rules []PathRule, deniedPaths, deniedNodes, deniedPref
 			continue
 		}
 
-		expanded, err := siblingGrants(PathRule{Path: path, Access: rule.Access}, inside, nodesInside, prefixes)
+		expanded, err := siblingGrants(PathRule{Path: path, Access: rule.Access}, inside, nodesInside, prefixes, branchAccess, underBranch)
 		if err != nil {
 			return nil, err
 		}
@@ -141,7 +176,7 @@ func containsPath(paths []string, want string) bool {
 // grants) but never granted themselves — see ExpandRulesExcluding's contract.
 // A traversed directory is skipped when it comes up as a child entry, so
 // putting a node in `traverse` is exactly what withholds its rule.
-func siblingGrants(rule PathRule, blocked, nodes, prefixes []string) ([]PathRule, error) {
+func siblingGrants(rule PathRule, blocked, nodes, prefixes []string, branchAccess map[string]uint64, underBranch func(string) bool) ([]PathRule, error) {
 	// traverse: directories to enumerate, i.e. the root plus every ancestor of
 	// a blocked path below it. denySet: the blocked paths themselves.
 	traverse := map[string]struct{}{rule.Path: {}}
@@ -180,6 +215,17 @@ func siblingGrants(rule PathRule, blocked, nodes, prefixes []string) ([]PathRule
 		for _, e := range entries {
 			full := filepath.Join(dir, e.Name())
 			if _, isDenied := denySet[full]; isDenied {
+				continue
+			}
+			// An allowed branch root carries ITS access class, never the
+			// parent rule's — this is the amendment §2 D5 mechanism that keeps
+			// a read-only generation read+execute under the RWX home rule.
+			if access, isBranch := branchAccess[full]; isBranch {
+				out = append(out, PathRule{Path: full, Access: access})
+				continue
+			}
+			if underBranch != nil && underBranch(full) {
+				// Inside a deeper branch: the branch's own rule covers it.
 				continue
 			}
 			if _, isTraversed := traverse[full]; isTraversed {

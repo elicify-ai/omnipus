@@ -373,6 +373,13 @@ func TestExpandRulesExcluding_NeverGrantsADeniedNode(t *testing.T) {
 					"unwired again and the macOS rename bypass is back", shape.workDir)
 			}
 
+			// Seeded BEFORE the expansion: the walk enumerates the work dir at
+			// call time, so the ordinary work file the control below checks
+			// must exist for the explosion to grant it.
+			workFile := filepath.Join(shape.workDir, "own-tree-control.txt")
+			if err := os.WriteFile(workFile, []byte("x"), 0o600); err != nil {
+				t.Fatalf("seed work file: %v", err)
+			}
 			expanded, err := ExpandRulesExcluding(policy.FilesystemRules, policy.DeniedPaths, policy.DeniedNodes, policy.DeniedPathPrefixes)
 			if err != nil {
 				t.Fatalf("expand: %v", err)
@@ -392,11 +399,14 @@ func TestExpandRulesExcluding_NeverGrantsADeniedNode(t *testing.T) {
 				}
 			}
 
-			// Control: the work dir itself must still be granted for write, or
-			// the assertion above is satisfied by a policy that grants nothing.
+			// Control: the work dir's own tree must still carry write — the
+			// node exclusion must not cost the agent its own tree. Since the
+			// #1284 D4 split, the work-dir rule explodes around the
+			// agent-home internal set, so the grant that matters is on the
+			// work dir's ordinary entries, not on one covering rule.
 			var workGranted bool
 			for _, r := range expanded {
-				if r.Access&AccessWrite != 0 && pathIsUnder(shape.workDir, r.Path) {
+				if r.Access&AccessWrite != 0 && pathIsUnder(workFile, r.Path) {
 					workGranted = true
 					break
 				}

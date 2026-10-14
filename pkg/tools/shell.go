@@ -524,8 +524,17 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// both of those cases (FR-050's Ask/God branches) — Auto mode's own
 	// widenings were already resolved and recorded above, so this scan
 	// passes cleanly for exactly what was approved.
-	if guardErr := t.guardCommand(ctx, command, cwd, perm.grants()); guardErr != "" && !isDocumentProbe {
+	//
+	// #1284 fix round 1 (F5): a protected-internal-file refusal is the ONE
+	// guard outcome with a structured wire marker, so it is classified here
+	// (same legs, same order — see guardCommandClassified) and returned as
+	// the contract's PermissionDenied payload with code
+	// protected_internal_file, in God Mode exactly as in every other mode.
+	if guardErr, protected := t.guardCommandClassified(ctx, command, cwd, perm.grants()); guardErr != "" && !isDocumentProbe {
 		t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
+		if protected {
+			return ProtectedInternalFileResult(t.Name(), guardErr)
+		}
 		return ErrorResult(guardErr)
 	}
 
@@ -534,6 +543,37 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		return auditResult
 	}
 
+	// ADR-090 environment-setup: resolve the per-turn runtime layers ONCE per
+	// run call — the generic prefixes (storage's RuntimeEnvPaths over the
+	// turn's authorized root) and the optional managed document runtime
+	// (readiness + per-turn cache) — then derive the kernel policy and the
+	// child environment from the SAME resolved layers, preserving each spawn
+	// path's baseline (god: scrubbed environ; background sandbox:
+	// sandboxLimitsEnv, whose proxy/npm injections must survive because that
+	// path bypasses sandbox.Run's merge; foreground sandbox: nil = inherit,
+	// preserved when nothing composes). Everything follows the turn's
+	// authorized root, never a construction-time identity (ES-FR-04).
+	//
+	// #1284 fix round 1 (D3): the layers are resolved BEFORE the limits so
+	// their allowances can ride INTO the denial — normal mode through
+	// turnKernelPolicy, the God floor through ResolveLimits — never appended
+	// to a finished one.
+	docLayer := t.documentEnvTurn(baseDir)
+	rtLayer, rtErr := runtimeEnvTurn(baseDir)
+	// Truthful readiness reporting: a broken optional layer never blocks the
+	// command, but it is never silent either (coordinator ruling). The doc
+	// notice covers the managed document runtime; the runtime notice covers
+	// unresolved or corrupt generic runtime state — where silent fall-through
+	// to the host PATH could run a different program of the same name.
+	turnNotice := docLayer.notice
+	if n := runtimeEnvNotice(rtLayer, rtErr); n != "" {
+		if turnNotice != "" {
+			turnNotice += "\n\n"
+		}
+		turnNotice += n
+	}
+	runtimeAllowRoots := turnAllowRoots(rtLayer, docLayer)
+
 	// FR-B6: route every non-god-mode invocation through sandbox.ResolveLimits.
 	// P3 (ADR-046): EffectiveFSPolicy feeds the per-child Landlock ruleset
 	// here — sandbox.ResolveLimits is where the fresh, per-call ruleset
@@ -541,7 +581,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// per the P3 spike's carve-out decision) will be computed and applied via
 	// the non-latched apply path, once the P3 kernel-sandbox rearchitecture
 	// lands. Today this remains the pre-ADR-046 god-mode/no-god-mode split.
-	lim, limErr := sandbox.ResolveLimits(t.godMode, baseDir, t.proxy, timeoutSeconds)
+	lim, limErr := sandbox.ResolveLimits(t.godMode, baseDir, t.proxy, timeoutSeconds, runtimeAllowRoots...)
 	if limErr != nil {
 		return ErrorResult(fmt.Sprintf("sandbox limits error: %v", limErr))
 	}
@@ -572,31 +612,6 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		}
 	}
 
-	// ADR-090 environment-setup: resolve the per-turn runtime layers ONCE per
-	// run call — the generic prefixes (storage's RuntimeEnvPaths over the
-	// turn's authorized root) and the optional managed document runtime
-	// (readiness + per-turn cache) — then derive the kernel policy and the
-	// child environment from the SAME resolved layers, preserving each spawn
-	// path's baseline (god: scrubbed environ; background sandbox:
-	// sandboxLimitsEnv, whose proxy/npm injections must survive because that
-	// path bypasses sandbox.Run's merge; foreground sandbox: nil = inherit,
-	// preserved when nothing composes). Everything follows the turn's
-	// authorized root, never a construction-time identity (ES-FR-04).
-	docLayer := t.documentEnvTurn(baseDir)
-	rtLayer, rtErr := runtimeEnvTurn(baseDir)
-	// Truthful readiness reporting: a broken optional layer never blocks the
-	// command, but it is never silent either (coordinator ruling). The doc
-	// notice covers the managed document runtime; the runtime notice covers
-	// unresolved or corrupt generic runtime state — where silent fall-through
-	// to the host PATH could run a different program of the same name.
-	turnNotice := docLayer.notice
-	if n := runtimeEnvNotice(rtLayer, rtErr); n != "" {
-		if turnNotice != "" {
-			turnNotice += "\n\n"
-		}
-		turnNotice += n
-	}
-
 	// ADR-063 FR-3.5: carry THIS TURN's filesystem policy to the kernel, so the
 	// child bash spawns is confined the same way the app-layer path resolver
 	// confines this same turn's read_file/write_file.
@@ -607,8 +622,12 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// denied exactly those paths. That divergence was demonstrated against real
 	// children, not inferred.
 	//
-	// God mode is excluded deliberately: it is an explicit operator opt-out of
-	// confinement, and runForeground routes it to runUnconstrained anyway.
+	// God mode is excluded deliberately from the ordinary per-turn
+	// derivation: it is an explicit operator opt-out of confinement. Its
+	// floor already carries this turn's runtime allowances (they rode into
+	// ResolveLimits above, before the denial), so the protected files stay
+	// denied while the managed runtime, document prefix and cache stay
+	// reachable — amendment §2 D7, fix round 1.
 	if !t.godMode {
 		kernelPolicy, kpErr := t.turnKernelPolicy(ctx, cwd, rtLayer, docLayer, perm)
 		if kpErr != nil {
@@ -805,7 +824,12 @@ func (t *ExecTool) turnKernelPolicy(ctx context.Context, cwd string, rt environm
 	if err != nil {
 		return nil, fmt.Errorf("resolve turn filesystem policy: %w", err)
 	}
-	policy, err := sandbox.KernelPolicyForTurn(authored)
+	// Amendment §2 D3 (fix round 1): the A5/A6 runtime allowances ride into
+	// the denial as TurnPolicyInput.AllowRoots — before it is computed, never
+	// appended after. augmentKernelPolicy below keeps adding the same rules
+	// additively for the child env composition; the denial no longer depends
+	// on it.
+	policy, err := sandbox.KernelPolicyForTurn(authored, turnAllowRoots(rt, doc)...)
 	if err != nil || policy == nil {
 		return policy, err
 	}
@@ -968,13 +992,15 @@ func buildShellArgv(command string) []string {
 }
 
 // runForeground executes command synchronously and returns its output. Under
-// god mode, hardening is skipped entirely (runUnconstrained); otherwise the
-// command is routed through sandbox.Run, which applies Landlock/seccomp
-// inheritance, resource limits, the egress proxy, and the wall-clock timeout
-// uniformly (FR-B6). timeoutSeconds is passed explicitly (not read from
-// lim.TimeoutSeconds) because sandbox.ResolveLimits returns the ZERO VALUE
-// under god mode (lim.TimeoutSeconds would be 0) — workspace_shell's run()
-// used the same explicit-parameter pattern for exactly this reason.
+// god mode, hardening is skipped entirely (runUnconstrained) — but the God
+// Mode FLOOR (amendment §2 D7) still applies: sandbox.ResolveLimits returned
+// it in lim.KernelPolicy, and runUnconstrained applies it via the backend's
+// child-confinement hook. Otherwise the command is routed through
+// sandbox.Run, which applies Landlock/seccomp inheritance, resource limits,
+// the egress proxy, and the wall-clock timeout uniformly (FR-B6).
+// timeoutSeconds is passed explicitly (not read from lim.TimeoutSeconds) so
+// the god path can carry its own timeout — workspace_shell's run() used the
+// same explicit-parameter pattern for exactly this reason.
 func (t *ExecTool) runForeground(
 	ctx context.Context,
 	command string,
@@ -985,7 +1011,7 @@ func (t *ExecTool) runForeground(
 	argv := buildShellArgv(command)
 
 	if t.godMode {
-		return t.runUnconstrained(ctx, argv, lim.WorkspaceDir, timeoutSeconds, execEnv)
+		return t.runUnconstrained(ctx, argv, lim, timeoutSeconds, execEnv)
 	}
 
 	res, err := sandbox.Run(ctx, argv, execEnv, lim)
@@ -1068,14 +1094,19 @@ func scrubbedEnv(base []string) []string {
 }
 
 // runUnconstrained runs the command without ApplyChildHardening/sandbox.Run.
-// Used only under the global god-mode override. The command still runs in
-// the resolved cwd and honors the caller-supplied timeout via context
+// Used only under the global god-mode override. The God Mode FLOOR
+// (amendment §2 D7) still applies: when lim.KernelPolicy carries the floor,
+// macOS renders it into the child's Seatbelt profile (sandbox.ApplyChild
+// KernelPolicy) and Linux applies it to the spawning thread before the fork
+// (sandbox.StartLockedWithPolicy), so the child inherits the protected-file
+// deny set while everything else stays free. The command still runs in the
+// resolved cwd and honors the caller-supplied timeout via context
 // cancellation (exec.CommandContext); the parent environment is inherited
 // with sensitive Omnipus credentials stripped.
 func (t *ExecTool) runUnconstrained(
 	ctx context.Context,
 	argv []string,
-	cwdPath string,
+	lim sandbox.Limits,
 	timeoutSeconds int32,
 	execEnv []string,
 ) *ToolResult {
@@ -1083,8 +1114,8 @@ func (t *ExecTool) runUnconstrained(
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
-	if cwdPath != "" {
-		cmd.Dir = cwdPath
+	if lim.WorkspaceDir != "" {
+		cmd.Dir = lim.WorkspaceDir
 	}
 	cmd.Env = execEnv
 
@@ -1092,8 +1123,25 @@ func (t *ExecTool) runUnconstrained(
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
+	// The floor: profile first (macOS), then the locked-thread spawn that
+	// carries the policy to the child on Linux. A nil policy — sandbox off,
+	// degraded backend, nogodmode build — reproduces the pre-floor god path
+	// exactly (plain Start on this goroutine).
+	startErr := func() error {
+		if lim.KernelPolicy == nil {
+			return cmd.Start()
+		}
+		if err := sandbox.ApplyChildKernelPolicy(cmd, lim.KernelPolicy); err != nil {
+			return err
+		}
+		return sandbox.StartLockedWithPolicy(cmd, lim.KernelPolicy)
+	}()
+	if startErr != nil {
+		return ErrorResult(fmt.Sprintf("command failed to start: %v", startErr))
+	}
+
 	start := time.Now()
-	runErr := cmd.Run()
+	runErr := cmd.Wait()
 	dur := time.Since(start)
 
 	timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)

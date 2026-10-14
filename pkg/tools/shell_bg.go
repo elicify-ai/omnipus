@@ -115,7 +115,11 @@ func (t *ExecTool) runBackground(
 
 	var startErr error
 	if t.godMode {
-		startErr = cmd.Start()
+		var startAbort *ToolResult
+		startErr, startAbort = startGodFloorChild(cmd, lim)
+		if startAbort != nil {
+			return startAbort
+		}
 	} else {
 		// CRIT-1 (ADR-090 security review): the background path must carry the
 		// DERIVED PER-TURN kernel policy — the same one sandbox.Run applies on
@@ -564,4 +568,19 @@ func (t *ExecTool) sessionActionResult(sessionID string, session *ProcessSession
 		ForUser: fmt.Sprintf("Session %s %s", sessionID, status),
 		IsError: marshalErr != nil,
 	}
+}
+
+// startGodFloorChild starts a GOD MODE background child under the floor
+// (amendment §2 D7): macOS renders the floor into the child's Seatbelt
+// profile, Linux applies it to the spawning thread before the fork. A nil
+// policy (sandbox off, degraded backend, nogodmode build) reproduces the
+// pre-floor god path exactly. Returns the start error and, on a floor-
+// application failure, a ready ErrorResult the caller returns directly.
+func startGodFloorChild(cmd *exec.Cmd, lim sandbox.Limits) (error, *ToolResult) {
+	if lim.KernelPolicy != nil {
+		if err := sandbox.ApplyChildKernelPolicy(cmd, lim.KernelPolicy); err != nil {
+			return nil, ErrorResult(fmt.Sprintf("sandbox floor failed: %v", err))
+		}
+	}
+	return sandbox.StartLockedWithPolicy(cmd, lim.KernelPolicy), nil
 }

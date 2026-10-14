@@ -185,15 +185,20 @@ func TestResolvePath_ReadConfinedIgnoresAllowPatterns(t *testing.T) {
 	pattern := regexp.MustCompile("^" + regexp.QuoteMeta(filepath.Join(f.home, "sessions")) + string(filepath.Separator) + ".*")
 	tool := NewReadFileTool(f.ws, true, MaxReadFileSize, []*regexp.Regexp{pattern})
 
-	if res := tool.Execute(f.ctx, map[string]any{"path": transcript}); res.IsError {
-		t.Fatalf("control: an ordinary turn reads the transcript, got: %s", res.ForLLM)
+	// #1284 supersession of the old control: session transcripts are
+	// protected inventory now, so an ORDINARY turn is refused too — the
+	// operator pattern cannot reopen them in any posture. The S-4.4 point
+	// stands and is stronger: no pattern, no posture, no policy reopens a
+	// transcript through a file tool.
+	if res := tool.Execute(f.ctx, map[string]any{"path": transcript}); !res.IsError || strings.Contains(res.ForLLM, "TRANSCRIPT-BODY") {
+		t.Fatalf("control (#1284): an ordinary turn must not read a session transcript either, got: %s", res.ForLLM)
 	}
 	res := tool.Execute(f.judgeCtx(t), map[string]any{"path": transcript})
 	if !res.IsError || strings.Contains(res.ForLLM, "TRANSCRIPT-BODY") {
 		t.Fatalf("S-4.4: an allow-path pattern must not reopen a transcript in a Judge review turn; IsError=%v: %s", res.IsError, res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "read-confined") {
-		t.Errorf("S-4.4 / MV-7: refusal must say read-confined, got: %s", res.ForLLM)
+	if !strings.Contains(res.ForLLM, "protected") {
+		t.Errorf("S-4.4 / MV-7 (#1284): refusal must name the protected-path rule, got: %s", res.ForLLM)
 	}
 }
 

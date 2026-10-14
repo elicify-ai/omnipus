@@ -127,3 +127,23 @@ func applyPostStartHardening(_ *exec.Cmd, lim Limits) error {
 	}
 	return nil
 }
+
+// applyKernelPolicyOnly renders the given kernel policy into the child's
+// Seatbelt profile — the God Mode floor's macOS application (amendment §2 D7).
+// Fail-closed like applyPlatformHardening: a rejected profile aborts the spawn
+// rather than falling through to an unconfined child.
+func applyKernelPolicyOnly(cmd *exec.Cmd, policy *SandboxPolicy) error {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+
+	sb := CurrentSeatbeltBackend()
+	if sb == nil {
+		return nil
+	}
+	if err := sb.ApplyToCmd(cmd, *policy); err != nil {
+		return fmt.Errorf("hardened_exec/darwin: apply god floor seatbelt profile to child: %w", err)
+	}
+	return nil
+}
