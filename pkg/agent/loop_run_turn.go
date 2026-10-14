@@ -142,6 +142,18 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	// detail. runTurn's deferred finalizeStreamer call is a no-op after this
 	// (ts.lastStreamer is nil once it has run); on a non-streamed turn the
 	// call is a no-op too (no streamer).
+	//
+	// Re-CHECK R2-F01 (round 3): because this inline call publishes done, the
+	// turn must already be RETIRED when done goes out — done must never
+	// advertise or leave a cancellable, snapshot-visible active turn. Run the
+	// same pre-finalize sequence runTurn's LIFO defers executed before this
+	// inline call existed: clearActiveTurn (registered after
+	// finalizeStreamer → fired before it; the ordering active_turn_info.go's
+	// IsAlive gate documents) then preserveTruncatedAccumulator (same LIFO
+	// position), THEN the finalize that publishes. Both are idempotent and
+	// runTurn's own defers re-run them harmlessly.
+	rz.rc.rx.rr.rq.ri.rf.rt.al.clearActiveTurn(rz.rc.rx.rr.rq.ri.rf.rt.ts)
+	rz.rc.rx.rr.rq.ri.rf.rt.al.preserveTruncatedAccumulator(rz.rc.rx.rr.rq.ri.rf.rt.ts)
 	if finErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.finalizeStreamer(rz.rc.rx.ctx); finErr != nil {
 		notSaved := &messageNotSavedError{role: "assistant", cause: finErr}
 		rz.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
