@@ -14772,7 +14772,7 @@ type AgentCreateRequestMain struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name Display name for the new agent.
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
 	Name string `json:"name"`
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
@@ -14863,7 +14863,7 @@ type AgentCreateRequestSubagent struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name Display name for the new agent.
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
 	Name string `json:"name"`
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
@@ -14954,7 +14954,7 @@ type AgentCreateRequestSubagent3p struct {
 	// Model Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
 	Model *string `json:"model,omitempty"`
 
-	// Name Display name for the new agent.
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
 	Name string `json:"name"`
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
@@ -15374,7 +15374,7 @@ type AgentUpdateRequest struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name New display name. Rejected on locked agents.
+	// Name New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
 	Name *string `json:"name,omitempty"`
 
 	// Provider New explicit routing key for the primary model (O3 two-field model). When set, resolution uses it directly and never infers a provider. Allowed on all agents. Send an empty string to clear it (fall back to default-provider resolution).

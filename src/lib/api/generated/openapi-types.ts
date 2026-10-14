@@ -8863,7 +8863,7 @@ export interface components {
              */
             type: "Main";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -8950,7 +8950,7 @@ export interface components {
              */
             type: "Subagent";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -9029,7 +9029,7 @@ export interface components {
              */
             type: "subagent_3p";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -9099,7 +9099,7 @@ export interface components {
             mcp_servers?: components["schemas"]["AgentMCPBinding"][];
             tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
-             * @description New display name. Rejected on locked agents.
+             * @description New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Renamed Agent
              */
             name?: string;
