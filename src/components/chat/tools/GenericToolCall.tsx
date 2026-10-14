@@ -16,7 +16,7 @@ import {
   isCancelledStatus,
   type ToolBadgeStatusConfig,
 } from '@/lib/toolStatusConfig'
-import { detectToolResultSentinels, isProtectedFileRefusal } from './toolResultSentinels'
+import { detectToolResultSentinels, isProtectedFileRefusal, isProtectedInternalFileDenial } from './toolResultSentinels'
 import {
   ClientTruncatedDisplay,
   DelegationFailureDisplay,
@@ -309,7 +309,9 @@ export function GenericToolCall({
                 <FileExistsRefusalDisplay refusal={fileExistsRefusal} />
               )}
 
-              {permissionDenied && <PermissionDeniedDisplay failure={permissionDenied} />}
+              {permissionDenied && (isProtectedInternalFileDenial(permissionDenied)
+                ? <ProtectedFileRefusalDisplay message={permissionDenied.reason} />
+                : <PermissionDeniedDisplay failure={permissionDenied} />)}
 
               {/* #1284: a protected-file refusal reads as its own block. */}
               {isProtectedFileRefusal(plainResult) && <ProtectedFileRefusalDisplay message={plainResult} />}

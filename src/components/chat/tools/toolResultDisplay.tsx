@@ -57,6 +57,7 @@ import type { ClientTruncatedResult } from '@/store/chat'
 import {
   detectToolResultSentinels,
   isProtectedFileRefusal,
+  isProtectedInternalFileDenial,
   policyAxisLabel,
 } from './toolResultSentinels'
 
@@ -180,6 +181,10 @@ export function resolveToolResult(result: unknown, error?: unknown): ResolvedToo
     return { kind: 'fileExists', refusal: sentinels.fileExistsRefusal }
   }
   if (sentinels.permissionDenied) {
+    // #1284: the structured marker decides, never the prose.
+    if (isProtectedInternalFileDenial(sentinels.permissionDenied)) {
+      return { kind: 'protectedFile', message: sentinels.permissionDenied.reason }
+    }
     return { kind: 'permissionDenied', failure: sentinels.permissionDenied }
   }
   if (isToolResultRef(result)) return { kind: 'ref', sentinel: result }
