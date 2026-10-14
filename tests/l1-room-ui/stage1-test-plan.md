@@ -34,6 +34,8 @@ The exact API body is to be confirmed from the generated contract before writing
 
 Capture the original ten files individually on UI head ca09d06f9d34bbcc63f158dc63d06973b9bb62f3 before editing. Preserve case names and assertion expression trees exactly. Record the switch/mock-only diff and original failure mechanism per file. Run only individual files, serially, with command, source state and raw exit recorded; a collection error is a harness failure, not behavioural RED proof.
 
+Supplemental team-lead dispatch adds three existing packs: select an explicit owner in the first-send Auto-approve/recipient fixtures; add the contract's attach_room discriminator to the exact WebSocket frame set. Preserve every existing assertion and case declaration in these too. The full before/after ledger therefore contains 13 existing files, plus the new nine-case shell file.
+
 ## RED / CHECK boundary
 
 RED proves a failure only on an actual historical pre-change implementation, with an expected-versus-actual behavioural failure. A current-head pass does not establish RED. No production mutations will be performed by this writer. GREEN verification, mutation execution and the skill's Proof-of-failability checklist are deferred to a fresh CHECK instance. The ledger will distinguish observed results, qualified RED evidence, and unverified claims.
