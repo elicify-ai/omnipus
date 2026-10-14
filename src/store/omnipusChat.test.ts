@@ -50,7 +50,7 @@ function setup(connected = true) {
       workspaceEntry: null,
       resolvingSessionForWorkspace: {},
     })
-    useChatStore.setState({ sessionsById: {}, isStreaming: false, pendingKickoff: null })
+    useChatStore.setState({ sessionsById: {}, isStreaming: false })
     useUiStore.setState({ toasts: [] })
   })
   return send
