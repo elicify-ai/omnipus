@@ -174,8 +174,8 @@ func fixedTestPolicy(t *testing.T) (home string, policy fspolicy.FSPolicy, allow
 	// root around its protected interior, so new direct entries cannot be
 	// granted. This matrix tests writing an existing ordinary direct file;
 	// the non-skip Linux agent-home probe separately pins the creation limit.
-	if err := os.WriteFile(filepath.Join(base.WorkDir, "f.txt"), []byte("before"), 0o600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(base.WorkDir, "f.txt"), []byte("before"), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	base.AllowedRoots = []string{allowedRoot}
 	base.PathGrants = []fspolicy.PathGrant{
