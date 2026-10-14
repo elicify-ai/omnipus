@@ -4,7 +4,7 @@ Settings connects model providers, sets agent limits, records your context, and 
 
 ## What it is
 
-The Settings screen is a row of tabs: Providers, Models, Integrations, Security, Gateway, Data, Memory, Devices, Performance, Chat, and About. The Devices tab appears only when your install enables device pairing, so most people never see it.
+The Settings screen is a row of tabs: Providers, Models, System agents, Integrations, Security, Gateway, Data, Memory, Devices, Performance, Chat, and About. The Devices tab appears only when your install enables device pairing, so most people never see it.
 
 Most settings save when changed, with an indicator confirming the save. Secret changes ask you to re-type your password. Gateway listening changes require a restart.
 
@@ -108,6 +108,7 @@ Each tab and neighbor screen has one job.
 |---|---|
 | Settings, Providers | Connect providers, manage keys and sign-ins, set the default model |
 | Settings, Models | Context budget: per-result caps, the combined share of the model's context window used by tool results, and model context-length overrides |
+| Settings, System agents | The agents the system runs on — Judge, Plan Supervisor and Omnipus — each opened in the shared agent editor |
 | Settings, Integrations | Web-search and voice-input providers, with their keys |
 | Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
 | Settings, Gateway | The address and port the gateway listens on; restarting it; god mode in its danger zone |
@@ -134,11 +135,17 @@ The rate limits live in Settings, Security, under its advanced section. Two numb
 
 Profile holds one setting your agents read every turn: **Workspace Context**. It is a free-text page about you — your role, your preferences, how you like answers — saved automatically and shared with all agents. Your display name, timezone, and font size are personal display choices stored in this browser, so they do not follow you to another machine.
 
+## System agents
+
+**Settings → System agents** lists Judge, Plan Supervisor and Omnipus. Judge and Plan Supervisor are internal engine agents and cannot join workspace teams. Omnipus is a hidden member of the default workspace only; open its fixed sidebar entry rather than looking for it in Team. These built-in agents cannot be deleted.
+
+**Edit** opens the shared agent editor, including Omnipus's model setting. You can repair its model here without a working model conversation. Judge and Plan Supervisor also have editable instructions; their capabilities remain fixed. There is no default-agent setting.
+
 ## Tool calls per turn
 
 **Max tool calls per turn**, on the Performance tab, caps how many tool steps any agent may take in one turn. A turn is one message, one task run, or one heartbeat run. When an agent reaches the limit without a final answer, the turn stops and the agent replies that it hit its limit of tool steps for one turn. You can then ask it to continue.
 
-- The limit applies to every agent, including the four built-in agents and [external workers](agents.md#workers-and-delegation).
+- The limit applies to every agent, including the built-in roster and [external workers](agents.md#workers-and-delegation).
 - It accepts a whole number from **1 to 1000**. The shipped value is **200**.
 - In `config.json` it is `agents.defaults.max_tool_iterations`.
 - An agent can have its own lower limit on its profile. It can never have a higher one. See [agents](agents.md#how-to-lower-one-agents-tool-call-limit).
