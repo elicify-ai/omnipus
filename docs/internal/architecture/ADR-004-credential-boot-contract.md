@@ -22,7 +22,7 @@ Every production caller must follow this exact sequence, implemented in the shar
 
 ```
 NewStore → Unlock → LoadConfigWithStore → InjectFromConfig →
-ResolveBundle → cfg.RegisterSensitiveValues(plaintexts) →
+ResolveBundle → Store.HealthCheck → cfg.RegisterSensitiveValues(plaintexts) →
 NewAgentLoop → WireSystemTools → NewManager(cfg, bundle, bus) → Start
 ```
 
@@ -90,16 +90,25 @@ Headless deployments that already have a `credentials.json` (e.g., because the k
 > error state naming the missing secret (the same degraded pattern providers
 > already used). Store-level failures (unlock, corrupt store document, a
 > whole-store entry-auth failure where nothing decrypts) stay fatal by design.
+>
+> **Clarified 2026-10-14 (#1277 round 3).** Boot, hot-reload and REST refresh
+> check the store itself with `credentials.Store.HealthCheck`, independently
+> of config reference enumeration. This includes MCP-only configurations and
+> configurations with no credential refs but a present store file. An unreadable
+> or undecodable file is rejected even if no consumer would call `Get`; format
+> probe errors propagate at unlock instead of waiting for a later read. A
+> nonempty store needs at least one decryptable entry, referenced or not. A
+> missing file with no refs, or an empty current-format store, is not a failure.
 
 | Scenario | Boot behavior | Hot-reload / REST-write behavior |
 |----------|--------------|----------------------------------|
 | `Unlock` fails | Fatal — abort boot | Reject reload, keep old config |
 | `LoadConfigWithStore` fails | Fatal — abort boot | Reject reload, keep old config |
 | `InjectFromConfig` returns `*NotFoundError` for one ref | ERROR log, that provider/mailbox degrades | Same — reload applies |
-| `InjectFromConfig` returns an entry-auth failure for one ref | Scoped when the rest of the vault still decrypts (ERROR + that entry degrades); whole-store fatal when nothing resolves | Same — reload applies, or rejects on the whole-store class |
+| `InjectFromConfig` returns an entry-auth failure for one ref | Scoped when any store entry still decrypts, referenced or not (ERROR + that entry degrades); whole-store fatal when no entry decrypts | Same — reload applies, or rejects on the whole-store class |
 | `InjectFromConfig` returns any other error (locked store, corrupt store document, env failure) | Fatal — abort boot | Reject reload, keep old config |
 | `ResolveBundle` returns `ErrNotFound` for **enabled** channel | **Amended 2026-10-13 (#1277):** ERROR log, boot continues — the channel degrades visibly (not started, ref-naming reason in Settings and doctor) | **Reload applies**; the affected channel stops and records the ref-naming failure |
-| `ResolveBundle` returns an entry-auth failure (single entry) | **Amended 2026-10-13 (#1277):** same scoped degrade, when the store itself still decrypts at least one entry (`credentials.Store.HasDecryptableEntry`, referenced or not); whole-store class stays fatal | Same |
+| `ResolveBundle` returns an entry-auth failure (single entry) | **Amended 2026-10-13 (#1277):** same scoped degrade, when the store itself still decrypts at least one entry (`credentials.Store.HealthCheck`, referenced or not); whole-store class stays fatal | Same |
 | `ResolveBundle` returns `ErrNotFound` for **disabled** channel | Info log, continue | Info log, continue |
 | `RegisterSensitiveValues` (never errors) | — | — |
 | `channels.NewManager` fails on a credential-scoped factory error (#1277) | **Amended 2026-10-13:** recorded + degraded, boot continues | Reload applies; the failed instance is recorded under its instance id |

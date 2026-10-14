@@ -247,18 +247,11 @@ func mcpEnabledEnvSensitiveValues(cfg *config.Config, store *credentials.Store) 
 	return values
 }
 
-// resolveAllRefPattern and enabledRefFromBundleError were deleted with the
-// #1277 store-class rework (CHECK F1/F2): bundle-resolution errors are now
-// classified by TYPE — storeLevelCredentialFailure refuses store-level
-// shapes, splitEntryAuthFailures scopes entry-auth failures by the store's
-// own readability witness, and NotFoundError degrades per reference — so no
-// caller parses ref names out of ResolveAll's message wrapping any more.
-
 // reportInjectionErrors logs every credentials.InjectFromConfig failure at
 // ERROR and returns the ones that must stop the caller (boot or reload) —
 // plus, separately, the entry-authentication failures whose fatal-vs-scoped
-// verdict the caller must defer until it has the whole bundle's evidence
-// (#1277, see splitEntryAuthFailures).
+// verdict the caller must defer until it has checked the store's health
+// (#1277, see credentials.Store.HealthCheck).
 //
 // The split, and why it is not "everything is fatal" any more (2026-08-14,
 // corrected 2026-08-15 — see the "wrong master key" note below):
@@ -281,11 +274,10 @@ func mcpEnabledEnvSensitiveValues(cfg *config.Config, store *credentials.Store) 
 //     doc comment says the discriminating evidence is SCOPE — a wrong key
 //     fails every entry, a tampered one fails only itself. Since #1277
 //     (founder decision 2026-10-12) that class is therefore NOT decided here:
-//     it comes back as deferred, and the caller decides once ResolveBundle has
-//     run — a bundle that resolved nothing means the whole vault is unreadable
-//     (fatal, the 2026-08-15 posture preserved); a bundle with any resolved
-//     value means the store is demonstrably readable and only this entry is
-//     broken (scoped degradation, logged by the caller).
+//     it comes back as deferred. The caller checks the store independently of
+//     the configured refs: at least one decryptable entry, even unreferenced,
+//     proves the store is readable and this error can be scoped. No decryptable
+//     entry in a nonempty store means a whole-store failure, which stays fatal.
 //
 //   - Everything else is STORE-WIDE, and stays fatal: the bare
 //     credentials.ErrStoreLocked (store never unlocked — short-circuited
@@ -324,8 +316,8 @@ func reportInjectionErrors(errs []error, phase string) (fatal []error, deferredA
 			}
 			var entryAuth *credentials.EntryAuthError
 			if errors.As(refErr.Err, &entryAuth) {
-				// #1277: the single-tampered-entry vs wrong-whole-key verdict
-				// needs the bundle's evidence — deferred to the caller.
+				// The caller's store health check decides whether this entry's
+				// authentication failure is scoped or whole-store.
 				deferredAuth = append(deferredAuth, e)
 				continue
 			}
@@ -368,48 +360,22 @@ func splitEntryAuthFailures(errs []error) (auth, rest []error) {
 	return auth, rest
 }
 
-// storeLevelCredentialFailure returns the first bundle-resolution error that
-// is a STORE-level failure rather than a per-integration one: a locked store,
-// a whole-file corruption or I/O failure, or an unclassified shape.
-//
-// A store.Get failure says something about ONE integration only when the
-// store itself answered — *credentials.NotFoundError (the referenced entry is
-// absent) or *credentials.EntryAuthError (this one entry does not decrypt).
-// Every other cause means the store document itself could not be read, and
-// that refuses boot, reload and REST refresh alike (#1277; CHECK F2) — the
-// same store-level class an Unlock failure aborts boot with.
-func storeLevelCredentialFailure(errs []error) error {
-	for _, e := range errs {
-		var notFound *credentials.NotFoundError
-		if errors.As(e, &notFound) {
-			continue
-		}
-		var entryAuth *credentials.EntryAuthError
-		if errors.As(e, &entryAuth) {
-			continue
-		}
-		return e
-	}
-	return nil
-}
+// errCredentialStoreUnreadableClass marks a refusal whose cause is the
+// store-level failure class, so /health's degraded reason can name the store
+// without leaking the underlying error detail (see reloadDegradedStatus).
+var errCredentialStoreUnreadableClass = errors.New("credential store unreadable")
 
-// fatalStoreWideAuthFailure builds the boot/reload-fatal error for the
-// store-wide entry-auth failure class: every configured credential failed to
-// decrypt and nothing resolved, so the vault is unreadable under this master
-// key (or credentials.json was wholesale replaced). #1277 keeps this class
-// fatal — the founder ruling scopes ONE integration's missing/unreadable
-// secret, not the whole vault. The returned error names the failing refs and
-// carries the entry-authentication cause (errors.Is ⇒ ErrWrongKey); each
-// failing ref is also logged at ERROR with its config attribution so the
-// operator sees exactly which entries the key cannot open.
-func fatalStoreWideAuthFailure(authErrs []error) error {
+// fatalStoreWideAuthFailure refuses boot, reload or refresh on a store-level
+// failure. The sentinel supports a fixed public health reason; cause preserves
+// the typed store error, and refErrs adds any known configuration attribution.
+func fatalStoreWideAuthFailure(cause error, refErrs []error) error {
 	slog.Error(
-		"credential store is unreadable — every configured credential failed to decrypt and nothing "+
-			"resolved: this is a whole-store failure (wrong master key or replaced credentials.json), "+
+		"credential store is unreadable — this is a whole-store failure "+
+			"(wrong master key, corrupted or locked store), "+
 			"not a single integration's missing secret; refusing to continue",
-		"failing_refs", len(authErrs),
+		"error", cause.Error(),
 	)
-	for _, e := range authErrs {
+	for _, e := range refErrs {
 		var refErr *credentials.CredentialRefError
 		if errors.As(e, &refErr) {
 			slog.Error(
@@ -429,15 +395,13 @@ func fatalStoreWideAuthFailure(authErrs []error) error {
 			"error", e,
 		)
 	}
-	return fmt.Errorf(
-		"fatal: credential store unreadable — every configured credential failed authentication "+
-			"(wrong master key?): %w",
-		errors.Join(authErrs...),
-	)
+	joined := append([]error{cause}, refErrs...)
+	return fmt.Errorf("fatal: %w (store-level failure — wrong master key, corrupted or locked store): %w",
+		errCredentialStoreUnreadableClass, errors.Join(joined...))
 }
 
-// logScopedCredentialFailures logs entry-auth failures that the bundle proved
-// scoped — the rest of the vault still decrypts — as loud per-integration
+// logScopedCredentialFailures logs entry-auth failures that the store health
+// check proved scoped — another entry decrypts — as loud per-integration
 // degradations (#1277), naming the config entry and the credential reference
 // wherever the error shape carries them.
 func logScopedCredentialFailures(phase string, authErrs []error) {
@@ -510,8 +474,8 @@ func bootCredentials(
 	// and that provider/mailbox is left unusable, so the operator can start the
 	// gateway and fix it in the UI. A store-wide failure is still fatal. See
 	// reportInjectionErrors for the full rationale and the incident behind it.
-	// Entry-auth failures come back deferred: their scoped-vs-store-wide
-	// verdict needs the bundle ResolveBundle produces below (#1277).
+	// Entry-auth failures come back deferred until the unconditional store
+	// health check below decides their scope (#1277).
 	var deferredAuth []error
 	if errs := credentials.InjectFromConfig(cfg, credStore); len(errs) > 0 {
 		fatal, auth := reportInjectionErrors(errs, "boot")
@@ -532,35 +496,20 @@ func bootCredentials(
 	// would read no keys and record duckduckgo for every upgrade, permanently.
 	config.MigrateWebSearchRoles(cfg, configPath, nil)
 
-	// Build a ref→in-use map so we can distinguish a missing credential on
-	// something actually enabled/in-use (fatal) from one on a disabled
-	// channel or unused feature (Info + continue).
+	// Enabled missing refs are logged at ERROR; disabled/unused ones at INFO.
+	// Neither is a whole-store failure.
 	enabledRefs := buildEnabledRefMap(cfg)
 
 	// Resolve all credential refs into a SecretBundle. Channels receive secrets
 	// via the bundle — no os.Setenv for channel credentials (B1 fix).
 	bundle, bundleErrs := credentials.ResolveBundle(cfg, credStore)
 
-	// #1277 (founder decision 2026-10-12): one integration's missing or
-	// unreadable secret never aborts boot — only that integration degrades,
-	// visibly. The exceptions are the STORE-LEVEL failure classes:
-	//
-	//   - locked / whole-file corrupt / unclassified store errors (a failure
-	//     the store itself raised, not one entry's) — refused by
-	//     storeLevelCredentialFailure below;
-	//   - a whole-store entry-auth failure, decided from the STORE's own
-	//     readability witness (credentials.Store.HasDecryptableEntry) and not
-	//     from whether any CONFIGURED reference happened to resolve (CHECK
-	//     F1): when no entry in the vault decrypts, the master key is wrong or
-	//     credentials.json was replaced and boot stays fatal.
 	bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
-	if storeErr := storeLevelCredentialFailure(bundleErrs); storeErr != nil {
-		return nil, nil, nil, fmt.Errorf(
-			"fatal: credential store unreadable (locked, corrupted, or otherwise unreadable — "+
-				"a store-level failure, not a single integration's secret): %w", storeErr)
-	}
-	if len(bundleAuth) > 0 && !credStore.HasDecryptableEntry() {
-		return nil, nil, nil, fatalStoreWideAuthFailure(append(append([]error{}, deferredAuth...), bundleAuth...))
+	// The store, not the configured refs or resolved bundle, decides whole-store
+	// health. Run even with only MCP refs or no refs; an absent file is healthy.
+	if healthErr := credStore.HealthCheck(); healthErr != nil {
+		return nil, nil, nil, fatalStoreWideAuthFailure(healthErr,
+			append(append([]error{}, deferredAuth...), bundleAuth...))
 	}
 	logScopedCredentialFailures("boot", deferredAuth)
 	for _, e := range bundleAuth {
@@ -591,10 +540,9 @@ func bootCredentials(
 			slog.Info("credential not found (not currently enabled/in use)", "ref", notFound.Name)
 			continue
 		}
-		// Unreachable by construction: splitEntryAuthFailures moved the
-		// entry-auth errors aside and storeLevelCredentialFailure refused
-		// every other non-NotFound shape above.
-		slog.Warn("credential bundle resolution error", "error", e)
+		// Do not lose a file/lock failure observed by resolution but not by
+		// the health check (the store may have changed between reads).
+		return nil, nil, nil, fatalStoreWideAuthFailure(e, nil)
 	}
 
 	// Register all resolved plaintext credentials with the config's sensitive-data

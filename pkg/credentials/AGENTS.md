@@ -27,9 +27,12 @@ persisted in credentials.json).
 
 ## What losing master.key actually costs
 
-Unlock still "succeeds" with a passphrase — on a current-format store
-`UnlockWithKey`/`UnlockWithPassphrase` verify NOTHING against stored data;
-they just set the key. (Exception: on a pre-upgrade version-1 store the
+On a readable current-format store, `UnlockWithKey`/`UnlockWithPassphrase`
+install the key without authenticating entries. Gateway boot, reload and REST
+refresh separately call `store.go::HealthCheck`: any decryptable entry proves
+readability; no decryptable entry in a nonempty store is a whole-store failure.
+Unlock itself rejects file-read and format-probe errors before installing a key.
+(Exception: on a pre-upgrade version-1 store the
 one-time migration opens every entry, so a wrong key fails AT unlock with a
 `*MigrationError` — see "Format versions" below.) Every subsequent `Get` then fails with `store.go::ErrWrongKey`
 (see gateway_boot_credentials.go::reportInjectionErrors for the
@@ -90,8 +93,8 @@ deleted in a later release (see the header of `store_migrate.go`).
 - v1 file + `.migrated` record present → `ErrLegacyStoreAfterMigration`.
 - `loadFileInternal` refuses every version but 2 (`ErrLegacyStoreFormat`,
   `ErrUnsupportedStoreVersion`): the safety net. No read path can open a v1
-  file and no write path can stamp one as v2. Unreadable/corrupt files at
-  unlock are left to it.
+  file and no write path can stamp one as v2. Unreadable/corrupt format probes
+  fail unlock immediately, including when no config references would read the store.
 - **Residual risk, real window = lifetime of the current secret** (master key
   or passphrase), NOT one unlock: an attacker with data-dir write access and a
   pre-upgrade copy can swap entries in it, delete `.migrated` (same dir), and
@@ -104,11 +107,14 @@ deleted in a later release (see the header of `store_migrate.go`).
 
 ## Error classification decides fatal-vs-degrade
 
-`inject.go::InjectFromConfig` returns the bare `ErrStoreLocked` (NOT a
-`*CredentialRefError`) when locked, because callers use that distinction:
-only a cause unwrapping to `*NotFoundError` degrades that one provider;
-anything else (e.g. ErrWrongKey inside a ref error) is store-wide and
-fatal.
+`store.go::HealthCheck` decides readability from the store itself, not from
+which refs are configured. Boot, reload and REST refresh reject a locked,
+unreadable or undecodable store, or a nonempty store with no decryptable entry.
+An absent file or empty current-format store is healthy. A readable entry anywhere
+in the store, even unreferenced, lets a single entry-auth failure degrade only
+its integration; missing entries are scoped too. `inject.go::InjectFromConfig`
+still returns bare `ErrStoreLocked` when locked. Unknown resolution errors are
+returned to the caller, never reduced to log-only warnings.
 
 ## DeriveSubkey — the sanctioned key-material path
 

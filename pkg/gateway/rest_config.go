@@ -571,31 +571,23 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	// enabled/in-use can be distinguished from one on a disabled channel or
 	// unused feature, matching bootCredentials/executeReload.
 	//
-	// #1277 (founder decision 2026-10-12): a missing or single-entry-unreadable
-	// secret on an enabled integration no longer rejects the in-memory refresh
-	// — only that integration degrades (the channel manager records its
-	// ref-naming failure; Settings shows it), while the operator's actual edit
-	// applies. The STORE-LEVEL classes still reject and keep the old config
-	// (CHECK F2, the same class boot and reload refuse on): a locked store, a
-	// whole-file corruption, or any other store-level fault, and — decided
-	// from the store's own readability witness, never from whether any
-	// configured reference resolved (CHECK F1) — a whole-store entry-auth
-	// failure where no entry decrypts.
+	// #1277 (founder decision 2026-10-12; round-3 chief ruling 2026-10-14):
+	// a missing or single-entry-unreadable secret on an enabled integration
+	// no longer rejects the in-memory refresh — only that integration degrades
+	// (the channel manager records its ref-naming failure; Settings shows it),
+	// while the operator's actual edit applies. ONE store-level health
+	// decision, made from the store itself and independent of which reference
+	// kinds the config holds (CHECK F1/F2), still rejects and keeps the old
+	// config: a wrong master key, a corrupt/undecodable file, or a locked
+	// vault — including on MCP-only and reference-free configurations.
 	enabledRefs := buildEnabledRefMap(newCfg)
 	bundle, bundleErrs := credentials.ResolveBundle(newCfg, a.credStore)
 	bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
-	if storeErr := storeLevelCredentialFailure(bundleErrs); storeErr != nil {
-		refreshErr := fmt.Errorf(
-			"refresh rejected: credential store unreadable (locked, corrupted, or otherwise "+
-				"unreadable — a store-level failure, not a single integration's secret): %w", storeErr)
+	if healthErr := a.credStore.HealthCheck(); healthErr != nil {
+		refreshErr := fmt.Errorf("refresh rejected: %w",
+			fatalStoreWideAuthFailure(healthErr, bundleAuth))
 		slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
 			"store-level credential failure", "error", refreshErr)
-		return refreshErr
-	}
-	if len(bundleAuth) > 0 && !a.credStore.HasDecryptableEntry() {
-		refreshErr := fmt.Errorf("refresh rejected: %w", fatalStoreWideAuthFailure(bundleAuth))
-		slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
-			"whole-store credential failure", "error", refreshErr)
 		return refreshErr
 	}
 	for _, e := range bundleAuth {
@@ -616,10 +608,9 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 				"ref", notFound.Name)
 			continue
 		}
-		// Unreachable by construction: splitEntryAuthFailures moved the
-		// entry-auth errors aside and storeLevelCredentialFailure refused
-		// every other non-NotFound shape above.
-		slog.Warn("refreshConfigAndRewireServices: bundle resolution error", "error", e)
+		// Resolution may observe a file/lock failure between the two reads.
+		// Preserve it rather than accepting a partial refresh with only a log.
+		return fmt.Errorf("refresh rejected: %w", fatalStoreWideAuthFailure(e, nil))
 	}
 	// Replace (not append) the entire sensitive-values set so rotated secrets
 	// are evicted and the scrubber reflects the current config refs plus every
