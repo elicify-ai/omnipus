@@ -75,11 +75,11 @@ func (d *wu22EngineStreamDelegate) GetStreamer(ctx context.Context, channel, cha
 	if !ok {
 		return stream, false
 	}
-	real, ok := stream.(*wsStreamer)
+	streamer, ok := stream.(*wsStreamer)
 	require.True(d.cut.t, ok, "SETUP: real gateway streamer, not a replacement capture")
 	require.Equal(d.cut.t, d.cut.frames.sid, sid)
-	d.cut.frames.streamer = real
-	return &wu22EngineCutStreamer{wsStreamer: real, cut: d.cut}, true
+	d.cut.frames.streamer = streamer
+	return &wu22EngineCutStreamer{wsStreamer: streamer, cut: d.cut}, true
 }
 
 type wu22EngineFixture struct {
@@ -155,6 +155,17 @@ func wu22EngineReturnedFailed(t *testing.T, al *agent.AgentLoop) bool {
 	return failed.Bool()
 }
 
+// Pin returned status separately from the failure bool/event: CHECK R03
+// changes only this tuple field and previously survived the full-loop oracle.
+func wu22EngineReturnedStatus(t *testing.T, al *agent.AgentLoop) agent.TurnEndStatus {
+	t.Helper()
+	result := reflect.ValueOf(al).Elem().FieldByName("lastTurnResult")
+	require.True(t, result.IsValid(), "SETUP: engine result observation exists")
+	status := result.FieldByName("status")
+	require.Equal(t, reflect.String, status.Kind())
+	return agent.TurnEndStatus(status.String())
+}
+
 func wu22EngineRecord(t *testing.T, f *wu22EngineFixture) *session.LifecycleRecord {
 	t.Helper()
 	lifecycle := f.al.GetSessionLifecycleStore()
@@ -183,6 +194,7 @@ func TestWU22RealStreamerLateWriteFailsEngineAndLifecycle(t *testing.T) {
 	assert.ErrorAs(t, turnErr, &returnedCause, "§4.1: engine caller must receive the late transcript error, not success")
 	assert.Empty(t, answer, "failed final persistence must not return a successful answer")
 	assert.True(t, wu22EngineReturnedFailed(t, f.al), "the returned turn outcome must carry TurnFailed, not just the wire flag")
+	assert.Equal(t, agent.TurnEndStatusError, wu22EngineReturnedStatus(t, f.al), "returned turnResult.status must be Error independently of the event and failure bool")
 	assert.Equal(t, []agent.TurnEndStatus{agent.TurnEndStatusError}, wu22EngineTurnEnds(t, f), "turn.end must be emitted after the late failure is known")
 	record := wu22EngineRecord(t, f)
 	assert.Equal(t, session.LifecycleFailed, record.State, "canonical ordinary lifecycle settlement must record failure")
@@ -206,6 +218,7 @@ func TestWU22RealStreamerHealthyWriteCompletesEngineAndLifecycle(t *testing.T) {
 	assert.Equal(t, 1, f.cut.finalizations)
 	require.NoError(t, f.cut.streamErr)
 	assert.False(t, wu22EngineReturnedFailed(t, f.al))
+	assert.Equal(t, agent.TurnEndStatusCompleted, wu22EngineReturnedStatus(t, f.al))
 	assert.Equal(t, []agent.TurnEndStatus{agent.TurnEndStatusCompleted}, wu22EngineTurnEnds(t, f))
 	record := wu22EngineRecord(t, f)
 	assert.Equal(t, session.LifecycleCompleted, record.State)
@@ -229,8 +242,9 @@ func TestWU22RealStreamerHealthyWriteCompletesEngineAndLifecycle(t *testing.T) {
 	require.Len(t, final, 1)
 	assert.Equal(t, wu22EngineAnswer, final[0].Content)
 	assert.Equal(t, "mia", final[0].AgentID)
-	var tokens []providers.Message
-	for _, raw := range framesOfType(t, live, "token") {
+	tokenFrames := framesOfType(t, live, "token")
+	tokens := make([]providers.Message, 0, len(tokenFrames))
+	for _, raw := range tokenFrames {
 		var frame generated.TokenFrame
 		require.NoError(t, json.Unmarshal(raw, &frame))
 		tokens = append(tokens, providers.Message{Role: "assistant", Content: frame.Content})
