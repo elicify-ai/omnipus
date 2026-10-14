@@ -125,8 +125,9 @@ func TestWU3MetadataReadDistinguishesMissingAgentFromMissingFile(t *testing.T) {
 // because the host volume is case-insensitive. No new lower-case-only ID rule.
 func TestWU3AgentReadDoesNotAliasIdentityByFilesystemCase(t *testing.T) {
 	d, cfg := wu3Deps(t)
-	id := wu3CreateAgent(t, d, cfg, "Case owner")
+	id := wu3CaseAgent(t, d, cfg)
 	upper := strings.ToUpper(id)
+	wu3Error(t, systools.NewAgentGetTool(d).Execute(context.Background(), map[string]any{"id": upper}), "AGENT_NOT_FOUND")
 	wu3Error(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"id": upper}), "AGENT_NOT_FOUND")
 	wu3Error(t, systools.NewAgentReadMetadataTool(d).Execute(context.Background(), map[string]any{"agent_id": upper, "file": "soul"}), "AGENT_NOT_FOUND")
 }

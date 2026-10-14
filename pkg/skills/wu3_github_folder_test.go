@@ -60,6 +60,8 @@ func TestWU3GitHubDerivedHostileFolderRefusedBeforeNetworkOrFilesystem(t *testin
 		{"parent_subpath", "https://github.com/fixture/repo/tree/main/.."},
 		{"windows_separator", "https://github.com/fixture/repo/tree/main/evil%5Cfolder"},
 		{"decoded_separator", "https://github.com/fixture/evil%2Ffolder"},
+		{"double_encoded_separator", "https://github.com/fixture/evil%252Ffolder"},
+		{"double_encoded_windows_separator", "https://github.com/fixture/repo/tree/main/evil%255Cfolder"},
 		{"reserved_con", "https://github.com/fixture/CON"},
 		{"reserved_nul", "https://github.com/fixture/nul"},
 		{"reserved_com1", "https://github.com/fixture/COM1"},

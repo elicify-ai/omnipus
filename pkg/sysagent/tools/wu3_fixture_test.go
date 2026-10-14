@@ -96,6 +96,20 @@ func wu3CreateAgent(t *testing.T, d *systools.Deps, cfg *config.Config, name str
 	return id
 }
 
+// Seed a PRE-EXISTING, valid UUID with guaranteed letters for casing probes.
+// A randomly generated all-digit UUID must not turn this test into a flake.
+func wu3CaseAgent(t *testing.T, d *systools.Deps, cfg *config.Config) string {
+	t.Helper()
+	const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	ac := &config.AgentConfig{ID: id, Name: "Case fixture", Type: config.AgentTypeCustom}
+	_, err := agentstore.New(d.Home).CreateState(id, ac, "Case fixture soul.")
+	require.NoError(t, err)
+	state, err := agentstore.New(d.Home).ReadState(id)
+	require.NoError(t, err)
+	cfg.Agents.List = append(cfg.Agents.List, *state.Agent)
+	return id
+}
+
 func wu3AgentRead(t *testing.T, d *systools.Deps, id string) map[string]any {
 	t.Helper()
 	return wu3Success(t, systools.NewAgentGetTool(d).Execute(context.Background(), map[string]any{"id": id}))

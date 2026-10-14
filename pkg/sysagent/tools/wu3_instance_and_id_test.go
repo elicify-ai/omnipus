@@ -19,7 +19,7 @@ func TestWU3AgentWritesRejectCaseAliasBeforeAnySideEffect(t *testing.T) {
 		t.Run(verb, func(t *testing.T) {
 			d, cfg := wu3Deps(t)
 			installLiveSessionStore(t, d, d.Home)
-			id := wu3CreateAgent(t, d, cfg, "Exact case colleague")
+			id := wu3CaseAgent(t, d, cfg)
 			before := wu3AgentRead(t, d, id)
 			args := map[string]any{"id": strings.ToUpper(id), "revision": before["revision"]}
 			var tool tools.Tool
