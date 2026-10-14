@@ -208,9 +208,9 @@ const (
 	// long after a supervision wake the engine waits before concluding the
 	// adjudication turn produced nothing. The wake is fire-and-forget and no
 	// seam reports a turn's outcome back into the engine, so the deadline —
-	// not a callback — is the observation mechanism. It never stops a running
-	// turn: the deadline is only evaluated once no supervision turn is in
-	// flight (issue #1306).
+	// not a callback — is the observation mechanism. It is a minimum interval
+	// counted from the wake and never stops a running turn: it is only
+	// evaluated once no supervision turn is in flight (issue #1306).
 	//
 	// It deliberately does NOT reuse the 10 s notify timeout below, which
 	// bounds a bus publish rather than an LLM turn. Spec default: 600 s.

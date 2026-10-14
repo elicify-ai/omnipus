@@ -286,6 +286,12 @@ type turnState struct {
 	// injected and never consumed in production.
 	parentSpawnCallID string
 
+	// causeCtx is the turn's own run context, kept only so a typed exit can
+	// read WHY it ended (context.Cause) — e.g. the Judge's own check time
+	// limit (ErrJudgeTimeLimit, issue #1306) versus a provider timeout. Set
+	// once in createTurnContext; read-only afterwards.
+	causeCtx context.Context
+
 	// Additional SubTurn fields
 	ctx          context.Context    // Context for this turn
 	cancelFunc   context.CancelFunc // Cancel function for this turn's context

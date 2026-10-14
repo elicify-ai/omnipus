@@ -201,6 +201,13 @@ const (
 	// Attribution `provider`; retryable.
 	CodeTurnTimedOut LLMErrorCode = "turn_timed_out"
 
+	// CodeJudgeTimeLimit (issue #1306): the Judge's own verification turn
+	// reached its configured check time limit (judge.timeout_sec). Not a
+	// provider fault and not retryable as-is — the operator raises the limit.
+	// Distinct from CodeTurnTimedOut, which now means only a provider request
+	// timeout.
+	CodeJudgeTimeLimit LLMErrorCode = "judge_time_limit"
+
 	// CodeDelegatedTaskLimit identifies a controller-authored notice for a
 	// delegated task that reached max_tool_iterations (there is no
 	// timeout_seconds limit any more, issue #1306).
@@ -1105,7 +1112,26 @@ var (
 	// ErrTurnTimedOut: a provider request timed out (its per-call request
 	// timeout). There is no turn deadline (issue #1306).
 	ErrTurnTimedOut = errors.New("turn timed out")
+	// ErrJudgeTimeLimit: the cause attached to the Judge's verification turn
+	// deadline (judge.timeout_sec) via context.WithTimeoutCause, so the exit
+	// is reported as the Judge's own check time limit, never as a provider
+	// timeout (issue #1306).
+	ErrJudgeTimeLimit = errors.New("the Judge reached its own check time limit")
 )
+
+// withDeadlineCause attaches the Judge's own time-limit cause to a deadline
+// error when ctx ended because of it (issue #1306). A provider call reports
+// only context.DeadlineExceeded; context.Cause(ctx) tells which clock it was.
+// Any other error — or a deadline with no such cause — is returned unchanged.
+func withDeadlineCause(ctx context.Context, err error) error {
+	if ctx == nil || err == nil || !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrJudgeTimeLimit) {
+		return err
+	}
+	if errors.Is(context.Cause(ctx), ErrJudgeTimeLimit) {
+		return fmt.Errorf("%w: %w", ErrJudgeTimeLimit, err)
+	}
+	return err
+}
 
 // typedExitCode reports the ADR-066 D7 exit code carried by err's chain, if
 // any. The sentinel and the raw context error are both accepted so callers
@@ -1116,6 +1142,10 @@ func typedExitCode(err error) (LLMErrorCode, bool) {
 	switch {
 	case err == nil:
 		return "", false
+	case errors.Is(err, ErrJudgeTimeLimit):
+		// Checked first: the Judge's own time limit also wraps
+		// context.DeadlineExceeded, but it is not a provider timeout.
+		return CodeJudgeTimeLimit, true
 	case errors.Is(err, ErrTurnCanceled), errors.Is(err, context.Canceled):
 		return CodeTurnCanceled, true
 	case errors.Is(err, ErrTurnTimedOut), errors.Is(err, context.DeadlineExceeded):

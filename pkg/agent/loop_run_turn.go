@@ -155,6 +155,7 @@ func (rc *agentLoopRunTurnConductor) createTurnContext() agentLoopRunTurnConduct
 	// No turn deadline (issue #1306): the turn context is cancel-only, so a
 	// turn ends when it finishes or an explicit Stop/cancel fires turnCancel.
 	rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.turnCancel = context.WithCancel(rc.rx.ctx)
+	rc.rx.rr.rq.ri.rf.rt.ts.causeCtx = rc.rx.rr.rq.ri.rf.rt.turnCtx
 	return agentLoopRunTurnConductorNext
 }
 

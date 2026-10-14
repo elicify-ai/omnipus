@@ -14,7 +14,8 @@ import (
 // attempt ceiling the deadline used to terminate the plan
 // failed(supervision_unavailable) even while the last supervision turn was
 // still running; now it waits for that turn to settle, and only then applies
-// (the post-settle grace).
+// (the interval counts from the wake, so a review that outlasted it is
+// judged as soon as it settles).
 func TestSupervisionDeadline_NeverFailsThePlanWhileTheSupervisionTurnIsInFlight(t *testing.T) {
 	h := newTestPlanEngine(t)
 	ctx := context.Background()

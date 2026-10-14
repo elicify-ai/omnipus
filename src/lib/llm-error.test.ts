@@ -60,6 +60,8 @@ const ALL_CODES: LLMErrorCode[] = [
   'model_unassigned',
   'turn_canceled',
   'turn_timed_out',
+  // Issue #1306: the Judge's own check time limit, distinct from a provider timeout.
+  'judge_time_limit',
   'delegated_task_limit',
   'context_window_unknown',
   'unknown',

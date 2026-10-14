@@ -15229,7 +15229,7 @@ export interface components {
                  */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
+                 * @description Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;
@@ -15350,7 +15350,7 @@ export interface components {
                 /** @example 7 */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
+                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;
@@ -15407,7 +15407,7 @@ export interface components {
                 /** @example 7 */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
+                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;

@@ -1475,8 +1475,10 @@ func (pe *PlanEngine) evaluateSupervisionDeadlineLocked(p *plan.Plan) {
 	if pe.supervisionTurnInFlight(p.ID) {
 		// Issue #1306: a supervision turn that is still working is never
 		// treated as having "produced nothing" — that would re-issue or fail
-		// the plan under a turn that may still conclude. The deadline is the
-		// grace AFTER the turn settles, measured from the same wake_at.
+		// the plan under a turn that may still conclude. The interval itself
+		// still counts from wake_at (a minimum observation interval, team-lead
+		// decision 2026-10-14): a review that outlasts it is judged as soon as
+		// it settles, with no extra grace after settlement.
 		return
 	}
 	if !pe.clock.Now().UTC().After(wakeAt.Add(pe.supervisionTurnTimeout(p))) {

@@ -21723,7 +21723,7 @@ type Plan struct {
 		// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
 		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
 		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
@@ -21930,7 +21930,7 @@ type PlanCreateRequest struct {
 		// SupervisionMaxAttempts Override of FR-022's no-correction supervision attempt ceiling (global default `planning.supervision_max_attempts`, 3).
 		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
 		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
@@ -22049,7 +22049,7 @@ type PlanListResponse struct {
 			// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
 			SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
+			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
 			SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 		} `json:"bounds,omitempty"`
 
@@ -22261,7 +22261,7 @@ type PlanRestartResponse struct {
 			// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
 			SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
+			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
 			SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 		} `json:"bounds,omitempty"`
 
@@ -22458,7 +22458,7 @@ type PlanUpdateRequest struct {
 		// SupervisionMaxAttempts Override of FR-022's no-correction supervision attempt ceiling (global default `planning.supervision_max_attempts`, 3).
 		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It never stops a running supervision turn: the deadline is only evaluated once no supervision turn is in flight, so it is the grace after a turn settles before that attempt counts as producing nothing.
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
 		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
