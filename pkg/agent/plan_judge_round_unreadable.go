@@ -23,9 +23,10 @@ import (
 //     read again.
 //   - The revert/park writes are still attempted (a transient read fault may
 //     not affect the write); their failures are logged by those helpers.
-//   - The plan owner is woken with a plain explanation, using the round's
-//     last good view of the plan (snapshot). The wake lands in the owner's
-//     chat/session, which is stored outside the plan record.
+//   - The conclusion is written as a system entry in the plan owner's
+//     session transcript (stored outside the plan record), and the owner is
+//     woken with the same plain explanation, using the round's last good
+//     view of the plan (snapshot).
 //
 // The round's verifier claim and Judge slot are released by
 // runPlanJudgeRound's own defers, as on every other exit. Once the record is
@@ -35,7 +36,7 @@ import (
 // A real verdict that cannot be applied is discarded, not guessed onto the
 // plan: the round is re-run after recovery. Caller holds planDecisionMu.
 func (pe *PlanEngine) concludeUnreadableJudgeRoundLocked(
-	planID string, snapshot *plan.Plan, result JudgeCriteriaResult, nothingToJudge bool, readErr error,
+	planID string, snapshot *plan.Plan, work string, result JudgeCriteriaResult, nothingToJudge bool, readErr error,
 ) {
 	reason := "the plan record could not be read to apply the judge round's outcome: " + readErr.Error()
 	if result.Unavailable && strings.TrimSpace(result.Reason) != "" {
@@ -54,20 +55,62 @@ func (pe *PlanEngine) concludeUnreadableJudgeRoundLocked(
 		return
 	}
 	if streak >= plan.MaxConsecutiveJudgeUnavailable {
-		pe.surfaceJudgeUnavailableStall(snapshot, streak, reason)
+		pe.surfaceJudgeUnavailableStall(snapshot, streak, reason, work)
 	} else {
-		pe.revertAbandonedJudgeRoundLocked(snapshot, reason)
+		pe.revertAbandonedJudgeRoundWithWorkLocked(snapshot, reason, work)
 	}
-	pe.wakeOwner(snapshot, buildUnreadableJudgeRoundWakeText(snapshot, streak, reason), "plan_judge_unavailable")
+	text := buildUnreadableJudgeRoundWakeText(snapshot, streak, reason, work)
+	pe.recordUnreadableJudgeRoundNote(snapshot, text)
+	pe.wakeOwner(snapshot, text, "plan_judge_unavailable")
+}
+
+// recordUnreadableJudgeRoundNote writes the conclusion as a system entry in
+// the plan owner's session transcript — stored outside the unreadable plan
+// record — so it is durable before the owner's wake turn runs (or if it never
+// does). A failed write is logged at ERROR; the wake below still goes out.
+func (pe *PlanEngine) recordUnreadableJudgeRoundNote(p *plan.Plan, text string) {
+	al := pe.agentLoop
+	if al == nil || p.OwnerSessionID == "" {
+		logger.ErrorCF("plan_engine", "plan judge round conclusion has no owner session to record it in",
+			map[string]any{"plan_id": p.ID, "agent_loop_wired": al != nil})
+		return
+	}
+	store := al.ResolveSessionStore(p.OwnerSessionID)
+	if store == nil {
+		store = al.GetSessionStore()
+	}
+	if err := al.writeGoalSystemTranscriptErr(store, p.OwnerSessionID, p.OwnerAgentID, text); err != nil {
+		logger.ErrorCF("plan_engine", "plan judge round conclusion could not be saved to the plan owner's session",
+			map[string]any{"plan_id": p.ID, "owner_session_id": p.OwnerSessionID, "error": err.Error()})
+	}
 }
 
 // buildUnreadableJudgeRoundWakeText is the owner-facing conclusion of a plan
 // Judge round that could not be applied to an unreadable plan record.
-func buildUnreadableJudgeRoundWakeText(p *plan.Plan, streak int, reason string) string {
-	return fmt.Sprintf(
-		"Plan %q (%s): the plan judge's round could not be concluded, so the Definition of Done has not "+
-			"been scored. Reason: %s. No judge round was consumed (unavailable rounds in a row: %d of %d). "+
-			"The members' work is unchanged. The engine retries the round once the plan record can be read "+
-			"again; if it stays unreadable, check the plans directory for disk or permission errors.",
-		p.Title, p.ID, judgeUnavailableReasonText(reason), streak, plan.MaxConsecutiveJudgeUnavailable)
+func buildUnreadableJudgeRoundWakeText(p *plan.Plan, streak int, reason, work string) string {
+	return notVerifiedConclusion(
+		fmt.Sprintf("plan %q (%s): the plan judge's round could not be concluded; %s", p.Title, p.ID,
+			judgeUnavailableReasonText(reason)),
+		fmt.Sprintf("The Definition of Done has not been scored. No judge round was consumed (unavailable "+
+			"rounds in a row: %d of %d). The members' work is unchanged. The engine retries the round once "+
+			"the plan record can be read again; if it stays unreadable, check the plans directory for disk or "+
+			"permission errors.", streak, plan.MaxConsecutiveJudgeUnavailable),
+		work)
+}
+
+// planWorkUnreadable is the work-result text of a round whose members'
+// results could not be read: the conclusion says so explicitly instead of
+// silently carrying nothing.
+func planWorkUnreadable(why string) string {
+	return "(The members' results could not be read for this round: " + why + ".)"
+}
+
+// planWorkResultSection renders work as the labelled unverified-result
+// section appended to a wake that already explains the failure; empty work
+// adds nothing.
+func planWorkResultSection(work string) string {
+	if strings.TrimSpace(work) == "" {
+		return ""
+	}
+	return "\n\n" + notVerifiedConclusion("the Definition of Done was not scored", "", work)
 }

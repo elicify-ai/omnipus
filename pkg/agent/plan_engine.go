@@ -660,6 +660,10 @@ type judgeUnavailablePark struct {
 	// "the park did not take effect" — true whether the write errored or the
 	// phase was written and then reverted by something else.
 	attempts int
+	// work is the members' results the abandoned round carried (issue
+	// #1306: the Judge concludes with the work result), so a re-attempted
+	// park renders the same Not-verified conclusion.
+	work string
 }
 
 // --- Lifecycle -----------------------------------------------------------

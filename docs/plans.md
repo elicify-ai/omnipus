@@ -75,6 +75,7 @@ A plan created in the interface may leave the DoD empty — the work is then jud
 Two built-in system agents — not chat colleagues — handle checking and rescue.
 
 - **The Judge** rules each task's criteria met or unmet as the task finishes, and the plan's DoD when all members finish. It works read-only, in its own session.
+- **When the plan's Judge cannot finish a round** (it is unavailable, or its round reaches the Judge's own check time limit), the plan's handover says **Not verified — the check could not complete**, with the reason and the members' results labelled **The work result, unverified:** (each member's result is shortened to its first 500 bytes). No judge round is used and the engine retries the round. After three such rounds in a row the plan is parked as stalled for the supervisor, with the same conclusion. If the members' results themselves could not be read, the conclusion says so instead of listing them. If the plan record itself cannot be read, the same conclusion is written into the plan owner's conversation and the round is retried once the record can be read again.
 - **The Plan Supervisor** is woken when a finished plan's DoD is unmet, or the graph stalls with nothing to dispatch. It applies one correction per wake.
 
 The supervisor can apply four corrections.

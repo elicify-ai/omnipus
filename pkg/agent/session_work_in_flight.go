@@ -85,9 +85,9 @@ func (al *AgentLoop) lifecycleTreeWorkInFlight(sessionID string) (bool, string, 
 	case err != nil:
 		return false, "", fmt.Errorf("read lifecycle record of %q: %w", sessionID, err)
 	case own != nil:
-		if own.State == session.LifecycleStopped {
-			return false, "", nil
-		}
+		// A stopped session's own record is not work, but its delegated
+		// sessions are still walked below (the stopped-cut rule applies to
+		// descendants, as in hasRunningOrQueuedDescendant).
 		if busy, why := al.lifecycleRecordWorking(own); busy {
 			return true, "this session " + why, nil
 		}
