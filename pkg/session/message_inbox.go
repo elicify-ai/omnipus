@@ -615,8 +615,8 @@ func (s *MessageInboxStore) appendMessage(ownerKey string, msg generated.Session
 	if bodyCap <= 0 {
 		bodyCap = DefaultChildSendBodyBytes
 	}
-	if err := checkInboxBody(msg, raw, bodyCap, systemFinal && peek.Kind == "handback"); err != nil {
-		return nil, err
+	if bodyErr := checkInboxBody(msg, raw, bodyCap, systemFinal && peek.Kind == "handback"); bodyErr != nil {
+		return nil, bodyErr
 	}
 
 	mu := s.lock.Get(ownerKey)
