@@ -16,7 +16,6 @@ import { workspacesQueryKeys } from '@/lib/api'
 vi.mock('./Sidebar', () => ({ Sidebar: () => null }))
 vi.mock('./NotificationPanel', () => ({ NotificationPanel: () => null }))
 vi.mock('@/components/ui/toast-container', () => ({ ToastContainer: () => null }))
-vi.mock('@/components/agents/ToolApprovalModal', () => ({ ToolApprovalModal: () => null }))
 vi.mock('@/components/chat/MediaLightbox', () => ({ MediaLightbox: () => null }))
 vi.mock('@/components/chat/OmnipusRuntimeProvider', () => ({
   OmnipusRuntimeProvider: ({ children }: { children?: React.ReactNode }) => children ?? null,

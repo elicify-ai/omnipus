@@ -30,7 +30,6 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 // AgentProfile (real — the component whose host count this file pins).
 vi.mock('./NotificationPanel', () => ({ NotificationPanel: () => null }))
 vi.mock('@/components/ui/toast-container', () => ({ ToastContainer: () => null }))
-vi.mock('@/components/agents/ToolApprovalModal', () => ({ ToolApprovalModal: () => null }))
 vi.mock('@/components/chat/MediaLightbox', () => ({ MediaLightbox: () => null }))
 vi.mock('@/components/search/SearchModal', () => ({ SearchModal: () => null }))
 vi.mock('@/components/chat/OmnipusRuntimeProvider', () => ({
