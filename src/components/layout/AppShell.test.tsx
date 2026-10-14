@@ -20,6 +20,14 @@ import React from 'react'
 // tests below are written directly against the implemented behavior.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// Keep the original cross-workspace-banner oracle in the enabled configuration.
+// Shipped stage-1 approval reachability is covered by AppShell.stage1.test.tsx.
+vi.mock('@/lib/featureSwitches', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/featureSwitches')>(),
+  INLINE_TOOL_APPROVALS_ENABLED: true,
+}))
+
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { AppState, NotificationList } from '@/lib/api/generated/openapi-types'

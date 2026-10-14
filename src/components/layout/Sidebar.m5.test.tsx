@@ -82,7 +82,8 @@ vi.mock('@/store/workspacesStore', () => ({
 }))
 
 // Mock session/chat stores (used by the workspace accordion)
-vi.mock('@/store/session', () => ({
+vi.mock('@/store/session', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/store/session')>(),
   useSessionStore: (selector?: (s: unknown) => unknown) => {
     const state = { activeSessionId: null, startNewSession: vi.fn() }
     return selector ? selector(state) : state

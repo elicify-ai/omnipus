@@ -4,6 +4,13 @@
 import type { ComponentType } from 'react'
 import { act } from 'react'
 import { vi } from 'vitest'
+
+// Stage 1 hides the main-chat entry point; retain its future-enabled oracle.
+vi.mock('@/lib/featureSwitches', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/featureSwitches')>(),
+  ROOMS_ENABLED: true,
+}))
+
 import { ChatScreen } from './ChatScreen'
 import { OmnipusRuntimeProvider } from './OmnipusRuntimeProvider'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'

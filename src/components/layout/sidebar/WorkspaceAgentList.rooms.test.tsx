@@ -1,7 +1,13 @@
 // RED — FR-160/174/175, US-17 AS-1/2, §6.3, BDD-17.1/2/20.
 // Existing sidebar is real; QueryClient/router/stores are real; fetch only is fake.
 import type { ComponentType } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Stage 1 ships rooms OFF. Preserve the original enabled-feature oracles.
+vi.mock('@/lib/featureSwitches', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/featureSwitches')>(),
+  ROOMS_ENABLED: true,
+}))
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceAgentList } from './WorkspaceAgentList'
