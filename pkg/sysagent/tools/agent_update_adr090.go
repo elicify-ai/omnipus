@@ -37,8 +37,8 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 	if len(fields) == 0 {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "at least one editable field is required", ""))
 	}
-	if err := validateColorArgs(args); err != nil {
-		return err
+	if refusal := validateVisualUpdateArgs(args); refusal != nil {
+		return refusal
 	}
 	home, err := resolveOmnipusHome(t.deps.Home)
 	if err != nil {
@@ -146,15 +146,6 @@ func fieldErrorResult(err error) *tools.ToolResult {
 		return tools.ErrorResult(errorJSON(string(fe.Code), fe.Error(), ""))
 	}
 	return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
-}
-
-func validateColorArgs(args map[string]any) *tools.ToolResult {
-	if color, ok := args["color"].(string); ok {
-		if _, err := canonicalAgentColor(color); err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a palette color, e.g. #6E8BA8"))
-		}
-	}
-	return nil
 }
 
 func suppliedAgentFields(args map[string]any) []string {

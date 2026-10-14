@@ -116,7 +116,11 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Primary LLM model slug (e.g. 'z-ai/glm-5v-turbo')",
 			},
-			"color": map[string]any{"type": "string", "description": "Avatar color, optional (default Pewter #8E9196): one of the palette hex values (e.g. '#6E8BA8')"},
+			"color": map[string]any{"type": "string", "description": "Avatar color, optional: one of the ten palette hex values #4F8A80, #5E6973, #6E8BA8, #7A8C9E, #7B7290, #8E9196, #9C8A5B, #A97142, #B76E79, #CDBA96 (letter-case is normalized). Omitted, null or empty creates the agent with the default Pewter #8E9196; any other value is rejected."},
+			// Visual identity figure/role (#1303): the same catalogs the SPA
+			// agent editor and REST create use; helpers in agent_visuals.go.
+			"figure": figureCreateProperty(),
+			"role":   roleCreateProperty(),
 			// Optional — agent type + external-CLI worker runtime.
 			"agent_type": map[string]any{
 				"type":        "string",
@@ -176,6 +180,8 @@ type agentCreateToolExecute struct {
 	soul            string
 	model           string
 	color           string
+	figure          string
+	role            string
 	agentType       string
 	execCLI         string
 	execCLIPath     string
@@ -263,6 +269,22 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	// so an explicit empty colour cannot overwrite the default.
 	ac.args["color"] = ac.color
 
+	// Visual identity figure/role (#1303, chief Q1 A 2026-10-14): omitted, null
+	// (NormalizeArgs renders it "") or empty select the shipped default —
+	// exactly like REST create — and any other non-catalog value is refused
+	// with the full choice list, before any write. Same catalog and
+	// canonicalizers as the color argument above.
+	figure, figureStop := resolveCreateVisual(ac.args, "figure", coreagent.DefaultFigure)
+	if figureStop != nil {
+		return figureStop, true
+	}
+	ac.figure = figure
+	role, roleStop := resolveCreateVisual(ac.args, "role", coreagent.DefaultRole)
+	if roleStop != nil {
+		return roleStop, true
+	}
+	ac.role = role
+
 	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
 	ac.agentType, _ = ac.args["agent_type"].(string)
 	if ac.agentType == "" {
@@ -349,6 +371,8 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 		Name:        ac.name,
 		Description: ac.description,
 		Color:       ac.color,
+		Figure:      ac.figure, // resolved default or canonical catalog value (#1303)
+		Role:        ac.role,
 		Model:       &config.AgentModelConfig{Primary: ac.model},
 	}
 	// Agent type / runtime (W4). Subagent + subagent_3p persist as worker;
@@ -904,7 +928,11 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model. Empty string clears an existing pin (falls back to default-provider resolution).",
 			},
-			"color": map[string]any{"type": "string"},
+			"color": map[string]any{"type": "string", "description": "New avatar color: one of the ten palette hex values #4F8A80, #5E6973, #6E8BA8, #7A8C9E, #7B7290, #8E9196, #9C8A5B, #A97142, #B76E79, #CDBA96 (letter-case is normalized). Omitted leaves the stored color unchanged; null or empty is refused."},
+			// Visual identity figure/role (#1303): same catalogs as create;
+			// helpers in agent_visuals.go.
+			"figure": figureUpdateProperty(),
+			"role":   roleUpdateProperty(),
 			// #904 D15: JSON null clears the own value ("use the global
 			// limit"), so the schema admits null; 1..1000 bound structurally.
 			"max_tool_iterations": map[string]any{

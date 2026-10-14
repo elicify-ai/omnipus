@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
@@ -53,9 +54,15 @@ func (t *AgentGetTool) Execute(_ context.Context, args map[string]any) *tools.To
 			defaultAgent = cfg.Agents.Defaults.DefaultAgentID == state.Agent.ID
 		}
 	}
+	// Visual identity readback (#1303): the stored figure/role/color, through
+	// the same read backstop the REST surface uses — a stored value in the
+	// catalog is emitted (color letter-case normalized); anything outside the
+	// catalog reads as the shipped default. It never rewrites the stored file.
+	readFigure, readRole, readColor := coreagent.WireIdentity(state.Agent.Figure, state.Agent.Role, state.Agent.Color)
 	resp := map[string]any{
 		"id": state.Agent.ID, "name": state.Agent.Name, "description": state.Agent.Description,
 		"type": wireAgentType(*state.Agent), "soul": state.Soul, "skills": nonNilStrings(state.Agent.Skills),
+		"figure": string(readFigure), "role": string(readRole), "color": string(readColor),
 		"mcp_servers": storedMCPBindings(state.Agent), "stored_tool_overrides": storedOverrides(state.Agent),
 		"override_names": overrides, "model": state.Agent.Model, "revision": state.Revision,
 		"activation_status": activation, "editable_fields": editableDescriptors(*state.Agent),
@@ -225,9 +232,20 @@ func editableDescriptors(a config.AgentConfig) []map[string]any {
 	descriptors := agentmutation.FieldDescriptors(a)
 	out := make([]map[string]any, 0, len(descriptors))
 	for _, descriptor := range descriptors {
-		d := map[string]any{"name": descriptor.Name, "editable": descriptor.Editable}
-		if descriptor.Reason != "" {
-			d["reason"] = descriptor.Reason
+		editable, reason := descriptor.Editable, descriptor.Reason
+		// FR-024: update_agent refuses the permission fields for every agent
+		// (permissionFieldRefusal) — set_agent_permissions owns them on an
+		// existing agent. The shared ADR-090 matrix still accepts them (and
+		// the REST PUT surface still takes them), but this surface's
+		// editable_fields must list exactly what update_agent accepts, so a
+		// field the tool would refuse is never advertised as editable here.
+		if editable && slices.Contains(permissionFieldNames, descriptor.Name) {
+			editable = false
+			reason = descriptor.Name + " cannot be changed with update_agent; per-agent tool policies and connector assignments change only through set_agent_permissions"
+		}
+		d := map[string]any{"name": descriptor.Name, "editable": editable}
+		if reason != "" {
+			d["reason"] = reason
 		}
 		out = append(out, d)
 	}
