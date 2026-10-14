@@ -131,7 +131,10 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
       setActive(index + 1)
       return
     }
-    submit()
+    // The answers this confirm decided on — not the previous render's drafts:
+    // Enter on an unanswered final option sets its choice in this same event
+    // (CHECK2 F1: submitting from stale state sent the recommendation instead).
+    submit(nextDrafts)
   }
 
   // Arrow-key movement among the active question's options and free text.
@@ -189,9 +192,9 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
     }))
   }
 
-  function buildAnswers() {
+  function buildAnswers(fromDrafts: Record<string, AnswerDraft>) {
     return questions.map((q) => {
-      const d = draftFor(q.header)
+      const d = fromDrafts[q.header] ?? { selected: [], freeText: '' }
       if (d.freeText.trim() !== '') {
         return { header: q.header, free_text: d.freeText }
       }
@@ -204,13 +207,13 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
     })
   }
 
-  function submit() {
+  function submit(fromDrafts: Record<string, AnswerDraft> = drafts) {
     if (submitted.current) return
     submitted.current = true
     sendAskUserAnswer({
       card_id: card.card_id,
       session_id: card.session_id,
-      answers: buildAnswers(),
+      answers: buildAnswers(fromDrafts),
     })
   }
 
@@ -480,7 +483,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
           variant="default"
           size="sm"
           disabled={!allAnswered}
-          onClick={submit}
+          onClick={() => submit()}
           data-testid="ask-user-submit"
           className="h-auto rounded-lg px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)]"
         >
