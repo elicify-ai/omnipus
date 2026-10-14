@@ -918,7 +918,11 @@ func isWorkerAgentID(cfg *config.Config, agentID string) bool {
 func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	var req gen.SessionCreateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidateStrict(w, r, "SessionCreateRequest", &req, validateEnabled) {
+	// Not decodeAndValidateStrict: the required agent is checked explicitly
+	// below in both validation modes, so an unknown member cannot bypass it,
+	// and the WU-1 strict decode here was an unrequested addition that
+	// refused previously accepted bodies with validation off (CI 1315).
+	if !decodeAndValidate(w, r, "SessionCreateRequest", &req, validateEnabled) {
 		return
 	}
 

@@ -711,7 +711,8 @@ func createSession(t *testing.T, gw *testutil.TestGateway) string {
 	req, err := gw.NewRequest(
 		http.MethodPost,
 		"/api/v1/sessions",
-		strings.NewReader(`{"type":"chat","channel":"webchat"}`),
+		// FR-122 / K16: a REST session create names its agent.
+		strings.NewReader(`{"type":"chat","channel":"webchat","agent_id":"`+integrationChatAgentID+`"}`),
 	)
 	if err != nil {
 		t.Fatalf("createSession: build request: %v", err)
