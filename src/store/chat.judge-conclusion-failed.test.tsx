@@ -107,7 +107,7 @@ function startRealFrameSequence(): void {
     useChatStore.getState().handleFrame({
       type: 'session_state', session_id: SID, user_id: 'tester',
       emitted_at: new Date().toISOString(), pending_approvals: [], pending_asks: [],
-      active_turn: { turn_id: TURN, agent_id: 'mia' },
+      active_turn: { turn_id: TURN, agent_id: 'mia', started_at: new Date().toISOString() },
     })
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, message_id: MESSAGE, turn_id: TURN, agent_id: 'mia', content: NARRATION,
