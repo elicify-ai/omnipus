@@ -681,6 +681,11 @@ type ErrorPayload struct {
 	Code          string
 	Message       string
 	ProviderError *ProviderError
+	// Detail is an optional controller-authored diagnostic for a curated
+	// Code whose Message is catalogue copy (e.g. judge_conclusion_failed):
+	// WireLLMError builds the Verbose-only wire detail from it (scrubbed,
+	// length-bounded) instead of from Message. Never shown as ordinary copy.
+	Detail string
 	// ChatID is needed so the WS event forwarder can route this event to the
 	// originating connection via matchesChatID.
 	ChatID string

@@ -152,30 +152,44 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 const goalConclusionAudienceAttempts = 3
 
 // goalConclusionAudience reports whether sessionID is a steered child (its
-// parent receives the conclusion) or a parentless chat (the user does).
-// Parentless is decided only from positive evidence: no lifecycle store
-// wired, no lifecycle record at all (a steered child's record is written
-// atomically at launch, so a plain chat without one is parentless by
-// construction), or a record with no steering edge. A record that exists but
-// cannot be read is retried and, if it stays unreadable, returned as an
-// error — never guessed (SFH F1).
+// parent receives the conclusion) or an ordinary root (the user does).
+//
+// The answer comes from the canonical audience boundary
+// (steer_audience.go::SteerAudienceResolver over
+// steer_classify.go::SteerRecordClassifier), which reads the lifecycle record
+// AND the session's metadata and requires them to agree (architect R2-A3).
+// Only a positively classified ordinary root takes the human path. A damaged
+// child (record lost, or edge lost while the metadata still names a parent),
+// a legacy delegate or an invalid edge has no safe audience and is returned
+// as an error, never guessed parentless. A read failure is retried and, if it
+// persists, returned as an error too (SFH F1). Either error routes the
+// conclusion to reportUndeliverableGoalConclusion.
 func (al *AgentLoop) goalConclusionAudience(sessionID string) (steered bool, err error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
+		// SteerLauncher.Launch refuses a child without a lifecycle store, so
+		// no session here can be a steered child.
 		return false, nil
 	}
+	sessions := al.ResolveSessionStore(sessionID)
+	if sessions == nil {
+		sessions = al.GetSessionStore()
+	}
+	if sessions == nil {
+		return false, fmt.Errorf("no session store to classify session %q", sessionID)
+	}
+	resolver := NewSteerAudienceResolver(NewSteerRecordClassifier(lifecycle, sessions))
 	for attempt := 1; ; attempt++ {
-		rec, loadErr := lifecycle.Load(sessionID)
+		audience, class, audErr := resolver.Audience(context.Background(), sessionID)
 		switch {
-		case loadErr == nil && rec != nil:
-			return rec.SteeredBy != nil, nil
-		case errors.Is(loadErr, session.ErrLifecycleNotFound):
+		case audErr == nil && audience == steer.AudienceUser:
 			return false, nil
-		case loadErr == nil:
-			err = fmt.Errorf("the lifecycle store returned no record and no error for session %q", sessionID)
-		default:
-			err = fmt.Errorf("read lifecycle record for session %q: %w", sessionID, loadErr)
+		case audErr == nil && audience == steer.AudienceSteeringSession:
+			return true, nil
+		case audErr == nil:
+			return false, fmt.Errorf("session %q is classified %s, so its conclusion has no safe audience", sessionID, class)
 		}
+		err = fmt.Errorf("classify the conclusion audience of session %q: %w", sessionID, audErr)
 		if attempt >= goalConclusionAudienceAttempts {
 			return false, err
 		}
@@ -191,16 +205,26 @@ func (al *AgentLoop) goalConclusionAudience(sessionID string) (steered bool, err
 // reason it was not delivered, and raised as a visible error — never dropped,
 // never sent to a guessed audience.
 func (al *AgentLoop) reportUndeliverableGoalConclusion(store *session.UnifiedStore, work *goalDeferredAdjudicationWork, conclusion string, audErr error) {
-	note := conclusion + "\n\nThis conclusion could not be delivered: the session's record could not be read (" + audErr.Error() + ")."
+	note := conclusion + "\n\nThis conclusion could not be delivered: the session's records could not be read, or do not establish who should receive it (" + audErr.Error() + ")."
 	logger.ErrorCF("agent", "goal: the Judge conclusion could not be delivered — the conclusion audience is unreadable",
 		map[string]any{"session_id": work.sessionID, "error": audErr.Error()})
+	detail := "The Judge's conclusion could not be delivered: " + audErr.Error()
 	if werr := appendGoalConclusionFn(al, store, work.sessionID, goalWorkAgentID(work), note); werr != nil {
 		logger.ErrorCF("agent", "goal: the undeliverable Judge conclusion could not be saved either",
 			map[string]any{"session_id": work.sessionID, "error": werr.Error()})
+		detail += "; saving the undeliverable note also failed: " + werr.Error()
 	}
-	al.emitEvent(EventKindError, EventMeta{Source: "goal_loop", SessionKey: work.sessionID}, ErrorPayload{
-		Stage: "goal_conclusion", Code: string(CodeUnknown), SessionID: work.sessionID,
-		Message: "The Judge's conclusion could not be delivered: " + audErr.Error(),
+	al.emitJudgeConclusionFailed(work.sessionID, detail)
+}
+
+// emitJudgeConclusionFailed raises the judge_conclusion_failed notice for
+// sessionID (issue #1306, SFH R2-3). The message is the curated catalogue
+// sentence; the raw cause (paths, store errors) goes only to the scrubbed,
+// Verbose-only detail. The notice ends no turn.
+func (al *AgentLoop) emitJudgeConclusionFailed(sessionID, detail string) {
+	al.emitEvent(EventKindError, EventMeta{Source: "goal_loop", SessionKey: sessionID}, ErrorPayload{
+		Stage: "goal_conclusion", Code: string(CodeJudgeConclusionFailed), SessionID: sessionID,
+		Message: UserMessageForCode(CodeJudgeConclusionFailed), Detail: detail,
 	})
 }
 
@@ -250,10 +274,7 @@ func (al *AgentLoop) concludeInteractiveGoalNotVerified(store *session.UnifiedSt
 	if saveErr != nil {
 		logger.ErrorCF("agent", "goal: the Judge conclusion could not be saved durably",
 			map[string]any{"session_id": work.sessionID, "error": saveErr.Error()})
-		al.emitEvent(EventKindError, EventMeta{Source: "goal_loop", SessionKey: work.sessionID}, ErrorPayload{
-			Stage: "goal_conclusion", Code: string(CodeUnknown), SessionID: work.sessionID,
-			Message: "The Judge's conclusion could not be saved to this chat: " + saveErr.Error(),
-		})
+		al.emitJudgeConclusionFailed(work.sessionID, "The Judge's conclusion could not be saved to this chat: "+saveErr.Error())
 	}
 	al.deliverGoalConclusionToRoute(work.sessionID, conclusion)
 	if concluded != nil {
@@ -332,10 +353,7 @@ func (al *AgentLoop) deliverGoalConclusionToRoute(sessionID, conclusion string) 
 	if err != nil {
 		logger.ErrorCF("agent", "goal: the Judge conclusion could not be delivered to the goal's chat",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
-		al.emitEvent(EventKindError, EventMeta{Source: "goal_loop", SessionKey: sessionID}, ErrorPayload{
-			Stage: "goal_conclusion", Code: string(CodeUnknown), SessionID: sessionID,
-			Message: "The Judge's conclusion could not be delivered to this chat's channel: " + err.Error(),
-		})
+		al.emitJudgeConclusionFailed(sessionID, "The Judge's conclusion could not be delivered to this chat's channel: "+err.Error())
 	}
 }
 

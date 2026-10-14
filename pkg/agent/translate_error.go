@@ -208,6 +208,14 @@ const (
 	// timeout.
 	CodeJudgeTimeLimit LLMErrorCode = "judge_time_limit"
 
+	// CodeJudgeConclusionFailed (issue #1306, SFH R2-3): a controller-authored
+	// operational notice that the Judge's Not-verified conclusion could not be
+	// fully saved or delivered (transcript, goal record, unreadable audience,
+	// missing channel route, outbound publish). It ends no turn. Not
+	// retryable, never a trusted provider message: the SPA shows the
+	// catalogue copy, and the raw cause stays in the Verbose-only detail.
+	CodeJudgeConclusionFailed LLMErrorCode = "judge_conclusion_failed"
+
 	// CodeDelegatedTaskLimit identifies a controller-authored notice for a
 	// delegated task that reached max_tool_iterations (there is no
 	// timeout_seconds limit any more, issue #1306).

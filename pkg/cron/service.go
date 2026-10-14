@@ -214,6 +214,11 @@ type CronService struct {
 	laneSem chan struct{}
 	// laneWG tracks in-flight lane runs so Stop() can drain them (W-3).
 	laneWG sync.WaitGroup
+	// dispatchPending counts, per job, dispatches handed to the lane that
+	// have not finished yet — including the wait for a lane slot, when the
+	// job has no Running flag and no turn (issue #1306, architect R2-A1).
+	// Guarded by mu; see JobDispatchInFlight.
+	dispatchPending map[string]int
 	// laneCtx/laneCancel cancel in-flight runs on shutdown (W-3).
 	laneCtx    context.Context
 	laneCancel context.CancelFunc
@@ -584,9 +589,14 @@ func (cs *CronService) dispatch(jobID string) {
 		laneCtx = context.Background()
 	}
 
+	cs.markDispatchPending(jobID)
 	cs.laneWG.Add(1)
 	go func() {
 		defer cs.laneWG.Done()
+		// Cleared on every exit: run finished, lane cancelled while queued,
+		// or a panic (deferred calls run while panicking, and the recover
+		// below stops the panic here).
+		defer cs.clearDispatchPending(jobID)
 		// Outer recover (defense-in-depth): executeJobByID has its own recover
 		// that converts a run panic into a recorded error, but a panic in the
 		// slot-acquisition/bookkeeping around it must never crash the gateway.
@@ -1098,7 +1108,10 @@ func (cs *CronService) RunNow(jobID string) (status string, sessionID string, er
 	// "a new run was appended" signal.
 	beforeLen, beforeRec := cs.runStateSnapshot(jobID)
 
-	// Acquire a lane slot (queues when the cap is reached, FR-007).
+	// Acquire a lane slot (queues when the cap is reached, FR-007). The job
+	// counts as dispatched while it waits and runs (JobDispatchInFlight).
+	cs.markDispatchPending(jobID)
+	defer cs.clearDispatchPending(jobID)
 	select {
 	case sem <- struct{}{}:
 	case <-laneCtx.Done():
@@ -1268,4 +1281,46 @@ func generateID() string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+// markDispatchPending records one more dispatch of jobID handed to the lane.
+func (cs *CronService) markDispatchPending(jobID string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.dispatchPending == nil {
+		cs.dispatchPending = make(map[string]int)
+	}
+	cs.dispatchPending[jobID]++
+}
+
+// clearDispatchPending releases one dispatch of jobID recorded by
+// markDispatchPending. Every caller defers it, so it runs on a finished run,
+// a lane cancelled while queued, and a panic alike.
+func (cs *CronService) clearDispatchPending(jobID string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.dispatchPending[jobID] <= 1 {
+		delete(cs.dispatchPending, jobID)
+		return
+	}
+	cs.dispatchPending[jobID]--
+}
+
+// JobDispatchInFlight reports whether jobID has a dispatch that is queued for
+// a lane slot or running (issue #1306, architect R2-A1). RunDueJobs clears a
+// due job's next fire before the lane wait, and the job has no Running flag
+// and no turn until it gets a slot, so an idle sweep must ask this instead of
+// treating that queued run as idle.
+func (cs *CronService) JobDispatchInFlight(jobID string) bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	if cs.dispatchPending[jobID] > 0 {
+		return true
+	}
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == jobID {
+			return cs.store.Jobs[i].State.Running
+		}
+	}
+	return false
 }
