@@ -112,12 +112,21 @@ func TestWU21_RealRecapInAIsAbsentFromSessionB(t *testing.T) {
 			t.Fatal("FR-219: deliberate private notes must still be present across workspaces")
 		}
 	})
+	if count := strings.Count(promptA, "## Last Session\n"); count != 1 {
+		t.Errorf("§3.2(4): workspace A Last Session heading count=%d want 1", count)
+	}
+	if strings.Contains(promptB, "## Last Session") {
+		t.Error("§3.2(4): workspace B without a pair summary rendered a Last Session block")
+	}
 	if strings.Contains(promptB, "WU21_ALPHA_RECAP") {
 		t.Error("FR-197: workspace A's real recap leaked into workspace B's session prompt")
 	}
 	b, err := os.ReadFile(f.path("alpha", "self"))
 	if err != nil || !strings.Contains(string(b), "WU21_ALPHA_RECAP") {
 		t.Errorf("§3.2(2): own pair file missing or wrong: err=%v", err)
+	}
+	if heading, recap := strings.Index(promptA, "## Last Session\n"), strings.Index(promptA, "WU21_ALPHA_RECAP"); heading < 0 || recap <= heading {
+		t.Error("§3.2(4): own recap must appear after the workspace's Last Session heading")
 	}
 	if _, err := os.Stat(f.path("beta", "self")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("immutable scope: recap A wrote to mutable workspace B; err=%v", err)
@@ -175,11 +184,22 @@ func TestWU21_ConcurrentSuccessAndFallbackKeepPairScope(t *testing.T) {
 func TestWU21_NoWorkspaceRecapHasNoAgentWideFallback(t *testing.T) {
 	for _, fallback := range []bool{false, true} {
 		f := wu21New(t)
+		const seeded = "WU21_SEEDED_PAIR_RECAP"
+		if err := f.ag.ContextBuilder.Memory().WriteCarryForward(CarryForwardScope{AgentID: "self", WorkspaceID: "alpha"}, seeded); err != nil {
+			t.Fatalf("valid pair positive source could not be written: %v", err)
+		}
+		f.ag.ContextBuilder.Memory().SetWorkspaceID("alpha") // generic context must not follow this pointer.
+		t.Run("valid_workspace_summary_positive", func(t *testing.T) {
+			own := f.ag.ContextBuilder.BuildSystemPromptForWorkspace("alpha")
+			if !strings.Contains(own, seeded) || strings.Count(own, "## Last Session\n") != 1 {
+				t.Fatal("positive source: seeded workspace summary and heading missing from its own prompt")
+			}
+		})
 		rr := f.recap(t, "", "WU21_NO_WORKSPACE")
 		if fallback {
 			err := f.al.writeHeuristicFallbackRetroWithCount(rr.sessionID, "idle", "llm_error", f.ag, 1, 0, rr.carryForward)
-			if err != nil && !errors.Is(err, ErrFallbackRecapSkipped) {
-				t.Fatalf("no-workspace fallback returned unrelated failure: %v", err)
+			if !errors.Is(err, ErrFallbackRecapSkipped) {
+				t.Errorf("§3.2(3): no-workspace fallback must return ErrFallbackRecapSkipped, got %v", err)
 			}
 		} else {
 			rr.persistResponse()
@@ -191,8 +211,12 @@ func TestWU21_NoWorkspaceRecapHasNoAgentWideFallback(t *testing.T) {
 		if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("§3.2(1/7): no-workspace recap created old agent-wide file (err=%v)", err)
 		}
-		if strings.Contains(f.ag.ContextBuilder.BuildSystemPrompt(), "WU21_NO_WORKSPACE") {
-			t.Error("§3.2(1/4): no-workspace prompt read a carry-forward fallback")
+		prompt := f.ag.ContextBuilder.BuildSystemPrompt()
+		if strings.Contains(prompt, "WU21_NO_WORKSPACE") || strings.Contains(prompt, seeded) || strings.Contains(prompt, "## Last Session") {
+			t.Error("§3.2(1/4): no-workspace prompt read a carry-forward fallback or rendered its heading")
+		}
+		if b, err := os.ReadFile(f.path("alpha", "self")); err != nil || string(b) != seeded {
+			t.Errorf("§3.2(1): no-workspace recap changed valid pair source: bytes=%q err=%v", b, err)
 		}
 		cb := f.ag.ContextBuilder
 		cb.BuildSystemPromptWithCacheForWorkspace("")
@@ -212,15 +236,25 @@ func TestWU21_OldAgentFileIsIgnoredAndUntouched(t *testing.T) {
 	if err := os.WriteFile(old, []byte("WU21_LEGACY_MUST_BE_IGNORED"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	f.recap(t, "alpha", "WU21_NEW_PAIR_RECAP").persistResponse()
+	t.Run("valid_pair_positive", func(t *testing.T) {
+		if !strings.Contains(f.ag.ContextBuilder.BuildSystemPromptForWorkspace("alpha"), "WU21_NEW_PAIR_RECAP") {
+			t.Fatal("positive source: new pair recap is not reachable in its own workspace")
+		}
+	})
 	for _, ws := range []string{"", "alpha", "beta"} {
-		if strings.Contains(f.ag.ContextBuilder.BuildSystemPromptForWorkspace(ws), "WU21_LEGACY_MUST_BE_IGNORED") {
+		prompt := f.ag.ContextBuilder.BuildSystemPromptForWorkspace(ws)
+		if strings.Contains(prompt, "WU21_LEGACY_MUST_BE_IGNORED") {
 			t.Errorf("§3.2(7): legacy agent-wide recap reached workspace %q", ws)
 		}
+		if ws == "" && (strings.Contains(prompt, "## Last Session") || strings.Contains(prompt, "WU21_NEW_PAIR_RECAP")) {
+			t.Error("§3.2(4): no-workspace prompt rendered a recap or Last Session heading")
+		}
 	}
-	if strings.Contains(f.ag.ContextBuilder.Memory().GetMemoryContext(), "WU21_LEGACY_MUST_BE_IGNORED") {
-		t.Error("§3.2(4): generic long-term memory context still includes last-session")
+	generic := f.ag.ContextBuilder.Memory().GetMemoryContext()
+	if strings.Contains(generic, "WU21_LEGACY_MUST_BE_IGNORED") || strings.Contains(generic, "WU21_NEW_PAIR_RECAP") || strings.Contains(generic, "## Last Session") {
+		t.Error("§3.2(4): generic long-term memory context includes a recap or Last Session heading")
 	}
-	f.recap(t, "alpha", "WU21_NEW_PAIR_RECAP").persistResponse()
 	b, err := os.ReadFile(old)
 	if err != nil || string(b) != "WU21_LEGACY_MUST_BE_IGNORED" {
 		t.Errorf("§3.2(7): old file overwritten/migrated/deleted: bytes=%q err=%v", b, err)

@@ -197,6 +197,8 @@ func TestIntegration_RecallSpansThreeScopes(t *testing.T) {
 		"GetMemoryContext must surface needle from long-term memory")
 	assert.Contains(t, memCtx, "## Long-term memory",
 		"GetMemoryContext must include the ## Long-term memory section")
+	assert.NotContains(t, memCtx, "## Last Session",
+		"§3.2(4): generic memory must not render a workspace carry-forward heading")
 
 	// -- Section C: retros are recall-only, not in the per-turn auto-inject ------
 	// After the finding #1 fix, recall_memory spans long-term + retrospectives

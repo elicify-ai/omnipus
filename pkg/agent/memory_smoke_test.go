@@ -147,10 +147,35 @@ func TestMemoryRetroRoundTrip(t *testing.T) {
 	}
 }
 
-// TestMemoryLastSession and TestGetMemoryContextIncludes were retired with the
-// removed agent-wide last-session API (WU-21 / #1197, amendment §3.2(7)):
-// TestMemoryLastSession's write/read roundtrip is covered by
-// TestWU21_CarryForwardAPIExactLocationScopeAndMode, and GetMemoryContext no
-// longer carries a "## Last Session" block (§3.2(4)) — its long-term section is
-// covered by TestIntegration_AutoInject20Recent and the removal by
-// TestWU21_OldAgentFileIsIgnoredAndUntouched.
+// TestMemoryLastSession's retired API roundtrip is replaced by
+// TestWU21_CarryForwardAPIExactLocationScopeAndMode (§3.2(7)). The independent
+// long-term-memory oracle in TestGetMemoryContextIncludes remains live below.
+
+// TestGetMemoryContextIncludes restores the live half of the mixed-scope
+// retirement: §3.2(4) keeps long-term entries and removes only Last Session.
+func TestGetMemoryContextIncludes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("OMNIPUS_HOME", home)
+	ms := NewMemoryStore(t.TempDir(), home)
+	t.Cleanup(ms.Close)
+	for i, category := range []string{"key_decision", "reference", "lesson_learned"} {
+		content := "WU21_LONG_TERM_ENTRY_" + string(rune('1'+i))
+		if err := ms.AppendLongTerm(content, category); err != nil {
+			t.Fatalf("long-term control %s could not be saved: %v", category, err)
+		}
+	}
+	context := ms.GetMemoryContext()
+	if count := strings.Count(context, "## Long-term memory\n"); count != 1 {
+		t.Errorf("§3.2(4): long-term heading count=%d want 1", count)
+	}
+	for i := range 3 { // three independently seeded categories from the original smoke case.
+		content := "WU21_LONG_TERM_ENTRY_" + string(rune('1'+i))
+		if count := strings.Count(context, content); count != 1 {
+			t.Errorf("§3.2(4): saved long-term content %q count=%d want 1", content, count)
+		}
+	}
+	if strings.Contains(context, "## Last Session") {
+		t.Error("§3.2(4): generic memory regained the retired Last Session block")
+	}
+}

@@ -331,11 +331,30 @@ func TestMemoryStore_SweepRetros_Deletes30DayOld(t *testing.T) {
 	}
 }
 
-// TestMemoryStore_GetMemoryContext_ContainsBothSections was retired with the
-// removed agent-wide last-session API (WU-21 / #1197): GetMemoryContext no
-// longer emits a "## Last Session" block (amendment §3.2(4)). The long-term
-// section it also covered is pinned by TestIntegration_AutoInject20Recent, and
-// the block's removal by TestWU21_OldAgentFileIsIgnoredAndUntouched.
+// Successor to TestMemoryStore_GetMemoryContext_ContainsBothSections: its live
+// long-term heading/content assertions remain; §3.2(4)/(7) retires only the
+// agent-wide Last Session API and block, not long-term-memory output.
+func TestMemoryStore_GetMemoryContext_LongTermSectionOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("OMNIPUS_HOME", home)
+	ms := NewMemoryStore(t.TempDir(), home)
+	t.Cleanup(ms.Close)
+	const note = "rooms keystone shipped"
+	if err := ms.AppendLongTerm(note, "key_decision"); err != nil {
+		t.Fatalf("long-term note control could not be saved: %v", err)
+	}
+	context := ms.GetMemoryContext()
+	if count := strings.Count(context, "## Long-term memory\n"); count != 1 {
+		t.Errorf("§3.2(4): long-term section count=%d want 1", count)
+	}
+	if count := strings.Count(context, note); count != 1 {
+		t.Errorf("long-term note %q count=%d want 1", note, count)
+	}
+	if strings.Contains(context, "## Last Session") {
+		t.Error("§3.2(4): generic memory still includes a Last Session heading")
+	}
+}
 
 // ---------------------------------------------------------------------------
 // TestMemoryStore_AppendLongTerm_MaxRune4096

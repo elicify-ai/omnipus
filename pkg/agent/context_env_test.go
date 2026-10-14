@@ -369,12 +369,26 @@ func TestContextBuilder_Rule4_PreservesOtherRules(t *testing.T) {
 	}
 }
 
-// TestContextBuilder_GetMemoryContext_BothSections was retired with the removed
-// agent-wide last-session API (WU-21 / #1197): BuildSystemPrompt without a
-// workspace no longer renders a "## Last Session" block (amendment §3.2(4)).
-// The long-term-memory marker it also covered is pinned by
-// TestIntegration_AutoInject20Recent, and the block's removal (and the
-// workspace-scoped replacement) by TestWU21_RealRecapInAIsAbsentFromSessionB.
+// Successor to TestContextBuilder_GetMemoryContext_BothSections: preserve its
+// assembled-prompt long-term-memory oracle, without resurrecting the retired
+// agent-wide Last Session API (§3.2(4)/(7)).
+func TestContextBuilder_GetMemoryContext_LongTermSection(t *testing.T) {
+	f := wu21New(t)
+	const note = "use flock for writes"
+	if err := f.ag.ContextBuilder.Memory().AppendLongTerm(note, "lesson_learned"); err != nil {
+		t.Fatalf("long-term prompt control could not be saved: %v", err)
+	}
+	prompt := f.ag.ContextBuilder.BuildSystemPrompt()
+	if count := strings.Count(prompt, "## Long-term memory\n"); count != 1 {
+		t.Errorf("§3.2(4): assembled prompt long-term heading count=%d want 1", count)
+	}
+	if count := strings.Count(prompt, note); count != 1 {
+		t.Errorf("assembled prompt saved-note count=%d want 1", count)
+	}
+	if strings.Contains(prompt, "## Last Session") {
+		t.Error("§3.2(4): no-workspace prompt rendered a carry-forward heading")
+	}
+}
 
 // ---------------------------------------------------------------------------
 // TestNoLLMProviderIdentityReference — CI guard

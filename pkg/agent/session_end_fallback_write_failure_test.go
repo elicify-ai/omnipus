@@ -23,7 +23,7 @@ import (
 // is built from it. The write-failure outcome no longer names "retro" next to
 // "last_session": on a failed summary write the fallback files NO retro at all
 // (amendment §3.2(3)), which the no-retro assertion below pins.
-func newFallbackFixture(t *testing.T, sessionID string) (*AgentLoop, *AgentInstance, string, string) {
+func newFallbackFixture(t *testing.T) (*AgentLoop, *AgentInstance, string, string, string) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -50,11 +50,12 @@ func newFallbackFixture(t *testing.T, sessionID string) (*AgentLoop, *AgentInsta
 
 	meta, err := store.NewSession(session.SessionTypeChat, "web", ag.ID)
 	require.NoError(t, err)
-	require.Equal(t, sessionID, meta.ID, "fixture session id must match the caller's")
-	wu21ReaimStampWorkspace(t, store, sessionID)
+	// NewSession generates its ID. Metadata, fallback and retro lookup must
+	// all use that same persisted ID, never a caller-invented literal.
+	wu21ReaimStampWorkspace(t, store, meta.ID)
 
 	pairPath := filepath.Join(home, "workspaces", wu21ReaimWorkspace, ".omnipus", "carry-forward", ag.ID+".md")
-	return al, ag, auditDir, pairPath
+	return al, ag, auditDir, pairPath, meta.ID
 }
 
 func fallbackAuditOutcome(t *testing.T, auditDir string) string {
@@ -70,28 +71,28 @@ func fallbackAuditOutcome(t *testing.T, auditDir string) string {
 // "fallback:<reason>", and no retro is filed (the marker must not claim a
 // fallback that does not exist).
 func TestWriteHeuristicFallbackRetro_WriteFailure_ReturnedAndAudited(t *testing.T) {
-	al, ag, auditDir, pairPath := newFallbackFixture(t, "sess_fail")
+	al, ag, auditDir, pairPath, sessionID := newFallbackFixture(t)
 
 	// A directory where the pair file belongs: the atomic rename onto it fails.
 	require.NoError(t, os.MkdirAll(filepath.Join(pairPath, "child"), 0o700))
 
-	writeErr := al.writeHeuristicFallbackRetroWithCount("sess_fail", "explicit", "llm_error", ag, 3, 1, "")
+	writeErr := al.writeHeuristicFallbackRetroWithCount(sessionID, "explicit", "llm_error", ag, 3, 1, "")
 	require.Error(t, writeErr, "a fallback whose carry-forward write failed must return that error")
 
 	outcome := fallbackAuditOutcome(t, auditDir)
 	require.Equal(t, "fallback_write_failed:llm_error:last_session", outcome,
 		"audit outcome must name the failed step")
 	require.NotContains(t, outcome, pairPath, "no filesystem path may reach the audit string")
-	require.False(t, al.agentSessionHasRetro(ag, "sess_fail"),
+	require.False(t, al.agentSessionHasRetro(ag, sessionID),
 		"no retro may be filed after a failed carry-forward write: it would block the retry")
 }
 
 // Control: with a working store the fallback returns nil, records
 // "fallback:<reason>", and lands the summary in the workspace's pair file.
 func TestWriteHeuristicFallbackRetro_WriteOK_RecordsFallback(t *testing.T) {
-	al, ag, auditDir, pairPath := newFallbackFixture(t, "sess_ok")
+	al, ag, auditDir, pairPath, sessionID := newFallbackFixture(t)
 
-	require.NoError(t, al.writeHeuristicFallbackRetroWithCount("sess_ok", "explicit", "llm_error", ag, 3, 1, ""))
+	require.NoError(t, al.writeHeuristicFallbackRetroWithCount(sessionID, "explicit", "llm_error", ag, 3, 1, ""))
 
 	entry := readLastAuditEntry(t, auditDir)
 	details, _ := entry["details"].(map[string]any)
