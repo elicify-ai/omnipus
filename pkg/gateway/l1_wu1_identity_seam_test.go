@@ -44,6 +44,7 @@ func l1WU1IdentitySocket(t *testing.T, validation bool) (*WSHandler, *bus.Messag
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	h := newWSHandler(msgBus, al, "")
 	h.home = home
+	require.Equal(t, validation, al.GetConfig().Gateway.ValidateInbound, "fixture must exercise its named validation mode")
 	return h, msgBus, al
 }
 
@@ -85,6 +86,26 @@ func l1WU1AssertNoInbound(t *testing.T, msgBus *bus.MessageBus) {
 		t.Errorf("refused input must make zero dispatch writes, got %+v", msg)
 	default:
 	}
+}
+
+// A refusal alone cannot prove the workspace reached intake. Drive the same
+// socket/metadata shape with an ordinary named agent and observe the actual
+// persisted workspace plus dispatch to that session before the negative case.
+func l1WU1AssertWorkspaceReceived(t *testing.T, conn *websocket.Conn, al *agent.AgentLoop, msgBus *bus.MessageBus, workspace string) {
+	t.Helper()
+	require.NoError(t, conn.WriteJSON(map[string]any{
+		"type": "message", "content": "workspace metadata control", "agent_id": "mia",
+		"metadata": map[string]string{"workspace_id": workspace},
+	}))
+	outcome := l1WU1WSMintOutcome(t, conn)
+	require.Equal(t, "user_message", outcome["type"], "valid metadata must reach ordinary chat intake, not schema refusal: %v", outcome)
+	msg := awaitInboundMessage(t, msgBus, "workspace metadata positive control")
+	assert.Equal(t, outcome["session_id"], msg.SessionID, "dispatch names the session that received the workspace")
+	assert.Equal(t, "workspace metadata control", msg.Content)
+	meta, err := al.GetSessionStore().GetMeta(msg.SessionID)
+	require.NoError(t, err)
+	assert.Equal(t, workspace, meta.WorkspaceID, "server actually stamped the supplied workspace")
+	assert.Equal(t, "mia", meta.AgentID)
 }
 
 func TestL1WU1RESTOmnipusCaseAliases_RefuseWithoutAliasOwnedWrites(t *testing.T) {
@@ -139,12 +160,13 @@ func TestL1WU1WebSocketOmnipusCaseAliases_RefuseWithoutAliasOwnedWrites(t *testi
 					store := al.GetSessionStore()
 					main, err := store.GetOrCreateMainSession("default", "omnipus")
 					require.NoError(t, err)
-					before := l1WU1SessionSnapshot(t, store)
 					conn, finish := l1WU1OpenSocket(t, h)
-					body := map[string]string{"type": "message", "content": "must not mint alias chat", "agent_id": alias}
+					body := map[string]any{"type": "message", "content": "must not mint alias chat", "agent_id": alias}
 					if workspace != "" {
-						body["workspace_id"] = workspace
+						l1WU1AssertWorkspaceReceived(t, conn, al, msgBus, workspace)
+						body["metadata"] = map[string]string{"workspace_id": workspace}
 					}
+					before := l1WU1SessionSnapshot(t, store)
 					require.NoError(t, conn.WriteJSON(body))
 					outcome := l1WU1WSMintOutcome(t, conn)
 					finish() // synchronize completion before inspecting zero writes/dispatch
