@@ -83,7 +83,8 @@ const (
 	textRoomUnavailable    = "the group this request came from is no longer available; the answer was not posted"
 	textMemberLeftRoom     = "you are no longer a member of this group; the answer was not posted"
 	auditEventRoomChange   = "room.changed"
-	maxRoomNameBytes       = 80
+	maxRoomNameRunes       = 80
+	textNameLength         = "a group name must be 1 to 80 characters"
 	maxContextEntries      = 20
 	maxContextBytes        = 8192
 	maxSnapshotEntries     = 10000

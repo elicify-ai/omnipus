@@ -69,10 +69,10 @@ func (s *Service) Create(workspaceID string, req generated.RoomCreateRequest, pr
 // roomName validates a squad name or composes an ad-hoc room's name from its
 // members (the Room schema requires a name).
 func roomName(kind string, name *string, members []string, ws Workspace) (string, error) {
-	if name != nil && strings.TrimSpace(*name) != "" {
+	if name != nil {
 		n := strings.TrimSpace(*name)
-		if len(n) > maxRoomNameBytes || !utf8.ValidString(n) || strings.ContainsRune(n, 0) {
-			return "", unprocessable("the group name must be at most %d bytes of text", maxRoomNameBytes)
+		if n == "" || utf8.RuneCountInString(n) > maxRoomNameRunes || !utf8.ValidString(n) || strings.ContainsRune(n, 0) {
+			return "", unprocessable(textNameLength)
 		}
 		return n, nil
 	}
@@ -87,14 +87,11 @@ func roomName(kind string, name *string, members []string, ws Workspace) (string
 }
 
 func truncateName(n string) string {
-	if len(n) <= maxRoomNameBytes {
+	runes := []rune(n)
+	if len(runes) <= maxRoomNameRunes {
 		return n
 	}
-	cut := maxRoomNameBytes - len("…")
-	for cut > 0 && !utf8.RuneStart(n[cut]) {
-		cut--
-	}
-	return n[:cut] + "…"
+	return string(runes[:maxRoomNameRunes-1]) + "…"
 }
 
 // Delete deletes a squad or an ad-hoc room: its pending requests are

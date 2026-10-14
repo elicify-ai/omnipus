@@ -20,9 +20,16 @@ import (
 // one member never holds up another (§6.11).
 func (s *Service) admitAll(r *room, ws Workspace, ids []string) {
 	for _, id := range ids {
-		go s.admitDelivery(r, ws, id)
+		s.inflight.Add(1)
+		go func(id string) {
+			defer s.inflight.Done()
+			s.admitDelivery(r, ws, id)
+		}(id)
 	}
 }
+
+// WaitIdleForTest waits until every background admission finished (tests).
+func (s *Service) WaitIdleForTest() { s.inflight.Wait() }
 
 // AdmitPendingForTest admits synchronously (tests only).
 func (s *Service) AdmitPendingForTest(roomID string) error {

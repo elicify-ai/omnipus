@@ -72,8 +72,8 @@ func validateMessage(req generated.RoomMessageRequest, bodyLimit int) error {
 	if strings.TrimSpace(cid) == "" || len(cid) > 128 || !validID(cid) {
 		return badRequest("client_message_id must be 1-128 characters without slashes")
 	}
-	if !utf8.ValidString(req.Text) || strings.ContainsRune(req.Text, 0) {
-		return badRequest("the message must be valid text")
+	if req.Text == "" || !utf8.ValidString(req.Text) || strings.ContainsRune(req.Text, 0) {
+		return badRequest("text is required and must be valid text")
 	}
 	if strings.TrimSpace(req.Text) == "" {
 		return unprocessable("the message is empty")

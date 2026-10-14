@@ -1,0 +1,262 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/addressing"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/tools"
+)
+
+// Tests for the agent side of group-chat rooms (omnipus-system-agent FR-200,
+// FR-214, FR-215, FR-216, FR-217, FR-251). Expected values come from the
+// spec: the delivery id IS the receiver's request id; a room request never
+// joins a running turn; the Ask card is raised in the receiver's main chat
+// labelled "for group <name>"; a committed capture is an admission already
+// made; the answer goes to the room, not to a source session.
+
+const roomTestDelivery = "d-0001"
+
+func roomAdmission() RoomRequestAdmission {
+	return RoomRequestAdmission{
+		Receiver:   addressing.Pair{WorkspaceID: addrWS, AgentID: addrReceiver},
+		DeliveryID: roomTestDelivery, RoomID: "room-1", RoomName: "Launch",
+		Sender: addressing.Sender{Principal: "user"}, SenderLabel: "the user",
+		DisplayText: "status?", ModelText: "Message from the user:\nstatus?",
+	}
+}
+
+func TestAdmitRoomRequest_DeliveryIDIsTheReceiverRequestID(t *testing.T) {
+	f := newAddrFixture(t)
+	res, err := f.al.AdmitRoomRequest(context.Background(), roomAdmission())
+	if err != nil {
+		t.Fatalf("AdmitRoomRequest: %v", err)
+	}
+	mainID, _ := session.MainSessionID(addrWS, addrReceiver)
+	if res.ReceiverSessionID != mainID || res.AlreadyAdmitted || res.Held {
+		t.Fatalf("result = %+v, want a fresh admission into %q", res, mainID)
+	}
+	c, found, err := f.al.RequestLedger().Get(mainID, roomTestDelivery)
+	if err != nil || !found {
+		t.Fatalf("capture for the delivery id: found=%v err=%v", found, err)
+	}
+	if c.Source.Kind != addressing.SourceRoom || c.Source.RoomID != "room-1" || c.Source.SessionID != "" {
+		t.Fatalf("capture source = %+v, want a room source with no source session", c.Source)
+	}
+	entries, err := f.al.GetSessionStore().ReadTranscript(mainID)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("receiver transcript: %d entries, err %v", len(entries), err)
+	}
+	e := entries[0]
+	if e.ID != roomTestDelivery || e.Content != "status?" || e.RoomRef == nil ||
+		e.RoomRef.RoomId != "room-1" || e.RoomRef.RoomName != "Launch" || e.RoomRef.RequestId != roomTestDelivery || e.RoomRef.Role != "request" {
+		t.Fatalf("entry = %+v room_ref=%+v, want id=delivery id, the display text and room_ref role request", e, e.RoomRef)
+	}
+	wake, ok := addrDrainInbound(t, f.bus)
+	if !ok {
+		t.Fatal("no wake was published for an idle receiver")
+	}
+	if !isRoomRequestWake(wake) || wake.Metadata[roomIDMetadataKey] != "room-1" || wake.TranscriptEntryID != roomTestDelivery {
+		t.Fatalf("wake metadata = %v entry=%q, want the no-join room wake for the delivery", wake.Metadata, wake.TranscriptEntryID)
+	}
+}
+
+func TestAdmitRoomRequest_RetryWithCommittedCaptureWritesAndWakesNothing(t *testing.T) {
+	f := newAddrFixture(t)
+	if _, err := f.al.AdmitRoomRequest(context.Background(), roomAdmission()); err != nil {
+		t.Fatalf("first admission: %v", err)
+	}
+	addrDrainInbound(t, f.bus)
+	res, err := f.al.AdmitRoomRequest(context.Background(), roomAdmission())
+	if err != nil || !res.AlreadyAdmitted {
+		t.Fatalf("retry = %+v err=%v, want AlreadyAdmitted", res, err)
+	}
+	mainID, _ := session.MainSessionID(addrWS, addrReceiver)
+	entries, _ := f.al.GetSessionStore().ReadTranscript(mainID)
+	if len(entries) != 1 {
+		t.Fatalf("receiver transcript has %d entries after a retry, want 1", len(entries))
+	}
+	if _, ok := addrDrainInbound(t, f.bus); ok {
+		t.Fatal("a retry of an admitted request woke the receiver again")
+	}
+}
+
+type recordingApprover struct {
+	mu       sync.Mutex
+	reqs     []PolicyApprovalReq
+	approved bool
+}
+
+func (r *recordingApprover) RequestApproval(_ context.Context, req PolicyApprovalReq) (bool, string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reqs = append(r.reqs, req)
+	if r.approved {
+		return true, "", false
+	}
+	return false, "user", false
+}
+
+func TestAdmitRoomRequest_AskRaisesTheCardInTheReceiversMainChat(t *testing.T) {
+	for _, approved := range []bool{false, true} {
+		f := newAddrFixture(t)
+		setSendMessagePolicy(t, f.al, addrReceiver, config.ToolPolicyAsk)
+		ap := &recordingApprover{approved: approved}
+		f.al.SetToolApprover(ap)
+		awaiting := false
+		a := roomAdmission()
+		a.OnAwaitingApproval = func() { awaiting = true }
+		_, err := f.al.AdmitRoomRequest(context.Background(), a)
+		mainID, _ := session.MainSessionID(addrWS, addrReceiver)
+		if len(ap.reqs) != 1 || !awaiting {
+			t.Fatalf("approved=%v: %d approval requests, awaiting=%v; want exactly one card", approved, len(ap.reqs), awaiting)
+		}
+		req := ap.reqs[0]
+		if req.SessionID != mainID || req.AgentID != addrReceiver || req.ToolCallID != roomTestDelivery ||
+			req.OriginLabel != "for group Launch" || req.RoomRef == nil || req.RoomRef.RequestId != roomTestDelivery || req.TurnID == "" {
+			t.Fatalf("card = %+v, want the receiver's main, request id = delivery id, room_ref and origin label", req)
+		}
+		_, found, _ := f.al.RequestLedger().Get(mainID, roomTestDelivery)
+		if approved && (err != nil || !found) {
+			t.Fatalf("approved card: err=%v captured=%v, want admitted", err, found)
+		}
+		if !approved && (!errors.Is(err, ErrRoomRequestRefused) || found) {
+			t.Fatalf("denied card: err=%v captured=%v, want refused with nothing written", err, found)
+		}
+	}
+}
+
+type failingRoomWriter struct{}
+
+func (failingRoomWriter) AppendTranscriptOnce(string, session.TranscriptEntry) (bool, error) {
+	return false, errors.New("disk full")
+}
+
+func TestAdmitRoomRequest_ReceiverAppendFaultLeavesNoAnswerableCapture(t *testing.T) {
+	f := newAddrFixture(t)
+	f.al.SetRoomReceiverWriter(failingRoomWriter{})
+	_, err := f.al.AdmitRoomRequest(context.Background(), roomAdmission())
+	if !errors.Is(err, ErrRoomStorage) {
+		t.Fatalf("err = %v, want ErrRoomStorage", err)
+	}
+	mainID, _ := session.MainSessionID(addrWS, addrReceiver)
+	c, found, gErr := f.al.RequestLedger().Get(mainID, roomTestDelivery)
+	if gErr != nil || (found && !c.Discarded) {
+		t.Fatalf("capture after a failed append: found=%v discarded=%v err=%v, want none or discarded", found, c.Discarded, gErr)
+	}
+	if _, ok := addrDrainInbound(t, f.bus); ok {
+		t.Fatal("a failed receiver append still woke the receiver")
+	}
+}
+
+func TestTrySteerIntoLiveTurn_RoomRequestNeverJoinsARunningTurn(t *testing.T) {
+	f := newAddrFixture(t)
+	if _, err := f.al.AdmitRoomRequest(context.Background(), roomAdmission()); err != nil {
+		t.Fatalf("admission: %v", err)
+	}
+	wake, ok := addrDrainInbound(t, f.bus)
+	if !ok {
+		t.Fatal("no wake published")
+	}
+	w := newSessionWorker("agent:mia:session:"+wake.SessionID, f.al, func() {})
+	w.inTurn.Store(true)
+	if w.trySteerIntoLiveTurn(wake) {
+		t.Fatal("a room request was steered into the running turn; it must wait for the turn to settle (FR-214)")
+	}
+	// Positive control: the same wake without the room marker is an ordinary
+	// request wake, which the live turn takes (so the check above could fail).
+	plain := wake
+	plain.Metadata = map[string]string{}
+	for k, v := range wake.Metadata {
+		if k != roomRequestMetadataKey {
+			plain.Metadata[k] = v
+		}
+	}
+	if !w.trySteerIntoLiveTurn(plain) {
+		t.Fatal("positive control: an ordinary request wake must join the running turn")
+	}
+}
+
+type fakeRoomRuntime struct {
+	mu       sync.Mutex
+	allow    bool
+	answers  []RoomAnswer
+	ended    []string
+	begun    []string
+	reminded []string
+}
+
+func (f *fakeRoomRuntime) BeginRoomConsume(_, requestID, _ string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.begun = append(f.begun, requestID)
+	return f.allow
+}
+func (f *fakeRoomRuntime) RoomConsumeHeld(string, string) {}
+func (f *fakeRoomRuntime) RoomConsumeEnded(_, requestID string, _ error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ended = append(f.ended, requestID)
+}
+func (f *fakeRoomRuntime) RoomReminderTurnEnded(sessionID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reminded = append(f.reminded, sessionID)
+}
+func (f *fakeRoomRuntime) RoomTurnCost(RoomTurnCost) {}
+func (f *fakeRoomRuntime) DeliverRoomAnswer(_ context.Context, a RoomAnswer) (tools.ReplyReceipt, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.answers = append(f.answers, a)
+	return tools.ReplyReceipt{ReplyID: "ans-1", Destination: "the group chat Launch"}, nil
+}
+
+func TestReply_RoomCaptureReturnsThroughTheRoomBranch(t *testing.T) {
+	f := newAddrFixture(t)
+	rt := &fakeRoomRuntime{allow: true}
+	f.al.SetRoomRuntime(rt)
+	if _, err := f.al.AdmitRoomRequest(context.Background(), roomAdmission()); err != nil {
+		t.Fatalf("admission: %v", err)
+	}
+	mainID, _ := session.MainSessionID(addrWS, addrReceiver)
+	receipt, err := f.r.Reply(context.Background(), tools.ReplyRequest{
+		ReplyTo: roomTestDelivery, Content: "all green",
+		Author: tools.SendOrigin{WorkspaceID: addrWS, AgentID: addrReceiver}, ResponderSessionID: mainID,
+	})
+	if err != nil || receipt.ReplyID != "ans-1" {
+		t.Fatalf("Reply = %+v, %v", receipt, err)
+	}
+	if len(rt.answers) != 1 || rt.answers[0].RoomID != "room-1" || rt.answers[0].RequestID != roomTestDelivery ||
+		rt.answers[0].ResponderSessionID != mainID || rt.answers[0].Content != "all green" {
+		t.Fatalf("room answers = %+v, want one answer for the delivery from the member's main", rt.answers)
+	}
+	if _, ok := addrDrainOutbound(f.bus); ok {
+		t.Fatal("a room answer was sent to a connector")
+	}
+}
+
+func TestGateRoomRequest_CancelledRequestIsDiscardedAndNotRun(t *testing.T) {
+	f := newAddrFixture(t)
+	rt := &fakeRoomRuntime{allow: false}
+	f.al.SetRoomRuntime(rt)
+	if _, err := f.al.AdmitRoomRequest(context.Background(), roomAdmission()); err != nil {
+		t.Fatalf("admission: %v", err)
+	}
+	wake, _ := addrDrainInbound(t, f.bus)
+	if _, proceed := f.al.gateRoomRequest(wake); proceed {
+		t.Fatal("the dequeue fence let a cancelled room request run")
+	}
+	mainID, _ := session.MainSessionID(addrWS, addrReceiver)
+	c, _, err := f.al.RequestLedger().Get(mainID, roomTestDelivery)
+	if err != nil || !c.Discarded {
+		t.Fatalf("capture discarded=%v err=%v, want discarded so it can never be answered", c.Discarded, err)
+	}
+	rt.allow = true
+	if _, proceed := f.al.gateRoomRequest(wake); !proceed {
+		t.Fatal("positive control: a current room request must pass the fence")
+	}
+}

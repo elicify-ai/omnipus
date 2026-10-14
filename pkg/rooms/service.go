@@ -107,6 +107,8 @@ type Service struct {
 	now     func() time.Time
 	ctx     context.Context
 	cancel  context.CancelFunc
+	// inflight counts the background admissions.
+	inflight sync.WaitGroup
 
 	mu        sync.Mutex
 	rooms     map[string]*room
