@@ -20,6 +20,7 @@ Day-to-day pages.
 | [Web app](using-omnipus-ui.md) | Browser app tour |
 | [Command line](using-omnipus-cli.md) | Terminal use |
 | [Workspaces](workspaces.md) | Chats, tasks, files, team |
+| [Group chats](group-chats.md) | One conversation with several agents |
 | [Tasks](tasks.md) | Board, List and Graph views |
 | [Plans](plans.md) | Shared Definition of Done |
 | [Calendar](calendar.md) | Scheduled, recurring work |
