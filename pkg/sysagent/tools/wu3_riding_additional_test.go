@@ -74,9 +74,30 @@ func TestWU3PermissionWriteReportsGlobalCeilingClamp(t *testing.T) {
 	cfg.Sandbox.ToolPolicies["read_file"] = "ask"
 	before := wu3AgentRead(t, d, id)
 	result := systools.NewAgentPermissionsTool(d).Execute(context.Background(), map[string]any{"id": id, "revision": before["revision"], "tool_policy_changes": map[string]any{"set": map[string]any{"read_file": "allow"}}})
-	wu3Success(t, result)
+	body := wu3Success(t, result)
 	read := wu3Success(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"id": id}))
 	assert.Equal(t, "allow", wu3Object(t, read["stored_tool_overrides"])["read_file"])
 	assert.Equal(t, "ask", wu3Object(t, read["effective_policies"])["read_file"])
-	assert.Contains(t, strings.ToLower(result.ForLLM), "clamp", "correct clamping must be visible in the mutation result")
+	// Chief's binding carrier A: an exact, resource-specific clamp row in
+	// both the mutation response and its public tool-policy read-back.
+	want := []any{map[string]any{"tool": "read_file", "requested": "allow", "effective": "ask"}}
+	assert.Equal(t, want, body["clamped"], "mutation must report exactly the policy the ceiling clamped")
+	assert.Equal(t, want, read["clamped"], "read-back must report the same persisted/effective distinction")
+	assert.NotEmpty(t, strings.TrimSpace(wu3String(t, body["message"])), "structured clamp data keeps a human-readable sentence")
+}
+
+// The unclamped control kills an implementation that always emits a clamp row
+// or uses null/omission instead of the required empty array.
+func TestWU3PermissionWriteWithoutCeilingClampReturnsEmptyArray(t *testing.T) {
+	d, cfg := wu3Deps(t)
+	id := wu3CreateAgent(t, d, cfg, "Policy subject")
+	cfg.Sandbox.ToolPolicies["read_file"] = "allow"
+	before := wu3AgentRead(t, d, id)
+	result := systools.NewAgentPermissionsTool(d).Execute(context.Background(), map[string]any{"id": id, "revision": before["revision"], "tool_policy_changes": map[string]any{"set": map[string]any{"read_file": "allow"}}})
+	body := wu3Success(t, result)
+	read := wu3Success(t, systools.NewAgentGetToolsTool(d).Execute(context.Background(), map[string]any{"id": id}))
+	assert.Equal(t, "allow", wu3Object(t, read["stored_tool_overrides"])["read_file"])
+	assert.Equal(t, "allow", wu3Object(t, read["effective_policies"])["read_file"])
+	assert.Equal(t, []any{}, body["clamped"], "no ceiling clamp means an empty array, never null or omitted")
+	assert.Equal(t, []any{}, read["clamped"], "unclamped read-back has the same exact empty-array shape")
 }
