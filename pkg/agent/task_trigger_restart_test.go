@@ -105,6 +105,10 @@ func TestTaskTriggerRestart(t *testing.T) {
 			})
 			require.NoError(t, err)
 			if i == 0 {
+				job.State.LastStatus = "ok"
+				job.State.LastRunAtMS = int64P(due - time.Hour.Milliseconds())
+				job.State.History = []cron.CronRunRecord{{RanAtMs: *job.State.LastRunAtMS, Status: "ok", SessionID: "prior-run"}}
+				require.NoError(t, engine.UpdateJob(job))
 				original = job
 			} else {
 				removed = append(removed, job.ID)
