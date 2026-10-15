@@ -550,6 +550,15 @@ jobs:
             exit 1
           fi
 
+          # WU-23's upload matrix is a measurement gate, like G-2: it must
+          # execute HERE with setup-chrome's exact pin, never in -short/arm64.
+          if ! grep -qE -- '^--- PASS: TestWU23_BrowserUploadProtectsInternalFiles \(' /tmp/browser-e2e.log ||
+             ! grep -qE -- '--- PASS: TestWU23_BrowserUploadProtectsInternalFiles/workspace_positive ' /tmp/browser-e2e.log ||
+             grep -qE -- '--- (SKIP|FAIL): TestWU23_BrowserUploadProtectsInternalFiles' /tmp/browser-e2e.log; then
+            echo "::error::WU-23 browser upload protection did not run with its real upload control; a skip or missing test is not coverage." >&2
+            exit 1
+          fi
+
           passes=$(grep -c -- '--- PASS' /tmp/browser-e2e.log || true)
           echo "pkg/tools/browser passing tests: $passes"
           # Ratchet, not a magic number: the real count with a working browser
