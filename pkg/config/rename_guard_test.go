@@ -258,6 +258,11 @@ var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
 		`assert.Equal(t, "real WU3 turn write", after.Workspace.Description, "actual registered Execute must have committed, not returned model prose")`: true,
 	},
 	// WU-3 create_agent workspace_id test: ReadState returns workspace.State.
+	// WU-3 team-admission test (b39cfe2fe): workspace.ReadState returns
+	// workspace.State; after.Workspace is that state's record, not AgentConfig.
+	"pkg/sysagent/tools/wu3_fix_team_admission_test.go": {
+		`assert.Empty(t, after.Workspace.CoreTeam)`: true,
+	},
 	"pkg/sysagent/tools/wu3dev_create_agent_target_test.go": {
 		`require.Contains(t, sales.Workspace.CoreTeam, id, "the agent joins the target team")`:          true,
 		`require.NotContains(t, other.Workspace.CoreTeam, id, "the caller's workspace is not touched")`: true,
