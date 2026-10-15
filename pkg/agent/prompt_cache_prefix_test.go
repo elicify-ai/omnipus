@@ -119,9 +119,9 @@ func TestPrefixStable_ClockAndScratchpadMove(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	t.Cleanup(al.Close)
 
-	meta, err := al.sharedSessionStore.NewSession(session.SessionTypeChat, "webchat", "mia")
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
+	meta, sessionErr := al.sharedSessionStore.NewSession(session.SessionTypeChat, "webchat", "mia")
+	if sessionErr != nil {
+		t.Fatalf("NewSession: %v", sessionErr)
 	}
 	send := func(content string) {
 		t.Helper()

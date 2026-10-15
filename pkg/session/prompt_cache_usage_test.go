@@ -72,9 +72,9 @@ func ratioText(v *float64) string {
 // call keeps its stored unpriced portion after reload.
 func TestProviderId_SurvivesReload(t *testing.T) {
 	store := newTestStore(t)
-	meta, err := store.NewSession(SessionTypeChat, "", "mia")
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
+	meta, sessionErr := store.NewSession(SessionTypeChat, "", "mia")
+	if sessionErr != nil {
+		t.Fatalf("NewSession: %v", sessionErr)
 	}
 	now := time.Now().UTC()
 	entries := []TranscriptEntry{
@@ -172,9 +172,9 @@ func TestProviderId_SurvivesReload(t *testing.T) {
 // TestCacheOnlyZeroOutput_ReconcilesThroughReload is TDD row 31.
 func TestCacheOnlyZeroOutput_ReconcilesThroughReload(t *testing.T) {
 	store := newTestStore(t)
-	meta, err := store.NewSession(SessionTypeChat, "", "mia")
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
+	meta, sessionErr := store.NewSession(SessionTypeChat, "", "mia")
+	if sessionErr != nil {
+		t.Fatalf("NewSession: %v", sessionErr)
 	}
 	now := time.Now().UTC()
 	if err := store.AppendTranscript(meta.ID, TranscriptEntry{
@@ -229,9 +229,9 @@ func TestCacheOnlyZeroOutput_ReconcilesThroughReload(t *testing.T) {
 // A missing usage object is not backfilled into 0 / 0 / 800 / 200.
 func TestCacheOnly_MissingUsageIsNotTheKnownSplit(t *testing.T) {
 	store := newTestStore(t)
-	meta, err := store.NewSession(SessionTypeChat, "", "mia")
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
+	meta, sessionErr := store.NewSession(SessionTypeChat, "", "mia")
+	if sessionErr != nil {
+		t.Fatalf("NewSession: %v", sessionErr)
 	}
 	if err := store.AppendTranscript(meta.ID, TranscriptEntry{
 		ID: "no-usage", Role: "assistant", Tokens: 1000, Timestamp: time.Now().UTC(),

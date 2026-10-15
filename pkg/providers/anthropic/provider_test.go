@@ -26,7 +26,7 @@ func TestBuildParams_BasicMessage(t *testing.T) {
 			if err != nil {
 				t.Fatalf("buildParams() error: %v", err)
 			}
-			if string(params.Model) != model {
+			if params.Model != model {
 				t.Errorf("Model = %q, want verbatim catalog ID %q (FR-004)", params.Model, model)
 			}
 			if params.MaxTokens != 1024 {
