@@ -20,11 +20,12 @@ import (
 // TokenUsageSummary.ByModel in pkg/api/generated/openapi_types.gen.go.
 // Canonical schema: contracts/components/schemas/ModelTokens.yaml.
 type byModelCell struct { // not-wire-format: mirrors the oapi-codegen-inlined by_model element shared by AgentTokenEntry and TokenUsageSummary; canonical schema ModelTokens.yaml — field order and tags must stay byte-identical to the generated inline shape
-	CacheRead  *int `json:"cache_read,omitempty"`
-	CacheWrite *int `json:"cache_write,omitempty"`
-	In         *int `json:"in,omitempty"`
-	Out        *int `json:"out,omitempty"`
-	Total      int  `json:"total"`
+	CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+	CacheRead     *int     `json:"cache_read,omitempty"`
+	CacheWrite    *int     `json:"cache_write,omitempty"`
+	In            *int     `json:"in,omitempty"`
+	Out           *int     `json:"out,omitempty"`
+	Total         int      `json:"total"`
 }
 
 // nonZeroPtr returns a pointer to v when v != 0, or nil when v == 0.
