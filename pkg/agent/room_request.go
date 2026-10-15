@@ -502,6 +502,15 @@ func (al *AgentLoop) gateRoomRequest(msg bus.InboundMessage) (*roomGate, bool) {
 	}
 	g := &roomGate{rt: rt, roomID: msg.Metadata[roomIDMetadataKey], requestID: msg.TranscriptEntryID}
 	al.roomRequests.Store(g.requestID, g.roomID)
+	if al.receiverStopped(msg.SessionID) {
+		// A wake that meets a stopped member is dropped; the request stays
+		// held in the member's ledger and is delivered when the member runs
+		// again (FR-252). It never shows "working" in between.
+		al.heldRepublished.Delete(g.requestID)
+		logger.InfoCF("agent", "room request stays held: its member is stopped",
+			map[string]any{"session_id": msg.SessionID, "request_id": g.requestID, "room_id": g.roomID})
+		return nil, false
+	}
 	if !rt.BeginRoomConsume(g.roomID, g.requestID, msg.SessionID) {
 		al.heldRepublished.Delete(g.requestID)
 		al.roomRequests.Delete(g.requestID)
