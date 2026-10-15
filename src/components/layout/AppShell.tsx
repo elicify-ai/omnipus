@@ -5,8 +5,9 @@ import { AgentProfile } from '@/components/agents/AgentProfile'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
 import { Button } from '@/components/ui/button'
-import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { CrossWorkspaceApprovalBanner } from '@/components/layout/CrossWorkspaceApprovalBanner'
+import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
+import { INLINE_TOOL_APPROVALS_ENABLED } from '@/lib/featureSwitches'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
 import { SearchModal } from '@/components/search/SearchModal'
 import { OmnipusRuntimeProvider } from '@/components/chat/OmnipusRuntimeProvider'
@@ -270,12 +271,10 @@ export function AppShell() {
                 </div>
               )}
 
-              {/* Cross-workspace tool-approval notice — founder decision
-              2026-09-14. Ambient, non-blocking: an approval waiting in a
-              workspace other than the one open right now is otherwise
-              invisible (ToolApprovalModal below only shows in-scope
-              approvals). See CrossWorkspaceApprovalBanner.tsx. */}
-              <CrossWorkspaceApprovalBanner />
+              {/* "Waiting in another chat" notice (L1 amendment §1.2 R6) —
+              hidden until WU-8 (stage 2): founder design = card in parent
+              chat, no banner, menu-bar attention animation. */}
+              {INLINE_TOOL_APPROVALS_ENABLED && <CrossWorkspaceApprovalBanner />}
 
               {/* Screen content — relative so children can use absolute inset-0 for bounded scrolling */}
               <main id="main-content" tabIndex={-1} className="flex-1 relative min-h-0 overflow-hidden">
@@ -299,8 +298,9 @@ export function AppShell() {
       {/* Global toast notifications */}
       <ToastContainer />
 
-      {/* Tool approval modal — FR-011, FR-082 */}
-      <ToolApprovalModal />
+      {/* Tool approval modal — FR-011, FR-082. L1 stage 1: the release modal
+          shows every pending approval while the inline card is hidden. */}
+      {!INLINE_TOOL_APPROVALS_ENABLED && <ToolApprovalModal />}
 
       {/* Notification center panel — #264 */}
       <NotificationPanel />

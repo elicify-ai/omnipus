@@ -1,4 +1,6 @@
-// ToolApprovalModal.readablePreviews.test.tsx
+// L1 amendment §1.2 R6 / §1.5: inline container replaces the modal.
+// All non-container preview/action/security oracles retained; B3 stub deletion deferred.
+// ToolApprovalModal.readablePreviews.test.tsx — inline surface
 //
 // Coverage for the per-tool readable-summary registry (approvalPreviews/):
 //  1. request_mount renders the folder path + reason as VISIBLE TEXT, not
@@ -13,7 +15,7 @@
 //  5. A tool with no registered preview still renders the generic Arguments
 //     JSON dump (registry fallback keeps working).
 //  6. The reconnect-stub case (toolCallId/turnId both empty — see the
-//     isReconnectStub note in ToolApprovalModal.tsx) renders an honest
+//     isReconnectStub note in ToolApprovalPanel.tsx) renders an honest
 //     notice with ONLY a Deny action.
 //  7. humanizeToolName is wired into the Tool label for an ordinary tool.
 //
@@ -24,53 +26,25 @@
 // comment), so this modal never needs a QueryClientProvider in its tree.
 // Seed/clear it directly, mirroring BrowserLiveView.agentChip.test.tsx.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { queryClient } from '@/lib/queryClient'
 import { workspacesQueryKeys } from '@/lib/api'
 import type { Agent, Session, Workspace } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
 
-vi.mock('@/lib/api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
-  return {
-    ...actual,
-    submitToolApproval: vi.fn(),
-  }
-})
-
-vi.mock('@/store/ui', () => ({
-  useUiStore: vi.fn((selector) => {
-    const state = { addToast: vi.fn(), toasts: [], removeToast: vi.fn() }
-    return selector ? selector(state) : state
-  }),
-}))
-
-vi.mock('@/lib/authLogout', () => ({
-  forceLogout: vi.fn(),
-}))
-
-import * as api from '@/lib/api'
 import { useToolApprovalStore } from '@/store/toolApproval'
-import { ToolApprovalModal } from './ToolApprovalModal'
+import { useSessionStore } from '@/store/session'
+import type { ComponentType } from 'react'
+import { renderWithClient as render, loadApprovalPanel, resetSharedState, installApprovalNetwork, approvalPosts, cleanupApprovalState } from '../../../tests/l1-ui-red-u23/support'
+let ToolApprovalPanel: ComponentType
 import type { SessionStateFrame } from '@/lib/ws'
 
-beforeEach(() => {
-  act(() => {
-    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
-  })
-  vi.clearAllMocks()
-  vi.mocked(api.submitToolApproval).mockResolvedValue({
-    approval_id: 'appr-mount-readable',
-    action: 'allow_once',
-    status: 'ok',
-  })
-  queryClient.clear()
-})
-
-afterEach(() => {
-  queryClient.clear()
+beforeEach(async () => {
+  resetSharedState('sess-mount')
+  installApprovalNetwork()
+  ToolApprovalPanel = await loadApprovalPanel()
 })
 
 const MOUNT_APPROVAL = {
@@ -102,12 +76,12 @@ function seedWorkspace() {
   )
 }
 
-describe('ToolApprovalModal — request_mount readable summary (Deliverable 2)', () => {
-  it('renders the folder path and reason as visible text, and hides the raw Arguments JSON dump', () => {
+describe('ToolApprovalPanel — request_mount readable summary (Deliverable 2)', () => {
+  it('L1 §1.2 R6: renders the folder path and reason as visible text, and hides the raw Arguments JSON dump', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     // Found as plain rendered text, not merely present inside a JSON blob.
     expect(screen.getByText('/Users/dana/Documents/projects/api')).toBeInTheDocument()
@@ -120,12 +94,12 @@ describe('ToolApprovalModal — request_mount readable summary (Deliverable 2)',
     expect(screen.queryByText(/"host_path"/)).not.toBeInTheDocument()
   })
 
-  it('states the lasting consequence', () => {
+  it('L1 §1.2 R6: states the lasting consequence', () => {
     seedAgent()
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(
       screen.getByText('Jim will be able to change files in this folder until you remove it.'),
     ).toBeInTheDocument()
@@ -135,11 +109,11 @@ describe('ToolApprovalModal — request_mount readable summary (Deliverable 2)',
     expect(screen.getByText(/declining keeps this folder read-only for Jim, it does not hide it/)).toBeInTheDocument()
   })
 
-  it('falls back to the raw agent id in the consequence line when the agent name is not cached', () => {
+  it('L1 §1.2 R6: falls back to the raw agent id in the consequence line when the agent name is not cached', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(
       screen.getByText(
         'agent-jim will be able to change files in this folder until you remove it.',
@@ -147,63 +121,63 @@ describe('ToolApprovalModal — request_mount readable summary (Deliverable 2)',
     ).toBeInTheDocument()
   })
 
-  it('shows the agent-specific title "<Agent> wants to add a folder"', () => {
+  it('L1 §1.2 R6: shows the agent-specific title "<Agent> wants to add a folder"', () => {
     seedAgent()
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Jim wants to add a folder')).toBeInTheDocument()
   })
 
-  it('resolves and shows the workspace name from the cached sessions/workspaces lists', () => {
+  it('L1 §1.2 R6: resolves and shows the workspace name from the cached sessions/workspaces lists', () => {
     seedWorkspace()
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Acme Backend')).toBeInTheDocument()
   })
 
-  it('falls back to "Unknown workspace" when the session/workspace cache has no match', () => {
+  it('L1 §1.2 R6: falls back to "Unknown workspace" when the session/workspace cache has no match', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Unknown workspace')).toBeInTheDocument()
   })
 
-  it('shows the human tool name via humanizeToolName, not the raw "request_mount" identifier', () => {
+  it('L1 §1.2 R6: shows the human tool name via humanizeToolName, not the raw "request_mount" identifier', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.queryByText('request_mount')).not.toBeInTheDocument()
   })
 })
 
-describe('ToolApprovalModal — request_mount button copy (Deliverable 2/3)', () => {
-  it('"Add folder" dispatches the SAME approve action as every other tool', async () => {
+describe('ToolApprovalPanel — request_mount button copy (Deliverable 2/3)', () => {
+  it('L1 §1.2 R6: "Add folder" dispatches the SAME approve action as every other tool', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Add folder/i }))
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-mount-readable', 'allow_once')
+      expect(approvalPosts()).toContainEqual({ id: 'appr-mount-readable', body: { action: 'allow_once' } })
     })
   })
 
-  it('"Don\'t add" dispatches the SAME deny action as every other tool', async () => {
+  it('L1 §1.2 R6: "Don\'t add" dispatches the SAME deny action as every other tool', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     fireEvent.click(screen.getByRole('button', { name: /Don't add/i }))
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-mount-readable', 'deny')
+      expect(approvalPosts()).toContainEqual({ id: 'appr-mount-readable', body: { action: 'deny' } })
     })
   })
 
@@ -215,8 +189,9 @@ describe('ToolApprovalModal — request_mount button copy (Deliverable 2/3)', ()
   // product decision in the merge decision record.
 })
 
-describe('ToolApprovalModal — registry fallback (Deliverable 1)', () => {
-  it('a tool with no registered preview still renders the generic Arguments JSON dump', () => {
+describe('ToolApprovalPanel — registry fallback (Deliverable 1)', () => {
+  it('L1 §1.2 R6: a tool with no registered preview still renders the generic Arguments JSON dump', () => {
+    act(() => useSessionStore.setState({ activeSessionId: 'sess-001' }))
     act(() => {
       useToolApprovalStore.setState({
         queue: [
@@ -233,12 +208,13 @@ describe('ToolApprovalModal — registry fallback (Deliverable 1)', () => {
         ],
       })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Arguments')).toBeInTheDocument()
     expect(screen.getByText(/omnipus release notes/)).toBeInTheDocument()
   })
 
-  it('shows the humanized Tool label for an ordinary tool, not the raw identifier', () => {
+  it('L1 §1.2 R6: shows the humanized Tool label for an ordinary tool, not the raw identifier', () => {
+    act(() => useSessionStore.setState({ activeSessionId: 'sess-001' }))
     act(() => {
       useToolApprovalStore.setState({
         queue: [
@@ -255,16 +231,16 @@ describe('ToolApprovalModal — registry fallback (Deliverable 1)', () => {
         ],
       })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Search the web')).toBeInTheDocument()
     expect(screen.queryByText('search_web')).not.toBeInTheDocument()
   })
 })
 
-describe('ToolApprovalModal — reconnect-stub (Deliverable 4)', () => {
+describe('ToolApprovalPanel — reconnect-stub (Deliverable 4)', () => {
   // Reproduces the shape a future reconcileWithSessionState hydration fix
   // would need to produce for an approval whose full frame never reached
-  // this browser tab (see the isReconnectStub note in ToolApprovalModal.tsx):
+  // this browser tab (see the isReconnectStub note in ToolApprovalPanel.tsx):
   // toolCallId and turnId both empty — a shape the wire schema guarantees can
   // never come from a genuine live tool_approval_required frame (both fields
   // are required, minLength 1, on ToolApprovalRequiredFrame).
@@ -279,11 +255,11 @@ describe('ToolApprovalModal — reconnect-stub (Deliverable 4)', () => {
     expiresAt: Date.now() + 120_000,
   }
 
-  it('renders an honest notice instead of a blank or normal-looking card', () => {
+  it('L1 §1.2 R6: renders an honest notice instead of a blank or normal-looking card', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [RECONNECT_STUB_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Approval Details Unavailable')).toBeInTheDocument()
     expect(screen.getByText(/did not come back with it/)).toBeInTheDocument()
     // Proves this is NOT silently falling through to request_mount's normal
@@ -291,11 +267,11 @@ describe('ToolApprovalModal — reconnect-stub (Deliverable 4)', () => {
     expect(screen.queryByText('Folder')).not.toBeInTheDocument()
   })
 
-  it('offers ONLY Deny — no Approve, no Add folder, no Always Allow, no Cancel', () => {
+  it('L1 §1.2 R6: offers ONLY Deny — no Approve, no Add folder, no Always Allow, no Cancel', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [RECONNECT_STUB_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Approve$/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Add folder/i })).not.toBeInTheDocument()
@@ -303,7 +279,7 @@ describe('ToolApprovalModal — reconnect-stub (Deliverable 4)', () => {
     expect(screen.queryByRole('button', { name: /^Cancel$/i })).not.toBeInTheDocument()
   })
 
-  it('the single Deny button dispatches the real deny action, in the reconnect-stub rendering specifically', async () => {
+  it('L1 §1.2 R6: the single Deny button dispatches the real deny action, in the reconnect-stub rendering specifically', async () => {
     // Deliberately re-asserts the stub title alongside the dispatch: without
     // the fix this approval renders the NORMAL 4-button row (Approve exists
     // too, and "Deny" there is unrelated to the reconnect-stub code path), so
@@ -312,40 +288,36 @@ describe('ToolApprovalModal — reconnect-stub (Deliverable 4)', () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [RECONNECT_STUB_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Approval Details Unavailable')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Approve$/i })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Deny/i }))
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-reconnect', 'deny')
+      expect(approvalPosts()).toContainEqual({ id: 'appr-reconnect', body: { action: 'deny' } })
     })
   })
 
-  it('default focus still lands on Deny in the reconnect-stub rendering (safe-default contract preserved)', async () => {
-    // Same reasoning as above: the focus mechanism alone is unchanged by the
-    // fix (denyButtonRef was always attached to whichever button dispatches
-    // 'deny'), so this pins the stub-specific title too — that part DOES
-    // fail on unfixed code, where this approval renders the ordinary title
-    // and 4-button row instead.
-    act(() => {
-      useToolApprovalStore.setState({ queue: [RECONNECT_STUB_APPROVAL] })
-    })
-    render(<ToolApprovalModal />)
+  it('L1 §1.2 R6: reconnect-stub remains Deny-only but never steals composer focus (B3 deferred)', () => {
+    // Stub shape/actions retained by dispatch. Only the modal focus oracle is
+    // superseded: amendment R6 says "never takes focus on appearance".
+    render(<><textarea aria-label="Chat composer" /><ToolApprovalPanel /></>)
+    const composer = screen.getByLabelText('Chat composer')
+    composer.focus()
+    act(() => useToolApprovalStore.setState({ queue: [RECONNECT_STUB_APPROVAL] }))
     expect(screen.getByText('Approval Details Unavailable')).toBeInTheDocument()
-    const denyButton = screen.getByRole('button', { name: /Deny/i })
-    await waitFor(() => {
-      expect(denyButton).toHaveFocus()
-    })
+    expect(screen.getByRole('button', { name: /Deny/i })).not.toHaveFocus()
+    expect(composer).toHaveFocus()
+    expect(approvalPosts()).toEqual([])
   })
 
-  it('a normal request_mount approval (real toolCallId/turnId) is NOT treated as a reconnect stub', () => {
+  it('L1 §1.2 R6: a normal request_mount approval (real toolCallId/turnId) is NOT treated as a reconnect stub', () => {
     // Guards the sentinel itself: a live frame's non-empty ids must never
     // trip this branch, or every ordinary approval would degrade to
     // Deny-only.
     act(() => {
       useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.queryByText('Approval Details Unavailable')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()
     // Real args are present, so Always Allow must be offered — it remembers
@@ -367,8 +339,8 @@ describe('ToolApprovalModal — reconnect-stub (Deliverable 4)', () => {
 // DEFECT (not just the isReconnectStub rendering contract) is fixed; without
 // it, the store's stub-creation code could regress back to doing nothing and
 // every other test in this file would stay green.
-describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal rendering)', () => {
-  it('a session_state frame reporting an approval this tab never queued renders the honest Deny-only card', () => {
+describe('ToolApprovalPanel — reconnect gap, end-to-end (store fix + modal rendering)', () => {
+  it('L1 §1.2 R6: a session_state frame reporting an approval this tab never queued renders the honest Deny-only card', () => {
     // Start exactly where a fresh page load starts: nobody has enqueued
     // anything locally, but the server still thinks this approval is open.
     act(() => {
@@ -394,7 +366,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
       useToolApprovalStore.getState().reconcileWithSessionState(frame)
     })
 
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     expect(screen.getByText('Approval Details Unavailable')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Deny/i })).toBeInTheDocument()
@@ -404,7 +376,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
     expect(screen.queryByRole('button', { name: /^Cancel$/i })).not.toBeInTheDocument()
   })
 
-  it('an approval already queued from a live frame is refreshed, not duplicated, and keeps rendering its full card', () => {
+  it('L1 §1.2 R6: an approval already queued from a live frame is refreshed, not duplicated, and keeps rendering its full card', () => {
     // Simulate: the live tool_approval_required frame already arrived (via
     // the real enqueue action, not a hand-built fixture) while this tab was
     // connected, THEN a session_state snapshot arrives (e.g. a brief WS
@@ -446,7 +418,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
     // Refreshed in place, not duplicated.
     expect(useToolApprovalStore.getState().queue).toHaveLength(1)
 
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     // Renders the FULL request_mount summary (real args survived the
     // reconcile), not the reconnect-stub notice — proving refresh took the
@@ -457,7 +429,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
     expect(screen.getByRole('button', { name: /Add folder/i })).toBeInTheDocument()
   })
 
-  it('a stub whose reported delta has already elapsed renders as expired, not as freshly askable', () => {
+  it('L1 §1.2 R6: a stub whose reported delta has already elapsed renders as expired, not as freshly askable', () => {
     // expires_in_ms is relative to frame receipt. A delta of 0 (or already
     // negative-by-the-time-React-renders) must land on the modal's existing
     // hasExpired state, not a live countdown with a working Deny button —
@@ -486,10 +458,13 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
       useToolApprovalStore.getState().reconcileWithSessionState(frame)
     })
 
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     expect(screen.getByText(/Approval expired unanswered — the agent is told nobody answered/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Deny/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Dismiss/i })).toBeInTheDocument()
   })
 })
+
+// Real stores/QueryClient/auth survive the test boundary; only fetch/socket doubled.
+afterEach(async () => { await cleanupApprovalState() })

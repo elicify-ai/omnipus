@@ -22,6 +22,8 @@ Use this page once, on a fresh install or a new machine. If Omnipus is already r
 6. **Select Start chatting** on the "Mia — Assistant" screen. The app opens **My Workspace** on **Chat**, its base page.
 7. **Type a message and send it once a chat is available.** To choose Mia or another agent, open the sidebar and select that agent's name under the workspace: that opens the agent's main chat. The row's **⋯** menu opens **History** — earlier chats for this workspace and that agent — along with **Hide from sidebar**, **Edit**, and **Remove**. Main-chat navigation requires the matching server update; if a main chat is unavailable, use **Retry** rather than sending into an unidentified chat. There is no agent picker beside the message box. The app restores this browser's last conversation in the workspace, or opens the first conversation agent's main chat in team order, skipping workers and Omnipus. A team with no conversation agent shows its setup options with sending off; [workspaces](workspaces.md) covers that. The workspace bar at the top offers **Tasks**, **Calendar**, **Library**, **Mail**, and **Team** as panel toggles; on a narrow bar, use the panels menu.
 
+8. **Add your next agent through Omnipus.** Connect a provider first (the wizard did that), because Omnipus needs a working model to plan with. Then select **Add agent** under your workspace in the sidebar, or **Team → Add agent → Create with Omnipus**. Omnipus's chat opens with creating an agent for that workspace already started; it asks what the agent is for, shows one summary, and creates it after you choose **Go**. See [Omnipus](using-omnipus-ui.md#omnipus).
+
 Three ways to install, and what each is good for:
 
 | Method | Good for | Command |

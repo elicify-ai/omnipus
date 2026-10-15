@@ -7,6 +7,7 @@
 // grandfathered line-budget ceilings (scripts/budgets/functions.txt); a new
 // function starts under the ordinary budget (warn>120, fail>240) instead.
 
+import { reconcileSecretRequests } from './secret-request-frames'
 import type { StoreApi } from 'zustand'
 import { produce } from 'immer'
 import { queryClient } from '@/lib/queryClient'
@@ -42,6 +43,7 @@ function handleSessionSnapshotFrame({ frame, targetSid, withBucket }: {
   targetSid: string
   withBucket: CatchUpFrameContext['withBucket']
 }): void {
+  if (frame.type === 'session_snapshot') reconcileSecretRequests(frame) // omnipus-system-agent K4
   // BE-DESIGN.md §4.5/§4.6/§6.2 — the server decided this connection's
   // cursor is not servable (first load, a stale/mismatched boot id, or a
   // gap the SPA itself reported — §6.2's "gap" row re-attaches, which can
@@ -313,6 +315,8 @@ function handleUserMessageFrame({ frame, targetSid, withBucket }: {
       // own-vs-other discriminator the thread renders by. Forwarded
       // verbatim — the replay path stamps the identical field.
       ...(userMsgFrame.participant ? { participant: userMsgFrame.participant } : {}),
+      // K33 / FR-202: a group chat's request to this agent renders collapsed.
+      ...(userMsgFrame.room_ref ? { roomRef: userMsgFrame.room_ref } : {}),
     }
     return produce(b, (draft) => {
       draft.messagesById[newMsg.id] = newMsg

@@ -101,8 +101,6 @@ function sendRecovery1090First(sender: ReturnType<typeof connectRecovery1090Send
     .toStrictEqual([ORIGINAL_FRAME])
   expect(useSessionStore.getState().activeSessionId, 'fixture: no acknowledgement has arrived')
     .toBe('__pending')
-  expect(useChatStore.getState().pendingKickoff, 'fixture: ordinary send is not a setup kickoff')
-    .toBeNull()
   expect(recovery1090Users(), 'fixture: first user message is visible before the drop')
     .toStrictEqual([{ id: CLIENT_ID, content: CONTENT }])
 }

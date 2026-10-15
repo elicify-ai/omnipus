@@ -28,7 +28,8 @@ export const INITIAL_GZIP_BUDGET_BYTES = 25 * 1024
 // growth. The frozen baseline, provenance checks, and initial-gzip ceiling stay
 // unchanged; the unfinished panel still requires its own build and measurement.
 // founder-approved repo-wide allowance 2026-10-08/09 (482 KiB): covers Tasks panel + release-train drift + Wave-1
-export const TOTAL_RAW_BUDGET_BYTES = 493568
+// Founder-authorised raise (2026-10-15): raised 482 KiB to 586 KiB to cover L1 stage 1: Omnipus/WU-10 screens + generated contract code, measured +549,263. see #1183.
+export const TOTAL_RAW_BUDGET_BYTES = 600064
 
 export function compareProductionBundles(baseline, candidate, provenance = null) {
   const initialGzipDelta = candidate.initial.gzipBytes - baseline.initial.gzipBytes

@@ -35,12 +35,14 @@ Any chat colleague can ask a teammate for help: start a message with `@` and pic
 
 Omnipus is your system agent for setup and configuration. It lives in your default workspace only: it cannot be added to another workspace or removed from the default one, and its chats live there. It works from its own folder, and its file tools can still reach the work folders of every workspace (and their mounts) to set them up — never a workspace's record or its private memory folder. Other agents keep to their own workspace.
 
-- **Protected name.** No other agent can be created or renamed to "Omnipus" (spaces and letter case do not matter). A similar name such as "Omnipus Helper" is fine.
+- **Protected name.** No other agent can be created or renamed to "Omnipus", ignoring letter case and leading or trailing whitespace. A different name such as "Omnipus Helper" is allowed.
 - **Approvals.** Under the shipped non-God-Mode policy, deleting an agent, removing a skill or connector, adding a connector, configuring a provider, and enabling or configuring a channel ask for your approval, as does changing an agent's permissions (`set_agent_permissions`). These calls keep asking when their effective policy is Ask, even with Auto-approve on.
 - **No per-agent Ask for Omnipus.** You can set any of Omnipus's tools to Deny, but not to Ask on Omnipus itself; set Ask on the global tool policy instead. Every path that changes per-agent permissions refuses it with "Omnipus takes no per-agent Ask; set Ask globally or use Deny".
 - **God Mode.** While God Mode is on, Omnipus is told so in every turn; it then proceeds without approvals.
 
-When an agent changes another agent through its tools, permissions are a separate step: `update_agent` changes identity, model and skills, while per-agent tool permissions and connector assignments change only through `set_agent_permissions`. Under the shipped non-God-Mode policy, that tool asks before it runs, even with Auto-approve on. Omnipus skips those global approvals in God Mode. A saved permission or connector-assignment change, from the agent's settings or through `set_agent_permissions`, applies to the agent's next request and next tool call without a restart. A newly created agent can never be granted a management tool (agent, workspace, skill, connector, provider, channel, permission, secret or settings changes) — those stay with Omnipus.
+When an agent changes another agent through its tools, permissions are a separate step: `update_agent` changes identity, model and skills, while per-agent tool permissions and connector assignments change only through `set_agent_permissions`. Under the shipped non-God-Mode policy, that tool asks before it runs, even with Auto-approve on. Omnipus skips those global approvals in God Mode.
+
+Permission and connector-assignment changes apply to subsequent requests and tool calls after successful live activation, without a restart. Saving and activation are separate results: check `persistence_status`, `activation_status` and the reported message. A saved change whose activation failed is not proof that the running agent uses it. Fix the reported problem and reload or restart before relying on the new permissions. A newly created agent can never be granted a management tool (agent, workspace, skill, connector, provider, channel, permission, secret or settings changes) — those stay with Omnipus.
 
 When an agent creates an external worker through its tools, the soul rule differs from the create form: a native agent (Main or Subagent) needs a soul, but an external worker takes none — it runs on its own command-line tool and has no persona prompt, and supplying one is refused with the reason shown. If that request names a `cli_path`, it must point at an existing file this machine can actually run: on macOS and Linux the user running Omnipus must hold execute permission on it, and on Windows its file extension must be one Windows recognizes as runnable (the PATHEXT list — .exe, .cmd and similar). A missing path, a directory, or a file failing this check is refused with the path named in the reason. Leaving `cli_path` out uses the tool's own launcher on the host's PATH.
 
@@ -57,7 +59,9 @@ Every conversation names its agent — there is no global default agent any more
 
 ## How to create your own agent
 
-You create one of three types. The create buttons sit in the section headers of the roster.
+**With Omnipus (the way the app is moving to).** In a workspace, select **Add agent** under it in the sidebar, or **Team → Add agent → Create with Omnipus**. Omnipus's chat opens with creating an agent for that workspace already started: it asks what the agent is for, shows one summary of what it will create (and any gaps it cannot cover), and creates the agent in that workspace after you choose **Go**. It needs a working model — fix providers in **Settings → Providers** and Omnipus's own model in **Settings → System agents**. The workspace's **Team** panel is the home of its agents: each card offers **Edit**, **Remove from this workspace** and **Delete everywhere…**.
+
+**With the form (until it is retired).** You create one of three types. The create buttons sit in the section headers of the roster.
 
 | Type | Runs on | Works for | You can chat with it |
 |---|---|---|---|

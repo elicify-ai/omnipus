@@ -14,7 +14,6 @@ import type {
   SubagentEndFrame,
   SubagentMessageFrame,
 } from '@/lib/api/generated/asyncapi-types'
-import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { logDiagnostic } from '@/lib/telemetry'
 import { normalizeTruncationReason } from '@/lib/truncation'
@@ -36,6 +35,9 @@ import { handleReplayAndStatusFrame } from './replay-and-status-frames'
 import { handleCatchUpFrame } from './catchup-frames'
 import { handleProviderFrame } from './provider-frames'
 import { handleMailPanelObserverFrame } from './mail-panel-observer-frames'
+import { handleSecretRequestFrame } from './secret-request-frames'
+import { handleRoomFrame } from './room-frames'
+import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
 import { appendErrorNotice, handleJudgeConclusionErrorFrame } from './error-notice-frames'
@@ -642,6 +644,8 @@ function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: T
   // across several tokens stamps the pair once.
   if (frame.reply_to_message_id && !m.replyToMessageId) m.replyToMessageId = frame.reply_to_message_id
   if (frame.reply_to_participant && !m.replyToParticipant) m.replyToParticipant = frame.reply_to_participant
+  // K33 / FR-202: an answer into a group chat, mirrored here, renders collapsed.
+  if (frame.room_ref && !m.roomRef) m.roomRef = frame.room_ref
   m.isStreaming = true
   m.status = 'streaming'
   draft.isStreaming = true
@@ -827,6 +831,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
         content: frame.content,
         agentId: frame.agent_id ?? prevMsg.agentId,
         turnId: turnId ?? prevMsg.turnId,
+        ...(frame.room_ref ? { roomRef: frame.room_ref } : {}),
       }
       draft.messagesById[messageId] = bubble
       if (idx !== -1) draft.messageOrder[idx] = messageId
@@ -866,6 +871,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
     // (see applyTokenContentTo for the merged-continuation path).
     ...(frame.reply_to_message_id ? { replyToMessageId: frame.reply_to_message_id } : {}),
     ...(frame.reply_to_participant ? { replyToParticipant: frame.reply_to_participant } : {}),
+    ...(frame.room_ref ? { roomRef: frame.room_ref } : {}), // K33 / FR-202
     ...(idCollision ? { mergedReplayIds: [messageId] } : {}),
   }
   if (idCollision) {
@@ -916,9 +922,6 @@ interface FrameContext {
   getActiveSid: () => string | null
   bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
-  deleteBucket: (sid: string) => void
-  resolveKickoffAttempt: (workspaceId: string, outcome: 'done' | 'failed') => void
-  abandonPendingKickoffInternal: () => void
   syncForeground: () => void
   armRateLimitClear: (sid: string, event: RateLimitEventData) => void
   maybeDrainNext: () => void
@@ -954,9 +957,10 @@ function applyMessageStatusCase(
   }
 }
 
-export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, deleteBucket, resolveKickoffAttempt, abandonPendingKickoffInternal, syncForeground, armRateLimitClear, maybeDrainNext, runtime }: FrameContext): FrameSlice {
+export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, syncForeground, armRateLimitClear, maybeDrainNext, runtime }: FrameContext): FrameSlice {
   return {
     handleFrame: (frame) => {
+      if (handleRoomFrame(frame)) return // group-chat frames never touch session routing (room-frames.ts)
       // Resolve which session this frame belongs to.
       // session_started is special: it carries the new id for the pending message.
       // ask_user_question nests its session id on card.session_id (required
@@ -1073,8 +1077,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         return
       }
 
-      // Mail panel presence ack/error: own handler, main switch is grandfathered.
-      if (handleMailPanelObserverFrame(frame)) {
+      // Mail panel presence and the secret card (K1/K3/K4): own handlers, main switch is grandfathered.
+      if (handleMailPanelObserverFrame(frame) || handleSecretRequestFrame(frame)) {
         syncForeground()
         return
       }
@@ -1087,74 +1091,10 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           // Server minted a new session_id in response to a message sent without one.
           const newSid = frame.session_id
 
-          // This ack may be resolving a pending workspace-setup
-          // kickoff rather than an ordinary sendMessage no-session turn.
-          // Capture + clear `pendingKickoff` up front — this frame always
-          // resolves whichever kickoff was outstanding, regardless of which
-          // branch below runs. Resolve the per-workspace attempt tracker
-          // ('done') too — this ack is always a SUCCESS for the kickoff
-          // (a failure arrives as an 'error' frame instead, never as
-          // session_started), regardless of which branch below handles it.
-          const resolvedKickoff = get().pendingKickoff
-          if (resolvedKickoff) {
-            set({ pendingKickoff: null })
-            resolveKickoffAttempt(resolvedKickoff.workspaceId, 'done')
-          }
-          const stillOnOriginatingWorkspace =
-            resolvedKickoff === null ||
-            useWorkspacesStore.getState().activeWorkspaceId === resolvedKickoff.workspaceId
-          // Plausibility gate: even when still on the originating
-          // workspace, only treat this ack as safe to FOREGROUND when the
-          // '__pending' placeholder is STILL the local foreground turn
-          // (activeSessionId === '__pending'). If the user has since
-          // attached to a different, real session WITHOUT leaving the
-          // workspace — e.g. picked an existing conversation from the
-          // sidebar/search while the kickoff was still resolving —
-          // `activeSessionId` is that real session's id, not '__pending';
-          // forefronting the kickoff's session here would silently evict
-          // the session the user actually selected (and, with `sendMessage`'s
-          // no-longer-possible collision — the collision guard prevents
-          // a stray plain message from ever sharing the '__pending' bucket
-          // with the kickoff — this is the one remaining way a late kickoff
-          // ack could still misattribute). Treat it exactly like "wrong
-          // workspace": migrate silently, do not disturb whatever is
-          // actually foreground.
-          const kickoffStillForeground =
-            resolvedKickoff === null || useSessionStore.getState().activeSessionId === '__pending'
-
-          if (resolvedKickoff && (!stillOnOriginatingWorkspace || !kickoffStillForeground)) {
-            // Late ack, wrong workspace, or superseded foreground:
-            // do NOT foreground it — leave whatever the user is currently
-            // looking at completely alone. Record the real session id under
-            // the ORIGINATING workspace's descriptor instead, so a later
-            // enterWorkspaceChat for that workspace attaches to (and
-            // replays) this session normally.
-            useSessionStore.getState().setWorkspaceSessionDescriptor(resolvedKickoff.workspaceId, {
-              id: newSid,
-              type: 'chat',
-              title: null,
-              agentId: frame.agent_id ?? null,
-            })
-            // Free the '__pending' bucket key. Its content so far (Ava's
-            // greeting, still streaming) isn't needed locally — re-entering
-            // the originating workspace triggers a fresh server replay via
-            // attachToSession regardless, and leaving it here would risk
-            // colliding with the next unrelated no-session turn that reuses
-            // the same '__pending' key.
-            deleteBucket('__pending')
-            queryClient.invalidateQueries({ queryKey: ['sessions'] })
-            // A message that collided with this kickoff's slot (via
-            // the `sendMessage` collision guard) sits in `outboundQueue` —
-            // nothing else will release it now that this kickoff has
-            // resolved via this (non-foregrounding) branch.
-            get().drainOutboundQueue()
-            break
-          }
-
           // Ordinary first sends are resolved by handleFirstSendFrame above.
-          // This tail remains only for a workspace-setup kickoff and any
-          // other ack that arrives with no unbound pending first send
-          // (DEL-F21/F22 deleted the legacy ordinary-ack migration).
+          // This tail remains for an ack that arrives with no unbound pending
+          // first send (DEL-F21/F22 deleted the legacy ordinary-ack migration;
+          // the client workspace-setup kickoff is retired, K9/FR-047).
           // A newer explicit agent-picker choice wins over this stale echo.
           const currentAgentId = useSessionStore.getState().activeAgentId
           const userReselected =
@@ -1813,15 +1753,15 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // to `frame.message` verbatim — exactly the pre-ADR-051 behavior.
             // `errorEntryId` powers the live→replay dedup (a reloaded session
             // must not re-render the same error twice). Read once here at the
-            // top so all three error sub-paths below (kickoff reject, no-bucket
-            // sweep, per-bucket render) see the same values.
+            // top so both error sub-paths below (no-bucket sweep, per-bucket
+            // render) see the same values.
             const llmError = readLLMErrorFromFrame(frame)
             const errorEntryId = readEntryIdFromFrame(frame)
             const verboseChatEnabled = useChatPreferencesStore.getState().verboseChatEnabled
             // D5 fix (UAT Site 3): a legacy/synthesized ErrorFrame (no typed
             // llm_error payload) falls back to the raw wire `message` for
             // display in several branches below (translatedMessage here, the
-            // kickoff-reject toast, unroutable global error, and the
+            // unroutable global error, and the
             // coalesced/fresh bubble content). Sanitize ONCE up front so
             // every one of those reads the same safe value — see
             // sanitizeLegacyErrorMessage's doc comment (lib/llm-error.ts) for
@@ -1849,86 +1789,6 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // path's case 'replay_error' performs the symmetric check.)
             const errorDedupId = errorEntryId
 
-            // A kickoff rejection (duplicate kickoff, unknown
-            // workspace, or a server-side kickoff error) is a hard REJECT of
-            // a turn that never really started — there is no real session
-            // behind it, only the local '__pending' sentinel. A kickoff
-            // rejection therefore NEVER carries a session_id on the wire
-            // (there is no real session to tag it with) — a
-            // session-TAGGED error frame is by definition never a kickoff
-            // reject, so `!frameSessionId` gates the ENTIRE kickoff-error
-            // branch (both sub-cases below), never just the still-foreground
-            // one. A genuinely tagged error always falls through unchanged
-            // to the generic routing further down.
-            const rejectedKickoff = get().pendingKickoff
-            if (rejectedKickoff && !frameSessionId) {
-              const sessionStillPending = useSessionStore.getState().activeSessionId === '__pending'
-              // "already ran" style messages are a benign DUPLICATE — an
-              // EARLIER attempt already succeeded server-side (setup_pending
-              // is already correctly false), not a real failure. Everything
-              // else is a genuine failure, worded differently so the user
-              // knows re-opening the workspace will retry it.
-              const isDuplicate = /already/i.test(frame.message ?? '')
-              // `abandonPendingKickoffInternal` handles the shared cleanup
-              // trio for BOTH sub-cases below: clear `pendingKickoff`, drop
-              // the orphaned '__pending' bucket, and mark this workspace's
-              // `kickoffAttemptStatus` 'failed' so
-              // useWorkspaceSetupKickoff's invalidate-on-failure effect can
-              // react and roll back its own premature optimistic
-              // setup_pending:false cache write.
-              abandonPendingKickoffInternal()
-              console.warn('chat.workspace_setup_kickoff_rejected', { message: frame.message, duplicate: isDuplicate, stillForeground: sessionStillPending })
-              logDiagnostic('chatWorkspaceSetupKickoffRejected', { message: frame.message, duplicate: isDuplicate, stillForeground: sessionStillPending })
-              if (sessionStillPending) {
-                // The kickoff's placeholder is still what the user is
-                // looking at — reset the composer back to a normal, empty
-                // state (not to be left as a stuck 'error'-status bubble
-                // under '__pending', which would otherwise poison every
-                // subsequent sendMessage call with a protocol-violating
-                // session_id:'__pending' frame — see sendMessage's composer
-                // guard) and surface a toast.
-                useSessionStore.getState().setActiveSession(null)
-                useUiStore.getState().addToast(
-                  isDuplicate
-                    ? {
-                        message: 'Workspace setup already ran — find the interview in your sessions list.',
-                        variant: 'default',
-                      }
-                    : {
-                        // D5 fix (Site 3): safeMessage (computed once at the
-                        // top of this case block) instead of the raw
-                        // frame.message.
-                        message: frame.message
-                          ? `Could not start the workspace setup interview: ${safeMessage}`
-                          : 'Could not start the workspace setup interview — reopen the workspace to retry.',
-                        variant: 'warning',
-                      },
-                )
-              }
-              // Reject-after-navigation fall-through: when the
-              // kickoff's placeholder is NO LONGER the local foreground
-              // (the user already navigated away, or attached to a
-              // different real session — either resets `activeSessionId`
-              // away from '__pending'), this untagged reject belongs to a
-              // turn nothing is currently showing. No toast — there is
-              // nothing on screen to retry FROM; the workspace-open hook is
-              // what will retry, once it re-checks server truth on the next
-              // open. Swallow quietly and do NOT let this frame fall through
-              // to the generic routing below — it would otherwise
-              // misattribute to whatever IS foreground (erroring an
-              // unrelated conversation's last bubble, or — if nothing is
-              // foreground — raising a bogus global connection-error banner
-              // via the `!targetSid` branch just below).
-              //
-              // Only `drainOutboundQueue()` (not `maybeDrainNext()`,
-              // which the ORIGINAL version of this branch used — a bug: it
-              // only ever moves `pendingDrainQueue`, never `outboundQueue`,
-              // so it never actually freed a message buffered by the
-              // collision guard or mid-turn '__pending' steering) releases
-              // whatever is actually queued.
-              get().drainOutboundQueue()
-              break
-            }
 
             // C2 (decided 2026-10-11; record: docs/internal/architecture/ADR-20261012-session-core-delta-amendments-c2-r1-2.md):
             // a MESSAGE-SCOPED refusal — the frame carries session_id AND
@@ -2359,9 +2219,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         case 'tool_call_result': {
           if (!targetSid) break
           const clampedResult = clampToolResult(frame.result)
-          // ADR-091 D7/D10: see case 'tool_call_start' — every result here
-          // is for this session's own flat tool call; no span-nesting path.
-          withBucket(targetSid, (b) => applyToolCallResultFrame(b, frame, clampedResult))
+          withBucket(targetSid, (b) => applyToolCallResultFrame(b, frame, clampedResult)) // ADR-091 D7/D10: own flat call (see tool_call_start)
+          refreshRosterAfterAgentMutation(frame) // #215: a successful agent change refreshes roster + teams
           break
         }
 

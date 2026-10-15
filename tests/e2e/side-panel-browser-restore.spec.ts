@@ -9,6 +9,7 @@
  */
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
+import { softSkip } from './fixtures/skip-tracking'
 import { newAdminApiContext } from './fixtures/admin-api'
 
 async function createWorkspace(): Promise<string> {
@@ -46,6 +47,8 @@ test.afterAll(async () => {
 })
 
 test('W9 — reload does not restore the Browser panel', async ({ page }) => {
+  // Skipped: founder ruling 2026-10-15, #1325 (allow-listed in fixtures/skip-tracking.ts).
+  softSkip(test, 'founder ruling 2026-10-15, #1325: name-only workspace has no team under L1 (FR-048), so Open browser has no active agent; https://github.com/elicify-ai/omnipus/issues/1325; expires 2026-10-22')
   await page.goto(`/#/workspaces/${workspaceId}/chat`)
   await page.getByRole('button', { name: /open browser|watch live/i }).click()
   await expect(page.getByTestId('side-panel-header')).toContainText('Browser')
@@ -55,6 +58,8 @@ test('W9 — reload does not restore the Browser panel', async ({ page }) => {
 })
 
 test('W10 — Back then Forward follows the store, not a stale panel value', async ({ page }) => {
+  // Skipped: founder ruling 2026-10-15, #1325 (allow-listed in fixtures/skip-tracking.ts).
+  softSkip(test, 'founder ruling 2026-10-15, #1325: name-only workspace has no team under L1 (FR-048), so Open browser has no active agent; https://github.com/elicify-ai/omnipus/issues/1325; expires 2026-10-22')
   await page.goto(`/#/workspaces/${workspaceId}/chat`)
   await page.getByRole('button', { name: /open browser|watch live/i }).click()
   await expect(page.getByTestId('side-panel-header')).toContainText('Browser')

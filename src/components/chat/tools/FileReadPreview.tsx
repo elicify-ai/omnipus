@@ -67,7 +67,7 @@ export function FileReadBlock({
   // failure renders its dedicated display instead of `String(result)`'s
   // "[object Object]". The line count derives ONLY from a plain-string
   // result (honest 0 for any other shape) — never from a stringified object.
-  const resolved = resolveToolResult(result)
+  const resolved = resolveToolResult(result, error)
   const content = resolved.kind === 'text' ? resolved.text : ''
   const lines = content.split('\n')
   // Zero (not 1) for a genuinely empty read — `''.split('\n')` yields `['']`,

@@ -229,7 +229,7 @@ These file-tool reading allowances do not grant registry listing, instruction-fi
 
 Internal state — sessions and transcripts, tasks and plans, memory, agent definitions (`SOUL.md` and friends), skill instructions, audit logs, gateway state, credentials, the master key and `config.json` — stays protected from generic file tools and is hidden from their search results. Shell commands use the command-text check and, when enforcing, the kernel restrictions described below. Use Omnipus's dedicated tools to access managed state.
 
-Protected-path file-tool denials and the shell command-text guard carry the structured code `protected_internal_file`. The chat recognizes that marker and displays **Protected Omnipus file — refused**, explaining that approval cannot open it. Some earlier shell pre-flight refusals instead arrive as ordinary secret-set errors without that marker and can appear as a generic failed call. Read the reason; repeating an approval does not open the protected path.
+A refusal carrying `protected_internal_file` is displayed as **Protected Omnipus file — refused**, explaining that approval cannot open it. Filesystem-policy denials and the shell's protected-operand guard can produce this marker. Other checks can return a different refusal first: agent-definition files can direct the agent to the metadata tools, and some shell pre-flights return an ordinary secret-set error. Read that refusal's reason; approval does not make the protected path accessible.
 
 **Two accepted risks and one boundary are worth knowing:**
 
@@ -243,7 +243,7 @@ Protected-path file-tool denials and the shell command-text guard carry the stru
 
 - Links (symlinks) it meets inside a folder are not followed. A link you name directly as the folder to search is followed, as `read_file` would.
 - The Linux system folders `/proc`, `/sys` and `/dev` are skipped, and device files, pipes and sockets are never read. They hold no user content, and some of them can hang a search. `read_file` of a file you name in those folders works as before.
-- Agent notes files such as `SOUL.md`, `HEARTBEAT.md`, `AGENT.md` and `MEMORY.md`, and the instruction files of installed skills (`SKILL.md`, `AGENT.md`, `AGENTS.md` in Omnipus's own skills folder), never show up in results, by name or by content. `read_file` refuses them too, and so does `list_directory` of the folder holding them. A skill's other files, such as its helper scripts, can be read and found.
+- Agent notes files such as `SOUL.md`, `HEARTBEAT.md`, `AGENT.md` and `MEMORY.md`, and the instruction files of installed skills (`SKILL.md`, `AGENT.md`, `AGENTS.md` in Omnipus's own skills folder), never show up in results, by name or by content. `read_file` refuses their contents. Do not assume every parent directory is unlistable: an agent working from its own home can list that working folder and see filenames. Listing the installed skill registry is still refused. A skill's other files, such as its helper scripts, can be read and found.
 
 **Denying `read_file` alone does not stop an agent reading.** The policies for `read_file` and `grep` are separate, and `grep` returns the matching lines of any file it can reach (up to the usual limits and surrounding lines). A custom agent with `grep` allowed and `read_file` denied can still read that way. To confine what an agent reads, deny `read_file`, `grep` and `bash` for it.
 
@@ -281,7 +281,7 @@ None of these ever shows a live approval card, even to an operator who happens t
 
 ### Approve a request
 
-When an approval card appears, read what it says, then choose:
+When a tool needs your decision, Omnipus opens an approval pop-up over the app. It accepts pending approvals from every workspace and conversation, not only the workspace or chat you are viewing. Requests are shown one at a time; a count indicates when more are queued. Read the named agent, tool and arguments before choosing Approve Once, Deny, Always Allow or Cancel. Some tool-specific requests use more specific button labels.
 
 | Button | What it does |
 |---|---|
@@ -289,6 +289,8 @@ When an approval card appears, read what it says, then choose:
 | **Always Allow** | Runs the call and remembers it for the rest of this chat, so an identical call does not ask again. |
 | **Deny** | Refuses the call. |
 | **Cancel** | Closes the request without running it. |
+
+Escape, the close control or clicking outside an unexpired pop-up dismisses it locally and sends Deny; it never approves the request. After reconnecting, a request whose original details are unavailable offers Deny only.
 
 What **Always Allow** remembers lasts only for that chat and ends with it. Agents that this chat hands work to inherit it. Nobody else's chats are affected, and there is no list of remembered approvals to review. For most tools it remembers the exact call, with the same arguments. For a shell command it offers a choice; see "Command rules compared with one-time approvals" below.
 
@@ -477,6 +479,8 @@ The application's default-deny rule also covers new internal locations before th
 | Windows | There is no kernel sandbox. File tools refuse protected paths, and the command-text check refuses a shell command whose protected path it identifies. A command that builds its path at runtime can evade that text check. |
 
 On Linux and macOS with the sandbox Off, Permissive or degraded/unavailable, the same no-kernel limitation applies: file-tool checks remain, but the command-text check alone does not contain arbitrary shell programs. Check the Security screen's actual enforcement and capabilities, not just the operating-system name or version.
+
+An authorized `environment_setup` run can create and read new files directly inside its selected installation folder, as well as use its selected cache and temporary folders. This does not authorize writes to sibling workspaces or unrelated operator-granted folders.
 
 ### Limits of the protection
 

@@ -66,7 +66,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
 // MailPanel, its API calls, the UI store, and the toast renderer stay real.
 vi.mock('@/components/layout/Sidebar', () => ({ Sidebar: () => null }))
 vi.mock('@/components/layout/NotificationPanel', () => ({ NotificationPanel: () => null }))
-vi.mock('@/components/agents/ToolApprovalModal', () => ({ ToolApprovalModal: () => null }))
 vi.mock('@/components/chat/MediaLightbox', () => ({ MediaLightbox: () => null }))
 vi.mock('@/components/search/SearchModal', () => ({ SearchModal: () => null }))
 vi.mock('@/components/layout/CrossWorkspaceApprovalBanner', () => ({ CrossWorkspaceApprovalBanner: () => null }))

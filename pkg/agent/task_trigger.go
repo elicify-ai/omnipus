@@ -178,10 +178,13 @@ func NewTaskTriggerScheduler(storePath string, store *task.Store, executor *Task
 	return s
 }
 
-// Start wires this scheduler as the cron runner, starts the engine, and
-// starts the recovery-sweep ticker (Scheduler rule 6). Must be called once at
-// boot, before Reconcile.
+// Start restores persisted task-to-job bindings and removes duplicate internal
+// jobs before the cron runner can fire, then starts the engine and recovery
+// sweep (Scheduler rule 6). Must be called once at boot, before Reconcile.
 func (s *TaskTriggerScheduler) Start() error {
+	if err := s.restoreStoredJobs(); err != nil {
+		return err
+	}
 	s.cs.SetRunner(s)
 	if err := s.cs.Start(); err != nil {
 		return err

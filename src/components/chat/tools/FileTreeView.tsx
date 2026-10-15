@@ -90,7 +90,7 @@ export function FileTreeBlock({
   // failure renders its dedicated display instead of `String(result)`'s
   // "[object Object]". Entries derive ONLY from a plain-string listing
   // (honest 0 for any other shape) — never from a stringified object.
-  const resolved = resolveToolResult(result)
+  const resolved = resolveToolResult(result, error)
   const content = resolved.kind === 'text' ? resolved.text : ''
   const entries = content ? parseTree(content) : []
 

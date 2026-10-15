@@ -137,15 +137,14 @@ describe('reattachActiveSession — failed reattach preserves transcript', () =>
   })
 })
 
-describe('reattachActiveSession — "__pending" (mid-kickoff reconnect) never attaches', () => {
-  const WORKSPACE_ID = 'ws-reattach-pending'
-
+describe('reattachActiveSession — unowned stuck "__pending" never attaches (FR-047/K9 retarget)', () => {
   beforeEach(() => {
-    // A workspace-setup kickoff was outstanding when the connection dropped.
+    // No ordinary first-send owns this stale sentinel. The client kickoff
+    // producer is retired, but generic never-attach/reset behavior remains.
     useSessionStore.setState({ activeSessionId: '__pending', activeAgentId: 'ava', activeAgentType: 'core' })
-    useChatStore.setState({ sessionsById: {}, pendingKickoff: { workspaceId: WORKSPACE_ID } } as never)
+    useChatStore.setState({ sessionsById: {}, pendingFirstSend: null })
     useChatStore.getState().appendMessage({
-      id: 'kickoff-placeholder',
+      id: 'unowned-placeholder',
       session_id: '__pending',
       role: 'assistant',
       content: '',
@@ -166,22 +165,20 @@ describe('reattachActiveSession — "__pending" (mid-kickoff reconnect) never at
     expect(setConnectionError).not.toHaveBeenCalled()
   })
 
-  it('tears down the dead kickoff (pendingKickoff cleared, bucket dropped, kickoffAttemptStatus failed) and resets activeSessionId to null', () => {
+  it('resets an unowned stuck pending sentinel to no active session', () => {
     const sender: ReattachSender = { send: vi.fn().mockReturnValue(true) }
 
     reattachActiveSession(sender, vi.fn())
 
-    expect(useChatStore.getState().pendingKickoff).toBeNull()
-    expect(useChatStore.getState().sessionsById['__pending']).toBeUndefined()
-    expect(useChatStore.getState().kickoffAttemptStatus[WORKSPACE_ID]).toBe('failed')
+    // Retired kickoff slot/bucket/attempt cleanup is not a current oracle.
     // The composer returns to a fresh, unstuck state — no reload needed,
     // no stuck '__pending' sentinel blocking every future sendMessage call.
     expect(useSessionStore.getState().activeSessionId).toBeNull()
   })
 
-  it('is idempotent when pendingKickoff was already cleared (e.g. by an earlier disconnect-time clearStreamingState call)', () => {
-    useChatStore.setState({ pendingKickoff: null })
+  it('is idempotent after an earlier generic pending-sentinel reset', () => {
     const sender: ReattachSender = { send: vi.fn().mockReturnValue(true) }
+    reattachActiveSession(sender, vi.fn())
 
     expect(() => reattachActiveSession(sender, vi.fn())).not.toThrow()
     expect(useSessionStore.getState().activeSessionId).toBeNull()

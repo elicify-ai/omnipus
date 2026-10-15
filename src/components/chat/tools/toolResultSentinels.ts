@@ -171,3 +171,29 @@ export function detectToolResultSentinels(result: unknown): ToolResultSentinels 
     statusConfig,
   }
 }
+
+/**
+ * #1284 (omnipus-system-agent FR-254–FR-256, L1 amendment §2; fix round 1):
+ * the structured marker. A PermissionDenied result whose generated `code` is
+ * `protected_internal_file` is Omnipus's never-grantable internal-file
+ * refusal — recognised without reading its prose.
+ */
+export function isProtectedInternalFileDenial(value: unknown): value is PermissionDenied {
+  return isPermissionDenied(value) && value.code === 'protected_internal_file'
+}
+
+/**
+ * #1284 prose FALLBACK, kept only until S1 assembly brings the structured
+ * marker (isProtectedInternalFileDenial) to every producer: a refusal that
+ * arrives as plain text in one of the server's two wordings
+ * (pkg/tools/shell_path_guard.go — "…is inside Omnipus's protected internal
+ * files…"; pkg/tools/fserrors.go ErrCarveOut — "…path is a protected
+ * carve-out…").
+ */
+export function isProtectedFileRefusal(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    (value.includes("is inside Omnipus's protected internal files") ||
+      value.includes('path is a protected carve-out'))
+  )
+}

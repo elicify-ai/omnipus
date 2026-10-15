@@ -71,9 +71,9 @@
 // (another tab, timeout, Stop, agent deletion) arrive as tool_approval_resolved
 // frames and are applied by src/store/chat.ts → markResolved.
 //
-// Scope: only approvals whose workspace matches the active workspace (or that
-// have no workspace) are shown — see isApprovalInScope. Out-of-scope approvals
-// stay queued and appear when the user switches to their workspace.
+// Scope (L1 stage 1): every pending approval is shown, whatever its workspace
+// or chat — see ToolApprovalModal below. Release showed only the active
+// workspace's approvals (isApprovalInScope) plus a cross-workspace banner.
 //
 // ADR-036 §3.4 note: this is now the ONLY tool-approval UI — the dedicated
 // exec-only flow (ExecApprovalBlock/ExecApprovalTool, WS
@@ -110,8 +110,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
-import { useToolApprovalStore, isApprovalInScope } from '@/store/toolApproval'
-import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useToolApprovalStore } from '@/store/toolApproval'
 import { submitToolApproval, isApiError, fetchAgents } from '@/lib/api'
 import type { Agent } from '@/lib/api'
 import type { ToolApprovalActionRequest } from '@/lib/api/generated/openapi-types'
@@ -841,8 +840,11 @@ function ToolApprovalCard({
 // and surface when the user switches to their workspace.
 export function ToolApprovalModal() {
   const queue = useToolApprovalStore((s) => s.queue)
-  const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
-  const visible = queue.filter((a) => isApprovalInScope(a, activeWorkspaceId))
+  // L1 stage 1 (founder, 2026-10-14): there is no "waiting elsewhere" banner,
+  // so every pending approval — any workspace, any chat, the open one too —
+  // is shown here; none can be lost. (Release scoped this to the active
+  // workspace and announced the rest in a cross-workspace banner.)
+  const visible = queue
   const first = visible[0]
 
   if (!first) return null

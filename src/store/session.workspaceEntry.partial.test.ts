@@ -11,11 +11,13 @@
  *
  * Oracles: FR-004 (a visible remembered chat wins; nothing overwrites it
  * without proof), FR-091 coverage contract. REAL stores and flow; network
- * and the main-ID seam are mocked, like the recovery suite.
+ * is mocked. WU-10 FR-107 / BDD-12.11 replaces Ava fallback with first
+ * colleague Mia; real generated main_session_id reads replace the seam double.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session, Workspace, WorkspaceMemberConfig } from '@/lib/api'
-import { fetchSessionDetail, fetchSessions, fetchWorkspace } from '@/lib/api'
+import { fetchSessionDetail, fetchSessions, fetchWorkspace, fetchAgents } from '@/lib/api'
+import { MIA } from '../../tests/omnipus-l1-ui-red/fixtures'
 import { ApiError } from '@/lib/api-error'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useConnectionStore } from './connection'
@@ -26,21 +28,17 @@ import { useWorkspacesStore } from './workspacesStore'
 const TARGET_WS = 'target-workspace'
 const TARGET = 'target-chat'
 const OTHER = 'other-chat'
-const AVA = 'ava-welcome'
+// Historical constant name retained; the amended fallback owner is Mia.
+const AVA = 'opaque-mia-welcome'
 const SOURCE_WS = 'source-workspace'
 const SOURCE = 'source-chat'
 
-const seam = vi.hoisted(() => ({ mains: new Map<object, string>() }))
-vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
-  // Real seam for everything the stubs don't override.
-  ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
-  mainSessionIdOfMember: (member: object) => seam.mains.get(member),
-}))
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/api')>(),
   fetchSessions: vi.fn(),
   fetchSessionDetail: vi.fn(),
   fetchWorkspace: vi.fn(),
+  fetchAgents: vi.fn(),
 }))
 vi.mock('@/lib/telemetry', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/telemetry')>(),
@@ -61,10 +59,10 @@ function otherSession(): Session {
 
 function avaWorkspace(member: WorkspaceMemberConfig = {}): Workspace {
   return {
-    id: TARGET_WS, name: 'Target', revision: 'rev-1', status: 'active',
+    id: TARGET_WS, name: 'Target', revision: '1'.repeat(64), status: 'active',
     pinned: false, pin_order: 0, task_count: 0,
     created_at: '2026-10-08T12:00:00Z', updated_at: '2026-10-08T12:00:00Z',
-    member_configs: { ava: member },
+    core_team: ['mia'], member_configs: { mia: member },
   }
 }
 
@@ -82,13 +80,12 @@ function rememberTargetPointer() {
 beforeEach(() => {
   localStorage.clear()
   vi.clearAllMocks()
-  seam.mains.clear()
+  vi.mocked(fetchAgents).mockResolvedValue([MIA])
   useSessionStore.setState(useSessionStore.getInitialState(), true)
   useConnectionStore.setState(useConnectionStore.getInitialState(), true)
   useUiStore.setState({ toasts: [] })
   useWorkspacesStore.setState({ activeWorkspaceId: TARGET_WS })
-  const member: WorkspaceMemberConfig = {}
-  seam.mains.set(member, AVA)
+  const member: WorkspaceMemberConfig = { main_session_id: AVA }
   vi.mocked(fetchWorkspace).mockResolvedValue(avaWorkspace(member))
 })
 
@@ -113,7 +110,8 @@ describe('workspace entry on a partial session list (M3)', () => {
     expect(useUiStore.getState().toasts).toEqual([])
   })
 
-  it('a 404 from the direct check is a truthful deletion: the main takes over and the pointer follows it', async () => {
+  // FR-107 / BDD-12.11 preserves truthful deletion; only fallback owner changes.
+  it('a 404 from the direct check is a truthful deletion: the first colleague main takes over and the pointer follows it', async () => {
     useConnectionStore.setState({ connection: { send: vi.fn().mockReturnValue(true) } as never, isConnected: true })
     vi.mocked(fetchSessions).mockResolvedValue(partialList([]))
     vi.mocked(fetchSessionDetail).mockRejectedValue(new ApiError(404, 'Session not found'))

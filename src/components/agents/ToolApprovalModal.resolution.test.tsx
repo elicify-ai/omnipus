@@ -1,34 +1,20 @@
-// ToolApprovalModal — an approval the server no longer holds must never stick
+// L1 amendment §1.2 R6 / §1.5: inline container replaces the modal.
+// All non-container preview/action/security oracles retained; B3 stub deletion deferred.
+// ToolApprovalPanel — an approval the server no longer holds must never stick
 // (UAT 2026-09-14: Approve / Deny / Cancel / Close all toasted "Failed to
 // submit approval: The requested resource was not found" and the dialog
 // stayed, re-surfacing on every navigation and in other workspaces).
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
 
-vi.mock('@/lib/api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
-  return {
-    ...actual,
-    submitToolApproval: vi.fn(),
-  }
-})
-
-vi.mock('@/store/ui', () => ({
-  useUiStore: vi.fn(),
-}))
-
-vi.mock('@/lib/authLogout', () => ({
-  forceLogout: vi.fn(),
-}))
-
-import * as api from '@/lib/api'
 import { useToolApprovalStore, type PendingToolApproval } from '@/store/toolApproval'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { ToolApprovalModal } from './ToolApprovalModal'
-
-let addToast: ReturnType<typeof vi.fn>
+import { useSessionStore } from '@/store/session'
+import type { ComponentType } from 'react'
+import { renderWithClient as render, loadApprovalPanel, resetSharedState, installApprovalNetwork, setApprovalReply, setApprovalOffline, approvalPosts, toasts, cleanupApprovalState } from '../../../tests/l1-ui-red-u23/support'
+let ToolApprovalPanel: ComponentType
 
 const STUCK: PendingToolApproval = {
   approvalId: 'appr-stuck',
@@ -45,66 +31,58 @@ const queue = () => useToolApprovalStore.getState().queue
 const resolvedIds = () => useToolApprovalStore.getState().resolvedIds
 
 beforeEach(async () => {
-  vi.clearAllMocks()
-  addToast = vi.fn()
-  const { useUiStore } = await import('@/store/ui')
-  vi.mocked(useUiStore).mockImplementation(((selector?: (s: unknown) => unknown) => {
-    const state = { addToast, toasts: [], removeToast: vi.fn() }
-    return selector ? selector(state) : state
-  }) as unknown as typeof useUiStore)
-  act(() => {
-    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
-    useWorkspacesStore.setState({ activeWorkspaceId: null })
-  })
+  resetSharedState('sess-1')
+  installApprovalNetwork()
+  ToolApprovalPanel = await loadApprovalPanel()
 })
 
 function show(...entries: PendingToolApproval[]) {
   act(() => {
     useToolApprovalStore.setState({ queue: entries })
   })
-  render(<ToolApprovalModal />)
+  render(<ToolApprovalPanel />)
 }
 
-describe('ToolApprovalModal — an approval the server no longer holds (404 / 410)', () => {
-  it('404 on Deny: the card goes, is remembered as resolved, and no error toast appears', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(404, 'Not Found'))
+describe('ToolApprovalPanel — an approval the server no longer holds (404 / 410)', () => {
+  it('L1 §1.2 R6: 404 on Deny: the card goes, is remembered as resolved, and no error toast appears', async () => {
+    setApprovalReply({ error: 'Not Found' }, 404)
     show(STUCK)
 
     fireEvent.click(screen.getByRole('button', { name: /^Deny$/ }))
 
     await waitFor(() => expect(queue()).toHaveLength(0))
     expect(resolvedIds()).toContain('appr-stuck')
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(addToast).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('tool-approval-panel')).not.toBeInTheDocument()
+    expect(toasts()).toEqual([])
   })
 
-  it('404 on Approve: the card goes, with a warning that the approval was not applied', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(404, 'Not Found'))
+  it('L1 §1.2 R6: 404 on Approve: the card goes, with a warning that the approval was not applied', async () => {
+    setApprovalReply({ error: 'Not Found' }, 404)
     show(STUCK)
 
     fireEvent.click(screen.getByRole('button', { name: /^Approve Once$/ }))
 
     await waitFor(() => expect(queue()).toHaveLength(0))
     expect(resolvedIds()).toContain('appr-stuck')
-    expect(addToast).toHaveBeenCalledTimes(1)
-    expect(addToast).toHaveBeenCalledWith(
+    expect(toasts()).toHaveLength(1)
+    expect(toasts()).toContainEqual(
       expect.objectContaining({ variant: 'warning', message: expect.stringMatching(/not applied/i) }),
     )
   })
 
-  it('410 on Always Allow: same dismissal and warning as a 404', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(410, 'Gone'))
+  it('L1 §1.2 R6: 410 on Always Allow: same dismissal and warning as a 404', async () => {
+    setApprovalReply({ error: 'Gone' }, 410)
     show(STUCK)
 
     fireEvent.click(screen.getByRole('button', { name: /Always Allow/ }))
 
     await waitFor(() => expect(queue()).toHaveLength(0))
     expect(resolvedIds()).toContain('appr-stuck')
-    expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'warning' }))
+    expect(toasts()).toContainEqual(expect.objectContaining({ variant: 'warning' }))
   })
 
-  it('a successful decision is remembered as resolved, not merely hidden', async () => {
-    vi.mocked(api.submitToolApproval).mockResolvedValue({
+  it('L1 §1.2 R6: a successful decision is remembered as resolved, not merely hidden', async () => {
+    setApprovalReply({
       approval_id: 'appr-stuck',
       action: 'deny',
       status: 'ok',
@@ -117,99 +95,106 @@ describe('ToolApprovalModal — an approval the server no longer holds (404 / 41
     expect(resolvedIds()).toContain('appr-stuck')
   })
 
-  it('a 500 on Approve keeps the card so the decision can be retried', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(500, 'boom'))
+  it('L1 §1.2 R6: a 500 on Approve keeps the card so the decision can be retried', async () => {
+    setApprovalReply({ error: 'boom' }, 500)
     show(STUCK)
 
     fireEvent.click(screen.getByRole('button', { name: /^Approve Once$/ }))
 
-    await waitFor(() => expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' })))
+    await waitFor(() => expect(toasts()).toContainEqual(expect.objectContaining({ variant: 'error' })))
     expect(queue()).toHaveLength(1)
     expect(resolvedIds()).toEqual([])
   })
 })
 
-describe('ToolApprovalModal — Close and Cancel always dismiss locally', () => {
-  it('the X close button dismisses even when the deny request fails', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(500, 'boom'))
+describe('ToolApprovalPanel — explicit decisions, not dialog dismissal (amendment R6)', () => {
+  // Binding: "resolves only through POST ... Escape does not resolve". There
+  // is no dialog X; explicit Deny still goes through the same failure path.
+  it('L1 §1.2 R6: no modal X; failed explicit Deny remains unconfirmed with a visible error', async () => {
+    setApprovalReply({ error: 'boom' }, 500)
     show(STUCK)
-
-    fireEvent.click(screen.getByRole('button', { name: /close/i }))
-
-    await waitFor(() => expect(api.submitToolApproval).toHaveBeenCalledWith('appr-stuck', 'deny'))
-    expect(queue()).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: /close/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Deny$/ }))
+    await waitFor(() => expect(approvalPosts()).toEqual([{ id: 'appr-stuck', body: { action: 'deny' } }]))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    // The deny did not land, so this is NOT a confirmed resolution: a later
-    // snapshot may legitimately bring the still-pending approval back.
-    await waitFor(() => expect(addToast).toHaveBeenCalled())
+    await waitFor(() => expect(toasts()).toContainEqual(expect.objectContaining({ variant: 'error' })))
+    expect(queue()).toHaveLength(1)
     expect(resolvedIds()).toEqual([])
   })
 
-  it('Escape dismisses even when the network is down', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(0, 'Network unavailable.'))
+  it('L1 §1.2 R6: Escape never sends or dismisses even when the network is down', () => {
+    setApprovalOffline()
     show(STUCK)
-
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape', code: 'Escape' })
-
-    await waitFor(() => expect(api.submitToolApproval).toHaveBeenCalledWith('appr-stuck', 'deny'))
-    expect(queue()).toHaveLength(0)
+    fireEvent.keyDown(screen.getByTestId('tool-approval-panel'), { key: 'Escape', code: 'Escape' })
+    expect(approvalPosts()).toEqual([])
+    expect(queue().map(a => a.approvalId)).toEqual(['appr-stuck'])
+    expect(resolvedIds()).toEqual([])
   })
 
-  it('Cancel dismisses even when the server answers 404', async () => {
-    vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(404, 'Not Found'))
+  it('L1 §1.2 R6: Cancel dismisses even when the server answers 404', async () => {
+    setApprovalReply({ error: 'Not Found' }, 404)
     show(STUCK)
 
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }))
 
-    await waitFor(() => expect(api.submitToolApproval).toHaveBeenCalledWith('appr-stuck', 'cancel'))
+    await waitFor(() => expect(approvalPosts()).toContainEqual({ id: 'appr-stuck', body: { action: 'cancel' } }))
     expect(queue()).toHaveLength(0)
     await waitFor(() => expect(resolvedIds()).toContain('appr-stuck'))
   })
 })
 
-describe('ToolApprovalModal — workspace scope', () => {
-  it('does not show an approval from another workspace, but keeps it queued', () => {
+describe('ToolApprovalPanel — owning-chat scope (amendment §1.2 R6 / BDD-11.3)', () => {
+  // Binding quote: "chat whose session id equals root_session_id (or
+  // session_id when ... omitted)"; active workspace alone never grants scope.
+  it('L1 §1.2 R6: another chat remains hidden but queued, even in the same workspace', () => {
     act(() => {
-      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-b' })
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' })
+      useSessionStore.setState({ activeSessionId: 'another-chat' })
     })
     show({ ...STUCK, workspaceId: 'ws-a' })
-
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('tool-approval-panel')).not.toBeInTheDocument()
     expect(queue()).toHaveLength(1)
   })
 
-  it('shows it once its own workspace becomes active', () => {
+  it('L1 §1.2 R6: shows it when its owning chat opens regardless of active workspace', () => {
     act(() => {
       useWorkspacesStore.setState({ activeWorkspaceId: 'ws-b' })
+      useSessionStore.setState({ activeSessionId: 'another-chat' })
     })
     show({ ...STUCK, workspaceId: 'ws-a' })
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-
-    act(() => {
-      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' })
-    })
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-approval-panel')).not.toBeInTheDocument()
+    act(() => useSessionStore.setState({ activeSessionId: 'sess-1' }))
+    expect(screen.getByTestId('tool-approval-panel')).toBeInTheDocument()
+    expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('ws-b')
   })
 
-  it('shows an approval that belongs to no workspace in any workspace', () => {
+  it('L1 §1.2 R6: no workspace is not global chat scope; omitted root uses the acting session', () => {
     act(() => {
       useWorkspacesStore.setState({ activeWorkspaceId: 'ws-b' })
+      useSessionStore.setState({ activeSessionId: 'another-chat' })
     })
     show(STUCK)
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-approval-panel')).not.toBeInTheDocument()
+    act(() => useSessionStore.setState({ activeSessionId: 'sess-1' }))
+    expect(screen.getByTestId('tool-approval-panel')).toBeInTheDocument()
+    expect(queue()).toHaveLength(1)
   })
 
-  it('shows the in-scope approval first and counts only in-scope approvals', () => {
-    act(() => {
-      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' })
-    })
+  it('L1 §1.2 R6: shows the front owning-chat approval and counts only that chat’s queue', () => {
+    act(() => useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' }))
     show(
-      { ...STUCK, approvalId: 'appr-other-ws', workspaceId: 'ws-b', toolName: 'bash', args: { command: 'ls' } },
-      { ...STUCK, approvalId: 'appr-here-1', workspaceId: 'ws-a' },
+      { ...STUCK, approvalId: 'appr-other-chat', sessionId: 'other-chat', workspaceId: 'ws-a', toolName: 'bash', args: { command: 'ls' } },
+      { ...STUCK, approvalId: 'appr-here-1', workspaceId: 'ws-b' },
       { ...STUCK, approvalId: 'appr-here-2', workspaceId: 'ws-a' },
     )
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByTestId('tool-approval-panel')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Deny$/ })).toBeInTheDocument()
     expect(document.getElementById('tool-approval-title-appr-here-1')).not.toBeNull()
     expect(screen.getByText('+1 more')).toBeInTheDocument()
+    expect(screen.queryByText('ls')).not.toBeInTheDocument()
+    expect(queue()).toHaveLength(3)
   })
 })
+
+// Real stores/QueryClient/auth survive the test boundary; only fetch/socket doubled.
+afterEach(async () => { await cleanupApprovalState() })

@@ -292,15 +292,16 @@ async function openTeamPanel(page: import('@playwright/test').Page, wsId: string
   }
   await expect(teamToggle).toHaveAttribute('aria-pressed', 'true');
   const team = await expectWorkspacePanel(page, wsId, 'team');
-  await expect(team.getByTestId('team-add-agent')).toBeVisible({ timeout: 20_000 });
+  await expect(team.getByTestId('team-add-agent-menu')).toBeVisible({ timeout: 20_000 });
 }
 
-/** Click "Add agent" in the visible Team panel; returns the popover locator. */
+/** Open Add agent → Add an existing agent; return the actual picker popover. */
 async function openAddAgentPicker(page: import('@playwright/test').Page, wsId: string) {
   const team = await expectWorkspacePanel(page, wsId, 'team');
-  const addAgent = team.getByTestId('team-add-agent');
+  const addAgent = team.getByTestId('team-add-agent-menu');
   await expect(addAgent).toBeVisible({ timeout: 20_000 });
   await addAgent.click();
+  await page.getByRole('menuitem', { name: 'Add an existing agent', exact: true }).click();
 
   const popover = page.locator('[data-radix-popper-content-wrapper]').last();
   await expect(popover).toBeVisible({ timeout: 10_000 });
@@ -320,10 +321,10 @@ test('UAT-47 (a) the add-agent control discloses the live-login grant before any
   // and is exactly why the text has to be IN the picker.
   await openTeamPanel(page, wsId);
   await expectWorkspacePanel(page, wsId, 'team');
-  await expect(page.getByTestId('team-add-agent')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('team-add-agent-menu')).toBeVisible({ timeout: 20_000 });
 
   const popover = await openAddAgentPicker(page, wsId);
-  const disclosure = popover.getByText(/this workspace/i).first();
+  const disclosure = popover.getByTestId('team-add-agent-disclosure').getByText(/this workspace/i).first();
   await expect(
     disclosure,
     'no disclosure at all in the add-agent picker (UAT-47 silent failure #3)',
@@ -355,7 +356,7 @@ test('UAT-47 (b) the disclosure is plain text in the picker, not a tooltip and n
   await openTeamPanel(page, wsId);
   const popover = await openAddAgentPicker(page, wsId);
 
-  const disclosure = popover.getByText(/act as whoever|acts as whoever/i).first();
+  const disclosure = popover.getByTestId('team-add-agent-disclosure').getByText(/act as whoever|acts as whoever/i).first();
   await expect(disclosure).toBeVisible({ timeout: 10_000 });
 
   // Silent failure #1, second half + the tooltip failure. A tooltip is rendered
@@ -394,7 +395,7 @@ const SCREENS: ReadonlyArray<{ name: string; path: string; expect: RegExp }> = [
   { name: 'Connectors', path: '/#/connectors', expect: /Connect Telegram, Discord, Slack/i },
   { name: 'Library', path: '/#/library', expect: /items/i },
   { name: 'Profile', path: '/#/profile', expect: /Your personal preferences/i },
-  { name: 'Settings', path: '/#/settings', expect: /Configure providers, integrations/i },
+  { name: 'Settings', path: '/#/settings', expect: /Configure providers, system agents, integrations/i },
 ];
 
 /**

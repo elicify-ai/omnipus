@@ -1,3 +1,5 @@
+// WU-10 US-1 AS-4 / ADR OSA-1.3: reserved Omnipus is hidden; use Ray for
+// the ordinary-Main fixtures and retain all missing-main/Retry assertions.
 // The sidebar roster renders core_team membership (founder bug 2026-10-11).
 //
 // Roster-level oracles live in workspaceRoster.coreTeam.test.ts; this file
@@ -52,9 +54,9 @@ function makeProject(overrides: Partial<Workspace> = {}): Workspace {
   }
 }
 
-const MAIN_ID = 'main-omnipus'
+const MAIN_ID = 'main-ray'
 
-const omnipus = makeAgent({ id: 'omnipus', name: 'Omnipus', type: 'Main' })
+const omnipus = makeAgent({ id: 'ray', name: 'Ray', type: 'Main' })
 
 function mainSession(agentId: string, needsAttention = false): Session {
   return {
@@ -90,7 +92,7 @@ function renderList(project: Workspace, agents: Agent[], sessions: Session[]) {
 
 describe('sidebar roster shows core_team members (founder bug 2026-10-11)', () => {
   it('a core_team Main without a member_configs entry surfaces "Main chat unavailable" with Retry', () => {
-    renderList(makeProject({ core_team: ['omnipus'], member_configs: {} }), [omnipus], [])
+    renderList(makeProject({ core_team: ['ray'], member_configs: {} }), [omnipus], [])
 
     expect(screen.getByRole('status', { name: 'Main chat unavailable' })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Retry' }).length).toBeGreaterThanOrEqual(1)
@@ -99,17 +101,17 @@ describe('sidebar roster shows core_team members (founder bug 2026-10-11)', () =
   it('once the member_configs entry with a main id arrives the row renders and the note is gone', () => {
     renderList(
       makeProject({
-        core_team: ['omnipus'],
-        member_configs: { omnipus: { main_session_id: MAIN_ID } },
+        core_team: ['ray'],
+        member_configs: { ray: { main_session_id: MAIN_ID } },
       }),
       [omnipus],
-      [mainSession('omnipus')],
+      [mainSession('ray')],
     )
 
     // Exact name: the row's two sibling icon buttons ("Past sessions with
     // Omnipus" / "New chat with Omnipus") would otherwise match a /Omnipus/
     // regex and throw on multiple matches.
-    expect(screen.getByRole('button', { name: 'Omnipus' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ray' })).toBeInTheDocument()
     expect(screen.queryByRole('status', { name: 'Main chat unavailable' })).toBeNull()
   })
 

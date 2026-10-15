@@ -20,6 +20,7 @@ import { Route as AppAutomationsRouteImport } from './routes/_app/automations'
 import { Route as AppBrowserLiveRouteImport } from './routes/_app/browser-live'
 import { Route as AppConnectorsRouteImport } from './routes/_app/connectors'
 import { Route as AppLibraryRouteImport } from './routes/_app/library'
+import { Route as AppOmnipusRouteImport } from './routes/_app/omnipus'
 import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
 import { Route as AppProfileRouteImport } from './routes/_app/profile'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
@@ -43,6 +44,7 @@ import { Route as AppWorkspacesWorkspaceIdMailRouteImport } from './routes/_app/
 import { Route as AppWorkspacesWorkspaceIdMediaRouteImport } from './routes/_app/workspaces.$workspaceId.media'
 import { Route as AppWorkspacesWorkspaceIdSettingsRouteImport } from './routes/_app/workspaces.$workspaceId.settings'
 import { Route as AppWorkspacesWorkspaceIdTeamRouteImport } from './routes/_app/workspaces.$workspaceId.team'
+import { Route as AppWorkspacesWorkspaceIdRoomsRoomIdRouteImport } from './routes/_app/workspaces.$workspaceId.rooms.$roomId'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -95,6 +97,11 @@ const AppConnectorsRoute = AppConnectorsRouteImport.update({
 const AppLibraryRoute = AppLibraryRouteImport.update({
   id: '/library',
   path: '/library',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppOmnipusRoute = AppOmnipusRouteImport.update({
+  id: '/omnipus',
+  path: '/omnipus',
   getParentRoute: () => AppRoute,
 } as any)
 const AppPoliciesRoute = AppPoliciesRouteImport.update({
@@ -223,6 +230,12 @@ const AppWorkspacesWorkspaceIdTeamRoute =
     path: '/team',
     getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
   } as any)
+const AppWorkspacesWorkspaceIdRoomsRoomIdRoute =
+  AppWorkspacesWorkspaceIdRoomsRoomIdRouteImport.update({
+    id: '/rooms/$roomId',
+    path: '/rooms/$roomId',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -234,6 +247,7 @@ export interface FileRoutesByFullPath {
   '/browser-live': typeof AppBrowserLiveRoute
   '/connectors': typeof AppConnectorsRoute
   '/library': typeof AppLibraryRoute
+  '/omnipus': typeof AppOmnipusRoute
   '/policies': typeof AppPoliciesRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
@@ -257,6 +271,7 @@ export interface FileRoutesByFullPath {
   '/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
   '/workspaces/$workspaceId/': typeof AppWorkspacesWorkspaceIdIndexRoute
+  '/workspaces/$workspaceId/rooms/$roomId': typeof AppWorkspacesWorkspaceIdRoomsRoomIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
@@ -267,6 +282,7 @@ export interface FileRoutesByTo {
   '/browser-live': typeof AppBrowserLiveRoute
   '/connectors': typeof AppConnectorsRoute
   '/library': typeof AppLibraryRoute
+  '/omnipus': typeof AppOmnipusRoute
   '/policies': typeof AppPoliciesRoute
   '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
@@ -289,6 +305,7 @@ export interface FileRoutesByTo {
   '/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdIndexRoute
+  '/workspaces/$workspaceId/rooms/$roomId': typeof AppWorkspacesWorkspaceIdRoomsRoomIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -302,6 +319,7 @@ export interface FileRoutesById {
   '/_app/browser-live': typeof AppBrowserLiveRoute
   '/_app/connectors': typeof AppConnectorsRoute
   '/_app/library': typeof AppLibraryRoute
+  '/_app/omnipus': typeof AppOmnipusRoute
   '/_app/policies': typeof AppPoliciesRoute
   '/_app/profile': typeof AppProfileRoute
   '/_app/settings': typeof AppSettingsRoute
@@ -326,6 +344,7 @@ export interface FileRoutesById {
   '/_app/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/_app/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
   '/_app/workspaces/$workspaceId/': typeof AppWorkspacesWorkspaceIdIndexRoute
+  '/_app/workspaces/$workspaceId/rooms/$roomId': typeof AppWorkspacesWorkspaceIdRoomsRoomIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -339,6 +358,7 @@ export interface FileRouteTypes {
     | '/browser-live'
     | '/connectors'
     | '/library'
+    | '/omnipus'
     | '/policies'
     | '/profile'
     | '/settings'
@@ -362,6 +382,7 @@ export interface FileRouteTypes {
     | '/workspaces/$workspaceId/settings'
     | '/workspaces/$workspaceId/team'
     | '/workspaces/$workspaceId/'
+    | '/workspaces/$workspaceId/rooms/$roomId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -372,6 +393,7 @@ export interface FileRouteTypes {
     | '/browser-live'
     | '/connectors'
     | '/library'
+    | '/omnipus'
     | '/policies'
     | '/profile'
     | '/settings'
@@ -394,6 +416,7 @@ export interface FileRouteTypes {
     | '/workspaces/$workspaceId/settings'
     | '/workspaces/$workspaceId/team'
     | '/workspaces/$workspaceId'
+    | '/workspaces/$workspaceId/rooms/$roomId'
   id:
     | '__root__'
     | '/_app'
@@ -406,6 +429,7 @@ export interface FileRouteTypes {
     | '/_app/browser-live'
     | '/_app/connectors'
     | '/_app/library'
+    | '/_app/omnipus'
     | '/_app/policies'
     | '/_app/profile'
     | '/_app/settings'
@@ -430,6 +454,7 @@ export interface FileRouteTypes {
     | '/_app/workspaces/$workspaceId/settings'
     | '/_app/workspaces/$workspaceId/team'
     | '/_app/workspaces/$workspaceId/'
+    | '/_app/workspaces/$workspaceId/rooms/$roomId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -517,6 +542,13 @@ declare module '@tanstack/react-router' {
       path: '/library'
       fullPath: '/library'
       preLoaderRoute: typeof AppLibraryRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/omnipus': {
+      id: '/_app/omnipus'
+      path: '/omnipus'
+      fullPath: '/omnipus'
+      preLoaderRoute: typeof AppOmnipusRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/policies': {
@@ -680,6 +712,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWorkspacesWorkspaceIdTeamRouteImport
       parentRoute: typeof AppWorkspacesWorkspaceIdRoute
     }
+    '/_app/workspaces/$workspaceId/rooms/$roomId': {
+      id: '/_app/workspaces/$workspaceId/rooms/$roomId'
+      path: '/rooms/$roomId'
+      fullPath: '/workspaces/$workspaceId/rooms/$roomId'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdRoomsRoomIdRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
   }
 }
 
@@ -708,6 +747,7 @@ interface AppWorkspacesWorkspaceIdRouteChildren {
   AppWorkspacesWorkspaceIdSettingsRoute: typeof AppWorkspacesWorkspaceIdSettingsRoute
   AppWorkspacesWorkspaceIdTeamRoute: typeof AppWorkspacesWorkspaceIdTeamRoute
   AppWorkspacesWorkspaceIdIndexRoute: typeof AppWorkspacesWorkspaceIdIndexRoute
+  AppWorkspacesWorkspaceIdRoomsRoomIdRoute: typeof AppWorkspacesWorkspaceIdRoomsRoomIdRoute
 }
 
 const AppWorkspacesWorkspaceIdRouteChildren: AppWorkspacesWorkspaceIdRouteChildren =
@@ -724,6 +764,8 @@ const AppWorkspacesWorkspaceIdRouteChildren: AppWorkspacesWorkspaceIdRouteChildr
       AppWorkspacesWorkspaceIdSettingsRoute,
     AppWorkspacesWorkspaceIdTeamRoute: AppWorkspacesWorkspaceIdTeamRoute,
     AppWorkspacesWorkspaceIdIndexRoute: AppWorkspacesWorkspaceIdIndexRoute,
+    AppWorkspacesWorkspaceIdRoomsRoomIdRoute:
+      AppWorkspacesWorkspaceIdRoomsRoomIdRoute,
   }
 
 const AppWorkspacesWorkspaceIdRouteWithChildren =
@@ -737,6 +779,7 @@ interface AppRouteChildren {
   AppBrowserLiveRoute: typeof AppBrowserLiveRoute
   AppConnectorsRoute: typeof AppConnectorsRoute
   AppLibraryRoute: typeof AppLibraryRoute
+  AppOmnipusRoute: typeof AppOmnipusRoute
   AppPoliciesRoute: typeof AppPoliciesRoute
   AppProfileRoute: typeof AppProfileRoute
   AppSettingsRoute: typeof AppSettingsRoute
@@ -756,6 +799,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppBrowserLiveRoute: AppBrowserLiveRoute,
   AppConnectorsRoute: AppConnectorsRoute,
   AppLibraryRoute: AppLibraryRoute,
+  AppOmnipusRoute: AppOmnipusRoute,
   AppPoliciesRoute: AppPoliciesRoute,
   AppProfileRoute: AppProfileRoute,
   AppSettingsRoute: AppSettingsRoute,

@@ -182,7 +182,7 @@ export function BashOutputBlock({
   // structured failure now renders through its dedicated display instead of
   // `String(result)`'s "[object Object]". Counts and bodies derive only from
   // `text` kinds (the JSON fallback's text is never counted as content).
-  const resolved = resolveToolResult(result)
+  const resolved = resolveToolResult(result, error)
   const output = resolved.kind === 'text' || resolved.kind === 'json' ? resolved.text : ''
 
   // Flat text-line redesign (ticket "Tool components in chat", P2): no

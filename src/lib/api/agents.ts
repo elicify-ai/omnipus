@@ -22,6 +22,7 @@ import type {
   RunnerTestResponse,
 } from '@/lib/api/generated/openapi-types'
 import { request } from './http'
+import { partitionAgentRows, reportInvalidAgentRows } from './agentRows'
 import { requestConfiguration } from './configuration'
 // invalidateAfterAgentCreate invalidates the workspaces LIST keys next to
 // ['agents'] — sibling module, no cycle (workspaces.ts imports neither
@@ -113,8 +114,14 @@ export function buildTaskAssigneeItems(
     }))
 }
 
-export function fetchAgents(): Promise<Agent[]> {
-  return request<Agent[]>('/agents', undefined, z.array(AgentSchema) as ZodType<Agent[]>)
+// GitHub #1076: the list is an array checked as a whole, but each row is
+// validated on its own (agentRows.ts) — one invalid agent is dropped and named,
+// the healthy rows stay usable. A payload that is not an array still fails.
+export async function fetchAgents(): Promise<Agent[]> {
+  const rows = await request<unknown[]>('/agents', undefined, z.array(z.unknown()) as ZodType<unknown[]>)
+  const { agents, invalid } = partitionAgentRows(rows)
+  if (invalid.length > 0) reportInvalidAgentRows(invalid)
+  return agents
 }
 
 export function fetchAgent(id: string): Promise<Agent> {
@@ -147,7 +154,7 @@ export function createAgent(data: AgentCreateRequest): Promise<Agent> {
 // registered queries under TanStack's partial matching — every real list
 // query is registered as {status:'active'} / {status:'archived'} (the same
 // no-op-invalidate pitfall documented in WorkspaceTeamTab.tsx and
-// WorkspaceSettingsTab.tsx; see also useWorkspaceSetupKickoff.ts).
+// WorkspaceSettingsTab.tsx).
 //
 // Callers own the client (useQueryClient() in components, the singleton in
 // the WS frame path); fire-and-forget, returns void.

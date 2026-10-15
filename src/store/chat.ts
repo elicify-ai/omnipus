@@ -13,6 +13,7 @@ import {
 } from '@/store/session'
 
 import { registerSyncChatForeground } from '@/store/session'
+import { registerOmnipusWorkflowSender } from '@/store/omnipusChat'
 
 // Register callbacks with the session store to break circular imports.
 registerChatSetReplaying((value) => useChatStore.getState().setReplaying(value))
@@ -20,6 +21,10 @@ registerChatSetReplaying((value) => useChatStore.getState().setReplaying(value))
 registerChatResetForReplay((sessionId) => useChatStore.getState().resetSessionForReplay(sessionId))
 
 registerSyncChatForeground(syncChatForeground)
+
+// omnipus-system-agent K8: the Omnipus entry's workflow-start message goes
+// out through the ordinary send (src/store/omnipusChat.ts).
+registerOmnipusWorkflowSender((content, workflowStart) => useChatStore.getState().sendMessage(content, { workflowStart }))
 
 registerIsSessionReplaying((sessionId) => useChatStore.getState().sessionsById[sessionId]?.isReplaying === true)
 

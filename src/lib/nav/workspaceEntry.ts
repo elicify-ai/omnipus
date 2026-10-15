@@ -1,12 +1,18 @@
 /**
- * Workspace entry (FR-004, BDD-02).
+ * Workspace entry (omnipus-system-agent FR-107, BDD-12.11, dataset D4;
+ * session-core FR-004).
  *
- * A visible remembered chat wins. Anything else opens Ava's validated main,
- * or unavailable / Retry with send off. A transport failure keeps the
- * committed chat and does not fall back. Entry never acknowledges.
+ * A visible remembered chat wins. Otherwise the main of the first
+ * conversation agent in the team's order (Omnipus excluded — FR-004), or,
+ * when the team has no conversation agent, the empty state with "Set up a
+ * team" (send off). A first agent whose main does not resolve is unavailable
+ * / Retry — never a silent fallback to the next agent. A transport failure
+ * (sessions, workspace or agents not loaded) keeps the committed chat and
+ * does not fall back. Entry never acknowledges.
  */
-import type { Session, WorkspaceMemberConfig } from '@/lib/api'
+import type { Agent, Session, WorkspaceMemberConfig } from '@/lib/api'
 import type { WorkspaceEntryView } from '@/store/session/workspaceEntryFlow'
+import { isConversationAgent } from '@/lib/omnipus'
 import { mainSessionIdOfMember } from './sessionCoreSeam'
 
 /** A loading or failed target is not a committed send destination (FR-004). */
@@ -34,13 +40,20 @@ export type PointerVerdict =
   | 'server-error'
   | 'absent'
 
+/** The loaded team: membership order, member configs and the agents to classify them. */
+export type EntryTeam = { // not-wire-format: the workspace team as loaded by the SPA for the entry decision; never sent to the gateway
+  coreTeam: readonly string[]
+  memberConfigs: Readonly<Record<string, WorkspaceMemberConfig>>
+  agents: readonly Pick<Agent, 'id' | 'type'>[]
+}
+
 export type EntryInput = { // not-wire-format: arguments to the in-browser workspace-entry decision, assembled from SPA state; never sent to the gateway
   workspaceId: string
   entryKind: EntryKind
   rememberedSessionId: string | null | undefined
   pointerVerdict: PointerVerdict
   sessions: Session[]
-  avaMember: WorkspaceMemberConfig
+  team: EntryTeam
   committed: { sessionId: string; agentId: string } | null
 }
 
@@ -52,12 +65,20 @@ export type ExactEntry = { // not-wire-format: client entry outcome for a visibl
   acknowledged: false
 }
 
-export type WelcomeEntry = { // not-wire-format: client entry outcome that opens Ava's validated main chat; drives SPA routing only, never a wire body
+export type WelcomeEntry = { // not-wire-format: client entry outcome that opens the first conversation agent's validated main; drives SPA routing only, never a wire body
   status: 'welcome'
   sessionId: string
-  agentId: 'ava'
+  agentId: string
   sendEnabled: true
   acknowledged: false
+}
+
+export type EmptyTeamEntry = { // not-wire-format: client entry outcome for a team with no conversation agent; drives the "Set up a team" empty state, never a wire body
+  status: 'empty-team'
+  sessionId: null
+  sendEnabled: false
+  acknowledged: false
+  setupOffer: true
 }
 
 export type UnavailableEntry = { // not-wire-format: client entry outcome when no main id is available; drives the SPA unavailable state and keeps send off
@@ -77,7 +98,7 @@ export type FailedAttempt = { // not-wire-format: client entry outcome that keep
   fellBack: false
 }
 
-export type EntryResult = ExactEntry | WelcomeEntry | UnavailableEntry | FailedAttempt
+export type EntryResult = ExactEntry | WelcomeEntry | EmptyTeamEntry | UnavailableEntry | FailedAttempt
 
 // 'partial-list' rides here as a fail-safe: an unresolved partial-list verdict
 // must never reach the welcome path (that would overwrite a pointer the entry
@@ -95,8 +116,22 @@ function validatedMainId(member: WorkspaceMemberConfig): string | undefined {
   return id
 }
 
-function welcomeOrUnavailable(avaMember: WorkspaceMemberConfig): WelcomeEntry | UnavailableEntry {
-  const sessionId = validatedMainId(avaMember)
+/** The first conversation agent in team order, Omnipus and workers excluded (FR-107). */
+export function firstConversationAgentId(team: EntryTeam): string | undefined {
+  const byId = new Map(team.agents.map((agent) => [agent.id, agent]))
+  for (const id of team.coreTeam) {
+    const agent = byId.get(id)
+    if (agent && isConversationAgent(agent)) return id
+  }
+  return undefined
+}
+
+function teamEntry(team: EntryTeam): WelcomeEntry | EmptyTeamEntry | UnavailableEntry {
+  const agentId = firstConversationAgentId(team)
+  if (agentId === undefined) {
+    return { status: 'empty-team', sessionId: null, sendEnabled: false, acknowledged: false, setupOffer: true }
+  }
+  const sessionId = validatedMainId(team.memberConfigs[agentId] ?? {})
   if (sessionId === undefined) {
     return {
       status: 'unavailable',
@@ -109,7 +144,7 @@ function welcomeOrUnavailable(avaMember: WorkspaceMemberConfig): WelcomeEntry | 
   return {
     status: 'welcome',
     sessionId,
-    agentId: 'ava',
+    agentId,
     sendEnabled: true,
     acknowledged: false,
   }
@@ -139,5 +174,5 @@ export function resolveWorkspaceEntry(input: EntryInput): EntryResult {
     }
   }
 
-  return welcomeOrUnavailable(input.avaMember)
+  return teamEntry(input.team)
 }

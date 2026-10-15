@@ -12,15 +12,6 @@ import { adminMainSessionIdOfWorkspace } from '@/lib/nav/sessionCoreSeam'
 /** Built-in Admin. Rendered only from the default workspace's admin_main_session_id, never via membership. */
 export const ADMIN_AGENT_ID = 'admin'
 
-/**
- * Built-in Omnipus (omnipus-system-agent FR-005): exactly ONE conversation —
- * its main chat in the default workspace. Any request to mint a second one is
- * refused server-side (REST 409 / WS error frame) with that main's id, so the
- * SPA never offers Omnipus a new chat: an extra-chat confirm routes to the
- * existing main instead.
- */
-export const OMNIPUS_AGENT_ID = 'omnipus'
-
 export type RosterState = 'fresh' | 'failed-no-cache' | 'failed-stale-cache'
 
 export type WorkspaceMains = {

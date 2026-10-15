@@ -106,7 +106,6 @@ function sendFirst(sender: ReturnType<typeof connectGapSender>) {
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: exact original session-less request')
     .toStrictEqual([ORIGINAL_FRAME])
   expect(useSessionStore.getState().activeSessionId, 'fixture: no acknowledgement yet').toBe('__pending')
-  expect(useChatStore.getState().pendingKickoff, 'fixture: ordinary first send, not a setup kickoff').toBeNull()
   expect(users(), 'fixture: original bubble is visible').toStrictEqual([{ id: OLD_ID, content: OLD_CONTENT }])
   expect(useChatStore.getState().pendingFirstSend?.payload, 'fixture: original recovery request is retained')
     .toStrictEqual(ORIGINAL_FRAME)

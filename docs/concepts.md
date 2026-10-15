@@ -6,7 +6,7 @@ Omnipus is a team of AI agents that runs on your own machine. This page introduc
 
 Everything in Omnipus hangs together in one shape:
 
-- All your work lives in a **workspace**. Chats, tasks, the calendar, files, and the team of agents belong to it.
+- **Workspaces** keep related chats, tasks, calendar entries, files and agent teams together; ordinary conversations can also exist without a workspace.
 - **Agents** do the work. Three chat colleagues ship built in, alongside workers and internal engine agents. You can create your own agents too.
 - Agents act through **tools**: reading and writing files, searching the web, running commands.
 - Work takes three shapes: **tasks**, **plans**, and **goals**.
@@ -31,7 +31,7 @@ Read this page once before [getting started](getting-started.md), so the words a
 
 ## The workspace
 
-A workspace is the container your work happens in. Every chat, task, plan, file, and calendar entry belongs to exactly one workspace, and each workspace keeps its own team of agents and its own memory. On a fresh install you start with one workspace, named My Workspace, with Mia, Jim, Omnipus, Planner, Researcher and General Purpose already on the team (Omnipus belongs to this default workspace only). The same agent can sit on several workspaces, so you can split work by client or by topic without doubling up. See [workspaces](workspaces.md).
+A workspace keeps related work together, with its own team and memory. Workspace chats belong to that workspace; ordinary named-agent conversations without an associated workspace can also exist as unfiled sessions. Omnipus is different: its one main chat belongs to the default workspace only. On a fresh install you start with one workspace, named My Workspace, with Mia, Jim, Omnipus, Planner, Researcher and General Purpose already on the team (Omnipus belongs to this default workspace only). The same agent can sit on several workspaces, so you can split work by client or by topic without doubling up. See [workspaces](workspaces.md).
 
 ## The agents
 
@@ -41,7 +41,7 @@ Agents are who does the work. Three chat colleagues ship with Omnipus. There is 
 |---|---|---|
 | Mia | Assistant | You want an everyday starting point. She answers and connects you with the right specialist. |
 | Jim | Planner and Orchestrator | A job has many steps. He breaks it into tasks, hands them out, and tracks them to done. |
-| Omnipus | System agent | You want to set up or change agents, teams, skills, connectors, providers or channels. It shows you one summary and asks before it changes anything. |
+| Omnipus | System agent | You want to set up or change agents, teams, skills, connectors, providers or channels. It is instructed to show one plan summary and ask Go / Change / Cancel outside God Mode. In God Mode, it shows the summary as a message and skips approval questions and global tool-policy prompts. |
 
 You can also create your own agents, in three kinds. A **Main** agent is a chat colleague. A **Subagent** is a worker that other agents hand work to. An **external worker** runs on a command-line agent tool you already have. Workers never chat with you. See [agents](agents.md).
 

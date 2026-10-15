@@ -1,6 +1,6 @@
 // types.ts: Chat, attachment, subagent-span, rate-limit, and per-session state contracts
 
-import type { Message, ToolCall, AgentKind } from '@/lib/api'
+import type { Message, ToolCall } from '@/lib/api'
 import type { WsConnection } from '@/lib/ws'
 import type {
   GoalStatusFrame,
@@ -12,6 +12,7 @@ import type {
   CancelFrame,
   ServerFrame,
   LLMError as GeneratedLLMError,
+  WorkflowStart,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 import type { UserDeliveryState } from '@/lib/userDeliveryState'
@@ -178,7 +179,7 @@ export type ChatMessage = Message & {
   isStreaming?: boolean
   /** Original wire identity, independent of a replay-rekeyed display id. */
   clientMessageId?: string
-  /** Ordinary first-send status only; workspace kickoffs never use it. */
+  /** Ordinary first-send status only. */
   firstSendStatus?: FirstSendStatus
   /**
    * SPA-only acknowledgement state for a user-authored message. Ruling
@@ -1043,7 +1044,7 @@ export interface ChatStore {
    * it directly if needed.
    */
   pendingDrainQueue: OutboundQueueItem[]
-  /** Ordinary first message, distinct from the synthetic workspace kickoff. */
+  /** The ordinary first message of a new chat. */
   pendingFirstSend: PendingFirstSend | null
   /** IDs abandoned in this tab, so late replies cannot affect a newer chat. */
   abandonedFirstSendIds: string[]
@@ -1065,7 +1066,12 @@ export interface ChatStore {
   //   forwards it as `metadata.model_name` in the WS message frame. The
   //   server honors it when present and falls back to the agent's `model`
   //   config when absent.
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; clientMessageId?: string; queuedAt?: string }) => void
+  /**
+   * `workflowStart` (omnipus-system-agent K8, FR-012): target data a screen
+   * button attaches to its message into Omnipus's main (W1 create an agent,
+   * W18 set up a team, for a named workspace). Never an instruction.
+   */
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; clientMessageId?: string; queuedAt?: string; workflowStart?: WorkflowStart }) => void
   /**
    * Review finding 17 — "Try again" on a failed user message used to call
    * `sendMessage(content)` with a brand-new id, which left the FAILED
@@ -1088,130 +1094,6 @@ export interface ChatStore {
   retryClearTranscript: (sessionId: string) => void
   /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. `sessionId` (the sending session, or the pending-bucket key when no session exists yet) is threaded through into the production telemetry record for operator correlation. */
   _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => void
-  /**
-   * Auto-triggers Ava's (or whichever agent leads the workspace's
-   * core_team) workspace-setup interview the first time a freshly-created
-   * workspace (server-seeded `setup_pending: true`) is opened with no
-   * conversation yet. Reuses `sendMessage`'s no-active-session ("new turn")
-   * wire mechanics — pending `'__pending'` placeholder bucket,
-   * `_validateOutboundFrame`, `isStreaming`, rollback-on-send-failure — MINUS
-   * any user-visible bubble: the backend records this turn's kickoff frame
-   * as a SYSTEM-role transcript entry (centered pill on replay), not a user
-   * message, so rendering an optimistic user bubble here would show text the
-   * user never typed. No `session_id` is sent — the server mints one and
-   * acks with `session_started`, same as any other first message.
-   *
-   * Sets the active agent (mirrors `AgentPicker`'s auto-select:
-   * `setActiveSession` with the resolved agent's id+type) so the
-   * composer/thread header show the agent immediately, without depending on
-   * `AgentPicker`'s own effect having already run.
-   *
-   * Bails silently (returns `false`, no toast) when offline, mid-stream, or
-   * a conversation already exists (`activeSessionId !== null`) — this must
-   * never fire over an existing chat. Returns `true` once the frame is
-   * handed to `connection.send` successfully. The caller (
-   * `useWorkspaceSetupKickoff`) uses the return value to decide whether to
-   * optimistically clear `setup_pending` in the workspaces query cache.
-   */
-  sendWorkspaceSetupKickoff: (opts: {
-    workspaceId: string
-    workspaceName: string
-    agentId: string
-    agentType: AgentKind | null
-  }) => boolean
-  /**
-   * Kickoff pending-session hardening: the workspace id of the
-   * ONE in-flight `sendWorkspaceSetupKickoff` call, or `null` when no
-   * kickoff is outstanding. Set the moment a kickoff frame is handed to
-   * `connection.send` successfully; cleared on whichever terminal outcome
-   * resolves it first:
-   *   - `session_started` — the kickoff succeeded (see that frame handler,
-   *     which also uses the recorded workspaceId to decide whether the ack
-   *     is still for the workspace the user is currently on, AND whether
-   *     the '__pending' placeholder is still the local foreground turn at
-   *     all — the plausibility gate).
-   *   - a rejecting, UNTAGGED `error` frame (a kickoff turn never
-   *     gets a real session_id, so any tagged error can never be a kickoff
-   *     reject) — regardless of whether `activeSessionId` is still
-   *     `'__pending'` at the time (the reject-after-navigation
-   *     fall-through covers the case where the user already moved on
-   *     locally).
-   *   - a hard WS disconnect — `clearStreamingState` tears this down
-   *     via `abandonPendingKickoff` the instant the connection drops, since
-   *     no ack can ever arrive on a dead connection.
-   *   - a failed `connection.send()` inside `sendWorkspaceSetupKickoff`
-   *     itself (the full-rollback branch).
-   *
-   * Also doubles as a single-slot in-flight guard: `sendWorkspaceSetupKickoff`
-   * bails while this is non-null, since a second kickoff would collide with
-   * the first on the shared `'__pending'` bucket key before either resolves.
-   * `sendMessage`'s own no-active-session branch respects the same guard
-   * — it enqueues instead of building a second
-   * `'__pending'` bucket while this is non-null.
-   */
-  pendingKickoff: { workspaceId: string } | null
-  /**
-   * Honest retry: per-workspace kickoff-attempt guard, keyed by
-   * workspace id. This is `useWorkspaceSetupKickoff`'s OWN send-time "have I
-   * already fired for this workspace" bookkeeping — moved out of a
-   * component-local `useRef` (which, once a kickoff terminally failed, had
-   * NO path back to "retry": failure just left the ref permanently claimed)
-   * and into the store so it can also be corrected by chat.ts's own async
-   * WS-frame handlers (`session_started` / `error` / a hard disconnect),
-   * which are the only code that ever learns of an ASYNC kickoff outcome —
-   * the hook itself only ever observes the synchronous accept/reject of the
-   * initial `connection.send()` call.
-   *   'in-flight' — a kickoff was sent for this workspace and hasn't
-   *                 resolved yet; blocks a second concurrent fire for the
-   *                 SAME workspace id.
-   *   'failed'    — the kickoff terminally failed (server reject, a hard
-   *                 disconnect, or a synchronous send failure). Does NOT
-   *                 block a future fire — the hook's own effect reacts to
-   *                 this transition by invalidating the workspaces query so
-   *                 server truth (which restores `setup_pending:true` on a
-   *                 genuine failure, per the kickoff contract — a DUPLICATE
-   *                 rejection is the exception: the flag is already
-   *                 correctly `false` from the earlier, actually-successful
-   *                 attempt) replaces the hook's own premature optimistic
-   *                 `false` write. The next natural re-render (once the
-   *                 invalidated query refetches a fresh `Workspace` object)
-   *                 decides honestly whether to retry via the ordinary
-   *                 `setup_pending` check — the DUPLICATE case naturally
-   *                 stops there since the refetch reports `false`.
-   * No entry means "never attempted, or already resolved 'done'" — free to
-   * fire.
-   */
-  kickoffAttemptStatus: Record<string, 'in-flight' | 'failed'>
-  /**
-   * Claim the per-workspace kickoff-attempt slot. Called by
-   * `useWorkspaceSetupKickoff` immediately BEFORE invoking
-   * `sendWorkspaceSetupKickoff`, mirroring the old ref's "claim before send"
-   * ordering — a synchronous re-render triggered by the send itself must
-   * not re-enter the hook's effect body and fire a second frame.
-   */
-  markKickoffInFlight: (workspaceId: string) => void
-  /**
-   * Resolve a workspace's kickoff-attempt slot. `'done'` deletes the
-   * entry (success, or any other case that no longer needs tracking);
-   * `'failed'` marks it so `useWorkspaceSetupKickoff`'s invalidate-on-failure
-   * effect fires.
-   */
-  resolveKickoffAttempt: (workspaceId: string, outcome: 'done' | 'failed') => void
-  /**
-   * Kickoff pending-session hardening: full, quiet teardown of an
-   * outstanding workspace-setup kickoff — clears `pendingKickoff`, drops the
-   * orphaned `'__pending'` bucket (if present), and marks the workspace's
-   * `kickoffAttemptStatus` as `'failed'`. No-op when no kickoff is
-   * outstanding. Used by `clearStreamingState` (a hard disconnect means no
-   * ack for any in-flight kickoff can ever arrive on the dead connection)
-   * and by `OmnipusRuntimeProvider.reattachActiveSession` (a reconnect
-   * mid-kickoff must not send a protocol-violating `attach_session
-   * {session_id: '__pending'}`). Deliberately does NOT touch
-   * `activeSessionId` or show a toast — those are the caller's own,
-   * context-specific responsibility (a disconnect vs. a reconnect want
-   * different visible behavior).
-   */
-  abandonPendingKickoff: () => void
   /**
    * Cancels the target session's in-flight turn (sends the `cancel` WS frame
    * and marks its last assistant message interrupted). `sessionId` optionally

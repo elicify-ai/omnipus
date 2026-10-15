@@ -394,6 +394,10 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 			delegationSeedNote = seededEdgesSummary(seeded, w.CoreTeam)
 		}
 	}
+	var mainChatWarning string
+	if len(w.CoreTeam) > 0 {
+		mainChatWarning = provisionMemberMains(t.deps, "create_workspace", w.ID)
+	}
 	resp := map[string]any{
 		"id": w.ID, "name": w.Name, "description": w.Description,
 		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
@@ -403,7 +407,36 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	if delegationSeedNote != "" {
 		resp["delegation_seeded"] = delegationSeedNote
 	}
+	if mainChatWarning != "" {
+		resp["main_chat_warning"] = mainChatWarning
+	}
 	return tools.NewToolResult(successJSON(resp))
+}
+
+// provisionMemberMains gives every eligible member of workspaceID's team its
+// main chat after a workspace tool changed the team (omnipus-system-agent
+// FR-002; the same provisioning a REST workspace save and create_agent run,
+// final-gate H2). The sidebar lists a member only when its member_configs
+// entry carries main_session_id, which is advertised only for a main that
+// already exists, so without this a member added through these tools stayed
+// invisible and its chat "unavailable" (L1 hands-on finding, 2026-10-14).
+//
+// The membership change itself has already been saved, so a provisioning
+// failure does not undo it: it is logged at ERROR and returned as a warning
+// for the tool result, so the agent tells the user instead of the member
+// silently missing from the sidebar. The main is re-attempted when the chat
+// is opened. Returns "" on success or when provisioning is not wired.
+func provisionMemberMains(deps *Deps, toolName, workspaceID string) string {
+	if deps == nil || deps.EnsureWorkspaceMains == nil {
+		return ""
+	}
+	if err := deps.EnsureWorkspaceMains(workspaceID); err != nil {
+		slog.Error("sysagent: "+toolName+": a member's main chat was not created; it is re-attempted when the chat is opened",
+			"workspace_id", workspaceID, "error", err)
+		return "The team was saved, but a member's main chat could not be prepared: " + err.Error() +
+			". It is retried when that chat is opened."
+	}
+	return ""
 }
 
 // ---- system.workspace.update ----
@@ -670,12 +703,26 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 			return workspaceMutationError(id, "save_delegation", "partial", actual.Revision, workspaceChangedFields(state.Workspace, actual.Workspace), workspaceActualState(actual))
 		}
 	}
-	tc := computeWorkspaceTaskCount(t.deps.Home, id)
+	return t.updateWorkspaceResult(w, coreTeamChanged, delegationSeedNote, setupCompletedNote)
+}
+
+// updateWorkspaceResult is update_workspace's success result for the saved
+// record w. After a team change it first provisions the members' mains
+// (provisionMemberMains), reporting a provisioning failure as
+// main_chat_warning.
+func (t *WorkspaceUpdateTool) updateWorkspaceResult(w workspacepkg.Workspace, coreTeamChanged bool, delegationSeedNote, setupCompletedNote string) *tools.ToolResult {
+	var mainChatWarning string
+	if coreTeamChanged {
+		mainChatWarning = provisionMemberMains(t.deps, "update_workspace", w.ID)
+	}
 	resp := map[string]any{
 		"id": w.ID, "name": w.Name, "description": w.Description,
 		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
 		"core_team":  w.CoreTeam,
-		"task_count": tc, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
+		"task_count": computeWorkspaceTaskCount(t.deps.Home, w.ID), "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
+	}
+	if mainChatWarning != "" {
+		resp["main_chat_warning"] = mainChatWarning
 	}
 	if delegationSeedNote != "" {
 		resp["delegation_seeded"] = delegationSeedNote
