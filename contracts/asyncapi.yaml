@@ -5436,8 +5436,8 @@ components:
           maxLength: 255
           description: >
             L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
-            session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat
-            whose session id equals this value renders the inline approval.
+            session's chain (ParentSessionID walk, 16 hops, cycle guard). Identifies
+            the related root chat without prescribing the approval's UI placement.
             Omitted when equal to session_id.
         acting_agent_name:
           type: string
@@ -5497,10 +5497,9 @@ components:
           minLength: 1
           maxLength: 128
           description: >
-            Workspace the requesting session belongs to (resolved server-side
-            from session meta, walking up to the delegating parent). The SPA
-            shows the approval only while that workspace is active. Omitted
-            when the session belongs to no workspace (shown everywhere).
+            Workspace attribution for the requesting session, resolved server-side
+            from session metadata or its delegating parent when a delegated child
+            has none. Omitted when the session belongs to no workspace.
         segments:
           type: array
           items:

@@ -1521,7 +1521,7 @@ type ToolApprovalRequiredFrame struct {
 	OriginLabel *string `json:"origin_label,omitempty"`
 	// Spec K7, FR-251. Present on a room's pre-admission approval card (request id = delivery id).
 	RoomRef *RoomRef `json:"room_ref,omitempty"`
-	// L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat whose session id equals this value renders the inline approval. Omitted when equal to session_id.
+	// L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting session's chain (ParentSessionID walk, 16 hops, cycle guard). Identifies the related root chat without prescribing the approval's UI placement. Omitted when equal to session_id.
 	RootSessionId *string `json:"root_session_id,omitempty"`
 	// ADR-092 D3/D4 per-segment breakdown of a bash approval. Present on every tool_approval_required whose tool_name is "bash" and whose args carry a non-empty command string, built with the bash tool's own segment splitter and program resolution. A single, unchained command still has exactly one entry so the SPA has one rendering path. Absent for every other tool. Offer the "prefix" scope only when a segment's prefix_available is true.
 	Segments   []CommandSegmentInfo `json:"segments,omitempty"`
@@ -1530,7 +1530,7 @@ type ToolApprovalRequiredFrame struct {
 	ToolName   string               `json:"tool_name"`
 	TurnId     string               `json:"turn_id"`
 	Type       string               `json:"type"`
-	// Workspace the requesting session belongs to (resolved server-side from session meta, walking up to the delegating parent). The SPA shows the approval only while that workspace is active. Omitted when the session belongs to no workspace (shown everywhere).
+	// Workspace attribution for the requesting session, resolved server-side from session metadata or its delegating parent when a delegated child has none. Omitted when the session belongs to no workspace.
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
