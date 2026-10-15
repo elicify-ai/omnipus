@@ -1,7 +1,9 @@
 # Feature Specification: Agent scheduled tasks and Suspend / Resume
 
 **Created**: 2026-10-15 (UTC)
-**Status**: Draft — first specification grill pending; Q1/Q2 resolved by founder interview, 2026-10-15.
+**Status**: Draft — specification grill round 1 corrected, 2026-10-15; round 2 still required. Q1/Q2 and FQ-1 A are settled (Source: Interview, 2026-10-15). No implementation readiness or review PASS claimed.
+**Correction, 2026-10-15:** said persisting task/goal before notification was a complete publication safeguard; wrong because recovery enumerates final task files independently; correct is goal-first preparation and complete-task publication last (§5.1.1). The same correction round completes authority/continuation ownership, Clear, REST preconditions/activation, request-wide limits, audit and hand-off requirements below.
+**Correction (source self-check):** said task → goal locking in the initial fix draft, wrong because the goal-store contract mandates goalLock → taskFileLock → sessionLock → cacheMu; correct is goal → task coordinated creation/cleanup below. This was corrected before commit; no production code ran.
 **Author**: architect, acting as specification author.
 **Input**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/internal/design/sched-tasks-suspend-resume-design-20261015.md`, committed at `3b9c4b4ab65e6f4680bf2248ba3145406a51374b`.
 **Runtime baseline**: `feat/sched-tasks-20261015` at that commit. This document specifies future behaviour; it does not claim implementation, executed tests, UAT or a review PASS.
@@ -39,8 +41,30 @@ Priority labels below rank acceptance/safety within this feature; the dispatch s
 |---|---|---|
 | **Q1 B** | **No rollout or migration — greenfield rule.** | Existing workers with no `schedule_task` override stay on the reconciled global **Ask**. Only **new** workers receive explicit Deny at creation, including fresh built-in worker seeds. Preserve every existing entity/operator value. No worker backfill, rollout marker or runtime role-based fallback. |
 | **Q2 YES** (original option B) | **The Omnipus system agent may schedule.** | Add only `schedule_task` to L1's `omnipusSupportedTools`. Omnipus has **no per-agent Ask entry** and rides global **Ask**, with **AutoAsks**. Ordinary local-workspace/ownership/delegation checks still apply. No implicit `list_tasks` / `run_task` expansion is authorized. |
+| **FQ-1 A** (fix-round steer) | **Keep original task creator/assigner authority, including human origin.** | Source: Interview, 2026-10-15, relayed during this correction. Set/Resume checks scheduling permission now; later removal does not stop the schedule. No new standing-authority state. AUTH-1 defines the exact existing-carrier/retry split; FR-036 adds the required preview/card and public-doc notice. The provisional alternative is discarded. |
 
 Q1 preserves **Two-layer tool-policy model: the reconciled global ceiling IS the default; remove the fail-closed per-agent backfill** without an exception. Q2 is an explicit founder-authorized addition to the supporting set in **The Omnipus system agent: one technical partner, workflows as skills, a narrow ask list and a secure secret field**; it is not authority for other task-tool grants or foreign scheduling. There is no remaining Q1/Q2 confirmation gate. [S14, S15, S24]
+
+### 1.2 Round-1 correction authority and ADR applicability
+
+The correction input is `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/internal/specs/sched-tasks-suspend-resume-spec-review.md`::MAJ-001–MAJ-007 / MIN-001–MIN-002 / OBS-001, reviewed at `08af07b45a8b558a5915ea53a5545f1d72572470`. During this correction the squad-lead relayed **FQ-1 A — Source: Interview, 2026-10-15**: future fires retain the task's original creator/assigner authority, including human origin; the scheduling agent's Ask permission is checked at Set/Resume, and removing that scheduling permission later does **not** stop the schedule. The earlier instruction to draft a provisional alternative is superseded and discarded. AUTH-1 is the sole detailed authority rule; no extra standing-authority state is authorized. [S25]
+
+**ADR applicability ruling:** **no new ADR** is required for this feature hand-off now that D1–D6, Q1/Q2 and FQ-1 A are settled by the founder. These corrections reuse the existing task creator/assigner authority, task/trigger owner, additive run history and two-layer policy model; they do not select a second scheduler, execution model or policy system. The governing decisions are **RRULE (RFC 5545) as the Recurrence Model for Task Triggers**, **Per-Task Run History (an additive execution-record layer)**, **Two-layer tool-policy model: the reconciled global ceiling IS the default; remove the fail-closed per-agent backfill**, and **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**. Superseded passages remain qualified in §15. The founder interview leaves no architectural choice open to commission an ADR for; do not manufacture one for resolved choices. Any later genuinely open significant choice goes back to team-lead/founder and the architect's prescribed one-grill/one-correction ADR process, not a silent implementation assumption. This is specification correction round 1, not an extra grill. [S14, S21, S22, S25]
+
+### 1.3 Round-1 finding dispositions — corrections, not a review PASS
+
+| Finding | Spec correction / discriminating acceptance |
+|---|---|
+| MAJ-001 | AUTH-1 implements founder FQ-1 A with existing task authority, no new standing state; explicit retries cannot overwrite it. FR-014/036, BDD-25/55/63, T22/T24 and preview/docs acceptance. |
+| MAJ-002 | §5.1.1 goal-first/complete-task-last publication, canonical goal→task locking, orphan cleanup and crash/discovery cut points. FR-001, BDD-07/56, T16/T18. |
+| MAJ-003 | §5.1 positive admitted-continuation predicate/receipt, later queue pickup after capacity refusal and never-admitted twin; preserve named current-graph/budget regression. FR-009/014, BDD-57, T20/T28. |
+| MAJ-004 | Locked Clear sends idle unadmitted Next/blocked work to Inbox; actual later drain/unblock stays inert, admitted work preserved. FR-002, BDD-58, T17. |
+| MAJ-005 | §5.5 required conditional trigger PATCH / locked compare / exact 400 and 409; both views keep drafts for read/review/reapply. FR-031/033, BDD-59, T11/T26/T31. |
+| MAJ-006 | Shared Task.schedule activation state in 200 mutation and GET read-back; saved-unavailable versus exhausted and both-controls recovery. FR-028/033, BDD-44/60, T10/T26/T31. |
+| MAJ-007 | §5.6 request-wide series/work/item/encoded-byte maxima and whole-query refusal, selected-series recovery. FR-025, BDD-61, T09/T27 and DS-4 exact-cap/+1 cases. |
+| MIN-001 | §5.3.1 existing semantic audit with actor/transition/outcome, no-op and sink-failure behaviour, no instruction ledger. FR-035, BDD-62, T36. |
+| MIN-002 | §1.2 explicit no-new-ADR ruling after founder answer, §5.0 contract inventory before mechanisms, §6.5 named catalogue-first dependencies. Document integrity checks these sections; no visual redesign. |
+| OBS-001 | Adopted: T35 is thin browser wiring only. Full lower-level policy matrix and every mandatory UAT-07/UAT-08 journey remain. |
 
 ## 2. User stories and acceptance criteria
 
@@ -55,7 +79,7 @@ A person asks a conversation agent for a weekly report or a one-time reminder. T
 | Acceptance scenario | Given / When / Then |
 |---|---|
 | US-1.AC1 | **Given** an eligible local agent and complete work instructions, **When** it schedules a one-time or repeating task, **Then** one task and its judged completion contract are saved, initially Inbox, with the approved timing and no immediate run. |
-| US-1.AC2 | **Given** an owned task, **When** its schedule is set, replaced or cleared, **Then** the requested timing changes without changing task identity or deleting history; clearing does not start the work. |
+| US-1.AC2 | **Given** an owned task, **When** its schedule is set, replaced or cleared, **Then** timing changes without changing task identity/history; Clear returns not-yet-admitted ready/dependency-waiting work to Inbox so later queue drains or dependency completion cannot start it, while admitted work keeps its own continuation. |
 | US-1.AC3 | **Given** a supported repeat pattern, **When** an agent proposes it, **Then** its occurrences match the Calendar's interpretation, including time zone, month end, daylight-saving changes and end condition. |
 | US-1.AC4 | **Given** invalid input or failed storage/scheduler dependencies, **When** scheduling is attempted, **Then** the caller receives the actual refusal or saved-but-unavailable outcome, never false activation or an instruction to create a duplicate. |
 
@@ -82,7 +106,7 @@ An agent discovers one scheduling capability with an explicit policy. New worker
 |---|---|
 | US-3.AC1 | **Given** a properly wired installation, **When** an agent searches for scheduling, **Then** eligible conversation agents, including Omnipus, can discover and invoke it under the effective policy; new-worker Deny, existing-worker inherited Ask and unattended Ask behaviour are enforced. |
 | US-3.AC2 | **Given** an operator's saved settings and the confirmed Q1 B/Q2 YES decisions, **When** defaults are seeded or the installation upgrades, **Then** explicit choices survive, existing workers are not migrated/backfilled, only new workers get default Deny, and Omnipus inherits the global scheduling policy without a per-agent Ask entry. |
-| US-3.AC3 | **Given** a local task and a known caller, **When** scheduling or explicit execution is authorized, **Then** real creator/assignee ownership and current delegation authority apply, including after approval. |
+| US-3.AC3 | **Given** a local task and a known caller, **When** scheduling or explicit execution is authorized, **Then** real creator/assignee ownership and current delegation authority apply, including after approval; future commitments follow AUTH-1 independently of admitted-attempt authority, and enabled auditing records the actual actor/transition/outcome without copying task instructions. |
 | US-3.AC4 | **Given** an unresolved caller, unrelated task or foreign/inaccessible destination, **When** mutation is attempted, **Then** it refuses before any task, goal, run or session change and explains the local-delivery boundary. |
 
 ### US-4 — Approve the exact future commitment, including after reconnect (P0)
@@ -93,7 +117,7 @@ The person sees which agent wants to change which task, what the previous and pr
 
 | Acceptance scenario | Given / When / Then |
 |---|---|
-| US-4.AC1 | **Given** a proposal needing approval, **When** its card appears, **Then** all five actions have readable task/agent/workspace/timing details and warnings; creation exposes its complete instructions and completion contract. |
+| US-4.AC1 | **Given** a proposal needing approval, **When** its card appears, **Then** all five actions have readable identity/timing/consequence details; creation exposes its whole instructions/completion contract; create/set/resume plainly disclose original task authority and that later removal of the scheduling agent's permission does not cancel the schedule. |
 | US-4.AC2 | **Given** a prepared proposal or remembered exact-call grant, **When** it proceeds, **Then** defaults stay fixed, changed targets/schedules do not reuse an earlier grant, and changed authority or approved state refuses before writing. |
 | US-4.AC3 | **Given** an outstanding approval, **When** the browser reconnects or reloads, **Then** the original complete proposal and remaining decision lifetime return without inventing new scheduling details. |
 | US-4.AC4 | **Given** Deny, Cancel, expiry or unusable preview information, **When** that condition is reached, **Then** no scheduling mutation occurs; invalid previews cannot be approved and the person receives recovery guidance. |
@@ -186,9 +210,11 @@ The system must not add skip/move-one-occurrence operations, event-versus-series
 | Repeat input | Frequencies minute/hour/day/week/month/year; integer interval 1–99; weekly 1–7 unique valid weekdays; monthly day 1–31 or ordinal 1–5 / last; count 1–100,000. Missing required, null, wrong-type, fractional, contradictory and unknown inputs refuse. |
 | Time input | One-time absolute date/time includes an explicit offset. New recurrence requires a starting instant and named time zone. Existing-series edits keep the stored zone; another zone refuses. |
 | Shared recurrence validation | At least 60 seconds between allowed fires, rule representation at most 512 characters, an occurrence within five years of its anchor, and valid end/zone. Suspension never bypasses validity. |
-| Occurrence query | Start inclusive/end exclusive; start precedes end; range at most 400 × 24 hours. At most 500 raw instants per task, 10,000 irregular-position iterations per task; at most 8 × 24 hours uses detail mode; broader ranges group days with more than three positions. |
+| Occurrence query | Start inclusive/end exclusive; start precedes end; range at most 400 × 24 hours. At most 500 raw instants / 10,000 irregular iterations per task; at most 8 × 24 hours uses detail mode; broader ranges group days with more than three positions. Request-wide maxima: 100 authorized candidate series, 100,000 work units, 10,000 output items and 1,048,576 encoded UTF-8 JSON bytes. Exceeding any maximum refuses the whole query, never a successful partial calendar (§5.6). |
 | Agent lists/history | Task rows at most 100, newest-updated first; upcoming preview at most three positions. Run page default 20, maximum 100, nonnegative integer offset; disclose total matched, returned, truncation and next offset. |
-| Suspend/Resume HTTP | 200 for a valid change/no-op; 400 for malformed ID or any request body; 404 absent task; 409 manual/no schedule or heartbeat; 500 storage failure. Existing authentication/authorization applies unchanged. |
+| Suspend/Resume HTTP | 200 Task with required-on-these-responses `schedule` state for a saved change/no-op, **including** saved-but-unavailable activation; 400 malformed ID/body; 404 absent task; 409 manual/no schedule or heartbeat; 500 storage failure before commit. Existing authentication/authorization applies unchanged. `schedule.scheduler_state=exhausted` is successful no-future-fire, not activation failure (§5.5). |
+| Conditional trigger PATCH | `expected_schedule_hash` is required with any supplied trigger, forbidden without it. Missing/malformed precondition: 400 ErrorResponse, `code=schedule_precondition_required`, `field=expected_schedule_hash`. Mismatch under the task lock: 409 ErrorResponse, `code=schedule_conflict`, `field=trigger`; no part of that PATCH commits. Exact messages and read/review/reapply flow: §5.5/§6.2. |
+| Aggregate occurrence refusal | REST 400 ErrorResponse, `code=occurrence_query_budget_exceeded`, `field=range`, error text “Occurrence query exceeds the request budget. Narrow task_id or the date range.” Tool uses the existing error result with the same text. No returned sets, continuation token or success-shaped partial result (§5.6). |
 | Read/explicit-run errors | A failed history read is an error, not zero runs. A future occurrence request is refused. Agent/tool refusals use the existing error/permission/delegation families, not a new failure discriminator. |
 | UI truth | No success badge before server confirmation; duplicate pending activation disabled; zero raw rule/cron strings in scheduling controls or approvals; recorded-run status has precedence over availability. |
 | Runtime envelope | Existing standalone application on Linux/macOS/Windows; no new runtime dependency or service. Preserve the root security-feature overhead ceiling of less than 10 MB beyond baseline; do not claim it measured until implementation evidence exists. |
@@ -204,7 +230,7 @@ The requested Go pattern index `/Users/danielpiatkowski/AI-Agent-Workspace/omnip
 | Existing pattern | Reuse / adaptation | Evidence |
 |---|---|---|
 | Per-task striped locking and atomic file publication | Preserve current storage; extend the same mutation/admission discipline for suspension. | [S2, S3] |
-| Paired task-goal create and cleanup | Persist complete scheduled creation before any notification; reuse cleanup on goal-write failure. | [S6] |
+| Paired task-goal create and cleanup | Reuse validation, normalized criterion identities and goal ownership, **not** the current task-first publication ordering. Preallocate/validate task identity, write its defining goal first, then publish the complete scheduled task last; orphan-goal cleanup cannot make incomplete work discoverable (§5.1.1). | [S6, S26] |
 | Server-owned occurrence expansion | Share it between REST, tools and scheduler; do not add client-side occurrence calculation. | [S3, S8, S9] |
 | Per-tool readable approval registry | Add a schedule preview, backed by a server-frozen generated contract rather than model prose. | [S10–S12] |
 | L1 role seed and custom-worker restriction | Extend new-worker creation data, not existing entities or the resolver; Q1 B forbids a worker upgrade rollout. | [S14, S15] |
@@ -249,6 +275,19 @@ Functional areas are task persistence, agent execution, tools/policy, gateway/co
 
 This section and subsequent technical sections are outside the behavioural-phase guardrail. Proposed schema/test/package names below are **planned**, not claims that those artifacts exist. Backend-lead alone edits and regenerates contracts; this spec author changes neither contracts nor production code. [S1, S16, S22]
 
+### 5.0 Contract inventory — before mechanism design
+
+Backend-lead defines/regenerates these named OpenAPI/AsyncAPI components **before Go/TypeScript consumers**. Exact shapes and statuses are in §5.5, not delegated to frontend implementation. All paths here are API routes, not filesystem paths. [S16, S22, S28]
+
+| Boundary | Contract inventory / change |
+|---|---|
+| Existing task CRUD/read-back | TaskTrigger response flag; new TaskTriggerInput request; TaskUpdateRequest.expected_schedule_hash; read-only Task.schedule using TaskScheduleState, including activation/warnings and the opaque baseline. Task remains the response entity. |
+| Narrow state controls | POST `/tasks/{id}/trigger/suspend` and `/tasks/{id}/trigger/resume`: 200 Task with schedule state, including saved-but-unavailable; existing generated ErrorResponse for explicit 4xx/5xx outcomes. |
+| Agent schedule tool | TaskScheduleInput, ScheduleTaskCreateInput, ScheduleTaskArguments, TaskScheduleState, ScheduleTaskResult; private authority and retry receipts never become writable wire fields. |
+| Reads / resource refusal | TaskOccurrenceSet.suspended; AgentTaskListRow/Result, AgentTaskOccurrencesResult, AgentTaskRunsResult; REST/tool shared aggregate-budget refusal through existing error contracts. |
+| Exact approval / reconnect | TaskScheduleApprovalPreview; optional typed schedule_preview on ToolApprovalRequiredFrame and SessionStatePendingApproval, including shared-schema mirrors. |
+| Existing run paths | Preserve RunNowRequest, TaskRun, DayBucket and existing run/status/frame families. Only the agent run tool gains optional occurrence_ms. |
+
 ### 5.1 One state owner, one admission order
 
 Add optional persisted `Trigger.Suspended bool` with `suspended,omitempty`; absent means false. `Task.status`, `TaskRun.status`, `IsRepeating`, `SeriesRetired`, results, goal state, session ownership and execution mode retain their meanings. Manual + true is invalid. Fully validate a suspended trigger and its assignee. No bulk task rewrite is needed; write the flag on mutation. [S1–S4]
@@ -256,9 +295,9 @@ Add optional persisted `Trigger.Suspended bool` with `suspended,omitempty`; abse
 | Operation | Normative persistence/execution semantics |
 |---|---|
 | Suspend | Only user-surface once/recurring. Set true and disarm derived jobs; invalidate pending old callbacks. Already true is a no-op. |
-| Resume | Set false without moving anchor/rule/zone/status. Recurring next fire is strictly after server now. Once arms only if `at_ms > now`. Already false is a no-op. |
+| Resume | Set false without moving anchor/rule/zone/status; apply AUTH-1. Recurring next fire is strictly after server now; once arms only if `at_ms > now`. Already false with unchanged AUTH-1 commitment is a persistence no-op; reconcile a missing/unavailable derived job on retry, never duplicate an existing valid job. |
 | Set/replace | Preserve suspension under the same task lock, including recurring→once and moving an existing once. Explicit future one-time edits remain eligible even if the last-run mirror is Done/Failed; narrow the terminal-once scheduler exclusion for this deliberate scheduling change, not the status vocabulary. |
-| Clear | Install canonical `{type:"manual",config:{}}` with no suspension; no automatic dispatch merely from clearing. Already manual is a no-op. |
+| Clear | In one locked write install canonical `{type:"manual",config:{}}`, remove suspension/timing but retain creator/assigner authority, and move an idle `next` or `blocked` task **without an admitted continuation** to `inbox`; retain its dependencies. Inbox does not auto-unblock to Next. Other states and valid admitted continuations keep their execution truth. Already manual is a no-op. Reject a combined trigger-clear plus explicit runnable-status PATCH rather than silently enqueueing it. The caller must separately choose Run now or mark Next. |
 | Other writers | Title/assignment/progress/checklist/results/completion/run reset/retry and ordinary trigger replacement cannot implicitly Resume. Assignment still passes current validation. |
 | Run now | Uses ordinary run permission/ownership/dependency/plan/overlap gates. Suspension stays true. It does not move the rule or consume a future planned position. |
 
@@ -266,7 +305,32 @@ Use the existing per-task lock to serialize suspension with the **final automati
 
 A callback must match the **currently tracked job ID and trigger generation**, then pass the conditional locked reset/admission before any task-status mutation, run, session or executor launch. Trigger content hash alone cannot distinguish a callback from before Suspend→Resume when identical content returns. Every arm/re-arm/boot/recovery/upsert re-reads current persisted state; a delayed task snapshot is not authority. Reject stale/suspended callbacks without synthetic skipped records; keep existing real-overlap recording and unreadable-task diagnostics. Persistence is authoritative even if derived job removal/arming fails. Return/report that failure honestly; the persisted admission fence must still prevent forbidden starts. [S1, S4]
 
-Close alternate new-run entries: queue, dependency unblock and follow-up cannot start a timed task merely because its mirror is `next`. Enforce this at the shared **new-run admission** boundary and prefilter the queue. Carry a trusted internal scheduled-fire context from `SpawnTriggeredRun`; neither `occurrence_ms` (nil for once) nor run kind is sufficient proof. Explicit starts and retries within a run already admitted keep their existing paths. Scheduled creation persists the trigger and paired goal before any notification, never creates a dispatchable manual task and patches timing later. [S1, S5, S6]
+Close alternate new-run entries at the shared admission boundary **and** queue prefilter using the same classification below, rechecked under the task lock. `next`, a nil `occurrence_ms` (normal for once), a run kind or an old history row is never admission proof. Scheduled creation uses §5.1.1; never create a dispatchable manual task and patch timing later. [S1, S5, S6, S27]
+
+| Trusted dispatch class | Positive admission rule |
+|---|---|
+| New automatic timed fire | Requires the current job-ID/generation context from `SpawnTriggeredRun`, current persisted trigger and AUTH-1 checks; suspension/staleness refuses before reset/claim. Queue/dependency/follow-up cannot mint this context. |
+| Continuation of admitted attempts | Requires the executor-owned pending-attempt receipt defined below, current matching execution evidence and remaining attempt budget. Queue pickup is **allowed even while suspended or after Clear**; it uses the failed attempt's authority, not the standing commitment. |
+| Explicit new run | Existing user/agent-authorized explicit-run adapter, ordinary plan/dependency/overlap/policy gates. It supersedes any older pending-attempt receipt atomically; it does not change the standing schedule commitment. |
+| Ordinary manual new work | Existing manual queue/plan rules. A timed task without either of the first two proofs refuses; a manual task left Inbox by Clear is not eligible. |
+
+**Admitted-continuation evidence:** extend the existing task envelope with an internal optional `pending_attempt` receipt, written **only by `consumeTaskAttempt` in the same locked update as its Next/blocked transition and attempt increment**, after reading the failed session's lifecycle authority through `retryAuthority`. It binds source session/generation, task/workspace/assignee, attempt index, occurrence key/run kind and attended/unattended posture, plus the captured human-or-agent authority/depth/effective onward budget. These are server-owned continuation facts, never tool/PATCH inputs or public Task fields; no new entity, history ledger or scheduler. Reuse the existing lifecycle record and retry-authority calculation, not a reconstructed creator identity. An additive TaskRun history write may be unavailable and is **not required** as the sole proof of admitted execution. [S27]
+
+Both prefilter and final locked claim validate receipt/task/session/generation/attempt agreement, genuine task-origin lifecycle identity, no winning Stop/supersession and remaining attempts. Re-authorize the captured authority against the current graph through the existing path; do not silently promote missing/unreadable authority to human. Capacity refusal leaves the receipt intact for the later queue; successful retry claim consumes it exactly once. A subsequent failed admitted attempt may mint its next receipt. Stop, explicit fresh restart, final completion/exhaustion or changed captured assignment invalidates the old receipt visibly; concurrent queue/direct pickups cannot consume it twice. Unrelated schedule/authority edits do not rewrite it. No legacy receipt is inferred from mirror status/count/nil occurrence alone: unreadable or unprovable continuation gets a visible refusal and explicit Run-now recovery. Preserve ordinary manual retry behaviour and the named existing queue-pickup regression in §9.3. [S5, S27]
+
+### 5.1.1 Scheduled creation publication — goal first, complete task last
+
+**Invariant:** no task discoverable/admissible by direct lookup, queue, notification, boot reconciliation or recovery may be an incompletely created scheduled task. Notification timing is not the fence. For **both** agent scheduled-create and REST timed-create, preallocate a fresh validated task ID, normalize/default/validate the full task and completion contract once (preserving criterion IDs and agent attribution), and construct its paired **defining**, not active, goal before publishing anything schedulable. [S6, S26]
+
+| Cut point under canonical goal → task creation locks | Discovery / failure / restart outcome |
+|---|---|
+| Before goal publication | No final task or goal exists; validation failure writes neither. |
+| Goal published; final task absent | Only an unreferenced defining goal may exist. Every task discovery/admission path sees no task; goal-only recovery must not start work or manufacture its missing owner. |
+| Atomic final-task publication | Publish the fully normalized Inbox task **with trigger, paired-goal identity/criteria agreement and AUTH-1 commitment already complete**. This final task-file publication is the sole eligibility cut point, not a callback. |
+| After final task publication, before notification/registration | Creation is complete. Boot/recovery may discover it and arm according to persisted state; the response/recovery reports saved identity and activation separately. |
+| Failure before final-task publication, including failed rollback | Remove the orphan task-owned goal using existing goal cleanup. Cleanup failure is reported with allocated identity, never hidden; there is still no discoverable task to arm. Extend existing boot/recovery cleanup for task-owned orphan defining goals under the same canonical goal → task locks as creation, so it cannot race an in-progress create. Do not remove a goal whose owner task exists. |
+
+Factor validation/preparation from current `Store.Create`/`CreateByAgent` so goal and task share **the same** normalized criterion IDs; do not call a task-first publishing helper and hope to delete it later or introduce a second task store/transaction service. The existing goal-store contract fixes goalLock → taskFileLock → sessionLock → cacheMu; the top-of-document correction records why the initial inverse draft was discarded. Preallocate the goal ID as well as task ID and expose a narrow goal-store coordinated, lock-held operation for goal-first write plus final task publication. Creation and orphan cleanup acquire **goal lock → task lock**, with internal non-reentrant operations (never call a public lock-taking Create/Delete under its own lock); cleanup checks owner absence under those locks before deleting. No session/cache/scheduler lock is needed in this publication section. Release all before notification, launch or audit. The lock-observer regression must prove this order; a race-detector green alone cannot. [S26] If an I/O result is ambiguous around final publication, inspect the final task and paired goal: complete publication is saved (activation may be unavailable); inability to establish it is an error/unknown outcome naming the reserved ID, never blind-create retry or deletion of the goal for a visible task. Crash/restart tests must inspect real stores at **every** cut point, including failed cleanup, recovery while creation is held, and successful post-publication recovery without notification. [S3, S6, S26]
 
 COUNT counts planned positions, including suspended elapsed ones. UNTIL retains its original instant. Resume never back-fills, starts an already elapsed once, resets count or extends the end. Actual rule/time/end edits retain Calendar's existing re-anchor/count-restart semantics; suspension changes alone never do. Exhaustion is a successful saved state with no future fire, not a failed Resume. [S1, S3, S9]
 
@@ -299,11 +363,32 @@ Compiler parity is normative: weekly BYDAY; month days 29–31 use the existing 
 
 Generated `ScheduleTaskResult` contains `task_id`, `workspace_id`, `agent_id`, task `status`, canonical `trigger`, `schedule_text`, opaque `schedule_hash`, at most three `next_occurrences_ms`, nullable `next_fire_ms`, `persistence:"saved"`, `scheduler_state:"armed|disarmed|exhausted|unavailable"`, `warnings[]`. Planned positions may remain while suspended; **next fire is null** for suspended/manual/expired/exhausted/unavailable state. Arrays are arrays, including empty arrays. [S1]
 
-`schedule_hash` binds canonical trigger (including suspension), assignee and workspace; consumers treat it as opaque, not authority and not a client-computed token. Distinguish it from the scheduler's job identity/generation admission fence. Storage failure is an error. If storage succeeded but activation failed, return the saved identity, unavailable state and explicit warning; do not claim scheduling success or suggest duplicate creation. The coordinator must return an observable activation outcome: today's void notification is not proof of arming. [S1, S4]
+`schedule_hash` binds canonical trigger (including suspension), assignee, workspace and the standing-commitment identity defined by AUTH-1; consumers treat it as opaque, not authority and not a client-computed token. It excludes derived activation/warnings/read times so read-back and registration retries cannot manufacture conflicts. Distinguish it from job identity/generation. Storage failure before commit is an error; ambiguous publication follows §5.1.1. If storage succeeded but activation failed, return saved identity, unavailable state and warning, not false scheduling success or duplicate-create advice. The coordinator must return an observable activation outcome: today's void notification is not proof of arming. All reads and HTTP mutations use the same state definition in §5.5. [S1, S4, S28]
 
 ### 5.3 Authority and exact approval
 
-Resolve the real current/default workspace through the existing task-workspace path. Refuse foreign create/arm/mutation before writes; guide the caller to delivery-only `create_task` and local receiving-team scheduling. Existing-task ownership is **assignee OR nonempty agent-namespaced `CreatedByAgent`**, never mixed human/agent `Owner` or `CreatedBy`. Re-authorize arming against the current assignee/workspace delegation graph; clear/suspend grant no execution privilege. Run-time delegation removal still prevents the next automatic run. [S1, S5–S7, S21]
+Resolve the real current/default workspace through the existing task-workspace path. Refuse foreign create/arm/mutation before writes; guide the caller to delivery-only `create_task` and local receiving-team scheduling. Existing-task ownership is **assignee OR nonempty agent-namespaced `CreatedByAgent`**, never mixed human/agent `Owner` or `CreatedBy`. Check the mutation caller's current assignee/workspace delegation authority for arming; clear/suspend grant no execution privilege. **Future-fire authority and its revocation follow AUTH-1**, separately from authority captured by an admitted attempt (§5.1). [S1, S5–S7, S21, S25, S27]
+
+#### AUTH-1 — Original task authority — founder FQ-1 A
+
+**Source: Interview, 2026-10-15**, relayed by squad-lead during fix round 1. The founder chose **A**, superseding the provisional alternative. Scheduling retains the task's **existing creator/assigner authority**, including a human start, rather than binding future fires to the agent making Set/Resume. The schedule tool's effective permission and mutation caller's ownership/delegation are checked **when that call executes**, including after approval; revoking that caller's `schedule_task` permission later does **not** revoke the existing schedule. [S25]
+
+Use the existing `Task.Initiator` creator/assigner carrier as the authority for **new timed runs**, with its existing nil=human meaning. No new standing-authority field, principal entity, migration or historical creator reconstruction. Current agent-origin authority is re-authorized against the current assignee/workspace graph with its stored depth/budget through the existing automatic path; unreadable/malformed authority refuses visibly rather than being replaced with nil. A genuinely persisted human origin is not an unknown-agent fallback. Do not change the existing self-exemption/depth model. [S5, S25, S27]
+
+| Operation / case | Required authority behaviour |
+|---|---|
+| Agent scheduled create | Preserve ordinary agent-created task attribution and creator/assigner Initiator. The task is not turned into operator-created work. |
+| Agent Set/Resume on a human-created or different-agent-created task, active or suspended | Check the caller now; preserve the existing task Initiator exactly. Future fires use that original task authority, **not** the scheduling caller. Changing that caller's scheduling permission afterwards leaves the schedule in effect. |
+| Human timed-create / human Set/Resume | Human creation retains normal human authority. Human timing controls on an existing agent-created/assigned task preserve its existing task authority; they do not replace it with a human bypass. |
+| Repeated Set/Resume / another scheduling actor | Equal canonical schedule/state is a persistence no-op regardless of which authorized actor requested it; no authority rebind. Rule-only edits with a newly prepared anchor are still real edits. Already-active Resume can reconcile unavailable activation without changing the anchor/authority. |
+| Authorized assignment change | Keep the existing **assignment** authority transition: a real reassignment uses the current creator/assigner rules and checks; a scheduling-only Set/Resume never impersonates a reassignment. Future fires consult that saved task authority. Active/pending attempts retain captured identity; mismatch before continuation refuses rather than transferring authority. |
+| Suspend/Clear and unrelated writes | Retain task creator/assigner authority; Clear removes timing/suspension, not task provenance. Both preserve already admitted attempt snapshots independently. |
+| Explicit Run now / failure / retry / completion | The run uses its own actual starter/lifecycle snapshot; queued retry uses `pending_attempt` (§5.1). **Never overwrite Task.Initiator with the last explicit runner or failed attempt's authority.** Move the current `consumeTaskAttempt` carry-forward write off that standing carrier and onto its private continuation receipt. |
+| Later permission removal | Removing the **scheduling caller's schedule-tool permission** does not stop automatic fires. Removing the task authority agent's relevant current execution delegation/membership may still refuse its next timed run; ordinary dependency/overlap/end conditions remain. Suspension or removing timing is the deliberate way to stop future automatic starts. |
+
+The opaque schedule hash includes the existing task authority identity so an authorized reassignment can invalidate a pending proposal; timing edits do not create another authority owner. A readable notice is mandatory for **create/set/resume** in the generated preview and registered card (§5.5/§6.4): **“This schedule keeps running under the task's creator/assigner authority until you suspend it or remove the schedule. Removing this agent's scheduling permission later does not stop it.”** Show alongside normal end/exhaustion and execution-gate caveats; this is not a promise to ignore the schedule's end or ordinary authority checks. Do not expose private depth/budget fields. BDD-55/BDD-63 and the public-doc TODOs verify the distinction.
+
+#### Exact preparation and approval
 
 Preparation must run for effective Allow as well as Ask. Resolve caller/target/ownership, canonical before/after schedule and anchor **before every exact-grant lookup, approval request, grant recording and pending transcript write**. Normalize the complete executable proposal into the argument map, including resolved anchor/zone and the pinned existing-task hash. Use that same map everywhere; hidden time-dependent defaults cannot be the basis of an exact grant. Freeze the compiled proposal in call context, including create. Do not hold task locks while awaiting approval. [S1, S10]
 
@@ -312,6 +397,20 @@ After approval, recheck policy, authority and pinned current state under the tas
 The server-authored `TaskScheduleApprovalPreview` carries action, task identity/title (existing ID nullable for create), resolved workspace and assignee, before/after trigger, exact readable schedule text and applicable warnings. Creation additionally carries its **whole** proposed task payload, including instructions, criteria/DoD and every optional field supplied. Bind preview and execution to the same prepared proposal. No model-authored summary is trusted as the commitment. [S1]
 
 Thread the stored typed preview through pending registry/approver adapters, live approval frame, pending transcript representation and reconnect snapshot/store/renderer. For scheduling, a valid reconnect preview is enough to render the exact decision even where the generic reconnect entry lacks tool-call/turn argument detail; it must not remain a deny-only bare-tool stub solely because those generic fields were not supplied. Missing/malformed scheduling preview disables Approve/Always Allow, retains Deny/Dismiss as applicable, and explains how to request a new proposal. Never fetch current task state and pretend it was approved. Preserve existing Cancel, expiry, resolved-ID deduplication, acting-session/audience and grant scope semantics. [S1, S10–S12]
+
+### 5.3.1 Semantic schedule audit — existing logger, no history ledger
+
+When existing auditing is enabled, the shared mutation path emits **one semantic entry per create/set/clear/suspend/resume operation** through the existing audit logger for both tool and REST/UI front doors. Register event names `task.schedule.create`, `task.schedule.set`, `task.schedule.clear`, `task.schedule.suspend`, `task.schedule.resume` in the existing event inventory. Retain generic tool/task auditing; it is not a substitute for this committed-transition record. [S29]
+
+| Audit case | Required metadata / outcome |
+|---|---|
+| Committed mutation | Authenticated actor kind/ID, source tool or REST, task/workspace ID, action, before/after canonical trigger + opaque commitment-bound schedule hashes, `outcome=changed` and observed scheduler_state. Create has null before identity; Clear has canonical manual after identity. Capture authoritative before/after under the mutation lock, emit after release; never re-read a later task as this operation's result. |
+| Matching no-op | Emit `outcome=noop`, equal before/after identities, no duplicate mutation/job/run. Apply AUTH-1's unchanged-task-authority/no-rebind rule; a different authorized scheduling caller alone does not turn a matching-state no-op into a mutation. Activation-only recovery records its actual scheduler_state without inventing a rule edit. |
+| Saved but unavailable | `outcome=saved_unavailable`, real committed identities and unavailable state, never “failed/nothing saved.” |
+| Refused or failed before commit | Existing deny/error decision conventions; `outcome=refused` or `failed`, no invented after-commit identity. Do not read/disclose an unauthorized target just to enrich the audit. |
+| Audit write failure / disabled auditor | Preserve existing best-effort convention: log the audit failure through the existing error path, do not roll back a committed schedule or turn it into a storage-failure response. Disabled auditing remains disabled. Tests must inspect the failure log and committed state, not assert an audit row that could not be written. |
+
+Use existing `Entry` actor/details and redaction conventions. Do not copy title/instructions, criteria/DoD, private initiator budgets or whole task objects into these entries; a trigger/hash transition is sufficient. BDD-62/T36 exercise both real front doors, no-op, refusal/storage/registration failures and an audit-sink write failure. This is not a persisted suspension-history ledger and is not an occurrence-rendering data source. [S29]
 
 ### 5.4 Registration and policy — Reachability prerequisite
 
@@ -352,25 +451,55 @@ All schema names marked new below are proposed under the absolute schema directo
 | Existing or proposed contract | Delta / exact shape |
 |---|---|
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskTrigger.yaml` | Optional read-only boolean `suspended`; no schema default that turns optional TS presence into a required property. Server response mappings emit effective true/false; older compatible responses may omit it. |
-| **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskTriggerInput.yaml` | Request-only `type,config`; no writable suspended. Retarget trigger request refs in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskCreateRequest.yaml` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskUpdateRequest.yaml`. POST initially active; PATCH preserves existing suspension atomically; manual clears. Explicit suspension input refuses even when optional inbound validation is off. |
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/openapi.yaml` | New POST `/tasks/{id}/trigger/suspend` (`suspendTaskTrigger`) and POST `/tasks/{id}/trigger/resume` (`resumeTaskTrigger`), no body; 200 generated Task, 400 malformed ID/body, 404 missing, 409 no time schedule/heartbeat, 500 storage fault, plus existing auth responses. Public prefix remains `/api/v1`; extend task subresource routing, not a new schedule entity. |
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskOccurrenceSet.yaml` | Optional current-state boolean `suspended`; keep planned recurring expansion while suspended, existing arrays/overlays/caps. Correct descriptions that equate projections with currently armed jobs. Once still uses Task trigger time, never a duplicate occurrence set. |
+| **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskTriggerInput.yaml` | Request-only `type,config`; no writable suspended. Retarget trigger refs in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskCreateRequest.yaml` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskUpdateRequest.yaml`. POST initially active through complete-publication create; PATCH preserves suspension atomically; manual applies the locked Clear transition (§5.1). Explicit suspension/private authority/receipt input refuses even with optional inbound validation off. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskUpdateRequest.yaml` | Add optional string `expected_schedule_hash` (nonempty opaque SHA-256 hex token, 64 lowercase hex characters). Server and schema enforce: required whenever `trigger` is present, forbidden when absent; null/wrong-type/invalid-format refuses. Compare against current schedule identity under the **same task lock** before applying any of the PATCH; mismatch writes nothing. Metadata-only saves omit trigger/token. No generic entity-version redesign. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/Task.yaml` | Add optional, read-only `schedule: TaskScheduleState`; new server emits it for every user-surface task (manual included) in task list/detail/create/PATCH/state-POST responses. It supplies both the Calendar baseline hash and fresh activation/read-back state. Old compatible Task responses may omit it; never fabricate a token from the trigger. No persisted activation field and no raw private authority/receipt serialization. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/openapi.yaml` | New POST `/tasks/{id}/trigger/suspend` (`suspendTaskTrigger`) / `/tasks/{id}/trigger/resume` (`resumeTaskTrigger`), no body; 200 generated Task **with schedule state**, including saved-but-unavailable, 400 malformed ID/body, 404 missing, 409 no time schedule/heartbeat, 500 pre-commit storage failure, plus existing auth responses. Extend updateTask's 400/409 descriptions for conditional writes and occurrence GET's budget refusal. Public prefix remains `/api/v1`; existing task routes, no schedule entity. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/ErrorResponse.yaml` | Reuse existing `error,code,field` properties, not a handwritten error envelope. Document exact `schedule_precondition_required`, `schedule_conflict` and `occurrence_query_budget_exceeded` responses below and in endpoint schemas. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskOccurrenceSet.yaml` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/openapi.yaml`::listTaskOccurrences | Optional current-state `suspended`; keep planned recurring expansion, arrays/overlays/per-task caps. Add optional validated `task_id` query parameter to existing occurrence GET (not present at baseline), constrained by the same authorized workspace selection; default remains all selected series. Narrow detail/upcoming reads can then recover within the shared budget without a new endpoint/UI family. Correct descriptions equating projections with armed jobs; once still uses Task time, no duplicate set. |
 | **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskScheduleInput.yaml` | §5.2 structured schedule fields, closed objects; no raw RRULE/cron input. |
 | **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/ScheduleTaskCreateInput.yaml` | §5.2 allowlisted task payload; reuse existing generated criteria/DoD item shapes and validation. No private attribution fields. |
 | **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/ScheduleTaskArguments.yaml` | Action plus optional same-workspace assertion, task/task_id/schedule and existing-task precondition, with the action matrix in §5.2. |
-| **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskScheduleState.yaml` | Canonical trigger, schedule_text, schedule_hash, next_occurrences_ms (0–3), nullable next_fire_ms. It describes planned versus actual firing, not a new persisted entity. If required state cannot be read, report unavailable instead of inventing a next fire. |
+| **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskScheduleState.yaml` | Required canonical trigger, schedule_text, opaque SHA-256 schedule_hash, next_occurrences_ms array (0–3), nullable next_fire_ms, `scheduler_state: armed/disarmed/exhausted/unavailable`, `warnings: string[]`. Read-only computed state shared by Task.schedule and tool projections, **not** a new persisted entity. All required arrays are arrays, not null. Activation truth follows the outcome table below. |
 | **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/ScheduleTaskResult.yaml` | §5.2 result fields, saved identity, truthful persistence/scheduler_state/warnings. Reuse the state fields; no success-shaped error branch. |
-| **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskScheduleApprovalPreview.yaml` | §5.3 server-authored action/identity/destination, before/after trigger and readable texts/warnings; full create payload when action=create. Existing task ID absent/null only for creation; assignee/workspace always resolved. |
+| **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskScheduleApprovalPreview.yaml` | §5.3 server-authored action/identity/destination, before/after trigger and readable texts/warnings; full create payload when action=create. Add `continuing_authority_notice: string`, **required and equal to AUTH-1's plain-language notice for create/set/resume**, absent for clear/suspend. Freeze/validate it with the proposal on live and reconnect paths. Existing task ID absent/null only for creation; assignee/workspace resolved. No private Initiator/budget serialization. |
 | **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/AgentTaskListRow.yaml` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/AgentTaskListResult.yaml` | Preserve current allowlisted row/envelope fields and scoping metadata; add optional schedule state and nullable latest_run using TaskRun. Foreign rows omit both. No disk-task serialization or private provenance. |
 | **New** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/AgentTaskOccurrencesResult.yaml` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/AgentTaskRunsResult.yaml` | Occurrences: generated sets plus workspace/foreign scope and requested bounds/zone. Runs: task_id, generated TaskRun array, matched/returned/truncated/nullable next_offset. No new run enum/status or instance entity. |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/asyncapi.yaml`::ToolApprovalRequiredFrame / SessionStatePendingApproval and matching `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/ToolApprovalRequiredFrame.yaml` / `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/SessionStatePendingApproval.yaml` | Optional typed schedule_preview on live and reconnect carriers; same frozen value. No new frame family. Use generated Go/TS/Zod values through registry, approver adapters, snapshot and store. |
 | Existing task CRUD, occurrence, run-list and Run-now paths | Keep paths/entities and existing RunNowRequest, TaskRun and DayBucket shapes. Document suspended Run now. Add optional occurrence_ms to the agent run tool, not a new REST request/status. |
+
+**Conditional PATCH responses:** missing/null/wrong-type/malformed token with a trigger returns 400 generated ErrorResponse with `code="schedule_precondition_required"`, `field="expected_schedule_hash"`, `error="A valid expected_schedule_hash is required when trigger is supplied."` Token without a trigger is 400 with `code="schedule_precondition_required"`, the same field and `error="expected_schedule_hash must be omitted when trigger is absent."` A well-formed mismatching token returns **409** with `code="schedule_conflict"`, `field="trigger"`, `error="The schedule changed. Read the current schedule, review your draft and reapply."` No other requested field commits on conflict. Fetch the latest Task for a new baseline, not a token calculated from form values. Hash comparison and suspension-preserving trigger/Clear mutation are one locked operation; a refetch before an unconditional save is not sufficient. [S28]
+
+**Saved state versus activation — same generated state for HTTP and tools:**
+
+| Authoritative observed outcome | HTTP / read-back result | Required user meaning |
+|---|---|---|
+| Saved active schedule with confirmed current derived job/admission generation | 200 Task; schedule.scheduler_state=armed, next_fire_ms from the actual current registration | Saved and automatic firing available; no guarantee of a completed execution. |
+| Saved suspended/manual state with successful disarm | 200 Task; disarmed, null next_fire_ms | Future automatic admission disabled. Already admitted work remains independent. |
+| Active elapsed once or exhausted recurrence, no future eligible position | 200 Task; exhausted, null next_fire_ms, explanatory warning | Save succeeded; there is no future fire. This is **not** a registration failure; edit timing or use permitted Run now. |
+| Save succeeds; registration/removal/reconciliation fails or current activation cannot be established | **200 Task** with the saved trigger/flag; unavailable, null next_fire_ms, nonempty actionable warnings | Persistence succeeded; automatic starts are unavailable/not confirmed. A saved Resume has suspended=false, not a false Suspended badge or “nothing saved.” A saved Suspend still fences new admissions even if derived-job cleanup failed. |
+| Storage failure before commit | 500 existing ErrorResponse; no success Task | No committed change. Ambiguous post-publication I/O follows §5.1.1 instead of a false definite-failure claim. |
+
+GET task/list projections recompute `schedule` from **current persisted timing and current coordinator state**; they do not remember “armed” just because the flag is false or return a stale success from the mutation response. GET does not arm a job. After restart before reconciliation, a future active rule without confirmed activation is unavailable until reconciliation succeeds. A missing/unreadable activation dependency yields unavailable/warnings, not an invented next fire; an unreadable task/trigger is the normal read error, not a made-up state. Manual/suspended planned projections may remain, but their next fire is null. [S4, S28]
+
+Recovery in both controls: read back Task; if active+unavailable, keep **Suspend schedule** available and offer **Retry activation**, using the same idempotent Resume endpoint to reconcile without re-anchoring. A repeated matching-state request is a persistence no-op, but may retry registration; valid existing jobs are not duplicated and the scheduling/recovery actor does not replace task authority. If the next read instead reports exhausted, explain no-future-fire and offer the existing edit/Run-now choices, not an endless activation retry. AUTH-1 preserves task authority through human or agent recovery; it does not rebind to the recovery actor. No new endpoint, job entity or durable availability flag is added. [S25, S28]
 
 Reference new models as named OpenAPI components; the inspected Go configuration retains models with `skip-prune: true`. Generate using `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/scripts/gen-contracts.sh` and atomically commit specs plus artifacts under `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/api/generated/`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/lib/api/generated/` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/gateway/inboundschemas/` **before consumers**. Verify actual runtime rejection/response parsing with valid controls, not regeneration alone. [S16, S22]
 
 ### 5.6 Shared queries and explicit agent Run now
 
 Extract the narrow occurrence/run projection into proposed package `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/taskquery/`, depending on task and generated contracts, never agent/gateway/tools. Both REST and tools use it. Preserve the existing pure-Go occurrence engine and run projection. One list request must not rescan the whole task store per returned row. Enforce range/caps and propagate real read/expansion/history faults rather than treating them as absence. [S1, S8]
+
+**Request-wide occurrence budget (REST and tool share one counter set):** first apply workspace/principal and optional task-ID selection; never expand an unauthorized series to count or truncate it. Visit authorized candidate series in ascending task-ID order for deterministic results. Request-wide limits are **inclusive**; refuse before doing/adding the first item beyond a limit. Keep current per-task truncation flags for their existing per-task bounds; aggregate exhaustion is a distinct **whole-request refusal**, not another successful truncation. [S8, S28]
+
+| Aggregate bound | Counting / exact boundary behaviour |
+|---|---|
+| 100 candidate series | Count every authorized selected recurring series before expansion, including one with no in-range positions. The 101st refuses before its expansion; optional task_id narrows the selection. Do not silently select the first 100. |
+| 100,000 work units | One unit for each task file examined during selection, each query-zone day evaluated (regular arithmetic included), each candidate/anchor-skip/irregular recurrence position visited, and each stored run record examined for overlays/counts. Charge before the work; at exactly 100,000, completion is allowed if nothing further is needed; needing the next unit refuses. No unmetered pre-expansion, whole-history materialization or per-task budget reset can escape this counter. |
+| 10,000 output items | One item per emitted series envelope, raw instant, day bucket or occurrence-run overlay. Counts inside a bucket are scalars, not enumerated positions. A projected item that would be 10,001 refuses; no partial sets leave the server. |
+| 1,048,576 encoded UTF-8 JSON bytes | Entire response envelope and nested arrays, after encoding/escaping. Because REST returns an array and the tool adds scope metadata, charge the **larger of the two defined response encodings for the same projection**, so the shared query cannot pass one surface and exceed the other. Count both framing lengths without retaining two payload copies; stage the selected response in a capped encoder/buffer before sending headers/body. Do not materialize an unbounded result then measure. Exactly the charged bound succeeds; one extra byte refuses both. |
+
+Selection/history traversal must stop on the shared work budget without first allocating all matching tasks/runs. Keep only bounded candidate references, per-task scratch and the capped staged result. Reuse existing store traversal/decoding with a bounded visitor where necessary; no new derived index/database. At any aggregate breach discard the staged projection and return the exact refusal in §3.4; the caller narrows task_id/range. REST and tool return the same error regardless of input enumeration order, and the UI shows actionable query failure, never a convincing incomplete calendar. Do not expose unauthorized task counts/identities in refusal text. DS-4/BDD-61 test many authorized series and **each exact maximum/+1**, including regular buckets, sparse irregular work, overlay reads and encoded-byte limits, plus forbidden-series positive/negative controls. [S8, S28]
 
 | Read/run front door | Required behaviour |
 |---|---|
@@ -408,13 +537,18 @@ Add **Suspend schedule / Resume schedule** in the schedule section of `CalendarE
 | Active valid time schedule | Suspend schedule; hint “No new scheduled runs; already admitted work continues.” | Only server-confirmed success changes to Resume schedule and Suspended. |
 | Suspended valid time schedule | Resume schedule; hint “Missed occurrences will not run; planned occurrences still count toward the end.” | Only server-confirmed success removes Suspended; do not promise a fire if expired/exhausted. |
 | Saving | “Suspending…” or “Resuming…”, disabled pending activation, existing schedule state remains factual. | Do not close the detail surface merely to hide pending/error state. |
-| Definite refusal/failure | Inline error next to schedule; preserve current state and other drafts. | Read current task if conflicting, offer valid retry. |
-| Lost response / unknown persistence | Explain that save could not be confirmed; refetch current task. | Do not automatically retry create or advertise success; idempotent state controls may be retried after reconciliation. |
+| Definite pre-commit refusal/failure | Inline FormError next to schedule; preserve current known state and drafts. | Read current task if conflicting, offer valid retry; do not label saved-but-unavailable as a failed write. |
+| Saved Resume, activation unavailable | Use saved suspended=false: remove the Suspended badge, retain Suspend schedule, and show “Schedule saved; automatic starts are unavailable” plus the server's actionable warning. | Read back activation state and offer Retry activation through idempotent Resume; do not retry create, re-anchor or claim operational scheduling. |
+| Saved Suspend, derived cleanup unavailable | Show saved Suspended/Resume schedule plus warning that cleanup needs recovery; persisted admission fencing remains effective. | Read back/reconcile; do not falsely say the suspension was unsaved or stop admitted work. |
+| Saved active, no future eligible position | No Suspended badge; explain expired/exhausted and null next fire. | Existing Calendar edit or permitted Run now, not an activation-failure loop. |
+| Lost response / unknown persistence | Explain that save could not be confirmed; refetch Task **including schedule state**. | Reconcile saved flag **and** armed/disarmed/exhausted/unavailable; no automatic create retry or success claim. Idempotent state controls may be retried after reconciliation. |
 | Manual/no trigger/heartbeat | No Suspend/Resume control. | Existing feature-specific heartbeat controls remain separate. |
 
 After a confirmed change invalidate/refetch task list, selected detail and occurrence queries; refresh run queries only when their execution data actually changes. Agent-origin task updates must also refresh visible schedule state through the existing task event/query path. Do not manufacture a new WS frame family. Reopening/reloading reads server truth; one view's successful change must update another open view. Background refresh must not wipe unrelated unsaved instructions, title or recurrence edits. [S1, S12, S18]
 
-Title/agent/metadata-only saves omit trigger entirely. A real rule/time edit sends the input-only type/config and preserves suspension server-side. Keep existing rule-edit count-reset notice and stored-zone behaviour; suspension alone never shows a misleading “count restarted” notice. Handle stale-rule conflict/read-back without writing the old form over the current schedule. [S1, S9]
+Title/agent/metadata-only saves omit trigger and `expected_schedule_hash` entirely. A real rule/time edit sends input-only type/config **and the baseline hash captured when this recurrence draft was loaded**, not a newer token substituted by background refetch. Keep existing rule-edit count-reset notice/zone behaviour; suspension alone never shows “count restarted.” Server comparison and suspension preservation are atomic (§5.5). [S1, S9, S28]
+
+On `409 schedule_conflict`, **both detail surfaces** retain the user's local drafts, show that the server schedule changed, and fetch/display the current schedule separately. Offer **Read current schedule / Review draft / Reapply after review** using existing buttons, not a blind automatic retry. Only an explicit reviewed reapply adopts the newly fetched baseline; another intervening change can conflict again. TaskDetailPanel has no new timing editor: its schedule controls refresh truth while unrelated title/instruction drafts stay local; any trigger edit it submits through shared actions uses the same precondition. If an older payload lacks `schedule.schedule_hash`, refetch from the new server; if still unavailable, disable trigger-changing save with a recoverable error rather than compute a hash. Metadata-only saving remains independent. T26 uses a barrier-controlled genuine trigger PATCH from view A arriving after view B/agent commits, and T11/T31 assert draft preservation/review/reapply. [S18, S28]
 
 ### 6.3 Calendar and history presentation
 
@@ -429,6 +563,8 @@ Title/agent/metadata-only saves omit trigger entirely. A real rule/time edit sen
 | Month dots | Preserve current Month navigation/rendering. Include suspension in the accessible/hover title where event state is exposed; do not add a new Month interaction or raw rule display. |
 | Older compatible payload without flag | False, not unknown. A malformed present field is a contract error, not false. |
 | Failed occurrence/history fetch | Recoverable error/unavailable state and retry, never a convincing empty calendar/history. |
+
+An aggregate-budget refusal is a recoverable QueryErrorState with the server's narrower-task/range guidance, never empty Calendar success. Detail/upcoming queries send the selected task_id through the extended occurrence GET and include that selector in their query key; whole-workspace Calendar queries remain unfiltered. Preserve the existing response array. Use existing task-detail access for a single-series recovery rather than commission a new screen/filter family. No automatic fan-out into unbounded per-task requests to evade the aggregate cap. [S28, S30]
 
 The server remains the occurrence authority. No new client expansion, calendar-position ledger, schedule-specific run status or synthetic history is introduced. UI local view models may add a presentation-only suspended state without changing Task/TaskRun wire enums. [S1, S4, S8, S9]
 
@@ -446,20 +582,33 @@ Extend the existing per-tool preview registry with a replace-mode scheduling pre
 
 One-time dates include the explicit offset/UTC, never an unlabelled browser-local conversion. Recurring schedules name the series zone and end. Example: “Mia wants to schedule ‘Weekly report’: every Monday at 09:00, Europe/Berlin, starting 19 October 2026, never ends.” Escape titles/instructions as text; do not render task-supplied markup. Missing/malformed preview blocks approval with recovery copy, not a fallback RRULE/JSON dump. A reconnect card must retain the same proposed instant and payload even if the task was edited elsewhere. [S1]
 
+For **create/set/resume**, render the frozen generated `continuing_authority_notice` from AUTH-1 as ordinary visible copy **before the decision controls**, on live and reconnect cards, beside the schedule/end consequences. A missing/altered notice makes those scheduling previews unusable: disable Approve/Always Allow and request a fresh proposal. The card must plainly distinguish the scheduling agent's call permission from the task's continuing execution authority; never say later revoking that agent's scheduling tool permission cancels the schedule. [S25]
+
 Add the **Changing task schedules** Auto Ask group and **Change task schedule** humanized label. Explain that Auto does not waive an effective Ask for this tool; Allow/God Mode and stored per-agent Deny retain the existing model. Update independent membership/label tests against the actual L1 set, not mutually stale copies. [S1, S15]
 
 ### 6.5 Interaction/accessibility acceptance
 
-Use catalogued controls, badges, inline error and loading primitives; load the design-system skill before implementation. Keep the existing modal/Sheet focus trap and return focus to the initiating control on dismissal. Keyboard users can Tab to the schedule control and operate it with Enter/Space; disabled saving state cannot double-submit. Errors and state changes are announced through the existing accessible status/error pattern. The full create payload is keyboard-reachable and readable on narrow screens before approval; no horizontal-only inspection requirement. Test normal/forced colours, zoom/reflow and reduced motion through the existing design-system conventions. No new local focus ring or colour-only suspension meaning. [S18, S22]
+**Catalogue-first reuse map**, verified against `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/design-system/catalog.json`::entries. No new public component family, visual tokens or modal is commissioned. [S30]
+
+| UI job | Existing dependency / adaptation |
+|---|---|
+| Suspend/Resume, Read current/Review/Reapply, Retry activation | Button from `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/components/ui/button.tsx`; use its existing pending/disabled semantics and ordinary status text, not a raw/local control. |
+| Suspended versus current activation warning | Badge from `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/components/ui/badge.tsx`; text names state independently of colour. |
+| Local save/conflict/saved-unavailable guidance | FormError from `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/components/ui/FormError.tsx`; retain existing accessible feedback rather than build another banner. |
+| Query loading/error/genuinely empty data | Skeleton, QueryErrorState and EmptyState from `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/components/ui/skeleton.tsx`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/components/ui/query-error-state.tsx`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/components/ui/empty-state.tsx`; failed/over-budget is not empty. |
+| Existing detail and approval containment | Keep the detail's Sheet (`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/components/ui/sheet.tsx`) and approval modal's existing Dialog (`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/components/ui/dialog.tsx`); extend the registered preview inside that containment, not a parallel dialog. |
+
+Load the design-system skill before implementation. Keep the existing modal/Sheet focus trap and return focus to the initiating control on dismissal. Keyboard users can Tab to the schedule control and operate it with Enter/Space; disabled saving state cannot double-submit. Errors and state changes are announced through the existing accessible status/error pattern. The full create payload is keyboard-reachable and readable on narrow screens before approval; no horizontal-only inspection requirement. Test normal/forced colours, zoom/reflow and reduced motion through the existing design-system conventions. No new local focus ring or colour-only suspension meaning. [S18, S22]
 
 ## 7. Integration boundaries and runtime
 
 | Boundary | Data in / out and contract | Failure behaviour | Development / verification |
 |---|---|---|---|
 | Native tool policy and delegation | Prepared structured arguments; existing policy/grant/delegation decisions; allowlisted generated result. | Refuse unknown caller, effective Deny, stale state or unreadable authority before writes. Unattended unresolved Ask refuses immediately. | Real policy/grant paths; controlled role/authority fixtures. |
-| Task + paired goal storage | Canonical task/trigger plus existing goal contract; per-entity files/atomic write. | Storage error is an error; create cleanup fault is reported, not hidden. No publication before complete creation. | Real temporary stores and injected read/write faults; no substitute aggregate task file. |
-| Derived cron jobs and executor | Persisted task → job ID/generation → trusted timed admission → actual run history. | Saved-but-unavailable activation is explicit; suspended/stale callbacks create no new run/session/status reset. Existing readable recovery remains. | Deterministic clock/barriers and actual cron-lane dispatch; no wall-clock sleep as a logic oracle. |
-| Gateway REST / SPA | Generated input-only trigger, Task/occurrence response, narrow state POSTs. | Exact HTTP outcomes in §3.4; invalid suspension input cannot be ignored even with optional schema enforcement off. | Real HTTP handlers and generated validators, valid-payload positive controls. |
+| Task + paired goal storage | Preallocated/normalized identity, defining goal first, complete Inbox task last (§5.1.1), per-entity atomic files. | No discoverable incomplete task even after failed rollback/restart; orphan cleanup/ambiguous publication reported, no blind retry. | Real store/discovery/recovery held at each cut; no substitute aggregate file. |
+| Derived cron jobs and executor | Task creator/assigner authority → current job/generation → trusted timed admission; admitted attempts use separate private receipt/lifecycle. | Saved-unavailable explicit; no stale/suspended new admission; positive capacity-refused retry pickup, no authority overwrite. | Real queue/executor/cron-lane barriers and effect counts, not wall-clock sleep. |
+| Gateway REST / SPA | Generated input-only trigger + required conditional PATCH baseline; Task.schedule read-back and narrow state POSTs. | Exact 400/409 and saved-but-unavailable 200; no partial stale PATCH or ignored suspension/private input even validation-off. | Real HTTP barrier/faults plus generated validators and valid controls, both mounted UIs. |
+| Existing audit logger | Actor/task/workspace/action, authoritative before/after scheduling identity and actual outcome (§5.3.1). | Best-effort sink failure logged, not false unsaved response/rollback; disabled auditing unchanged. | Real tool/UI mutations, inspect rows and audit-failure log, not a second ledger. |
 | Approval WebSocket / reconnect | Frozen typed preview through existing live and pending-state carriers. | Missing/unusable preview is unapprovable; resolution/expiry is authoritative; disconnect never implies Stop. | Real registry plus live/reconnect serialization/store tests and browser reload. |
 | External model/provider | Ordinary native-agent requests/tools; no new provider API or credential. | Existing provider failure remains visible; no false “armed”/“ran” inference from model prose. | Deterministic provider twin for automated tool-loop tests; real mandated provider for UAT. |
 | User-facing documentation | Updated pages for actual controls, permission, run/read semantics and operations. | Missing or inaccurate behaviour documentation blocks completion. | Implementing leads draft; independent docs-verifier audits against implementation. |
@@ -555,9 +704,10 @@ BDD means behaviour-driven development: concrete Given/When/Then outcomes. IDs b
 #### BDD-07 — Scenario: Report incomplete creation and cleanup faults
 **Traces to:** User Story 1, Acceptance Scenario 4 (US-1.AC4).
 **Category:** Error Path.
-- **Given** task-write, paired-goal-write or cleanup failure injection.
+- **Given** goal-first creation with goal-write, pre-publication task-write or orphan-goal-cleanup failure injection.
 - **When** a scheduled create is attempted.
-- **Then** no activation/publication occurs, the actual failed/partly persisted outcome is reported and cleanup failure is not swallowed.
+- **Then** no incomplete task is published/admissible through lookup, notification or recovery, actual allocated identity/failure/possible orphan goal is reported, and cleanup failure is not swallowed.
+- **And** a complete final task published before a later response/registration fault is reported as saved/unknown according to §5.1.1, never deleted or described as definitely unsaved.
 
 #### BDD-08 — Scenario: Preserve saved identity when scheduler activation fails
 **Traces to:** User Story 1, Acceptance Scenario 4 (US-1.AC4).
@@ -728,12 +878,19 @@ BDD means behaviour-driven development: concrete Given/When/Then outcomes. IDs b
 - **When** create/set/clear/suspend/resume is submitted.
 - **Then** it refuses with local-delivery guidance and no target task/goal/job/run/session mutation.
 
-#### BDD-25 — Scenario: Re-authorize a future execution commitment
+#### BDD-25 — Scenario Outline: Recheck the correct authority at each boundary
 **Traces to:** User Story 3, Acceptance Scenario 3 (US-3.AC3).
 **Category:** Error Path.
-- **Given** a prepared arming proposal and removed/denied/unreadable caller→assignee workspace authority.
-- **When** approved execution or the next automatic run reaches authorization.
-- **Then** it refuses without a new run and preserves genuine agent initiator/depth/budget; it never takes an operator bypass.
+- **Given** `<boundary>` and `<authority_change>` under AUTH-1 (founder FQ-1 A).
+- **When** that boundary reaches its current authorization check.
+- **Then** `<outcome>` without substituting the scheduling caller, last explicit runner or nil for unreadable authority.
+
+| boundary | authority_change | outcome |
+|---|---|---|
+| Set/Resume after approval | scheduling caller's tool/ownership/delegation denied or unreadable before mutation | refusal with zero write/dispatch |
+| next timed admission | original task authority agent's current execution delegation/membership removed or unreadable | refusal with no new run, preserving original depth/budget semantics |
+| next timed admission | only the different scheduling agent's schedule_task permission removed after committed Set/Resume | normal timed admission remains eligible under the original task authority; schedule is not cancelled |
+| next timed admission | genuine original human authority and different scheduling agent later denied | normal human-origin path remains eligible, not a caller-based revocation |
 
 #### BDD-26 — Scenario: Preserve every explicit operator policy
 **Traces to:** User Story 3, Acceptance Scenario 2 (US-3.AC2).
@@ -920,6 +1077,8 @@ BDD means behaviour-driven development: concrete Given/When/Then outcomes. IDs b
 | definite storage/server refusal |
 | task deleted / invalid-state conflict |
 | network response lost after server persistence |
+| Resume saved suspended=false but registration failed: active flag plus unavailable warning/Retry activation, not Suspended or “nothing saved” |
+| Resume saved active with no future position: exhausted explanation, not activation-failure retry |
 
 #### BDD-45 — Scenario: Synchronize saved schedule state without erasing drafts
 **Traces to:** User Story 6, Acceptance Scenario 3 (US-6.AC3).
@@ -986,6 +1145,119 @@ BDD means behaviour-driven development: concrete Given/When/Then outcomes. IDs b
 - **When** restart/platform acceptance and documentation verification are performed.
 - **Then** suspension survives without extra services, single-binary/pure-Go/bounded-footprint constraints are evidenced, and the docs explicitly warn that older binaries may ignore the flag and fire work.
 
+### Round-1 discriminating scenarios
+
+#### BDD-55 — Scenario Outline: Keep task authority independent of scheduling and retries
+**Traces to:** User Story 3, Acceptance Scenario 3 (US-3.AC3).
+**Category:** Alternate Path.
+- **Given** `<origin>` task authority, a different authorized scheduling actor and a held admitted attempt started by yet another actor, per AUTH-1.
+- **When** the scheduling Set/Resume commits while that attempt retries.
+- **Then** the task's existing creator/assigner authority remains unchanged for the next timed run, and the pending attempt keeps its own starter/depth/budget.
+- **And** later denying only the scheduling actor's scheduling permission does not stop the schedule; revoking the original task authority's relevant execution edge still refuses a new timed run.
+
+| origin |
+|---|
+| original human-created/assigned task with nil task Initiator |
+| original different-agent creator/assigner with a valid captured task Initiator |
+| same caller/assignee as task authority, repeated already-active Resume |
+| human timing control on an agent-created task, without reassignment |
+| authorized reassignment followed by a different actor's timing-only edit |
+
+#### BDD-56 — Scenario Outline: Recover only completely published scheduled creation
+**Traces to:** User Story 1, Acceptance Scenario 4 (US-1.AC4).
+**Category:** Edge Case.
+- **Given** real task/goal stores held or restarted at `<cut_point>`, and due/boot/recovery/queue discovery ready to run.
+- **When** discovery proceeds.
+- **Then** `<outcome>`; notification observation alone is not the oracle.
+
+| cut_point | outcome |
+|---|---|
+| before goal write | no task eligible and no orphan goal |
+| goal saved before final-task publication | no task eligible, even if the process crashed or cleanup failed; only an orphan defining goal may remain |
+| task-publication failure plus orphan cleanup failure | no task eligible, cleanup fault visible; boot cleanup cannot race and delete a live owner's goal |
+| final complete task saved before notification | exactly the complete Inbox task/goal is recoverable and eligible for its proper future schedule, never an immediate manual run |
+
+#### BDD-57 — Scenario: Pick up a suspended timed retry after capacity refusal
+**Traces to:** User Story 2, Acceptance Scenario 1 (US-2.AC1).
+**Category:** Edge Case.
+- **Given** a real timed run was admitted then suspended, its failed attempt saved the trusted continuation receipt, immediate redispatch was refused for capacity, and a never-admitted timed twin has the same Next/dependency/trigger shape but no valid receipt.
+- **When** the real queue drains after capacity is released.
+- **Then** exactly the admitted continuation is picked up under its original authority/budget/posture/occurrence identity, once, and the never-admitted twin does not run.
+- **And** stale/mismatched/consumed receipts and unreadable source authority refuse visibly; neither suspension nor a different standing task authority rewrites the valid attempt.
+
+#### BDD-58 — Scenario Outline: Clear cannot cause a later manual-queue start
+**Traces to:** User Story 1, Acceptance Scenario 2 (US-1.AC2).
+**Category:** Edge Case.
+- **Given** waiting timed work in `<state>` without admitted continuation, with dependencies retained and real queue/unblock routes available.
+- **When** Clear commits.
+- **Then** the task is manual, not suspended and Inbox under the same ID/history, including after a later queue drain and dependency completion.
+- **And** a separate ordinary manual Next task and a valid already-admitted retry after Clear still dispatch normally; Clear never changes their captured authority.
+
+| state |
+|---|
+| idle ready Next |
+| dependency-waiting Blocked |
+
+#### BDD-59 — Scenario: Reject a genuine stale Calendar trigger save atomically
+**Traces to:** User Story 6, Acceptance Scenario 3 (US-6.AC3).
+**Category:** Error Path.
+- **Given** Calendar A holds an edited recurrence and its old server hash, while view B/agent commits a newer rule before A's HTTP PATCH crosses a held write barrier.
+- **When** A's real trigger-changing PATCH reaches the server.
+- **Then** it returns 409 schedule_conflict, no field in A's PATCH commits, and the newer rule/suspension/task authority remain.
+- **And** both detail controls keep local drafts, display fetched current state separately and require explicit review/reapply with a new baseline; missing/malformed token is 400 and a valid baseline is the successful control.
+
+#### BDD-60 — Scenario Outline: Show saved-but-unavailable activation on HTTP and both controls
+**Traces to:** User Story 6, Acceptance Scenario 2 (US-6.AC2).
+**Category:** Error Path.
+- **Given** `<surface>` resumes a valid suspended task, the state write succeeds and subsequent registration fails.
+- **When** its real state POST completes and its Task read-back is rendered.
+- **Then** HTTP 200 and the subsequent read report suspended=false, scheduler_state=unavailable, null next fire and nonempty recovery warnings; the control shows saved active/unavailable, not Suspended or “nothing saved.”
+- **And** Retry activation reuses Resume without re-anchor/duplicate jobs; a separate exhausted fixture reports exhausted rather than unavailable.
+
+| surface |
+|---|
+| CalendarEventSlideOver |
+| TaskDetailPanel |
+
+#### BDD-61 — Scenario Outline: Bound the complete occurrence request
+**Traces to:** User Story 5, Acceptance Scenario 2 (US-5.AC2).
+**Category:** Error Path.
+- **Given** many authorized series and a request that `<boundary>` under §5.6/DS-4, plus forbidden-series controls filtered before expansion.
+- **When** the same occurrence query is made through REST and the agent tool.
+- **Then** `<result>` identically, in deterministic task order, without unauthorized expansion or successful partial calendar output.
+
+| boundary | result |
+|---|---|
+| finishes at each exact candidate/work/item/byte maximum | complete bounded success, preserving any explicit per-task truncation |
+| needs one candidate/work unit/output item/encoded byte more | whole-request occurrence_query_budget_exceeded refusal and narrower-task/range guidance |
+
+#### BDD-62 — Scenario Outline: Audit the actual scheduling transition
+**Traces to:** User Story 3, Acceptance Scenario 3 (US-3.AC3).
+**Category:** Happy Path.
+- **Given** auditing enabled and a real authorized `<entry>` create/set/clear/suspend/resume or matching no-op.
+- **When** the operation settles.
+- **Then** one semantic existing-audit entry identifies actor/workspace/task/action, authoritative before/after trigger/hash and actual changed/noop/saved_unavailable/refused/failed outcome without copying instructions or private budgets.
+- **And** an injected audit-sink write failure is logged while committed scheduling/read-back remains truthful; disabled auditing has its existing no-entry behaviour.
+
+| entry |
+|---|
+| native schedule_task tool |
+| authenticated REST/UI scheduling path |
+
+#### BDD-63 — Scenario Outline: Disclose continuing authority before approval
+**Traces to:** User Story 4, Acceptance Scenario 1 (US-4.AC1).
+**Category:** Happy Path.
+- **Given** a server-prepared `<action>` proposal under founder FQ-1 A, including a Set/Resume caller different from the task's original authority.
+- **When** its live or reconnected registered approval card renders.
+- **Then** the frozen generated continuing_authority_notice plainly says the schedule keeps running under the task's creator/assigner authority until suspended or removed, and later revoking this agent's scheduling permission does not stop it.
+- **And** the notice is visible before approval beside end/exhaustion caveats; missing/altered notice blocks approval rather than reverting to generic/model-written prose.
+
+| action |
+|---|
+| create |
+| set |
+| resume |
+
 ## 9. Test-driven development plan
 
 **All tests below are planned, not executed.** QA writes RED before production implementation, from these observable outcomes. Existing fixtures may be reused, but expected schedule instants/policy sets must come from frozen specification/editor fixtures, not the new compiler/resolver under test. Unit first, then integration, then browser end-to-end. Do not weaken, delete, skip or log-away failing tests to obtain GREEN. A different qa-lead performs CHECK/test-integrity audit. [S1, S22]
@@ -1001,36 +1273,37 @@ Test IDs are stable planning references; test names/file placement may be refine
 | 3 / T03 | TestTaskScheduleCompiler_AnchorZoneAndEnds | Unit | BDD-04, BDD-13 | Frozen anchor/zone/offset; count/date/once strict-future edges. |
 | 4 / T04 | TestTriggerSuspension_ValidationAndRoundTrip | Unit | BDD-16, BDD-17, BDD-51 | Missing=false; true round trip; manual/invalid suspended input refusal. |
 | 5 / T05 | TestTriggerSuspension_WriterPreservation | Unit | BDD-15 | Every writer family; replacement preserves flag, explicit clear removes it. |
-| 6 / T06 | TestScheduleTaskPolicy_Matrix | Unit | BDD-20, BDD-22, BDD-26, BDD-34 | Real two-layer resolution/classification and independent expected role/default sets. |
-| 7 / T07 | TestScheduleTaskUpgrade_NoWorkerBackfill | Unit | BDD-21 | Existing native/external worker maps unchanged across upgrade/reload; missing key inherits Ask; new creation gets Deny; no rollout or migration marker. |
-| 8 / T08 | TestTaskQuery_DefaultProjectionAndPagination | Unit | BDD-35, BDD-37, BDD-39 | Allowlist, ordering, bounds/pagination and foreign redaction. |
-| 9 / T09 | TestTaskQuery_ExpansionBoundsAndErrors | Unit | BDD-36, BDD-38 | Filter-before-expansion, caps/buckets, unavailable versus valid empty. |
-| 10 / T10 | scheduleControl: visibilityAndPending | Unit | BDD-42, BDD-43, BDD-44 | Mount both real detail surfaces; correct endpoint, pending/disable/error/read-back. |
-| 11 / T11 | scheduleControl: editsAndCache | Unit | BDD-45 | Actual query invalidation/form drafts; no response-trigger echo on metadata save. |
-| 12 / T12 | scheduleApproval: readableActionsAndTaskContract | Unit | BDD-27, BDD-28 | Actual registered preview; exact resolved content/escaping/full create payload/no raw fallback. |
-| 13 / T13 | toolApproval: frozenReconnectAndInvalidPreview | Unit | BDD-31, BDD-32, BDD-33 | Store and renderer, snapshot/live ordering, invalid-preview decision prevention. |
-| 14 / T14 | eventMappingSuspended: precedenceAndBuckets | Unit | BDD-48, BDD-49, BDD-50, BDD-51, BDD-52 | Actual mapping/rendered output, not source-text substring checks. |
+| 6 / T06 | TestScheduleTaskPolicy_Matrix | Unit | BDD-20, BDD-22, BDD-26, BDD-34 | Full two-layer role/operator/Auto/God matrix; independent expected sets. |
+| 7 / T07 | TestScheduleTaskUpgrade_NoWorkerBackfill | Unit | BDD-21 | Existing native/external worker maps unchanged; missing key inherits Ask; new creation Deny; no migration marker. |
+| 8 / T08 | TestTaskQuery_DefaultProjectionAndPagination | Unit | BDD-35, BDD-37, BDD-39 | Allowlist, order, pagination, foreign redaction and shared schedule state. |
+| 9 / T09 | TestTaskQuery_ExpansionBoundsAndErrors | Unit | BDD-36, BDD-38, BDD-61 | Per-task bounds plus every aggregate exact-cap/+1; early refusal, deterministic order, filter-before-expansion and unavailable versus empty. |
+| 10 / T10 | scheduleControl: visibilityAndPending | Unit | BDD-42, BDD-43, BDD-44, BDD-60 | Mount both real details; pending/error/read-back, saved active+unavailable versus exhausted, real Retry activation request. |
+| 11 / T11 | scheduleControl: editsAndCache | Unit | BDD-45, BDD-59 | Loaded baseline token on genuine edit; metadata omits trigger/token; conflict preserves draft and requires explicit read/review/reapply. |
+| 12 / T12 | scheduleApproval: readableActionsAndTaskContract | Unit | BDD-27, BDD-28, BDD-63 | Registered preview; exact full payload/escaping, continuing-authority notice for create/set/resume, missing notice cannot approve. |
+| 13 / T13 | toolApproval: frozenReconnectAndInvalidPreview | Unit | BDD-31, BDD-32, BDD-33, BDD-63 | Real store/renderer, live/snapshot order and frozen required notice; unusable preview cannot approve. |
+| 14 / T14 | eventMappingSuspended: precedenceAndBuckets | Unit | BDD-48, BDD-49, BDD-50, BDD-51, BDD-52 | Actual mapping/rendering, not source substrings. |
 | 15 / T15 | scheduleAccessibility: keyboardAndHints | Unit | BDD-46, BDD-47 | Semantic labels/focus/error announcements/named zone and consequences. |
-| 16 / T16 | TestScheduleTask_CreateAndCommitNoImmediateDispatch | Integration | BDD-01, BDD-02, BDD-18 | Real stores + notification/executor; task/goal/trigger before publication, no manual gap. |
-| 17 / T17 | TestScheduleTask_SetClearAndFutureOnce | Integration | BDD-03, BDD-14 | Same ID/history, no clear-triggered start, future deliberate once eligible after Done/Failed. |
-| 18 / T18 | TestScheduleTask_PersistFaultsAndArmingOutcome | Integration | BDD-07, BDD-08 | Exact failed-write/goal-cleanup/registration cut points and truthful response. |
-| 19 / T19 | TestSuspension_LinearizedAdmission | Integration | BDD-09, BDD-10 | Actual callback/reset/admit/run-open barriers; both orderings, counts of real effects. |
-| 20 / T20 | TestSuspension_StaleJobAndAllArmPaths | Integration | BDD-11, BDD-17, BDD-18 | Job ID + generation, ABA, all re-arm sources and alternate admission paths. |
-| 21 / T21 | TestSuspension_ResumeCalendarPositions | Integration | BDD-12, BDD-13 | Fixed next timestamps, zero catch-up dispatches, unchanged end/count. |
-| 22 / T22 | TestScheduleTask_AuthorityAndProvenance | Integration | BDD-23, BDD-24, BDD-25, BDD-26 | Real membership/delegation/store paths; attribution, depth and operator values. |
-| 23 / T23 | TestScheduleTask_RegistrationReloadAndDiscovery | Integration | BDD-19 | Literal catalog/ceiling equality plus live ToolSearch/execution at boot/reload/late wiring. |
-| 24 / T24 | TestScheduleApproval_PrepareGrantAndRevalidate | Integration | BDD-29, BDD-30, BDD-34 | Preparation before every grant/transcript path; state/policy race and unattended marker. |
-| 25 / T25 | TestScheduleApproval_LiveReconnectAndResolution | Integration | BDD-27, BDD-31, BDD-32, BDD-33 | Real registry, approvers, generated WS/snapshot round trip and resolved-ID fence. |
-| 26 / T26 | TestSuspension_RESTAndStrictContracts | Integration | BDD-09, BDD-16, BDD-51 | Exact HTTP matrix, read-only input refusal even validation-off, real generated response parse. |
-| 27 / T27 | TestTaskQuery_RESTAgentParityAndFaults | Integration | BDD-35, BDD-36, BDD-37, BDD-38, BDD-39 | Same fixtures across front doors; current flag versus historical runs; bounded scans. |
-| 28 / T28 | TestAgentRunTask_SuspendedScheduledAdapter | Integration | BDD-40, BDD-41, BDD-54 | Actual agent-authorized executor, no operator bypass/context loss/false run ID. |
-| 29 / T29 | TestSuspension_UpgradeRestartAndRuntimeConstraints | Integration | BDD-17, BDD-53 | File upgrade/restart, supported platform gates, no dependency/service addition and footprint receipt. |
-| 30 / T30 | scheduling-tool: agentCreateEditRead | E2E | BDD-01, BDD-03, BDD-19, BDD-35 | Tool-driven create/read/edit visible in real UI, actual persistence. |
-| 31 / T31 | schedule-controls: bothSurfaces | E2E | BDD-42, BDD-43, BDD-44, BDD-45, BDD-46, BDD-47 | Both rendered controls, keyboard/narrow viewport, cache and failure recovery. |
-| 32 / T32 | schedule-state: calendarHistoryTruth | E2E | BDD-48, BDD-49, BDD-50, BDD-51, BDD-52, BDD-53 | Once/series/group/past/recorded truth, reload/error and unchanged Board filtering. |
-| 33 / T33 | schedule-approval: exactProposalAndReconnect | E2E | BDD-27, BDD-28, BDD-29, BDD-30, BDD-31, BDD-32, BDD-33 | Exact card/normalized commitment/reload/stale refusal/termination. |
-| 34 / T34 | schedule-execution: suspendResumeAndRunNow | E2E | BDD-09, BDD-12, BDD-13, BDD-40, BDD-41, BDD-54 | Timed non-firing/firing/no burst and explicit suspended run/history. |
-| 35 / T35 | schedule-permissions: workerForeignAndAuto | E2E | BDD-20, BDD-21, BDD-22, BDD-23, BDD-24, BDD-25, BDD-26, BDD-34 | Role/operator/upgrade/foreign/Auto/unattended outcomes against real policies. |
+| 16 / T16 | TestScheduleTask_CreateAndCommitNoImmediateDispatch | Integration | BDD-01, BDD-02, BDD-18, BDD-56 | Real stores/discovery at goal-first/task-last cuts, observed canonical goal→task lock order, normalized criterion IDs, no manual/publication gap; complete recovery without notification. |
+| 17 / T17 | TestScheduleTask_SetClearAndFutureOnce | Integration | BDD-03, BDD-14, BDD-58 | Same ID/history; Clear Next/blocked→Inbox followed by real drain/unblock; admitted/manual controls still dispatch; future once eligible after Done/Failed. |
+| 18 / T18 | TestScheduleTask_PersistFaultsAndArmingOutcome | Integration | BDD-07, BDD-08, BDD-56 | Fault/restart at every goal/task/publication/cleanup cut, failed rollback and real recovery reads; truthful saved/unknown/unavailable outcomes. |
+| 19 / T19 | TestSuspension_LinearizedAdmission | Integration | BDD-09, BDD-10 | Actual callback/reset/admit/run-open barriers; both orderings and real effect counts. |
+| 20 / T20 | TestSuspension_StaleJobAndAllArmPaths | Integration | BDD-11, BDD-17, BDD-18, BDD-57 | Job-ID/generation ABA/all sources; suspended admitted retry after forced capacity refusal versus never-admitted twin; exactly-once receipt consumption. |
+| 21 / T21 | TestSuspension_ResumeCalendarPositions | Integration | BDD-12, BDD-13 | Fixed next timestamps, zero catch-up, unchanged end/count. |
+| 22 / T22 | TestScheduleTask_AuthorityAndProvenance | Integration | BDD-23, BDD-24, BDD-25, BDD-26, BDD-55 | Original human/different-agent authority survives Set/Resume and explicit retry; scheduling-tool revocation does not cancel; original execution-edge revocation refuses; no private standing field. |
+| 23 / T23 | TestScheduleTask_RegistrationReloadAndDiscovery | Integration | BDD-19, BDD-21, BDD-22 | Catalog/ceiling plus live boot/reload/late ToolSearch/execution; real creation/upgrade/Omnipus fixtures. |
+| 24 / T24 | TestScheduleApproval_PrepareGrantAndRevalidate | Integration | BDD-25, BDD-29, BDD-30, BDD-34, BDD-55 | Preparation before grants/transcripts; current caller checks versus future task authority; concurrent explicit retry cannot replace original authority. |
+| 25 / T25 | TestScheduleApproval_LiveReconnectAndResolution | Integration | BDD-27, BDD-31, BDD-32, BDD-33, BDD-63 | Real registry/approvers/generated WS and snapshot, frozen required notice and resolved-ID fence. |
+| 26 / T26 | TestScheduleREST_ConditionalWritesAndOutcomes | Integration | BDD-09, BDD-16, BDD-51, BDD-59, BDD-60 | Exact HTTP/status/body and generated parse, validation-off strictness; real PATCH barrier/zero partial writes; write-success registration-failure POST/GET and idempotent recovery. |
+| 27 / T27 | TestTaskQuery_RESTAgentParityAndFaults | Integration | BDD-35, BDD-36, BDD-37, BDD-38, BDD-39, BDD-61 | Same REST/tool fixtures; aggregate candidate/work/item/byte maxima/+1 and no partial output, bounded reads/allocations. |
+| 28 / T28 | TestAgentRunTask_SuspendedScheduledAdapter | Integration | BDD-40, BDD-41, BDD-54, BDD-57 | Actual executor; held capacity then real queue continuation under captured authority/budget/posture; standing Task.Initiator unchanged. |
+| 29 / T29 | TestSuspension_UpgradeRestartAndRuntimeConstraints | Integration | BDD-17, BDD-53 | File restart/platform/footprint receipts, no dependency/service addition. |
+| 30 / T36 | TestScheduleMutation_AuditTransitions | Integration | BDD-62 | Both real front doors/all actions/no-op, actual before/after actor/hash/outcome; audit write failure log and unchanged committed result; no instructions in rows. |
+| 31 / T30 | scheduling-tool: agentCreateEditRead | E2E | BDD-01, BDD-03, BDD-19, BDD-35 | Real tool-driven create/read/edit, UI and persistence. |
+| 32 / T31 | schedule-controls: bothSurfaces | E2E | BDD-42, BDD-43, BDD-44, BDD-45, BDD-46, BDD-47, BDD-59, BDD-60 | Both controls/keyboard/narrow view, stale-draft read/review/reapply and saved-unavailable/read-back/retry recovery. |
+| 33 / T32 | schedule-state: calendarHistoryTruth | E2E | BDD-48, BDD-49, BDD-50, BDD-51, BDD-52, BDD-53 | Once/series/group/past/recorded truth, errors/reload, unchanged Board filtering. |
+| 34 / T33 | schedule-approval: exactProposalAndReconnect | E2E | BDD-27, BDD-28, BDD-29, BDD-30, BDD-31, BDD-32, BDD-33, BDD-63 | Exact card/payload/continuing-authority notice, reconnect/stale refusal/termination. |
+| 35 / T34 | schedule-execution: suspendResumeAndRunNow | E2E | BDD-09, BDD-12, BDD-13, BDD-40, BDD-41, BDD-54 | Timed firing/non-firing/no burst and explicit suspended run/history. |
+| 36 / T35 | schedule-permissions: discoveryApprovalAndRefusal | E2E | BDD-19, BDD-20, BDD-24, BDD-34 | Thin wiring checks only: eligible discovery/Ask with Auto, one stored worker-Deny, one foreign refusal and unattended Ask. Full matrix stays T06/T07/T22/T23/T24; all UAT-07/UAT-08 rows remain mandatory. |
 
 ### 9.2 Test datasets
 
@@ -1052,6 +1325,8 @@ Each row names applicable values; enumerated boundary values are separate test c
 | 10 | title/prompt empty or beyond existing task bounds; missing criteria/dod; invalid optional task field | task validation | Existing validator refusal before writes | BDD-05 | Existing complete contract control; no new arbitrary bounds |
 | 11 | canonical rule 512 vs 513 characters; secondly/invalid by-second; never-live rule; end before anchor | engine bounds | Apply shared validation, invalid refuses | BDD-05 | Use valid 512-character control, not padding that fails for another reason |
 | 12 | valid-shaped new schedule sent via ordinary create_task/update_task | scope | “Use schedule_task to change a schedule”; no write | BDD-05 | Prevent hidden second mutation permission |
+| 13 | trigger PATCH with absent/null/empty/wrong-type/non-64-hex token; token without trigger | conditional shape | Exact 400 schedule_precondition_required; zero fields written | BDD-59 | Valid 64-hex current token is positive control; malformed and mismatched are different cases |
+| 14 | private authority or pending_attempt supplied via tool/REST; clear+explicit runnable status | scope/contradiction | Refuse; no provenance override or Clear-triggered enqueue | BDD-05, BDD-58 | Strict even when optional schema validation is off |
 
 #### DS-2 — Time, ending and compiler parity
 
@@ -1084,6 +1359,10 @@ Each row names applicable values; enumerated boundary values are separate test c
 | 10 | foreign/unknown/empty explicit workspace; removed delegation/self-edge; unreadable graph | authority | Refuse before mutation/execution | BDD-24, BDD-25 | Default workspace resolution separate |
 | 11 | identical normalized proposal vs changed anchor/target/hash | grant identity | Only identical scope can reuse grant; stale state refuses | BDD-29, BDD-30 | No hidden time default |
 | 12 | unattended effective Ask + Auto with no grant; same with Allow; revoked policy pending | error/control | Immediate denial; normal allowed execution; refusal after recheck | BDD-34, BDD-30 | No detached attended-context leak |
+| 13 | original human task / task created or assigned by another agent; Mia Set/Resume | authority origin | Original Task.Initiator unchanged; future admission uses it, not Mia | BDD-55 | AUTH-1 founder FQ-1 A; include real nil-human and valid agent cases |
+| 14 | scheduling caller's tool permission removed after commit versus original task agent's execution edge removed | revocation contrast | First leaves schedule eligible; second refuses under current execution graph | BDD-25, BDD-55 | Never conflate mutation permission and automatic-run authority |
+| 15 | explicit runner different from task authority; retry races with Set/Resume/human recovery; assignment-only change | concurrency/lifetime | Captured attempt budget stays separate; task authority preserved except normal genuine assignment transition | BDD-55, BDD-57 | No new standing-authority state or historical creator reconstruction |
+| 16 | create/set/resume live/reconnect preview with exact/missing/altered continuing_authority_notice | informed approval | Exact notice visible; missing/altered cannot approve | BDD-63, BDD-32 | Retain end/exhaustion caveats; no private budget serialization |
 
 #### DS-4 — Queries and retained history
 
@@ -1099,6 +1378,11 @@ Each row names applicable values; enumerated boundary values are separate test c
 | 8 | history read denied/corrupt; expansion or scheduler-state source unavailable | I/O/dependency | Visible unavailable/error, never empty success | BDD-38 | Genuine empty read positive control |
 | 9 | foreign authorized task, unrelated task, explicit runs/occurrence detail | scope/security | Status-only permitted task row; no detailed disclosure | BDD-39 | Scope filters run before expansion |
 | 10 | 100 returned rows among a larger task store | work/footprint | Bounded projections and no whole-store rescan per row | BDD-36 | Instrument real read counts, not stopwatch alone |
+| 11 | 100 / 101 authorized selected recurring series (including empty-range series), many foreign controls | aggregate candidates | 100 allowed within other budgets; 101st whole-query refusal before expansion | BDD-61 | Task-ID order independent of store enumeration; forbidden series never expanded |
+| 12 | demand 100000 / 100001 total task-read/day/candidate/anchor-skip/run-record work units across many series | aggregate work | Exact maximum succeeds if complete; needing +1 refuses with zero result body sets | BDD-61 | Charge before work, including regular arithmetic days and overlay reads; no unmetered prepass |
+| 13 | 10000 / 10001 total series-envelope/raw-instant/day-bucket/run-overlay items | aggregate output | Complete success at max; whole-query refusal at +1 | BDD-61 | Every per-task cap may still be satisfied; staged output is discarded on refusal |
+| 14 | larger REST/tool response encoding is exactly 1048576 / 1048577 UTF-8 JSON bytes | aggregate bytes | Exact max success on both; +1 whole-query refusal on both, no headers/partial success first | BDD-61 | Measure encoding/escaping/framing and buffer peak, not characters; other limits below max; no second retained payload |
+| 15 | unchanged per-task 500/10000 truncation versus request-wide breach, optional task_id narrowed after refusal | distinction/recovery | Explicit per-task truncated success versus global error; narrower query succeeds | BDD-36, BDD-61 | REST/tool exact error parity, UI error not empty |
 
 #### DS-5 — Concurrency, failures and UI state
 
@@ -1116,6 +1400,13 @@ Each row names applicable values; enumerated boundary values are separate test c
 | 10 | absent/null/wrong preview; script-like Unicode title/instruction | corrupt/content | Cannot approve invalid preview; render escaped complete valid content | BDD-28, BDD-32 | No hidden payload |
 | 11 | future/no-run, past/no-run, recorded statuses, dense day, once | display precedence | Suspended/No record/real status as applicable | BDD-48, BDD-49, BDD-50 | Current bool is not a ledger |
 | 12 | keyboard, narrow viewport, zoom/forced colours, background refetch with draft | accessibility/state | Complete reachable content/focus/status and retained unrelated drafts | BDD-45, BDD-46, BDD-47 | Existing design-system checks |
+| 13 | goal-first create held/crashed before goal, between goal/task, after complete task/before notification | publication/restart | Only complete task ever discoverable; orphan defining goal cannot start; complete task recovers without callback | BDD-56 | Real stores and boot/recovery/lookup/queue, not callback spy |
+| 14 | goal saved, task-publication failure, orphan-goal deletion also fails; cleanup races creation | failed rollback/concurrency | No schedulable task, visible cleanup error; observed goal→task lock order serializes cleanup/publication | BDD-07, BDD-56 | Include normalized criterion identity and ambiguous post-publication read-back |
+| 15 | Clear idle timed Next / blocked; later dependency done and real queue drain | delayed admission | Manual Inbox remains unstarted; dependencies/history retained | BDD-58 | Separate explicit Next/Run-now later is allowed; admitted retry control preserved |
+| 16 | view A old hash plus genuine edited rule, B/agent commits newer rule before A write; metadata draft present | stale HTTP/UI write | 409 schedule_conflict and zero partial PATCH; draft retained until explicit review/reapply | BDD-59, BDD-45 | Barrier-controlled server path, not refetch-before-save simulation |
+| 17 | Resume writes false; registration fails; GET confirms current activation in each surface | partial success | 200 saved active+unavailable/warnings/null fire, actionable Retry activation | BDD-60, BDD-44 | No Suspended or “nothing saved”; compare with exhausted control |
+| 18 | already-active Resume after unavailable / already-armed / exhausted | idempotent recovery | Reconcile unavailable without anchor/authority change; no duplicate job; exhaustion not failure | BDD-60, BDD-13 | Read-back uses live state, no sticky last-success flag |
+| 19 | both front doors/all actions, matching no-op, pre-commit failure, saved-unavailable, audit failure/disabled | semantic audit | Actual actor/transition/outcome; audit failure logged without undoing saved state | BDD-62 | Inspect real audit rows and logs; no task instructions/private budget |
 
 #### DS-6 — Existing-behaviour regression dataset
 
@@ -1129,17 +1420,20 @@ Each row names applicable values; enumerated boundary values are separate test c
 | 6 | manual task queue / already-admitted attempt retry | Normal execution | Still runs under its original authority and cancellation ownership | BDD-18, BDD-54 |
 | 7 | historical run result/chat after rule edit | History independent of projection | Same retained rows/results/links | BDD-37, BDD-48 |
 | 8 | per-agent Deny with God Mode; explicit operator settings | Own Deny wins, values preserved | Unchanged two-layer model | BDD-20, BDD-26 |
+| 9 | admitted timed failed attempt, suspension, immediate capacity refusal, later queue pickup; never-admitted twin | Retry can use ordinary later queue under failed-run authority | Only valid captured continuation dispatches once with original depth/budget/posture; no TaskRun-history dependency | BDD-57 |
+| 10 | original task authority and different explicit run/retry starter | Task carrier was previously overloaded by retry | Corrected split: continuation receipt/lifecycle preserves retry authority while Task.Initiator retains creator/assigner for future fires | BDD-55, BDD-57 |
 
 ### 9.3 Existing regression tests to preserve
 
-This modifies existing behaviour at shared seams; “no regression impact” would be false. Preserve existing assertions unchanged except for explicit new contract fields or the narrowly specified scheduled-Done run/future-once extension. Do not restore tests for deleted legacy timing formats. [S1, S21]
+This modifies existing behaviour at shared seams; “no regression impact” would be false. Preserve existing behavioural assertions except for explicit new contract fields, the narrowly specified scheduled-Done run/future-once extension, and AUTH-1's required authority-carrier separation: the old retry test's assertion that retry overwrites Task.Initiator must move to the private pending-attempt receipt, with a **new assertion that the original Task.Initiator remains unchanged**. Do not weaken its actual queue-pickup/current-graph/effective-budget/refusal checks. Do not restore tests for deleted legacy timing formats. [S1, S21]
 
 | Existing test/source read | Behaviour protected | New regression test |
 |---|---|---|
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/agent/task_trigger_rrule_test.go`::TestTriggerScheduler_EditDuringFire | Newer rule wins over stale re-arm | T20 adds suspension and identical-rule ABA, with fixed expected instant rather than an oracle computed by the new code. |
 | Same absolute scheduler-test source::TestTriggerScheduler_LegacyPathUnchanged | Surviving once mapping and missing-rule refusal | T17/T26 add future-once and suspension cases; do not reintroduce every/cron cases. |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/task/rrule_test.go`::TestRruleExpansion_WallClockDST | Stable wall clock, spring shift, first fall occurrence | T02/T03 shared compiler fixtures. |
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/tools/task_initiator_store_test.go`::TestTaskCreateTool_StoresInitiator | Agent-origin initiator/depth/inherited budget | T22/T28 prove the new path retains the same fields without public serialization. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/tools/task_initiator_store_test.go`::TestTaskCreateTool_StoresInitiator | Agent-origin creator/assigner Initiator/depth/inherited budget | T22/T28 preserve provenance and separate explicit/attempt starters without public serialization. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/agent/sessioncore_initiator_auto_test.go`::TestAutoInitiator_F5_RetryAuthoritySurvivesQueuePickup / TestAutoInitiator_N2_UnreadableRetryAuthorityFailsClosed | Real later queue pickup, current-edge refusal, effective minimum budget, person-started retries and unknown-authority refusal | Preserve those behavioural assertions; move only the old carry-forward storage assertion to pending_attempt, adding unchanged original Task.Initiator. T20/T28 add suspended timed capacity-refusal pickup versus never-admitted twin, concurrent consume and Clear controls; T22 adds the later original-authority fire. TaskRun history stays additive. |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/gateway/task_occurrences_test.go`::TestOccurrences_BucketingAndCaps / TestOccurrences_WireArraysNeverNull | Query-zone buckets/caps and arrays not null | T09/T27 add suspended projections and honest errors. |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/lib/calendar/eventMapping.occurrences.test.ts`::mapToCalendarEvents occurrence-instants suite | Actual chip mapping and no client occurrence engine | T14/T32 add availability/run precedence and one-time/group labels. |
 
@@ -1162,20 +1456,20 @@ Heavy gates stay on CI/remote cluster under team-lead coordination. A reviewer a
 
 | ID | Requirement | Source |
 |---|---|---|
-| FR-001 | MUST create a complete local scheduled task/paired goal initially Inbox with no immediate dispatch. | D1/D2; S1 §2 |
-| FR-002 | MUST expose only create/set/clear/suspend/resume through one scheduling-mutation tool; preserve identity/history and keep ordinary create/update unscheduled. | D2/D3; S1 §1/§2 |
+| FR-001 | MUST publish a complete local scheduled Inbox task only after its normalized paired defining goal; no incomplete task is discoverable/admissible at any crash/cleanup cut point and no immediate manual dispatch. | D1/D2; S1 §2; S26; §5.1.1 |
+| FR-002 | MUST expose create/set/clear/suspend/resume through one scheduling-mutation tool; preserve identity/history and ordinary unscheduled create/update; Clear atomically returns unadmitted Next/blocked work to Inbox so later drain/unblock cannot start it, while admitted continuations remain legal. | D2/D3; S1 §1/§2; S27; §5.1 |
 | FR-003 | MUST strictly validate action/nested shapes and task contract with no discarded unknown/contradictory input. | S1 §2 |
 | FR-004 | MUST compile Calendar-equivalent supported forms and use the existing validator/occurrence engine, bounds, DST and month-end policy. | D2; S1 §2; S3/S9/S21 |
 | FR-005 | MUST freeze preparation-time defaults and preserve series zone; actual rule edits restart count as the Calendar does. | S1 §2/§3 |
 | FR-006 | MUST persist suspension only as optional trigger state, absent=false, without status/goal/session-model changes; invalid suspended triggers refuse. | D5; S1 §1 |
 | FR-007 | MUST preserve suspension through every ordinary writer/replacement and clear it only through explicit Resume/Clear semantics. | D5; S1 §1 |
 | FR-008 | MUST serialize Suspend with final automatic admission and reject stale job/generation callbacks before any execution-state effect. | D5; S1 §1 |
-| FR-009 | MUST close all stale arm/recovery and queue/dependency/follow-up new-run bypasses; already admitted retries remain legal. | D1/D5; S1 §1 |
+| FR-009 | MUST close stale arm/recovery and queue/dependency/follow-up new-run bypasses using shared trusted classification; positively admit a valid pending-attempt continuation after capacity refusal even while suspended/cleared, once, under captured authority/budget, without relying on run history or nil occurrence. | D1/D5; S1 §1; S27; §5.1 |
 | FR-010 | MUST resume strictly future scheduling without replay, count freezing, end extension or synthetic skipped history. | D5; S1 §1 |
 | FR-011 | MUST keep deliberate future one-time set/move eligible after a Done/Failed mirror and keep expired once unfired. | D2/D5; S1 §1 |
 | FR-012 | MUST permit authorized explicit suspended runs with normal gates/context and truthful asynchronous identity, without implicit Resume. | D2/D5; S1 §5 |
 | FR-013 | MUST enforce current-workspace mutation and real creator/assignee ownership; foreign delivery confers no scheduling authority. | S1 §2/§5; S21 |
-| FR-014 | MUST preserve/recheck delegation, initiator, depth, budget and readiness without operator bypass. | S1 §2/§5 |
+| FR-014 | MUST retain task creator/assigner authority for future fires per AUTH-1 (FQ-1 A), checking scheduling permission at mutation time only; later scheduling-tool revocation does not cancel the schedule. Preserve ordinary current execution delegation/depth/budget/readiness; explicit runs/retries keep separate captured authority and never overwrite the task carrier. No new standing-authority state. | S1 §2/§5; S25/S27; Source: Interview, 2026-10-15 |
 | FR-015 | MUST land catalog, ceiling, role inventory, Auto classification and live boot/reload/late wiring together, with real discovery/execution proof. | D1/D4; S1 §3 |
 | FR-016 | MUST use global Ask, explicit **new-worker creation** default Deny and sparse conversation-agent inheritance through the unchanged two-layer resolver; preserve existing entities and submitted operator settings. | D4 amended by Q1 B; S1 §3; S14/S15/S24 |
 | FR-017 | MUST leave all existing worker maps unchanged: missing schedule_task inherits global Ask; no rollout/migration/backfill/marker. Only new workers receive explicit default Deny at creation. | Q1 B; Source: Interview, 2026-10-15; S24 |
@@ -1186,25 +1480,27 @@ Heavy gates stay on CI/remote cluster under team-lead coordination. A reviewer a
 | FR-022 | MUST carry the frozen preview live and on reconnect; missing/malformed preview blocks approval and termination cannot mutate/resurrect. | S1 §3/§4 |
 | FR-023 | MUST keep schedule mutation AutoAsks, preserve exact-grant/Allow/God semantics and deny unresolved unattended Ask without opening a waiting card. | D4; S1 §3 |
 | FR-024 | MUST extend allowlisted task reads with schedule/planned-vs-next-fire/latest-run state and preserve scope/order/100-row metadata. | D2; S1 §5 |
-| FR-025 | MUST share bounded occurrence projection across REST/tools, filter before expansion and never duplicate once or rescan the task store per row. | D2; S1 §5 |
+| FR-025 | MUST share occurrence projection/limits across REST/tools, filter before expansion, enforce request-wide 100-series/100000-work/10000-item/1048576-byte maxima with deterministic whole-query refusal at +1, preserve explicit per-task truncation, and never duplicate once or rescan the store per row. | D2; S1 §5; S28; §5.6 |
 | FR-026 | MUST offer paged old-rule-independent run history, preserve foreign status-only projection and report read faults as unavailable/error. | D2; S1 §5 |
 | FR-027 | MUST render working Suspend/Resume controls in both existing detail surfaces, separately from execution controls and hidden for manual/heartbeat. | D5; S1 §5 |
-| FR-028 | MUST show pending/confirmed/error/unknown-save state honestly, disable duplicate pending activation and support safe read-back/retry. | D5; S1 §5 |
+| FR-028 | MUST show pending/confirmed/error/unknown-save and saved-but-unavailable state honestly in both controls; HTTP 200 Task plus GET schedule state distinguishes saved active/unavailable from exhausted, with null next fire/warnings and idempotent Retry activation; disable duplicate pending activation and support safe read-back. | D5; S1 §5; S28; §5.5/§6.2 |
 | FR-029 | MUST explain no replay/admitted-work/count/end/zone/offset semantics in controls/card, with no raw schedule syntax or colour-only meaning. | D4/D5; S1 §3/§5 |
 | FR-030 | MUST preserve recorded-run outcome/result/chat precedence, past No record, once/group timestamps and factual counts while showing current suspension separately; scheduled work remains Calendar-only and excluded from Board/List. | D5; S1 §5; S21 |
-| FR-031 | MUST refresh related views after UI/agent mutation, preserve unrelated drafts and omit untouched/read-only trigger data from metadata saves. | S1 §4/§5 |
+| FR-031 | MUST reject stale trigger PATCH atomically through required expected_schedule_hash/current locked comparison and exact 400/409 outcomes; both views preserve drafts and offer read/review/reapply, refresh shared state after UI/agent saves, and omit trigger/token on metadata-only saves. | S1 §4/§5; S28; §5.5/§6.2 |
 | FR-032 | MUST keep controls/card keyboard-accessible and complete on narrow/assistive views using the existing design system. | S1 §5; S18/S22 |
 | FR-033 | MUST use contract-first generated types/runtime validation, input-only trigger schemas and the exact new endpoints/optional fields without a new run status/frame/entity. | S1 §4; S16/S22 |
 | FR-034 | MUST retain old-file compatibility and supported pure-Go/single-binary/bounded-footprint runtime; disclose unsafe flag-ignorant downgrade. | S1 §1; S22 |
+| FR-035 | MUST use existing semantic audit integration for both front doors/all five actions, no-ops and actual saved/refused/failed outcomes, recording actor/workspace/task/before-after schedule identity without instructions/private budgets; audit-write failure follows existing logged best-effort, not rollback. | MIN-001; S29; §5.3.1 |
+| FR-036 | MUST freeze and render the plain continuing-authority notice for create/set/resume in generated TaskScheduleApprovalPreview and live/reconnect approval cards; missing/altered notice cannot approve. DOC-01/02/03 must plainly explain original task authority and non-revocation by later scheduling-tool permission removal. | FQ-1 A; S25; Source: Interview, 2026-10-15; §5.5/§6.4/§13 |
 
 ### 10.2 Success criteria
 
 | ID | Measurable acceptance outcome |
 |---|---|
-| SC-001 | All 34 FR rows and all 54 BDD scenarios map to planned tests; implementation receipts later prove every row, including the confirmed existing-worker and Omnipus policy decisions. |
-| SC-002 | Deterministic pre-admission Suspend cases create **zero** new automatic status resets/runs/sessions; admitted-first cases produce exactly the allowed prior run, never an extra catch-up burst. |
-| SC-003 | Both actual detail surfaces can suspend and resume; live/reconnect approvals show the identical prepared payload/time and cannot execute a stale/invalid proposal. |
-| SC-004 | Compiler/Calendar fixed fixtures agree; bounds at 99/100000/400 days/500 instants/10000 irregular iterations remain enforced, no per-row whole-store scan and root runtime/footprint gates are evidenced. No unmeasured latency claim. |
+| SC-001 | All **36 FR**, **63 BDD** and **36 planned tests** remain linked: 7 stories / 28 acceptance criteria, 6 datasets / 84 rows, 6 success criteria and 7 evaluator-only scenarios. Later receipts prove each mapped behaviour, including Q1/Q2 and FQ-1 A; document-link integrity alone is not runtime coverage. |
+| SC-002 | Pre-admission Suspend and unadmitted Clear cases create **zero** new automatic resets/runs/sessions, including later drain/unblock; admitted retries still pick up once after capacity refusal. No extra catch-up burst. |
+| SC-003 | Both detail surfaces reject genuine stale-rule saves without losing drafts and show saved-but-unavailable versus exhausted truthfully; live/reconnect approvals preserve exact payload/time and the required continuing-authority notice, refusing stale/invalid proposals. |
+| SC-004 | Independent Calendar fixtures agree; 99/100000/400-day/per-task bounds and request-wide 100-series/100000-work/10000-item/1048576-byte maxima are enforced at cap/+1. No per-row whole-store scans; runtime/footprint gates later evidenced, no unmeasured latency claim. |
 | SC-005 | Local eligible roles discover and execute the real tool; default-worker, foreign-scope, Auto/unattended and operator-matrix fixtures produce the specified outcomes without changing the resolver. |
 | SC-006 | All matching public-doc TODOs pass docs-verifier; exact-commit agent-engine UAT and independent validation pass before integration landing; the five-reviewer gate and founder approval are recorded. |
 
@@ -1214,40 +1510,42 @@ T IDs resolve to the named tests in §9.1. Multiple tests per scenario intention
 
 | Requirement | User story | BDD scenarios | Planned tests |
 |---|---|---|---|
-| FR-001 | US-1 | BDD-01, BDD-02, BDD-07, BDD-08 | T16, T18, T30 |
-| FR-002 | US-1 | BDD-03, BDD-05 | T01, T17, T30 |
+| FR-001 | US-1 | BDD-01, BDD-02, BDD-07, BDD-08, BDD-56 | T16, T18, T30 |
+| FR-002 | US-1 | BDD-03, BDD-05, BDD-58 | T01, T17, T30 |
 | FR-003 | US-1 | BDD-05, BDD-07 | T01, T18 |
 | FR-004 | US-1 | BDD-02, BDD-05, BDD-06 | T01, T02, T03 |
 | FR-005 | US-1, US-4 | BDD-04, BDD-29 | T03, T24, T33 |
 | FR-006 | US-2, US-7 | BDD-09, BDD-16, BDD-17, BDD-51 | T04, T19, T26, T29 |
 | FR-007 | US-1, US-2 | BDD-03, BDD-15 | T05, T17 |
 | FR-008 | US-2 | BDD-09, BDD-10, BDD-11 | T19, T20 |
-| FR-009 | US-2, US-5 | BDD-11, BDD-17, BDD-18, BDD-54 | T16, T20, T28 |
+| FR-009 | US-2, US-5 | BDD-11, BDD-17, BDD-18, BDD-54, BDD-57 | T16, T20, T28 |
 | FR-010 | US-2, US-7 | BDD-12, BDD-13, BDD-50 | T03, T14, T21, T34 |
 | FR-011 | US-2 | BDD-13, BDD-14 | T03, T17, T21 |
 | FR-012 | US-5 | BDD-40, BDD-41, BDD-54 | T28, T34 |
 | FR-013 | US-3, US-5 | BDD-23, BDD-24, BDD-39 | T08, T22, T27, T35 |
-| FR-014 | US-3, US-5 | BDD-25, BDD-30, BDD-54 | T22, T24, T28, T35 |
-| FR-015 | US-3 | BDD-19 | T23, T30 |
+| FR-014 | US-3, US-5 | BDD-25, BDD-30, BDD-54, BDD-55, BDD-57 | T22, T24, T28 |
+| FR-015 | US-3 | BDD-19 | T23, T30, T35 |
 | FR-016 | US-3 | BDD-20, BDD-26 | T06, T22, T35 |
-| FR-017 | US-3 | BDD-21 | T07, T35 |
-| FR-018 | US-3 | BDD-22 | T06, T35 |
+| FR-017 | US-3 | BDD-21 | T07, T23 |
+| FR-018 | US-3 | BDD-22 | T06, T23 |
 | FR-019 | US-4 | BDD-04, BDD-29, BDD-30 | T03, T24, T33 |
-| FR-020 | US-4 | BDD-27, BDD-28 | T12, T25, T33 |
+| FR-020 | US-4 | BDD-27, BDD-28, BDD-63 | T12, T25, T33 |
 | FR-021 | US-4 | BDD-25, BDD-30 | T22, T24, T33 |
 | FR-022 | US-4 | BDD-31, BDD-32, BDD-33 | T13, T25, T33 |
 | FR-023 | US-3, US-4 | BDD-20, BDD-29, BDD-34 | T06, T24, T35 |
 | FR-024 | US-5 | BDD-35 | T08, T27, T30 |
-| FR-025 | US-5 | BDD-36, BDD-38 | T09, T27 |
+| FR-025 | US-5 | BDD-36, BDD-38, BDD-61 | T09, T27 |
 | FR-026 | US-5 | BDD-37, BDD-38, BDD-39 | T08, T09, T27 |
 | FR-027 | US-6 | BDD-42 | T10, T31 |
-| FR-028 | US-6 | BDD-43, BDD-44 | T10, T31 |
+| FR-028 | US-6 | BDD-43, BDD-44, BDD-60 | T10, T26, T31 |
 | FR-029 | US-4, US-6 | BDD-27, BDD-28, BDD-47 | T12, T15, T31, T33 |
 | FR-030 | US-7 | BDD-48, BDD-49, BDD-50, BDD-52 | T14, T32 |
-| FR-031 | US-6 | BDD-45 | T11, T31 |
+| FR-031 | US-6 | BDD-45, BDD-59 | T11, T26, T31 |
 | FR-032 | US-6 | BDD-46, BDD-47 | T15, T31 |
-| FR-033 | US-2, US-4, US-7 | BDD-16, BDD-31, BDD-51 | T04, T25, T26, T32 |
+| FR-033 | US-2, US-4, US-6, US-7 | BDD-16, BDD-31, BDD-51, BDD-59, BDD-60, BDD-63 | T04, T25, T26, T32 |
 | FR-034 | US-2, US-7 | BDD-17, BDD-53 | T29, T32 |
+| FR-035 | US-3 | BDD-62 | T36 |
+| FR-036 | US-4 | BDD-63 | T12, T13, T25, T33 |
 
 ## 11. Reachability — mandatory before a completion claim
 
@@ -1273,9 +1571,9 @@ Use the real compiled backend with the matching embedded SPA and isolated data/w
 
 | UAT row | Human/agent journey | Pass evidence |
 |---|---|---|
-| UAT-01 | Conversation agent discovers, proposes and creates once and recurring tasks under Ask; person approves full card. | Real tool trace/card, one saved task/goal each, correct Calendar positions, zero immediate run. |
-| UAT-02 | Agent edits schedule/rule/end, converts recurring→once and moves a once after a completed mirror. | Exact old→new preview, preserved ID/history/suspension/zone, actual later eligible once fire. |
-| UAT-03 | Use Suspend then Resume in **each** existing detail surface. | Both controls render/POST, saving/error state, read-back/reload/cross-view agreement and keyboard/narrow-screen evidence. |
+| UAT-01 | Conversation agent discovers/proposes once and recurring work; person approves full card. | Real tool/card, complete task/goal each, correct positions, zero immediate run; **create** authority notice plainly visible before approval. |
+| UAT-02 | Agent edits schedule/rule/end, converts recurring→once and moves a once after a completed mirror; include different original task authority and a simultaneous explicit-run retry. | Exact old→new preview and **set/resume** authority notice, preserved ID/history/suspension/zone/original authority, **actual later eligible once fire**; retry starter does not replace task authority; later scheduling-tool revocation does not cancel, ordinary execution-edge/end gates still apply. |
+| UAT-03 | Use Suspend then Resume in **each** existing detail surface; additionally fault registration after saved Resume and exercise a genuine stale recurrence save. | Both controls render/POST with saving/error state, GET read-back/reload/cross-view agreement, keyboard/narrow-screen evidence; draft read/review/reapply on 409, saved-active/unavailable Retry activation versus exhausted. |
 | UAT-04 | Suspend before a real due position; separately suspend after a run is admitted. | Active positive-control fires; suspended new run count stays zero; already admitted run/helpers/attempts finish normally. |
 | UAT-05 | Leave multiple positions behind suspension, then Resume; include exhausted count and elapsed once. | No burst/missed replay; first eligible future fire only; exhausted/expired has null next fire and truthful explanation. |
 | UAT-06 | Agent reads default tasks, occurrences and old-rule run history; explicitly Run now while suspended. | Planned-versus-next-fire distinction, paginated history/links, permitted run without Resume; future occurrence and ordinary Done refusal controls. |
@@ -1292,9 +1590,9 @@ These are specific **TODOs**, not claims that public docs changed in this spec-o
 
 | ID / owner | Existing absolute page | Matching documentation TODO / audit acceptance |
 |---|---|---|
-| DOC-01 / frontend-lead | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/calendar.md` | Explain both schedule controls, separate from Stop; Suspended versus recorded status/No record/one-time/groups; no replay/count continues, exhausted/expired Resume, kept zone and rule-edit count reset versus suspension. Remove the affected stale old-format-keeps-firing claim. Keep current Week/Day/Month interaction description accurate. |
-| DOC-02 / backend-lead | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/tasks.md` | Explain structured schedule_task versus ordinary create/update; local scope; new schedule read/history views; explicit suspended Run now and future-occurrence restriction; no confusion with execution Stop/Restart or new Board visibility. |
-| DOC-03 / backend-lead with prompt-engineer copy | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/tools.md` | Describe Ask tool, new-worker default Deny versus existing-worker inherited Ask with **no migration** (Q1 B), Omnipus scheduling under global Ask/AutoAsks with no per-agent Ask (Q2 YES), unattended refusal, readable exact approval and changed-proposal/grant scope. Update the affected Ask-membership statement to actual landed facts. |
+| DOC-01 / frontend-lead | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/calendar.md` | Explain both controls separate from Stop; Suspended versus recorded/No record/once/groups; no replay/count continues, exhausted/expired versus saved-active/unavailable and Retry activation; stale-save draft read/review/reapply; retained zone/count-reset-on-edit. **State plainly FQ-1 A: future fires use the task's existing creator/assigner authority, including human origin; later removing the scheduling agent's scheduling permission does not stop the schedule—Suspend or remove timing to stop future starts, subject to normal ends/execution gates.** Remove affected stale old-format guidance; keep Week/Day/Month description accurate. |
+| DOC-02 / backend-lead | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/tasks.md` | Explain schedule_task versus ordinary create/update, local reads/history/Run now and future-occurrence refusal, no new Board scheduled rows; Clear unadmitted work returns Inbox, admitted retries continue. **Plainly state FQ-1 A's original task authority and that revoking the scheduling agent's tool permission later does not cancel it; use Suspend/remove timing, with ordinary ends/execution gates still applying.** Explain the same notice before create/set/resume approval and saved versus armed/unavailable read-back. |
+| DOC-03 / backend-lead with prompt-engineer copy | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/tools.md` | Describe Ask tool, new-worker Deny versus unchanged existing-worker inherited Ask (Q1 B), Omnipus inherited Ask/AutoAsks without per-agent Ask (Q2 YES), unattended refusal, exact card/grants. **Plainly state FQ-1 A: scheduling permission is checked at mutation time; future fires keep existing task creator/assigner authority, not the Set/Resume caller; revoking that caller's scheduling permission later does not stop it.** Include the continuing-authority notice and Suspend/remove-timing guidance, not a promise to bypass ends/execution gates. Update Ask membership from actual landed facts. |
 | DOC-04 / backend-lead with prompt-engineer copy | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/reference/built-in-tools.md` | Regenerate the catalog from real tool metadata after descriptions/classification land; include scheduling tool and accurate Under Auto value. Do not hand-edit generated descriptions. Existing generator is `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/cmd/docsref/main.go`::renderTools. |
 | DOC-05 / backend-lead | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/operations/tools-configuration.md` | Replace obsolete Cron Tool guidance and affected config example with task-trigger scheduling/new permission. Warn explicitly that older binaries ignore suspension and can fire suspended work; saved and armed are separate claims. Do not add a feature-specific execution timeout. |
 
@@ -1304,7 +1602,7 @@ Docs-verifier audits each checkable claim against the implemented code/real entr
 
 | Unit | Owner | Dependency / scope |
 |---|---|---|
-| Decisions + reviews | Team-lead/founder | Q1 B/Q2 YES recorded with Source: Interview, 2026-10-15; exactly the prescribed two specification grill/interview/fix rounds remain, then escalate remaining blockers. This draft does not run or consume a review round. |
+| Decisions + reviews | Team-lead/founder | Q1 B/Q2 YES and FQ-1 A recorded, Source: Interview, 2026-10-15. This is **fix round 1 after the first grill**, not a second grill or a review PASS. Next run the mandatory second/final specification grill, interview on its founder questions, then its one correction; escalate remaining blockers, never loop to a third round. No new ADR choice remains (§1.2). |
 | Contracts | Backend-lead | Reconcile actual L1 target; contract edits/regeneration atomically before consumers (§5.5). No frontend-owned contract edit. |
 | RED | QA-lead | Frozen acceptance/shape, before implementation. Preserve current regression tests and independent oracles. |
 | Domain/query/scheduler/admission | Backend-lead | Contract baseline, then shared seams. Coordinate agent/gateway file ownership serially; new helpers in siblings rather than growing budget-pinned files. |
@@ -1321,11 +1619,12 @@ Each writer gets its own worktree. Do not merge L1, modify source/contracts/test
 |---|---|---|
 | Q1 worker upgrade | “Worker-default Deny means migrate old entities.” | Resolved **Q1 B**, Source: Interview, 2026-10-15. Existing maps stay unchanged; absent key inherits Ask. FR-017/T07/UAT-07 mandatory; no migration. |
 | Q2 Omnipus capability | “Its older closed supporting set must keep scheduling denied, or adding scheduling grants all task tools.” | Resolved **Q2 YES**, Source: Interview, 2026-10-15. Add schedule_task only, no per-agent Ask; inherited Ask/AutoAsks. FR-018 mandatory, no silent read/run grants. |
+| FQ-1 continuing authority | “Set/Resume binds future runs to the scheduling caller, or later tool revocation cancels existing timing.” | Resolved **FQ-1 A**, Source: Interview, 2026-10-15. AUTH-1 retains original task creator/assigner authority; FR-014/036, BDD-25/55/63 and DOC-01/02/03 apply. Provisional alternative discarded, no new standing-authority state. |
 | L1 has not landed here | “Candidate helper and its UI groups are current checkout facts.” | Pin candidate separately, reconcile on actual landing and resolve its recorded membership drift in its owning unit. |
 | Missing graph/reference library | “Impact processes/patterns were verified anyway.” | No graph claim; manual impact Inferred. Requested Go pattern index is absent; use named local evidence. |
 | Holdout visibility | “A section in a shared spec is a secret oracle.” | §16 is evaluator-only and excluded from development/test matrices; it is not a genuinely blind secret in this repository. Team-lead keeps it out of implementing briefs. |
 
-Assumptions are limited to the dispatched D1–D6 input, existing application prerequisites and the explicitly supplied Q1 B/Q2 YES founder answers. No additional founder answer, global priority, production performance result, migration mechanism or approval authority is invented. Current code wins over dated documents. **RRULE (RFC 5545) as the Recurrence Model for Task Triggers** retains obsolete legacy-compatibility/agent-scheduling passages; use **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths** and verified current code for the removed timing/foreign-arming boundaries. This spec flags the disagreement and does not amend unrelated ADRs or restore removed features. [S1, S21]
+Assumptions are limited to dispatched D1–D6, existing prerequisites and the explicitly supplied Q1 B/Q2 YES/**FQ-1 A** founder answers. The FQ-1 answer is recorded in §1.2/AUTH-1; no authority answer remains outstanding. No additional founder answer, global priority, production performance result, migration mechanism or approval authority is invented. Current code wins over dated documents. **RRULE (RFC 5545) as the Recurrence Model for Task Triggers** retains obsolete legacy-compatibility/agent-scheduling passages; use **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths** and verified current code for the removed timing/foreign-arming boundaries. This spec flags the disagreement and does not amend unrelated ADRs or restore removed features. [S1, S21]
 
 **Clarification / decisions log, 2026-10-15 — Source: Interview, 2026-10-15**: squad-lead relayed founder Q1 B (existing workers inherit global Ask; NO one-time rollout/migration; only new workers explicit Deny) and Q2 YES (Omnipus MAY schedule; supporting-set addition; no per-agent Ask, global Ask/AutoAsks). This overrides the original A/A brief. The design note's former Q1/Q2 sections/status and affected policy text are amended in this same commit. These are confirmed decisions, not a claimed spec grill, implementation gate or UAT PASS.
 
@@ -1345,7 +1644,7 @@ These seven external evaluations are for post-implementation verification by the
 
 ## 17. Evidence table
 
-Verified here means first-hand **source inspected**, not implemented behaviour exercised. Proposed consequences/impact are inferred. Planned tests/UAT have no RED/GREEN receipt yet. Absolute paths below identify source symbols; no line-number citations are used.
+Evidence S1–S24/E-CONTEXT retains the initial author's pinned **source-inspection provenance**, not a claim that every old command was rerun in this fix. Current-round first-hand reads/decision receipts are S25–S30 and the revised E-VERIFY. Source inspection is not implemented behaviour exercised; proposed consequences/impact are inferred, and planned runtime tests/UAT have no RED/GREEN receipt yet. Absolute paths identify source symbols, never line numbers.
 
 | Claim | Evidence | Certainty |
 |---|---|---|
@@ -1374,5 +1673,11 @@ Verified here means first-hand **source inspected**, not implemented behaviour e
 | S23 — Existing build/toolchain and frontend typecheck | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/go.mod`::go 1.26.9 / existing recurrence dependency; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/package.json`::scripts.typecheck / scripts.build. | Verified (high) |
 | E-CONTEXT — Graph unavailable, controlled manual scope/reachability/reference checks | `gitnexus status` exit 0: “Repository not indexed”; checkout query exit 1: repository not found. `/Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-evidence-20261015/discovery-0.log`, `/Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-evidence-20261015/discovery-1.log`; manual `/Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-evidence-20261015/trigger-writers.log`, `/Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-evidence-20261015/dispatch-callers.log`, `/Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-evidence-20261015/approval-callers.log`, `/Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-evidence-20261015/ui-consumers.log`. Literal positive-control rg create_task exit 0 in all three required trees (3/1/13 files); schedule_task exit 1 in each (0 files). Python reference check found built-in reference true and requested Go index false. | Verified checks (high); blast radius Inferred (medium), no graph result |
 | S24 — Founder answers override original recommendations and remove confirmation ambiguity | Supplied squad-lead steer, **Source: Interview, 2026-10-15**: “Q1 = B: existing workers stay on the global ask; NO one-time rollout/migration … only NEW workers get explicit deny”; “Q2 = YES … add schedule_task to omnipusSupportedTools … no per-agent Ask entry … global ask.” | Verified supplied decision receipt (high); no independent interview claimed |
-| E-VERIFY — Document integrity, not runtime tests | `python3 -I /Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-evidence-20261015/check_spec.py` exit 0: PASS, 7 stories / 28 acceptance criteria / 54 BDD / 35 planned tests / 6 datasets with 64 rows / 34 FR / 6 SC / 7 evaluator scenarios; all five intentionally broken-document controls detected. Initial check exit 1 found BDD-52 missing from the matrix; FR-030/matrix corrected before the passing run. Receipts: `/Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-evidence-20261015/spec-integrity.json` and `/Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-evidence-20261015/spec-integrity-initial-failure.log`. | Verified document checks (high); no implementation-test PASS |
-| **Self-check** | Reconciled this draft and amended design against D1–D6, confirmed Q1 B/Q2 YES with interview source, current/candidate source separation, backend and frontend stories, every requirement/scenario/planned-test link, contract-first delta, both controls/approval Reachability, docs TODOs and exact-commit independent UAT. Final integrity/scope/commit/push receipts are reported separately by the author; no implementation, runtime tests or UAT are claimed by this artifact. | Verified authored-content check; implementation acceptance Unknown |
+| S25 — Round-1 input and founder's superseding authority answer | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/docs/internal/specs/sched-tasks-suspend-resume-spec-review.md`::MAJ-001–007 / MIN-001–002 / OBS-001 / FQ-1; current supplied squad-lead steer, **Source: Interview, 2026-10-15**, FQ-1 **A**: original task authority, mutation-time scheduling permission only, no new standing-authority state, required preview/card and three-page docs disclosure. AUTH-1/§1.2 record it; provisional alternative discarded. | Verified supplied decision/source (high), no independent interview claimed |
+| S26 — Publication and canonical cross-store order | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/task/store.go`::Store.Create / CreateByAgent; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/tools/task.go`::SyncTaskGoalRecord / taskCreateToolExecute.persistAndRespond; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/agent/task_trigger.go`::Reconcile; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/goal/store.go`::Store.Create / Delete / LOCK ORDER; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/goal/doc.go`::Lock order. Initial inverse draft corrected to existing goal→task order, before commit. | Verified current source (high); proposed crash/publication safeguards Inferred, not executed |
+| S27 — Existing task authority and retry/queue carrier collision | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/task/task.go`::Task.Initiator / Initiator; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/tools/task.go`::taskUpdateToolExecute.applyReassignment; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/agent/task_executor.go`::automaticInitiator / executeTask / CheckQueuedTasks; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/agent/task_run_loop.go`::consumeTaskAttempt / retryAuthority; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/agent/task_executor_run.go`::runTask / openRun; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/agent/sessioncore_initiator_auto_test.go`::TestAutoInitiator_F5_RetryAuthoritySurvivesQueuePickup / TestAutoInitiator_N2_UnreadableRetryAuthorityFailsClosed. | Verified current source/test read (high), not a test run; new receipt is planned |
+| S28 — Exact current REST/error/read contracts and consumers ground the new shapes | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/Task.yaml`::Task; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/TaskUpdateRequest.yaml`::TaskUpdateRequest; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/components/schemas/ErrorResponse.yaml`::error / code / field; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/contracts/openapi.yaml`::updateTask / listTaskOccurrences; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/gateway/task_occurrences.go`::buildOccurrenceSets / perTaskInstantCap / perTaskIterationBudget; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/lib/calendar/useOccurrences.ts`::fetchTaskOccurrences / occurrencesQueryKey; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/components/calendar/CalendarEventSlideOver.tsx`::CalendarEventSlideOver. | Verified current source (high); conditional writes/activation/budget delta proposed, not regenerated |
+| S29 — Existing semantic audit is explicit and best-effort | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/gateway/rest_tasks.go`::auditTask / auditTriggerChange; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/pkg/audit/audit.go`::Entry / validEventNames / DecisionAllow / DecisionDeny / DecisionError. | Verified current source (high); new audit acceptance planned |
+| S30 — Named catalogued UI reuse is available | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/design-system/catalog.json`::entries; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/components/ui/button.tsx`::Button; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/sched-tasks/src/components/ui/FormError.tsx`::FormError. Catalog extraction exit 0: `catalogued_required_components=8`; absolute-source export inventory `/Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-fix1-evidence-20261015/catalog-reuse.json`. | Verified source/catalog (high), no rendered conformance claim |
+| E-VERIFY — Revised integrity instrument, not runtime tests | `python3 -I /Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-fix1-evidence-20261015/check_spec.py` exit 0: PASS, **7 stories / 28 acceptance criteria / 63 BDD / 36 planned tests / 6 datasets / 84 rows / 36 FR / 6 SC / 7 evaluator scenarios**, errors=[]; all **10** deliberately broken-document controls rejected. Counts/settled-authority checks explicitly revised from the original checker; no relaxed coverage condition. Unchanged independent link-audit copy exit 0, same counts/errors=[], all **3** negative controls detected. Receipts: `/Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-fix1-evidence-20261015/spec-integrity.json`, `/Users/danielpiatkowski/AI-Agent-Workspace/sched-tasks-spec-fix1-evidence-20261015/spec-links.json`. | Verified document checks/instrument (high); not feature-test GREEN |
+| **Self-check** | Re-read the authored spec/design diff against all ten round-1 findings and the superseding FQ-1 A steer; removed the discarded authority branch, reconciled BDD-25/notice/docs, kept Q1/Q2 and all UAT rows, checked canonical goal→task lock order against source, contract inventory/shape/reuse hand-off and all 36 FR/63 BDD/36 test links. Revised integrity plus unchanged independent link audit reject their broken-document controls; whitespace/scope checks and final exact-tree reruns/commit/push receipts are recorded by the author separately. Only spec/design change; no production/contracts/tests edited or runtime tests/UAT/feature PASS claimed. | Verified document/source self-check (high); future implementation acceptance Unknown |
