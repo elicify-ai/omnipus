@@ -74,16 +74,17 @@ type providerRegionDTO struct {
 }
 
 type modelDTO struct {
-	ID                string   `json:"id"`
-	Name              string   `json:"name"`
-	ReleaseDate       string   `json:"release_date"`
-	ContextWindow     int      `json:"context_window"`
-	MaxOutputTokens   int      `json:"max_output_tokens"`
-	InputModalities   []string `json:"input_modalities"`
-	ToolCall          bool     `json:"tool_call"`
-	Status            string   `json:"status"`
-	Disputed          bool     `json:"disputed"`
-	InferenceProfiles []string `json:"inference_profiles"`
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	ReleaseDate       string     `json:"release_date"`
+	ContextWindow     int        `json:"context_window"`
+	MaxOutputTokens   int        `json:"max_output_tokens"`
+	InputModalities   []string   `json:"input_modalities"`
+	ToolCall          bool       `json:"tool_call"`
+	Status            string     `json:"status"`
+	Disputed          bool       `json:"disputed"`
+	InferenceProfiles []string   `json:"inference_profiles"`
+	Cost              *ModelCost `json:"cost,omitempty"`
 }
 
 // invalid builds a rejection naming path.
@@ -485,6 +486,7 @@ func parseModel(path string, dto *modelDTO) (Model, error) {
 		Status:            status,
 		Disputed:          dto.Disputed,
 		InferenceProfiles: profiles,
+		Cost:              dto.Cost,
 	}, nil
 }
 

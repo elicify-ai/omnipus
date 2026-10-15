@@ -81,6 +81,7 @@ type ModelContentBlock struct {
 // "ephemeral" is produced by the Anthropic adapter).
 type ModelCacheControl struct {
 	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 // ModelToolCall mirrors providers.ToolCall EXACTLY, including the three
@@ -183,7 +184,7 @@ func EncodeModelPayload(msg providers.Message) (ModelPayload, error) {
 func encodeContentBlock(p providers.ContentBlock) ModelContentBlock {
 	block := ModelContentBlock{Type: p.Type, Text: p.Text}
 	if p.CacheControl != nil {
-		block.CacheControl = &ModelCacheControl{Type: p.CacheControl.Type}
+		block.CacheControl = &ModelCacheControl{Type: p.CacheControl.Type, TTL: p.CacheControl.TTL}
 	}
 	return block
 }
@@ -235,7 +236,7 @@ func DecodeModelPayload(p ModelPayload) (providers.Message, error) {
 		for i, b := range p.SystemParts {
 			block := providers.ContentBlock{Type: b.Type, Text: b.Text}
 			if b.CacheControl != nil {
-				block.CacheControl = &providers.CacheControl{Type: b.CacheControl.Type}
+				block.CacheControl = &providers.CacheControl{Type: b.CacheControl.Type, TTL: b.CacheControl.TTL}
 			}
 			out.SystemParts[i] = block
 		}

@@ -96,6 +96,10 @@ type UsageBucket struct {
 	// CacheWrite is tokens written into a new cache entry (Anthropic only).
 	// See CacheRead's comment for its relationship to Total.
 	CacheWrite int
+	// CacheHitRatio is cache reads divided by uncached input plus cache read
+	// plus cache write. Nil when that denominator is 0. AggregateUsage does
+	// not set it yet.
+	CacheHitRatio *float64
 	// Total is the authoritative recorded token total for this bucket
 	// (SessionStats.TokensTotal for agent/session dimensions, ModelTokens.Total
 	// for the model dimension), accumulated independently of In/Out/CacheRead/
@@ -149,6 +153,13 @@ type UsageReport struct {
 	// Buckets contains one entry per grouping key, sorted descending by Total
 	// then ascending by Key.
 	Buckets []UsageBucket
+	// ByProvider is the per-catalog-provider breakdown, same cell shape as a
+	// model bucket. Nil until provider totals are summed.
+	ByProvider map[string]UsageBucket
+	// UnpricedTokens sums unpriced portions only, not whole calls.
+	UnpricedTokens int
+	// SubscriptionTokens sums ChatGPT sign-in tokens, which recorded no dollars.
+	SubscriptionTokens int
 }
 
 // periodBounds computes the [start, end) bounds for the requested period,
@@ -192,6 +203,13 @@ func resolveLabel(agentID string, opts UsageOptions) string {
 		}
 	}
 	return agentID
+}
+
+// CacheHitRatio returns cacheRead / (uncached + cacheRead + cacheWrite), or
+// nil when that denominator is 0. The skeleton always returns nil.
+func CacheHitRatio(uncached, cacheRead, cacheWrite int) *float64 {
+	_, _, _ = uncached, cacheRead, cacheWrite
+	return nil
 }
 
 // AggregateUsage aggregates a slice of *UnifiedMeta into a UsageReport.
