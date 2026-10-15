@@ -2,6 +2,7 @@ package systools_test
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -54,7 +55,7 @@ func wu3FileInventory(t *testing.T, home string) []string {
 		root := filepath.Join(home, dir)
 		walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				if os.IsNotExist(err) && path == root {
+				if errors.Is(err, os.ErrNotExist) && path == root {
 					return nil
 				}
 				return err
