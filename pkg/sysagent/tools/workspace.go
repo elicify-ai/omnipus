@@ -703,16 +703,23 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 			return workspaceMutationError(id, "save_delegation", "partial", actual.Revision, workspaceChangedFields(state.Workspace, actual.Workspace), workspaceActualState(actual))
 		}
 	}
+	return t.updateWorkspaceResult(w, coreTeamChanged, delegationSeedNote, setupCompletedNote)
+}
+
+// updateWorkspaceResult is update_workspace's success result for the saved
+// record w. After a team change it first provisions the members' mains
+// (provisionMemberMains), reporting a provisioning failure as
+// main_chat_warning.
+func (t *WorkspaceUpdateTool) updateWorkspaceResult(w workspacepkg.Workspace, coreTeamChanged bool, delegationSeedNote, setupCompletedNote string) *tools.ToolResult {
 	var mainChatWarning string
 	if coreTeamChanged {
-		mainChatWarning = provisionMemberMains(t.deps, "update_workspace", id)
+		mainChatWarning = provisionMemberMains(t.deps, "update_workspace", w.ID)
 	}
-	tc := computeWorkspaceTaskCount(t.deps.Home, id)
 	resp := map[string]any{
 		"id": w.ID, "name": w.Name, "description": w.Description,
 		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
 		"core_team":  w.CoreTeam,
-		"task_count": tc, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
+		"task_count": computeWorkspaceTaskCount(t.deps.Home, w.ID), "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
 	}
 	if mainChatWarning != "" {
 		resp["main_chat_warning"] = mainChatWarning
