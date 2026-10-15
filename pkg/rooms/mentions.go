@@ -25,6 +25,9 @@ type typedMentions struct {
 	all bool
 	// ambiguous names a typed @Name that matched several members.
 	ambiguous string
+	// unresolved is true when an @-name matched no member (§6.13: it stays
+	// text and addresses nobody).
+	unresolved bool
 }
 
 // resolveTyped applies §6.13 to typed text: at every "@" the longest exact,
@@ -57,8 +60,11 @@ func resolveTyped(text string, members []Agent) typedMentions {
 			}
 		}
 		if bestLen == 0 {
-			if strings.HasPrefix(rest, mentionAll) && boundaryAt(rest, len(mentionAll)) {
+			switch {
+			case strings.HasPrefix(rest, mentionAll) && boundaryAt(rest, len(mentionAll)):
 				out.all = true
+			case len(rest) > 0 && !boundaryAt(rest, 0):
+				out.unresolved = true
 			}
 			continue
 		}

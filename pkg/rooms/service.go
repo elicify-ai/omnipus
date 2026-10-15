@@ -110,8 +110,10 @@ type Service struct {
 	now     func() time.Time
 	ctx     context.Context
 	cancel  context.CancelFunc
-	// inflight counts the background admissions.
-	inflight sync.WaitGroup
+	// inflight counts the background admissions; admitting maps a delivery
+	// id in flight to a channel closed when its admission finished.
+	inflight  sync.WaitGroup
+	admitting sync.Map
 
 	mu        sync.Mutex
 	rooms     map[string]*room
@@ -296,6 +298,14 @@ func (s *Service) recover(r *room) {
 			continue
 		}
 		next, reason := s.recoveredState(r, d)
+		if next == StateInterrupted && d.SessionID != "" {
+			// Interrupted work is never replayed (§6.11): the member's request
+			// is discarded so no later turn picks it up again.
+			if err := s.deps.Discard(d.SessionID, d.RequestID); err != nil {
+				slog.Error("rooms: an interrupted request could not be discarded; the dequeue fence still refuses it",
+					"room_id", r.rec.ID, "request_id", d.RequestID, "error", err)
+			}
+		}
 		if next == d.State && reason == d.Reason {
 			continue
 		}
@@ -314,6 +324,11 @@ func (s *Service) recover(r *room) {
 // recoveredState decides a delivery's state after a restart from the
 // member's ledger (the receiver facts).
 func (s *Service) recoveredState(r *room, d *deliveryRecord) (string, string) {
+	if d.Consumed {
+		// The room recorded that a turn had taken it; the restart cut that
+		// turn off.
+		return StateInterrupted, ReasonRestart
+	}
 	facts, err := s.deps.Facts(addressing.Pair{WorkspaceID: r.rec.WorkspaceID, AgentID: d.AgentID}, d.RequestID)
 	if err != nil {
 		return StateUnknown, ""

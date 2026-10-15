@@ -534,7 +534,7 @@ func (g *roomGate) prepared(err error) {
 // message that started it), a room input when that message is a room
 // request; steered inputs are added as the turn consumes them.
 func (al *AgentLoop) newTurnRoomMeter(msg bus.InboundMessage) *roomCostMeter {
-	m := &roomCostMeter{al: al, inputs: 1, rooms: map[string]int{}}
+	m := &roomCostMeter{al: al, sessionID: msg.SessionID, inputs: 1, rooms: map[string]int{}}
 	if isRoomRequestWake(msg) {
 		m.rooms[msg.Metadata[roomIDMetadataKey]]++
 	}
@@ -614,13 +614,14 @@ func (al *AgentLoop) roomCallCost(model string, usage *providers.UsageInfo, esti
 // and which of those inputs were room requests (by room). Methods are
 // nil-safe so the turn code can call them unconditionally.
 type roomCostMeter struct {
-	al       *AgentLoop
-	mu       sync.Mutex
-	turnID   string
-	cost     float64
-	unpriced bool
-	inputs   int
-	rooms    map[string]int
+	al        *AgentLoop
+	sessionID string
+	mu        sync.Mutex
+	turnID    string
+	cost      float64
+	unpriced  bool
+	inputs    int
+	rooms     map[string]int
 }
 
 func (m *roomCostMeter) addCost(turnID string, cost float64, priced bool) {
@@ -628,15 +629,23 @@ func (m *roomCostMeter) addCost(turnID string, cost float64, priced bool) {
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.turnID == "" {
 		m.turnID = turnID
 	}
-	if !priced {
-		m.unpriced = true
+	if priced {
+		m.cost += cost
+		m.mu.Unlock()
 		return
 	}
-	m.cost += cost
+	first := !m.unpriced
+	m.unpriced = true
+	m.mu.Unlock()
+	if first && m.al != nil {
+		// An unknown price is known the moment the call is debited: the rooms
+		// show "plus unpriced turns" now. The turn adds no money (§6.14), so
+		// the report at its end changes nothing (each turn counts once).
+		m.al.reportRoomCost(m, m.sessionID)
+	}
 }
 
 // addInputs counts n inputs the turn just consumed; ids are their entry ids

@@ -29,6 +29,7 @@ type fakeDeps struct {
 	admitErr  map[string]error // agent id -> admission error
 	held      map[string]bool  // agent id -> admitted held
 	facts     map[string]ReceiverFacts
+	factsErr  map[string]error
 	discarded []string
 	mirrors   []Mirror
 	frames    []any
@@ -40,7 +41,7 @@ func newFakeDeps() *fakeDeps {
 	return &fakeDeps{
 		ws:       Workspace{ID: "sales", Name: "Sales", Agents: []Agent{{"mia", "Mia"}, {"jim", "Jim"}, {"r2", "Researcher2"}}},
 		names:    map[string]string{"mia": "Mia", "jim": "Jim", "r2": "Researcher2", "ray": "Ray"},
-		admitErr: map[string]error{}, held: map[string]bool{}, facts: map[string]ReceiverFacts{}, rate: 60,
+		admitErr: map[string]error{}, held: map[string]bool{}, facts: map[string]ReceiverFacts{}, factsErr: map[string]error{}, rate: 60,
 	}
 }
 
@@ -77,6 +78,9 @@ func (f *fakeDeps) Admit(_ context.Context, a Admission) (AdmitResult, error) {
 func (f *fakeDeps) Facts(_ addressing.Pair, requestID string) (ReceiverFacts, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.factsErr[requestID]; err != nil {
+		return ReceiverFacts{}, err
+	}
 	return f.facts[requestID], nil
 }
 
@@ -226,6 +230,7 @@ func TestPostMessage_AddressingFollowsMentions(t *testing.T) {
 		{"@Mia @Jim compare", nil, []string{"jim", "mia"}},
 		{"@all go", nil, []string{"jim", "mia", "r2"}},
 		{"@Jimmy plan it", []string{"jim"}, []string{"jim"}},
+		{"@Jimmy plan it", nil, nil}, // §6.13: an unresolved @-name addresses nobody
 	}
 	for _, c := range cases {
 		f := newFixture(t)
@@ -458,8 +463,9 @@ func TestRetry_ReconcilesReceiverFactsAndRemovedMembers(t *testing.T) {
 	}
 }
 
-// §6.11 restart: a request a turn had taken shows interrupted; one with no
-// provable facts shows unknown, never working.
+// §6.11 restart: a request a turn had taken shows interrupted (and is
+// discarded, never replayed); a waiting one whose receiver facts cannot be
+// read shows unknown, never working.
 func TestRestart_RestoresProvableStatesOnly(t *testing.T) {
 	f := newFixture(t)
 	room := f.squad("mia", "jim")
@@ -469,14 +475,16 @@ func TestRestart_RestoresProvableStatesOnly(t *testing.T) {
 	mia := f.deliveryOf(room.Id, "mia")
 	jim := f.deliveryOf(room.Id, "jim")
 	f.svc.BeginConsume(room.Id, mia.RequestID, "main-mia")
-	f.svc.BeginConsume(room.Id, jim.RequestID, "main-jim")
 	f.deps.facts[mia.RequestID] = ReceiverFacts{Found: true, Delivered: true, SessionID: "main-mia"}
-	delete(f.deps.facts, jim.RequestID)
+	f.deps.factsErr[jim.RequestID] = errors.New("ledger unreadable")
 	fresh := New(NewFileJournal(f.dir), f.deps)
 	fx := &fixture{t: t, dir: f.dir, deps: f.deps, svc: fresh}
 	st := fx.states(room.Id)
 	if st["mia"] != "interrupted/restart" || st["jim"] != "unknown/" {
 		t.Fatalf("after restart: %v; want mia interrupted, jim unknown", st)
+	}
+	if !slices.Contains(f.deps.discarded, mia.RequestID) {
+		t.Fatal("interrupted work must be discarded so it is never replayed")
 	}
 }
 

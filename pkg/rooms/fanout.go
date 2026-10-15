@@ -29,13 +29,38 @@ func (s *Service) admitAll(r *room, ws Workspace, ids []string) {
 		settled.Add(1)
 		var once sync.Once
 		settle := func() { once.Do(settled.Done) }
+		done := make(chan struct{})
+		s.admitting.Store(id, done)
 		go func(id string) {
 			defer s.inflight.Done()
 			defer settle()
+			defer func() {
+				s.admitting.Delete(id)
+				close(done)
+			}()
 			s.admitDelivery(r, ws, id, settle)
 		}(id)
 	}
 	settled.Wait()
+}
+
+// AwaitAdmission waits, at most limit, until the admission of a delivery
+// that is in flight has finished. The approval REST call uses it so that,
+// when the person approves a room's pre-admission card, the response comes
+// back with the request admitted (FR-251), not still on its way.
+func (s *Service) AwaitAdmission(requestID string, limit time.Duration) {
+	v, ok := s.admitting.Load(requestID)
+	if !ok {
+		return
+	}
+	done, isChan := v.(chan struct{})
+	if !isChan {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(limit):
+	}
 }
 
 // WaitIdleForTest waits until every background admission finished (tests).

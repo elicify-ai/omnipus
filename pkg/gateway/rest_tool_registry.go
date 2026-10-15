@@ -563,6 +563,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("approval %q not found", approvalID))
 		return
 	}
+	a.awaitRoomAdmission(entry)
 
 	// "allow": the pending call is now approved — record the session-scoped
 	// grant. Identity (session_id, agent_id, tool, args) comes from the immutable

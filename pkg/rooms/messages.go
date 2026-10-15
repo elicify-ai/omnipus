@@ -73,8 +73,8 @@ func validateMessage(req generated.RoomMessageRequest, bodyLimit int) error {
 	if strings.TrimSpace(cid) == "" || len(cid) > 128 || !validID(cid) {
 		return badRequest("client_message_id must be 1-128 characters without slashes")
 	}
-	if req.Text == "" || !utf8.ValidString(req.Text) || strings.ContainsRune(req.Text, 0) {
-		return badRequest("text is required and must be valid text")
+	if !utf8.ValidString(req.Text) || strings.ContainsRune(req.Text, 0) {
+		return badRequest("text must be valid text")
 	}
 	if strings.TrimSpace(req.Text) == "" {
 		return unprocessable("the message is empty")
@@ -144,6 +144,11 @@ func (s *Service) userAddressees(r *room, ws Workspace, req generated.RoomMessag
 		if !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
+	}
+	if len(ids) == 0 && !typed.all && !all && typed.unresolved {
+		// "@Jim go" where no member is called exactly Jim: the name stays
+		// text and the message addresses nobody (§6.13, BDD-17.31).
+		return []string{}, nil
 	}
 	if typed.all || all || len(ids) == 0 {
 		for _, id := range unmuted(r) {

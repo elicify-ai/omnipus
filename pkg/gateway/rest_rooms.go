@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -223,4 +224,20 @@ func requirePresentNonNull(w http.ResponseWriter, r *http.Request, fields ...str
 		}
 	}
 	return true
+}
+
+// roomAdmissionAwaitLimit bounds how long an approval answer waits for the
+// room admission it unblocked.
+const roomAdmissionAwaitLimit = 10 * time.Second
+
+// awaitRoomAdmission lets the approval of a group chat's pre-admission card
+// (FR-251) return once the request it approved is admitted (or refused by the
+// re-read authorization), so the person's next look shows the result.
+func (a *restAPI) awaitRoomAdmission(entry *approvalEntry) {
+	if entry == nil || entry.RoomRef == nil {
+		return
+	}
+	if hub := a.rooms.Load(); hub != nil && hub.svc != nil {
+		hub.svc.AwaitAdmission(entry.RoomRef.RequestId, roomAdmissionAwaitLimit)
+	}
 }
