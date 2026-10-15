@@ -38,14 +38,14 @@ func TestMain(m *testing.M) {
 	// and writes the developer's own data; here it lands in the throwaway home and
 	// fails the run, naming what leaked.
 	if leaks := home.Leaks(); len(leaks) > 0 {
-		reportTestMain("gateway TestMain: a test used the user-home fallback ($HOME/.omnipus) instead of its own temp home; created:", strings.Join(leaks, ", "))
+		reportTestMain("GUARD FAILURE: gateway TestMain: a test used the user-home fallback ($HOME/.omnipus) instead of its own temp home; created:", strings.Join(leaks, ", "))
 		if code == 0 {
 			code = 1
 		}
 	}
 	home.Remove()
 	if leaked := leakedPackageDirFiles(); len(leaked) > 0 {
-		reportTestMain("gateway TestMain: a test wrote into the package directory instead of its temp home:", strings.Join(leaked, ", "))
+		reportTestMain("GUARD FAILURE: gateway TestMain: a test wrote into the package directory instead of its temp home:", strings.Join(leaked, ", "))
 		if code == 0 {
 			code = 1
 		}
@@ -56,7 +56,7 @@ func TestMain(m *testing.M) {
 	// later test in this binary unable to log. Fail the package loudly rather
 	// than letting the next failure hide its own evidence.
 	if logger.ConsoleDisabled() {
-		reportTestMain("gateway TestMain: console logging is still disabled after the test run — a test called logger.DisableConsole() without t.Cleanup on its restore func")
+		reportTestMain("GUARD FAILURE: gateway TestMain: console logging is still disabled after the test run — a test called logger.DisableConsole() without t.Cleanup on its restore func")
 		if code == 0 {
 			code = 1
 		}
