@@ -4,11 +4,15 @@ package testutil
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -129,15 +133,26 @@ func TestStartTestGateway_CleanupRestoresStderr(t *testing.T) {
 		return
 	}
 	out, err := runStderrChild(t, "TestStartTestGateway_CleanupRestoresStderr", "restore")
-	if err == nil {
-		t.Fatalf("expected the refusing runner to fail boot\n%s", out)
-	}
-	if !strings.Contains(out, "MARKER_OK") {
-		t.Fatalf("stderr was not restored by StartTestGateway cleanup\n%s", out)
+	if verdict := stderrRestoreChildVerdict(out, err); verdict != nil {
+		t.Fatalf("%v\n%s", verdict, out)
 	}
 }
 
 func stderrRestoreChild(t *testing.T) {
+	t.Helper()
+	armStderrRestoreProbe(t)
+	RegisterGatewayRunner(func(_ context.Context, _ bool, home, _ string, _ bool) error {
+		cleanup, initErr := logger.InitPanic(filepath.Join(home, "panic.log"))
+		if initErr != nil {
+			return initErr
+		}
+		defer cleanup()
+		return errors.New("boot refused after redirect")
+	})
+	StartTestGateway(t)
+}
+
+func armStderrRestoreProbe(t *testing.T) {
 	t.Helper()
 	orig, err := unix.Dup(int(os.Stderr.Fd()))
 	if err != nil {
@@ -167,20 +182,9 @@ func stderrRestoreChild(t *testing.T) {
 	if err := writeEnd.Close(); err != nil {
 		t.Fatal(err)
 	}
-
 	// Registered before StartTestGateway, so it runs after that cleanup puts
-	// the pipe back. Boot failure aborts the child; the parent reads this.
+	// the pipe back. The parent reads the marker the cleanup prints.
 	t.Cleanup(func() { reportRestoredMarker(readEnd) })
-
-	RegisterGatewayRunner(func(_ context.Context, _ bool, home, _ string, _ bool) error {
-		cleanup, initErr := logger.InitPanic(filepath.Join(home, "panic.log"))
-		if initErr != nil {
-			return initErr
-		}
-		defer cleanup()
-		return errors.New("boot refused after redirect")
-	})
-	StartTestGateway(t)
 }
 
 func reportRestoredMarker(readEnd *os.File) {
@@ -210,4 +214,151 @@ func runStderrChild(t *testing.T, name, mode string) (string, error) {
 	cmd.Env = append(os.Environ(), "OMNIPUS_STDERR_CHILD="+mode)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// stderrRestoreCleanupFaults are diagnostics a restore probe must not hide
+// behind MARKER_OK. The marker only proves one write reached the pipe.
+var stderrRestoreCleanupFaults = []string{
+	"cannot restore stderr:",
+	"ORIG_RESTORE_ERR",
+	"ORIG_CLOSE_ERR",
+	"READ_CLOSE_ERR",
+	"MARKER_WRITE_ERR",
+	"MARKER_DEADLINE_ERR",
+	"MARKER_MISSING",
+}
+
+// stderrRestoreChildVerdict is the decision TestStartTestGateway_CleanupRestoresStderr
+// uses. A nonzero exit plus MARKER_OK is not enough: a cleanup error printed
+// beside the marker is still a failed restore.
+func stderrRestoreChildVerdict(out string, childErr error) error {
+	if childErr == nil {
+		return errors.New("child exited 0; the refusing runner must fail boot")
+	}
+	if !strings.Contains(out, "boot refused after redirect") {
+		return errors.New("missing boot-refusal diagnostic")
+	}
+	for _, bad := range stderrRestoreCleanupFaults {
+		if strings.Contains(out, bad) {
+			return fmt.Errorf("unexpected cleanup diagnostic %q", bad)
+		}
+	}
+	if !strings.Contains(out, "MARKER_OK") {
+		return errors.New("stderr was not restored: MARKER_OK missing")
+	}
+	return nil
+}
+
+func TestStderrRestoreChildVerdict_RejectsCleanupErrorBesideTheMarker(t *testing.T) {
+	out := "failed to boot: boot refused after redirect\nMARKER_OK\ncannot restore stderr: dup2 stderr: broken pipe\n"
+	err := stderrRestoreChildVerdict(out, errors.New("exit status 1"))
+	if err == nil {
+		t.Fatal("verdict accepted MARKER_OK beside a cleanup error")
+	}
+	if !strings.Contains(err.Error(), "cannot restore stderr:") {
+		t.Fatalf("verdict %v does not name the cleanup error", err)
+	}
+}
+
+func TestStderrRestoreChildVerdict_RejectsACleanExitAndADifferentFailure(t *testing.T) {
+	refused := "failed to boot: boot refused after redirect\nMARKER_OK\n"
+	if err := stderrRestoreChildVerdict(refused, nil); err == nil {
+		t.Fatal("verdict accepted a zero exit")
+	}
+	if err := stderrRestoreChildVerdict("MARKER_OK\nsome other failure\n", errors.New("exit status 1")); err == nil {
+		t.Fatal("verdict accepted a failure other than the boot refusal")
+	}
+	if err := stderrRestoreChildVerdict("boot refused after redirect\nMARKER_MISSING\n", errors.New("exit status 1")); err == nil {
+		t.Fatal("verdict accepted a missing marker")
+	}
+}
+
+func TestStderrRestoreChildVerdict_AcceptsRefusedBootWithOnlyTheMarker(t *testing.T) {
+	out := "failed to boot: boot refused after redirect\nMARKER_OK\n"
+	if err := stderrRestoreChildVerdict(out, errors.New("exit status 1")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Removing the restore cleanup from the successful-return path of
+// StartTestGateway must fail this test. The refusing-boot probe never
+// registers Close, so it cannot see a restore that only the success path lost.
+func TestStartTestGateway_SuccessfulBootRestoresStderr(t *testing.T) {
+	if os.Getenv("OMNIPUS_STDERR_CHILD") == "restore-ok" {
+		stderrSuccessChild(t)
+		return
+	}
+	out, err := runStderrChild(t, "TestStartTestGateway_SuccessfulBootRestoresStderr", "restore-ok")
+	if err != nil {
+		t.Fatalf("successful boot did not finish cleanly\n%s", out)
+	}
+	if !strings.Contains(out, "MARKER_OK") {
+		t.Fatalf("stderr was not restored after a successful boot\n%s", out)
+	}
+	for _, bad := range stderrRestoreCleanupFaults {
+		if strings.Contains(out, bad) {
+			t.Fatalf("cleanup diagnostic %s after a successful boot\n%s", bad, out)
+		}
+	}
+}
+
+func stderrSuccessChild(t *testing.T) {
+	t.Helper()
+	armStderrRestoreProbe(t)
+	RegisterGatewayRunner(stderrSuccessRunner)
+	StartTestGateway(t)
+}
+
+// stderrSuccessRunner serves /health and writes gateway.port, then returns nil
+// when the harness cancels. InitPanic steals stderr the way a real boot does;
+// the marker reaches the pipe only if StartTestGateway's cleanup puts it back.
+func stderrSuccessRunner(ctx context.Context, _ bool, home, configPath string, _ bool) error {
+	cleanup, err := logger.InitPanic(filepath.Join(home, "panic.log"))
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	port, err := gatewayPortFromConfig(configPath)
+	if err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		ReadHeaderTimeout: time.Second,
+	}
+	go func() { _ = srv.Serve(ln) }()
+	if err := os.WriteFile(filepath.Join(home, gatewayPortFileName), []byte(strconv.Itoa(port)+"\n"), 0o600); err != nil {
+		_ = srv.Close()
+		return err
+	}
+	<-ctx.Done()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(shutdownCtx)
+	return nil
+}
+
+func gatewayPortFromConfig(configPath string) (int, error) {
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		return 0, err
+	}
+	var cfg struct {
+		Gateway struct {
+			Port int `json:"port"`
+		} `json:"gateway"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return 0, err
+	}
+	if cfg.Gateway.Port == 0 {
+		return 0, errors.New("config has no gateway.port")
+	}
+	return cfg.Gateway.Port, nil
 }

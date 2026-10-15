@@ -28,13 +28,11 @@ func TestLeakGuard_ChildProcessReportsEveryLocation(t *testing.T) {
 	} {
 		t.Run(probe, func(t *testing.T) {
 			dir := t.TempDir()
-			// The unreadable probe removes every permission, including the
-			// owner's. Restore them before the temp dir is deleted (cleanups
-			// run last-in, first-out) or removal fails and hides the result.
+			// The unreadable probe denies directory listing. Put it back before
+			// the temp dir is deleted (cleanups run last-in, first-out).
 			t.Cleanup(func() {
-				tasks := filepath.Join(dir, "tasks")
-				if err := os.Chmod(tasks, 0o755); err != nil && !os.IsNotExist(err) {
-					t.Errorf("restore tasks mode: %v", err)
+				if err := restoreUnreadableTasks(dir); err != nil {
+					t.Errorf("restore tasks access: %v", err)
 				}
 			})
 			cmd := exec.Command(os.Args[0],
@@ -59,12 +57,14 @@ func TestLeakGuard_ChildProcessReportsEveryLocation(t *testing.T) {
 				if !strings.Contains(text, "--- FAIL:") {
 					t.Fatalf("expected the deliberate test failure in the child output:\n%s", text)
 				}
-				if !strings.Contains(text, "tasks/") {
-					t.Fatalf("leak path missing beside the test failure:\n%s", text)
+				want := filepath.Join("tasks", "stderr-probe")
+				if !strings.Contains(text, want) {
+					t.Fatalf("leak path %s missing beside the test failure:\n%s", want, text)
 				}
 			default:
-				if !strings.Contains(text, probe) {
-					t.Fatalf("leak %s missing from the guard message:\n%s", probe, text)
+				want := filepath.FromSlash(probe)
+				if !strings.Contains(text, want) {
+					t.Fatalf("leak %s missing from the guard message:\n%s", want, text)
 				}
 			}
 		})
@@ -82,13 +82,7 @@ func leakGuardChild(t *testing.T, probe string) {
 
 	switch probe {
 	case "unreadable-tasks":
-		if err := os.Mkdir("tasks", 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join("tasks", "hidden"), []byte("x"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod("tasks", 0); err != nil {
+		if err := plantUnreadableTasks(); err != nil {
 			t.Fatal(err)
 		}
 	case "fail-and-tasks":
@@ -100,12 +94,13 @@ func leakGuardChild(t *testing.T, probe string) {
 		}
 		t.Error("deliberate failure alongside a package leak")
 	default:
-		if dir := filepath.Dir(probe); dir != "." {
+		native := filepath.FromSlash(probe)
+		if dir := filepath.Dir(native); dir != "." {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if err := os.WriteFile(probe, []byte("x"), 0o600); err != nil {
+		if err := os.WriteFile(native, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}

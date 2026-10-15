@@ -112,4 +112,125 @@ want_before "$root/deploy/ci-worker/runci.sh" \
 	'run_gotest()' \
 	'run_gorace'
 
+# Execute the checked-in post-processing body. A stub go records each
+# invocation and exits 0, so a retry is visible and a clean retry would
+# be excused. This is the real fragment, not a copy of its logic.
+extract_guard_body() {
+	local file="$1" start="$2" end="$3"
+	awk -v start="$start" -v end="$end" '
+		index($0, start) {capture=1}
+		capture {print}
+		capture && index($0, end) && !index($0, start) {exit}
+	' "$file" | awk '
+		index($0, "GUARD FAILURE is TestMain") {keep=1}
+		keep {print}
+		keep && ($0 ~ /(exit|return) \$rc[[:space:]]*$/) {exit}
+	'
+}
+
+run_extracted() {
+	local body="$1" input="$2" stublog="$3" outlog="$4"
+	local stubdir work runsh status
+	stubdir=$(mktemp -d)
+	work=$(mktemp -d)
+	: >"$stublog"
+	cat >"$stubdir/go" <<-'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >>"${GO_STUB_LOG:?}"
+exit 0
+EOF
+	chmod +x "$stubdir/go"
+	printf '%s\n' "$body" >"$work/body.sh"
+	printf '%s\n' "$input" >"$work/input.log"
+	runsh="$work/run.sh"
+	cat >"$runsh" <<-EOF
+set +e
+cd $(printf '%q' "$root") || exit 99
+export PATH=$(printf '%q' "$stubdir"):\$PATH
+export GO_STUB_LOG=$(printf '%q' "$stublog")
+export TMPDIR=$(printf '%q' "$work")
+export TAGS=goolm,stdjson
+out=\$(cat $(printf '%q' "$work/input.log"))
+code=1
+post() {
+  source $(printf '%q' "$work/body.sh")
+}
+post
+exit \$?
+EOF
+	# The workflow steps run under set +e. A guard failure is a nonzero
+	# status the caller records; it must not abort this proof script.
+	set +e
+	bash "$runsh" >"$outlog" 2>&1
+	status=$?
+	rm -rf "$stubdir" "$work"
+	rm -f /tmp/rr_gateway.log /tmp/rr_gw_race.log
+	return "$status"
+}
+
+check_real_body() {
+	local label="$1" file="$2" start="$3" end="$4"
+	local body stublog outlog status goes text
+	body=$(extract_guard_body "$file" "$start" "$end")
+	if [[ -z "$body" || "$body" != *"ci_log_has_guard_failure"* ]]; then
+		echo "FAIL $label: could not extract the checked-in guard body"
+		rc=1
+		return
+	fi
+	if [[ "$body" != *"exit 1"* && "$body" != *"return 1"* ]]; then
+		echo "FAIL $label: extracted body has no failing exit or return"
+		rc=1
+		return
+	fi
+	stublog=$(mktemp)
+	outlog=$(mktemp)
+	set +e
+	run_extracted "$body" "$guard_log" "$stublog" "$outlog"
+	status=$?
+	set -e
+	goes=$(wc -l <"$stublog" | tr -d ' ')
+	text=$(cat "$outlog")
+	if [[ "$status" -ne 0 && "$goes" -eq 0 \
+		&& "$text" == *"REAL FAILURE (guard failure detected — never excused)"* \
+		&& "$text" != *"FLAKE (passed isolated)"* ]]; then
+		echo "PASS $label: guard log fails without a retry"
+	else
+		echo "FAIL $label: guard log status=$status go_calls=$goes"
+		printf '%s\n' "$text" | tail -n 20
+		rc=1
+	fi
+	set +e
+	run_extracted "$body" "$hang_log" "$stublog" "$outlog"
+	status=$?
+	set -e
+	goes=$(wc -l <"$stublog" | tr -d ' ')
+	text=$(cat "$outlog")
+	if [[ "$status" -eq 0 && "$goes" -eq 1 && "$text" == *"FLAKE (passed isolated)"* ]]; then
+		echo "PASS $label: hang log is retried once and excused"
+	else
+		echo "FAIL $label: hang log status=$status go_calls=$goes"
+		printf '%s\n' "$text" | tail -n 20
+		rc=1
+	fi
+	rm -f "$stublog" "$outlog"
+}
+
+check_real_body "pr.yml gateway step" \
+	"$root/.github/workflows/pr.yml" \
+	'Run pkg/gateway tests (dedicated shard' \
+	'Run test-tagged approver escape-hatch test'
+check_real_body "pr.yml gateway race step" \
+	"$root/.github/workflows/pr.yml" \
+	'Run go test -race ./pkg/gateway/...' \
+	'test-race:'
+check_real_body "run_gorace" \
+	"$root/deploy/ci-worker/runci.sh" \
+	'run_gorace()' \
+	'run_gotest()'
+check_real_body "run_gotest" \
+	"$root/deploy/ci-worker/runci.sh" \
+	'run_gotest()' \
+	'run_records_no_sqlite()'
+
+
 exit "$rc"
