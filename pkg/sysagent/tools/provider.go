@@ -379,11 +379,21 @@ func (t *ProviderConfigureTool) checkSavedProvider(ctx context.Context, rep *con
 		return savedNotWorking(fmt.Sprintf("not checked: the %s protocol has no model listing", ep.Protocol), "",
 			append([]string{"the endpoint", "the credential"}, providerCheckNotTested...)...)
 	}
-	key := rep.APIKey()
-	if key == "" && rep.APIKeyRef != "" && t.deps.CredStore != nil {
-		if v, gerr := t.deps.CredStore.Get(rep.APIKeyRef); gerr == nil {
-			key = v
+	// The credential checked is the one just SAVED: read from the store by the
+	// entry's reference, never the process environment, which still holds the
+	// value injected before this change until the queued reload re-injects it.
+	key := ""
+	if rep.APIKeyRef != "" {
+		if t.deps.CredStore == nil {
+			return savedNotWorking("the saved credential cannot be read: the credential store is not available",
+				scope, providerCheckNotTested...)
 		}
+		v, gerr := t.deps.CredStore.Get(rep.APIKeyRef)
+		if gerr != nil {
+			return savedNotWorking(fmt.Sprintf("the saved credential %q could not be read: %v", rep.APIKeyRef, gerr),
+				scope, providerCheckNotTested...)
+		}
+		key = v
 	}
 	local := ep.Locality == catalog.LocalityLocal
 	if key == "" && !local && ep.Protocol != catalog.ProtocolOllama {
