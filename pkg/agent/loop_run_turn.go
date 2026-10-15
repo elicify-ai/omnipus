@@ -1040,13 +1040,10 @@ func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 		rq.ri.rf.providerToolDefs = nil
 		rq.ri.rf.rt.ts.markGracefulTerminalUsed()
 	}
-	if agent := rq.ri.rf.rt.ts.agent; agent != nil {
-		ts := rq.ri.rf.rt.ts
-		note := agent.ContextBuilder.buildDynamicContext(ts.depth, ts.opts.WorkspaceID, ts.channel, ts.chatID, ts.opts.SenderID, ts.opts.SenderDisplayName)
-		rq.ri.rf.callMessages = appendVolatileNote(rq.ri.rf.callMessages, note)
+	if rq.ri.rf.rt.ts.agent != nil {
+		rq.ri.rf.callMessages = appendVolatileNote(rq.ri.rf.callMessages, buildVolatileContext())
 	}
 	rq.ri.rf.callMessages = consolidateVolatileNotes(rq.ri.rf.callMessages)
-
 }
 
 // prepareLLMRequest applies request options and hooks, then records the outgoing LLM request.

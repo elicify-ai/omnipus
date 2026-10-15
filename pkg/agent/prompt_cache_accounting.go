@@ -10,19 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// estimateLLMCallCost uses the exact provider/model catalog pair. A missing
-// provider or price is unpriced; subscription tokens never acquire API dollars.
-func estimateLLMCallCost(model string, usage *providers.UsageInfo, providerID ...string) float64 {
-	if usage == nil {
-		return 0
-	}
-	id := ""
-	if len(providerID) > 0 {
-		id = providerID[0]
-	}
-	return priceLLMUsage(id, model, *usage).Cost
-}
-
 func priceLLMUsage(providerID, model string, usage providers.UsageInfo) promptcache.PriceResult {
 	return promptcache.Price(promptcache.PriceInput{
 		ProviderID: providerID,

@@ -231,6 +231,17 @@ one-hour tokens as `unpriced_tokens`. It does not discard the known cost or call
 the unpriced portion free. Native Anthropic's documented one-hour multiplier is
 2 times catalog input when the catalog does not supply `cache_write_1h`.
 
+### Request layout
+
+Caching does not change who supplied a message. Current-sender, session and
+runtime metadata remain in the system context—the request's instruction prefix.
+Only the changing clock, tool-summary, scratchpad and goal-checklist notes, plus
+the per-turn skill reminder, follow the conversation in one user-role text block.
+When a turn is assembled, its current user message retains its caption and
+attachments immediately before that block. Tool-call follow-ups keep complete
+call/result groups ahead of the notes. Removing old history from the live window
+does not remove the original system instructions.
+
 ### Stored accounting for each call
 
 Each completed provider call has its own assistant accounting entry in the

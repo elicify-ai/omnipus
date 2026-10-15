@@ -1,10 +1,22 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
+
+// buildVolatileContext moves only the clock and ADR-072 D3 reminder behind
+// history. Sender/session metadata and live permission context stay in system.
+func buildVolatileContext() string {
+	localNow := time.Now()
+	// Keep the local zone/offset and explicit UTC timestamp together, as before.
+	now := localNow.Format("2006-01-02 15:04 MST (-07:00) Monday")
+	utcNow := localNow.UTC().Format("2006-01-02 15:04:05Z")
+	return fmt.Sprintf("## Current Time\n%s\nUTC: %s\n\n%s", now, utcNow, skillReminderNote)
+}
 
 // appendVolatileNote stages request-only text. consolidateVolatileNotes collects
 // all such notes into one user-role message after the complete history. It never
