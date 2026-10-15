@@ -79,10 +79,16 @@ func NewProvider(token string) *Provider {
 	return NewProviderWithBaseURL(token, "")
 }
 
-func NewProviderWithBaseURL(token, apiBase string) *Provider {
+func NewProviderWithBaseURL(token, apiBase string, timeoutSeconds ...int) *Provider {
 	baseURL := normalizeBaseURL(apiBase)
+	timeout := common.DefaultRequestTimeout
+	if len(timeoutSeconds) > 0 && timeoutSeconds[0] > 0 {
+		timeout = time.Duration(timeoutSeconds[0]) * time.Second
+	}
 	client := anthropic.NewClient(
-		option.WithAuthToken(token),
+		option.WithAuthToken(""),
+		option.WithAPIKey(token),
+		option.WithRequestTimeout(timeout),
 		option.WithBaseURL(baseURL),
 		// D13: the chain owns every retry decision (§7.4's in-chain
 		// rate-limit loop reads the provider's own retry-after fact). An
@@ -95,8 +101,16 @@ func NewProviderWithBaseURL(token, apiBase string) *Provider {
 	return &Provider{
 		client:           &client,
 		baseURL:          baseURL,
-		streamHTTPClient: newStreamHTTPClient(common.DefaultRequestTimeout),
+		streamHTTPClient: newStreamHTTPClient(timeout),
 	}
+}
+
+// NewProviderWithTimeout preserves the factory's canonical Messages endpoint
+// while the SDK uses its root (it adds v1/messages itself).
+func NewProviderWithTimeout(token, apiBase string, timeoutSeconds int) *Provider {
+	p := NewProviderWithBaseURL(token, apiBase, timeoutSeconds)
+	p.baseURL = strings.TrimRight(p.baseURL, "/") + "/v1"
+	return p
 }
 
 // WithStreamStallTimeout sets the streaming silence limit on this provider
@@ -151,6 +165,7 @@ func (p *Provider) Chat(
 		}
 		opts = append(opts,
 			option.WithAuthToken(tok),
+			option.WithAPIKey(""),
 			option.WithHeader("anthropic-beta", anthropicBetaHeader),
 		)
 	}
@@ -159,6 +174,7 @@ func (p *Provider) Chat(
 	if err != nil {
 		return nil, err
 	}
+	p.markCache(&params, messages, model)
 
 	// OAuth/setup-tokens require streaming; API keys use non-streaming.
 	if p.tokenSource != nil {
@@ -198,6 +214,7 @@ func (p *Provider) ChatStream(
 		}
 		opts = append(opts,
 			option.WithAuthToken(tok),
+			option.WithAPIKey(""),
 			option.WithHeader("anthropic-beta", anthropicBetaHeader),
 		)
 	}
@@ -206,6 +223,7 @@ func (p *Provider) ChatStream(
 	if err != nil {
 		return nil, err
 	}
+	p.markCache(&params, messages, model)
 
 	return p.streamWithCallbacks(ctx, params, opts, onChunk, onProgress)
 }
@@ -247,7 +265,7 @@ func (p *Provider) streamWithCallbacks(
 	// immediately after the stream is created and every subsequent Read
 	// re-arms the clock. Reads that race the fill simply skip one arm.
 	var armer stallBodyArmer
-	streamOpts := opts
+	streamOpts := append(append([]option.RequestOption{}, opts...), option.WithRequestTimeout(0))
 	if p.streamHTTPClient != nil {
 		streamOpts = append(append([]option.RequestOption{}, streamOpts...), option.WithHTTPClient(p.streamHTTPClient))
 	}
@@ -482,9 +500,6 @@ func buildParams(
 			if len(msg.SystemParts) > 0 {
 				for _, part := range msg.SystemParts {
 					block := anthropic.TextBlockParam{Text: part.Text}
-					if part.CacheControl != nil && part.CacheControl.Type == "ephemeral" {
-						block.CacheControl = anthropic.NewCacheControlEphemeralParam()
-					}
 					system = append(system, block)
 				}
 			} else {
@@ -492,12 +507,10 @@ func buildParams(
 			}
 		case "user":
 			if msg.ToolCallID != "" {
-				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropicToolResult(msg)),
-				)
+				anthropicMessages = appendToolResult(anthropicMessages, anthropicToolResult(msg))
 			} else {
 				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content)),
+					anthropic.NewUserMessage(anthropicUserContent(msg)...),
 				)
 			}
 		case "assistant":
@@ -507,40 +520,25 @@ func buildParams(
 					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 				}
 				for _, tc := range msg.ToolCalls {
-					// Skip tool calls with empty names to avoid API errors
-					if tc.Name == "" {
-						continue
+					name := tc.Name
+					if name == "" && tc.Function != nil {
+						name = tc.Function.Name
 					}
-					// OUTBOUND rebuild: this re-serialises OUR OWN history back
-					// into an Anthropic request, so unlike the inbound decode in
-					// parseResponse a failure here is an internal invariant
-					// violation, not a truncated upstream reply. It stays
-					// non-fatal — refusing to rebuild would make one bad history
-					// entry permanently unsendable, which is the wedge described
-					// in common.ErrToolArgumentsUndecodable — but it no longer
-					// happens in silence. Before, the error was discarded
-					// outright and an empty arguments block was sent as if the
-					// model had called the tool with no parameters.
+					if name == "" {
+						return anthropic.MessageNewParams{}, fmt.Errorf("stored tool call has no function name")
+					}
 					args := tc.Arguments
 					if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
-						decoded, err := common.DecodeToolCallArguments(
-							json.RawMessage(tc.Function.Arguments), tc.Name,
-						)
-						if err != nil {
-							logger.ErrorCF(
-								"anthropic",
-								"stored tool call arguments will not decode when rebuilding the request; "+
-									"sending an empty arguments block",
-								map[string]any{"tool": tc.Name, "id": tc.ID, "error": err.Error()},
-							)
-						} else {
-							args = decoded
+						decoded, decodeErr := common.DecodeToolCallArguments(json.RawMessage(tc.Function.Arguments), name)
+						if decodeErr != nil {
+							return anthropic.MessageNewParams{}, decodeErr
 						}
+						args = decoded
 					}
 					if args == nil {
 						args = map[string]any{}
 					}
-					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, tc.Name))
+					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, name))
 				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
 			} else {
@@ -549,9 +547,7 @@ func buildParams(
 				)
 			}
 		case "tool":
-			anthropicMessages = append(anthropicMessages,
-				anthropic.NewUserMessage(anthropicToolResult(msg)),
-			)
+			anthropicMessages = appendToolResult(anthropicMessages, anthropicToolResult(msg))
 		}
 	}
 
@@ -560,12 +556,8 @@ func buildParams(
 		maxTokens = int64(mt)
 	}
 
-	// Normalize model ID: Anthropic API uses hyphens (claude-sonnet-4-6),
-	// but config may use dots (claude-sonnet-4.6).
-	apiModel := strings.ReplaceAll(model, ".", "-")
-
 	params := anthropic.MessageNewParams{
-		Model:     apiModel,
+		Model:     model,
 		Messages:  anthropicMessages,
 		MaxTokens: maxTokens,
 	}
@@ -724,6 +716,15 @@ func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
 		}
 		if desc := t.Function.Description; desc != "" {
 			tool.Description = anthropic.String(desc)
+		}
+		tool.InputSchema.ExtraFields = make(map[string]any)
+		for key, value := range t.Function.Parameters {
+			if key != "type" && key != "properties" && key != "required" {
+				tool.InputSchema.ExtraFields[key] = value
+			}
+		}
+		if req, ok := t.Function.Parameters["required"].([]string); ok {
+			tool.InputSchema.Required = append([]string(nil), req...)
 		}
 		if req, ok := t.Function.Parameters["required"].([]any); ok {
 			required := make([]string, 0, len(req))
