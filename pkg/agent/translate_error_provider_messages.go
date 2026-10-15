@@ -12,6 +12,7 @@ package agent
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -129,6 +130,9 @@ func WireLLMError(p ErrorPayload) generated.LLMError {
 		message = p.Message
 		retryable = IsRetryableCode(code)
 		detail = BuildDetail(p.ProviderError, message)
+		if p.Detail != "" {
+			detail = boundWireDetail(BuildDetail(p.ProviderError, p.Detail))
+		}
 	}
 
 	providerID, modelID, requestID := "", "", ""
@@ -185,4 +189,22 @@ var keyShapedToken = regexp.MustCompile(`sk-[A-Za-z0-9][A-Za-z0-9_-]{4,}`)
 // WebSocket on every error frame, so neither path may leak it.
 func scrubDetailText(s string) string {
 	return keyShapedToken.ReplaceAllString(logger.ScrubSensitiveValues(s), "[redacted]")
+}
+
+// wireDetailMaxBytes keeps a controller-authored detail inside the
+// contract's LLMError.detail maxLength (2048) with room for the marker.
+const wireDetailMaxBytes = 2000
+
+// boundWireDetail cuts detail to wireDetailMaxBytes on a UTF-8 boundary and
+// marks the cut, so a long store/path error can never make the frame
+// violate its contract.
+func boundWireDetail(detail string) string {
+	if len(detail) <= wireDetailMaxBytes {
+		return detail
+	}
+	cut := wireDetailMaxBytes
+	for cut > 0 && !utf8.RuneStart(detail[cut]) {
+		cut--
+	}
+	return detail[:cut] + " … [truncated]"
 }

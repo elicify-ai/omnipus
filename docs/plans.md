@@ -75,6 +75,7 @@ A plan created in the interface may leave the DoD empty — the work is then jud
 Two built-in system agents — not chat colleagues — handle checking and rescue.
 
 - **The Judge** rules each task's criteria met or unmet as the task finishes, and the plan's DoD when all members finish. It works read-only, in its own session.
+- **When a plan Judge round is abandoned as unavailable, with no verdict to score**, the plan's handover says **Not verified — the check could not complete**, with the reason and the member-result excerpts labelled **The work result, unverified:**. Each non-superseded member's result contributes at most its first 500 bytes; a long combined result may be truncated further. No judge round is used on this unavailable path. Below the consecutive-unavailability bound the engine retries; the third consecutive unavailable round parks the plan as stalled for the supervisor, with the same conclusion. If the members' results could not be read, the conclusion explains that instead. If the plan record cannot be read, the engine also attempts to save the conclusion in the plan owner's conversation. Recovery retries the round only while the retry bound remains; an already-decided park is applied instead. Repeated time-limit failures after real review progress can instead produce a scored **unmet** verdict and consume a judge round.
 - **The Plan Supervisor** is woken when a finished plan's DoD is unmet, or the graph stalls with nothing to dispatch. It applies one correction per wake.
 
 The supervisor can apply four corrections.
@@ -94,8 +95,9 @@ After a correction the plan returns to running. The plan fails when its configur
 - **Restart re-runs only unfinished tasks**, each from scratch. Finished tasks and their evidence are kept.
 - **Stop is a hard cancel** — in-flight tasks, checks, and shell commands. A stopped plan never resumes on its own.
 - **Run slots follow the install-wide active-loop cap**—16 by default—shared by plans, conversation goals and recurring loops. A plan can wait at Approved and stays stoppable there.
-- **Bounds are per plan** — the judge-round ceiling and idle-expiry days, defaulting to 20 rounds and 7 days. A plan idle that long ends failed.
+- **Bounds are per plan** — the judge-round ceiling and idle-expiry days, defaulting to 20 rounds and 7 days. A plan idle that long ends failed — but only when nothing is running: a member task in progress or waiting to start, a judge round, or an owner or supervisor turn keeps the plan alive however long it takes.
 - **A running plan can pause.** If its owner agent is disabled, the plan pauses and the tile shows the reason.
+- **Plan work has no time limit.** Member tasks and the supervisor's review run until they finish or you press Stop. A supervision attempt is checked against `planning.supervision_turn_timeout_seconds` (600 seconds by default, or the plan's own override), counted from when the supervisor was woken, and only once its turn has ended — a review that is still working is never cut off. A review that runs longer than that interval is judged as soon as it ends; there is no extra waiting time after it finishes.
 - **A running plan cannot be deleted.** The Clear action in a tile's menu works only on plans that are not running.
 - **Agent-driven plan execution is permission-gated.** On a fresh install, Jim is allowed to execute and stop plans. Mia and Omnipus are denied those tools by their shipped role policies. Operators can configure supported per-agent permissions. [Tools](tools.md) explains the per-agent settings.
 

@@ -16,7 +16,7 @@
 // pkg/session's index return a steer.IndexReport — read together those two
 // sentences are a cycle. Resolved here one way, stated once: every type
 // PERSISTED on session.LifecycleRecord (Origin, SteeredBy, ReportingTarget,
-// Authorization, Limits, Stop, Principal) and I-9's IndexReport are defined
+// Authorization, Stop, Principal) and I-9's IndexReport are defined
 // in pkg/session (see pkg/session/lifecycle_edge.go and
 // pkg/session/lifecycle_index.go), and pkg/steer re-exports each one with a
 // Go type alias below so callers still resolve

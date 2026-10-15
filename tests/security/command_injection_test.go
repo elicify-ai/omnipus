@@ -22,6 +22,7 @@ package security_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -807,8 +809,18 @@ func TestExecPathGuard_SecretSetStaysRefusedUnderTheReadExemption(t *testing.T) 
 
 				cmd := "cat " + secretPath
 				result := runExec(t, tool, cmd)
-				requireGuardRefused(t, result, cmd,
-					"every fspolicy.SecretEntriesAlways entry stays refused even as a read")
+				// WU-23 marker ruling, HANDOFFS 2026-10-14T00:15:15Z:
+				// named inventory has an exact structural refusal, not the
+				// old workspace-guard prose. Cross-tree assertions below stay.
+				require.True(t, result.IsError, "named internal file must be refused before execution")
+				var refusal generated.PermissionDenied
+				require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &refusal))
+				require.Equal(t, "permission_denied", refusal.Error)
+				require.NotNil(t, refusal.Code)
+				require.Equal(t, "protected_internal_file", *refusal.Code)
+				require.Equal(t, "bash", refusal.Tool)
+				require.True(t, refusal.Permanent)
+				require.Nil(t, result.ExitCode, "a refusal must not be a failing child exit")
 				assert.NotContains(t, result.ForLLM, secretCanary,
 					"the secret's content must not reach the agent")
 			})

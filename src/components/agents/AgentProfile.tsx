@@ -679,8 +679,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     if (isSubagent3p) {
       // #904 D14 supersedes agent-types-field-matrix.md Decisions #1: the
       // own tool-iteration limit is the CLI's turn cap, sent only when the
-      // operator changed or reset it (FR-017). timeout_seconds STAYS
-      // (process-level kill for a hung CLI).
+      // operator changed or reset it (FR-017). There is no timeout_seconds:
+      // a CLI run has no time limit (issue #1306).
       return {
         ...identity,
         model,

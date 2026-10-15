@@ -13,7 +13,7 @@ const agent = {
   // W1-5: required identity on the generated Agent response schema.
   figure: 'Omnipus', role: 'general',
   needs_model: false, model: 'test-model', status: 'active', soul: 'fixed',
-  timeout_seconds: 60, max_tool_iterations: 20, memory_enabled: true,
+  max_tool_iterations: 20, memory_enabled: true,
   // Issue #904: the effective limit's provenance is required on every Agent.
   max_tool_iterations_source: 'global', max_tool_iterations_override_ignored: false,
 }

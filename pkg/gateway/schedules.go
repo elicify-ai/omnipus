@@ -21,7 +21,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -42,22 +41,13 @@ type agentChecker interface {
 	IsRegistered(agentID string) bool
 }
 
-// scheduledCanceller is the subset of *agent.AgentLoop used to stop a
-// scheduled run that overran its deadline (FR-003/FR-006): the one session
-// Stop (polite at once, forced 3 s later). Defined as an interface so the
-// runner can be tested without a full agent loop.
-type scheduledCanceller interface {
-	StopSession(ctx context.Context, req agent.StopRequest) (agent.StopResult, error)
-}
-
 // scheduledRunner implements cron.ScheduledRunner (#264). It wakes a fired
-// schedule's OWNING agent in the session mode the schedule chose, under a
-// per-run deadline, and on failure raises a notification + a channel alert to
+// schedule's OWNING agent in the session mode the schedule chose, with no
+// time limit (issue #1306), and on failure raises a notification + a channel alert to
 // the owning agent's default channel. It NEVER falls back to the default agent.
 type scheduledRunner struct {
 	exec      scheduledExecutor
 	checker   agentChecker
-	canceller scheduledCanceller
 	msgBus    *bus.MessageBus
 	notifs    *notifications.Store
 	getConfig func() *config.Config
@@ -80,9 +70,7 @@ type scheduledRunner struct {
 }
 
 // newScheduledRunner builds the runner. getConfig is read at run time so the
-// runner always sees the live (possibly hot-reloaded) config. If exec also
-// implements scheduledCanceller (the real *agent.AgentLoop does), it is used to
-// force-abort a run that overran its deadline (FR-003).
+// runner always sees the live (possibly hot-reloaded) config.
 func newScheduledRunner(
 	exec scheduledExecutor,
 	checker agentChecker,
@@ -96,9 +84,6 @@ func newScheduledRunner(
 		msgBus:    msgBus,
 		notifs:    notifs,
 		getConfig: getConfig,
-	}
-	if c, ok := exec.(scheduledCanceller); ok {
-		r.canceller = c
 	}
 	return r
 }
@@ -155,23 +140,16 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 		return "", err
 	}
 
-	// Per-run deadline (FR-003): per-schedule override else global default.
-	timeout := job.TimeoutSeconds
-	if timeout <= 0 {
-		if cfg := r.getConfig(); cfg != nil {
-			timeout = cfg.Schedules.RunTimeoutSeconds
-		}
-		if timeout <= 0 {
-			timeout = config.DefaultSchedulesRunTimeoutSeconds
-		}
-	}
-	ctx2, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-	defer cancel()
+	// No per-run deadline (issue #1306): a scheduled run ends when the owning
+	// agent's turn finishes or an explicit Stop cancels it — never on a
+	// timer. The retired schedules.run_timeout_seconds / per-schedule
+	// timeout_seconds keys are ignored when an older install still has them.
+	ctx2 := ctx
 
 	// FR-011: install a per-run child-process tracker on the run context so the
 	// exec/shell tools (which call tools.TrackProcess after spawning a child)
 	// record their PIDs under THIS run's session id. cleanupRunProcesses below
-	// then terminates exactly those PIDs on completion (success/error/timeout).
+	// then terminates exactly those PIDs on completion (success/error).
 	if r.procTrack != nil {
 		sid := sessionID
 		ctx2 = tools.WithProcessTracker(ctx2, func(pid int) { r.procTrack(sid, pid) })
@@ -193,23 +171,7 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	// EmitToolPolicyAskDenied has a fixed field set without them.
 	ctx2 = agent.WithScheduledJobContext(ctx2, job.ID, job.Name)
 
-	// Run the owning agent's turn. If the deadline fires while the turn is
-	// still going, stop it via the one session Stop (StopSession) and
-	// allow a short cleanup window, then return a deadline error so the lane
-	// records a "timeout" run (FR-003/FR-006). A watcher goroutine triggers the
-	// cancel exactly once on ctx2.Done() while ProcessScheduled is in flight.
-	runDone := make(chan struct{})
-	stopErrCh := make(chan error, 1)
-	go func() {
-		stopErrCh <- r.watchDeadline(ctx2, runDone, sessionID, owner)
-	}()
-
 	reply, runErr := r.exec.ProcessScheduled(ctx2, owner, sessionID, job.Payload.Message, "", "")
-	close(runDone)
-	// The watcher returns at once when the run finished first; when the
-	// deadline fired it returns after its stop and cleanup window. A failed
-	// deadline stop has no other caller, so it rides the run's own error.
-	stopErr := <-stopErrCh
 	// M6: ProcessScheduled runs the turn with SendResponse:false,
 	// so the agent's final text reply is NOT auto-published to any channel. If the
 	// agent wants to message a user, it does so via the message tool during its
@@ -219,11 +181,6 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	// FR-011: best-effort clean up any child/browser processes the run spawned.
 	r.cleanupRunProcesses(job, sessionID)
 
-	if runErr == nil && stopErr != nil {
-		// The run returned on its own while its deadline Stop failed: the
-		// failed Stop is still the run's error, never dropped (F6).
-		runErr = fmt.Errorf("scheduled run exceeded its deadline and the deadline stop failed: %w", stopErr)
-	}
 	if runErr != nil {
 		// Always log the raw error before any wrapping so the real cause lands in
 		// gateway.log regardless of what the channel-alert path surfaces.
@@ -234,134 +191,16 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 				"owner":       owner,
 				"error":       runErr.Error(),
 			})
-		// Surface the deadline as a context.DeadlineExceeded error so the cron
-		// lane classifies the run record Status as "timeout" (errors.Is). The
-		// underlying agent error is wrapped so it stays inspectable.
-		if ctx2.Err() == context.DeadlineExceeded {
-			if stopErr != nil {
-				runErr = fmt.Errorf("scheduled run timed out after %ds: %w; the deadline stop failed: %w", timeout, context.DeadlineExceeded, stopErr)
-			} else {
-				runErr = fmt.Errorf("scheduled run timed out after %ds: %w", timeout, context.DeadlineExceeded)
-			}
-		} else {
-			// Classify transient provider errors so the lane schedules a backoff
-			// retry (FR-010). Wrapping in *cron.TransientError lets cron.IsTransient
-			// detect it without coupling cron to provider error types.
-			if isTransientRunError(runErr) {
-				runErr = &cron.TransientError{Err: runErr}
-			}
+		// Classify transient provider errors so the lane schedules a backoff
+		// retry (FR-010). Wrapping in *cron.TransientError lets cron.IsTransient
+		// detect it without coupling cron to provider error types.
+		if isTransientRunError(runErr) {
+			runErr = &cron.TransientError{Err: runErr}
 		}
 		r.onFailure(job, sessionID, runErr)
 		return sessionID, runErr
 	}
 	return sessionID, nil
-}
-
-// watchDeadline force-aborts the in-flight scheduled run when ctx2's deadline
-// fires (FR-003/FR-006). It returns immediately if the run completes first
-// (runDone closed). On deadline it issues the one session Stop against the run's
-// session and allows a short cleanup window for the turn to tear down.
-func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan struct{}, sessionID, owner string) error {
-	select {
-	case <-runDone:
-		return nil
-	case <-ctx2.Done():
-		if ctx2.Err() != context.DeadlineExceeded || r.canceller == nil || sessionID == "" {
-			return nil
-		}
-		logger.WarnCF("gateway", "scheduled run exceeded deadline — force-aborting",
-			map[string]any{"session_id": sessionID, "owner": owner})
-		// Force-abort the turn registered under this session id. Use a detached
-		// context so the cancel itself is not aborted by the just-expired ctx2.
-		cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		res, cancelErr := r.canceller.StopSession(cancelCtx, agent.StopRequest{
-			SessionID: sessionID,
-			By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: "scheduler"},
-			Channel:   "cron",
-			HooksFor: func(string) agent.CancelHooks {
-				return agent.CancelHooks{
-					// Cascade the scheduled-run stop to any detached background
-					// bash/exec sessions this run's session started
-					// (FR-B10/FR-B11).
-					KillBackgroundSessions: func(sid string) (killed, failed int) {
-						return tools.GetSharedSessionManager().KillAllForSession(sid)
-					},
-					// No turn had registered yet: a pre-registration latch stands
-					// in. If it ages out unconsumed the deadline was never
-					// enforced; there is no browser watching a cron run, so this
-					// log is the operator's signal.
-					OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
-						logger.WarnCF("gateway", "scheduled run deadline force-abort's pre-registration cancel latch expired unconsumed — the run was never actually force-aborted",
-							map[string]any{
-								"session_id":        scope.SessionID,
-								"owner":             owner,
-								"canceller_channel": canceller.Channel,
-							})
-					},
-				}
-			},
-		})
-		// F6: a session the deadline Stop could not reach (its fence or
-		// acceptance was refused) is a failed Stop, never "no active turn".
-		failures := []error{cancelErr, res.RootErr}
-		for _, item := range res.Report.Unreachable {
-			failures = append(failures, fmt.Errorf("deadline Stop for %s: %s", item.ID, item.Reason))
-		}
-		cancelErr = errors.Join(failures...)
-		outcome := res.Root
-		outcome.Fired, outcome.Armed = res.Fired, res.Armed
-		outcome.BackgroundSessionsKilled = res.BackgroundKilled
-		outcome.BackgroundSessionsFailed = res.BackgroundFailed
-		if cancelErr != nil {
-			logger.ErrorCF("gateway", "scheduled run deadline stop failed",
-				map[string]any{"session_id": sessionID, "owner": owner, "error": cancelErr.Error()})
-		}
-		if cancelErr == nil {
-			if !outcome.Fired {
-				// A force-abort that targeted no active turn is worth observing: the
-				// run may have already completed between the deadline check and the
-				// cancel, or the turn was never registered under this session id.
-				// outcome.Armed distinguishes the two (CancelOutcome.Armed doc
-				// comment, pkg/agent/cancel.go): true means the stop latched a
-				// pre-registration cancel (pkg/agent/cancel_prearm.go) that fires
-				// the instant a turn registers under this session, bounded by the
-				// latch's TTL — deadline enforcement is DEFERRED, not skipped;
-				// false means there is genuinely nothing left to enforce against.
-				logger.DebugCF("gateway", "scheduled run force-abort hit no active turn",
-					map[string]any{"session_id": sessionID, "owner": owner, "armed": outcome.Armed})
-				if outcome.Armed {
-					logger.InfoCF("gateway", "scheduled run force-abort armed a pre-registration cancel latch — deadline enforcement deferred to the next turn registration for this session, bounded by the latch TTL",
-						map[string]any{"session_id": sessionID, "owner": owner})
-				}
-			}
-			// Observability fix: even when the run's own turn is already
-			// gone (!Fired — e.g. it dispatched a `bash
-			// run_in_background=true` job and returned before the deadline
-			// fired), the kill cascade above still runs unconditionally and
-			// may have killed real background work. There is no live client
-			// connection to notify here (unlike the WS handleCancel path),
-			// so an INFO log is this surface's equivalent observability
-			// signal — an operator scanning gateway.log for this run should
-			// see that background work was cleaned up, not just silence.
-			if outcome.BackgroundSessionsKilled > 0 || outcome.BackgroundSessionsFailed > 0 {
-				logger.InfoCF("gateway", "scheduled run force-abort killed background session(s)",
-					map[string]any{
-						"session_id":                 sessionID,
-						"owner":                      owner,
-						"background_sessions_killed": outcome.BackgroundSessionsKilled,
-						"background_sessions_failed": outcome.BackgroundSessionsFailed,
-					})
-			}
-		}
-		// Short cleanup window: let the turn observe the cancel and unwind before
-		// ProcessScheduled returns.
-		select {
-		case <-runDone:
-		case <-time.After(2 * time.Second):
-		}
-		return cancelErr
-	}
 }
 
 // setProcessCleanup wires the best-effort per-run child-process cleanup hook
@@ -383,17 +222,17 @@ func (r *scheduledRunner) setProcessTracker(fn func(sessionID string, pid int)) 
 // paths: the runner installs a tools.ProcessTracker on the run context keyed to
 // the run's session id, and ExecTool.runSync / ExecTool.runBackground call
 // tools.TrackProcess(ctx, pid) after spawning a child, which lands here via
-// Track. On run completion (success, error, or timeout) the runner calls
+// Track. On run completion (success or error) the runner calls
 // Cleanup(sessionID), which terminates and forgets every tracked PID for that
 // session.
 //
 // Residual / NOT covered:
 //   - Sandbox-ON exec (ExecTool.runSyncHardened → sandbox.Run) is NOT tracked
 //     here: sandbox.Run owns its child's full lifecycle and force-kills it
-//     (SIGTERM→SIGKILL) on context cancel/timeout via the run's own ctx2, so a
+//     (SIGTERM→SIGKILL) on context cancel via the run's own ctx2, so a
 //     hardened child cannot outlive the run regardless of this registry. Adding
 //     a PID hook through sandbox.Run would require threading a callback through
-//     the hardened-exec API for no additional safety on the timeout path.
+//     the hardened-exec API for no additional safety on the cancel path.
 //   - Browser/chromedp processes are not tracked: chromedp manages its own
 //     allocator lifecycle tied to the run context. This is the known residual.
 //
@@ -989,17 +828,16 @@ func intPtr(v int) *int { return &v }
 // toSchedule projects a cron.CronJob onto the generated Schedule wire type.
 func toSchedule(job cron.CronJob) gen.Schedule {
 	s := gen.Schedule{
-		Id:             job.ID,
-		Name:           job.Name,
-		Enabled:        job.Enabled,
-		OwnerAgentId:   job.AgentID,
-		CreatedBy:      strPtr(job.CreatedBy),
-		Message:        job.Payload.Message,
-		RunIsolated:    boolPtrIfTrue(job.RunIsolated),
-		SessionId:      strPtr(job.SessionID),
-		TimeoutSeconds: job.TimeoutSeconds,
-		CreatedAtMs:    job.CreatedAtMS,
-		UpdatedAtMs:    job.UpdatedAtMS,
+		Id:           job.ID,
+		Name:         job.Name,
+		Enabled:      job.Enabled,
+		OwnerAgentId: job.AgentID,
+		CreatedBy:    strPtr(job.CreatedBy),
+		Message:      job.Payload.Message,
+		RunIsolated:  boolPtrIfTrue(job.RunIsolated),
+		SessionId:    strPtr(job.SessionID),
+		CreatedAtMs:  job.CreatedAtMS,
+		UpdatedAtMs:  job.UpdatedAtMS,
 	}
 
 	// Trigger.
@@ -1178,11 +1016,6 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 		jsonErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	timeout := derefInt(req.TimeoutSeconds)
-	if timeout < 0 {
-		jsonErr(w, http.StatusBadRequest, "timeout_seconds must be >= 0")
-		return
-	}
 
 	// FR-017: there is no session-mode choice. The mode is derived from the
 	// owner and the run_isolated checkbox.
@@ -1193,19 +1026,18 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
-	// M3: persist the COMPLETE job (owner, mode, timeout, created-by) in one
+	// M3: persist the COMPLETE job (owner, mode, created-by) in one
 	// atomic write via AddJobFull. The previous AddJob+UpdateJob pair briefly
 	// persisted an owner-less job that could fire and die between the two writes.
 	job, err := a.cronSvc().AddJobFull(cron.JobSpec{
-		Name:           req.Name,
-		Schedule:       schedule,
-		Message:        req.Message,
-		AgentID:        req.OwnerAgentId,
-		SessionMode:    sessionMode,
-		RunIsolated:    runIsolated,
-		TimeoutSeconds: timeout,
-		CreatedBy:      user.Username,
-		Enabled:        req.Enabled,
+		Name:        req.Name,
+		Schedule:    schedule,
+		Message:     req.Message,
+		AgentID:     req.OwnerAgentId,
+		SessionMode: sessionMode,
+		RunIsolated: runIsolated,
+		CreatedBy:   user.Username,
+		Enabled:     req.Enabled,
 	})
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to create schedule")
@@ -1275,13 +1107,6 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, i
 	}
 	if req.RunIsolated != nil {
 		job.RunIsolated = *req.RunIsolated
-	}
-	if req.TimeoutSeconds != nil {
-		if *req.TimeoutSeconds < 0 {
-			jsonErr(w, http.StatusBadRequest, "timeout_seconds must be >= 0")
-			return
-		}
-		job.TimeoutSeconds = *req.TimeoutSeconds
 	}
 	if req.Enabled != nil {
 		job.Enabled = *req.Enabled
@@ -1393,13 +1218,6 @@ func validateTrigger(s cron.CronSchedule) (string, bool) {
 func derefStr(p *string) string {
 	if p == nil {
 		return ""
-	}
-	return *p
-}
-
-func derefInt(p *int) int {
-	if p == nil {
-		return 0
 	}
 	return *p
 }

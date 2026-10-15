@@ -54,7 +54,8 @@ func wu19LoadInventory(t *testing.T, root string) *wu19Inventory {
 			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
-			file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 			if err != nil {
 				return err
 			}
@@ -62,7 +63,7 @@ func wu19LoadInventory(t *testing.T, root string) *wu19Inventory {
 			if err != nil {
 				return err
 			}
-			p.addFile(path, "github.com/elicify-ai/omnipus/"+filepath.ToSlash(rel), file)
+			p.addFile(path, "github.com/elicify-ai/omnipus/"+filepath.ToSlash(rel), file, fset)
 			return nil
 		})
 		if err != nil {
@@ -119,7 +120,8 @@ func wu19InventoryInstrument(t *testing.T) {
 				imports = `import ("os"; "os/exec")`
 			}
 			main := "package sandbox; " + imports + "; func probe(flag bool, input []string) {" + tc.body + "}"
-			f, err := parser.ParseFile(token.NewFileSet(), "probe.go", main, 0)
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "probe.go", main, parser.SkipObjectResolution)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -127,13 +129,14 @@ func wu19InventoryInstrument(t *testing.T) {
 			if pkg == "" {
 				pkg = "github.com/elicify-ai/omnipus/pkg/sandbox"
 			}
-			p.addFile("probe.go", pkg, f)
+			p.addFile("probe.go", pkg, f, fset)
 			if tc.helpers != "" {
-				helper, err := parser.ParseFile(token.NewFileSet(), "helper.go", "package sandbox; "+imports+"; "+tc.helpers, 0)
+				helperSet := token.NewFileSet()
+				helper, err := parser.ParseFile(helperSet, "helper.go", "package sandbox; "+imports+"; "+tc.helpers, parser.SkipObjectResolution)
 				if err != nil {
 					t.Fatal(err)
 				}
-				p.addFile("helper.go", pkg, helper)
+				p.addFile("helper.go", pkg, helper, helperSet)
 			}
 			sites, findings := p.scan()
 			if sites != 1 || (len(findings) > 0) != tc.unsafe {

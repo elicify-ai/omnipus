@@ -72,7 +72,6 @@ const mockExternalAgent: Agent = {
   model: 'claude-sonnet-4-6',
   description: 'Delegates to an external CLI',
   soul: 'You are a focused delegate.',
-  timeout_seconds: 60,
   max_tool_iterations: 20,
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,

@@ -167,7 +167,6 @@ func DefaultConfig() *Config {
 		Tools:   defaultToolsConfig(),
 		Schedules: SchedulesConfig{
 			MaxConcurrentRuns: DefaultSchedulesMaxConcurrentRuns,
-			RunTimeoutSeconds: DefaultSchedulesRunTimeoutSeconds,
 			RetryBackoffMs:    append([]int64(nil), DefaultSchedulesRetryBackoffMs...),
 		},
 		Voice: VoiceConfig{
@@ -1162,8 +1161,7 @@ func defaultAgentsConfig(workspacePath string) AgentsConfig {
 				Enabled:       false,
 				MaxArgsLength: 300,
 			},
-			SplitOnMarker:  false,
-			TimeoutSeconds: 0, // disabled; OpenRouter queue delays make fixed timeouts unreliable
+			SplitOnMarker: false,
 		},
 	}
 }

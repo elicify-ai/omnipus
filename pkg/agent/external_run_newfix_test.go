@@ -56,7 +56,7 @@ func TestNEW3_UnreadableLifecycleRecordRefusesBeforeAnyRun(t *testing.T) {
 	defer restore()
 	unreadable := n3MakeUnreadable(t, lc, ts.transcriptSessionID)
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "launch instruction", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "launch instruction")
 	require.Error(t, err, "an unreadable session record must refuse visibly")
 	require.Nil(t, res)
 	runs, resumes := drv.snapshot()
@@ -127,7 +127,7 @@ func TestN7_StartMarkIsDurableBeforeTheCLIRuns(t *testing.T) {
 	newExternalDriver = func(string, runner.ConsentHandler) (runner.ExternalAgentRunner, error) { return drv, nil }
 	defer func() { newExternalDriver = prev }()
 
-	_, err := runExternalCLISubTurn(context.Background(), al, ts, "launch instruction", 30*time.Second)
+	_, err := runExternalCLISubTurn(context.Background(), al, ts, "launch instruction")
 	require.NoError(t, err)
 	drv.mu2.Lock()
 	defer drv.mu2.Unlock()

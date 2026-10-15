@@ -11,7 +11,6 @@ required:
   - owner_agent_id
   - trigger
   - message
-  - timeout_seconds
   - state
   - created_at_ms
   - updated_at_ms
@@ -46,9 +45,6 @@ properties:
       FR-017). The run mode is otherwise derived from the owner; there is no
       user-facing session-mode choice.
     example: false
-  timeout_seconds:
-    type: integer
-    description: Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default.
   session_id:
     type: string
     description: For continue/main modes, the persistent session id this schedule runs in.

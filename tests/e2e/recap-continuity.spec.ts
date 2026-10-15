@@ -1,56 +1,31 @@
 /**
- * recap-continuity.spec.ts — recap → last-session.md → next-session injection
- * continuity, on the CURRENT trigger.
+ * recap-continuity.spec.ts — idle recap → pair carry-forward → fresh chat.
  *
- * PORT (delta-review R2 gap 6). The former recap-continuity.spec.ts was deleted
- * (d491e68b7, S5 M5) because it drove the recap with a WS `session_close` frame,
- * RETIRED by DEL-08 — with that trigger gone the spec could not pass at all, and
- * only Go tests remained (config toggle, idle ticker, last-session.md,
- * next-session injection). This is the end-to-end replacement: the SAME
- * assertions, driven through the trigger the product actually has — the
- * per-session IDLE TICKER (pkg/agent/loop.go → CloseSession("idle") →
- * runRecap → WriteLastSession). No `session_close` frame anywhere.
+ * Binding oracle ("amendment" in the assertion comments below):
+ * /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/designs/L1-AMENDMENTS-20261013.md
+ * §3.2 items 1–5, 8 (lines 280–284, 287); §3.3 (line 293);
+ * §3.4 (line 297); reachability (line 501). WU-21 / #1197 overrides the
+ * former agent-wide continuity oracle. Corroborated by the system-agent
+ * spec FR-197, carry-forward part of FR-218 and §15 WU-21; ADR OSA-16.
  *
- * WHAT THIS CATCHES
- * -----------------
- * The "agent remembers last session" feature is three independent pipes wired
- * together: the idle ticker firing, the recap pipeline writing
- * agents/<id>/.omnipus/last-session.md, and the NEXT session's context builder
- * injecting that file. Every Go test covers one pipe in isolation; nothing
- * covers the join across the real gateway — a break anywhere in the chain
- * (a ticker that never fires, a writer pointed at another directory, an
- * injector that reads the wrong agent's file) is invisible to all of them.
+ * The real idle ticker still drives the recap; no retired session_close
+ * frame or mocked gateway/model is used. The publication path is now
+ * workspaces/<workspace>/.omnipus/carry-forward/<agent>.md. Polling that
+ * file alone is not enough: fresh chats must prove its user-visible effect.
  *
- * BDD:
- *   Given auto_recap_enabled is true and the idle timeout is one minute
- *   And  a fresh chat with the agent the sidebar has selected
+ * Given a fresh chat with one agent in workspace A and auto recap enabled,
+ * when the user states a unique, conversation-only fact and the chat idles,
+ * then A's carry-forward for that agent contains the fact (amendment 281–282).
+ * When a NEW, empty chat with the SAME agent in A asks about it, its completed
+ * reply contains the fact (amendment 280, 283–284).
+ * When a NEW, empty chat with that agent in workspace B asks the same question,
+ * its completed reply does NOT contain A's fact (amendment 280, 283–284, 289).
  *
- *   When the user states a distinctive fact the agent would not otherwise know
- *   And  the session sits idle past the idle timeout
- *   Then last-session.md under agents/<THAT agent>/.omnipus/ is written and
- *        carries the fact
- *
- *   When the user opens a NEW chat with the same agent
- *   And  asks a question only answerable from that recap
- *   Then the agent's reply contains the fact
- *   This proves last-session.md was injected into the new session's context.
- *
- * Traces to: BRD FR-019 (auto-recap), FR-023 (session-end recap pipeline),
- * FR-028/FR-030 (continuity), pkg/agent/idle_timeout_seam_test.go (the Go half
- * of the same chain), pkg/memrooms/rooms.go (last-session.md path).
- *
- * S5 fixes applied here:
- *   S5-01 — the roster is a BARE ARRAY (contracts listAgents;
- *           rest_agents.go::listAgents), not `{agents: [...]}`. The agent id no
- *           longer comes from a hand-rolled roster read at all: `freshChat`
- *           (fixtures/session-setup.ts) resolves it the way the SPA does.
- *   S5-02 — every mutating request carries X-CSRF-Token, read from the page's
- *           own cookie jar (the sibling's pageCsrfHeaders rule). The afterEach
- *           restore no longer swallows its failure: a swallowed restore leaks a
- *           one-minute idle timeout into every later spec in the shard.
- *   S5-03 — the recap file is polled for the agent of the session THIS test
- *           opened, not the first roster entry, which need not be the page's
- *           selected agent.
+ * Deliberate private notes remain agent-wide (amendment 287–293). All turns
+ * therefore request no tools and their real transcript tool lists must be
+ * empty: neither remember nor recall can substitute for recap injection.
+ * B uses existing workspace-create REST and freshChat helpers, not new fixtures.
+ * The existing CSRF handling, settings restore and wait budgets stay intact.
  */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -58,13 +33,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { chatInput, assistantMessages } from './fixtures/selectors';
 import { freshChat, originOf } from './fixtures/session-setup';
+import { SessionDetail, Workspace } from '../../src/lib/api/generated/schemas';
+import type { WorkspaceCreateRequest } from '../../src/lib/api/generated/openapi-types';
 
-const OMNIPUS_HOME = process.env.OMNIPUS_HOME || path.join(process.env.HOME || '', '.omnipus');
+// Never default a filesystem-observing spec to the operator's real data home.
+const OMNIPUS_HOME = process.env.OMNIPUS_HOME;
 
 /** One idle timeout of margin on top of the ticker's own minute. */
 const IDLE_TIMEOUT_MINUTES = 1;
 const IDLE_WAIT_MS = (IDLE_TIMEOUT_MINUTES + 1) * 60_000;
-/** The recap pipeline's own overall budget, plus margin (see pollLastSession). */
+/** The recap pipeline's own overall budget, plus margin (see pollCarryForward). */
 const RECAP_BUDGET_MS = 120_000;
 
 interface MemorySettingsWire {
@@ -100,34 +78,82 @@ async function putMemorySettings(page: Page, body: MemorySettingsWire): Promise<
   ).toBe(true);
 }
 
+function isolatedOmnipusHome(): string {
+  if (!OMNIPUS_HOME) {
+    throw new Error('recap-continuity requires an explicit, isolated OMNIPUS_HOME.');
+  }
+  const home = fs.realpathSync(OMNIPUS_HOME);
+  const operatorHomes = [
+    path.resolve(process.env.HOME || '', '.omnipus'),
+    '/Users/danielpiatkowski/.omnipus',
+  ];
+  if (operatorHomes.some((operatorHome) => home === operatorHome || home.startsWith(`${operatorHome}${path.sep}`))) {
+    throw new Error('recap-continuity refuses to read or write the operator data home.');
+  }
+  return home;
+}
+
+/** Amendment line 281 (§3.2 item 2): the pair file, never an agent-wide fallback. */
+function carryForwardPath(agentId: string, workspaceId: string): string {
+  return path.join(isolatedOmnipusHome(), 'workspaces', workspaceId, '.omnipus', 'carry-forward', `${agentId}.md`);
+}
+
 /**
- * Poll for the recap file of THIS test's agent. The budget is deliberately
- * larger than the recap pipeline's own overall cap: a budget equal to that cap
- * races the pipeline with zero margin even on the successful path.
+ * Poll the file for THIS session's immutable pair (amendment 280–282).
+ * The existing budget exceeds the recap pipeline's overall cap, unchanged.
  */
-async function pollLastSession(page: Page, agentId: string, needle: string): Promise<string> {
-  const lastSessionPath = path.join(OMNIPUS_HOME, 'agents', agentId, '.omnipus', 'last-session.md');
+async function pollCarryForward(page: Page, agentId: string, workspaceId: string, needle: string): Promise<string> {
+  const summaryPath = carryForwardPath(agentId, workspaceId);
   const deadline = Date.now() + RECAP_BUDGET_MS;
   let lastContents = '';
   while (Date.now() < deadline) {
-    if (fs.existsSync(lastSessionPath)) {
-      lastContents = fs.readFileSync(lastSessionPath, 'utf-8');
+    if (fs.existsSync(summaryPath)) {
+      lastContents = fs.readFileSync(summaryPath, 'utf-8');
       if (lastContents.includes(needle)) return lastContents;
     }
     await page.waitForTimeout(2_000);
   }
   throw new Error(
-    `recap-continuity: last-session.md did not carry the fact within ${RECAP_BUDGET_MS / 1000}s.\n` +
-      `Path: ${lastSessionPath}\n` +
-      (fs.existsSync(lastSessionPath)
-        ? `The file exists but does not contain ${needle}. Last contents:\n${lastContents.slice(0, 2000)}`
-        : 'The file was never written — the idle ticker did not fire, or the recap pipeline did not run.'),
+    `recap-continuity: pair carry-forward did not carry ${needle} within ${RECAP_BUDGET_MS / 1000}s.\n` +
+      `Agent: ${agentId}; workspace: ${workspaceId}; path: ${summaryPath}\n` +
+      (fs.existsSync(summaryPath)
+        ? `The file exists but does not contain the fact. Last contents:\n${lastContents.slice(0, 2000)}`
+        : 'The pair file was never written — check the idle trigger and scoped recap publication.'),
   );
 }
 
+async function readSessionDetail(page: Page, sessionId: string): Promise<ReturnType<typeof SessionDetail.parse>> {
+  const resp = await page.request.get(`${originOf(page)}/api/v1/sessions/${sessionId}`, {
+    headers: await pageCsrfHeaders(page),
+  });
+  // Fixture oracle: contracts/openapi.yaml::getSession (200 + SessionDetail).
+  expect(resp.status(), `GET session ${sessionId}: ${await resp.text()}`).toBe(200);
+  return SessionDetail.parse(await resp.json());
+}
+
+async function expectToolFreeTranscript(page: Page, sessionId: string): Promise<void> {
+  const { messages } = await readSessionDetail(page, sessionId);
+  // Amendment 287–293: private notes still cross workspaces; rule out that
+  // alternate path and tool-based recall, so only the prompt injection is tested.
+  expect(
+    messages.filter((message) => message.type === 'tool_call' || (message.tool_calls?.length ?? 0) > 0),
+    `Session ${sessionId} must not use tools to store or retrieve the conversation-only fact`,
+  ).toEqual([]);
+  // Amendment 501 requires a real reply: an error, blank or interrupted turn
+  // must not pass the isolation assertion just because it omits the nonce.
+  // Fixture oracle: contracts/components/schemas/Message.yaml::status/content.
+  const replies = messages.filter((message) => message.role === 'assistant' && (message.type ?? 'message') === 'message');
+  expect(replies, `Session ${sessionId} must persist exactly one assistant reply`).toHaveLength(1);
+  expect(replies[0].status, `Session ${sessionId} must complete successfully`).toBe('ok');
+  expect((replies[0].content ?? '').trim(), `Session ${sessionId} must not return a blank reply`).not.toBe('');
+  expect(replies[0].truncated ?? false, `Session ${sessionId} must not return a truncated reply`).toBe(false);
+}
+
 let baseline: MemorySettingsWire | null = null;
+let isolationWorkspaceId: string | null = null;
 
 test.beforeEach(async ({ page }) => {
+  isolatedOmnipusHome();
   // PR #1260 (E2E ui-heavy): the hook read the gateway settings BEFORE any
   // navigation, so the page was still on about:blank and originOf() refused —
   // every attempt failed at line 131 with a message that (misleadingly) named
@@ -142,28 +168,47 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async ({ page }) => {
-  if (!baseline) return;
   const b = baseline;
   baseline = null;
-  // NOT swallowed (S5-02): these are GLOBAL gateway settings, and a failed
-  // restore leaves a one-minute idle timeout in force for every later spec
-  // sharing this shard's gateway. A restore failure must fail loudly here.
-  await putMemorySettings(page, {
-    auto_recap_enabled: b.auto_recap_enabled ?? false,
-    idle_timeout_minutes: b.idle_timeout_minutes ?? 30,
-    bootstrap_recap_enabled: b.bootstrap_recap_enabled ?? false,
-    bootstrap_recap_max_per_minute: b.bootstrap_recap_max_per_minute ?? 5,
-    session_days: b.session_days ?? 90,
-    memory_retros_days: b.memory_retros_days ?? 180,
-  });
+  try {
+    // NOT swallowed (S5-02): a failed restore must fail loudly, never leak
+    // a one-minute idle timeout to the later specs sharing this gateway.
+    if (b) {
+      await putMemorySettings(page, {
+        auto_recap_enabled: b.auto_recap_enabled ?? false,
+        idle_timeout_minutes: b.idle_timeout_minutes ?? 30,
+        bootstrap_recap_enabled: b.bootstrap_recap_enabled ?? false,
+        bootstrap_recap_max_per_minute: b.bootstrap_recap_max_per_minute ?? 5,
+        session_days: b.session_days ?? 90,
+        memory_retros_days: b.memory_retros_days ?? 180,
+      });
+    }
+  } finally {
+    // Cleanup still runs if an assertion or settings restoration failed.
+    if (isolationWorkspaceId) {
+      const workspaceId = isolationWorkspaceId;
+      isolationWorkspaceId = null;
+      const resp = await page.request.get(`${originOf(page)}/api/v1/workspaces/${workspaceId}`, {
+        headers: await pageCsrfHeaders(page),
+      });
+      // Fixture oracle: contracts/openapi.yaml::getWorkspace and deleteWorkspace;
+      // deleting requires the current revision, not a fabricated token.
+      expect(resp.status(), `GET isolation workspace: ${await resp.text()}`).toBe(200);
+      const workspace = Workspace.parse(await resp.json());
+      const deleted = await page.request.delete(`${originOf(page)}/api/v1/workspaces/${workspaceId}`, {
+        headers: await pageCsrfHeaders(page),
+        params: { revision: workspace.revision },
+      });
+      expect(deleted.status(), `DELETE isolation workspace: ${await deleted.text()}`).toBe(200);
+    }
+  }
 });
 
 test(
-  'recap_continuity: a fact survives into the next session via last-session.md injection',
+  'recap_continuity: a fact carries into the same workspace but not another workspace',
   async ({ page }) => {
-    // Worst case: setup ~20s, turn 1 ~90s, the idle wait itself
-    // (IDLE_WAIT_MS = 120s), the recap poll 120s, new-session setup ~30s,
-    // turn 2 ~90s = ~470s. 900s leaves real headroom for CI jitter.
+    // The existing 900s budget covers the idle wait (120s), recap poll (120s),
+    // three completed model turns (90s each), setup and cleanup. No widening.
     test.setTimeout(900_000);
 
     await putMemorySettings(page, {
@@ -171,36 +216,82 @@ test(
       idle_timeout_minutes: IDLE_TIMEOUT_MINUTES,
     });
 
-    // The app is already open (test.beforeEach navigated to '/' so the
-    // settings read could resolve the page's origin); this is the readiness
-    // assertion, kept as it was.
+    // Readiness and the real idle trigger remain unchanged.
     await expect(chatInput(page)).toBeVisible({ timeout: 20_000 });
-
-    // The session this test drives, and the agent it belongs to. `freshChat`
-    // resolves the agent the SPA has selected and opens a real chat for it, so
-    // the recap file polled below belongs to THIS session's agent (S5-03).
     const first = await freshChat(page);
+    const firstDetail = await readSessionDetail(page, first.sessionId);
+    // Amendment 280 (§3.2 item 1): scope comes from this session's metadata.
+    expect(firstDetail.session).toMatchObject({ id: first.sessionId, agent_id: first.agentId });
+    const workspaceId = firstDetail.session.workspace_id;
+    if (!workspaceId) {
+      throw new Error('BLOCKED: recap-continuity fixture has no workspace — WU-21 amendment line 280 requires a pair scope.');
+    }
 
-    // A nonce no model could produce from its own priors: the only way it can
-    // reach the second session is through last-session.md.
     const nonce = `recap-nonce-${Date.now()}`;
     const input = chatInput(page);
-    await input.fill(`Remember for later: the launch codename is ${nonce}.`);
+    // Amendment 287–293: do not turn an automatic carry-forward check into a
+    // deliberate private-note test; those notes intentionally span workspaces.
+    await input.fill(
+      `For this conversation only, the launch codename is ${nonce}. ` +
+      'Do not save this in memory and do not use any tools. Just acknowledge it.',
+    );
     await input.press('Enter');
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 });
+    await expectToolFreeTranscript(page, first.sessionId);
 
-    // ── The idle ticker, which is the ONLY recap trigger since DEL-08 ────────
+    // Amendment 281–282 (§3.2 items 2–3): exact pair publication with the fact.
     await page.waitForTimeout(IDLE_WAIT_MS);
-    await pollLastSession(page, first.agentId, nonce);
+    await pollCarryForward(page, first.agentId, workspaceId, nonce);
 
-    // ── A NEW chat with the same agent: the recap must be injected ──────────
+    // Amendment 280, 283–284: fresh session, same agent AND same workspace.
     const second = await freshChat(page, first.agentName);
     expect(second.sessionId).not.toBe(first.sessionId);
+    expect(second.agentId).toBe(first.agentId);
+    const secondDetail = await readSessionDetail(page, second.sessionId);
+    expect(secondDetail.session).toMatchObject({ agent_id: first.agentId, workspace_id: workspaceId });
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 15_000 });
+    const question = 'What was the launch codename I told you about? Answer with just the codename if you know it; otherwise say UNKNOWN. Do not use any tools.';
     const fresh = chatInput(page);
-    await fresh.fill('What was the launch codename I told you about? Answer with just the codename.');
+    await fresh.fill(question);
     await fresh.press('Enter');
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 });
+    // Amendment 283 (§3.2 item 4): keep the original user-visible nonce oracle,
+    // not just an existence check on the carry-forward file.
     await expect(assistantMessages(page).first()).toContainText(nonce, { timeout: 90_000 });
+    await expectToolFreeTranscript(page, second.sessionId);
+
+    // Existing REST createWorkspace + freshChat(workspace) provide isolation;
+    // no new fixture system or shared-fixture change is needed.
+    const workspaceName = `Recap isolation ${Date.now()}`;
+    const created = await page.request.post(`${originOf(page)}/api/v1/workspaces`, {
+      headers: await pageCsrfHeaders(page),
+      data: { name: workspaceName, core_team: [first.agentId] } satisfies WorkspaceCreateRequest,
+    });
+    // Fixture oracle: contracts/openapi.yaml::createWorkspace (201 + Workspace).
+    expect(created.status(), `POST isolation workspace: ${await created.text()}`).toBe(201);
+    const otherWorkspace = Workspace.parse(await created.json());
+    isolationWorkspaceId = otherWorkspace.id;
+    // Amendment 280, 289: the negative case is a DIFFERENT workspace, SAME agent.
+    expect(otherWorkspace.id).not.toBe(workspaceId);
+    expect(otherWorkspace.core_team).toEqual([first.agentId]);
+    // Amendment 297 (§3.4): a first session in a workspace has no summary.
+    expect(fs.existsSync(carryForwardPath(first.agentId, otherWorkspace.id))).toBe(false);
+
+    await page.reload(); // Refresh the sidebar's roster after the real REST create.
+    const third = await freshChat(page, first.agentName, workspaceName);
+    // Amendment 280, 283–284, 289: rule out another agent/session as a false control.
+    expect(third.agentId).toBe(first.agentId);
+    expect([first.sessionId, second.sessionId]).not.toContain(third.sessionId);
+    const thirdDetail = await readSessionDetail(page, third.sessionId);
+    expect(thirdDetail.session).toMatchObject({ agent_id: first.agentId, workspace_id: otherWorkspace.id });
+    await expect(assistantMessages(page)).toHaveCount(0, { timeout: 15_000 });
+    const isolated = chatInput(page);
+    await isolated.fill(question); // The question contains no nonce, in either workspace.
+    await isolated.press('Enter');
+    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 });
+    await expectToolFreeTranscript(page, third.sessionId);
+    // Amendment 280, 283–284, 289, 501: a real completed reply, not an empty
+    // thread or a missing file, proves A's recap did not reach B's session.
+    await expect(assistantMessages(page).first()).not.toContainText(nonce);
   },
 );

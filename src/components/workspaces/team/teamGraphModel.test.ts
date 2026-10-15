@@ -36,7 +36,6 @@ function agent(id: string, over: Partial<Agent> = {}): Agent {
     soul: '',
     heartbeat: '',
     instructions: '',
-    timeout_seconds: 60,
     max_tool_iterations: 10,
     heartbeat_enabled: false,
     heartbeat_interval: 0,

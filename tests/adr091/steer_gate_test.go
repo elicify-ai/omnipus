@@ -2,22 +2,19 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-091 fix lane RX-TESTS. Three properties the suite asserted only by
-// reading the code, or by a test that could not tell the right answer from
-// the wrong one:
+// ADR-091 fix lane RX-TESTS. Properties the suite asserted only by reading
+// the code, or by a test that could not tell the right answer from the wrong
+// one:
 //
 //  1. I-2's "Dispatch decides atomically under one lock". Every existing
 //     admission test is strictly SEQUENTIAL, so a lock narrowed to exclude
 //     the `len(g.active)` read would be invisible to all of them and to
 //     -race (no test ever ran two Dispatch calls at once).
-//  2. D9's "the timeout's scope is the session's LIFETIME across re-entries".
-//     The existing integration test set a 1s limit, backdated CreatedAt by
-//     500ms and bounded the call in a 5s select — both "half the budget is
-//     already spent" and "the budget restarted on this wake" land inside 5s,
-//     so it passed either way.
-//  3. A timed-out child STARTS NO FURTHER TOOL CALLS, and its timeout notice
-//     has exactly one owner. Coverage lost with the deleted
-//     pkg/agent/subturn_timeout_stops_child_test.go.
+//  2. A child run to completion never blocks its parent and wakes it.
+//
+// (D9's session-lifetime timeout tests were removed with the timeout itself:
+// issue #1306 — delegated work has no time limit. The no-limit regression
+// tests live in pkg/agent/no_time_limit_test.go.)
 //
 // Everything here runs a real *agent.AgentLoop with its real session,
 // lifecycle and inbox stores, the real production audience resolver and the
@@ -43,7 +40,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 const gateAgentID = "adr091-fixture-agent-a"
@@ -278,264 +274,6 @@ func TestDispatch_ConcurrentCallsAdmitExactlyOneUnderACapOfOne(t *testing.T) {
 				"duplicate or missing positions mean the queue append raced the admission decision",
 				position, positions[position], positions)
 		}
-	}
-}
-
-// --- D9: the timeout's scope is the session's lifetime, not one wake -------
-
-const gateSlowToolName = "adr091_gate_slow_tool"
-const gateSecondToolName = "adr091_gate_second_tool"
-
-// blockUntilDoneTool blocks until its context is cancelled — the tool the
-// timed-out child is still inside when its deadline fires.
-type blockUntilDoneTool struct {
-	tools.BaseTool
-	started chan struct{}
-	once    sync.Once
-}
-
-func (*blockUntilDoneTool) Name() string        { return gateSlowToolName }
-func (*blockUntilDoneTool) Description() string { return "blocks until its context is done" }
-func (*blockUntilDoneTool) Parameters() map[string]any {
-	return map[string]any{"type": "object", "properties": map[string]any{}}
-}
-func (*blockUntilDoneTool) Scope() tools.ToolScope { return tools.ScopeCore }
-func (p *blockUntilDoneTool) Execute(ctx context.Context, _ map[string]any) *tools.ToolResult {
-	p.once.Do(func() { close(p.started) })
-	<-ctx.Done()
-	return tools.ErrorResult("slow tool cancelled: " + ctx.Err().Error())
-}
-
-// countingTool records whether it was ever executed. A timed-out child must
-// never reach it.
-type countingTool struct {
-	tools.BaseTool
-	calls atomic.Int32
-}
-
-func (*countingTool) Name() string        { return gateSecondToolName }
-func (*countingTool) Description() string { return "records that it ran" }
-func (*countingTool) Parameters() map[string]any {
-	return map[string]any{"type": "object", "properties": map[string]any{}}
-}
-func (*countingTool) Scope() tools.ToolScope { return tools.ScopeCore }
-func (p *countingTool) Execute(context.Context, map[string]any) *tools.ToolResult {
-	p.calls.Add(1)
-	return tools.NewToolResult("second tool ran")
-}
-
-// twoToolProvider answers the first Chat call with TWO queued tool calls (a
-// slow one and a second one) and every later call with more work — so a
-// child that survives its deadline visibly keeps going.
-type twoToolProvider struct{ calls atomic.Int32 }
-
-func (p *twoToolProvider) Chat(
-	_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
-) (*providers.LLMResponse, error) {
-	p.calls.Add(1)
-	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{
-		{ID: "gate-slow-call", Function: &providers.FunctionCall{Name: gateSlowToolName, Arguments: `{}`}},
-		{ID: "gate-second-call", Function: &providers.FunctionCall{Name: gateSecondToolName, Arguments: `{}`}},
-	}}, nil
-}
-
-func (*twoToolProvider) GetDefaultModel() string { return "scripted-model" }
-
-func (f *steerFixture) allowTools(t *testing.T, registered ...tools.Tool) {
-	t.Helper()
-	policies := map[string]config.ToolPolicy{}
-	for _, tool := range registered {
-		f.al.RegisterTool(tool)
-		policies[tool.Name()] = config.ToolPolicyAllow
-	}
-	for _, agentID := range f.al.GetRegistry().ListAgentIDs() {
-		if instance, ok := f.al.GetRegistry().GetAgent(agentID); ok {
-			instance.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: policies})
-		}
-	}
-}
-
-func (f *steerFixture) awaitState(t *testing.T, sessionID string, want session.LifecycleState, within time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(within)
-	var last session.LifecycleState
-	for time.Now().Before(deadline) {
-		record, err := f.lifecycle.Load(sessionID)
-		if err == nil {
-			last = record.State
-			if record.State == want {
-				return
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("session %s state = %q after %s, want %q", sessionID, last, within, want)
-}
-
-// TestTimeout_TimedOutChild_StartsNoFurtherToolCallsAndTellsOneOwner
-// restores the coverage deleted with
-// pkg/agent/subturn_timeout_stops_child_test.go
-// (TestSubTurn_TimedOutChild_StartsNoFurtherToolCalls and
-// TestSpawnSubTurn_SettledTimeoutPublicationChoosesSingleOwner), re-aimed at
-// the ADR-091 mechanism that replaced the sub-turn ring: the run deadline
-// steer_launcher.go::steeredTurnRunContext installs from
-// rec.SteeredBy.Limits.TimeoutSeconds.
-//
-// The child's model response queues [slow_tool, second_tool] and the child is
-// still inside slow_tool when its limit fires. Afterwards:
-//   - second_tool must NEVER have executed (nothing further starts),
-//   - the model must not have been called again,
-//   - the record must read stopped, with cause timeout (Q19),
-//   - and the timeout notice must have exactly ONE owner: one durable D6 notice
-//     to the direct steering session, no terminal final, and no user-bus leak.
-//
-// Frozen Vocabulary/Q19: "LifecycleTimedOut is retired as a distinct outcome".
-// D6: "Every steered child's transition into stopped ... persists one notice
-// for its direct parent". This supersedes only the old terminal delivery oracle.
-func TestTimeout_TimedOutChild_StartsNoFurtherToolCallsAndTellsOneOwner(t *testing.T) {
-	provider := &twoToolProvider{}
-	f := newSteerFixture(t, provider, false)
-	slow := &blockUntilDoneTool{started: make(chan struct{})}
-	second := &countingTool{}
-	f.allowTools(t, slow, second)
-
-	// The budget is deliberately generous and re-anchored at NOW. D9 scopes
-	// the limit to the session's LIFETIME (CreatedAt + TimeoutSeconds), so a
-	// short budget left at its launch-time anchor can already be spent
-	// before the turn starts on a loaded machine — the turn then never
-	// reaches its first tool at all and this test would be measuring
-	// nothing. Re-anchoring gives the child the whole budget from dispatch.
-	const childBudget = 12 * time.Second
-	childID, childGen := f.launchChild(t, "call-timeout-stops-child")
-	if err := f.lifecycle.Mutate(childID, func(record *session.LifecycleRecord) error {
-		record.SteeredBy.Limits.TimeoutSeconds = int(childBudget / time.Second)
-		record.CreatedAt = time.Now()
-		return nil
-	}); err != nil {
-		t.Fatalf("Mutate(child timeout): %v", err)
-	}
-	if _, err := f.launcher.Dispatch(context.Background(), childID, childGen); err != nil {
-		t.Fatalf("Dispatch(child): %v", err)
-	}
-
-	select {
-	case <-slow.started:
-	case <-time.After(childBudget):
-		t.Fatal("the child never entered its first tool call within its whole time budget — the fixture " +
-			"proves nothing about what happens after the deadline")
-	}
-	// Settle on the FIRST of "the child stopped" or "the child started the
-	// next queued tool anyway", so the no-further-tool-calls failure is
-	// reported as itself rather than as a downstream timeout waiting for a
-	// terminal state a runaway child never reaches.
-	settleDeadline := time.Now().Add(childBudget + 15*time.Second)
-	for time.Now().Before(settleDeadline) {
-		if second.calls.Load() > 0 {
-			break
-		}
-		if record, err := f.lifecycle.Load(childID); err == nil && record.State == session.LifecycleStopped {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if got := second.calls.Load(); got != 0 {
-		t.Fatalf("the second queued tool ran %d times after the child's deadline fired — a timed-out "+
-			"child must START NO FURTHER TOOL CALLS (loop_run_turn_tools.go::"+
-			"agentLoopRunTurnToolsExecute.validateCall's turn-context-done skip)", got)
-	}
-	f.awaitState(t, childID, session.LifecycleStopped, childBudget+15*time.Second)
-
-	if got := provider.calls.Load(); got != 1 {
-		t.Fatalf("the model was called %d times, want exactly 1 — a timed-out child must not go back to "+
-			"the model for another round", got)
-	}
-
-	// D2/T11: stopped(timeout) owns no terminal final. D6's separate durable
-	// notice still has exactly one owner, with its own dedup identity.
-	stopped, err := f.lifecycle.Load(childID)
-	if err != nil {
-		t.Fatalf("Load(timeout-stopped child): %v", err)
-	}
-	if stopped.StopNote == nil || stopped.StopNote.Cause != session.StopCauseTimeout {
-		t.Fatalf("timeout stop must retain cause timeout, got %+v", stopped.StopNote)
-	}
-	g7AssertDirectStopNotice(t, f.al.GetMessageInboxStore(), f.root, stopped)
-	if got := f.upward.countFor(childID); got != 0 {
-		t.Fatalf("legacy terminal deliveries for the timeout-stopped child = %d, want 0 (D2/T11)", got)
-	}
-	// And nobody else: nothing reaches the user-facing outbound bus.
-	for {
-		select {
-		case outbound := <-f.msgBus.OutboundChan():
-			t.Fatalf("a steered child's timeout reached the user-facing outbound bus: %+v — the notice "+
-				"has a second owner", outbound)
-		default:
-			return
-		}
-	}
-}
-
-// TestWake_TimeoutBudgetIsTheSessionLifetimeNotThisWake is the distinguishing
-// re-entry test D9 demands ("the timeout's scope is the session's lifetime
-// across re-entries").
-//
-// The existing integration test (pkg/agent::TestWake_AppliesConfiguredTimeout)
-// sets a 1s limit, backdates CreatedAt by 500ms and bounds the call in a 5s
-// select — both "500ms of a 1s budget is left" and "the budget restarted, so
-// 1s is left" finish well inside 5s, so it cannot tell them apart. Replacing
-// `anchor := rec.CreatedAt` with `anchor := time.Now()` in
-// steer_launcher.go::steeredTurnRunContext — the session lifetime restarting
-// on EVERY wake, so a child woken every few minutes runs for ever — left it
-// green.
-//
-// This one MEASURES. The budget is 6s and 5.5s of it is already spent, so a
-// lifetime-anchored deadline fires in about half a second and a
-// wake-anchored one would take a full six. The bound is 3s: comfortably
-// above the real ~0.5s and comfortably below the 6s the regression needs.
-func TestWake_TimeoutBudgetIsTheSessionLifetimeNotThisWake(t *testing.T) {
-	const (
-		budget       = 20 * time.Second
-		alreadySpent = 19500 * time.Millisecond
-		// Anything at or above this means the budget restarted on this run.
-		// The gap is deliberately wide — ~0.5s for the correct behaviour,
-		// ~20s for the regression — so neither verdict can be reached by a
-		// loaded machine rather than by the code under test.
-		restartedThreshold = 8 * time.Second
-	)
-	release := make(chan struct{})
-	provider := &blockingProvider{release: release}
-	f := newSteerFixture(t, provider, false)
-	defer close(release)
-
-	childID, childGen := f.launchChild(t, "call-lifetime-budget")
-	if err := f.lifecycle.Mutate(childID, func(record *session.LifecycleRecord) error {
-		record.SteeredBy.Limits.TimeoutSeconds = int(budget / time.Second)
-		record.CreatedAt = time.Now().Add(-alreadySpent)
-		return nil
-	}); err != nil {
-		t.Fatalf("Mutate(child budget): %v", err)
-	}
-
-	started := time.Now()
-	if _, err := f.launcher.Dispatch(context.Background(), childID, childGen); err != nil {
-		t.Fatalf("Dispatch(child): %v", err)
-	}
-	f.awaitState(t, childID, session.LifecycleStopped, budget+4*time.Second)
-	elapsed := time.Since(started)
-
-	if elapsed >= restartedThreshold {
-		t.Fatalf("the child took %s to time out, but only %s of its %s budget was left when it started — "+
-			"the deadline was anchored at THIS run instead of the session's CreatedAt, so the lifetime "+
-			"limit restarts on every re-entry and a repeatedly woken child never dies "+
-			"(steer_launcher.go::steeredTurnRunContext)",
-			elapsed.Round(time.Millisecond), (budget - alreadySpent).Round(time.Millisecond), budget)
-	}
-	// Positive control: the deadline must not be in the PAST either — a
-	// child that times out instantly would also satisfy the bound above
-	// while proving the budget is not honoured at all.
-	if provider.calls.Load() == 0 {
-		t.Fatal("the child never reached the model before timing out — this test cannot distinguish a " +
-			"lifetime-anchored deadline from a session that never ran")
 	}
 }
 

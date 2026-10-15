@@ -27,7 +27,8 @@ properties:
     description: >
       Who or what initiated the stop, formatted "human:<id>" / "agent:<id>",
       "system" for a cause with no human/agent principal behind it (a
-      lifetime-budget timeout, a goal-loop attempt supersession), or the
+      goal-loop attempt supersession, or a historical lifetime-budget
+      timeout), or the
       literal "restart" for a boot-recovery restart (sub-agent control plane
       ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal`
       / `::StopActorSystem` / `::StopActorRestart`.
@@ -53,7 +54,9 @@ properties:
       - timeout
     description: >
       The closed vocabulary naming WHY the session last landed `stopped`
-      (`pkg/session/lifecycle_edge.go::StopCause`).
+      (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical:
+      it is only read from records written before delegated work lost its
+      time limit (issue #1306) and is never written any more.
     example: "stop"
   boot_seq:
     type: integer

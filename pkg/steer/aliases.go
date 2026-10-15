@@ -28,7 +28,6 @@ type (
 	ReportingTarget   = session.ReportingTarget
 	Authorization     = session.Authorization
 	AuthorizationMode = session.AuthorizationMode
-	Limits            = session.Limits
 
 	// Stop — I-1/D8: the durable Stop marker on a session's own record.
 	Stop = session.Stop

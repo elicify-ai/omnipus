@@ -23,7 +23,7 @@ import (
 // No stuck-run reaper: a run stays in_progress until its own execution
 // closes it (operator decision 2026-07-20) — "a run could even go over
 // days." The staleAfter/taskRunStaleAfterMultiplier plumbing that used to
-// derive a reaper deadline from cfg.Schedules.RunTimeoutSeconds has been
+// derive a reaper deadline from the (since retired) schedules.run_timeout_seconds has been
 // removed along with the reaper itself. A liveness-aware reaper is a
 // planned follow-up requiring careful design (ADR-050 follow-up).
 

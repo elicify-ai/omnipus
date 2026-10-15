@@ -14,8 +14,13 @@ import (
 )
 
 // Issue #1215 (founder decision 2026-10-07, option 1): a final handback
-// delivered in THIS execution makes a later timeout end the helper as
-// completed with that result — never a second timeout stop/notice.
+// delivered in THIS execution makes a later deadline error end the helper as
+// completed with that result — never a second stop/failure notice.
+//
+// Issue #1306 removed the session lifetime budget, so the deadline error these
+// tests inject (context.DeadlineExceeded) now stands for a provider request
+// timeout, the only remaining source. Without a handback such an error is an
+// ordinary failure with its real cause — never a "timeout" stop.
 
 func admitExecution(t *testing.T, al *AgentLoop, id, runID string) *session.LifecycleRecord {
 	t.Helper()
@@ -102,7 +107,7 @@ func TestTimeoutAfterFinalHandback_CompletesWithHandbackResultAndNoTimeoutNotice
 	}
 }
 
-func TestTimeoutWithoutHandback_StaysStoppedTimeout(t *testing.T) {
+func TestDeadlineErrorWithoutHandback_FailsWithRealCauseNotTimeoutStop(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	parent := newTestSteeringSession(t, al, "ws-1215-b")
@@ -113,7 +118,16 @@ func TestTimeoutWithoutHandback_StaysStoppedTimeout(t *testing.T) {
 	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{}, context.DeadlineExceeded); err != nil {
 		t.Fatalf("completeSteeredTurn(deadline): %v", err)
 	}
-	assertU1StoppedChildNotice(t, al, parent, rec, string(session.StopCauseTimeout), "")
+	got := mustLoadRec(t, al, child.SessionID)
+	if got.State != session.LifecycleFailed {
+		t.Fatalf("child after a provider deadline error = %q (stop note %+v), want failed with the real cause", got.State, got.StopNote)
+	}
+	if got.StopNote != nil {
+		t.Fatalf("child after a provider deadline error carries stop note %+v, want none (no lifetime-limit stop, #1306)", got.StopNote)
+	}
+	if !strings.Contains(got.FailedReason, context.DeadlineExceeded.Error()) || strings.Contains(got.FailedReason, "lifetime") {
+		t.Fatalf("failed reason = %q, want the real deadline cause and no lifetime-limit wording", got.FailedReason)
+	}
 }
 
 func TestResumeAfterTimeoutThenHandback_CompletesAndOldHandbackDoesNotLeak(t *testing.T) {
@@ -137,18 +151,19 @@ func TestResumeAfterTimeoutThenHandback_CompletesAndOldHandbackDoesNotLeak(t *te
 		t.Fatalf("Revive: %v", err)
 	}
 
-	// Execution 2 times out WITHOUT its own handback: stopped(timeout).
+	// Execution 2 hits a deadline error WITHOUT its own handback: failed, not
+	// completed — an earlier execution's handback must not cover it.
 	rec2 := admitExecution(t, al, child.SessionID, "run-c2")
 	if err := al.completeSteeredTurn(context.Background(), rec2, turnResult{}, context.DeadlineExceeded); err != nil {
 		t.Fatalf("completeSteeredTurn(deadline, no handback in this execution): %v", err)
 	}
-	if got := mustLoadRec(t, al, child.SessionID); got.State != session.LifecycleStopped || got.StopNote == nil || got.StopNote.Cause != session.StopCauseTimeout {
-		t.Fatalf("execution 2 without its own handback = %q %+v, want stopped(timeout): an earlier execution's handback must not cover it", got.State, got.StopNote)
+	if got := mustLoadRec(t, al, child.SessionID); got.State != session.LifecycleFailed {
+		t.Fatalf("execution 2 without its own handback = %q %+v, want failed: an earlier execution's handback must not cover it", got.State, got.StopNote)
 	}
 
-	// Resume after the timeout, hand back in the new execution, time out again.
+	// Resume after the failure, hand back in the new execution, hit a deadline error again.
 	if _, err := al.steerCanceller().Revive(context.Background(), child.SessionID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}); err != nil {
-		t.Fatalf("Revive after timeout: %v", err)
+		t.Fatalf("Revive after failure: %v", err)
 	}
 	rec3 := admitExecution(t, al, child.SessionID, "run-c3")
 	sendFinalHandback(t, al, child.SessionID, "RESUMED-RESULT")
@@ -197,10 +212,11 @@ func TestHandbackMark_GoalSessionIsExcluded(t *testing.T) {
 	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{}, context.DeadlineExceeded); err != nil {
 		t.Fatalf("completeSteeredTurn: %v", err)
 	}
-	// Unchanged pre-#1215 behaviour for a goal child: the deadline stops it.
+	// The handback mark never applies to a goal child: a deadline error is
+	// an ordinary failure for it (no lifetime-limit stop since #1306).
 	got := mustLoadRec(t, al, rec.SessionID)
-	if got.State != session.LifecycleStopped || got.StopNote == nil || got.StopNote.Cause != session.StopCauseTimeout {
-		t.Fatalf("goal-bearing session after a deadline = %q %+v, want stopped(timeout) — the handback mark must not apply to it", got.State, got.StopNote)
+	if got.State != session.LifecycleFailed || got.StopNote != nil {
+		t.Fatalf("goal-bearing session after a deadline error = %q %+v, want failed with no stop note — the handback mark must not apply to it", got.State, got.StopNote)
 	}
 }
 
@@ -237,8 +253,10 @@ func TestHandbackMark_SameRunIDEarlierBootSeqIsInert(t *testing.T) {
 	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{}, context.DeadlineExceeded); err != nil {
 		t.Fatalf("completeSteeredTurn: %v", err)
 	}
-	if got := mustLoadRec(t, al, child.SessionID); got.State != session.LifecycleStopped {
-		t.Fatalf("a mark from another boot completed the child (state %q); want stopped(timeout)", got.State)
+	// Not completed by the other boot's mark: the deadline error is an
+	// ordinary failure (no lifetime-limit stop since #1306).
+	if got := mustLoadRec(t, al, child.SessionID); got.State != session.LifecycleFailed {
+		t.Fatalf("a mark from another boot completed the child (state %q); want failed", got.State)
 	}
 }
 

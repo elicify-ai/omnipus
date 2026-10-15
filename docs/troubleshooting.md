@@ -118,9 +118,11 @@ This is an internal retry notice, not a data-loss event: relief changes the mode
 
 A storage or projection error is different. If Omnipus cannot save the window change, it stops with that genuine error instead of sending a request that disagrees with the saved state. See [memory](memory.md#how-long-conversations-stay-in-view) for what can leave the live window and what an aborted turn rolls back.
 
-The same rule now covers the agent's own reply. If Omnipus cannot save the reply (or another piece of the conversation, such as a tool result or a steering instruction) to disk, the chat shows the fixed notice **"Sorry, I couldn't save your message — please try again later."** and the turn ends as failed rather than being reported as answered. Nothing pretends to have been saved: the reply is missing from the conversation history after a reload, and the stored error re-appears when the chat is reopened. Resolve the disk, permissions or path problem, then send the request again. Operator logs carry the real storage error with the session key; in shutdown and boot-recovery reports a session whose notice could not be written is reported as failed, never as written.
+If the final streamed reply cannot be saved, the live chat shows **"Sorry, I couldn't save your message — please try again later."** and reports a failed turn rather than a successful answer. This failure is visible in normal chat; **Verbose chat** is for technical details. Other conversation-storage failures also stop the affected operation, but their wording depends on the failing path.
 
-Turn on **Settings → Chat → Verbose chat** to see this notice and other internal-retry details; it does not appear in normal chat. Live chat, reopened history, and conversation replay all use the same Verbose chat setting to show or hide it.
+A failed write does not prove that the reply or its error notice was saved. The current connection's retained event history can carry the notice, and active-turn handling attempts to record it, but failing storage can prevent that record too. After a reload or restart, inspect the saved history and gateway log rather than assuming the notice must return. Fix disk space, permissions or the path problem before retrying. Work already done outside the conversation is not undone.
+
+The **context-window compression/retry notice** described above — not a failed-save notice — is shown or hidden by **Settings → Chat → Verbose chat**. Live chat, reopened history and conversation replay use that same display setting.
 
 ### "This endpoint did not report a context length for this model"
 

@@ -311,10 +311,10 @@ export type ChatMessage = Message & {
    */
   errorFacts?: GeneratedLLMError['facts']
   /**
-   * A message-scoped refusal notice (frames.ts, the C2 branch): an error bubble
-   * appended while the turn the refused message was sent into KEEPS RUNNING.
-   * It is not that turn's reply, so busyFlagIsUnbacked looks past it - and only
-   * past it; a real turn-ending error bubble is a reply and is not skipped.
+   * A non-terminal error notice: a message-scoped refusal (frames.ts, C2) or
+   * judge_conclusion_failed. Neither notice is the running turn's reply, so
+   * busyFlagIsUnbacked looks past it; a real turn-ending error bubble remains
+   * a reply and is not skipped. The legacy field name is retained.
    */
   refusalNotice?: boolean
   /**

@@ -471,9 +471,9 @@ func TestConfigSet_OtherTypesStillWorkAfterBoolFix(t *testing.T) {
 		},
 		{
 			name:       "int field, number value",
-			key:        "agents.defaults.timeout_seconds",
+			key:        "agents.defaults.max_media_size",
 			rawValue:   `120`,
-			wantOnDisk: `"timeout_seconds": 120`,
+			wantOnDisk: `"max_media_size": 120`,
 		},
 		{
 			name:       "float field (pointer), number value",

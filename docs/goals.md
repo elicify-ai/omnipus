@@ -63,7 +63,7 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 |---|---|---|
 | active | Work is under way | Steer by chatting |
 | waiting on you | Paused, waiting for you | Reply in chat |
-| judge unavailable | Judging is paused because the Judge cannot run | Wait for the Judge to become available |
+| judge unavailable | Judging is paused because the Judge cannot run | Wait for the Judge to become available; if it still cannot run, you get a **Not verified** conclusion (see below) |
 | re-planning | A plan needs your correction before work continues | Review the request and reply |
 | judging | The Judge is reading the work | Wait |
 | verifying elsewhere | Another judgment of the same work is already running | Wait for that verdict |
@@ -72,7 +72,7 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 | done | Every criterion was judged met | Read the verdict |
 | failed | Tries ran out with work unmet | Restate or raise the budget |
 | cleared | You stopped it | Restart if needed |
-| expired | Quiet for seven days | Restart it |
+| expired | Quiet for seven days with nothing running — a goal whose agent or helper is still working never expires | Restart it |
 
 ## What controls a goal
 
@@ -83,7 +83,7 @@ These numbers shape a goal's life:
 | Tries per goal | 20 by default | Settings, Performance, "Goal completion budget" |
 | Task attempts | 3 by default | On the task |
 | Question rounds | 1 per goal | Fixed |
-| Idle expiry | 7 days | Server setting |
+| Idle expiry | 7 days, never while work is running | Server setting |
 | Active chat goals | 16 at a time | Server setting; tasks count separately |
 
 A goal ends one of four ways — met, tries exhausted, expired, cleared by you — and the record is kept in each: what was wanted, and how it was judged, stays readable.
@@ -94,6 +94,14 @@ A goal ends one of four ways — met, tries exhausted, expired, cleared by you �
 - On a task, tries bound the work inside one run; attempts bound how many runs the task gets. The task card shows both, for example "attempt 1 of 3 · try 5 of 20".
 - Unproven counts as unmet. Finished work can be sent back when the Judge could not verify it; the reason names the evidence that was missing.
 - Verdict speed follows the Judge's model — a fast one keeps verdicts quick.
+- The work itself has no wall-clock lifetime limit. The Judge's verification turn does: `judge.timeout_sec`, 420 seconds by default and at most 900. When that limit ends the verification turn, the message names the Judge's own check time limit, not a model provider failure.
+- If checking is abandoned because the Judge is unavailable, chat, helper, task and plan paths produce **Not verified — the check could not complete**, with the reason and the worker's claimed result labelled **The work result, unverified:**. The embedded result is limited to 8,000 bytes; longer results end with **[truncated]**. Do not treat that conclusion as a complete copy of a long result.
+  - In a chat goal, the conclusion is added to the chat and the goal stays active, so the agent can claim completion again later.
+  - For a helper working on a goal, its parent agent receives the conclusion with the helper's claimed result.
+  - For a task, an unavailable-Judge exit ends the task **Failed**, with the conclusion in its result text and no attempt used. Re-run it after fixing the Judge or once it is available.
+  - For a plan, the plan's handover carries the same **Not verified — the check could not complete** conclusion with the members' results, and the engine retries the round or parks the plan for a correction. See [Plans](plans.md).
+- An unverified criterion is different from an unavailable Judge. A review that ran but still could not verify a criterion can produce an **unmet** verdict, including after repeated failures following real review progress. That can consume a goal try, send the worker back to work, and eventually consume a task attempt if the run fails. Storage or delivery failures are reported separately; a helper conclusion is not routed to a guessed parent when its saved records cannot be read or do not agree about its parent.
+- For an interactive chat goal, a detected failure to save the conclusion in the chat transcript or goal record, resolve the saved chat route, or queue the conclusion for that route produces a separate notice. A helper whose records cannot establish a safe audience uses the same notice: **Omnipus could not fully save or deliver the Judge's conclusion. Check disk space, file permissions and the chat's channel connection, then reload the chat. Open Verbose chat for details.** The notice is not a verdict on the work. It does not end the goal, use a try, or stop a reply that is still running. It is not a guarantee that every later connector-send failure or every plan/helper storage failure is reported this way. Reloading does not itself retry conclusion delivery.
 - Ending a goal never erases it, but goal records are swept by the same retention rule as sessions. Keep what you need somewhere durable.
 
 ## Related pages

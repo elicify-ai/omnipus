@@ -59,7 +59,14 @@ rc=$?
 printf 'OP_EXIT=%s\n' "$rc"
 cat "$3/probe-err.txt"
 `
-					cmd := wu23KernelCommand(t, policy, []string{"/bin/sh", "-c", script, "wu23", path, filepath.Join(f.Work, "allowed.txt"), f.Work})
+					probePath := path
+					if op.name == "list" && wu23Platform() == "Landlock" {
+						// L1-AMENDMENTS §2 D8 T-L L1: test directory enumeration.
+						// ls(file) only stats its name, which Landlock does not
+						// restrict (visible names accepted, HANDOFFS 23:51:23Z).
+						probePath = filepath.Dir(path)
+					}
+					cmd := wu23KernelCommand(t, policy, []string{"/bin/sh", "-c", script, "wu23", probePath, filepath.Join(f.Work, "allowed.txt"), f.Work})
 					out, err := cmd.CombinedOutput()
 					if err != nil {
 						t.Fatalf("child failed before complete probe: %v output=%s", err, out)

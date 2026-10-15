@@ -762,6 +762,7 @@ type KnowledgeIndexProgressFrame struct {
 
 // LLMError — Translated provider/LLM error safe for the live WebSocket boundary.
 type LLMError struct {
+	// Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
 	Code string `json:"code"`
 	// Live-only technical detail; never persisted or replayed.
 	Detail *string `json:"detail,omitempty"`
@@ -779,6 +780,7 @@ type LLMError struct {
 
 // LLMErrorReplay — Replay-safe translated provider/LLM error with live-only detail omitted.
 type LLMErrorReplay struct {
+	// Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	// Server-authored subtype/trust flag (MAJ-104, C-14), replay twin of the live LLMError flag — when true, `message` carries the persisted provider-message sentence and the SPA renders it after reload; when absent or false, catalogue copy keyed on `code`, byte-identical to today (RG-2). No `facts` object on the replay shape (§7.1 item 3 — the persisted message itself carries the provider naming, C-13).

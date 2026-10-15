@@ -1,5 +1,7 @@
 # ADR-20261004 — Steering commands: no person question
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. C6's retained lifetime-timeout half of T19 and the Negative consequence's lifetime-budget backstop are **superseded** below. No fresh budget is installed on resume. Explicit Stop and execution ownership protections stay; the already-retired 24-hour person-question expiry stays retired. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/session/active_budget.go`::NoteRealActivity; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/session/lifecycle_edge.go`::SteeredBy / StopCauseTimeout. This records a later founder order, not a second grill/correction round.
+
 ## Amended 2026-10-06 — founder decision
 
 Later founder decisions narrow the preserved control-plane requirements. Use [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](ADR-20260928-sub-agent-control-plane.md)::Amended 2026-10-06 as the current decision record. This is a founder-requested synchronization, not a second grill/correction round.
@@ -141,6 +143,8 @@ Required regression (into qa-lead's pack with the C6 list): stop → untaken not
 
 ### C6 — Source-test dispositions and user-document TODOs
 
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** T19's **“Stays” lifetime-timeout half** below is no longer a build or test obligation. Replace deadline-triggered `stopped(timeout)` / fresh-budget-on-resume assertions with deadline-free work and resume, plus readable legacy timeout-note cases. T6/T19/T20/T23 keep their goal-preservation and explicit Stop/restart assertions, not timeout generation. The previously withdrawn 24-hour-expiry comparison stays withdrawn. User-doc TODO: remove delegated lifetime/default/reset copy from the Agents guide and generated General tool reference; implementing lead and docs-verifier own the public update in PR #1311.
+
 Source acceptance tests (ADR-20260928, "Required acceptance tests"):
 
 | Source test | Disposition |
@@ -176,6 +180,8 @@ New and adjusted tests this correction requires (qa-lead RED; expected values co
 - The ring-until-taken stop notice closes the "helper stopped and nobody noticed" hole, and a repeat ring cannot make the parent redo the work.
 
 ### Negative
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the first consequence below may no longer rely on the session's **“own lifetime budget”** as a backstop. Agent work deliberately has no elapsed-time ceiling. The parent may act on ordinary messages or explicitly Stop; no person-question expiry or replacement automatic work timeout is introduced. Judge and command/connection guards are separate.
 
 - An agent chain that asks a question and has no human in the loop has **no forced bound on waiting**: the 24-hour visible failure is gone and no replacement expiry is designed (locked decision 6). The ordinary bounds that remain are the parent agent acting on the message and the session's own lifetime budget, which stops any working turn as usual.
 - The Who/When/Which owner-answer guarantee disappears with the acceptor: nothing in the message path grants **owner-only question-answer authorization** any more. What stays: connection authentication, ordinary session/ancestor steering authority, the untrusted-origin label on agent-authored content, and tool approval policy (Correction C2). The sender record of locked decision 7 is a persistence guarantee, **not** an authorization check.

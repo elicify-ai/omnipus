@@ -94,6 +94,15 @@ func ExpandRulesExcluding(rules []PathRule, deniedPaths, deniedNodes, deniedPref
 		if clean == "" || clean == "." {
 			continue
 		}
+		// A branch override may be emitted wholesale only if its whole tree
+		// is safe. Otherwise the ordinary rule expansion must descend around
+		// the denials; granting the ancestor first would reopen its protected
+		// descendants on Landlock, whose grants cannot be punched out later.
+		if isAtOrUnderAny(clean, denied) || containsPath(nodes, clean) ||
+			len(deniedStrictlyUnder(clean, denied)) > 0 || len(deniedStrictlyUnder(clean, nodes)) > 0 ||
+			matchesDeniedPrefix(clean, prefixes) {
+			continue
+		}
 		if existing, dup := branchAccess[clean]; dup {
 			// Widest access wins when the same root is named twice.
 			branchAccess[clean] = existing | b.Access
@@ -204,6 +213,12 @@ func siblingGrants(rule PathRule, blocked, nodes, prefixes []string, branchAcces
 
 	out := make([]PathRule, 0, len(dirs)*8)
 	for _, dir := range dirs {
+		// A denied subtree stays denied even if a separate branch supplied
+		// a traversal node inside it. Enumerating that node would emit child
+		// grants and silently reopen the subtree on a grant-only kernel.
+		if isAtOrUnderAny(dir, blocked) || matchesDeniedPrefix(dir, prefixes) {
+			continue
+		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			// See the contract above: no fallback. A caller that continued here

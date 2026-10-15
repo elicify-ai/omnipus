@@ -80,6 +80,10 @@ type turnResult struct {
 	// this turn's own finalContent — see goalDeferredAdjudicationWork's own
 	// doc comment (goal_loop.go) for the full contract.
 	goalDeferredAdjudication *goalDeferredAdjudicationWork
+	// turnID is the producing turn's ID (its transcript entries carry it as
+	// TurnID). Lets a goal claim gather everything the claiming turn wrote
+	// for the parent (goal_upward_answer.go). Empty when not set.
+	turnID string
 }
 
 type turnState struct {
@@ -285,6 +289,12 @@ type turnState struct {
 	// parentSpawnCallID assignment, has zero callers outside tests — the value is
 	// injected and never consumed in production.
 	parentSpawnCallID string
+
+	// causeCtx is the turn's own run context, kept only so a typed exit can
+	// read WHY it ended (context.Cause) — e.g. the Judge's own check time
+	// limit (ErrJudgeTimeLimit, issue #1306) versus a provider timeout. Set
+	// once in createTurnContext; read-only afterwards.
+	causeCtx context.Context
 
 	// Additional SubTurn fields
 	ctx          context.Context    // Context for this turn
@@ -669,6 +679,10 @@ type turnState struct {
 	toolRepeatSig        string
 	toolRepeatRun        int
 	toolRepeatStopNotice string
+	// delegatePolls tracks, per polled child session, what each delegate
+	// polling action last returned and how many times new information was
+	// seen (delegate_poll_guard.go). Guarded by mu; per-turn, never persisted.
+	delegatePolls map[string]*delegatePollState
 }
 
 // atomicToolCallProgress is the atomics-based store for turnState's live
@@ -1157,7 +1171,8 @@ type TurnCancelHook interface {
 	// and has now been set to true). Returns false if already canceled.
 	ClaimCancel() bool
 	// MarkAbandoned suppresses later writes after a controller detaches a
-	// stuck turn goroutine (gateway cancel or delegation timeout).
+	// stuck turn goroutine (gateway cancel; there is no delegation timeout
+	// since issue #1306).
 	MarkAbandoned()
 }
 

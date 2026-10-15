@@ -923,10 +923,10 @@ describe('CreateAgentModal — Advanced step fields', () => {
   })
 
   // subagent_3p: an UNTOUCHED max_tool_iterations is absent (#904 D14 lets a
-  // worker set one, US-3 AS-4; left empty it rides the global) and it DOES
-  // carry timeout_seconds (process-level
-  // kill for a hung CLI) and always sends the external-cli executor block.
-  it('subagent_3p create has NO max_tool_iterations, HAS timeout_seconds, and executor.kind=external-cli', async () => {
+  // worker set one, US-3 AS-4; left empty it rides the global), carries NO
+  // timeout_seconds (a CLI run has no time limit, issue #1306), and always
+  // sends the external-cli executor block.
+  it('subagent_3p create has NO max_tool_iterations, NO timeout_seconds, and executor.kind=external-cli', async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined)
     renderModal({
       open: true,
@@ -940,7 +940,7 @@ describe('CreateAgentModal — Advanced step fields', () => {
     await waitFor(() => expect(onCreate).toHaveBeenCalled())
     const call = onCreate.mock.calls.at(-1)![0]
     expect(call.max_tool_iterations).toBeUndefined()
-    expect(call.timeout_seconds).toBe(300)
+    expect('timeout_seconds' in call).toBe(false)
     expect(call.executor).toMatchObject({ kind: 'external-cli' })
     expect(call.steering_mode).toBeUndefined()
     expect(call.model_params).toBeUndefined()

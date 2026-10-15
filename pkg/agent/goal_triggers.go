@@ -773,12 +773,16 @@ type agentLoopRunGoalAdjudication struct {
 	goalDefinition    string
 	maxRounds         int
 	reasonText        string
-	// claimText is the worker's completion claim this adjudication judges.
-	// The terminal arms (met, rounds-exhausted) hand it to the completion
-	// tail as the child's final answer (#947 defect 1, decision (b)) — the
-	// prose-marker path's value is result.finalContent itself.
+	// claimText is the worker's completion claim this adjudication judges
+	// (for a goal_claim tool call, its narrower evidence, JUDGE-FR-094).
 	claimText string
-	ret0      bool
+	// answer is what the terminal arms (met, rounds-exhausted) hand the
+	// completion tail as the child's final answer (#947 defect 1, decision
+	// (b)): all assistant text of the claiming turn (issue #1306, UAT R1 —
+	// the evidence sentence alone lost the work). Empty falls back to
+	// claimText (upwardAnswer).
+	answer string
+	ret0   bool
 }
 
 // agentLoopRunGoalAdjudicationFlow reports how a block stage of agentLoopRunGoalAdjudication wants the conductor to proceed.
@@ -862,7 +866,7 @@ func (al *AgentLoop) runGoalAdjudication(
 	aa := &agentLoopRunGoalAdjudicationAdvance{deliverSteer: deliverSteer}
 
 	aa.ag = &agentLoopRunGoalAdjudication{al: al, agentInst: agentInst, sessionID: sessionID, store: store, rec: rec, claimText: claimText,
-		producer: goalProducerFromContext(ctx)}
+		producer: goalProducerFromContext(ctx), answer: goalAnswerFromContext(ctx)}
 
 	if aa.ag.agentInst == nil || aa.ag.rec == nil || aa.ag.store == nil || aa.ag.sessionID == "" {
 		return false, false
@@ -891,7 +895,9 @@ func (al *AgentLoop) runGoalAdjudication(
 	criteria := compiledGoalCriteriaFor(goalRecordCompiledJSON(aa.ag.rec), aa.ag.rec.Prompt, aa.ag.sessionID)
 	aa.ag.attempt = aa.ag.rec.Round + 1
 
-	judgeCtx, cancel := context.WithTimeout(ctx, goalJudgeRoundTimeout)
+	// Issue #1306 R2-4: the outer round clock is the Judge's own check time
+	// limit, so its expiry is never reported as a provider timeout.
+	judgeCtx, cancel := context.WithTimeoutCause(ctx, goalJudgeRoundTimeout, ErrJudgeTimeLimit)
 	defer cancel()
 
 	jr := aa.ag.al.JudgeCriteria(judgeCtx, JudgeCriteriaInput{
@@ -1070,7 +1076,7 @@ func (al *AgentLoop) runGoalAdjudication(
 		// second terminal arm hands the completion tail the child's final
 		// answer, exactly as its met arm does, so an exhausted goal no longer
 		// leaves the child `running` with a settled goal above it.
-		aa.ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), aa.ag.producer), aa.ag.sessionID, aa.ag.claimText, nil)
+		aa.ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), aa.ag.producer), aa.ag.sessionID, aa.ag.upwardAnswer(), nil)
 		return false, false
 	}
 
@@ -1291,7 +1297,7 @@ func (ag *agentLoopRunGoalAdjudication) finishMetGoal() agentLoopRunGoalAdjudica
 		ag.ret0 = true
 		return agentLoopRunGoalAdjudicationReturn
 	}
-	finalWoke := ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), ag.producer), ag.sessionID, ag.claimText, nil)
+	finalWoke := ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), ag.producer), ag.sessionID, ag.upwardAnswer(), nil)
 	// Q1=A (founder, #984 follow-up): the met verdict's inbox entry was
 	// delivered without a wake (deliverGoalVerdictUpward's SuppressWake);
 	// acknowledge it only after the deterministic final hand-back is known

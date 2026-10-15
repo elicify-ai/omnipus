@@ -125,8 +125,9 @@ export function getLLMErrorDisplay(
   // llm_calls_per_minute (retry after Ns)") and NO flag, so that text can
   // never reach a bubble — live or replayed. The kept `delegated_task_limit`
   // exception is unchanged (controller-authored, always user-facing).
+  // Conclusion handling is never provider-authored copy, even if a sender flags it.
   const providerMessageTrusted =
-    le.provider_message === true && delegatedLimitMessage.length > 0
+    le.code !== 'judge_conclusion_failed' && le.provider_message === true && delegatedLimitMessage.length > 0
   const delegatedLimitTrusted =
     le.code === 'delegated_task_limit' && delegatedLimitMessage.length > 0
   const message =

@@ -374,22 +374,19 @@ type PerformanceConfig struct {
 	// never silently reinterpreted).
 	MaxDelegationDepth int `json:"max_delegation_depth,omitempty" env:"OMNIPUS_PERFORMANCE_MAX_DELEGATION_DEPTH"`
 
-	// DelegationTimeoutMinutes is the shared timeout for a delegated session.
-	// 0 means unset (the built-in 30-minute default applies — see
-	// pkg/agent's defaultSubTurnTimeout; founder raised it from 5 minutes,
-	// 2026-09-23); negative is a
-	// configuration error.
-	DelegationTimeoutMinutes int `json:"delegation_timeout_minutes,omitempty" env:"OMNIPUS_PERFORMANCE_DELEGATION_TIMEOUT_MINUTES"`
+	// performance.delegation_timeout_minutes is retired (issue #1306): a
+	// delegated session has no time limit. A config.json that still carries
+	// the key loads normally — the value is ignored and dropped on the next
+	// save (TestOldTimeLimitKeysAreIgnoredOnLoad).
 }
 
 // ErrPerformanceLimitMisconfigured is returned by
-// PerformanceConfig.EffectiveMaxDelegationDepth /
-// EffectiveDelegationTimeoutMinutes for a negative configured value — a
+// PerformanceConfig.EffectiveMaxDelegationDepth for a negative configured value — a
 // genuine configuration error, never silently coerced into "unset"
 // (mirrors admission.go::ErrRootDelegationCapMisconfigured's identical
 // rule for max_parallel_agents' sibling knob).
 var ErrPerformanceLimitMisconfigured = errors.New(
-	"performance: max_delegation_depth and delegation_timeout_minutes must each be >= 0")
+	"performance: max_delegation_depth must be >= 0")
 
 // EffectiveMaxDelegationDepth returns MaxDelegationDepth, or an error when
 // it is negative. 0 (unset) is not an error — callers apply their own
@@ -420,15 +417,6 @@ func ConfiguredMaxDelegationDepth(p PerformanceConfig, site string) (limit int, 
 		return 0, false
 	}
 	return limit, true
-}
-
-// EffectiveDelegationTimeoutMinutes returns DelegationTimeoutMinutes, or an
-// error when it is negative. 0 (unset) is not an error.
-func (p PerformanceConfig) EffectiveDelegationTimeoutMinutes() (int, error) {
-	if p.DelegationTimeoutMinutes < 0 {
-		return 0, fmt.Errorf("%w: delegation_timeout_minutes=%d", ErrPerformanceLimitMisconfigured, p.DelegationTimeoutMinutes)
-	}
-	return p.DelegationTimeoutMinutes, nil
 }
 
 type HooksConfig struct {
@@ -1015,11 +1003,10 @@ type AgentDefaults struct {
 	// scale the timeout-recovery trim trigger; every consumer now reads the
 	// one budget B (pkg/agent/context_budget.go::contextBudget). A stale key
 	// in config.json is ignored (greenfield rule: no migration, no rejection).
-	MaxMediaSize   int                `json:"max_media_size,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
-	Routing        *RoutingConfig     `json:"routing,omitempty"`
-	ToolFeedback   ToolFeedbackConfig `json:"tool_feedback,omitempty"`
-	SplitOnMarker  bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
-	TimeoutSeconds int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled
+	MaxMediaSize  int                `json:"max_media_size,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	Routing       *RoutingConfig     `json:"routing,omitempty"`
+	ToolFeedback  ToolFeedbackConfig `json:"tool_feedback,omitempty"`
+	SplitOnMarker bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 
 	// AutoRecapEnabled gates the session-end recap pipeline (FR-033).
 	// When false, CloseSession is a no-op and no background LLM calls are made.
@@ -1325,16 +1312,16 @@ type MailboxConfig struct {
 type MailboxesConfig map[string]map[string]MailboxConfig
 
 // SchedulesConfig holds global guardrail settings for scheduled agent runs
-// (#264). These are deliberately separate from agents.defaults.timeout_seconds
-// (which is intentionally 0/disabled): scheduled runs are unattended and need
-// their own deadline + concurrency bounds.
+// (#264): the concurrency bound and the transient-error retry backoff. There
+// is no run deadline — a scheduled run ends when it finishes or is explicitly
+// stopped (issue #1306).
 type SchedulesConfig struct {
 	// MaxConcurrentRuns bounds the parallel autonomous-run lane (FR-007).
 	// Default 8; values <= 0 fall back to the default on load.
 	MaxConcurrentRuns int `json:"max_concurrent_runs,omitempty" env:"OMNIPUS_SCHEDULES_MAX_CONCURRENT_RUNS"`
-	// RunTimeoutSeconds is the global per-run deadline applied to every scheduled
-	// run that does not set a per-schedule override (FR-003). Default 300.
-	RunTimeoutSeconds int `json:"run_timeout_seconds,omitempty" env:"OMNIPUS_SCHEDULES_RUN_TIMEOUT_SECONDS"`
+	// schedules.run_timeout_seconds is retired (issue #1306): a scheduled run
+	// has no time limit. An old config.json key is ignored on load.
+
 	// RetryBackoffMs is the transient-error retry backoff schedule (FR-010): the
 	// next fire after the Nth consecutive transient failure is offset by
 	// RetryBackoffMs[N] ms, capped at len(RetryBackoffMs) attempts before

@@ -734,6 +734,11 @@ func TestBuildContinuationTarget_ResolvesWorkspaceID_FromSessionMeta(t *testing.
 // value resolveOrCreateChannelSession would have seeded a new session with.
 func TestBuildContinuationTarget_ResolvesWorkspaceID_FromChannelBinding(t *testing.T) {
 	tmpDir := t.TempDir()
+	// The "sales" record below must live in this test's own home: written
+	// into the package-shared home it made Mia a member of two workspaces for
+	// every later test (CI 1315: TestRegisterSharedTools_HotReload_
+	// ShutsDownReplacedBrowserManager resolved an ambiguous browser).
+	t.Setenv("OMNIPUS_HOME", tmpDir)
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{

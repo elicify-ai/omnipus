@@ -164,7 +164,6 @@ const AGENT_MIA = {
   locked: true,
   status: 'active',
   soul: '',
-  timeout_seconds: 300,
   max_tool_iterations: 25,
   // Required by Agent.yaml since 36801b44 (ADR-066/067/068); omitting it makes
   // AgentSchema reject GET /agents. false = healthy (has a usable model).
@@ -753,7 +752,6 @@ test(
         locked: true,
         status: 'active',
         soul: '',
-        timeout_seconds: 300,
         max_tool_iterations: 25,
         // Required by Agent.yaml since 36801b44 (ADR-066/067/068); omitting it
         // makes AgentSchema reject GET /agents. false = healthy.
