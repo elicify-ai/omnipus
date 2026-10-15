@@ -57,55 +57,8 @@ func TestToolOrder_IndependentOfInputOrder(t *testing.T) {
 	}
 }
 
-// TestLoadedTool_NotInheritedByNextSession is TDD row 12b.
-func TestLoadedTool_NotInheritedByNextSession(t *testing.T) {
-	finished := NewSessionToolList("sess-finished")
-	finished.Add(toolNamed("mcp_widget"))
-	if !finished.Contains("mcp_widget") {
-		t.Fatal("tool loaded in the finished session is not in that session's tool list")
-	}
-	next := NewSessionToolList("sess-next")
-	if next.Contains("mcp_widget") || len(next.Definitions()) != 0 {
-		t.Fatalf("new session lists %v; a finished session's tool must not carry over", listedToolNames(next.Definitions()))
-	}
-}
-
-// TestLoadedTool_SurvivesTime is TDD row 14. Adding a tool and not removing it
-// is the session lifetime. The list's bytes must not change merely because
-// time passed.
-func TestLoadedTool_SurvivesTime(t *testing.T) {
-	list := NewSessionToolList("sess-live")
-	list.Add(toolNamed("mcp_widget"))
-	before := CanonicalToolListBytes(list.Definitions())
-	if !list.Contains("mcp_widget") {
-		t.Fatal("loaded tool is not executable after time passed without a revoke")
-	}
-	after := CanonicalToolListBytes(list.Definitions())
-	if !bytes.Equal(before, after) {
-		t.Fatalf("tool list bytes changed with no add or remove: %q vs %q", before, after)
-	}
-	names := listedToolNames(list.Definitions())
-	if len(names) != 1 || names[0] != "mcp_widget" {
-		t.Fatalf("definitions = %v, want [mcp_widget]", names)
-	}
-}
-
-// TestLoadedMcpTool_ExecutesOnlyInThatSession is TDD row 26.
-func TestLoadedMcpTool_ExecutesOnlyInThatSession(t *testing.T) {
-	owner := NewSessionToolList("sess-owner")
-	owner.Add(toolNamed("mcp_widget"))
-	if !owner.Contains("mcp_widget") {
-		t.Fatal("non-core MCP tool is not executable in the session that loaded it")
-	}
-	other := NewSessionToolList("sess-other")
-	if other.Contains("mcp_widget") {
-		t.Fatal("second session can run a tool it did not load")
-	}
-	owner.Remove("mcp_widget")
-	if owner.Contains("mcp_widget") {
-		t.Fatal("tool stayed executable after a Deny, removed assignment, or disconnect")
-	}
-}
+// Rows 12b, 14 and 26 drive the real registry in prompt_cache_tool_lifetime_test.go.
+// SessionToolList does not expire, so those tests do not live here.
 
 // TestGoalNarrowing_RestoresListNextTurn is TDD row 16.
 func TestGoalNarrowing_RestoresListNextTurn(t *testing.T) {
