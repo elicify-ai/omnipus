@@ -33,15 +33,15 @@ func TestRestoreProcessStderr_UndoesPanicFileRedirect(t *testing.T) {
 	}
 	defer cleanup()
 
-	if _, err := os.Stderr.WriteString("HIDDEN_MARKER\n"); err != nil {
-		t.Fatal(err)
+	if _, werr := os.Stderr.WriteString("HIDDEN_MARKER\n"); werr != nil {
+		t.Fatal(werr)
 	}
-	if err := restoreProcessStderr(saved); err != nil {
-		t.Fatal(err)
+	if rerr := restoreProcessStderr(saved); rerr != nil {
+		t.Fatal(rerr)
 	}
 	restored = true
-	if _, err := os.Stderr.WriteString("VISIBLE_MARKER\n"); err != nil {
-		t.Fatal(err)
+	if _, werr := os.Stderr.WriteString("VISIBLE_MARKER\n"); werr != nil {
+		t.Fatal(werr)
 	}
 
 	data, err := os.ReadFile(panicLog)
