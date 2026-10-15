@@ -38,6 +38,8 @@ import { ProviderFallbackNoteLine } from './ProviderFallbackNoteLine'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
+import { SecretRequestThreadTail } from './SecretRequestCard'
+import { ToolApprovalThreadTail } from '@/components/agents/ToolApprovalPanel'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { ModelPicker } from './composer/ModelPicker'
@@ -85,6 +87,9 @@ import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
+import { MainChatAddParticipant } from './AddParticipant'
+import { AGENT_PRIVATE_SECRETS_ENABLED, INLINE_TOOL_APPROVALS_ENABLED, ROOMS_ENABLED } from '@/lib/featureSwitches'
+import { RoomTrafficMessage } from './RoomTrafficEntry'
 import type { SlashCommand, Skill } from '@/lib/api'
 import {
   AgentStatusIndicator,
@@ -1484,6 +1489,9 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
             row = shouldRenderJudgeVerdictInThread(verboseChatEnabled) && msg.verdict
               ? <JudgeVerdictThreadCard verdict={msg.verdict} />
               : null
+          } else if (ROOMS_ENABLED && msg.roomRef) {
+            // FR-202: collapsed group-chat traffic — hidden until WU-15 (stage 3), #1314.
+            row = <RoomTrafficMessage message={msg} />
           } else if (msg.role === 'user') {
             row = (
               <VirtualUserMessageRow
@@ -1637,6 +1645,8 @@ function VirtualizedMessageListInner({
       if (!shouldRenderJudgeVerdictInThread(verboseChatEnabled) || !msg.verdict) return null
       return <JudgeVerdictThreadCard verdict={msg.verdict} />
     }
+    // FR-202: collapsed group-chat traffic — hidden until WU-15 (stage 3), #1314.
+    if (ROOMS_ENABLED && msg.roomRef) return <RoomTrafficMessage message={msg} />
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
@@ -1724,6 +1734,9 @@ function VirtualizedMessageListInner({
                 {({ message }) => {
                   const isLast = message.id === messages[messages.length - 1]?.id
                   if (!isLast) return null
+                  const last = messages[messages.length - 1]
+                  // FR-202 group-chat traffic — hidden until WU-15 (stage 3), #1314.
+                  if (ROOMS_ENABLED && last?.roomRef) return <RoomTrafficMessage message={last} />
                   if (message.role === 'user') return <UserMessage />
                   if (message.role === 'system') return <SystemMessage />
                   return <AssistantMessage />
@@ -3215,6 +3228,9 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         </div>
       )}
 
+      {/* FR-207: "Add participant" at the top-left of a member's main chat (absent for Omnipus) — hidden until WU-15 (stage 3), #1314. */}
+      {ROOMS_ENABLED && <MainChatAddParticipant />}
+
       {/* Above-feed kind. FeedKindLabel also keeps the old Task: line when no descriptor matches. */}
       <FeedKindLabel />
 
@@ -3271,8 +3287,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           <RestartInterruptedNotice />
 
           {/* Rate-limit indicator — shown above composer. Tool-approval requests
-              (including `bash`) are handled by the global ToolApprovalModal
-              (ADR-036 §3.4 retired the dedicated exec-only approval flow). */}
+              (including `bash`) are handled by the app-wide ToolApprovalModal
+              in L1 stage 1, the inline ToolApprovalPanel later (ADR-036 §3.4 retired the dedicated exec-only approval flow). */}
           {rateLimitEvent && (
             <div className="px-[var(--space-3)] space-y-[var(--space-2)] pb-[var(--space-2)]">
               <RateLimitIndicator
@@ -3338,6 +3354,16 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               While pending, the composer below is locked (see
               OmnipusComposer's askLocked). */}
           <AskUserQuestionThreadTail />
+
+          {/* Secure secret card (omnipus-system-agent K1, FR-061/FR-074):
+              pending cards rooted in this chat, plus the latest result —
+              hidden until WU-4/5 (no secret-request server in stage 1). */}
+          {AGENT_PRIVATE_SECRETS_ENABLED && <SecretRequestThreadTail />}
+
+          {/* Inline tool approvals rooted in this chat (#1263, L1 amendment
+              §1.2 R6) — hidden until WU-8 (stage 2): founder design = card in
+              parent chat, no banner, menu-bar attention animation. */}
+          {INLINE_TOOL_APPROVALS_ENABLED && <ToolApprovalThreadTail />}
 
           {/* Composer — centered, ChatGPT-style floating layout. The context
               row and ActivityBar pills render bare on the shell (above /

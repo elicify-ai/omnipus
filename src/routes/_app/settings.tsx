@@ -10,6 +10,7 @@ import type { SettingsTab } from '@/components/screens/SettingsScreen'
 const SETTINGS_TABS = [
   'providers',
   'models',
+  'system-agents',
   'integrations',
   'security',
   'gateway',

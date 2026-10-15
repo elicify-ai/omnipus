@@ -20,6 +20,14 @@ import React from 'react'
 // tests below are written directly against the implemented behavior.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// Keep the original cross-workspace-banner oracle in the enabled configuration.
+// Shipped stage-1 approval reachability is covered by AppShell.stage1.test.tsx.
+vi.mock('@/lib/featureSwitches', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/featureSwitches')>(),
+  INLINE_TOOL_APPROVALS_ENABLED: true,
+}))
+
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { AppState, NotificationList } from '@/lib/api/generated/openapi-types'
@@ -33,7 +41,6 @@ import type { AppState, NotificationList } from '@/lib/api/generated/openapi-typ
 vi.mock('./Sidebar', () => ({ Sidebar: () => null }))
 vi.mock('./NotificationPanel', () => ({ NotificationPanel: () => null }))
 vi.mock('@/components/ui/toast-container', () => ({ ToastContainer: () => null }))
-vi.mock('@/components/agents/ToolApprovalModal', () => ({ ToolApprovalModal: () => null }))
 vi.mock('@/components/chat/MediaLightbox', () => ({ MediaLightbox: () => null }))
 vi.mock('@/components/chat/OmnipusRuntimeProvider', () => ({
   OmnipusRuntimeProvider: ({ children }: { children?: React.ReactNode }) => children ?? null,
@@ -660,10 +667,15 @@ describe('AppShell — cross-workspace approval banner coexists with other banne
 
     const connectionBanner = await waitFor(() => screen.getByText('Lost connection to gateway'))
     const approvalBanner = await waitFor(() =>
-      screen.getByText('1 approval waiting in UAT-T2'),
+      // L1 amendment §1.2 R6 / BDD-11.3 names the target chat, not just
+      // the workspace. Known owner and unknown-agent descriptions are valid.
+      screen.getByText(/^1 approval waiting in (?:a chat|[^\n]+'s chat) in UAT-T2$/),
     )
     expect(connectionBanner).toBeInTheDocument()
     expect(approvalBanner).toBeInTheDocument()
+    // Follow-up (h): mounted-but-hidden banners cannot satisfy coexistence.
+    expect(connectionBanner).toBeVisible()
+    expect(approvalBanner).toBeVisible()
 
     // Stacked siblings, not overlapping: the approval banner's ancestor
     // button must come AFTER the connection-error alert in document order

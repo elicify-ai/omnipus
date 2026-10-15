@@ -10,16 +10,16 @@
  *  - entry-id dedup: a live error then a replay_error with the same id
  *    produces ONE bubble (no duplication on reload).
  *  - legacy 'error' frames (no payload.llm_error) still render frame.message.
- *  - kickoff-reject and cancel-ack sub-paths are untouched.
+ *  - cancel-ack remains; the retired client kickoff-reject case is removed
+ *    under FR-047/K9, with its exact title/reason recorded in the ledger.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, getMessages, makeBucketMessages, type ChatMessage } from './chat'
 import { useSessionStore } from './session'
 import { useConnectionStore } from './connection'
 import { useChatPreferencesStore } from './chatPreferences'
-import { useUiStore } from './ui'
 import { codeToDisplay } from '@/lib/llm-error'
 import type { ServerFrame } from '@/lib/ws'
 
@@ -513,37 +513,13 @@ describe('ADR-051 — live→replay entry_id dedup', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Regression guards — kickoff reject & cancel ack remain untouched
+// Regression guard — ordinary cancel ack remains; client kickoff is retired
 // ---------------------------------------------------------------------------
 
-describe("ADR-051 — kickoff-reject and cancel-ack sub-paths unchanged", () => {
-  it('a kickoff-reject (no session_id) still routes to abandonPendingKickoffInternal + toast, not the typed-payload branch', () => {
-    // Seed a pendingKickoff so the reject branch fires.
-    act(() => {
-      useChatStore.setState({ pendingKickoff: { workspaceId: 'ws-1', workspaceName: 'WS', kickoffContent: 'go' } as never })
-      useSessionStore.setState({ activeSessionId: '__pending' })
-    })
-    const toastSpy = vi.spyOn(useUiStore.getState(), 'addToast')
-
-    act(() => {
-      useChatStore.getState().handleFrame({
-        // NO session_id — this is what gates the kickoff-reject branch.
-        type: 'error',
-        message: 'kickoff blew up',
-        // Even if a (malformed) typed payload is present, the kickoff branch
-        // fires FIRST and never reaches the typed-payload render code.
-        payload: { llm_error: { code: 'unknown', message: 'kickoff blew up', retryable: false } },
-      })
-    })
-
-    // No bucket was created (no session to tag it to).
-    expect(useChatStore.getState().sessionsById['__pending']).toBeUndefined()
-    // The pendingKickoff was cleared by abandonPendingKickoffInternal.
-    expect(useChatStore.getState().pendingKickoff).toBeNull()
-    // A toast fired (kickoff-reject path).
-    expect(toastSpy).toHaveBeenCalled()
-    toastSpy.mockRestore()
-  })
+describe("ADR-051 — cancel-ack sub-path unchanged", () => {
+  // The legacy client kickoff-reject case is retired under FR-047/K9:
+  // that synthetic sender/slot/cleanup branch no longer exists. All ordinary
+  // typed, legacy, replay, dedup and cancel-ack cases/assertions remain.
 
   it('a cancel-ack error (message matches /turn.cancel/i) still resolves to interrupted status, not error', () => {
     seedEmptyBucket()

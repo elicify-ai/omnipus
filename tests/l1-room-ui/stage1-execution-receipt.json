@@ -1,0 +1,516 @@
+{
+  "schema_version": 2,
+  "specification": "team-lead stage-1 dispatch 2026-10-14 plus accepted g/h, dormant room/secret carriers, release-modal queue and expiry, and required e4c84116b integration",
+  "original_production_base": "ca09d06f9d34bbcc63f158dc63d06973b9bb62f3",
+  "production_base": "e4c84116b36637810c59961e90def0f83dee0370",
+  "tested_commit": "0da2c2a52d17da9e7ce04c064bff1aa03115171c",
+  "tested_tree": "d2803a695c0adbba7635bef73a3af4a6cccfcbcc",
+  "historical_red_base": "08a204c98ab043f8f2494a5e042bb675eb4e17f3",
+  "prior_pack": "8eafc5ac4a71735748a18ce29dae3cd5608d4ab3",
+  "followup_tests_only_commit": "ec17f7f4e9627a9f70357d31a279ab318aacece6",
+  "execution_policy": "one file and one local test process at a time; no full suite; no production mutation; accepted production merged without manual edits",
+  "observed_total": {
+    "files": 16,
+    "tests": 290,
+    "passed": 290
+  },
+  "new_cases": {
+    "behavioural": 18,
+    "constant_guards": 3,
+    "total": 21
+  },
+  "red_proof": {
+    "historical_behavioural": "18/18",
+    "pre_hardening_expected_failures": "6/18 (four room-traffic variants and two secret carriers)",
+    "constant_guard_mutation_proof": "deferred to fresh CHECK"
+  },
+  "check_status": {
+    "independent_green_verification": "deferred to CHECK",
+    "mutation_execution": "deferred to CHECK",
+    "proof_of_failability_checklist": "deferred to CHECK"
+  },
+  "retained_oracles": {
+    "existing_files": 14,
+    "original_assertion_expressions": 629,
+    "added_visibility_assertions": 5,
+    "original_shell_cases_preserved": 9
+  },
+  "unmocked_boundaries": [
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/AppShell.stage1.test.tsx",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/stage1-harness.tsx",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/harness.tsx",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/lib/featureSwitches.stage1.test.ts"
+  ],
+  "test_support": [
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/stage1-harness.tsx",
+      "source_sha256": "d3ae01471e08d19e3b0a65448488c4cfb8d8acbb1474246d44cf43649a58eb2d"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/harness.tsx",
+      "source_sha256": "88b6d6676cb45fce5ec2baa1e77fecbf0873a3b94722c9658686b9ced0ae2e3f"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/l1-room-ui/verify-stage1-retargeting.mjs",
+      "source_sha256": "91b0e5ef5cfbdbcfa050f58f38ca7e154fdd2f7811c311aba8bb3cf1d1822213"
+    }
+  ],
+  "existing": [
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx",
+      "source_sha256": "b3f25091473471893529cca9a247775c5b4dcc82afd54763122639ac8ed8ed3a",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-WorkspaceAgentList.rooms.test.tsx.log",
+        "command": "npx vitest run src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  7 failed | 10 passed (17)",
+        "named_failures": [
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [FR-174; BDD-17.1/2] sorts team first, squads second, ad-hoc third regardless of HTTP order",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [FR-160; BDD-17.20] a hidden team room is not shown or deleted; a visible squad stays listed",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [FR-162/174] every workspace has its own section and room rows never leak across workspaces",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [FR-174; K23; §6.3] needs_attention produces a marker on that room row",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [§6.3] a successfully empty room list says exactly No group chats yet",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [§6.3] a failed list shows Error plus Retry, never the true-empty text",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [FR-174; test row 119 SPA half] clicking a room opens its workspace room route, not a new agent session"
+        ],
+        "sha256": "1633f94a0ebd05b93832bd3b59c92929263432f179bac25165dc607494a49e8b"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-WorkspaceAgentList.rooms.test.tsx.log",
+        "command": "npx vitest run src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  17 passed (17)",
+        "named_failures": [],
+        "sha256": "6d6d90338d11793a7929c6ba7d678cf7f7f7da2973b0a4fe07d52b3b3456786d"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/chat/AddParticipant.test.tsx",
+      "source_sha256": "2de2c1122f5f9e362e878cc5fa54119daedd7fd2d27b003719b6ce94d970a6e8",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-AddParticipant.test.tsx.log",
+        "command": "npx vitest run src/components/chat/AddParticipant.test.tsx --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  1 failed | 8 passed (9)",
+        "named_failures": [
+          "FAIL  src/components/chat/AddParticipant.test.tsx > Add participant — agents only, one workspace, no main-chat conversion > [FR-207/208; BDD-17.24/25] the real ChatScreen header shows Add participant in a main chat and removes it for Omnipus"
+        ],
+        "sha256": "b708c1ed9b76163d7f650f6f0e018dd8f6f15ce67a921688020c3c7ef4f9ec37"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-AddParticipant.test.tsx.log",
+        "command": "npx vitest run src/components/chat/AddParticipant.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  9 passed (9)",
+        "named_failures": [],
+        "sha256": "9dc2d8bb52fa9e1b454c5fa376d834a33c9226c07ecaf676855b5e14e9e82d3f"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/AppShell.test.tsx",
+      "source_sha256": "3d047c7358be9ebae3c29eac8f3920bb6243a243deba80ccc57c54cee5628275",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-AppShell.test.tsx.log",
+        "command": "npx vitest run src/components/layout/AppShell.test.tsx --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  1 failed | 28 passed (29)",
+        "named_failures": [
+          "FAIL  src/components/layout/AppShell.test.tsx > AppShell — cross-workspace approval banner coexists with other banners > renders both the connection-error banner and the cross-workspace approval banner at once, neither hiding the other"
+        ],
+        "sha256": "40b91d1c1021e97281c91ff2c4a7c86cf0fe8a2c252e80ace75ccfb1b8470b9d"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-AppShell.test.tsx.log",
+        "command": "npx vitest run src/components/layout/AppShell.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  29 passed (29)",
+        "named_failures": [],
+        "sha256": "03cec9fb81148ec99e7b9b2e897ff95b374647081881b4eda3db146a0480a76e"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.test.tsx",
+      "source_sha256": "987acbb81169c1bf40822ae29c7b6158faa44210079c6e319a23a6d349327c86",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-Sidebar.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.test.tsx --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  no tests",
+        "named_failures": [
+          "FAIL  src/components/layout/Sidebar.test.tsx [ src/components/layout/Sidebar.test.tsx ]"
+        ],
+        "sha256": "659ce201122962ecde43f50454fb310de9ed48c2e0244398b6d935312874ca6d"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-Sidebar.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  35 passed (35)",
+        "named_failures": [],
+        "sha256": "3e99e8b36b6332092872f01590da024fa89d07bb23abd1fc8daf7effbb6ffdaf"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.focus-trap.test.tsx",
+      "source_sha256": "56147bcf7a62765c08fcb424734c0e564196c23873754b04387b158f78d98b14",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-Sidebar.focus-trap.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.focus-trap.test.tsx --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  no tests",
+        "named_failures": [
+          "FAIL  src/components/layout/Sidebar.focus-trap.test.tsx [ src/components/layout/Sidebar.focus-trap.test.tsx ]"
+        ],
+        "sha256": "092418e920c0c1bc4a8a180171dce109011901e7d3aec00cc3ffae52d5c044f3"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-Sidebar.focus-trap.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.focus-trap.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  6 passed (6)",
+        "named_failures": [],
+        "sha256": "7d0059f690cce634a567b459fa96a8150d8723cf0ed174887b75800c52e56a60"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.kb5.test.tsx",
+      "source_sha256": "c87fe61f860cb1a090e41e2923b8ee85e8402614bc7cff4b25b18b8074fa90a7",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-Sidebar.kb5.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.kb5.test.tsx --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  no tests",
+        "named_failures": [
+          "FAIL  src/components/layout/Sidebar.kb5.test.tsx [ src/components/layout/Sidebar.kb5.test.tsx ]"
+        ],
+        "sha256": "2c258409a85aeda0d8ed49bf3b1aae734ce497b7f4fad01d2665ecc6682d7b7b"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-Sidebar.kb5.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.kb5.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  4 passed (4)",
+        "named_failures": [],
+        "sha256": "db4e99a47d319d4cd710a52bedc4a39dbb57da39eec779d81aa0f9d232c5ef87"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.m5.test.tsx",
+      "source_sha256": "1264e564814cd25576b872a519a7d80289adf196fbb417a92891b46c10ac225b",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-Sidebar.m5.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.m5.test.tsx --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  no tests",
+        "named_failures": [
+          "FAIL  src/components/layout/Sidebar.m5.test.tsx [ src/components/layout/Sidebar.m5.test.tsx ]"
+        ],
+        "sha256": "1e2c13f6ca8fdb1354204e0fa37c6c8e5586032bf1221652a6b4b918733f1ebd"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-Sidebar.m5.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.m5.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  18 passed (18)",
+        "named_failures": [],
+        "sha256": "e2a214ef8073ecefb9607be40f7836b5e9eb8b098bedc53000fd192af3ee561d"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.panelGuard.test.tsx",
+      "source_sha256": "0dbe9687abce7eed5ecaba1d2d8a0a251d8204e5fb6deb0aef6f82372fa04493",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-Sidebar.panelGuard.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.panelGuard.test.tsx --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  no tests",
+        "named_failures": [
+          "FAIL  src/components/layout/Sidebar.panelGuard.test.tsx [ src/components/layout/Sidebar.panelGuard.test.tsx ]"
+        ],
+        "sha256": "c39f12d839ec3e4621aab45fa6d1b531d76d36303689679e9ea0e1af6d0b3629"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-Sidebar.panelGuard.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.panelGuard.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  2 passed (2)",
+        "named_failures": [],
+        "sha256": "e1700a59b25212fe329936582e13c630658017e1a2dda2f618b3e096dc042568"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.panelGuard.matrix.test.tsx",
+      "source_sha256": "28c895634adcdf1a7c9307cf9be2e11bd5c4b8da648827492137d06ec091a53c",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-Sidebar.panelGuard.matrix.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.panelGuard.matrix.test.tsx --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  no tests",
+        "named_failures": [
+          "FAIL  src/components/layout/Sidebar.panelGuard.matrix.test.tsx [ src/components/layout/Sidebar.panelGuard.matrix.test.tsx ]"
+        ],
+        "sha256": "5ac344eaf26c68315a2f5c9d65f19b4d9bf1fe575b2c9f088b09dd2dbffee044"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-Sidebar.panelGuard.matrix.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.panelGuard.matrix.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  2 passed (2)",
+        "named_failures": [],
+        "sha256": "11db884eccaeec86a7b119a2a0cc85d3004974746bb0d6c4a5d6181aecbc8b53"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/Sidebar.shortcuts.editor.test.tsx",
+      "source_sha256": "0b8e60e2a7ea85b5776f5082660810bf9759675e3b3667982695163ee26410f4",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-Sidebar.shortcuts.editor.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.shortcuts.editor.test.tsx --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  no tests",
+        "named_failures": [
+          "FAIL  src/components/layout/Sidebar.shortcuts.editor.test.tsx [ src/components/layout/Sidebar.shortcuts.editor.test.tsx ]"
+        ],
+        "sha256": "7190cf49fdfcbee81ef0da6260b76beb9defef6db14d2c4fcf8894041962daef"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-Sidebar.shortcuts.editor.test.tsx.log",
+        "command": "npx vitest run src/components/layout/Sidebar.shortcuts.editor.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  9 passed (9)",
+        "named_failures": [],
+        "sha256": "dae08ff3d0b59bfd990627ab7998fe5826c0d3b4a24d98fe44e232c5cf427982"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/store/chat.sessionModeUpdate.test.ts",
+      "source_sha256": "a9a746434748b2ef06fd8c90c07784392c113884d239bb15640ca927750712a2",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-chat.sessionModeUpdate.test.ts.log",
+        "command": "npx vitest run src/store/chat.sessionModeUpdate.test.ts --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  3 failed | 16 passed (19)",
+        "named_failures": [
+          "FAIL  src/store/chat.sessionModeUpdate.test.ts > chat store — pendingAutoApproveChoice rides the first message frame (ADR-092) > sends the pending choice as auto_approve on the first message frame, then session_started reflects it locally and clears the pending field",
+          "FAIL  src/store/chat.sessionModeUpdate.test.ts > chat store — pendingAutoApproveChoice rides the first message frame (ADR-092) > carries a false choice the same way, on the first message frame",
+          "FAIL  src/store/chat.sessionModeUpdate.test.ts > chat store — pendingAutoApproveChoice rides the first message frame (ADR-092) > omits auto_approve from the first message frame, and sends nothing extra on session_started, when there is no pending choice"
+        ],
+        "sha256": "db4142b6592fad7db23c5a25c1935c7c5763959a681b5e0d03dc868e3da1750c"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-chat.sessionModeUpdate.test.ts.log",
+        "command": "npx vitest run src/store/chat.sessionModeUpdate.test.ts --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  19 passed (19)",
+        "named_failures": [],
+        "sha256": "7765f466071bda48ce550d280cf65388a0c8145ee035a316a61577b5a37c48c6"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/store/chat.recipient-send.test.ts",
+      "source_sha256": "d5e4b2d93e362676f7736e0f72b54ce0445fc7ea7b74288c77033c441c2813c2",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-chat.recipient-send.test.ts.log",
+        "command": "npx vitest run src/store/chat.recipient-send.test.ts --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  1 failed | 27 passed (28)",
+        "named_failures": [
+          "FAIL  src/store/chat.recipient-send.test.ts > first-send payloads never carry a recipient > the minting frame (no session_id) omits recipient even for @-prefixed text — the composer blocks that path in the UI"
+        ],
+        "sha256": "9e5341e04fc29317cd0d5d44687dbeb529935f0b869716176b270ae57972bf7e"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-chat.recipient-send.test.ts.log",
+        "command": "npx vitest run src/store/chat.recipient-send.test.ts --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  28 passed (28)",
+        "named_failures": [],
+        "sha256": "8450e9887fc597ec31eafebacf7981f3fe08aebf5f1155e9ea175f140517efe3"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/lib/ws.test.ts",
+      "source_sha256": "ec10089e4a68465eaaaadeb520fa2fa4a87605d189cca98b09cbbea3135ef3dd",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-ws.test.ts.log",
+        "command": "npx vitest run src/lib/ws.test.ts --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  1 failed | 81 passed (82)",
+        "named_failures": [
+          "FAIL  src/lib/ws.test.ts > ClientFrameTypes — contract test > ClientFrameTypes contains exactly the specified client frame types"
+        ],
+        "sha256": "cabb846ea4cb5c33605e9d657b0e012fd0747a69bca6556f307ff45635931015"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-ws.test.ts.log",
+        "command": "npx vitest run src/lib/ws.test.ts --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  82 passed (82)",
+        "named_failures": [],
+        "sha256": "01e4e7ff4f17d13a4febceb138f71c18f136754341b1a28166dc69b0cd9f33e9"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/chat/RoomTrafficEntry.test.tsx",
+      "source_sha256": "4dc0f8b752980f9c44bfef8ac67e49c50d66b7adcb407f0d77dc8287b7e8c760",
+      "before": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/before-RoomTrafficEntry.test.tsx.log",
+        "command": "npx vitest run src/components/chat/RoomTrafficEntry.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  9 passed (9)",
+        "named_failures": [],
+        "sha256": "cbea03ee9f6c5fc1105379ffc169b90a9caf9ba66d6ff804a5e3d08cb705e4dc"
+      },
+      "after": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-RoomTrafficEntry.test.tsx.log",
+        "command": "npx vitest run src/components/chat/RoomTrafficEntry.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  9 passed (9)",
+        "named_failures": [],
+        "sha256": "01a92a4104da899d878fcadc6629b2f117bcc2087d69f3a1dcf9a010f03211b5"
+      }
+    }
+  ],
+  "acceptance": {
+    "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/AppShell.stage1.test.tsx",
+    "source_sha256": "67b4f3ae5dbb90094dec841c46cd507cf7ac21bd2d6ff4534f6f02d12ff466fa",
+    "historical": {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/extended-historical-final.log",
+      "command": "npx vitest run /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1-historical-red/src/components/layout/AppShell.stage1.test.tsx --root /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1-historical-red --reporter=verbose",
+      "exit": 1,
+      "test_summary": "Tests  18 failed (18)",
+      "named_failures": [
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — rooms hidden through the real application shell > [S1-a1; dispatch 2(a)] a populated expanded workspace has no Group chats and never reads its room collection",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — rooms hidden through the real application shell > [S1-a2; dispatch 2(a)] a member main chat has no Add participant entry point or room-list request",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — rooms hidden through the real application shell > [S1-a3; dispatch 2(a)] a direct room URL redirects to workspace chat without any room REST request or attach_room frame",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — private secrets hidden through the shell-owned agent profile > [S1-b; dispatch 2(b)] a conversation agent Tools panel has no Private secrets section and never reads secrets",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — release approval modal reachable on Settings > [S1-c; dispatch 2(c)] 'Approve Once' on Settings posts the exact 'allow_once' decision for the active chat approval",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — release approval modal reachable on Settings > [S1-c; dispatch 2(c)] 'Deny' on Settings posts the exact 'deny' decision for the active chat approval",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — every pending approval has exactly one actionable surface > [S1-d; dispatch 2(d)] a child approval without root_session_id appears while the parent main chat stays open, without a Go there detour",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — every pending approval has exactly one actionable surface > [S1-e; dispatch 2(e)] the open chat own approval appears once in the modal, never inline or in a banner",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — every pending approval has exactly one actionable surface > [S1-f; dispatch 2(f)] an approval from another workspace appears in the modal without switching the active workspace",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden room traffic in the real main-chat renderer > [S1-a traffic; added dispatch] a 'plain' 'request' carrying room_ref renders no room-traffic entry",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden room traffic in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'request' carrying room_ref renders no room-traffic entry",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden room traffic in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'streaming answer' carrying room_ref renders no room-traffic entry",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden room traffic in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'completed answer' carrying room_ref renders no room-traffic entry",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden secret cards for live and snapshot carriers > [S1-b card; added dispatch] a live secret request renders no card or secret endpoint request",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden secret cards for live and snapshot carriers > [S1-b card; added dispatch] a session_state secret request renders no card or secret endpoint request",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — release modal drains every queued approval > [S1-q; added dispatch] approve/deny/approve drains three real queued requests in arrival order without navigation",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — release modal expiry cannot approve a timed-out call > [S1-exp; added dispatch] at expiry actions disappear without a POST and denied_timeout promotes the next queued request",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — release modal expiry cannot approve a timed-out call > [S1-exp zero; added dispatch] a zero-lifetime request is already non-actionable on arrival and never submits automatically"
+      ],
+      "sha256": "275f6b83b720420b89de5d5b7c3d27833fd1f29012f5253ec2cfbf8713e994f9"
+    },
+    "before_hardening": {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/final-extended-AppShell.stage1.test.tsx.log",
+      "command": "npx vitest run src/components/layout/AppShell.stage1.test.tsx --reporter=verbose",
+      "exit": 1,
+      "test_summary": "Tests  6 failed | 12 passed (18)",
+      "named_failures": [
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden room traffic in the real main-chat renderer > [S1-a traffic; added dispatch] a 'plain' 'request' carrying room_ref renders no room-traffic entry",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden room traffic in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'request' carrying room_ref renders no room-traffic entry",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden room traffic in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'streaming answer' carrying room_ref renders no room-traffic entry",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden room traffic in the real main-chat renderer > [S1-a traffic; added dispatch] a 'virtual' 'completed answer' carrying room_ref renders no room-traffic entry",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden secret cards for live and snapshot carriers > [S1-b card; added dispatch] a live secret request renders no card or secret endpoint request",
+        "FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — hidden secret cards for live and snapshot carriers > [S1-b card; added dispatch] a session_state secret request renders no card or secret endpoint request"
+      ],
+      "sha256": "fa9d0756f50043d26f55d7d91a5bccdbc61b39542206d109a0a559f48b6beb20"
+    },
+    "current": {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-AppShell.stage1.test.tsx.log",
+      "command": "npx vitest run src/components/layout/AppShell.stage1.test.tsx --reporter=verbose",
+      "exit": 0,
+      "test_summary": "Tests  18 passed (18)",
+      "named_failures": [],
+      "sha256": "487ead3ca6e0c1360ed27fd6e4fe6176ed724d21c8d926b281e10dc43aaf1a9f"
+    }
+  },
+  "guard": {
+    "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/lib/featureSwitches.stage1.test.ts",
+    "source_sha256": "c23bd55454d9f4f1ac85675bfbc0c348f6761ea9bedbf7370955265e94ce6da6",
+    "current": {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-featureSwitches.stage1.test.ts.log",
+      "command": "npx vitest run src/lib/featureSwitches.stage1.test.ts --reporter=verbose",
+      "exit": 0,
+      "test_summary": "Tests  3 passed (3)",
+      "named_failures": [],
+      "sha256": "78b71514b6885b89b63c42281fe4a4de0773dd7de68b626dc10c2cba28ae5119"
+    },
+    "real_module": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/lib/featureSwitches.ts",
+    "qualified_historical_red": "UNVERIFIED: module introduced already false; prior absence is not behavioural RED; three isolated switch mutants deferred to fresh CHECK"
+  },
+  "gates": [
+    {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-preservation.log",
+      "command": "node tests/l1-room-ui/verify-stage1-retargeting.mjs",
+      "exit": 0,
+      "test_summary": null,
+      "named_failures": [],
+      "sha256": "b87f012117a2ec22abf00c6c57048134f02be75831579b9e06c10415bb9f0ca0"
+    },
+    {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-typecheck.log",
+      "command": "npm run typecheck",
+      "exit": 0,
+      "test_summary": null,
+      "named_failures": [],
+      "sha256": "6cd29ea840ea955b14f41de6b6a13b867d1a93eb7c4b93b89ee5e0875a50fa4f"
+    },
+    {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-design-system.log",
+      "command": "npm run lint:design-system-locks",
+      "exit": 0,
+      "test_summary": null,
+      "named_failures": [],
+      "sha256": "37aaebe65ba8623f2dd70a9680a0315e225d168be6a4b26484e7433c6fd0f7af"
+    },
+    {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-discovery.log",
+      "command": "node scripts/check-vitest-coverage.mjs",
+      "exit": 0,
+      "test_summary": null,
+      "named_failures": [],
+      "sha256": "c718a2dcd87c432ebfcdd01c80c4764e7abaed891e77fbeee7ac470bef76c466"
+    },
+    {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-lint.log",
+      "command": "npx eslint src/lib/featureSwitches.stage1.test.ts src/components/chat/RoomTrafficEntry.test.tsx src/components/layout/AppShell.stage1.test.tsx src/components/layout/AppShell.test.tsx src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx tests/l1-room-ui/stage1-harness.tsx tests/l1-room-ui/verify-stage1-retargeting.mjs",
+      "exit": 0,
+      "test_summary": null,
+      "named_failures": [],
+      "sha256": "d6fee59db0e99ae6b8263516206702df82c7484342bbae87a7424eff67a506d8"
+    },
+    {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-function-selfcheck.log",
+      "command": "bash scripts/check-function-budget-selfcheck.sh",
+      "exit": 0,
+      "test_summary": null,
+      "named_failures": [],
+      "sha256": "8d6dba775f1729d5c3ce2cc488865939caed3af7844500d40f1b837030a23217"
+    },
+    {
+      "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-gate-function-budget.log",
+      "command": "bash scripts/check-function-budget.sh",
+      "exit": 0,
+      "test_summary": null,
+      "named_failures": [],
+      "sha256": "f8abb343f0e185f71821c3e0b0c67a11fdcbccbbb37e5bb5b8930bf903368d3d"
+    }
+  ],
+  "integrity": {
+    "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/extended-historical-integrity.log",
+    "command": null,
+    "exit": 0,
+    "test_summary": null,
+    "named_failures": [],
+    "sha256": "3c696c094e2a1323fa00cf0974a861af0cd6824b1672248c1d12791a70a61e4e"
+  },
+  "merge": {
+    "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/ui-head-merge.log",
+    "command": "git merge --no-ff origin/work/omnipus-l1-ui-rooms-wip -m merge(l1): test the accepted stage-1 UI hardening head",
+    "exit": 0,
+    "test_summary": null,
+    "named_failures": [],
+    "sha256": "b08df4dbe32e6e6dbce58627903d9047b3c493bb38b601eaeeb760aa3f4ef0f4"
+  }
+}

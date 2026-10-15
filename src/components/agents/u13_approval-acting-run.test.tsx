@@ -1,86 +1,94 @@
-// RED pack — WC-RESUME RED·U13/U14, unit U13 (FR-034; BDD-10.2).
-//
-// Spec source: docs/internal/specs/session-core-spec.md
-//   FR-034 — "one native approval ID/modal names acting helper/run."
-//   BDD-10.2 — "One ID/current scoped actions/target restrictions, acting
-//            execution name/Open; no duplicate queue/card."
-//
-// Oracle provenance: the spec's FR-034/BDD-10.2 clauses. An approval raised by
-// a helper/run must let the human (a) see WHICH execution is acting and (b)
-// reach that execution ("acting execution name/Open"). The current modal names
-// only the AGENT (`resolvedAgentName`) and offers no way to open the acting
-// run's own session — E-APPROVAL's `one acting approval modal/store` is not
-// yet widened to the run identity.
-//
-// FIELD-NAME CONTRACT (stated, not hidden): the Open control carries
-// `data-testid="approval-open-run"` and targets the acting run's session
-// (`PendingToolApproval.sessionId`). The spec names this by meaning
-// ("acting execution name/Open"); if GREEN lands a differently-named control,
-// update the testid here, not the assertions.
+// U13 / FR-034 / BDD-10.2, retargeted by L1 amendment §1.2 R6 / §1.5.
+// Binding quotes: "Card renders ... chat whose session id equals
+// root_session_id (or session_id when root_session_id is omitted)";
+// "U13's 'Open run' link to the acting session is kept."
+// One inline root-chat card replaces one modal; acting identity and the
+// exact Open-run target contract remain. B3 is not changed by this file.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
-import { act } from 'react'
-
-vi.mock('@/lib/api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
-  return { ...actual, submitToolApproval: vi.fn(), fetchAgents: vi.fn().mockResolvedValue([]) }
-})
-
-vi.mock('@/store/ui', () => ({
-  useUiStore: vi.fn((selector) => {
-    const state = { addToast: vi.fn(), toasts: [], removeToast: vi.fn() }
-    return selector ? selector(state) : state
-  }),
-}))
-
-vi.mock('@/lib/authLogout', () => ({ forceLogout: vi.fn() }))
-
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { createRootRoute, createRoute, createRouter, createMemoryHistory, RouterProvider, Outlet } from '@tanstack/react-router'
+import { queryClient } from '@/lib/queryClient'
+import { act, type ComponentType } from 'react'
+import type { ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
 import { useToolApprovalStore } from '@/store/toolApproval'
-import { ToolApprovalModal } from './ToolApprovalModal'
+import { useSessionStore } from '@/store/session'
+import {
+  loadApprovalPanel, renderWithClient, resetSharedState,
+  installApprovalNetwork, cleanupApprovalState, approvalPosts,
+} from '../../../tests/l1-ui-red-u23/support'
 
-const HELPER_APPROVAL = {
-  approvalId: 'appr-helper-001',
-  toolCallId: 'call-helper-001',
-  toolName: 'bash',
+const ROOT_CHAT = 'sess-owning-root'
+const HELPER_APPROVAL: ToolApprovalRequiredFrame = {
+  type: 'tool_approval_required',
+  approval_id: 'appr-helper-001',
+  tool_call_id: 'call-helper-001',
+  tool_name: 'bash',
   args: { command: 'echo hi' },
-  agentId: 'agent-helper',
-  sessionId: 'sess-helper-run-7',
-  turnId: 'turn-001',
-  expiresAt: Date.now() + 300_000,
+  agent_id: 'agent-helper',
+  session_id: 'sess-helper-run-7',
+  root_session_id: ROOT_CHAT,
+  turn_id: 'turn-001',
+  expires_in_ms: 300_000, // same five-minute fixture window as the legacy case
+}
+let ToolApprovalPanel: ComponentType
+
+beforeEach(async () => {
+  resetSharedState(ROOT_CHAT)
+  installApprovalNetwork()
+  ToolApprovalPanel = await loadApprovalPanel()
+})
+afterEach(async () => { await cleanupApprovalState() })
+
+function showHelperApproval() {
+  act(() => useToolApprovalStore.getState().enqueue(HELPER_APPROVAL))
+  renderWithClient(<ToolApprovalPanel />)
 }
 
-beforeEach(() => {
-  act(() => {
-    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
-  })
-  vi.clearAllMocks()
-})
-
-describe('U13/FR-034 — the approval modal attributes the acting helper/run', () => {
+describe('U13 / FR-034 / BDD-10.2 / R6 — inline root-chat card attributes the acting helper/run', () => {
   it('names the acting execution and exposes an Open control to its run session', () => {
-    act(() => {
-      useToolApprovalStore.setState({ queue: [HELPER_APPROVAL] })
-    })
-    render(<ToolApprovalModal />)
+    showHelperApproval()
 
-    // One approval → exactly one card (BDD-10.2 "no duplicate queue/card").
-    expect(screen.getAllByRole('dialog')).toHaveLength(1)
-    // The acting execution is reachable from the modal (FR-034
-    // "acting execution name/Open").
+    // BDD-10.2 retains "no duplicate queue/card"; the amended container is
+    // inline, not a dialog. Root placement must not retarget Open to the root.
+    expect(screen.getAllByTestId('tool-approval-panel')).toHaveLength(1)
+    expect(screen.queryAllByRole('dialog')).toHaveLength(0)
+    expect(useToolApprovalStore.getState().queue.map(a => a.approvalId)).toEqual(['appr-helper-001'])
+    expect(useSessionStore.getState().activeSessionId).toBe(ROOT_CHAT)
     const open = screen.getByTestId('approval-open-run')
     expect(open).toBeInTheDocument()
     expect(open).toHaveAttribute('data-session-id', 'sess-helper-run-7')
+    expect(open).not.toHaveAttribute('data-session-id', ROOT_CHAT)
+    expect(approvalPosts()).toEqual([])
+  })
+
+  it('R6 / CHECK2: clicking Open run navigates to the acting session, not the viewed root', async () => {
+    // F5 / B3-open-run-navigation: preserve the public attribute, but drive
+    // the real navigation callback with a real router rather than trusting it.
+    const root = createRootRoute({ component: () => <QueryClientProvider client={queryClient}><ToolApprovalPanel /><Outlet /></QueryClientProvider> })
+    const home = createRoute({ getParentRoute: () => root, path: '/', component: () => <div>Root chat</div> })
+    const acting = createRoute({ getParentRoute: () => root, path: '/sessions/$sessionId', component: () => <div>Acting run</div> })
+    const router = createRouter({ routeTree: root.addChildren([home, acting]), history: createMemoryHistory({ initialEntries: ['/'] }) })
+    await act(async () => { await router.load(); render(<RouterProvider router={router} />) })
+    act(() => useToolApprovalStore.getState().enqueue(HELPER_APPROVAL))
+    expect(useSessionStore.getState().activeSessionId).toBe(ROOT_CHAT)
+    const open = screen.getByTestId('approval-open-run')
+    expect(open).toHaveAttribute('data-session-id', 'sess-helper-run-7')
+    fireEvent.click(open)
+    await waitFor(() => expect(router.state.location.pathname).toBe('/sessions/sess-helper-run-7'))
+    expect(router.state.location.pathname).not.toBe(`/sessions/${ROOT_CHAT}`)
+    expect(approvalPosts()).toEqual([])
+    expect(useToolApprovalStore.getState().queue.map(entry => entry.approvalId)).toEqual(['appr-helper-001'])
+    expect(useToolApprovalStore.getState().resolvedIds).toEqual([])
   })
 
   it('still names the acting agent (positive control — unchanged behaviour)', () => {
-    act(() => {
-      useToolApprovalStore.setState({ queue: [HELPER_APPROVAL] })
-    })
-    render(<ToolApprovalModal />)
-    const dialog = screen.getAllByRole('dialog')[0]
-    // The agent id is the only name available on the wire today; the modal
-    // falls back to it when no cached/fetched agent name resolves.
-    expect(within(dialog).getByText('agent-helper')).toBeInTheDocument()
+    showHelperApproval()
+    const panel = screen.getAllByTestId('tool-approval-panel')[0]
+    // No acting_agent_name and no agent cache: the existing raw-id fallback
+    // remains exact. The owning root must not replace the acting identity.
+    expect(within(panel).getByText('agent-helper')).toBeInTheDocument()
+    expect(approvalPosts()).toEqual([])
   })
 })

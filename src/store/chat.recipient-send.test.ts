@@ -299,6 +299,8 @@ describe('resendMessage (Retry) re-derives the recipient from the kept content',
 
 describe('first-send payloads never carry a recipient', () => {
   it('the minting frame (no session_id) omits recipient even for @-prefixed text — the composer blocks that path in the UI', () => {
+    // B1/B2: an owner is required to mint a chat; recipient assertions stay exact.
+    act(() => { useSessionStore.setState({ activeAgentId: 'jim', activeAgentType: 'core' }) })
     const send = connectWithSendSpy()
 
     act(() => { useChatStore.getState().sendMessage('@Mia please review X') })

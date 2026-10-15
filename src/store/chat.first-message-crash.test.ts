@@ -93,9 +93,6 @@ describe('#1090 — an ordinary unconfirmed first message after a crash', () => 
       type: 'message', content, client_message_id: id, agent_id: 'mia',
     }))
     expect(useSessionStore.getState().activeSessionId).toBe('__pending')
-    expect(useChatStore.getState().pendingKickoff,
-      'T3 fixture is an ordinary first message, NOT a workspace-setup kickoff',
-    ).toBeNull()
     expect(foreground1090Users(), 'T3 fixture must first show the submitted message')
       .toEqual([{ id, content }])
 
@@ -123,7 +120,6 @@ describe('#1090 — an ordinary unconfirmed first message after a crash', () => 
     const sender = connect1090Sender()
 
     act(() => useChatStore.getState().sendMessage(oldContent, { clientMessageId: oldId }))
-    expect(useChatStore.getState().pendingKickoff).toBeNull()
     expect(foreground1090Users(), 'T4 fixture must first show the old pending message')
       .toEqual([{ id: oldId, content: oldContent }])
     reconnect1090Sender(sender)

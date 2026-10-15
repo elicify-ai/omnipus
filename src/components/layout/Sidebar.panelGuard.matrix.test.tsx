@@ -95,11 +95,12 @@ vi.mock('@/store/workspacesStore', () => {
   }
 })
 
-vi.mock('@/store/session', () => {
+vi.mock('@/store/session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/store/session')>()
   const state = { activeSessionId: null as string | null, startNewSession: vi.fn() }
   const useSessionStore = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state)
   useSessionStore.getState = () => state
-  return { useSessionStore }
+  return { ...actual, useSessionStore }
 })
 
 vi.mock('@/components/chat/useSelectSession', () => ({ useSelectSession: () => vi.fn() }))

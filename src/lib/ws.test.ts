@@ -923,6 +923,9 @@ describe('ClientFrameTypes — contract test', () => {
       'redirect',
       'ping',
       'attach_session',
+      // K45 — contracts/asyncapi.yaml::operations.sendAttachRoom (client → server)
+      // and components.schemas.AttachRoomFrame.type.const, not observed output.
+      'attach_room',
       'device_pairing_response',
       'whatsapp_pairing_subscribe',
       // ADR-038 — live interactive browser panel client→server frames.

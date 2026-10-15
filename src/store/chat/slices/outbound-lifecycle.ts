@@ -1,4 +1,4 @@
-// outbound-lifecycle.ts: queued sends, session kickoff, cancellation, and stream cleanup
+// outbound-lifecycle.ts: queued sends, cancellation, and stream cleanup
 
 
 import type { StoreApi } from 'zustand'
@@ -16,8 +16,9 @@ import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/ws-schemas'
 import type { CancelFrame } from '@/lib/api/generated/asyncapi-types'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { isOmnipusAgentId } from '@/lib/omnipus'
 import { logDiagnostic } from '@/lib/telemetry'
-import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
+import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
 import { isClearCommandText, isClearContextMarker } from '@/lib/clearMarker'
 import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddressResendBlockMessage, recipientAddressUnresolvedBlockMessage, resolveAddressedAgent, retryAgentsRoster } from '../recipientSend'
@@ -303,7 +304,6 @@ type OutboundLifecycleSlice = Pick<ChatStore,
   | '_validateOutboundFrame'
   | 'sendMessage'
   | 'resendMessage'
-  | 'sendWorkspaceSetupKickoff'
   | 'cancelStream'
   | 'clearStreamingState'
 >
@@ -314,7 +314,6 @@ interface OutboundLifecycleContext {
   getActiveSid: () => string | null
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
   bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
-  abandonPendingKickoffInternal: () => void
   maybeDrainNext: () => void
   runtime: { agentIdAtLastMintSend: string | null }
 }
@@ -349,7 +348,41 @@ function clearCatchUpSideChannelsOnDisconnect(): void {
   }
 }
 
-export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, abandonPendingKickoffInternal, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
+/**
+ * The workspace id a message frame carries as `metadata.workspace_id`.
+ */
+function outboundWorkspaceId(): string {
+  // M4 workspace→turn binding (BLOCKER 1). When the user is chatting inside
+  // a workspace, the active workspace id is the single source of truth in
+  // useWorkspacesStore (set by WorkspaceTabContainer from the route param;
+  // null on the global/inbox chat). We forward it as `metadata.workspace_id`
+  // so the server stamps the session with this workspace and any task the
+  // agent creates this turn (task_create / delegation) lands on THIS
+  // workspace's board instead of the agent's default workspace. Absent (or
+  // empty) when not in a workspace, matching the backend's default-workspace
+  // fallback. The contract caps it at 128 chars; an over-length id is dropped
+  // rather than sent (the outbound Zod validator would otherwise toast every
+  // turn for a malformed local id).
+  const activeWorkspaceIdRaw = useWorkspacesStore.getState().activeWorkspaceId
+  // omnipus-system-agent FR-003 / OSA-9.1: Omnipus's one chat lives in the
+  // default workspace whatever workspace is active (its entry never
+  // switches it, FR-100). Its frames carry NO workspace_id — the server
+  // refuses a frame that would re-bind the Omnipus chat to another
+  // workspace (pkg/gateway/websocket_chat.go, sessionIsOmnipusChat), and
+  // an absent value leaves the session's own binding as-is. The workspace
+  // a workflow acts on travels as `workflow_start` target data instead.
+  const inOmnipusChat = isOmnipusAgentId(useSessionStore.getState().activeAgentId)
+  return (
+    !inOmnipusChat &&
+    typeof activeWorkspaceIdRaw === 'string' &&
+    activeWorkspaceIdRaw.length > 0 &&
+    activeWorkspaceIdRaw.length <= 128
+      ? activeWorkspaceIdRaw
+      : ''
+  )
+}
+
+export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
   return {
     enqueueOutboundMessage: (content, queuedMessage) => {
       const MAX_QUEUE = 5
@@ -363,14 +396,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
 
     drainOutboundQueue: () => {
       const queue = get().outboundQueue
-      // Kickoff hardening: the early-return used to skip straight
-      // past `maybeDrainNext()` whenever `outboundQueue` was empty — but
-      // several kickoff-terminal cleanup paths (a rejecting error frame, a
-      // synchronous send failure, the "wrong workspace" migration) call
+      // The early-return used to skip straight past `maybeDrainNext()`
+      // whenever `outboundQueue` was empty — but terminal cleanup paths call
       // THIS function specifically (not `maybeDrainNext()` directly) to
       // release whatever is waiting, and what's waiting may already sit in
       // `pendingDrainQueue` (moved there by an EARLIER drain cycle that got
-      // stuck behind the kickoff's own `isStreaming` window) rather than in
+      // stuck behind an `isStreaming` window) rather than in
       // `outboundQueue`. Always falling through to `maybeDrainNext()` below
       // makes this function a safe, strict superset of it — correct to call
       // at every "an attempt just ended, try to free the next thing"
@@ -450,24 +481,10 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const modelNameRaw = opts?.model_name
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
-      // M4 workspace→turn binding (BLOCKER 1). When the user is chatting inside
-      // a workspace, the active workspace id is the single source of truth in
-      // useWorkspacesStore (set by WorkspaceTabContainer from the route param;
-      // null on the global/inbox chat). We forward it as `metadata.workspace_id`
-      // so the server stamps the session with this workspace and any task the
-      // agent creates this turn (task_create / delegation) lands on THIS
-      // workspace's board instead of the agent's default workspace. Absent (or
-      // empty) when not in a workspace, matching the backend's default-workspace
-      // fallback. The contract caps it at 128 chars; an over-length id is dropped
-      // rather than sent (the outbound Zod validator would otherwise toast every
-      // turn for a malformed local id).
-      const activeWorkspaceIdRaw = useWorkspacesStore.getState().activeWorkspaceId
-      const workspaceId =
-        typeof activeWorkspaceIdRaw === 'string' &&
-        activeWorkspaceIdRaw.length > 0 &&
-        activeWorkspaceIdRaw.length <= 128
-          ? activeWorkspaceIdRaw
-          : ''
+      // M4 workspace→turn binding and the Omnipus-chat exception: see outboundWorkspaceId.
+      const workspaceId = outboundWorkspaceId()
+      // K8 (FR-012): target data naming the workflow a screen button started.
+      const workflowStartFrame = opts?.workflowStart ? { workflow_start: opts.workflowStart } : {}
 
       // Merge model_name + workspace_id into a single `metadata` object so the
       // two payload build sites below stay in sync. The frame omits `metadata`
@@ -481,16 +498,16 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
       const { isStreaming } = get()
       // Composer guard: a '__pending' sentinel with no in-flight
-      // stream is a STUCK state, not a real session — it means a workspace-
-      // setup kickoff started a turn under '__pending' and that turn ended
-      // (rejected, rolled back, or otherwise never got its session_started
-      // ack) without activeSessionId ever being reset back to null. Sending
+      // stream is a STUCK state, not a real session — a turn started under
+      // '__pending' ended (rejected, rolled back, or otherwise never got its
+      // session_started ack) without activeSessionId ever being reset back
+      // to null. Sending
       // `session_id: '__pending'` on the wire is a protocol violation the
       // gateway answers with a terminal "session not found" error. Treat it
       // exactly like "no active session yet" instead — an ordinary fresh
       // turn, no session_id on the wire — rather than propagating the
-      // sentinel. A '__pending' session that IS still streaming (the kickoff
-      // or a first message is actively in flight) is untouched here; that
+      // sentinel. A '__pending' session that IS still streaming (a first
+      // message is actively in flight) is untouched here; that
       // case is handled by the existing mid-turn-steering '__pending' branch
       // below.
       const activeSessionId = (rawActiveSessionId === '__pending' && !isStreaming) ? null : rawActiveSessionId
@@ -599,6 +616,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             agent_id: activeAgentId ?? undefined,
             ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
             ...metadataFrame,
+            ...workflowStartFrame,
             // @-addressed steer (founder 2026-10-11 Q1 B): legal here — a
             // steer always carries a real session_id ('__pending' steers are
             // enqueued above, never put on the wire).
@@ -747,6 +765,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
+          ...workflowStartFrame,
           // @-addressed ordinary send (founder 2026-10-11 Q1 B): the pair
           // rides WITH this session_id, never alone.
           ...(() => {
@@ -796,28 +815,6 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           if (isClearCommandText(content)) armClearRefreshForSend(activeSessionId, clientMessageId, get)
         }
       } else {
-        // Kickoff hardening: a workspace-setup kickoff already owns
-        // the shared '__pending' bucket key (see `pendingKickoff`'s doc
-        // comment). Building a SECOND '__pending' bucket here would collide
-        // with — and, since `withBucket` appends rather than replaces,
-        // silently co-mingle content with — the kickoff's own placeholder,
-        // and this send's eventual `session_started` ack would then be
-        // ambiguous with the kickoff's own ack. Degrade to the same
-        // offline-style buffering `sendMessage` already uses for a
-        // disconnected WS / mid-turn '__pending' steering: enqueue and let
-        // it go out as an ordinary follow-up once the kickoff resolves
-        // (every kickoff-terminal cleanup path calls `drainOutboundQueue()`
-        // to release it).
-        if (get().pendingKickoff !== null) {
-          const enqueued = get().enqueueOutboundMessage(content, queuedMessage)
-          if (!enqueued) {
-            useConnectionStore.getState().setConnectionError(
-              'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
-            )
-          }
-          return
-        }
-
         if (refuseAgentlessNewChat(activeAgentId, 'send')) return
         runtime.agentIdAtLastMintSend = activeAgentId ?? null
         const autoApproveChoice = get().pendingAutoApproveChoice
@@ -837,114 +834,6 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
     // scope, above) for the bug this replaces and why the body lives there
     // rather than here.
     resendMessage: (messageId) => performResendMessage(get, getActiveSid, withBucket, messageId),
-
-    sendWorkspaceSetupKickoff: (opts) => {
-      const { workspaceId, workspaceName, agentId, agentType } = opts
-      const { connection, isConnected } = useConnectionStore.getState()
-      const { activeSessionId } = useSessionStore.getState()
-      const { isStreaming, pendingKickoff } = get()
-
-      // Never kick off over an offline connection, a mid-turn stream, or an
-      // existing conversation — mirrors sendMessage's own guards, but as an
-      // outright bail (no queueing, no toast): a missed kickoff simply
-      // leaves `setup_pending` true, so the calling hook can retry on the
-      // next render once the blocking condition clears.
-      if (!connection || !isConnected) return false
-      if (isStreaming) return false
-      if (activeSessionId !== null) return false
-      // A DIFFERENT kickoff is already outstanding (its ack hasn't
-      // landed yet — see `pendingKickoff`'s doc comment). This can happen
-      // even with `activeSessionId === null` above: the user can navigate
-      // away from the workspace that triggered the first kickoff (which
-      // resets `activeSessionId` back to null via `enterWorkspaceChat`)
-      // before that kickoff's `session_started`/`error` ack arrives. Firing
-      // a second kickoff here would collide with the first on the shared
-      // `'__pending'` bucket key. Bail exactly like the other guards; the
-      // hook releases its own guard on `false` and retries later.
-      if (pendingKickoff !== null || getPendingFirstSend(get())) return false
-
-      const content = buildWorkspaceSetupKickoffContent(workspaceName)
-      const pendingSid = '__pending'
-      const assistantMsg: ChatMessage = {
-        id: generateId(),
-        session_id: pendingSid,
-        role: 'assistant',
-        content: '',
-        timestamp: new Date().toISOString(),
-        status: 'streaming',
-        isStreaming: true,
-        // Stamp the target agent's identity on the placeholder
-        // immediately (mirrors the reconnect/reattach placeholders — see
-        // `resolveLastActiveAgentId` in OmnipusRuntimeProvider.tsx) so the
-        // thread shows the resolved agent right away instead of waiting for
-        // a later frame that also happens to carry `agent_id`.
-        agentId,
-      }
-
-      // Render ONLY the optimistic streaming assistant placeholder — no user
-      // bubble. This turn's "user" content is a synthetic instruction the
-      // backend records as a SYSTEM-role transcript entry (a centered pill
-      // on replay), not something the user typed, so echoing it as a user
-      // bubble here would show text the user never wrote.
-      withBucket(pendingSid, (b) => {
-        const allMsgs = [...getMessages(b), assistantMsg]
-        return { ...applyMessageArray(allMsgs, b), isStreaming: true, lastUserMessageAt: Date.now() }
-      })
-      // Activate the pending bucket AND select the agent in one write —
-      // mirrors AgentPicker's auto-select (setActiveSession with the
-      // resolved agent's id+type) so the composer/thread header show the
-      // agent immediately, same as sendMessage's own no-session branch
-      // activates '__pending' as foreground.
-      useSessionStore.getState().setActiveSession(pendingSid, agentId, agentType)
-      // Claim the single in-flight-kickoff slot BEFORE sending, so
-      // a synchronous re-render triggered by the writes above cannot race a
-      // second kickoff attempt in behind this one, and so the
-      // `session_started`/`error` handlers can find it as soon as either
-      // frame arrives.
-      set({ pendingKickoff: { workspaceId } })
-
-      const payload = {
-        type: 'message' as const,
-        content,
-        agent_id: agentId,
-        metadata: {
-          workspace_id: workspaceId,
-          workspace_setup_kickoff: true,
-        },
-      }
-      get()._validateOutboundFrame(payload, pendingSid)
-      const sent = connection.send(payload)
-
-      if (!sent) {
-        // FULL rollback — unlike sendMessage's failure rollback
-        // (which keeps a user's typed bubble as a retriable 'error'), a
-        // kickoff has no user-typed content to preserve, so tear the whole
-        // '__pending' bucket down rather than leaving an empty husk behind.
-        // Also reset session activation back to "no session" (retaining the
-        // agent selection just made above) — without this, `activeSessionId`
-        // would stay stuck at '__pending' forever and the hook's own guard
-        // (`activeSessionId === null`) would block every future retry,
-        // including the one it's about to attempt now that this call is
-        // returning `false`. `abandonPendingKickoffInternal` handles the
-        // `pendingKickoff` clear + bucket teardown + `kickoffAttemptStatus`
-        // 'failed' marking in one place, shared with the disconnect
-        // and reject-frame cleanup paths below.
-        abandonPendingKickoffInternal()
-        useSessionStore.getState().setActiveSession(null)
-        useConnectionStore.getState().setConnectionError(
-          'Could not start the workspace setup interview — connection dropped. Please try again.'
-        )
-        // Only `drainOutboundQueue()` (not `maybeDrainNext()`) moves
-        // items actually sitting in `outboundQueue` — e.g. a message that
-        // collided with THIS kickoff's `pendingKickoff` slot via the
-        // collision guard in `sendMessage` — into `pendingDrainQueue` and
-        // sends the head.
-        get().drainOutboundQueue()
-        return false
-      }
-
-      return true
-    },
 
     cancelStream: (sessionId, scope) => {
       const { connection } = useConnectionStore.getState()
@@ -1067,18 +956,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
     },
 
     clearStreamingState: () => {
-      // Kickoff hardening: a hard disconnect means no ack
-      // (session_started or error) can ever arrive on THIS connection for an
-      // outstanding workspace-setup kickoff — its '__pending' placeholder
-      // turn is dead. Clear the slot and drop the orphaned bucket now
-      // (quietly — no toast, no `activeSessionId` change: `activeSessionId`
-      // staying at '__pending' until reconnect is handled by
-      // `OmnipusRuntimeProvider.reattachActiveSession`) rather than
-      // leaving `pendingKickoff` wedged non-null forever, which would
-      // otherwise permanently block every future kickoff attempt via
-      // `sendWorkspaceSetupKickoff`'s own `pendingKickoff` guard.
       if (getPendingFirstSend(get())) get().markFirstSendDisconnected()
-      else abandonPendingKickoffInternal()
       // F-S3: a socket drop means no more terminal frames are coming for any
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.

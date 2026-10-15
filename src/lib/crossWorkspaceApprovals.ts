@@ -1,61 +1,53 @@
-// Pure helper for the cross-workspace tool-approval indicator (founder
-// decision 2026-09-14). ToolApprovalModal (src/components/agents/
-// ToolApprovalModal.tsx) only shows approvals that are in scope for the
-// active workspace (isApprovalInScope, src/store/toolApproval.ts) — an
-// approval waiting in a workspace the user isn't currently looking at is
-// otherwise invisible until they switch tabs or the server's 10-minute
-// timeout denies it for them.
-//
-// This module computes the notice text and click target for those
-// out-of-scope approvals. Kept separate from the rendering component
-// (CrossWorkspaceApprovalBanner.tsx) so the copy logic can be unit-tested
-// without mounting React or a QueryClient.
+// Pure helper for the "waiting in another chat" notice (L1 amendment §1.2 R6,
+// BDD-11.3; supersedes the workspace-only scope of the founder decision of
+// 2026-09-14). The inline approval card renders only in the approval's ROOT
+// chat (approvalChatId), so an approval rooted anywhere else — another
+// workspace, another chat in the same workspace, a chat in no workspace, or
+// Omnipus's chat — is otherwise invisible. This module counts those and names
+// the first chat to go to; the banner (CrossWorkspaceApprovalBanner.tsx)
+// renders it. Kept pure so the copy logic is unit-testable.
 
-import type { PendingToolApproval } from '@/store/toolApproval'
+import { approvalChatId, type PendingToolApproval } from '@/store/toolApproval'
 
-export interface CrossWorkspaceApprovalSummary { // not-wire-format: client-side UI summary computed from the tool-approval store, never serialized or sent over any API/WS boundary
-  /** Total pending approvals whose workspace differs from the active one. */
+export interface ApprovalsElsewhereSummary { // not-wire-format: client-side UI summary computed from the tool-approval store, never serialized
+  /** Approvals whose root chat is not the open one. */
   count: number
-  /** Distinct workspace ids holding those approvals, in queue (arrival) order. */
-  workspaceIds: string[]
-  /** Workspace to navigate to on click — the first one, in queue order. */
-  targetWorkspaceId: string
+  /** Distinct root chats holding them, in arrival order. */
+  chatIds: string[]
+  /** The chat "Go there" opens — the first one, in arrival order. */
+  targetChatId: string
+  /** The first approval for the target chat (its workspace and agent). */
+  target: Pick<PendingToolApproval, 'rootSessionId' | 'sessionId' | 'workspaceId' | 'agentId'>
   /** Human-readable notice text, plural-aware. */
   label: string
 }
 
 /**
- * Summarizes pending approvals that belong to a workspace other than
- * `activeWorkspaceId`, or returns null when there is nothing to show.
- *
- * Mirrors isApprovalInScope's own rule for what counts as "elsewhere": an
- * approval with no workspaceId is in scope everywhere (never "elsewhere"),
- * and when there is no active workspace at all (activeWorkspaceId === null,
- * e.g. the "All workspaces" view) EVERY approval is already in scope for the
- * modal, so there is nothing left for this indicator to surface.
+ * Summarizes pending approvals whose root chat differs from `activeChatId`,
+ * or returns null when there is nothing to show. `describeChat` names a chat
+ * for the notice (e.g. "Omnipus" or "Jim's chat in Sales") and never returns
+ * a raw id when a name is known.
  */
-export function summarizeCrossWorkspaceApprovals(
-  queue: Pick<PendingToolApproval, 'workspaceId'>[],
-  activeWorkspaceId: string | null,
-  workspaceName: (workspaceId: string) => string,
-): CrossWorkspaceApprovalSummary | null {
-  if (!activeWorkspaceId) return null
-
-  const workspaceIds: string[] = []
+export function summarizeApprovalsElsewhere(
+  queue: Pick<PendingToolApproval, 'rootSessionId' | 'sessionId' | 'workspaceId' | 'agentId'>[],
+  activeChatId: string | null,
+  describeChat: (approval: Pick<PendingToolApproval, 'rootSessionId' | 'sessionId' | 'workspaceId' | 'agentId'>) => string,
+): ApprovalsElsewhereSummary | null {
+  const chatIds: string[] = []
   let count = 0
+  let target: ApprovalsElsewhereSummary['target'] | null = null
   for (const approval of queue) {
-    if (!approval.workspaceId || approval.workspaceId === activeWorkspaceId) continue
+    const chatId = approvalChatId(approval)
+    if (chatId === activeChatId) continue
     count += 1
-    if (!workspaceIds.includes(approval.workspaceId)) workspaceIds.push(approval.workspaceId)
+    if (!chatIds.includes(chatId)) chatIds.push(chatId)
+    if (!target) target = approval
   }
-  if (count === 0) return null
-
-  const targetWorkspaceId = workspaceIds[0]
+  if (count === 0 || !target) return null
   const approvalWord = count === 1 ? 'approval' : 'approvals'
   const label =
-    workspaceIds.length === 1
-      ? `${count} ${approvalWord} waiting in ${workspaceName(targetWorkspaceId)}`
-      : `${count} ${approvalWord} waiting in ${workspaceIds.length} other workspaces`
-
-  return { count, workspaceIds, targetWorkspaceId, label }
+    chatIds.length === 1
+      ? `${count} ${approvalWord} waiting in ${describeChat(target)}`
+      : `${count} ${approvalWord} waiting in ${chatIds.length} other chats`
+  return { count, chatIds, targetChatId: chatIds[0], target, label }
 }

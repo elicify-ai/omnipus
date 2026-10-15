@@ -49,7 +49,6 @@ function resetStores() {
       textAtToolCallStart: {},
       sessionTokens: 0,
       sessionCost: 0,
-      pendingKickoff: null,
       outboundQueue: [],
       pendingDrainQueue: [],
     })

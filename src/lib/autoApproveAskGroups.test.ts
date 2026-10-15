@@ -6,10 +6,12 @@ import { AUTO_APPROVE_ASK_GROUPS, AUTO_APPROVE_ASK_GROUP_BY_TOOL } from './autoA
 // 2026-09-24) — every entry whose class is `AutoAsks`, i.e. every tool that
 // always asks under Auto-approve. `bash` is deliberately excluded: its own
 // class is `AutoShellMode`, a distinct mechanism (the shell-permission mode
-// UI), not a member of this 28-tool ask-list. This is NOT derived from
+// UI), not a member of this 29-tool stage-1 ask-list. This is NOT derived from
 // autoApproveAskGroups.ts — a mistake in that file's grouping (a dropped
 // tool, a duplicate, an extra invented one) must fail against this
 // independent transcription, not just agree with itself.
+// FR-021 stage-1 amendment (2026-10-15): add the permission tool only;
+// reserved connection/secret actions are not part of this stage-1 list.
 const EXPECTED_ASK_LIST_TOOLS = [
   // Files
   'request_mount',
@@ -39,6 +41,8 @@ const EXPECTED_ASK_LIST_TOOLS = [
   // System (agents)
   'create_agent',
   'update_agent',
+  // FR-021: set_agent_permissions is AutoAsks on the stage-1 server.
+  'set_agent_permissions',
   'delete_agent',
   // System (workspaces)
   'update_workspace',
@@ -53,9 +57,9 @@ const EXPECTED_ASK_LIST_TOOLS = [
   'browser_upload_file',
 ].sort()
 
-describe('AUTO_APPROVE_ASK_GROUPS — covers every one of the 28 ADR-092 always-ask tools', () => {
-  it('the hand-transcribed reference list has exactly 28 tools', () => {
-    expect(EXPECTED_ASK_LIST_TOOLS).toHaveLength(28)
+describe('AUTO_APPROVE_ASK_GROUPS — covers all 29 stage-1 ADR-092/FR-021 always-ask tools', () => {
+  it('the stage-1 hand-transcribed reference list has exactly 29 tools (FR-021)', () => {
+    expect(EXPECTED_ASK_LIST_TOOLS).toHaveLength(29)
   })
 
   it('every group tool is unique to that group — no tool appears in two groups', () => {
@@ -78,7 +82,7 @@ describe('AUTO_APPROVE_ASK_GROUPS — covers every one of the 28 ADR-092 always-
     }
   })
 
-  it('the grouped tools, flattened and sorted, exactly equal the hand-transcribed 28-tool reference list', () => {
+  it('the grouped tools, flattened and sorted, exactly equal the stage-1 29-tool reference list (FR-021)', () => {
     const grouped = AUTO_APPROVE_ASK_GROUPS.flatMap((g) => g.tools).sort()
     expect(grouped).toEqual(EXPECTED_ASK_LIST_TOOLS)
   })
@@ -87,6 +91,13 @@ describe('AUTO_APPROVE_ASK_GROUPS — covers every one of the 28 ADR-092 always-
     for (const tool of EXPECTED_ASK_LIST_TOOLS) {
       expect(AUTO_APPROVE_ASK_GROUP_BY_TOOL[tool], `no group found for "${tool}"`).toBeTruthy()
     }
+  })
+
+  it('FR-021: set_agent_permissions shares the exact settings/agents group with create_agent and update_agent', () => {
+    const label = 'Changing or testing settings, providers, channels, agents or skills'
+    expect(['create_agent', 'update_agent', 'set_agent_permissions'].map(
+      (tool) => AUTO_APPROVE_ASK_GROUP_BY_TOOL[tool],
+    )).toEqual([label, label, label])
   })
 
   // #920 founder decision D3 (2026-09-27): under Auto-approve, reading,

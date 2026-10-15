@@ -11,7 +11,7 @@
 // GREEN and implementation mutation/proof-of-failability checks: deferred to CHECK.
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -30,6 +30,7 @@ import { routeTree } from '@/routeTree.gen'
 
 const api = vi.hoisted(() => ({
   fetchWorkspace: vi.fn<typeof import('@/lib/api').fetchWorkspace>(),
+  fetchWorkspaces: vi.fn<typeof import('@/lib/api').fetchWorkspaces>(),
   fetchWorkspaceDelegation: vi.fn<typeof import('@/lib/api').fetchWorkspaceDelegation>(),
   fetchAgents: vi.fn<typeof import('@/lib/api').fetchAgents>(),
   fetchAppState: vi.fn<typeof import('@/lib/api').fetchAppState>(),
@@ -101,6 +102,8 @@ beforeAll(async () => {
 beforeEach(() => {
   for (const edge of Object.values(api)) edge.mockReset()
   api.fetchWorkspace.mockResolvedValue(INITIAL_WORKSPACE)
+  // FR-102: list cards also read the global membership labels.
+  api.fetchWorkspaces.mockResolvedValue([INITIAL_WORKSPACE])
   api.fetchWorkspaceDelegation.mockResolvedValue(DELEGATION)
   api.fetchAgents.mockResolvedValue([INITIAL_MEMBER, NEW_MEMBER])
   api.fetchAppState.mockResolvedValue(SIGNED_IN)
@@ -174,6 +177,9 @@ function assertSourceRetained(presentation: Presentation, router?: TeamRouter, w
 
 async function assertTeamMembers(memberIds: string[]) {
   expect(await screen.findByRole('heading', { name: 'Team & delegation' })).toBeVisible()
+  // WU-10 FR-102 / BDD-12.3: retain the graph-membership regression in Graph,
+  // not as an assertion that the now-superseded default view is graph-first.
+  fireEvent.click(await screen.findByRole('radio', { name: /^Graph$/i }))
   expect(screen.getByRole('button', { name: 'Add agent' })).toBeEnabled()
   await waitFor(() => {
     const nodeIds = Array.from(

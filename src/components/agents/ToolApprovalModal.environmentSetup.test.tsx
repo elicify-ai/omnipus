@@ -1,8 +1,10 @@
-// ToolApprovalModal.environmentSetup.test.tsx
+// L1 amendment §1.2 R6 / §1.5: inline container replaces the modal.
+// All non-container preview/action/security oracles retained; B3 stub deletion deferred.
+// ToolApprovalModal.environmentSetup.test.tsx — inline surface
 //
 // Focused coverage for the `environment_setup` readable approval preview
 // (approvalPreviews/EnvironmentSetupApprovalPreview.tsx, registered in
-// approvalPreviews/registry.ts). Driven through the REAL ToolApprovalModal +
+// approvalPreviews/registry.ts). Driven through the REAL ToolApprovalPanel +
 // registry so the integration (entry lookup, replace-mode rendering, title)
 // is what is under test, not a component in isolation.
 //
@@ -42,53 +44,25 @@
 //   approval workflow, standard buttons preserved.
 //
 // Case table: 35 cases (24 positive, 11 negative — 31% negative).
-// Mutations applied after green are listed in the lane status note.
+// Original suite has historical mutation receipts. This L1 RED pack defers
+// GREEN, mutation checks and Proof-of-failability to a different CHECK instance.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { queryClient } from '@/lib/queryClient'
 import { workspacesQueryKeys } from '@/lib/api'
 import type { Agent, Session, Workspace } from '@/lib/api'
 
-vi.mock('@/lib/api', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
-  return {
-    ...actual,
-    submitToolApproval: vi.fn(),
-  }
-})
-
-vi.mock('@/store/ui', () => ({
-  useUiStore: vi.fn((selector) => {
-    const state = { addToast: vi.fn(), toasts: [], removeToast: vi.fn() }
-    return selector ? selector(state) : state
-  }),
-}))
-
-vi.mock('@/lib/authLogout', () => ({
-  forceLogout: vi.fn(),
-}))
-
-import * as api from '@/lib/api'
 import { useToolApprovalStore } from '@/store/toolApproval'
-import { ToolApprovalModal } from './ToolApprovalModal'
+import type { ComponentType } from 'react'
+import { renderWithClient as render, loadApprovalPanel, resetSharedState, installApprovalNetwork, approvalPosts, cleanupApprovalState } from '../../../tests/l1-ui-red-u23/support'
+let ToolApprovalPanel: ComponentType
 
-beforeEach(() => {
-  act(() => {
-    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
-  })
-  vi.clearAllMocks()
-  vi.mocked(api.submitToolApproval).mockResolvedValue({
-    approval_id: 'appr-env-setup',
-    action: 'allow_once',
-    status: 'ok',
-  })
-  queryClient.clear()
-})
-
-afterEach(() => {
-  queryClient.clear()
+beforeEach(async () => {
+  resetSharedState('sess-env')
+  installApprovalNetwork()
+  ToolApprovalPanel = await loadApprovalPanel()
 })
 
 /** Approval-queue entry shape with args wide open — the wire `args` object is generic JSON. */
@@ -161,21 +135,21 @@ function enqueue(approval: FixtureApproval) {
   })
 }
 
-describe('ToolApprovalModal — environment_setup install summary (ES-FR-01/02: the command itself is visible)', () => {
-  it('renders the actual installation command as readable text (not a JSON blob)', () => {
+describe('ToolApprovalPanel — environment_setup install summary (ES-FR-01/02: the command itself is visible)', () => {
+  it('L1 §1.2 R6: renders the actual installation command as readable text (not a JSON blob)', () => {
     seedAgent()
     enqueue(INSTALL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     const commandBlock = screen.getByTestId('environment-setup-command')
     expect(commandBlock.textContent).toContain('python3 -m venv .venv')
     expect(commandBlock.textContent).toContain('pip install reportlab==4.2.0')
   })
 
-  it('renders a multiline script with its line structure intact (ES-BDD-12 custom script)', () => {
+  it('L1 §1.2 R6: renders a multiline script with its line structure intact (ES-BDD-12 custom script)', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: { command: INSTALL_SCRIPT, purpose: 'install the toolchain' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     const commandBlock = screen.getByTestId('environment-setup-command')
     // Every line survives, and the newlines between them survive too — the
@@ -187,29 +161,29 @@ describe('ToolApprovalModal — environment_setup install summary (ES-FR-01/02: 
     expect(commandBlock.textContent).toContain('\n')
   })
 
-  it('shows the default (absent) action as an installation in the title', () => {
+  it('L1 §1.2 R6: shows the default (absent) action as an installation in the title', () => {
     seedAgent()
     enqueue(INSTALL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Jim wants to install software')).toBeInTheDocument()
   })
 
-  it('renders the stated purpose under "Why"', () => {
+  it('L1 §1.2 R6: renders the stated purpose under "Why"', () => {
     seedAgent()
     enqueue(INSTALL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('render the quarterly report to PDF')).toBeInTheDocument()
   })
 
-  it('shows the session-derived workspace name', () => {
+  it('L1 §1.2 R6: shows the session-derived workspace name', () => {
     seedAgent()
     seedWorkspace()
     enqueue(INSTALL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Acme Backend')).toBeInTheDocument()
   })
 
-  it('shows an explicit target workspace over the session workspace (Admin cross-workspace targeting, GS-06 disposition)', () => {
+  it('L1 §1.2 R6: shows an explicit target workspace over the session workspace (Admin cross-workspace targeting, GS-06 disposition)', () => {
     seedAgent()
     seedWorkspace()
     enqueue({
@@ -223,152 +197,152 @@ describe('ToolApprovalModal — environment_setup install summary (ES-FR-01/02: 
         { id: 'ws-2', name: 'Backend B' },
       ] as unknown as Workspace[],
     )
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Backend B')).toBeInTheDocument()
     // The session's own workspace must NOT be shown as the target — showing
     // it would tell the approver the wrong destination.
     expect(screen.queryByText('Acme Backend')).not.toBeInTheDocument()
   })
 
-  it('falls back to the raw target value when the explicit target is not in the workspaces cache', () => {
+  it('L1 §1.2 R6: falls back to the raw target value when the explicit target is not in the workspaces cache', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: { ...INSTALL_APPROVAL.args, target_workspace: 'ws-unlisted' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('ws-unlisted')).toBeInTheDocument()
   })
 
-  it('defaults the scope line to the workspace when no scope is given (ES-FR-02: scope defaults to workspace)', () => {
+  it('L1 §1.2 R6: defaults the scope line to the workspace when no scope is given (ES-FR-02: scope defaults to workspace)', () => {
     seedAgent()
     enqueue(INSTALL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('This workspace')).toBeInTheDocument()
   })
 
-  it('renders the requested timeout when one is sent (existing-style timeout_seconds)', () => {
+  it('L1 §1.2 R6: renders the requested timeout when one is sent (existing-style timeout_seconds)', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: { ...INSTALL_APPROVAL.args, timeout_seconds: 300 } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('5m')).toBeInTheDocument()
   })
 
-  it('leaves the timeout line out when the request sends none', () => {
+  it('L1 §1.2 R6: leaves the timeout line out when the request sends none', () => {
     seedAgent()
     enqueue(INSTALL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.queryByText('Timeout')).not.toBeInTheDocument()
   })
 })
 
-describe('ToolApprovalModal — environment_setup shared scope is explicit (ES-FR-02)', () => {
-  it('renders an explicit Shared scope line when scope is shared', () => {
+describe('ToolApprovalPanel — environment_setup shared scope is explicit (ES-FR-02)', () => {
+  it('L1 §1.2 R6: renders an explicit Shared scope line when scope is shared', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: { ...INSTALL_APPROVAL.args, scope: 'shared' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Shared')).toBeInTheDocument()
     expect(screen.queryByText('This workspace')).not.toBeInTheDocument()
   })
 
-  it('states the lasting consequence of a shared install', () => {
+  it('L1 §1.2 R6: states the lasting consequence of a shared install', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: { ...INSTALL_APPROVAL.args, scope: 'shared' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText(/installed once by Omnipus/)).toBeInTheDocument()
     expect(screen.getByText(/stay available to every agent/)).toBeInTheDocument()
   })
 
-  it('treats scope case-insensitively ("Shared", "SHARED")', () => {
+  it('L1 §1.2 R6: treats scope case-insensitively ("Shared", "SHARED")', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: { ...INSTALL_APPROVAL.args, scope: 'SHARED' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Shared')).toBeInTheDocument()
   })
 
-  it('treats scope SHARED as shared even alongside a run action spelled out', () => {
+  it('L1 §1.2 R6: treats scope SHARED as shared even alongside a run action spelled out', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: { ...INSTALL_APPROVAL.args, action: 'run', scope: 'shared' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Shared')).toBeInTheDocument()
   })
 })
 
-describe('ToolApprovalModal — environment_setup background session actions (ES-FR-02 poll/read/kill)', () => {
-  it('renders the session id for a poll call and no install fields', () => {
+describe('ToolApprovalPanel — environment_setup background session actions (ES-FR-02 poll/read/kill)', () => {
+  it('L1 §1.2 R6: renders the session id for a poll call and no install fields', () => {
     seedAgent()
     enqueue(POLL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('envsess-abc123')).toBeInTheDocument()
     expect(screen.queryByText('Command')).not.toBeInTheDocument()
     expect(screen.queryByText('Why')).not.toBeInTheDocument()
   })
 
-  it('titles a poll call as checking an installation, not installing', () => {
+  it('L1 §1.2 R6: titles a poll call as checking an installation, not installing', () => {
     seedAgent()
     enqueue(POLL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Jim wants to check an installation')).toBeInTheDocument()
     expect(screen.queryByText('Jim wants to install software')).not.toBeInTheDocument()
   })
 
-  it('titles a read call as checking an installation and describes reading output', () => {
+  it('L1 §1.2 R6: titles a read call as checking an installation and describes reading output', () => {
     seedAgent()
     enqueue({ ...POLL_APPROVAL, args: { action: 'read', session_id: 'envsess-abc123' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Jim wants to check an installation')).toBeInTheDocument()
     expect(screen.getByText(/Read the output of a background installation/)).toBeInTheDocument()
   })
 
-  it('titles a kill call as stopping an installation', () => {
+  it('L1 §1.2 R6: titles a kill call as stopping an installation', () => {
     seedAgent()
     enqueue({ ...POLL_APPROVAL, approvalId: 'appr-env-kill', args: { action: 'kill', session_id: 'envsess-abc123' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('Jim wants to stop an installation')).toBeInTheDocument()
   })
 
-  it('says so plainly when a session action arrives without a session id', () => {
+  it('L1 §1.2 R6: says so plainly when a session action arrives without a session id', () => {
     seedAgent()
     enqueue({ ...POLL_APPROVAL, args: { action: 'poll' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('No session was included with this request.')).toBeInTheDocument()
   })
 })
 
-describe('ToolApprovalModal — environment_setup honest degradation', () => {
-  it('says so plainly when no command was included', () => {
+describe('ToolApprovalPanel — environment_setup honest degradation', () => {
+  it('L1 §1.2 R6: says so plainly when no command was included', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: { purpose: 'something' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('No installation command was included with this request.')).toBeInTheDocument()
   })
 
-  it('says "No reason was given." when the purpose is missing (request_mount copy precedent)', () => {
+  it('L1 §1.2 R6: says "No reason was given." when the purpose is missing (request_mount copy precedent)', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: { command: INSTALL_COMMAND } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('No reason was given.')).toBeInTheDocument()
   })
 
-  it('renders an honest card for entirely empty args — no crash, missing lines shown', () => {
+  it('L1 §1.2 R6: renders an honest card for entirely empty args — no crash, missing lines shown', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: {} })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText('No installation command was included with this request.')).toBeInTheDocument()
     expect(screen.getByText('No reason was given.')).toBeInTheDocument()
   })
 })
 
-describe('ToolApprovalModal — environment_setup standard approval semantics preserved', () => {
-  it('hides the raw Arguments JSON dump for a fully covered request (replace mode)', () => {
+describe('ToolApprovalPanel — environment_setup standard approval semantics preserved', () => {
+  it('L1 §1.2 R6: hides the raw Arguments JSON dump for a fully covered request (replace mode)', () => {
     seedAgent()
     enqueue(INSTALL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.queryByText('Arguments')).not.toBeInTheDocument()
     expect(screen.queryByText(/"command"/)).not.toBeInTheDocument()
   })
 
-  it('offers standard Approve / Deny / Always Allow / Cancel and dispatches the standard approve action', async () => {
+  it('L1 §1.2 R6: offers standard Approve / Deny / Always Allow / Cancel and dispatches the standard approve action', async () => {
     seedAgent()
     enqueue(INSTALL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
 
     // Standard four-way semantics unchanged: no environment-specific button
     // row, no hidden Approve, Cancel still offered. Always Allow remembers
@@ -380,11 +354,11 @@ describe('ToolApprovalModal — environment_setup standard approval semantics pr
 
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-env-install', 'allow_once')
+      expect(approvalPosts()).toContainEqual({ id: 'appr-env-install', body: { action: 'allow_once' } })
     })
   })
 
-  it('shows the raw JSON alongside the summary when the request carries a field the preview does not know (never silently dropped)', () => {
+  it('L1 §1.2 R6: shows the raw JSON alongside the summary when the request carries a field the preview does not know (never silently dropped)', () => {
     seedAgent()
     enqueue({
       ...INSTALL_APPROVAL,
@@ -393,24 +367,24 @@ describe('ToolApprovalModal — environment_setup standard approval semantics pr
         some_future_field: 'a field a newer tool schema might send',
       },
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText(/not summarized above/)).toBeInTheDocument()
     // The unknown content itself must be visible, not just admitted to.
     expect(screen.getByText(/some_future_field/)).toBeInTheDocument()
   })
 
-  it('shows the raw JSON when command is present but not a string (unsummarizable content stays visible)', () => {
+  it('L1 §1.2 R6: shows the raw JSON when command is present but not a string (unsummarizable content stays visible)', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: { command: 42, purpose: 'p' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText(/not summarized above/)).toBeInTheDocument()
     expect(screen.getByText(/"command": 42/)).toBeInTheDocument()
   })
 
-  it('shows the raw JSON when the action value is unknown (unknown verbs are not silently run-style)', () => {
+  it('L1 §1.2 R6: shows the raw JSON when the action value is unknown (unknown verbs are not silently run-style)', () => {
     seedAgent()
     enqueue({ ...INSTALL_APPROVAL, args: { action: 'reinstall', command: INSTALL_COMMAND, purpose: 'p' } })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText(/not summarized above/)).toBeInTheDocument()
     expect(screen.getByText(/reinstall/)).toBeInTheDocument()
     // The readable command is still shown — the fallback AUGMENTS, it does
@@ -418,7 +392,7 @@ describe('ToolApprovalModal — environment_setup standard approval semantics pr
     expect(screen.getByTestId('environment-setup-command')).toBeInTheDocument()
   })
 
-  it('canonical keys only: an alias spelling the tool does not accept surfaces in the technical details instead of being parsed (no alias catalogue)', () => {
+  it('L1 §1.2 R6: canonical keys only: an alias spelling the tool does not accept surfaces in the technical details instead of being parsed (no alias catalogue)', () => {
     seedAgent()
     enqueue({
       ...INSTALL_APPROVAL,
@@ -427,7 +401,7 @@ describe('ToolApprovalModal — environment_setup standard approval semantics pr
         reason: 'render the quarterly report to PDF',
       },
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     // 'cmd'/'reason' are NOT tool schema keys: the summary must not pretend
     // they were understood — they surface as unsummarized content.
     expect(screen.getByText(/not summarized above/)).toBeInTheDocument()
@@ -435,21 +409,21 @@ describe('ToolApprovalModal — environment_setup standard approval semantics pr
     expect(screen.getByText(/"reason"/)).toBeInTheDocument()
   })
 
-  it('shows the raw JSON when timeout_seconds is not a number (malformed known keys stay visible)', () => {
+  it('L1 §1.2 R6: shows the raw JSON when timeout_seconds is not a number (malformed known keys stay visible)', () => {
     seedAgent()
     enqueue({
       ...INSTALL_APPROVAL,
       args: { ...INSTALL_APPROVAL.args, timeout_seconds: 'forever' },
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText(/not summarized above/)).toBeInTheDocument()
     expect(screen.getByText(/forever/)).toBeInTheDocument()
   })
 
-  it('fully-covered requests render no technical-details block', () => {
+  it('L1 §1.2 R6: fully-covered requests render no technical-details block', () => {
     seedAgent()
     enqueue(INSTALL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.queryByText(/not summarized above/)).not.toBeInTheDocument()
   })
 })
@@ -461,8 +435,8 @@ describe('ToolApprovalModal — environment_setup standard approval semantics pr
 // the rendered summary hides. Oracle: the component's replace-mode contract
 // (raw JSON hidden ONLY when the summary covers everything) and the tool
 // schema's scope enum (`workspace` | `shared`).
-describe('ToolApprovalModal — environment_setup branch-aware fidelity (MAJ-001/MIN-001 regression)', () => {
-  it('shows the raw JSON when a poll carries extra known install fields (the session card never renders them)', () => {
+describe('ToolApprovalPanel — environment_setup branch-aware fidelity (MAJ-001/MIN-001 regression)', () => {
+  it('L1 §1.2 R6: shows the raw JSON when a poll carries extra known install fields (the session card never renders them)', () => {
     seedAgent()
     enqueue({
       ...POLL_APPROVAL,
@@ -473,7 +447,7 @@ describe('ToolApprovalModal — environment_setup branch-aware fidelity (MAJ-001
         purpose: 'ride-along content the session card cannot show',
       },
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText(/not summarized above/)).toBeInTheDocument()
     // The ridden-in command text itself must be visible to the approver —
     // the fallback AUGMENTS the session summary, it does not replace it.
@@ -481,43 +455,46 @@ describe('ToolApprovalModal — environment_setup branch-aware fidelity (MAJ-001
     expect(screen.getByText('envsess-abc123')).toBeInTheDocument()
   })
 
-  it('shows the raw JSON when a run carries session_id (the install card never renders it)', () => {
+  it('L1 §1.2 R6: shows the raw JSON when a run carries session_id (the install card never renders it)', () => {
     seedAgent()
     enqueue({
       ...INSTALL_APPROVAL,
       args: { ...INSTALL_APPROVAL.args, session_id: 'envsess-leftover' },
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText(/not summarized above/)).toBeInTheDocument()
     expect(screen.getByText(/"session_id": "envsess-leftover"/)).toBeInTheDocument()
   })
 
-  it('shows the raw JSON when scope is not a tool-enum value (an unsupported scope is never presented as the workspace default)', () => {
+  it('L1 §1.2 R6: shows the raw JSON when scope is not a tool-enum value (an unsupported scope is never presented as the workspace default)', () => {
     seedAgent()
     enqueue({
       ...INSTALL_APPROVAL,
       args: { ...INSTALL_APPROVAL.args, scope: 'global' },
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.getByText(/not summarized above/)).toBeInTheDocument()
     expect(screen.getByText(/"scope": "global"/)).toBeInTheDocument()
   })
 
-  it('keeps a minimal poll (action + session_id only) fully covered — branch-aware coverage does not over-fallback', () => {
+  it('L1 §1.2 R6: keeps a minimal poll (action + session_id only) fully covered — branch-aware coverage does not over-fallback', () => {
     seedAgent()
     enqueue(POLL_APPROVAL)
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.queryByText(/not summarized above/)).not.toBeInTheDocument()
   })
 
-  it('keeps an enum-valid explicit workspace scope fully covered', () => {
+  it('L1 §1.2 R6: keeps an enum-valid explicit workspace scope fully covered', () => {
     seedAgent()
     enqueue({
       ...INSTALL_APPROVAL,
       args: { ...INSTALL_APPROVAL.args, scope: 'workspace' },
     })
-    render(<ToolApprovalModal />)
+    render(<ToolApprovalPanel />)
     expect(screen.queryByText(/not summarized above/)).not.toBeInTheDocument()
     expect(screen.getByText('This workspace')).toBeInTheDocument()
   })
 })
+
+// Real stores/QueryClient/auth survive the test boundary; only fetch/socket doubled.
+afterEach(async () => { await cleanupApprovalState() })

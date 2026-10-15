@@ -15,9 +15,9 @@
  *   - id present but workspace_id is a different workspace → not visible
  *     (hidden / forbidden — never attach that target)
  *   - fetch rejects → timeout / offline / server-error (one class)
- * - Ava's member: fetchWorkspace(id).member_configs.ava, passed through
- *   the seam. The welcome id below is an opaque seam return, not a
- *   client-built main-session-… id.
+ * - WU-10 amendment: spec FR-107 / BDD-12.11 / dataset D4; ADR OSA-10 U8
+ *   retires Ava-first. The first conversation member's generated main_session_id
+ *   is read through the REAL seam; no client-built main-session-… id.
  * - applied decision: useSessionStore.workspaceEntry, the resolveWorkspaceEntry
  *   result (exact / welcome / unavailable / failed-attempt)
  */
@@ -29,43 +29,11 @@ import { useUiStore } from './ui'
 import { useChatStore } from './chat'
 
 const POINTER_KEY = 'omnipus.sessionByWorkspace.v1'
-const WELCOME_ID = 'seam-welcome-ava'
+const WELCOME_ID = 'opaque-welcome-mia'
 const OWNER = 'mia'
 
-const seam = vi.hoisted(() => {
-  const mains = new Map<object, string | undefined>()
-  return {
-    mains,
-    mainSessionIdOfMember: vi.fn((member: object): string | undefined => mains.get(member)),
-    isMainSession: vi.fn((_session: unknown): boolean => {
-      void _session
-      return false
-    }),
-    sessionAttention: vi.fn((_session: unknown): 'unknown' => {
-      void _session
-      return 'unknown'
-    }),
-    attachAckFields: vi.fn((_bound: unknown): Record<string, unknown> => {
-      void _bound
-      return {}
-    }),
-    attentionBoundOfFrame: vi.fn((_frame: unknown): number | undefined => {
-      void _frame
-      return undefined
-    }),
-  }
-})
-
-vi.mock('@/lib/nav/sessionCoreSeam', async (importOriginal) => ({
-  // Real seam for everything the stubs don't override (notably
-  // adminMainSessionIdOfWorkspace: the Admin-main rule stays real).
-  ...await importOriginal<typeof import('@/lib/nav/sessionCoreSeam')>(),
-  mainSessionIdOfMember: (member: object) => seam.mainSessionIdOfMember(member),
-  isMainSession: (session: unknown) => seam.isMainSession(session),
-  sessionAttention: (session: unknown) => seam.sessionAttention(session),
-  attachAckFields: (bound: unknown) => seam.attachAckFields(bound),
-  attentionBoundOfFrame: (frame: unknown) => seam.attentionBoundOfFrame(frame),
-}))
+// WU-10: real generated member projection replaces the obsolete seam doubles.
+import { MIA, JIM, OMNIPUS, WORKER, EXTERNAL_WORKER } from '../../tests/omnipus-l1-ui-red/fixtures'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -73,10 +41,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchSessions: vi.fn(),
     fetchWorkspace: vi.fn(),
+    fetchAgents: vi.fn(),
   }
 })
 
-import { fetchSessions, fetchWorkspace } from '@/lib/api'
+import { fetchSessions, fetchWorkspace, fetchAgents } from '@/lib/api'
 import { useSessionStore } from './session'
 
 type Descriptor = { id: string; type: Session['type']; title: string | null; agentId: string | null }
@@ -99,18 +68,19 @@ function session(partial: {
   }
 }
 
-function workspace(id: string, avaMember: WorkspaceMemberConfig): Workspace {
+function workspace(id: string, member: WorkspaceMemberConfig): Workspace {
   return {
     id,
     name: id,
-    revision: 'rev-1',
+    revision: '1'.repeat(64),
     status: 'active',
     pinned: false,
     pin_order: 0,
     task_count: 0,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
-    member_configs: { ava: avaMember },
+    core_team: ['mia'],
+    member_configs: { mia: member },
   }
 }
 
@@ -139,7 +109,7 @@ function resetAll() {
     isStreaming: false,
     isReplaying: false,
   })
-  seam.mains.clear()
+  vi.mocked(fetchAgents).mockReset().mockResolvedValue([MIA, JIM, OMNIPUS, WORKER, EXTERNAL_WORKER])
   vi.mocked(fetchSessions).mockReset()
   vi.mocked(fetchWorkspace).mockReset()
   localStorage.clear()
@@ -177,9 +147,105 @@ function framesOf(send: ReturnType<typeof vi.fn>): Array<Record<string, unknown>
   return send.mock.calls.map((call) => call[0] as Record<string, unknown>)
 }
 
+// Historical helper name retained to keep the amendment narrow; the fixture
+// now belongs to Mia (first colleague) and uses the generated server field.
 function primeAva(member: WorkspaceMemberConfig, mainId: string | undefined) {
-  seam.mains.set(member, mainId)
+  Object.assign(member, { main_session_id: mainId })
 }
+
+describe('WU-10 ordered workspace entry — FR-107 / BDD-12.11 / dataset D4', () => {
+  beforeEach(resetAll)
+
+  it('BDD-12.11 Default skips hidden Omnipus and opens Mia through the real member field', async () => {
+    const ws = 'default'
+    vi.mocked(fetchWorkspace).mockResolvedValue({ ...workspace(ws, { main_session_id: WELCOME_ID }),
+      is_default: true, core_team: ['omnipus', 'mia'], member_configs: {
+        omnipus: { main_session_id: 'opaque-omnipus-main' }, mia: { main_session_id: WELCOME_ID },
+      } })
+    vi.mocked(fetchSessions).mockResolvedValue([])
+    useWorkspacesStore.setState({ activeWorkspaceId: ws })
+    const send = connection()
+    await useSessionStore.getState().enterWorkspaceChat(ws)
+    expect(useSessionStore.getState().activeSessionId).toBe(WELCOME_ID)
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+    expect(framesOf(send)).toEqual([{ type: 'attach_session', session_id: WELCOME_ID }])
+  })
+
+  it('FR-107 core_team order beats alphabetic and session recency order', async () => {
+    const ws = 'ordered'
+    vi.mocked(fetchWorkspace).mockResolvedValue({ ...workspace(ws, {}), core_team: ['jim', 'mia'], member_configs: {
+      jim: { main_session_id: 'opaque-jim-first' }, mia: { main_session_id: WELCOME_ID },
+    } })
+    vi.mocked(fetchSessions).mockResolvedValue([session({ id: WELCOME_ID, agent_id: 'mia', workspace_id: ws, updated_at: '2026-10-13T00:00:00Z' })])
+    useWorkspacesStore.setState({ activeWorkspaceId: ws })
+    const send = connection()
+    await useSessionStore.getState().enterWorkspaceChat(ws)
+    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    expect(framesOf(send)).toEqual([{ type: 'attach_session', session_id: 'opaque-jim-first' }])
+  })
+
+  it.each([{ coreTeam: [] }, { coreTeam: ['researcher', 'external'] }, { coreTeam: ['omnipus'] }])(
+    'BDD-12.11 team %j with no conversation colleague gives the healthy empty state, not Retry', async ({ coreTeam }) => {
+      const ws = 'empty-team'
+      vi.mocked(fetchWorkspace).mockResolvedValue({ ...workspace(ws, {}), core_team: coreTeam,
+        member_configs: { omnipus: { main_session_id: 'opaque-omnipus-main' } } })
+      vi.mocked(fetchSessions).mockResolvedValue([])
+      useWorkspacesStore.setState({ activeWorkspaceId: ws })
+      const send = connection()
+      await useSessionStore.getState().enterWorkspaceChat(ws)
+      expect(useSessionStore.getState().workspaceEntry).toEqual({
+        status: 'empty-team', sessionId: null, sendEnabled: false, setupOffer: true, acknowledged: false,
+      })
+      expect(useSessionStore.getState().activeSessionId).toBeNull()
+      expect(framesOf(send)).toEqual([])
+    },
+  )
+
+  it('FR-112 failed agent-list loading is Retry with no fabricated fallback or empty-team offer', async () => {
+    const ws = 'failed-members'
+    vi.mocked(fetchWorkspace).mockResolvedValue(workspace(ws, { main_session_id: WELCOME_ID }))
+    vi.mocked(fetchSessions).mockResolvedValue([])
+    vi.mocked(fetchAgents).mockRejectedValue(new Error('Agent roster offline'))
+    useWorkspacesStore.setState({ activeWorkspaceId: ws })
+    const send = connection()
+    await useSessionStore.getState().enterWorkspaceChat(ws)
+    expect(useSessionStore.getState().workspaceEntry).toEqual({
+      status: 'failed-attempt', committed: null, attempted: { sessionId: '', sendEnabled: false },
+      acknowledged: false, retry: true, fellBack: false,
+    })
+    expect(framesOf(send)).toEqual([])
+  })
+
+  it('FR-112 a remembered exact session stays usable when the agent roster fails', async () => {
+    const ws = 'exact-with-roster-failure'
+    const exact = session({ id: 'remembered-exact', agent_id: 'mia', workspace_id: ws })
+    vi.mocked(fetchWorkspace).mockResolvedValue(workspace(ws, {}))
+    vi.mocked(fetchSessions).mockResolvedValue([exact])
+    vi.mocked(fetchAgents).mockRejectedValue(new Error('Agent roster offline'))
+    remember(ws, { id: exact.id, type: 'chat', title: exact.title, agentId: 'mia' })
+    const send = connection()
+    await useSessionStore.getState().enterWorkspaceChat(ws)
+    expect(useSessionStore.getState().workspaceEntry).toEqual({ status: 'exact', acknowledged: false })
+    expect(framesOf(send)).toEqual([{ type: 'attach_session', session_id: exact.id }])
+  })
+
+  it('section 6.3 Workspace entry keeps sending blocked until its member request resolves', async () => {
+    const ws = 'members-pending'
+    let resolveWorkspace!: (value: Workspace) => void
+    vi.mocked(fetchWorkspace).mockReturnValue(new Promise((resolve) => { resolveWorkspace = resolve }))
+    vi.mocked(fetchSessions).mockResolvedValue([])
+    useWorkspacesStore.setState({ activeWorkspaceId: ws })
+    const send = connection()
+    const pending = useSessionStore.getState().enterWorkspaceChat(ws)
+    useChatStore.getState().sendMessage('must not reach any old destination')
+    expect(useSessionStore.getState().resolvingSessionForWorkspace[ws]).toBe(true)
+    expect(framesOf(send)).toEqual([])
+    resolveWorkspace(workspace(ws, { main_session_id: WELCOME_ID }))
+    await pending
+    expect(useSessionStore.getState().activeSessionId).toBe(WELCOME_ID)
+    expect(framesOf(send)).toEqual([{ type: 'attach_session', session_id: WELCOME_ID }])
+  })
+})
 
 describe('enterWorkspaceChat uses workspace entry (T-02, N03–N07)', () => {
   beforeEach(resetAll)
@@ -196,7 +262,7 @@ describe('enterWorkspaceChat uses workspace entry (T-02, N03–N07)', () => {
     })
     const newer = session({
       id: 'newer-other',
-      agent_id: 'ava',
+      agent_id: 'jim',
       workspace_id: ws,
       updated_at: '2026-06-01T00:00:00Z',
     })
@@ -330,7 +396,7 @@ describe('enterWorkspaceChat uses workspace entry (T-02, N03–N07)', () => {
     })
   })
 
-  it('N04 an absent pointer opens the validated Ava main, not a blank new chat', async () => {
+  it('N04 an absent pointer opens the validated first colleague main, not a blank new chat', async () => {
     const ws = 'operations-absent'
     const member: WorkspaceMemberConfig = { heartbeat: { enabled: false } }
     primeAva(member, WELCOME_ID)
@@ -349,20 +415,20 @@ describe('enterWorkspaceChat uses workspace entry (T-02, N03–N07)', () => {
       entry: (useSessionStore.getState() as { workspaceEntry?: unknown }).workspaceEntry ?? null,
     }).toEqual({
       sessionId: WELCOME_ID,
-      agentId: 'ava',
-      persisted: { id: WELCOME_ID, type: 'chat', title: null, agentId: 'ava' },
+      agentId: 'mia',
+      persisted: { id: WELCOME_ID, type: 'chat', title: null, agentId: 'mia' },
       acknowledged: false,
       entry: {
         status: 'welcome',
         sessionId: WELCOME_ID,
-        agentId: 'ava',
+        agentId: 'mia',
         sendEnabled: true,
         acknowledged: false,
       },
     })
   })
 
-  it('N04 a persisted null pointer is not a blank new chat; it opens the validated Ava main', async () => {
+  it('N04 a persisted null pointer is not a blank new chat; it opens the validated first colleague main', async () => {
     const ws = 'operations-null'
     const member: WorkspaceMemberConfig = { heartbeat: { enabled: true, interval_minutes: 30, body: '' } }
     primeAva(member, WELCOME_ID)
@@ -379,12 +445,12 @@ describe('enterWorkspaceChat uses workspace entry (T-02, N03–N07)', () => {
       acknowledged: framesOf(send).some((frame) => frame.ack_attention === true),
     }).toEqual({
       sessionId: WELCOME_ID,
-      agentId: 'ava',
+      agentId: 'mia',
       acknowledged: false,
     })
   })
 
-  it('N06 a deleted pointer opens the validated Ava main and never reuses the missing id', async () => {
+  it('N06 a deleted pointer opens the validated first colleague main and never reuses the missing id', async () => {
     const ws = 'operations-deleted'
     const member: WorkspaceMemberConfig = {}
     primeAva(member, WELCOME_ID)
@@ -404,7 +470,7 @@ describe('enterWorkspaceChat uses workspace entry (T-02, N03–N07)', () => {
       acknowledged: framesOf(send).some((frame) => frame.ack_attention === true),
     }).toEqual({
       sessionId: WELCOME_ID,
-      agentId: 'ava',
+      agentId: 'mia',
       attachedDeleted: false,
       acknowledged: false,
     })
@@ -436,7 +502,7 @@ describe('enterWorkspaceChat uses workspace entry (T-02, N03–N07)', () => {
     })
   })
 
-  it('N03 with no validated Ava main, entry is unavailable: Retry, no send, no blank chat', async () => {
+  it('N03 with no validated first colleague main, entry is unavailable: Retry, no send, no blank chat', async () => {
     const ws = 'operations-empty'
     const member: WorkspaceMemberConfig = {}
     primeAva(member, undefined)

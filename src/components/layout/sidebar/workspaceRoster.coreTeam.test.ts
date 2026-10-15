@@ -1,3 +1,6 @@
+// WU-10 US-1 AS-4 / ADR OSA-1.3: Omnipus is now reserved and hidden.
+// Ordinary-Main fixtures below use Ray; membership/missing-main assertions
+// are otherwise identical. This does not turn a hidden identity into a row.
 // Membership comes from core_team, not member_configs keys (founder bug
 // 2026-10-11: a new Main agent — "omnipus" — was added to the workspace team
 // but the sidebar showed no entry at all).
@@ -52,21 +55,21 @@ const SESSIONS: Session[] = []
 
 describe('workspaceMains membership via core_team (founder bug 2026-10-11)', () => {
   it('a core_team Main with no member_configs entry is a missing main, not a silent drop', () => {
-    const omnipus = makeAgent({ id: 'omnipus', name: 'Omnipus', type: 'Main' })
-    const workspace = makeWorkspace({ core_team: ['omnipus'], member_configs: {} })
+    const omnipus = makeAgent({ id: 'ray', name: 'Ray', type: 'Main' })
+    const workspace = makeWorkspace({ core_team: ['ray'], member_configs: {} })
 
     const mains = workspaceMains(workspace, [omnipus], SESSIONS, 'fresh', [])
 
     expect(mains.result.reason).toBe('main-id-missing')
-    expect(mains.result.missingMainAgentIds).toContain('omnipus')
-    expect(mains.result.rows).not.toContainEqual(expect.objectContaining({ agentId: 'omnipus' }))
+    expect(mains.result.missingMainAgentIds).toContain('ray')
+    expect(mains.result.rows).not.toContainEqual(expect.objectContaining({ agentId: 'ray' }))
   })
 
   it('once the member_configs entry with a main id arrives, the row appears (ready)', () => {
-    const omnipus = makeAgent({ id: 'omnipus', name: 'Omnipus', type: 'Main' })
+    const omnipus = makeAgent({ id: 'ray', name: 'Ray', type: 'Main' })
     const workspace = makeWorkspace({
-      core_team: ['omnipus'],
-      member_configs: { omnipus: { main_session_id: 'main-omnipus' } },
+      core_team: ['ray'],
+      member_configs: { ray: { main_session_id: 'main-ray' } },
     })
 
     const mains = workspaceMains(workspace, [omnipus], SESSIONS, 'fresh', [])
@@ -74,7 +77,7 @@ describe('workspaceMains membership via core_team (founder bug 2026-10-11)', () 
     expect(mains.result.status).toBe('ready')
     expect(mains.result.missingMainAgentIds).toEqual([])
     expect(mains.result.rows).toEqual([
-      { agentId: 'omnipus', workspaceId: WS, name: 'Omnipus', mainSessionId: 'main-omnipus' },
+      { agentId: 'ray', workspaceId: WS, name: 'Ray', mainSessionId: 'main-ray' },
     ])
   })
 
@@ -83,9 +86,9 @@ describe('workspaceMains membership via core_team (founder bug 2026-10-11)', () 
     const planner = makeAgent({ id: 'planner', name: 'Planner', type: 'Subagent' })
     const researcher = makeAgent({ id: 'researcher', name: 'Researcher', type: 'Subagent' })
     const extWorker = makeAgent({ id: 'ext-worker', name: 'Ext Worker', type: 'subagent_3p' })
-    const newMain = makeAgent({ id: 'omnipus', name: 'Omnipus', type: 'Main' })
+    const newMain = makeAgent({ id: 'ray', name: 'Ray', type: 'Main' })
     const workspace = makeWorkspace({
-      core_team: ['ava', 'planner', 'researcher', 'ext-worker', 'omnipus'],
+      core_team: ['ava', 'planner', 'researcher', 'ext-worker', 'ray'],
       // researcher HAS a stored config but no main id — still a helper, still skipped by type.
       member_configs: {
         ava: { main_session_id: 'main-ava' },
@@ -102,7 +105,7 @@ describe('workspaceMains membership via core_team (founder bug 2026-10-11)', () 
     )
 
     expect(mains.result.rows.map((row) => row.agentId)).toEqual(['ava'])
-    expect(mains.result.missingMainAgentIds).toEqual(['omnipus'])
+    expect(mains.result.missingMainAgentIds).toEqual(['ray'])
     expect(mains.result.reason).toBe('main-id-missing')
   })
 

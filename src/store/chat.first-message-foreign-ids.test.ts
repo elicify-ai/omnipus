@@ -101,7 +101,6 @@ function sendFirstA(sender: ReturnType<typeof connectSender>) {
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: A sends exactly the original session-less request')
     .toStrictEqual([ORIGINAL_FRAME])
   expect(useSessionStore.getState().activeSessionId, 'fixture: A has no acknowledged real session').toBe('__pending')
-  expect(useChatStore.getState().pendingKickoff, 'fixture: A is an ordinary message, not setup kickoff').toBeNull()
   expect(useChatStore.getState().pendingFirstSend?.payload, 'fixture: A owns the exact original recovery request')
     .toStrictEqual(ORIGINAL_FRAME)
   expect(useChatStore.getState().messagesById[CLIENT_A].firstSendStatus, 'fixture: A has no save confirmation yet')

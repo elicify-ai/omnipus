@@ -33,6 +33,8 @@ Use a fallback chain when an agent must keep working through temporary failures.
 
 For device-code sign-in, Omnipus shows the provider's verification link and a short code. Open the link and approve the code with the provider; Omnipus then checks for completion. The sign-in API identifies this flow with `method: "device_code"`.
 
+**Omnipus's model.** Omnipus, the system agent that creates and changes your agents, uses a model like any agent. If none works, it cannot plan — fix it without a chat: open **Settings → System agents**, choose **Edit** on Omnipus and pick a model from a connected provider. Saving works even while no model works, because it is a settings change, not a chat with the model.
+
 For a custom endpoint, choose either the `openai-compatible` or `anthropic` protocol. Enter the exact model names that the endpoint accepts. Omnipus cannot discover a custom endpoint's catalog for you.
 
 ## Picking a model when two providers offer it

@@ -27,6 +27,7 @@ import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 import { useNotificationsStore } from '@/store/notifications'
+import { reconcileSecretRequests } from './secret-request-frames'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -117,6 +118,7 @@ function handleSessionStateFrame(
   withBucket: ReplayAndStatusFrameContext['withBucket'],
 ): void {
   useToolApprovalStore.getState().reconcileWithSessionState(frame)
+  reconcileSecretRequests(frame) // omnipus-system-agent K4
   // askuserquestion-tool-spec v3 US-6 S1/FR-9: reconcile pending
   // AskUserQuestion cards on every reconnect snapshot. The
   // hydrate/clear/race semantics live in the dedicated, unit-tested
@@ -592,6 +594,7 @@ interface ReplayMessageFrameFields {
   replayParticipant: ReplayMessageFrame['participant']
   replayReplyToMessageId: string | undefined
   replayReplyToParticipant: ReplayMessageFrame['reply_to_participant']
+  replayRoomRef: ReplayMessageFrame['room_ref']
 }
 
 function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayMessageFrameFields {
@@ -664,6 +667,7 @@ function parseReplayMessageFrameFields(replayFrame: ReplayMessageFrame): ReplayM
     replayParticipant,
     replayReplyToMessageId,
     replayReplyToParticipant,
+    replayRoomRef: replayFrame.room_ref,
   }
 }
 
@@ -773,7 +777,7 @@ function bakePendingNonAssistantToolCalls(draft: SessionChatState): void {
 // parsed fields: reads nothing else (and mints an id/timestamp when the
 // frame lacks one).
 function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
-  const { role, text, messageId, messageTimestamp, replayAgentId, replayModel, replayTurnId, replayTruncated, replayTruncationReason, replayInputDiscarded, replayParticipant, replayReplyToMessageId, replayReplyToParticipant } = fields
+  const { role, text, messageId, messageTimestamp, replayAgentId, replayModel, replayTurnId, replayTruncated, replayTruncationReason, replayInputDiscarded, replayParticipant, replayReplyToMessageId, replayReplyToParticipant, replayRoomRef } = fields
   return {
     id: messageId ?? generateId(),
     role,
@@ -812,6 +816,8 @@ function buildReplayChatMessage(fields: ReplayMessageFrameFields): ChatMessage {
     ...(replayParticipant && role === 'user' ? { participant: replayParticipant } : {}),
     ...(replayReplyToMessageId && role === 'assistant' ? { replyToMessageId: replayReplyToMessageId } : {}),
     ...(replayReplyToParticipant && role === 'assistant' ? { replyToParticipant: replayReplyToParticipant } : {}),
+    // K33 / FR-202: group-chat traffic (request or answer) renders collapsed.
+    ...(replayRoomRef ? { roomRef: replayRoomRef } : {}),
   }
 }
 

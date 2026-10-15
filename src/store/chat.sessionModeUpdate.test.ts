@@ -222,7 +222,8 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
       useChatStore.getState().clearStreamingState()
       useChatStore.setState({ sessionsById: {}, pendingAutoApproveChoice: null })
       useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
-      useSessionStore.setState({ activeSessionId: null, activeAgentId: null, activeAgentType: null })
+      // B1/B2: a first send requires an owner; the Auto-approve oracle is unchanged.
+      useSessionStore.setState({ activeSessionId: null, activeAgentId: 'mia', activeAgentType: 'core' })
       useWorkspacesStore.setState({ activeWorkspaceId: null })
     })
   }

@@ -96,6 +96,7 @@ const EXPLICIT_LABELS: Record<string, string> = {
   list_agents: 'List agents',
   create_agent: 'Create agent',
   update_agent: 'Update agent',
+  set_agent_permissions: 'Set agent permissions',
   delete_agent: 'Delete agent',
   read_agent_metadata: 'Read agent metadata',
   write_agent_metadata: 'Write agent metadata',

@@ -462,8 +462,9 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 			delegationSeedNote = seededEdgesSummary(seeded, w.CoreTeam)
 		}
 	}
-	return workspaceWrittenResult(t.deps.Home, w.ID, workspaceWrite{
+	return workspaceWrittenResult(t.deps, w.ID, workspaceWrite{
 		changed: []string{"workspace"}, seedNote: delegationSeedNote, ceiling: workspaceDelegationDepthCeiling(t.deps),
+		teamChanged: len(w.CoreTeam) > 0, toolName: "create_workspace",
 	})
 }
 
@@ -474,6 +475,10 @@ type workspaceWrite struct {
 	setupNote   string
 	beforeEdges []workspacepkg.DelegationEdge // the graph before this call (nil on create)
 	ceiling     int
+	// teamChanged asks for the members' main chats to be provisioned after
+	// the write (provisionMemberMains); toolName names the caller in its log.
+	teamChanged bool
+	toolName    string
 }
 
 // workspaceWrittenResult re-reads a just-written workspace and renders the
@@ -482,7 +487,8 @@ type workspaceWrite struct {
 // cycle) and every edge this call added must join two current core-team
 // members. A read-back failure or a graph problem is "saved but not working".
 // The caller holds workspacepkg.LockID(id).
-func workspaceWrittenResult(home, id string, wr workspaceWrite) *tools.ToolResult {
+func workspaceWrittenResult(deps *Deps, id string, wr workspaceWrite) *tools.ToolResult {
+	home := deps.Home
 	const scope = "workspace record and delegation graph re-read from disk; graph validity and new edges' membership checked"
 	notTested := []string{"a delegation between the members"}
 	state, err := workspacepkg.ReadStateLocked(home, id)
@@ -498,9 +504,20 @@ func workspaceWrittenResult(home, id string, wr workspaceWrite) *tools.ToolResul
 	if wr.setupNote != "" {
 		resp["setup_completed"] = wr.setupNote
 	}
-	if problems := workspaceGraphProblems(state, wr.beforeEdges, wr.ceiling); len(problems) > 0 {
-		return changeSuccess(resp, savedNotWorking("the saved delegation graph is not valid: "+
-			strings.Join(problems, "; "), scope, notTested...))
+	// After a team change every member gets its main chat (FR-002); a
+	// provisioning failure does not undo the saved team, it is reported.
+	var problems []string
+	if wr.teamChanged && len(state.Workspace.CoreTeam) > 0 {
+		if warning := provisionMemberMains(deps, wr.toolName, id); warning != "" {
+			resp["main_chat_warning"] = warning
+			problems = append(problems, warning)
+		}
+	}
+	if graph := workspaceGraphProblems(state, wr.beforeEdges, wr.ceiling); len(graph) > 0 {
+		problems = append(problems, "the saved delegation graph is not valid: "+strings.Join(graph, "; "))
+	}
+	if len(problems) > 0 {
+		return changeSuccess(resp, savedNotWorking(strings.Join(problems, " "), scope, notTested...))
 	}
 	return changeSuccess(resp, working(scope, notTested...))
 }
@@ -534,6 +551,32 @@ func workspaceGraphProblems(state workspacepkg.State, before []workspacepkg.Dele
 		problems = append(problems, "the delegation graph contains a cycle")
 	}
 	return problems
+}
+
+// provisionMemberMains gives every eligible member of workspaceID's team its
+// main chat after a workspace tool changed the team (omnipus-system-agent
+// FR-002; the same provisioning a REST workspace save and create_agent run,
+// final-gate H2). The sidebar lists a member only when its member_configs
+// entry carries main_session_id, which is advertised only for a main that
+// already exists, so without this a member added through these tools stayed
+// invisible and its chat "unavailable" (L1 hands-on finding, 2026-10-14).
+//
+// The membership change itself has already been saved, so a provisioning
+// failure does not undo it: it is logged at ERROR and returned as a warning
+// for the tool result, so the agent tells the user instead of the member
+// silently missing from the sidebar. The main is re-attempted when the chat
+// is opened. Returns "" on success or when provisioning is not wired.
+func provisionMemberMains(deps *Deps, toolName, workspaceID string) string {
+	if deps == nil || deps.EnsureWorkspaceMains == nil {
+		return ""
+	}
+	if err := deps.EnsureWorkspaceMains(workspaceID); err != nil {
+		slog.Error("sysagent: "+toolName+": a member's main chat was not created; it is re-attempted when the chat is opened",
+			"workspace_id", workspaceID, "error", err)
+		return "The team was saved, but a member's main chat could not be prepared: " + err.Error() +
+			". It is retried when that chat is opened."
+	}
+	return ""
 }
 
 // ---- system.workspace.update ----
@@ -774,9 +817,10 @@ func (u *workspaceUpdate) commit() *tools.ToolResult {
 			return workspaceMutationError(u.id, "save_delegation", "partial", actual.Revision, workspaceChangedFields(u.state.Workspace, actual.Workspace), workspaceActualState(actual))
 		}
 	}
-	return workspaceWrittenResult(home, u.id, workspaceWrite{
+	return workspaceWrittenResult(u.t.deps, u.id, workspaceWrite{
 		changed: changed, seedNote: u.seedNote, setupNote: u.setupNote,
 		beforeEdges: u.state.Delegation, ceiling: workspaceDelegationDepthCeiling(u.t.deps),
+		teamChanged: u.coreTeamChanged, toolName: "update_workspace",
 	})
 }
 

@@ -104,7 +104,6 @@ function sendFirstForSavedLabel(sender: ReturnType<typeof connectSavedLabelSende
   expect(sender.send.mock.calls.map(([frame]) => frame), 'fixture: real sendMessage sends the original session-less request')
     .toStrictEqual([ORIGINAL_FRAME])
   expect(useSessionStore.getState().activeSessionId, 'fixture: first send awaits a real session').toBe('__pending')
-  expect(useChatStore.getState().pendingKickoff, 'fixture: ordinary first send, not setup kickoff').toBeNull()
   expect(useChatStore.getState().pendingFirstSend?.payload, 'fixture: real first-send lifecycle retains this request')
     .toStrictEqual(ORIGINAL_FRAME)
   expect(useChatStore.getState().messagesById[CLIENT_ID].firstSendStatus, 'fixture: no server confirmation yet')

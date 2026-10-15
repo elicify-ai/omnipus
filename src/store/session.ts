@@ -111,6 +111,17 @@ function persistSessionByWorkspaceEntry(
   }
 }
 
+/**
+ * `recordForWorkspace: false` — the Omnipus entry's dedicated attach path
+ * (omnipus-system-agent FR-100, ADR-20261011 OSA-10 U1). Omnipus's one chat
+ * opens without changing the active workspace, so it must not become that
+ * workspace's remembered chat or main pointer: returning to the workspace
+ * restores the workspace's own conversation. Default true.
+ */
+export interface AttachOptions { // not-wire-format: in-browser attach behaviour flag; never sent over the gateway boundary
+  recordForWorkspace?: boolean
+}
+
 interface SessionStore {
   activeSessionId: string | null
   activeAgentId: string | null
@@ -193,7 +204,8 @@ interface SessionStore {
     sessionId: string,
     type: Session['type'],
     title?: string,
-    agentId?: string
+    agentId?: string,
+    options?: AttachOptions,
   ) => boolean
   setAttachedContext: (type: Session['type'], title: string | null) => void
   /**
@@ -291,8 +303,7 @@ export function registerChatResetForReplay(fn: (sessionId: string) => void): voi
 // bucket there via resetChatBucketForReplay) and the
 // offline/no-connection branch (its own explicit call). Deliberately NOT
 // wired into setActiveSession itself — sendMessage's own pending-session
-// mint (session id '__pending') and sendWorkspaceSetupKickoff both call
-// setActiveSession too, and clearing there would erase the very choice this
+// mint (session id '__pending') calls setActiveSession too, and clearing there would erase the very choice this
 // fix exists to carry through to session_started.
 let _chatClearPendingAutoApprove: (() => void) | null = null
 
@@ -516,7 +527,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   attachedSessionType: null,
   attachedTaskTitle: null,
 
-  attachToSession: (sessionId, type, title, agentId) => {
+  attachToSession: (sessionId, type, title, agentId, options) => {
+    const recordForWorkspace = options?.recordForWorkspace !== false
     // A hidden document is a prefetch, not a foreground open (FR-013).
     if (typeof document !== 'undefined' && document.hidden === true) return false
     const { connection } = useConnectionStore.getState()
@@ -544,7 +556,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         ...clearRetiredSelection(),
       }))
       // Record under current workspace.
-      const wsId = useWorkspacesStore.getState().activeWorkspaceId
+      const wsId = recordForWorkspace ? useWorkspacesStore.getState().activeWorkspaceId : null
       if (wsId) {
         const descriptor: WorkspaceSessionDescriptor = {
           id: sessionId,
@@ -559,7 +571,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         persistSessionByWorkspaceEntry(wsId, descriptor)
       }
       syncForeground()
-      rememberMainPointer(get, set, sessionId, type)
+      if (recordForWorkspace) rememberMainPointer(get, set, sessionId, type)
       noteForegroundAttach(sessionId)
       if (!alreadyInFlight) {
         noteAttachSent(sessionId, connection)
@@ -587,7 +599,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         ...clearRetiredSelection(),
       }))
       // Record under current workspace (offline path).
-      const wsId = useWorkspacesStore.getState().activeWorkspaceId
+      const wsId = recordForWorkspace ? useWorkspacesStore.getState().activeWorkspaceId : null
       if (wsId) {
         const descriptor: WorkspaceSessionDescriptor = {
           id: sessionId,
@@ -602,7 +614,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         persistSessionByWorkspaceEntry(wsId, descriptor)
       }
       syncForeground()
-      rememberMainPointer(get, set, sessionId, type)
+      if (recordForWorkspace) rememberMainPointer(get, set, sessionId, type)
       noteForegroundAttach(sessionId)
       if (entryWasBlocked) queueMicrotask(resumeWorkspaceEntryQueue)
       return true

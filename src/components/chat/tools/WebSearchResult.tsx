@@ -144,7 +144,7 @@ export function WebSearchBlock({
   // failure renders its dedicated display instead of `String(result)`'s
   // "[object Object]". The hit count derives ONLY from a plain-string
   // listing (honest 0 for any other shape) — never from a stringified object.
-  const resolved = resolveToolResult(result)
+  const resolved = resolveToolResult(result, error)
   const content = resolved.kind === 'text' ? resolved.text : ''
   const parsed = parseSearchResults(content)
   const hasStructured = parsed.results.length > 0

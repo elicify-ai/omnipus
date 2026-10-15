@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,13 @@ import (
 // D6/T-FT. UploadFileTool is catalogued but held out of live registration;
 // construction here exercises its existing implementation without re-enabling it.
 func TestWU23_BrowserUploadProtectsInternalFiles(t *testing.T) {
+	// Like the G-2 measurement gate in browser_e2e_test.go, this belongs to
+	// pr.yml's browser-e2e job, which installs and pins a real Chrome and
+	// requires this exact test to PASS without a skip. The short platform
+	// matrix neither provides that browser nor supports a CfT arm64 build.
+	if testing.Short() || os.Getenv("OMNIPUS_BROWSER_E2E") != "1" {
+		t.Skip("WU-23 browser upload runs non-short in the Chrome-provisioned browser-e2e job; that job requires a named non-skip PASS")
+	}
 	f := fixture.New(t)
 	cfg := testBrowserCfg(t)
 	cfg.ExecPath = requireBrowserOrFail(t) // never use a skipping fixture.

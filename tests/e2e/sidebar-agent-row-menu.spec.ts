@@ -554,33 +554,10 @@ test.describe('D8 — rows that cannot leave the default workspace', () => {
     }
   })
 
-  test("Admin's menu has History + Edit, no Hide, and a disabled Remove with a reason", async ({
-    page,
-  }) => {
-    // Admin is NOT a workspace member (C-MAIN), so the landed menu omits
-    // "Hide from sidebar" from his row entirely (no member entry exists to
-    // carry the flag) and disables Remove with "Admin is not a workspace
-    // member." (removeDisabledReason branch i) — while History and Edit stay
-    // available (AgentRowMenu.tsx).
-    const menu = await openRowMenu(page, 'Admin')
-
-    // Items, in order — Hide absent between History and Edit.
-    await expect(
-      menu.getByRole('menuitem'),
-      "Admin's menu items (no Hide — not a member)",
-    ).toHaveText([/^History$/, /^Edit$/, /^Remove/])
-    await expect(
-      menu.getByRole('menuitem', { name: 'Hide from sidebar' }),
-      "Admin's row must have no Hide item (no membership to flag)",
-    ).toHaveCount(0)
-
-    const remove = menu.getByRole('menuitem', { name: 'Remove' })
-    await expect(remove, 'Admin must not be removable (D8)').toBeDisabled({ timeout: 15_000 })
-    const reason = await disabledReason(page, remove)
-    expect(
-      reason,
-      "D8 forbids a silent no-op: Admin's disabled Remove must carry a visible reason",
-    ).toBeTruthy()
-    await closeRowMenu(page)
-  })
+  // RETIRED ONLY: Admin's off-team History/Edit/no-Hide/disabled-Remove case.
+  // WU-2: system-agent spec FR-001/FR-008 removes Admin; FR-003/FR-004 makes
+  // Omnipus a hidden member, not an off-team workspace row. ADR OSA-1(2–3)
+  // explicitly deletes Admin's off-team special cases; spec §9.4 requires
+  // deleting their tests with the feature. There is no same-intent replacement:
+  // Jim/Mia are member rows with Hide, and their D8 guards remain tested above.
 })

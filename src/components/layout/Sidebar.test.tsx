@@ -134,11 +134,12 @@ vi.mock('@/store/workspacesStore', () => {
 // and the "New chat" row's direct `useSessionStore.getState().startNewSession()`
 // call — the mock must expose a `.getState()` static, mirroring the real
 // zustand hook shape, or that call throws).
-vi.mock('@/store/session', () => {
+vi.mock('@/store/session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/store/session')>()
   const state = { activeSessionId: null as string | null, startNewSession: mockStartNewSession }
   const useSessionStore = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state)
   useSessionStore.getState = () => state
-  return { useSessionStore }
+  return { ...actual, useSessionStore }
 })
 vi.mock('@/components/chat/useSelectSession', () => ({
   useSelectSession: () => mockSelectSession,

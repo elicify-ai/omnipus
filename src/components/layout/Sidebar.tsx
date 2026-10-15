@@ -32,6 +32,7 @@ import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, f
 import { logError } from '@/lib/telemetry'
 import type { Workspace } from '@/lib/api'
 import { WorkspaceAgentList } from './sidebar/WorkspaceAgentList'
+import { OmnipusEntry } from './sidebar/OmnipusEntry'
 import type { RosterState } from './sidebar/workspaceRoster'
 import {
   DropdownMenu,
@@ -196,7 +197,7 @@ export function Sidebar() {
   // includeVerifier opt-in exists on the signature (UsageScreen uses it)
   // but is intentionally omitted here, so this stays the excluded default
   // by construction — do not add it.
-  const { data: allSessions = [] } = useQuery({
+  const { data: allSessions = [], isError: sessionsError, data: sessionsData } = useQuery({
     queryKey: ['sessions'],
     queryFn: () => fetchSessions(),
     staleTime: 15_000,
@@ -439,6 +440,19 @@ export function Sidebar() {
           end of the sidebar scroll drags the page itself up, leaving a gap at
           the bottom (the shell is fixed-position; the page should never move). */}
       <div className="flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]">
+        {/* omnipus-system-agent FR-100/FR-101 (F:D15): the fixed Omnipus
+            entry ABOVE the workspaces — one conversation, reachable from
+            every workspace, opened without switching the active one. */}
+        <OmnipusEntry
+          workspaces={projects}
+          workspacesLoading={projectsLoading}
+          agents={agents}
+          sessions={allSessions}
+          sessionsStatus={sessionsError ? (sessionsData ? 'stale' : 'failed') : 'fresh'}
+          onOpened={() => {
+            if (!effectivelyPinned) close()
+          }}
+        />
         {/* Workspaces section. The old hidden `/`-to-filter input is removed —
             undiscoverable (no visual hint, focus-dependent) and a subset of
             what the search modal does; workspace lookup lives there now. */}

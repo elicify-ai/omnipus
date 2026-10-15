@@ -1,70 +1,79 @@
-// CrossWorkspaceApprovalBanner — founder decision 2026-09-14.
+// CrossWorkspaceApprovalBanner — "waiting in another chat" (L1 amendment §1.2
+// R6, BDD-11.3, FR-092; generalised from the workspace-only notice of the
+// founder decision of 2026-09-14). Name and testid kept.
 //
-// commit 0c79af19 scoped ToolApprovalModal to the active workspace: the
-// tool_approval_required WS frame and reconnect-snapshot pending entries
-// carry an optional workspace_id, and useToolApprovalStore keeps every
-// pending approval (every tab receives every frame) while the modal only
-// shows the ones that match the workspace currently open
-// (isApprovalInScope, src/store/toolApproval.ts). Consequence: an approval
-// waiting in a workspace the user isn't looking at is invisible until they
-// happen to switch tabs, or the server's 10-minute timeout denies it on
-// their behalf.
-//
-// This banner is a small, persistent, ambient notice — mounted once in
-// AppShell above the Outlet, so it renders on every screen regardless of
-// which workspace tab is open. It never blocks or steals focus: it's a
-// role="status" region, not a dialog.
-//
-// Clicking it switches the active workspace and navigates to that
-// workspace's chat tab, where ToolApprovalModal picks the approval straight
-// back up. It disappears the moment those approvals resolve — the
-// tool_approval_resolved WS frame already drives markResolved, which drops
-// the entry from the shared queue this banner reads.
+// The inline approval card (ToolApprovalPanel) renders only in the approval's
+// root chat. Any approval rooted elsewhere — another workspace, another chat in
+// the same workspace, a chat in no workspace, Omnipus's chat — is announced
+// here, mounted once in AppShell above the Outlet so it shows on every screen.
+// It never blocks, never takes focus and never resolves anything: it is a
+// role="status" region whose one action opens the root chat, where the card is.
+// An Omnipus root opens /omnipus through the Omnipus attach path (the active
+// workspace stays); any other root opens through the ordinary session
+// selection (its workspace chat, or /sessions/$id for a chat in no workspace).
+// It disappears when those approvals resolve (tool_approval_resolved →
+// markResolved).
 
 import { useMemo } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { Shield } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
-import { useToolApprovalStore } from '@/store/toolApproval'
-import { useWorkspacesStore } from '@/store/workspacesStore'
-import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
-import { summarizeCrossWorkspaceApprovals } from '@/lib/crossWorkspaceApprovals'
+import { approvalChatId, useToolApprovalStore, type PendingToolApproval } from '@/store/toolApproval'
+import { useSessionStore } from '@/store/session'
+import { fetchAgents, fetchSessions, fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
+import type { Agent, Session, Workspace } from '@/lib/api'
+import { OMNIPUS_AGENT_ID } from '@/lib/omnipus'
+import { summarizeApprovalsElsewhere } from '@/lib/crossWorkspaceApprovals'
+import { useSelectSession } from '@/components/chat/useSelectSession'
+
+type ApprovalTarget = Pick<PendingToolApproval, 'rootSessionId' | 'sessionId' | 'workspaceId' | 'agentId'> // not-wire-format: local alias
 
 export function CrossWorkspaceApprovalBanner() {
   const navigate = useNavigate()
   const queue = useToolApprovalStore((s) => s.queue)
-  const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
-  const setActiveWorkspaceId = useWorkspacesStore((s) => s.setActiveWorkspaceId)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
 
   // status: 'all' — a held-open approval's workspace can be archived and
-  // still have a real name; an 'active'-only list would fall back to the
-  // raw id for it even though the name is available.
-  const { data: workspaces } = useQuery({
+  // still have a real name.
+  const { data: workspaces = [] } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'all' }),
     queryFn: () => fetchWorkspaces({ status: 'all' }),
     staleTime: 30_000,
   })
+  const { data: sessions = [] } = useQuery({ queryKey: ['sessions'], queryFn: () => fetchSessions(), staleTime: 15_000 })
+  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, staleTime: 30_000 })
+  const selectSession = useSelectSession({ agents, workspaces: workspaces as Workspace[], onClose: () => {} })
 
-  const workspaceName = useMemo(() => {
-    const byId = new Map((workspaces ?? []).map((w) => [w.id, w.name]))
-    return (workspaceId: string) => byId.get(workspaceId) ?? workspaceId
-  }, [workspaces])
+  const resolveRoot = useMemo(() => rootResolver(sessions, workspaces, agents), [sessions, workspaces, agents])
 
   const summary = useMemo(
-    () => summarizeCrossWorkspaceApprovals(queue, activeWorkspaceId, workspaceName),
-    [queue, activeWorkspaceId, workspaceName],
+    () => summarizeApprovalsElsewhere(queue, activeSessionId, (approval) => resolveRoot(approval).label),
+    [queue, activeSessionId, resolveRoot],
   )
 
-  const goToWorkspace = (workspaceId: string) => {
-    setActiveWorkspaceId(workspaceId)
-    navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId } })
+  const goThere = () => {
+    if (!summary) return
+    const root = resolveRoot(summary.target)
+    if (root.isOmnipus) {
+      // The Omnipus chat opens without switching the active workspace.
+      const attached = useSessionStore.getState().attachToSession(
+        summary.targetChatId, root.session?.type ?? 'main', root.session?.title ?? undefined, OMNIPUS_AGENT_ID,
+        { recordForWorkspace: false },
+      )
+      if (attached) void navigate({ to: '/omnipus' })
+      return
+    }
+    selectSession(root.session ?? ({
+      id: summary.targetChatId,
+      agent_id: summary.target.agentId,
+      ...(summary.target.workspaceId ? { workspace_id: summary.target.workspaceId } : {}),
+      type: 'main',
+    } as Session))
   }
 
-  // The wrapper stays mounted (empty) even with nothing to show, so
-  // aria-live="polite" announces the notice the instant it appears —
-  // announcing depends on the LIVE REGION already being present in the DOM
-  // before its content changes, not on the region itself being added.
+  // The wrapper stays mounted (empty) so aria-live announces the notice the
+  // instant it appears.
   return (
     <div role="status" aria-live="polite" className="shrink-0">
       {summary && (
@@ -72,7 +81,7 @@ export function CrossWorkspaceApprovalBanner() {
           type="button"
           variant="ghost"
           data-testid="cross-workspace-approval-banner"
-          onClick={() => goToWorkspace(summary.targetWorkspaceId)}
+          onClick={goThere}
           className="h-auto w-full items-center justify-start gap-[var(--space-2)] rounded-none px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-accent)]/10 border-b border-[var(--color-accent)]/30 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)] text-left"
         >
           <Shield size={14} weight="bold" className="shrink-0" aria-hidden="true" />
@@ -82,4 +91,26 @@ export function CrossWorkspaceApprovalBanner() {
       )}
     </div>
   )
+}
+
+/** Names an approval's root chat from the cached lists (never a raw id when a name is known). */
+function rootResolver(sessions: Session[], workspaces: Workspace[], agents: Agent[]) {
+  return (approval: ApprovalTarget) => {
+    const chatId = approvalChatId(approval)
+    const session = sessions.find((candidate) => candidate.id === chatId)
+    const agentId = session?.agent_id ?? (approval.rootSessionId ? undefined : approval.agentId)
+    const isOmnipus = agentId === OMNIPUS_AGENT_ID
+    if (isOmnipus) return { session, isOmnipus, label: 'Omnipus' }
+    const workspaceId = session?.workspace_id ?? approval.workspaceId
+    const agentName = agents.find((agent) => agent.id === agentId)?.name
+    const workspaceName = workspaceId ? workspaces.find((w) => w.id === workspaceId)?.name : undefined
+    const label = agentName && workspaceName
+      ? `${agentName}'s chat in ${workspaceName}`
+      : agentName
+        ? `${agentName}'s chat`
+        : workspaceName
+          ? `a chat in ${workspaceName}`
+          : 'another chat'
+    return { session, isOmnipus, label }
+  }
 }

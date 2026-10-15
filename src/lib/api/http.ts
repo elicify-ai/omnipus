@@ -195,11 +195,23 @@ export async function withCsrfRetry<T>(attempt: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Per-call transport options. */
+export interface RequestOptions { // not-wire-format: in-browser transport switch, never sent
+  /**
+   * false: a CSRF 403 is surfaced instead of being recovered and replayed.
+   * Only for a body that must never be sent twice automatically — the secret
+   * card's submit (omnipus-system-agent FR-075, founder 2026-10-14). Every
+   * other state-changing call keeps the one-time recovery.
+   */
+  csrfRetry?: boolean
+}
+
 export async function request<T>(
   path: string,
   init?: RequestInit,
   schema?: ZodType<T>,
   onResponseHeaders?: (headers: Headers) => void,
+  options?: RequestOptions,
 ): Promise<T> {
   // Client-side CSRF gate: reject state-changing calls that would be
   // guaranteed to 403 at the server. This gives a clear error immediately
@@ -227,7 +239,7 @@ export async function request<T>(
   }
 
   const attempt = () => performRequest<T>(path, init, schema, onResponseHeaders)
-  return stateChanging ? withCsrfRetry(attempt) : attempt()
+  return stateChanging && options?.csrfRetry !== false ? withCsrfRetry(attempt) : attempt()
 }
 
 async function performRequest<T>(

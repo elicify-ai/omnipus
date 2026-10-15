@@ -198,7 +198,7 @@ export function createFirstSendActions(context: FirstSendContext): Pick<ChatStor
       }
       set((state) => {
         const sessionsById = { ...state.sessionsById }
-        if (!state.pendingKickoff) delete sessionsById.__pending
+        delete sessionsById.__pending
         return {
           sessionsById,
           pendingFirstSend: null,

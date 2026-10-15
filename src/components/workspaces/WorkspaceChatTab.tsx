@@ -1,5 +1,9 @@
+import { UsersThree } from '@phosphor-icons/react'
 import { ChatScreen } from '@/components/chat/ChatScreen'
 import { useSessionStore } from '@/store/session'
+import { useOpenOmnipus } from '@/hooks/useOpenOmnipus'
+import { Button } from '@/components/ui/button'
+import { useActiveWorkspace } from './WorkspaceTabContainer'
 
 interface WorkspaceChatTabProps {
   workspaceId: string
@@ -29,11 +33,44 @@ export function WorkspaceChatTab({ workspaceId }: WorkspaceChatTabProps) {
     (s) => s.resolvingSessionForWorkspace[workspaceId] === true
   )
 
+  // omnipus-system-agent FR-107 / BDD-12.11: a team with no conversation
+  // agent opens the empty state with "Set up a team" (send stays off).
+  const emptyTeam = useSessionStore((s) => s.workspaceEntry?.status === 'empty-team')
+
   if (isRestoringSession) {
     return <ChatRestoreSkeleton />
   }
 
+  if (emptyTeam) return <EmptyTeamEntry />
+
   return <ChatScreen />
+}
+
+function EmptyTeamEntry() {
+  const workspace = useActiveWorkspace()
+  const openOmnipus = useOpenOmnipus()
+  const start = (workflow: 'W1' | 'W18') =>
+    openOmnipus({ workflow, workspaceId: workspace.id, workspaceName: workspace.name })
+  return (
+    <div
+      className="absolute inset-0 flex flex-col items-center justify-center gap-[var(--space-2-5)] p-[var(--space-5)] text-center"
+      data-testid="workspace-entry-empty-team"
+    >
+      <UsersThree size={32} weight="duotone" className="text-[var(--color-muted)]" aria-hidden="true" />
+      <div>
+        <p className="font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
+          No agents in {workspace.name} yet
+        </p>
+        <p className="mt-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+          Omnipus can set up a whole team for this workspace, or create one agent.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center justify-center gap-[var(--space-2)]">
+        <Button data-testid="workspace-entry-set-up-team" onClick={() => start('W18')}>Set up a team</Button>
+        <Button variant="outline" data-testid="workspace-entry-add-agent" onClick={() => start('W1')}>Add agent</Button>
+      </div>
+    </div>
+  )
 }
 
 function ChatRestoreSkeleton() {

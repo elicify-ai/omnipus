@@ -162,11 +162,18 @@ func setupAllowRoots(area EnvironmentSetupTarget, runtimeEnv environmentsetup.Ru
 		}
 		roots = append(roots, fspolicy.AllowRoot{Path: filepath.Clean(root), Writable: false})
 	}
-	roots = append(roots,
-		fspolicy.AllowRoot{Path: filepath.Clean(area.Prefix()), Writable: true},
-		fspolicy.AllowRoot{Path: filepath.Clean(area.Cache()), Writable: true},
-		fspolicy.AllowRoot{Path: filepath.Clean(area.Tmp()), Writable: true},
-	)
+	prefix := filepath.Clean(area.Prefix())
+	roots = append(roots, fspolicy.AllowRoot{Path: prefix, Writable: true})
+	for _, root := range []string{area.Cache(), area.Tmp()} {
+		// The writable prefix already covers its cache/tmp subtrees. Adding
+		// them as separate branches makes the prefix a denied ancestor node
+		// on Landlock, preventing the installer from creating direct files.
+		// Keep only external selections: the union of authorized paths does
+		// not widen, and inventory/ancestor protections remain unchanged.
+		if root != "" && !pathWithin(prefix, root) {
+			roots = append(roots, fspolicy.AllowRoot{Path: filepath.Clean(root), Writable: true})
+		}
+	}
 	return roots
 }
 
