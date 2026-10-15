@@ -123,6 +123,59 @@ new_repo_with_feature_branch() {
 
 echo "=== check-adr-id-scheme self-test ==="
 
+# --- Fixture regressions: fresh repos even when random values repeat --------
+
+echo ""
+echo "Fixture isolation: identical random values must not reuse a repository"
+OUTPUT="$(
+  # Unsetting RANDOM removes its special behaviour. Limit the fault to this
+  # subshell: subsequent guard cases still run with their normal environment.
+  unset RANDOM
+  RANDOM=13442
+  FIRST_REPO="$(new_repo_with_feature_branch)" || exit 1
+  printf 'first fixture only\n' > "$FIRST_REPO/first-only.txt" || exit 1
+  SECOND_REPO="$(new_repo_with_feature_branch)" || exit 1
+  if [[ "$FIRST_REPO" == "$SECOND_REPO" ]]; then
+    printf 'fixture paths are identical: %s\n' "$FIRST_REPO" >&2
+    exit 1
+  fi
+  if [[ -e "$SECOND_REPO/first-only.txt" ]]; then
+    printf 'second fixture inherited the first fixture sentinel\n' >&2
+    exit 1
+  fi
+  if [[ "$(< "$FIRST_REPO/first-only.txt")" != 'first fixture only' ]]; then
+    printf 'first fixture sentinel changed\n' >&2
+    exit 1
+  fi
+)"
+EXIT_CODE=$?
+assert_exit_code "fixture-isolation" 0 "$EXIT_CODE"
+if [[ "$EXIT_CODE" -ne 0 ]]; then
+  printf '%s\n' "$OUTPUT"
+fi
+
+# Fault only the external Git process edge; all other setup uses real Git.
+# A failed fixture must return its error and never publish a path on stdout.
+for SETUP_STAGE in commit checkout; do
+  echo ""
+  echo "Fixture setup: a failing git $SETUP_STAGE must stop setup"
+  OUTPUT="$(
+    git() {
+      if [[ "${3:-}" == "$SETUP_STAGE" ]]; then
+        printf 'injected git %s failure\n' "$SETUP_STAGE" >&2
+        return 73
+      fi
+      command git "$@"
+    }
+    new_repo_with_feature_branch 2> "$TMP_DIR/setup-$SETUP_STAGE.err"
+  )"
+  EXIT_CODE=$?
+  assert_exit_code "fixture-$SETUP_STAGE-error" 73 "$EXIT_CODE"
+  assert_exit_code "fixture-$SETUP_STAGE-no-path" 0 "${#OUTPUT}"
+  assert_output_contains "fixture-$SETUP_STAGE-diagnostic" \
+    "injected git $SETUP_STAGE failure" "$(< "$TMP_DIR/setup-$SETUP_STAGE.err")"
+done
+
 # --- Test 1: unchanged pre-existing legacy ADR is never flagged -------------
 
 echo ""
