@@ -92,7 +92,7 @@ func NormalizeUsage(providerID string, raw []byte) (protocoltypes.UsageInfo, err
 		}
 		if geminiRead > 0 && providerID != "fireworks-ai" {
 			u.CacheReadTokens = geminiRead
-		} else {
+		} else if providerID != "google" {
 			u.PromptTokens = max(0, u.PromptTokens-u.CacheReadTokens-u.CacheWriteTokens)
 		}
 	}
