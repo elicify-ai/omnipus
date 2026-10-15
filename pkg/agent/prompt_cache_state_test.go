@@ -52,7 +52,7 @@ func TestToolOrder_IndependentOfInputOrder(t *testing.T) {
 	alpha := strings.Index(text, "alpha")
 	mid := strings.Index(text, "mid")
 	zebra := strings.Index(text, "zebra")
-	if alpha < 0 || mid < 0 || zebra < 0 || !(alpha < mid && mid < zebra) {
+	if alpha < 0 || mid < 0 || zebra < 0 || alpha >= mid || mid >= zebra {
 		t.Fatalf("canonical bytes = %q, want alphabetical alpha then mid then zebra", text)
 	}
 }
