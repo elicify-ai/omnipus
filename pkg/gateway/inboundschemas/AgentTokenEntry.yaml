@@ -32,6 +32,18 @@ properties:
     minimum: 0
     description: Total cache-write tokens for this agent in the period.
     example: 500
+  cache_hit_ratio:
+    type: number
+    format: double
+    minimum: 0
+    maximum: 1
+    nullable: true
+    description: >
+      Cache-hit ratio for this agent: tokens_cache_read / (tokens_in +
+      tokens_cache_read + tokens_cache_write) when that denominator is greater
+      than zero. Null when the denominator is 0, which is not the same as a
+      ratio of zero. A number from 0 to 1 inclusive. tokens_in is uncached input.
+    example: 0.8
   by_model:
     type: object
     description: Per-model breakdown for this agent. Absent when no model data is available.

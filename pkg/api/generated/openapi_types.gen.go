@@ -15105,6 +15105,9 @@ type AgentTokenEntry struct {
 
 	// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 	ByModel *map[string]struct {
+		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
 		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
@@ -15120,6 +15123,9 @@ type AgentTokenEntry struct {
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
+
+	// CacheHitRatio Cache-hit ratio for this agent: tokens_cache_read / (tokens_in + tokens_cache_read + tokens_cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. tokens_in is uncached input.
+	CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
 
 	// TokensCacheRead Total cache-read tokens for this agent in the period.
 	TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
@@ -21681,6 +21687,9 @@ type MessageParentResponse struct {
 
 // ModelTokens Per-model token breakdown within a session or usage summary.
 type ModelTokens struct {
+	// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+	CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
 	// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 	CacheRead *int `json:"cache_read,omitempty"`
 
@@ -24677,6 +24686,9 @@ type Session struct {
 	Stats struct {
 		// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 		ByModel *map[string]struct {
+			// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+			CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
 			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 			CacheRead *int `json:"cache_read,omitempty"`
 
@@ -24693,11 +24705,35 @@ type Session struct {
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
 
-		// Cost Total USD cost for this session (based on provider pricing).
+		// ByProvider Per-provider token breakdown. Same cell shape as by_model. Keys are catalog provider ids. Summed from the stored per-call provider id, including after reload. Absent for legacy sessions.
+		ByProvider *map[string]struct {
+			// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+			CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
+			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
+			CacheRead *int `json:"cache_read,omitempty"`
+
+			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
+			CacheWrite *int `json:"cache_write,omitempty"`
+
+			// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
+			In *int `json:"in,omitempty"`
+
+			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
+			Out *int `json:"out,omitempty"`
+
+			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
+			Total int `json:"total"`
+		} `json:"by_provider,omitempty"`
+
+		// Cost Total USD cost for this session: the sum of priced portions only. A cost of zero together with unpriced_tokens greater than zero means the session is unpriced, not free. subscription_tokens are excluded from cost; those tokens recorded no dollars.
 		Cost float64 `json:"cost"`
 
 		// MessageCount Number of transcript entries in this session.
 		MessageCount int `json:"message_count"`
+
+		// SubscriptionTokens Tokens from ChatGPT sign-in calls. Those tokens recorded no dollars and are excluded from cost.
+		SubscriptionTokens *int `json:"subscription_tokens,omitempty"`
 
 		// TokensCacheRead Total cache-read tokens across all assistant turns (tokens served from provider KV cache, not re-computed). 0 for sessions without caching or created before Wave 1 token tracking.
 		TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
@@ -24716,6 +24752,9 @@ type Session struct {
 
 		// ToolCalls Total number of tool calls made in this session.
 		ToolCalls int `json:"tool_calls"`
+
+		// UnpricedTokens Unpriced token portions in this session. Counts only the unpriced portion of each call, not the whole call. A session with cost 0 and unpriced_tokens greater than 0 is unpriced, not free.
+		UnpricedTokens *int `json:"unpriced_tokens,omitempty"`
 	} `json:"stats"`
 
 	// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
@@ -25300,6 +25339,9 @@ type SessionDetail struct {
 		Stats struct {
 			// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 			ByModel *map[string]struct {
+				// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+				CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
 				// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 				CacheRead *int `json:"cache_read,omitempty"`
 
@@ -25316,11 +25358,35 @@ type SessionDetail struct {
 				Total int `json:"total"`
 			} `json:"by_model,omitempty"`
 
-			// Cost Total USD cost for this session (based on provider pricing).
+			// ByProvider Per-provider token breakdown. Same cell shape as by_model. Keys are catalog provider ids. Summed from the stored per-call provider id, including after reload. Absent for legacy sessions.
+			ByProvider *map[string]struct {
+				// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+				CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
+				// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
+				CacheRead *int `json:"cache_read,omitempty"`
+
+				// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
+				CacheWrite *int `json:"cache_write,omitempty"`
+
+				// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
+				In *int `json:"in,omitempty"`
+
+				// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
+				Out *int `json:"out,omitempty"`
+
+				// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
+				Total int `json:"total"`
+			} `json:"by_provider,omitempty"`
+
+			// Cost Total USD cost for this session: the sum of priced portions only. A cost of zero together with unpriced_tokens greater than zero means the session is unpriced, not free. subscription_tokens are excluded from cost; those tokens recorded no dollars.
 			Cost float64 `json:"cost"`
 
 			// MessageCount Number of transcript entries in this session.
 			MessageCount int `json:"message_count"`
+
+			// SubscriptionTokens Tokens from ChatGPT sign-in calls. Those tokens recorded no dollars and are excluded from cost.
+			SubscriptionTokens *int `json:"subscription_tokens,omitempty"`
 
 			// TokensCacheRead Total cache-read tokens across all assistant turns (tokens served from provider KV cache, not re-computed). 0 for sessions without caching or created before Wave 1 token tracking.
 			TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
@@ -25339,6 +25405,9 @@ type SessionDetail struct {
 
 			// ToolCalls Total number of tool calls made in this session.
 			ToolCalls int `json:"tool_calls"`
+
+			// UnpricedTokens Unpriced token portions in this session. Counts only the unpriced portion of each call, not the whole call. A session with cost 0 and unpriced_tokens greater than 0 is unpriced, not free.
+			UnpricedTokens *int `json:"unpriced_tokens,omitempty"`
 		} `json:"stats"`
 
 		// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
@@ -26071,6 +26140,9 @@ type SessionScopeUpdateResponse struct {
 type SessionStats struct {
 	// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 	ByModel *map[string]struct {
+		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
 		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
@@ -26087,11 +26159,35 @@ type SessionStats struct {
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
-	// Cost Total USD cost for this session (based on provider pricing).
+	// ByProvider Per-provider token breakdown. Same cell shape as by_model. Keys are catalog provider ids. Summed from the stored per-call provider id, including after reload. Absent for legacy sessions.
+	ByProvider *map[string]struct {
+		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
+		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
+		CacheRead *int `json:"cache_read,omitempty"`
+
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
+		CacheWrite *int `json:"cache_write,omitempty"`
+
+		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
+		In *int `json:"in,omitempty"`
+
+		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
+		Out *int `json:"out,omitempty"`
+
+		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
+		Total int `json:"total"`
+	} `json:"by_provider,omitempty"`
+
+	// Cost Total USD cost for this session: the sum of priced portions only. A cost of zero together with unpriced_tokens greater than zero means the session is unpriced, not free. subscription_tokens are excluded from cost; those tokens recorded no dollars.
 	Cost float64 `json:"cost"`
 
 	// MessageCount Number of transcript entries in this session.
 	MessageCount int `json:"message_count"`
+
+	// SubscriptionTokens Tokens from ChatGPT sign-in calls. Those tokens recorded no dollars and are excluded from cost.
+	SubscriptionTokens *int `json:"subscription_tokens,omitempty"`
 
 	// TokensCacheRead Total cache-read tokens across all assistant turns (tokens served from provider KV cache, not re-computed). 0 for sessions without caching or created before Wave 1 token tracking.
 	TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
@@ -26110,6 +26206,9 @@ type SessionStats struct {
 
 	// ToolCalls Total number of tool calls made in this session.
 	ToolCalls int `json:"tool_calls"`
+
+	// UnpricedTokens Unpriced token portions in this session. Counts only the unpriced portion of each call, not the whole call. A session with cost 0 and unpriced_tokens greater than 0 is unpriced, not free.
+	UnpricedTokens *int `json:"unpriced_tokens,omitempty"`
 }
 
 // SignInPollRequest Body for POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). Identifies which open device-code session to check.
@@ -27476,6 +27575,9 @@ type TokenUsageSummary struct {
 
 		// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 		ByModel *map[string]struct {
+			// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+			CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
 			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 			CacheRead *int `json:"cache_read,omitempty"`
 
@@ -27492,6 +27594,9 @@ type TokenUsageSummary struct {
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
 
+		// CacheHitRatio Cache-hit ratio for this agent: tokens_cache_read / (tokens_in + tokens_cache_read + tokens_cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. tokens_in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
 		// TokensCacheRead Total cache-read tokens for this agent in the period.
 		TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
 
@@ -27504,6 +27609,9 @@ type TokenUsageSummary struct {
 
 	// ByModel Cross-agent per-model breakdown for the period. Keys are model name strings. Absent when no model data is available.
 	ByModel *map[string]struct {
+		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
 		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
@@ -27520,6 +27628,27 @@ type TokenUsageSummary struct {
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
+	// ByProvider Per-provider token breakdown for the period. Same cell shape as by_model. Keys are catalog provider ids. Absent when no provider data is available.
+	ByProvider *map[string]struct {
+		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
+
+		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
+		CacheRead *int `json:"cache_read,omitempty"`
+
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
+		CacheWrite *int `json:"cache_write,omitempty"`
+
+		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
+		In *int `json:"in,omitempty"`
+
+		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
+		Out *int `json:"out,omitempty"`
+
+		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
+		Total int `json:"total"`
+	} `json:"by_provider,omitempty"`
+
 	// Partial True when one or more session stores failed to load during aggregation, so the totals may under-count. Clients should surface a "some sessions could not be read" indicator rather than presenting the number as authoritative. Absent (or false) when every store loaded cleanly.
 	Partial *bool `json:"partial,omitempty"`
 
@@ -27532,11 +27661,17 @@ type TokenUsageSummary struct {
 	// PeriodStart Start of the aggregation period (inclusive), UTC.
 	PeriodStart time.Time `json:"period_start"`
 
+	// SubscriptionTokens Sum of tokens from ChatGPT sign-in calls in the period. Those tokens recorded no dollars and are excluded from any priced cost.
+	SubscriptionTokens *int `json:"subscription_tokens,omitempty"`
+
 	// TokensCacheRead Grand total cache-read tokens across all agents in the period.
 	TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
 
 	// TokensCacheWrite Grand total cache-write tokens across all agents in the period.
 	TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
+
+	// UnpricedTokens Sum of unpriced token portions in the period. Counts only the unpriced portion of each call, not the whole call. A period with no priced cost and unpriced_tokens greater than zero is unpriced, not free.
+	UnpricedTokens *int `json:"unpriced_tokens,omitempty"`
 }
 
 // ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `deny` and `cancel` remain distinct non-approval resolution actions.
