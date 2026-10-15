@@ -138,17 +138,18 @@ func (t *AgentGetToolsTool) Execute(_ context.Context, args map[string]any) *too
 			}
 		}
 	}
+	// One resolver for effective_policies and clamped: the runtime compositor
+	// (wildcards and the God Mode floor), so the two never disagree (WU-3 R2-04).
+	resolver := runtimePolicyResolver(global, storedOverrides(state.Agent), t.deps.godModeActive())
 	effective := make(map[string]string, len(global))
-	for name, policy := range global {
-		effective[name] = policy
+	for name := range global {
+		effective[name] = effectivePolicy(resolver, name)
 	}
-	if state.Agent.Tools != nil {
-		for name, policy := range state.Agent.Tools.Builtin.Policies {
-			effective[name] = strictest(policy, config.ToolPolicy(global[name]))
-		}
+	for name := range resolver.Policies {
+		effective[name] = effectivePolicy(resolver, name)
 	}
 	// Discovery is always available, even when stored policy says deny.
-	effective["ToolSearch"] = "allow"
+	effective["ToolSearch"] = effectivePolicy(resolver, "ToolSearch")
 	connectorCatalog := map[string][]string{}
 	if t.deps != nil {
 		for server, names := range t.deps.currentInventory().LiveMCPTools {
@@ -214,18 +215,6 @@ func sortedStringKeys(m map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-func strictest(local, global config.ToolPolicy) string {
-	if local == config.ToolPolicyDeny || global == config.ToolPolicyDeny {
-		return "deny"
-	}
-	if local == config.ToolPolicyAsk || global == config.ToolPolicyAsk {
-		return "ask"
-	}
-	if local == config.ToolPolicyAllow {
-		return "allow"
-	}
-	return string(global)
 }
 func wireAgentType(a config.AgentConfig) string {
 	if a.IsExternalCLIWorker() {

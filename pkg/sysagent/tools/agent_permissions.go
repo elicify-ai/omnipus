@@ -3,6 +3,7 @@ package systools
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -161,19 +162,38 @@ func (d *Deps) godModeActive() bool {
 	return d != nil && d.GodModeActive != nil && d.GodModeActive()
 }
 
+// runtimePolicyResolver is the runtime compositor's input for one agent: the
+// global ceiling, the agent's stored overrides and the active God Mode.
+func runtimePolicyResolver(global map[string]string, policies map[string]config.ToolPolicy, godMode bool) *tools.ToolPolicyCfg {
+	ceiling := make(map[string]config.ToolPolicy, len(global))
+	for tool, p := range global {
+		ceiling[tool] = config.ToolPolicy(p)
+	}
+	return &tools.ToolPolicyCfg{Policies: policies, GlobalPolicies: ceiling, GodMode: godMode}
+}
+
+// effectivePolicy is what runs for tool: the infrastructure tools
+// (tools.InfraManifestToolNames, i.e. ToolSearch) are always callable;
+// everything else resolves through tools.ResolveEffectivePolicy.
+func effectivePolicy(resolver *tools.ToolPolicyCfg, tool string) string {
+	if slices.Contains(tools.InfraManifestToolNames(), tool) {
+		return string(config.ToolPolicyAllow)
+	}
+	return tools.ResolveEffectivePolicy(resolver, tool)
+}
+
 // policyClamps lists, sorted by tool, every per-agent policy the ceiling
 // clamps — the runtime compositor (tools.ResolveEffectivePolicy, wildcards and
 // the God Mode floor included) resolves a policy different from the stored
 // one. Never nil (an empty list means nothing was clamped).
 func policyClamps(global map[string]string, policies map[string]config.ToolPolicy, godMode bool) []policyClamp {
-	ceiling := make(map[string]config.ToolPolicy, len(global))
-	for tool, p := range global {
-		ceiling[tool] = config.ToolPolicy(p)
-	}
-	resolver := &tools.ToolPolicyCfg{Policies: policies, GlobalPolicies: ceiling, GodMode: godMode}
+	resolver := runtimePolicyResolver(global, policies, godMode)
 	out := []policyClamp{}
 	for tool, requested := range policies {
-		effective := tools.ResolveEffectivePolicy(resolver, tool)
+		if slices.Contains(tools.InfraManifestToolNames(), tool) {
+			continue // always callable: not subject to the ceiling at all
+		}
+		effective := effectivePolicy(resolver, tool)
 		if effective != string(requested) {
 			out = append(out, policyClamp{Tool: tool, Requested: string(requested), Effective: effective})
 		}
