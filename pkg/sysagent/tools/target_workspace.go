@@ -59,8 +59,10 @@ func resolveTargetWorkspace(d *Deps, ctx context.Context, args map[string]any) (
 	}
 	s = strings.TrimSpace(s)
 	if s == "" {
-		// JSON null is normalized to "" upstream: treat it as omitted.
-		return targetWorkspace{ID: contextual}, nil
+		// An explicit empty target is refused, never read as "omitted"
+		// (FR-043): omit the argument to use the conversation's workspace.
+		return targetWorkspace{}, tools.ErrorResult(errorJSON("INVALID_INPUT",
+			workspaceIDParam+" is empty", "Omit workspace_id to use this conversation's workspace, or name one from list_workspaces"))
 	}
 	if err := validateID(s); err != nil {
 		return targetWorkspace{}, tools.ErrorResult(errorJSON("INVALID_INPUT",

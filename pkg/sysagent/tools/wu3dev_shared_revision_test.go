@@ -134,8 +134,8 @@ func TestWU3Dev_SharedRevision_SecretFreeAndStable(t *testing.T) {
 	require.True(t, ok, res.ForLLM)
 	require.Equal(t, before, row["revision"])
 	require.Equal(t, "openai_API_KEY", row["api_key_ref"])
-	endpoint, _ := row["endpoint"].(string)
-	require.True(t, strings.HasPrefix(endpoint, "https://"), "effective endpoint: %v", row["endpoint"])
+	endpoint, _ := row["api_base"].(string)
+	require.True(t, strings.HasPrefix(endpoint, "https://"), "effective endpoint: %v", row["api_base"])
 	require.NotEmpty(t, row["protocol"])
 
 	cfg.Channels = map[string]config.ChannelInstanceConfig{"telegram": {Type: "telegram", TokenRef: "channel_telegram_token"}}

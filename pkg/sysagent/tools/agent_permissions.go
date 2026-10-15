@@ -2,7 +2,9 @@ package systools
 
 import (
 	"context"
+	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -83,11 +85,13 @@ func (t *AgentPermissionsTool) Execute(_ context.Context, args map[string]any) (
 			"at least one of tool_policy_changes or mcp_servers is required", ""))
 	}
 	sort.Strings(fields)
+	var requested map[string]config.ToolPolicy
 	if raw, present := args["tool_policy_changes"]; present {
 		patch, err := decodePolicyPatch(raw)
 		if err != nil {
 			return fieldErrorResult(err)
 		}
+		requested = patch.Set
 		if _, bad := coreagent.OmnipusPerAgentAskViolation(id, patch.Set); bad {
 			return tools.ErrorResult(errorJSON("OMNIPUS_PER_AGENT_ASK", coreagent.OmnipusPerAgentAskRefusal,
 				"Use deny for Omnipus, or set Ask on the global tool policy"))
@@ -115,6 +119,10 @@ func (t *AgentPermissionsTool) Execute(_ context.Context, args map[string]any) (
 		return (&AgentUpdateTool{deps: t.deps}).mutateErrorResult(id, result, mutateErr)
 	}
 	activation, message := publishAgentActivation(t.deps, id)
+	clamped := policyClamps(t.deps.globalToolPolicies(), requested)
+	if note := clampSentence(clamped); note != "" {
+		message = strings.TrimSpace(message + " " + note)
+	}
 	return changeSuccess(map[string]any{
 		"id":                 id,
 		"revision":           result.Revision,
@@ -122,7 +130,56 @@ func (t *AgentPermissionsTool) Execute(_ context.Context, args map[string]any) (
 		"activation_status":  activation,
 		"changed_fields":     fields,
 		"message":            message,
+		"clamped":            clamped,
 	}, updateVerdict(activation, message))
 }
 
 var _ tools.Tool = (*AgentPermissionsTool)(nil)
+
+// policyClamp is one per-agent policy the global ceiling makes stricter
+// (#1064 A5): the stored value is kept, the effective value is what runs.
+type policyClamp struct {
+	Tool      string `json:"tool"`
+	Requested string `json:"requested"`
+	Effective string `json:"effective"`
+}
+
+// globalToolPolicies is the live global ceiling (Layer 1).
+func (d *Deps) globalToolPolicies() map[string]string {
+	if d == nil || d.GetCfg == nil {
+		return map[string]string{}
+	}
+	cfg := d.GetCfg()
+	if cfg == nil {
+		return map[string]string{}
+	}
+	return cfg.Sandbox.ToolPolicies
+}
+
+// policyClamps lists, sorted by tool, every per-agent policy the ceiling
+// clamps — strictest-wins makes the effective policy differ from the stored
+// one. Never nil (an empty list means nothing was clamped).
+func policyClamps(global map[string]string, policies map[string]config.ToolPolicy) []policyClamp {
+	out := []policyClamp{}
+	for tool, requested := range policies {
+		effective := strictest(requested, config.ToolPolicy(global[tool]))
+		if effective != string(requested) {
+			out = append(out, policyClamp{Tool: tool, Requested: string(requested), Effective: effective})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Tool < out[j].Tool })
+	return out
+}
+
+// clampSentence is the human-readable form of clamped ("" when none).
+func clampSentence(clamped []policyClamp) string {
+	if len(clamped) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(clamped))
+	for _, c := range clamped {
+		parts = append(parts, fmt.Sprintf("%s requested %s, effective %s", c.Tool, c.Requested, c.Effective))
+	}
+	return "The global tool ceiling clamps " + strings.Join(parts, "; ") +
+		" (the stored value is kept and applies if the ceiling is loosened)."
+}

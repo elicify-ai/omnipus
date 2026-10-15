@@ -669,6 +669,11 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 	// that roster, and before the agent_created notify below so the client's
 	// refetch sees the main. A failure is logged, not fatal: the main is
 	// re-attempted when its chat is opened.
+	if ac.joinedWorkspaceID != "" && ac.t.deps.EnsureWorkspaceMains == nil {
+		// FR-041: a joined member's main chat is part of the change; without
+		// the provisioning hook it was not created, so the result must say so.
+		ac.mainsErr = errors.New("main chat provisioning is not available here")
+	}
 	if ac.joinedWorkspaceID != "" && ac.t.deps.EnsureWorkspaceMains != nil {
 		if mainsErr := ac.t.deps.EnsureWorkspaceMains(ac.joinedWorkspaceID); mainsErr != nil {
 			slog.Error("sysagent: create_agent: the new member's main chat was not created; it is re-attempted when the chat is opened",
@@ -794,13 +799,16 @@ func (ac *agentCreateToolExecute) createVerdict(activation agentstore.Activation
 // otherwise nothing was saved. The stage, revision and cause are always named
 // — never blank fields (#1064 A2).
 func createSaveFailedResult(id string, mutation agentstore.MutationResult, err error) *tools.ToolResult {
+	// The store marks a status as soon as any file is published; an empty
+	// status means it failed before publishing anything (same reading as
+	// update_agent's mutateErrorResult).
 	stage := mutation.ErrorStage
 	if stage == "" {
-		stage = "unknown (the store did not report a stage)"
+		stage = "prepare"
 	}
 	persistence := string(mutation.PersistenceStatus)
 	if persistence == "" {
-		persistence = "unknown (the store did not report it)"
+		persistence = string(agentstore.PersistenceNone)
 	}
 	body := map[string]any{
 		"success": false,

@@ -222,8 +222,8 @@ func refuseEncodedSeparators(link string) error {
 	lower := strings.ToLower(link)
 	for _, enc := range []string{"%2f", "%5c", "%25"} {
 		if strings.Contains(lower, enc) {
-			return fmt.Errorf("the GitHub link %q contains an encoded path separator or an encoded %%; "+
-				"use the plain owner/repo/folder form", link)
+			return fmt.Errorf("the skill folder name in the GitHub link %q hides a path separator in "+
+				"percent-encoding (or an encoded %%); use the plain owner/repo/folder form", link)
 		}
 	}
 	return nil

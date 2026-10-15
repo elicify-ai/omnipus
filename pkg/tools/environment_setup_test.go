@@ -405,7 +405,7 @@ func TestEnvironmentSetup_RunValidation_Refusals(t *testing.T) {
 			start := h.tool.Execute(ctx, tc.args)
 			require.NotNil(t, start)
 			require.True(t, start.IsError, "expected refusal, got: %s", start.ForLLM)
-			assert.Contains(t, start.ForLLM, tc.wantErr)
+			assert.Contains(t, setupRefusalText(start), tc.wantErr)
 		})
 	}
 	// Nothing was started: no area exists under the workspace.
@@ -737,4 +737,19 @@ func TestEnvironmentSetup_SharedScope_Aborts_OnFailure(t *testing.T) {
 				"no unpublished generation directory may remain (found %s)", e.Name())
 		}
 	}
+}
+
+// setupRefusalText is a refusal's own text: a run refused before launch is a
+// structured FR-030 result (WU-3) whose text sits in error.message; other
+// actions still answer in plain text.
+func setupRefusalText(res *ToolResult) string {
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(res.ForLLM), &body) == nil && body.Error.Message != "" {
+		return body.Error.Message
+	}
+	return res.ForLLM
 }

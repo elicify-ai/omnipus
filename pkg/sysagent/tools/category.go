@@ -44,6 +44,18 @@ func (*MCPAddTool) Category() tools.ToolCategory    { return tools.CategoryMCP }
 func (*MCPRemoveTool) Category() tools.ToolCategory { return tools.CategoryMCP }
 func (*MCPListTool) Category() tools.ToolCategory   { return tools.CategoryMCP }
 
+// The three MCP-management builtins are governed by their tool policy only,
+// never by a per-agent connector assignment (#1063 F1).
+func (*MCPAddTool) IsMCPManagementBuiltin()    {}
+func (*MCPRemoveTool) IsMCPManagementBuiltin() {}
+func (*MCPListTool) IsMCPManagementBuiltin()   {}
+
+var (
+	_ tools.MCPManagementBuiltin = (*MCPAddTool)(nil)
+	_ tools.MCPManagementBuiltin = (*MCPRemoveTool)(nil)
+	_ tools.MCPManagementBuiltin = (*MCPListTool)(nil)
+)
+
 // Workspace tools
 
 func (*WorkspaceCreateTool) Category() tools.ToolCategory { return tools.CategoryWorkspaces }

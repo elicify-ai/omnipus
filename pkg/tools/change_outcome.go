@@ -120,6 +120,10 @@ func FinalizeChangeResult(tool string, res *ToolResult) *ToolResult {
 		// as a JSON object on an "Outcome:" line.
 		return finalizePlainText(tool, res)
 	}
+	if dry, _ := m["dry_run"].(bool); dry {
+		// A dry run changes nothing and states its own check scope.
+		return res
+	}
 	if o, has := m["outcome"]; has {
 		if o == OutcomeFailedNothingSaved && m["changed_fields"] == nil {
 			m["changed_fields"] = []string{}
@@ -144,22 +148,25 @@ func FinalizeChangeResult(tool string, res *ToolResult) *ToolResult {
 	return res
 }
 
-// finalizePlainText appends the FR-030 verdict to a plain-text result.
+// finalizePlainText turns a plain-text change result into the structured
+// FR-030 object: the text becomes error.message (a refusal) or message, so
+// every change-tool result is one JSON shape (RED pack, WU-3).
 func finalizePlainText(tool string, res *ToolResult) *ToolResult {
-	if strings.Contains(res.ForLLM, "\nOutcome: {") {
-		return res
-	}
+	text := strings.TrimSpace(res.ForLLM)
 	var o ChangeOutcome
 	fields := map[string]any{}
 	if res.IsError {
-		o = ChangeOutcome{Outcome: OutcomeFailedNothingSaved, Reason: strings.TrimSpace(res.ForLLM)}
+		o = ChangeOutcome{Outcome: OutcomeFailedNothingSaved, Reason: text}
+		fields["success"] = false
+		fields["error"] = map[string]any{"message": text}
 		fields["changed_fields"] = []string{}
 	} else {
 		slog.Error("tools: change tool returned success without an FR-030 outcome", "tool", tool)
+		fields["message"] = text
 		o = ChangePartlySaved("the tool did not report what it checked; read the affected resource before relying on it",
 			"", []string{"verification"})
 	}
-	res.ForLLM += "\n\nOutcome: " + marshalResult(o.Into(fields))
+	res.ForLLM = marshalResult(o.Into(fields))
 	return res
 }
 

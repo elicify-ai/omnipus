@@ -34,7 +34,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -102,8 +101,8 @@ func (t *AgentReadMetadataTool) Execute(ctx context.Context, args map[string]any
 	// exist under exactly that id — so a typo or a case variant ("OMNIPUS" on a
 	// case-insensitive filesystem) is AGENT_NOT_FOUND, never another agent's
 	// file and never confused with an existing agent whose file is absent.
-	if err := agentstore.ValidateAgentID(agentID); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Use an id from list_agents"))
+	if refusal := agentIDRefusal(agentID); refusal != nil {
+		return refusal
 	}
 	known, err := t.agentKnownExact(agentID)
 	if err != nil {

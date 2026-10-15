@@ -159,6 +159,8 @@ func (t *AgentGetToolsTool) Execute(_ context.Context, args map[string]any) *too
 		"id": id, "revision": state.Revision, "override_names": storedOverrideNames(state.Agent),
 		"stored_tool_overrides": storedOverrides(state.Agent), "mcp_servers": storedMCPBindings(state.Agent),
 		"effective_policies": effective, "static_catalog": sortedStringKeys(global),
+		// #1064 A5: every stored policy the global ceiling makes stricter.
+		"clamped":           policyClamps(global, storedOverrides(state.Agent)),
 		"connector_catalog": connectorCatalog,
 	}
 	if preview {
@@ -271,8 +273,8 @@ func editableDescriptors(a config.AgentConfig) []map[string]any {
 // compares it with the stored id, so "OMNIPUS" never opens omnipus.json on a
 // case-insensitive filesystem. Refusals are tool results.
 func readAgentStateExact(home, id string) (*agentstore.State, *tools.ToolResult) {
-	if err := agentstore.ValidateAgentID(id); err != nil {
-		return nil, tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Use an id from list_agents"))
+	if refusal := agentIDRefusal(id); refusal != nil {
+		return nil, refusal
 	}
 	// agentstore compares the stored id exactly, so a case variant is not found.
 	state, err := agentstore.New(home).ReadState(id)
@@ -283,6 +285,24 @@ func readAgentStateExact(home, id string) (*agentstore.State, *tools.ToolResult)
 		return nil, tools.ErrorResult(errorJSON("READ_FAILED", err.Error(), "Use list_agents"))
 	}
 	return state, nil
+}
+
+// agentIDRefusal applies one id rule to every agent read surface (#1032 F-2):
+// an unsafe id (empty, a path separator, "..", NUL) is INVALID_INPUT; a safe
+// string that no agent id can have (spaces, say) is AGENT_NOT_FOUND — there
+// is no such agent — rather than a validation error. nil when id may name an agent.
+func agentIDRefusal(id string) *tools.ToolResult {
+	if err := validateID(id); err != nil || strings.TrimSpace(id) == "" {
+		msg := "id is required"
+		if err != nil {
+			msg = err.Error()
+		}
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", msg, "Use an id from list_agents"))
+	}
+	if agentstore.ValidateAgentID(id) != nil {
+		return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND", fmt.Sprintf("No agent with ID %q", id), "Use list_agents"))
+	}
+	return nil
 }
 
 // agentRecordExistsExact reports whether the agent entity store holds a record

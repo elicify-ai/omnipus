@@ -122,9 +122,22 @@ func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) (res
 	})
 }
 
+// projectSkillsDir is the recognised skills folder of a mounted project that
+// a new project skill goes into: the folder the project already uses
+// (.omnipus/skills, else .claude/skills), or .omnipus/skills when it has none.
+func projectSkillsDir(mountRoot string) string {
+	for _, rel := range []string{filepath.Join(".omnipus", "skills"), filepath.Join(".claude", "skills")} {
+		dir := filepath.Join(mountRoot, rel)
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			return dir
+		}
+	}
+	return filepath.Join(mountRoot, ".omnipus", "skills")
+}
+
 // createProjectSkill creates a project skill on the target workspace's shelf
-// (FR-042, BDD-4.8): <mount>/.omnipus/skills/<name>/SKILL.md in the
-// workspace's one mounted project folder. A workspace with no mount, or with
+// (FR-042, BDD-4.8): <name>/SKILL.md in the recognised skills folder
+// (projectSkillsDir) of the workspace's one mounted project folder. A workspace with no mount, or with
 // several (the destination would be a guess), is refused before any write.
 func (t *SkillCreateTool) createProjectSkill(ctx context.Context, wsID, name, content string) *tools.ToolResult {
 	mounts, ok := workspacepkg.LoadMounts(t.deps.Home, wsID)
@@ -148,7 +161,7 @@ func (t *SkillCreateTool) createProjectSkill(ctx context.Context, wsID, name, co
 				wsID, strings.Join(names, ", ")),
 			"Create the skill in the project folder from the app, or omit workspace_id to create a user skill"))
 	}
-	writer := skills.NewSkillWriter(filepath.Join(mounts[0].HostPath, ".omnipus", "skills"))
+	writer := skills.NewSkillWriter(projectSkillsDir(mounts[0].HostPath))
 	path, revision, err := writer.CreateSkillReviewed(name, content)
 	if err != nil {
 		return skillAuthoringError("create", name, err)

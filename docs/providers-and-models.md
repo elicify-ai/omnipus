@@ -71,7 +71,7 @@ When Omnipus configures a provider with `configure_provider`, it checks the save
 
 `configure_provider` also has a dry run (`dry_run`): it checks the provider id, the key's shape and the address's shape, saves nothing and contacts nobody.
 
-`list_models` lists models through each configured provider's saved endpoint the same way. Asking it for a provider that is not configured is an error that says so, instead of an empty list. `list_providers` shows each provider's endpoint, protocol and the name of its saved key reference (never the key), and `test_provider` accepts every provider `list_providers` shows.
+`list_models` lists models through each configured provider's saved endpoint the same way. Asking it for a provider that is not configured is an error that says so, instead of an empty list. `list_providers` shows each provider's effective endpoint (`api_base`), protocol and the name of its saved key reference (`api_key_ref`, never the key), and `test_provider` accepts every provider `list_providers` shows.
 
 ## Limits and things to watch
 

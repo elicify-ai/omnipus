@@ -864,11 +864,10 @@ func parseWorkspaceDelegationArg(args map[string]any, teamIDs []string, ceiling 
 			}
 		}
 		if rawDepth, exists := row["depth"]; exists {
-			value, ok := rawDepth.(float64)
-			if !ok || value != float64(int(value)) {
+			depth, err := jsonInt(rawDepth, "delegation depth")
+			if err != nil {
 				return nil, true, errors.New("delegation depth must be an integer")
 			}
-			depth := int(value)
 			edge.Depth = &depth
 		}
 		if err := edge.Validate(team, ceiling); err != nil {
@@ -1577,27 +1576,38 @@ func (t *WorkspaceListTool) Execute(_ context.Context, args map[string]any) *too
 		PinOrder    int      `json:"pin_order"`
 		IsDefault   bool     `json:"is_default"`
 		CoreTeam    []string `json:"core_team"`
-		TaskCount   int      `json:"task_count"`
-		CreatedAt   string   `json:"created_at"`
-		UpdatedAt   string   `json:"updated_at"`
+		// Delegation is the workspace's graph (#1057 F6: the same field every
+		// workspace view carries, [] when empty). DelegationUnreadable marks
+		// a graph that could not be read, so [] is never mistaken for "none".
+		Delegation           []workspacepkg.DelegationEdge `json:"delegation"`
+		DelegationUnreadable bool                          `json:"delegation_unreadable,omitempty"`
+		TaskCount            int                           `json:"task_count"`
+		CreatedAt            string                        `json:"created_at"`
+		UpdatedAt            string                        `json:"updated_at"`
 	}
 	resp := make([]workspaceResponse, 0, len(workspaces))
 	for _, w := range workspaces {
 		if w.CoreTeam == nil {
 			w.CoreTeam = []string{} // #1057 F6: lists are never null
 		}
+		edges, edgesOK := workspacepkg.LoadDelegation(t.deps.Home, w.ID)
+		if edges == nil {
+			edges = []workspacepkg.DelegationEdge{}
+		}
 		resp = append(resp, workspaceResponse{
-			ID:          w.ID,
-			Name:        w.Name,
-			Description: w.Description,
-			Status:      w.Status,
-			Pinned:      w.Pinned,
-			PinOrder:    w.PinOrder,
-			IsDefault:   w.IsDefault,
-			CoreTeam:    w.CoreTeam,
-			TaskCount:   counts[w.ID],
-			CreatedAt:   w.CreatedAt,
-			UpdatedAt:   w.UpdatedAt,
+			Delegation:           edges,
+			DelegationUnreadable: !edgesOK,
+			ID:                   w.ID,
+			Name:                 w.Name,
+			Description:          w.Description,
+			Status:               w.Status,
+			Pinned:               w.Pinned,
+			PinOrder:             w.PinOrder,
+			IsDefault:            w.IsDefault,
+			CoreTeam:             w.CoreTeam,
+			TaskCount:            counts[w.ID],
+			CreatedAt:            w.CreatedAt,
+			UpdatedAt:            w.UpdatedAt,
 		})
 	}
 	out := map[string]any{"workspaces": resp}

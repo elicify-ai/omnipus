@@ -7,6 +7,7 @@ package systools
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -98,6 +99,19 @@ func buildKnownChannels() []channelEntry {
 	return out
 }
 
+// findChannelInstance resolves a channel INSTANCE id — a bare type
+// ("telegram", the default instance) or a namespaced instance key
+// ("telegram.eu", ADR-029) — to its type's catalog entry. The shared-resource
+// token and every write are scoped to the instance, never to the type
+// (FR-085/FR-088).
+func findChannelInstance(id string) (channelEntry, bool) {
+	if config.ValidateInstanceKey(id) != nil {
+		return channelEntry{}, false
+	}
+	chType, _ := config.ParseInstanceKey(id)
+	return findChannel(chType)
+}
+
 func findChannel(id string) (channelEntry, bool) {
 	for _, c := range knownChannels {
 		if c.ID == id {
@@ -149,7 +163,7 @@ func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) (res
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
-	if _, ok := findChannel(id); !ok {
+	if _, ok := findChannelInstance(id); !ok {
 		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND", fmt.Sprintf("Unknown channel %q", id), ""))
 	}
 	expected, missing := expectedRevisionArg(args, "list_channels")
@@ -163,7 +177,8 @@ func (t *ChannelEnableTool) Execute(_ context.Context, args map[string]any) (res
 			}
 			ch, ok := cfg.Channels[id]
 			if !ok {
-				ch = config.ChannelInstanceConfig{Type: id}
+				chType, _ := config.ParseInstanceKey(id)
+				ch = config.ChannelInstanceConfig{Type: chType}
 			}
 			ch.Enabled = true
 			cfg.Channels[id] = ch
@@ -264,7 +279,7 @@ func (t *ChannelConfigureTool) Execute(_ context.Context, args map[string]any) (
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
-	if _, ok := findChannel(id); !ok {
+	if _, ok := findChannelInstance(id); !ok {
 		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND",
 			fmt.Sprintf("Unknown channel %q", id), ""))
 	}
@@ -310,7 +325,8 @@ func (t *ChannelConfigureTool) Execute(_ context.Context, args map[string]any) (
 			}
 			ch, ok := cfg.Channels[id]
 			if !ok {
-				ch = config.ChannelInstanceConfig{Type: id}
+				chType, _ := config.ParseInstanceKey(id)
+				ch = config.ChannelInstanceConfig{Type: chType}
 			}
 			for field, credKey := range credRefs {
 				applyChannelRef(&ch, field, credKey)
@@ -422,7 +438,7 @@ func (t *ChannelDisableTool) Execute(_ context.Context, args map[string]any) (re
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
-	if _, ok := findChannel(id); !ok {
+	if _, ok := findChannelInstance(id); !ok {
 		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND", fmt.Sprintf("Unknown channel %q", id), ""))
 	}
 	expected, missing := expectedRevisionArg(args, "list_channels")
@@ -486,6 +502,30 @@ func (t *ChannelListTool) Execute(_ context.Context, _ map[string]any) *tools.To
 		}
 		out = append(out, e)
 	}
+	// Configured instances beyond each type's default one ("telegram.eu"):
+	// each is its own shared resource with its own revision (FR-088).
+	if cfg != nil {
+		var extra []string
+		for key := range cfg.Channels {
+			if _, isType := findChannel(key); !isType {
+				extra = append(extra, key)
+			}
+		}
+		sort.Strings(extra)
+		for _, key := range extra {
+			meta, ok := findChannelInstance(key)
+			if !ok {
+				continue
+			}
+			ch := cfg.Channels[key]
+			e := channelEntry{ID: key, Name: meta.Name, Tier: meta.Tier, Implementation: meta.Implementation,
+				Enabled: ch.Enabled, Status: "configured", Revision: channelRevision(cfg, key)}
+			if ch.TokenRef == "" && ch.AppSecretRef == "" && (ch.Identity == nil || ch.Identity.ID == "") {
+				e.Status = "needs_credentials"
+			}
+			out = append(out, e)
+		}
+	}
 	return tools.NewToolResult(successJSON(map[string]any{"channels": out}))
 }
 
@@ -513,7 +553,7 @@ func (t *ChannelTestTool) Execute(_ context.Context, args map[string]any) *tools
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
-	if _, ok := findChannel(id); !ok {
+	if _, ok := findChannelInstance(id); !ok {
 		return tools.ErrorResult(errorJSON("CHANNEL_NOT_FOUND", fmt.Sprintf("Unknown channel %q", id), ""))
 	}
 	cfg := t.deps.GetCfg()

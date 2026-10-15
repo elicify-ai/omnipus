@@ -1352,8 +1352,16 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		CredStore:        rc.credStore,
 		ReloadFunc:       rc.reloadTrigger,
 		// EnsureWorkspaceMains (final-gate H2): create_agent's team join gives the
-		// new member its main chat through the workspace-save path.
-		EnsureWorkspaceMains: rc.runningServices.ensureWorkspaceMains,
+		// new member its main chat through the workspace-save path. Resolved at
+		// call time through the one restAPI (the same method boot stores in
+		// runningServices.ensureWorkspaceMains), so the hook never depends on
+		// which of the two was wired first (FR-041).
+		EnsureWorkspaceMains: func(workspaceID string) error {
+			if rc.runningServices == nil || rc.runningServices.restAPIRef == nil {
+				return errors.New("workspace main provisioning is not wired")
+			}
+			return rc.runningServices.restAPIRef.ensureWorkspaceMains(workspaceID)
+		},
 		// DEL-10: the delete_agent cascade uses the loop's one live store and stops
 		// each session first.
 		DeleteSessionStore: func() systools.AgentSessionStore {

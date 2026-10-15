@@ -463,11 +463,11 @@ func (t *ProviderListTool) Execute(_ context.Context, args map[string]any) *tool
 	type providerSummary struct {
 		Name   string `json:"name"`
 		Status string `json:"status"`
-		// Endpoint and Protocol are the saved entry's EFFECTIVE base URL and
+		// APIBase and Protocol are the saved entry's EFFECTIVE base URL and
 		// wire protocol, resolved exactly as runtime does (catalog row,
-		// protocol selection, api_base override). Empty when the row cannot
-		// be resolved; Unresolved then carries the reason.
-		Endpoint   string `json:"endpoint"`
+		// protocol selection, api_base override). When the row cannot be
+		// resolved they are the configured values and Unresolved says why.
+		APIBase    string `json:"api_base"`
 		Protocol   string `json:"protocol"`
 		Unresolved string `json:"unresolved,omitempty"`
 		// APIKeyRef is the credential REFERENCE NAME (never the value).
@@ -502,8 +502,9 @@ func (t *ProviderListTool) Execute(_ context.Context, args map[string]any) *tool
 		}
 		summary := providerSummary{Name: p, Status: status, APIKeyRef: rep.APIKeyRef, Revision: providerRevision(cfg, p)}
 		if ep, err := effectiveProviderEndpoint(rep); err == nil {
-			summary.Endpoint, summary.Protocol = ep.API, string(ep.Protocol)
+			summary.APIBase, summary.Protocol = ep.API, string(ep.Protocol)
 		} else {
+			summary.APIBase, summary.Protocol = strings.TrimSpace(rep.APIBase), strings.TrimSpace(rep.Protocol)
 			summary.Unresolved = err.Error()
 		}
 		list = append(list, summary)

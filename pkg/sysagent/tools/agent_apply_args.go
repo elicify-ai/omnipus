@@ -328,16 +328,23 @@ func applyModelParams(a *config.AgentConfig, raw any) error {
 	return nil
 }
 
+// jsonInt reads a whole number: a JSON-decoded float64 without a fraction,
+// or a Go integer from an in-process caller.
 func jsonInt(raw any, field string) (int, error) {
-	f, ok := raw.(float64)
-	if !ok {
-		return 0, fieldErr(field, field+" must be an integer")
+	switch v := raw.(type) {
+	case int:
+		return v, nil
+	case int32:
+		return int(v), nil
+	case int64:
+		return int(v), nil
+	case float64:
+		n := int(v)
+		if float64(n) == v {
+			return n, nil
+		}
 	}
-	n := int(f)
-	if float64(n) != f {
-		return 0, fieldErr(field, field+" must be an integer")
-	}
-	return n, nil
+	return 0, fieldErr(field, field+" must be an integer")
 }
 
 func requiredStringArray(raw any, field string) ([]string, error) {
