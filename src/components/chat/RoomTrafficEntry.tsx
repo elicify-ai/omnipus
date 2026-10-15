@@ -57,6 +57,7 @@ export function RoomTrafficEntry({ roomRef, text, agentName }: RoomTrafficEntryP
           <p className="whitespace-pre-wrap text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{text}</p>
           {workspaceId && (
             <Link
+              tabIndex={0}
               to="/workspaces/$workspaceId/rooms/$roomId"
               params={{ workspaceId, roomId: roomRef.room_id }}
               className="self-start text-[length:var(--type-caption-size)] text-[var(--color-accent)] underline-offset-2 hover:underline"
