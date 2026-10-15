@@ -60,6 +60,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"golang.org/x/crypto/argon2"
@@ -414,12 +415,40 @@ func (s *Store) List() ([]string, error) {
 	return names, nil
 }
 
+// DamagedEntriesError reports store entries whose stored encoding is damaged
+// (malformed Base64, a wrong nonce length) while at least one other entry still
+// decrypts under the master key: the failure is real and visible, but scoped to
+// the named entries — the store itself is readable. Callers treat it as a
+// per-entry failure, never as a whole-store one.
+type DamagedEntriesError struct {
+	Names []string
+	Errs  []error
+}
+
+func (e *DamagedEntriesError) Error() string {
+	return fmt.Sprintf("credentials: %d damaged store entr%s cannot be read (%s); the other entries are readable — re-enter the named credentials: %v",
+		len(e.Names), pluralY(len(e.Names)), strings.Join(e.Names, ", "), errors.Join(e.Errs...))
+}
+
+// Unwrap exposes each entry's own error.
+func (e *DamagedEntriesError) Unwrap() []error { return e.Errs }
+
+func pluralY(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
+}
+
 // HealthCheck checks the store independently of configured credential refs.
 // A locked, unreadable or undecodable store is unhealthy. A nonempty store must
 // have at least one decryptable entry (referenced or not); otherwise its entry
-// errors are returned, preserving ErrWrongKey and any decoding causes. A
-// readable witness leaves individual missing/unreadable refs to their consumers.
-// An absent file or an empty current-format store is healthy and is not written.
+// errors are returned, preserving ErrWrongKey and any decoding causes. With a
+// readable witness, entries whose encoding is damaged (malformed Base64, wrong
+// nonce length) are reported as a *DamagedEntriesError naming them — a
+// visible, scoped failure; entries that fail authentication are still left to
+// their consumers. An absent file or an empty current-format store is healthy
+// and is not written.
 func (s *Store) HealthCheck() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -444,24 +473,29 @@ func (s *Store) HealthCheck() error {
 	}
 	sort.Strings(names)
 	entryErrs := make([]error, 0, len(names))
+	damaged := &DamagedEntriesError{}
+	witness := false
 	for _, name := range names {
-		entry := sf.Credentials[name]
-		// GCM.Open panics on the wrong nonce length. A malformed envelope is
-		// unreadable evidence, not a reason for the health probe to panic.
-		nonce, decodeErr := base64.StdEncoding.DecodeString(entry.Nonce)
-		if decodeErr == nil && len(nonce) != nonceLen {
-			entryErrs = append(entryErrs, fmt.Errorf(
-				"credentials: entry %q is malformed: nonce must be %d bytes, got %d", name, nonceLen, len(nonce)))
+		_, decryptErr := decrypt(s.key, name, sf.Credentials[name])
+		if decryptErr == nil {
+			witness = true
 			continue
 		}
-		if _, decryptErr := decrypt(s.key, name, entry); decryptErr != nil {
-			entryErrs = append(entryErrs, decryptErr)
-		} else {
-			return nil
+		entryErrs = append(entryErrs, decryptErr)
+		var authErr *EntryAuthError
+		if !errors.As(decryptErr, &authErr) {
+			damaged.Names = append(damaged.Names, name)
+			damaged.Errs = append(damaged.Errs, decryptErr)
 		}
 	}
-	return fmt.Errorf("credentials: no store entry could be decrypted (wrong master key or corrupted entries): %w",
-		errors.Join(entryErrs...))
+	if !witness {
+		return fmt.Errorf("credentials: no store entry could be decrypted (wrong master key or corrupted entries): %w",
+			errors.Join(entryErrs...))
+	}
+	if len(damaged.Names) > 0 {
+		return damaged
+	}
+	return nil
 }
 
 // Delete removes the credential named name from the store atomically.
@@ -741,6 +775,12 @@ func decrypt(key []byte, name string, entry encEntry) (string, error) {
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		return "", fmt.Errorf("credentials: gcm init: %w", err)
+	}
+	// GCM.Open panics on a nonce of the wrong length; a damaged entry is a
+	// clear, named error for that entry, never a crash (founder 2026-10-15).
+	if len(nonce) != gcm.NonceSize() {
+		return "", fmt.Errorf("credentials: entry %q is malformed: nonce must be %d bytes, got %d",
+			name, gcm.NonceSize(), len(nonce))
 	}
 	plain, err := gcm.Open(nil, nonce, ct, aadFor(name))
 	if err != nil {

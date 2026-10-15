@@ -365,6 +365,25 @@ func splitEntryAuthFailures(errs []error) (auth, rest []error) {
 // without leaking the underlying error detail (see reloadDegradedStatus).
 var errCredentialStoreUnreadableClass = errors.New("credential store unreadable")
 
+// storeHealthFailure turns a credential-store health result into the
+// boot/reload/refresh decision: nil when the store is healthy, nil (after an
+// ERROR log naming them) when only some entries are damaged and the store is
+// otherwise readable — a visible, scoped failure, never a whole-store refusal
+// (founder 2026-10-15, WU-4) — and the error to refuse with otherwise.
+func storeHealthFailure(phase string, healthErr error) error {
+	if healthErr == nil {
+		return nil
+	}
+	var damaged *credentials.DamagedEntriesError
+	if errors.As(healthErr, &damaged) {
+		slog.Error(phase+": damaged credential entries cannot be read — re-enter them; "+
+			"the rest of the credential store is readable and the system continues",
+			"credential_refs", damaged.Names, "error", healthErr)
+		return nil
+	}
+	return healthErr
+}
+
 // fatalStoreWideAuthFailure refuses boot, reload or refresh on a store-level
 // failure. The sentinel supports a fixed public health reason; cause preserves
 // the typed store error, and refErrs adds any known configuration attribution.
@@ -507,7 +526,7 @@ func bootCredentials(
 	bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
 	// The store, not the configured refs or resolved bundle, decides whole-store
 	// health. Run even with only MCP refs or no refs; an absent file is healthy.
-	if healthErr := credStore.HealthCheck(); healthErr != nil {
+	if healthErr := storeHealthFailure("boot", credStore.HealthCheck()); healthErr != nil {
 		return nil, nil, nil, fatalStoreWideAuthFailure(healthErr,
 			append(append([]error{}, deferredAuth...), bundleAuth...))
 	}

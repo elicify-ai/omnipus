@@ -587,7 +587,7 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	enabledRefs := buildEnabledRefMap(newCfg)
 	bundle, bundleErrs := credentials.ResolveBundle(newCfg, a.credStore)
 	bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
-	if healthErr := a.credStore.HealthCheck(); healthErr != nil {
+	if healthErr := storeHealthFailure("refresh", a.credStore.HealthCheck()); healthErr != nil {
 		refreshErr := fmt.Errorf("refresh rejected: %w",
 			fatalStoreWideAuthFailure(healthErr, bundleAuth))
 		slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
