@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -67,26 +68,42 @@ func TestTurnAssembly_MenuInsideCacheBoundaryReminderOutside(t *testing.T) {
 
 	cb := NewContextBuilder(tmpDir).WithSkillAllowlist([]string{"release-notes"})
 
-	msgs := cb.BuildMessages(0, nil, "hello", nil, "", "test", "chat1", "user1", "Alice", "", nil)
+	history := []providers.Message{
+		{Role: "user", Content: "earlier question"},
+		{Role: "assistant", Content: "earlier answer"},
+	}
+	msgs := cb.BuildMessages(0, history, "hello", nil, "", "test", "chat1", "user1", "Alice", "", nil)
 	require.NotEmpty(t, msgs)
 	require.Equal(t, "system", msgs[0].Role)
-	require.Len(t, msgs[0].SystemParts, 2, "static + dynamic blocks only — no active skills, no breadcrumb, on this turn")
 
 	staticBlock := msgs[0].SystemParts[0]
-	dynamicBlock := msgs[0].SystemParts[1]
-
-	require.NotNil(t, staticBlock.CacheControl, "the static block must carry cache_control (ADR-071 D5's cached prefix)")
+	require.NotNil(t, staticBlock.CacheControl, "the static block must carry cache_control so the skill menu stays in the stable prefix")
 	assert.Equal(t, "ephemeral", staticBlock.CacheControl.Type)
 	assert.Contains(t, staticBlock.Text, "# Skills", "the menu heading must be inside the cached static block")
 	assert.Contains(t, staticBlock.Text, "release-notes", "the granted skill's menu entry must be inside the cached static block")
 	assert.NotContains(t, staticBlock.Text, skillReminderNote, "the reminder must NOT be inside the cached static block")
-
-	assert.Nil(t, dynamicBlock.CacheControl, "the dynamic block must carry no cache_control — it changes every request")
-	assert.Contains(t, dynamicBlock.Text, skillReminderNote, "the reminder must be inside the un-cached dynamic block")
-	// The reminder legitimately quotes the menu's own heading name
-	// ("# Skills"), so the no-duplication check below asserts on the
-	// granted skill's actual MENU ENTRY, not the heading string.
-	assert.NotContains(t, dynamicBlock.Text, "release-notes", "the granted skill's menu entry must not be duplicated into the dynamic block")
+	for _, part := range msgs[0].SystemParts {
+		assert.NotContains(t, part.Text, skillReminderNote, "the reminder moves behind the conversation; it is not a system block")
+	}
+	for _, msg := range msgs {
+		if msg.Role == "system" {
+			assert.NotContains(t, msg.Content, skillReminderNote, "the reminder must not be a system-role message")
+		}
+	}
+	var tail string
+	seenHello := false
+	for _, msg := range msgs {
+		if msg.Content == "hello" {
+			seenHello = true
+			continue
+		}
+		if seenHello && msg.Role == "user" {
+			tail += msg.Content
+		}
+	}
+	require.True(t, seenHello, "the current user message must be present so the reminder can sit after it")
+	assert.Contains(t, tail, skillReminderNote, "the per-turn skill reminder must be a user-role block after the conversation")
+	assert.NotContains(t, tail, "release-notes", "the granted skill's menu entry must not be duplicated into the reminder tail")
 }
 
 // TestTurnAssembly_NoSkillBodiesWhenNoneActive (test 33) — ADR-072 D1's
