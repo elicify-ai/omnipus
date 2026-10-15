@@ -44,18 +44,22 @@ func TestMain(m *testing.M) {
 		}
 	}
 	home.Remove()
-	if leaked := leakedPackageDirFiles(); len(leaked) > 0 && code == 0 {
+	if leaked := leakedPackageDirFiles(); len(leaked) > 0 {
 		reportTestMain("gateway TestMain: a test wrote into the package directory instead of its temp home:", strings.Join(leaked, ", "))
-		code = 1
+		if code == 0 {
+			code = 1
+		}
 	}
 	// Hygiene guard (2026-09-14, after a CI debug session where the real
 	// failure text never reached the log): a test that silences the console
 	// via logger.DisableConsole and never runs its restore func leaves EVERY
 	// later test in this binary unable to log. Fail the package loudly rather
 	// than letting the next failure hide its own evidence.
-	if code == 0 && logger.ConsoleDisabled() {
+	if logger.ConsoleDisabled() {
 		reportTestMain("gateway TestMain: console logging is still disabled after the test run — a test called logger.DisableConsole() without t.Cleanup on its restore func")
-		os.Exit(1)
+		if code == 0 {
+			code = 1
+		}
 	}
 	os.Exit(code)
 }
