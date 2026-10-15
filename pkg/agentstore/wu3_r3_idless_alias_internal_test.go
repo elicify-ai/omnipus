@@ -27,9 +27,9 @@ func TestWU3GetRefusesCaseAliasOnAnyFilesystem(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(s.Dir(), "IDLESS.json"), record, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	real := readStoreDir
+	listDir := readStoreDir
 	readStoreDir = func(dir string) ([]fs.DirEntry, error) {
-		entries, err := real(dir)
+		entries, err := listDir(dir)
 		out := entries[:0]
 		for _, e := range entries {
 			if e.Name() != "IDLESS.json" { // the volume lists only the real name
@@ -38,7 +38,7 @@ func TestWU3GetRefusesCaseAliasOnAnyFilesystem(t *testing.T) {
 		}
 		return out, err
 	}
-	t.Cleanup(func() { readStoreDir = real })
+	t.Cleanup(func() { readStoreDir = listDir })
 
 	if got, err := s.Get("idless"); err != nil || got.ID != "idless" {
 		t.Fatalf("control: the exact id reads (got %v, %v)", got, err)
