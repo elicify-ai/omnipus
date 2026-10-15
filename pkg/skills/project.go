@@ -126,10 +126,6 @@ func discoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugC
 
 	for _, dirRel := range projectSkillsDirs {
 		dirPath := filepath.Join(mountRoot, filepath.FromSlash(dirRel))
-		if _, statErr := os.Stat(dirPath); statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-			incomplete = errors.Join(incomplete, fmt.Errorf("mount %q: %s: %w", mountName, dirRel, statErr))
-			continue
-		}
 		if _, ok := realWithinRoot(mountRootReal, dirPath); !ok {
 			// Missing, or a symlink (direct or via any parent component)
 			// resolving outside the mount — the whole directory is refused,
