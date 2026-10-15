@@ -39,6 +39,7 @@ type Provider struct {
 	client             *anthropic.Client
 	tokenSource        func() (string, error)
 	baseURL            string
+	providerID         string        // catalog identity, preserved when api_base points at a proxy
 	streamStallTimeout time.Duration // streaming silence limit; 0 = common.DefaultStreamStallTimeout
 
 	// streamHTTPClient is the streaming request's HTTP client: the default
@@ -112,6 +113,10 @@ func NewProviderWithTimeout(token, apiBase string, timeoutSeconds int) *Provider
 	p.baseURL = strings.TrimRight(p.baseURL, "/") + "/v1"
 	return p
 }
+
+// WithProviderID pins documented dialect selection to the configured catalog
+// row, even when an operator routes it through a private base URL.
+func (p *Provider) WithProviderID(id string) *Provider { p.providerID = id; return p }
 
 // WithStreamStallTimeout sets the streaming silence limit on this provider
 // (founder decision 2026-09-14): a ChatStream call receiving no events of any

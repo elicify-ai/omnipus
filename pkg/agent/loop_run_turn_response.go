@@ -976,12 +976,11 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 	//
 	// This entry owns this call's usage, including a no-text accounting entry.
 	// The final reply must not count that usage a second time.
-	hadAccounting := rr.rq.ri.rf.rt.ts.pendingCallAccounting()
 	rr.rq.ri.rf.rt.ts.appendIntermediateAssistantTranscript(rr.rq.ri.rf.response.Content)
 	if err := rr.rq.ri.rf.rt.ts.callAccountingError(); err != nil {
 		return err
 	}
-	if rr.rq.ri.rf.response.Content != "" || hadAccounting {
+	if rr.rq.ri.rf.response.Content != "" {
 		// The narration is now in the transcript. If this round's streamer
 		// ends up being finalized (the turn exits via max_tool_iterations
 		// exhaustion, where the last executed round is a tool-call round),

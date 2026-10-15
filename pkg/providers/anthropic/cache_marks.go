@@ -10,6 +10,21 @@ import (
 // cacheLifetime is an endpoint dialect, not a feature switch. Unknown and
 // automatic-only hosts receive no field. MiniMax M3 is automatic-only.
 func (p *Provider) cacheLifetime(model string) string {
+	switch p.providerID {
+	case "anthropic":
+		return "1h"
+	case "minimax", "minimax-cn", "minimax-coding-plan", "minimax-cn-coding-plan":
+		return miniMaxLifetime(model)
+	case "moonshotai", "moonshotai-cn", "zai", "zai-coding-plan", "zhipuai", "deepseek":
+		return ""
+	case "alibaba", "alibaba-cn":
+		return "5m"
+	case "vercel":
+		if strings.Contains(strings.ToLower(model), "claude") {
+			return "5m"
+		}
+		return ""
+	}
 	u, err := url.Parse(p.baseURL)
 	if err != nil {
 		return ""
@@ -18,10 +33,7 @@ func (p *Provider) cacheLifetime(model string) string {
 	case "api.anthropic.com":
 		return "1h"
 	case "api.minimax.io", "api.minimax.cn", "api.minimaxi.com":
-		if strings.HasPrefix(strings.ToLower(model), "minimax-m3") {
-			return ""
-		}
-		return "5m"
+		return miniMaxLifetime(model)
 	case "dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com":
 		return "5m"
 	case "ai-gateway.vercel.sh":
@@ -87,4 +99,11 @@ func (p *Provider) markCache(params *anthropic.MessageNewParams, source []Messag
 	case candidate.OfToolResult != nil:
 		candidate.OfToolResult.CacheControl = tail
 	}
+}
+
+func miniMaxLifetime(model string) string {
+	if strings.HasPrefix(strings.ToLower(model), "minimax-m3") {
+		return ""
+	}
+	return "5m"
 }

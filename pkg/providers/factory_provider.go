@@ -230,7 +230,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.APIKey(),
 			row.api,
 			cfg.RequestTimeout,
-		).WithStreamStallTimeout(cfg.EffectiveStreamStallTimeout()), modelID, nil
+		).WithProviderID(cfg.Provider).WithStreamStallTimeout(cfg.EffectiveStreamStallTimeout()), modelID, nil
 
 	case catalog.ProtocolBedrock:
 		if err := requireKey(cfg, row); err != nil {

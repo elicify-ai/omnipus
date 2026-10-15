@@ -64,7 +64,7 @@ func (ts *turnState) accountProviderCall(providerID, model string, usage *provid
 		price.BillingClass = promptcache.BillingClassUnpriced
 	}
 	entry := session.TranscriptEntry{
-		ID: uuid.NewString(), Role: "assistant", AgentID: ts.agent.ID, TurnID: ts.turnID, GoalID: ts.goalID,
+		ID: uuid.NewString(), Role: "assistant", AgentID: ts.resolveActiveAgentID(), TurnID: ts.turnID, GoalID: ts.goalID,
 		Timestamp: time.Now().UTC(), ProviderID: providerID, Model: model, ModelID: model,
 		BillingClass: price.BillingClass, UnpricedTokens: price.UnpricedTokens,
 		Tokens: u.TotalTokens, Cost: price.Cost, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
@@ -91,6 +91,13 @@ func (rt *agentLoopRunTurn) logCompletedCall(providerID, model string, response 
 	var usage providers.UsageInfo
 	if response.Usage != nil {
 		usage = *response.Usage
+	}
+	if response.Content == "" && rt.ts.transcriptStore != nil && rt.ts.transcriptSessionID != "" {
+		// No-text calls own an invisible accounting entry immediately. A later
+		// synthetic terminal notice must not inherit their provider attribution.
+		if err := rt.ts.flushPendingCallAccounting(); err != nil {
+			rt.ts.setCallAccountingError(err)
+		}
 	}
 	logger.InfoC("agent", promptcache.FormatCallAccounting(promptcache.CallAccounting{
 		ProviderID: providerID, ModelID: model, AgentID: rt.ts.agent.ID,
