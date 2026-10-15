@@ -2,7 +2,6 @@ package tools
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 )
 
@@ -23,12 +22,16 @@ func TestWU3FinalizeChangeResult_Shapes(t *testing.T) {
 	}
 
 	text := FinalizeChangeResult("t", ErrorResult(`scope must be "workspace" or "shared"`))
-	if !strings.HasPrefix(text.ForLLM, `scope must be "workspace" or "shared"`) {
-		t.Fatalf("plain-text refusal must keep its text verbatim: %s", text.ForLLM)
+	var tm map[string]any
+	if err := json.Unmarshal([]byte(text.ForLLM), &tm); err != nil {
+		t.Fatalf("a plain-text refusal becomes the structured FR-030 object: %v %s", err, text.ForLLM)
 	}
-	if !strings.Contains(text.ForLLM, `"outcome": "failed: nothing saved"`) ||
-		!strings.Contains(text.ForLLM, `"changed_fields": []`) {
-		t.Fatalf("plain-text refusal must carry the verdict: %s", text.ForLLM)
+	errBlock, _ := tm["error"].(map[string]any)
+	if errBlock["message"] != `scope must be "workspace" or "shared"` || tm["outcome"] != OutcomeFailedNothingSaved {
+		t.Fatalf("plain-text refusal must keep its text as error.message with the verdict: %s", text.ForLLM)
+	}
+	if cf, ok := tm["changed_fields"].([]any); !ok || len(cf) != 0 {
+		t.Fatalf("changed_fields must be []: %s", text.ForLLM)
 	}
 
 	partial := ChangeErrorResult(map[string]any{"changed_fields": []string{"a"}}, ChangePartlySaved("r", "", []string{"b"}))
