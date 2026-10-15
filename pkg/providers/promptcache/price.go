@@ -43,6 +43,9 @@ func Price(in PriceInput) PriceResult {
 	}
 	cost := contextCost(in.Cost, u.PromptTokens+u.CacheReadTokens+u.CacheWriteTokens)
 	r := PriceResult{BillingClass: BillingClassUnpriced}
+	if u.CacheWrite1hTokens > 0 {
+		r.OneHourRule = OneHourRuleUnpriced
+	}
 	if cost == nil || !validPrice(cost.Input) {
 		r.UnpricedTokens = total
 		return r
