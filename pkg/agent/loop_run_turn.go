@@ -1626,7 +1626,13 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 				if p == nil {
 					p = rt.activeProvider
 				}
-				return p.Chat(ctx, candidateMessages, toolDefsForCall, model, rt.llmOpts)
+				rt.ts.setLastProducedModel(model)
+				rt.ts.setLastProducedProvider(provider)
+				response, err := p.Chat(ctx, candidateMessages, toolDefsForCall, model, rt.llmOpts)
+				if err == nil && response != nil {
+					rt.logCompletedCall(provider, model, response)
+				}
+				return response, err
 			},
 		)
 		if fbErr != nil {

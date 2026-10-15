@@ -35,7 +35,12 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 	messagesForCall []providers.Message,
 	toolDefsForCall []providers.ToolDefinition,
 	streamed *atomic.Int64,
-) (*providers.LLMResponse, error) {
+) (response *providers.LLMResponse, err error) {
+	defer func() {
+		if err == nil && response != nil {
+			rt.logCompletedCall(providerName, model, response)
+		}
+	}()
 	var imageErr error
 	cat := rt.al.getCapabilityCatalog()
 	budget := resizeBudgetForModel(cat, providerName, model, int(catalog.DefaultResizeLimits.MaxBytes))
