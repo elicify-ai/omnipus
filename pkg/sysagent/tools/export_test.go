@@ -100,3 +100,11 @@ func FailMCPCredentialWriteAfterForTest(t interface{ Cleanup(func()) }, ok int) 
 	}
 	t.Cleanup(func() { mcpCredentialSet = prev })
 }
+
+// FailAgentMetadataReadBackForTest makes update_agent's metadata read-back
+// fail (the write itself still happens), restoring the real reader when t ends.
+func FailAgentMetadataReadBackForTest(t interface{ Cleanup(func()) }) {
+	prev := readAgentMetadataBack
+	readAgentMetadataBack = func(string) ([]byte, error) { return nil, errors.New("injected read-back failure") }
+	t.Cleanup(func() { readAgentMetadataBack = prev })
+}

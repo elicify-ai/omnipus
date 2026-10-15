@@ -68,11 +68,15 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 	} else if refusal := checkRevisionUnchanged(store, id, revision); refusal != nil {
 		return refusal
 	}
-	written, metaFailure := writeAgentMetadataFiles(home, id, meta)
+	written, unverified, metaFailure := writeAgentMetadataFiles(home, id, meta)
 	durable := append(append([]string{}, fields...), written...)
 	if metaFailure != nil {
 		if len(durable) == 0 {
 			return tools.ErrorResult(errorJSON("SAVE_FAILED", metaFailure.Error(), "Read the agent with get_agent before retrying"))
+		}
+		missing := missingMetadata(meta, written)
+		if unverified != "" {
+			missing = append(missing, "read-back of "+unverified)
 		}
 		return changeErrorWithOutcome(map[string]any{
 			"success":            false,
@@ -81,7 +85,7 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 			"revision":           newRevision,
 			"persistence_status": agentstore.PersistencePartial,
 			"changed_fields":     durable,
-		}, partlySaved(metaFailure.Error(), "", missingMetadata(meta, written)))
+		}, partlySaved(metaFailure.Error(), "", missing))
 	}
 	activation, message := publishAgentActivation(t.deps, id)
 	if _, hasVoice := args["voice"]; hasVoice && message == "" {
@@ -182,8 +186,9 @@ func agentMetadataWrites(args map[string]any) ([]agentMetadataWrite, error) {
 }
 
 // checkMetadataWriteAllowed applies the shared field rules to the metadata
-// files (they follow soul's: protected on locked built-ins and system agents,
-// unsupported on external CLI workers).
+// files (they follow soul's: ordinary built-ins protect these instruction
+// files, hidden system agents keep them editable, external CLI workers do not
+// support them).
 func checkMetadataWriteAllowed(store *agentstore.Store, id string, writes []agentMetadataWrite) *tools.ToolResult {
 	a, err := store.Get(id)
 	if err != nil {
@@ -202,8 +207,10 @@ func checkMetadataWriteAllowed(store *agentstore.Store, id string, writes []agen
 	return nil
 }
 
-// checkRevisionUnchanged refuses a metadata-only update whose revision is
-// stale, so the optimistic-concurrency rule holds when no record field changes.
+// checkRevisionUnchanged refuses a metadata-only update whose entity/SOUL
+// revision is stale. The revision covers only the entity record and SOUL.md,
+// not AGENT.md, so it does not detect a concurrent AGENT.md-only change
+// (tracked as #1321).
 func checkRevisionUnchanged(store *agentstore.Store, id, revision string) *tools.ToolResult {
 	current, err := store.PeekRevision(id)
 	if err != nil {
@@ -221,23 +228,34 @@ func checkRevisionUnchanged(store *agentstore.Store, id, revision string) *tools
 }
 
 // writeAgentMetadataFiles writes each requested file atomically (0600) in the
-// agent's home and reads it back. It stops at the first failure and returns
-// the arguments already written.
-func writeAgentMetadataFiles(home, id string, writes []agentMetadataWrite) (written []string, err error) {
+// agent's home and reads it back. It stops at the first failure. written lists
+// the arguments whose file was published — recorded as soon as the atomic
+// write succeeds, because publication is durable whether or not the read-back
+// then works (WU-3 SF-05). unverified names the file whose read-back failed or
+// differed, if that was the failure.
+func writeAgentMetadataFiles(home, id string, writes []agentMetadataWrite) (written []string, unverified string, err error) {
 	dir := datamodel.AgentHomePath(home, id)
 	for _, w := range writes {
 		path := filepath.Join(dir, w.file)
 		if werr := fileutil.WriteFileAtomic(path, []byte(w.content), 0o600); werr != nil {
-			return written, fmt.Errorf("%s could not be written: %w", w.file, werr)
-		}
-		back, rerr := os.ReadFile(path)
-		if rerr != nil || string(back) != w.content {
-			return written, fmt.Errorf("%s did not read back as written", w.file)
+			return written, "", fmt.Errorf("%s could not be written: %w", w.file, werr)
 		}
 		written = append(written, w.arg)
+		back, rerr := readAgentMetadataBack(path)
+		if rerr != nil {
+			return written, w.file, fmt.Errorf("%s was saved but could not be read back: %w", w.file, rerr)
+		}
+		if string(back) != w.content {
+			return written, w.file, fmt.Errorf("%s was saved but reads back differently", w.file)
+		}
 	}
-	return written, nil
+	return written, "", nil
 }
+
+// readAgentMetadataBack reads a just-written metadata file back. A variable
+// only so a test can fail the read-back (FailAgentMetadataReadBackForTest);
+// production never reassigns it.
+var readAgentMetadataBack = os.ReadFile
 
 // missingMetadata lists the requested metadata files that were not written.
 func missingMetadata(writes []agentMetadataWrite, written []string) []string {
