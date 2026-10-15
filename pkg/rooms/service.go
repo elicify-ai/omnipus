@@ -72,11 +72,24 @@ type AuditEvent struct {
 	Principal                   string
 }
 
-// Deps are the gateway-owned facts and side effects the room service uses.
-type Deps interface {
+// Directory is what the room service reads about workspaces and agents.
+type Directory interface {
 	// Workspace loads a workspace; found=false when it does not exist. A
 	// read failure is an error, never "not found".
 	Workspace(workspaceID string) (ws Workspace, found bool, err error)
+	// AgentName returns an agent's display name (any agent, member or not).
+	AgentName(agentID string) (string, bool)
+	// SessionInWorkspace reports whether sessionID is a main chat of a
+	// conversation agent of workspaceID (origin_session_id validation).
+	SessionInWorkspace(sessionID, workspaceID string) bool
+	// Limits returns the per-sender-and-target admissions per minute and the
+	// message body limit in bytes (FR-176: the session messaging limits).
+	Limits() (ratePerMinute, bodyBytes int)
+}
+
+// Receivers is the member side: the agent loop's room admission, the
+// member's request ledger and its main chat.
+type Receivers interface {
 	// Admit admits one delivery into the member's main session. Refusals
 	// wrap ErrAdmitRefused / ErrAdmitUnavailable / ErrAdmitCancelled.
 	Admit(ctx context.Context, a Admission) (AdmitResult, error)
@@ -86,21 +99,33 @@ type Deps interface {
 	Discard(sessionID, requestID string) error
 	// Mirror writes an answer once into the responder's main chat.
 	Mirror(m Mirror) error
+	// CancelApproval withdraws the member's pending pre-admission card for a
+	// delivery, if any (pause, removal, deletion).
+	CancelApproval(requestID string)
+}
+
+// Effects are the room service's outward signals.
+type Effects interface {
 	// Publish sends a frame to the connections attached to the room.
 	Publish(roomID string, frame any)
 	// Audit records a room change.
 	Audit(e AuditEvent)
-	// SessionInWorkspace reports whether sessionID is a main chat of a
-	// conversation agent of workspaceID (origin_session_id validation).
-	SessionInWorkspace(sessionID, workspaceID string) bool
-	// Limits returns the per-sender-and-target admissions per minute and the
-	// message body limit in bytes (FR-176: the session messaging limits).
-	Limits() (ratePerMinute, bodyBytes int)
-	// AgentName returns an agent's display name (any agent, member or not).
-	AgentName(agentID string) (string, bool)
-	// CancelApproval withdraws the member's pending pre-admission card for a
-	// delivery, if any (pause, removal, deletion).
-	CancelApproval(requestID string)
+}
+
+// Deps are the gateway-owned facts and side effects the room service uses.
+type Deps struct {
+	Directory
+	Receivers
+	Effects
+}
+
+// DepsFrom builds Deps from one value that provides all three parts.
+func DepsFrom(all interface {
+	Directory
+	Receivers
+	Effects
+}) Deps {
+	return Deps{Directory: all, Receivers: all, Effects: all}
 }
 
 // Service is the rooms of one Omnipus home.

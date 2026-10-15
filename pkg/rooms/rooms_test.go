@@ -137,7 +137,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	dir := t.TempDir()
 	deps := newFakeDeps()
-	return &fixture{t: t, dir: dir, deps: deps, svc: New(NewFileJournal(dir), deps)}
+	return &fixture{t: t, dir: dir, deps: deps, svc: New(NewFileJournal(dir), DepsFrom(deps))}
 }
 
 func (f *fixture) squad(members ...string) generated.Room {
@@ -340,7 +340,7 @@ func TestList_StorageFailureIsAnErrorNotAnEmptyList(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(f.dir, room.Id, "room.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fresh := New(NewFileJournal(f.dir), f.deps)
+	fresh := New(NewFileJournal(f.dir), DepsFrom(f.deps))
 	list, err := fresh.List("sales")
 	if err == nil || StatusOf(err) != http.StatusInternalServerError || list != nil {
 		t.Fatalf("list over an unreadable room = %v, %v; want a 500 error", list, err)
@@ -477,7 +477,7 @@ func TestRestart_RestoresProvableStatesOnly(t *testing.T) {
 	f.svc.BeginConsume(room.Id, mia.RequestID, "main-mia")
 	f.deps.facts[mia.RequestID] = ReceiverFacts{Found: true, Delivered: true, SessionID: "main-mia"}
 	f.deps.factsErr[jim.RequestID] = errors.New("ledger unreadable")
-	fresh := New(NewFileJournal(f.dir), f.deps)
+	fresh := New(NewFileJournal(f.dir), DepsFrom(f.deps))
 	fx := &fixture{t: t, dir: f.dir, deps: f.deps, svc: fresh}
 	st := fx.states(room.Id)
 	if st["mia"] != "interrupted/restart" || st["jim"] != "unknown/" {

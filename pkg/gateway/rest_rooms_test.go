@@ -241,7 +241,7 @@ func (j *faultJournal) Remove(id string) error {
 // useJournal replaces the harness's room service with one over journal.
 func (rh *roomsHarness) useJournal(j rooms.Journal) {
 	hub := &roomsHub{subs: map[string]map[*wsConn]struct{}{}}
-	hub.svc = rooms.New(j, &gatewayRoomDeps{h: rh.h, home: rh.api.homePath, hub: hub})
+	hub.svc = rooms.New(j, rooms.DepsFrom(&gatewayRoomDeps{h: rh.h, home: rh.api.homePath, hub: hub}))
 	rh.h.agentLoop.SetRoomRuntime(agentRoomRuntime{svc: hub.svc})
 	rh.h.rooms = hub
 	rh.hub = hub
@@ -270,10 +270,10 @@ func TestRoomsREST_StorageFaultIs500OnEveryRoute(t *testing.T) {
 	}
 	for _, c := range cases {
 		fj.fail = map[string]bool{c.fault: true}
-		w := rh.do(c.method, c.path, c.body, c.handler)
+		res := rh.do(c.method, c.path, c.body, c.handler)
 		var e generated.ErrorResponse
-		if w.Code != http.StatusInternalServerError || json.Unmarshal(w.Body.Bytes(), &e) != nil || e.Error == "" {
-			t.Errorf("%s under a %s fault: %d %q, want 500 with an ErrorResponse", c.name, c.fault, w.Code, w.Body.String())
+		if res.Code != http.StatusInternalServerError || json.Unmarshal(res.Body.Bytes(), &e) != nil || e.Error == "" {
+			t.Errorf("%s under a %s fault: %d %q, want 500 with an ErrorResponse", c.name, c.fault, res.Code, res.Body.String())
 		}
 	}
 	fj.fail = map[string]bool{}

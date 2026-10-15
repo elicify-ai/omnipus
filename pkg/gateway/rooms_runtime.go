@@ -39,7 +39,7 @@ type roomsHub struct {
 // the agent loop.
 func newRoomsHub(h *WSHandler, home string) *roomsHub {
 	hub := &roomsHub{subs: map[string]map[*wsConn]struct{}{}}
-	hub.svc = rooms.New(rooms.NewFileJournal(rooms.DefaultDir(home)), &gatewayRoomDeps{h: h, home: home, hub: hub})
+	hub.svc = rooms.New(rooms.NewFileJournal(rooms.DefaultDir(home)), rooms.DepsFrom(&gatewayRoomDeps{h: h, home: home, hub: hub}))
 	if h.agentLoop != nil {
 		h.agentLoop.SetRoomRuntime(agentRoomRuntime{svc: hub.svc})
 	}
@@ -99,7 +99,11 @@ type gatewayRoomDeps struct {
 	hub  *roomsHub
 }
 
-var _ rooms.Deps = (*gatewayRoomDeps)(nil)
+var (
+	_ rooms.Directory = (*gatewayRoomDeps)(nil)
+	_ rooms.Receivers = (*gatewayRoomDeps)(nil)
+	_ rooms.Effects   = (*gatewayRoomDeps)(nil)
+)
 
 // Workspace lists the workspace's conversation agents: team members that are
 // chat targets, never workers, system agents or Omnipus (FR-160, FR-162).
