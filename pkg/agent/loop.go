@@ -608,8 +608,9 @@ type AgentLoop struct {
 	// a fresh set on first load; entries are evicted by forgetSession's
 	// suffix sweep on CloseSession (transcript sessions). Only populated when
 	// Compressed is true.
-	loadedTools   map[string]map[string]bool
-	loadedToolsMu sync.Mutex
+	loadedTools         map[string]map[string]bool
+	loadedToolsMu       sync.Mutex
+	promptCacheSessions sync.Map // manifest bucket → sessionPromptCache
 
 	// pendingSearchPromotions is a side table of loadedTools (ADR-071
 	// §4.3.1a): bucket key → tool name → the turn index (bucketTurnCounter

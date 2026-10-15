@@ -191,7 +191,7 @@ func stripInfraToolDefs(in []tools.Tool) []tools.Tool {
 // compressed code-path.
 func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []tools.Tool) ([]providers.ToolDefinition, error) {
 	bucket := ts.manifestBucket()
-	loaded := al.sessionLoadedTools(bucket)
+	loaded := al.pruneLoadedTools(bucket, policyFiltered)
 
 	// Track which infra tools are already present in policyFiltered so we don't
 	// double-add them. Build the sent list in one pass.
@@ -228,7 +228,9 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 	if err != nil {
 		return nil, err
 	}
-	return tools.ToolsToProviderDefs(sent), nil
+	defs := tools.ToolsToProviderDefs(sent)
+	al.retainAdvertisedTools(ts, defs)
+	return defs, nil
 }
 
 // appendGoalDoorsAfterEscape keeps ADR-088 D3's first-move doors callable

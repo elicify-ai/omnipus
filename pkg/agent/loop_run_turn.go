@@ -944,6 +944,8 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		rq.ri.rf.providerToolDefs = tools.ToolsToProviderDefs(stripInfraToolDefs(rq.policyFilteredTools))
 	}
 
+	rq.cacheToolSurface()
+
 	// Native web search support
 	_, hasWebSearch := rq.ri.rf.rt.ts.agent.Tools.Get("search_web")
 	rq.useNativeSearch = rq.ri.cfg.Tools.Web.PreferNative &&
@@ -980,7 +982,7 @@ func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 		return
 	}
 
-	rq.ri.rf.callMessages = repairedHistory
+	rq.ri.rf.callMessages = rq.ri.rf.rt.al.freezeSessionSkillMenu(rq.ri.rf.rt.ts, repairedHistory)
 	// Re-inject the acting agent's current scratchpad as an ephemeral system
 	// message so the checklist survives context compression and the agent
 	// always sees its plan at the top of the turn. The note is NOT persisted
@@ -1128,6 +1130,11 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 	// native-search strip, graceful-terminal clearing, BeforeLLM hook). The
 	// tool loop below refuses any call to a tool outside it — see
 	// toolNotOfferedRefusal (tool_offer_gate.go).
+	if err := rq.recordPromptTokenSizes(); err != nil {
+		rq.ret0 = turnResult{status: TurnEndStatusError}
+		rq.ret1 = err
+		return agentLoopRunTurnRequestReturn
+	}
 	rq.offeredTools = newOfferedToolSet(rq.ri.rf.providerToolDefs)
 
 	// G1 fix: a cheap, non-blocking tool-call-argument progress callback,

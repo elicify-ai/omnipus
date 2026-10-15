@@ -4,6 +4,7 @@ package agent
 
 import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"strings"
 )
 
 // markToolsLoaded records names as loaded for the given session (manifest
@@ -12,6 +13,11 @@ import (
 func (al *AgentLoop) markToolsLoaded(sessionID string, names []string) {
 	if sessionID == "" || len(names) == 0 {
 		return
+	}
+	if agentID, _, ok := strings.Cut(sessionID, manifestBucketKeySep); ok && al.registry != nil {
+		if agent, exists := al.registry.GetAgent(agentID); exists && agent.Tools != nil {
+			agent.Tools.RetainLoadedTools(names)
+		}
 	}
 	al.loadedToolsMu.Lock()
 	defer al.loadedToolsMu.Unlock()

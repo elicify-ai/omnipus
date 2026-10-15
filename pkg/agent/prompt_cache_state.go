@@ -1,107 +1,83 @@
 package agent
 
-import "github.com/elicify-ai/omnipus/pkg/providers"
+import (
+	"encoding/json"
+	"fmt"
+	"slices"
+	"sort"
+	"unicode/utf8"
 
-// SessionToolList is one session's loaded tool definitions. A tool added
-// here stays advertised for that session until the session ends, and a
-// second session does not see it. The skeleton retains nothing.
+	"github.com/elicify-ai/omnipus/pkg/providers"
+)
+
+// SessionToolList is the authorized advertised view of one session. The real
+// registry owns executable tools; the manifest's loaded set owns membership.
+// This snapshot is replaced only on ordinary requests, never by goal narrowing.
 type SessionToolList struct {
 	sessionID string
+	defs      map[string]providers.ToolDefinition
 }
 
-// NewSessionToolList returns the loaded-tool list for sessionID.
 func NewSessionToolList(sessionID string) *SessionToolList {
-	return &SessionToolList{sessionID: sessionID}
+	return &SessionToolList{sessionID: sessionID, defs: make(map[string]providers.ToolDefinition)}
 }
 
-// SessionID returns the session this list belongs to.
-func (s *SessionToolList) SessionID() string {
-	if s == nil {
-		return ""
-	}
-	return s.sessionID
-}
-
-// Add records a tool definition on this session. The skeleton does not store it.
-func (s *SessionToolList) Add(def providers.ToolDefinition) {
-	_, _ = s, def
-}
-
-// Remove drops a tool by name (a Deny, a removed assignment, or a disconnect).
-// The skeleton has nothing to drop.
-func (s *SessionToolList) Remove(name string) {
-	_, _ = s, name
-}
-
-// Definitions returns the tools still advertised, in deterministic order.
-// The skeleton returns nil.
+func (s *SessionToolList) Add(def providers.ToolDefinition) { s.defs[def.Function.Name] = def }
+func (s *SessionToolList) Remove(name string)               { delete(s.defs, name) }
 func (s *SessionToolList) Definitions() []providers.ToolDefinition {
-	_ = s
-	return nil
-}
-
-// Contains reports whether name is still executable in this session.
-// The skeleton reports false.
-func (s *SessionToolList) Contains(name string) bool {
-	_, _ = s, name
-	return false
-}
-
-// CanonicalToolListBytes serialises defs in one order that does not depend on
-// the input order. The skeleton returns nil.
-func CanonicalToolListBytes(defs []providers.ToolDefinition) []byte {
-	_ = defs
-	return nil
-}
-
-// GoalNarrowedTools returns the tool list for one turn. narrow true is the
-// goal-setting turn and uses goal. narrow false is the following ordinary
-// turn and uses the session list. The skeleton returns nil.
-func GoalNarrowedTools(session *SessionToolList, narrow bool, goal []providers.ToolDefinition) []providers.ToolDefinition {
-	_, _, _ = session, narrow, goal
-	return nil
-}
-
-// FrozenSkillList is the skill list advertised at the start of a session.
-// Later turns keep this list even when the files on disk change. The
-// skeleton does not keep the names it was given.
-type FrozenSkillList struct {
-	sessionID string
-}
-
-// FreezeSkillList captures the advertised skill list for sessionID.
-func FreezeSkillList(sessionID string, names []string) *FrozenSkillList {
-	_ = names
-	return &FrozenSkillList{sessionID: sessionID}
-}
-
-// SessionID returns the session this list was frozen for.
-func (f *FrozenSkillList) SessionID() string {
-	if f == nil {
-		return ""
+	defs := make([]providers.ToolDefinition, 0, len(s.defs))
+	for _, def := range s.defs {
+		defs = append(defs, def)
 	}
-	return f.sessionID
+	sort.Slice(defs, func(i, j int) bool { return defs[i].Function.Name < defs[j].Function.Name })
+	return defs
 }
 
-// Names returns the advertised list. The skeleton returns nil.
-func (f *FrozenSkillList) Names() []string {
-	_ = f
-	return nil
+func CanonicalToolListBytes(defs []providers.ToolDefinition) []byte {
+	ordered := slices.Clone(defs)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Function.Name < ordered[j].Function.Name })
+	data, err := json.Marshal(ordered)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
-// TokenSizeRecord is a labelled token count or token estimate of the tool
-// list and of the skill text for one agent. Estimator names the estimator.
-// A byte count alone does not satisfy the record. The skeleton leaves every
-// field at zero, including an empty Estimator.
+func GoalNarrowedTools(session *SessionToolList, narrow bool, goal []providers.ToolDefinition) []providers.ToolDefinition {
+	if narrow {
+		return slices.Clone(goal)
+	}
+	return session.Definitions()
+}
+
+type FrozenSkillList struct{ names []string }
+
+func FreezeSkillList(_ string, names []string) *FrozenSkillList {
+	return &FrozenSkillList{names: slices.Clone(names)}
+}
+func (f *FrozenSkillList) Names() []string { return slices.Clone(f.names) }
+
+// TokenSizeRecord is an estimate, not a provider tokenizer count. Err prevents
+// serialization failures from being recorded as a misleading zero estimate.
 type TokenSizeRecord struct {
 	ToolListTokens  int
 	SkillTextTokens int
 	Estimator       string
+	Err             error
 }
 
-// RecordTokenSizes records the token size of the tool list and the skill
-// text. The skeleton returns the zero record.
 func RecordTokenSizes(tools []providers.ToolDefinition, skillText string) TokenSizeRecord {
-	_, _ = tools, skillText
-	return TokenSizeRecord{}
+	data := CanonicalToolListBytes(tools)
+	if data == nil && len(tools) > 0 {
+		return TokenSizeRecord{Err: fmt.Errorf("tool schemas cannot be serialized for token estimation")}
+	}
+	toolTokens := 0
+	if len(tools) > 0 {
+		toolTokens = utf8.RuneCount(data) * 2 / 5
+	}
+	return TokenSizeRecord{
+		ToolListTokens:  toolTokens,
+		SkillTextTokens: utf8.RuneCountInString(skillText) * 2 / 5,
+		Estimator:       "omnipus-json-runes/2.5",
+	}
 }
