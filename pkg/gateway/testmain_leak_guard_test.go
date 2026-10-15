@@ -16,6 +16,16 @@ import (
 // legitimate runtime paths inside the source tree, so they are not gitignored.
 func leakedPackageDirFiles() []string {
 	var leaked []string
+	// Older task migrations wrote the completion marker at the home root
+	// (.milestones_migrated), and a test whose home was the package directory
+	// committed those files. The current marker lives under tasks/; both
+	// shapes are leaks here.
+	for _, name := range []string{".milestones_migrated", ".planning_status_migrated"} {
+		info, err := os.Stat(name)
+		if err == nil && info != nil && !info.IsDir() {
+			leaked = append(leaked, name)
+		}
+	}
 	for _, rel := range []string{"entities", "sessions", "workspaces", "uploads", "tasks"} {
 		_ = filepath.Walk(rel, func(path string, info os.FileInfo, err error) error {
 			//nolint:nilerr // an unreadable entry must not abort the sweep: the
