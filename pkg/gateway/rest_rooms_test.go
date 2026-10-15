@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -301,7 +302,7 @@ func TestRoomsREST_StorageFaultIs500OnEveryRoute(t *testing.T) {
 	if _, err := rh.hub.svc.Get(doomed.Id); rooms.StatusOf(err) != http.StatusNotFound {
 		t.Fatalf("after a restart the deleted group is served: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(rooms.DefaultDir(rh.api.homePath), doomed.Id)); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(rooms.DefaultDir(rh.api.homePath), doomed.Id)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("the next load did not finish removing the deleted group's files: %v", statErr)
 	}
 	rh.useJournal(fj)
