@@ -27,7 +27,7 @@ func TestTaskTriggerRestart(t *testing.T) {
 		t.Setenv("HOME", config.OmnipusHomeDir())
 		clk := newTriggerFakeClock()
 		due := secondAligned(clk.Now().Add(time.Minute))
-		ids := []string{}
+		ids := make([]string, 0, 2)
 		for range 2 { // distinct tasks intentionally share exactly the same schedule
 			tk := makeRruleTask(t, al.taskStore, "native-agent", "FREQ=DAILY;COUNT=5", due, "UTC")
 			pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
@@ -140,7 +140,9 @@ func TestTaskTriggerRestart(t *testing.T) {
 			if record["msg"] == "task_trigger: removed duplicate trigger job" {
 				assert.Equal(t, tk.ID, record["task_id"])
 				assert.Equal(t, original.ID, record["kept_job_id"])
-				logged = append(logged, record["job_id"].(string))
+				jobID, ok := record["job_id"].(string)
+				require.True(t, ok, "cleanup logs must carry the removed job ID as a string")
+				logged = append(logged, jobID)
 			}
 		}
 		assert.ElementsMatch(t, removed, logged, "log every removed job exactly once, with the retained identity")
