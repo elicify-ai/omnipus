@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -157,24 +158,35 @@ func workspaceView(w workspace, edges []workspacepkg.DelegationEdge, revision st
 	}
 }
 
-// firstUnknownTeamMember returns the first id in ids that names no agent
-// (#1057 F2): neither the live roster nor the agent entity store knows it.
-// "" when every id resolves. An unreadable live roster falls back to the
-// entity store alone — the store is the agents' durable record.
-func firstUnknownTeamMember(d *Deps, ids []string) string {
+// teamMemberRefusal returns the refusal for the first id in ids that is not an
+// agent under exact identity (#1057 F2; exact-id ruling 2026-10-14): neither
+// the live roster nor the agent entity store's exact read knows it. A file at
+// the expected record name is not enough — the store checks the record's own
+// id and exact file name (SF-07). An agent record that cannot be read is
+// refused as READ_FAILED, distinct from an unknown id. nil when every id is an
+// agent.
+func teamMemberRefusal(d *Deps, ids []string) *tools.ToolResult {
 	live := configAgentPresenceSet(d)
 	for _, id := range ids {
 		if live[id] {
 			continue
 		}
-		if d != nil && strings.TrimSpace(d.Home) != "" && validateID(id) == nil {
-			if _, err := os.Stat(filepath.Join(agentstore.New(d.Home).Dir(), id+".json")); err == nil {
-				continue
-			}
+		if d == nil || strings.TrimSpace(d.Home) == "" || validateID(id) != nil {
+			return unknownTeamMemberResult(id)
 		}
-		return id
+		_, err := agentstore.New(d.Home).Get(id)
+		switch {
+		case err == nil:
+			continue
+		case errors.Is(err, entity.ErrNotFound):
+			return unknownTeamMemberResult(id)
+		default:
+			return tools.ErrorResult(errorJSON("READ_FAILED",
+				fmt.Sprintf("core_team names %q, whose agent record could not be read: %v", id, err),
+				"Repair the agent record, or leave it out of core_team"))
+		}
 	}
-	return ""
+	return nil
 }
 
 // unknownTeamMemberResult is the refusal for a core_team entry that names no agent.
@@ -383,8 +395,8 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	if coreagent.OmnipusMembershipRefusal(false, nil, w.CoreTeam) {
 		return omnipusMembershipError()
 	}
-	if unknown := firstUnknownTeamMember(t.deps, w.CoreTeam); unknown != "" {
-		return unknownTeamMemberResult(unknown)
+	if refusal := teamMemberRefusal(t.deps, w.CoreTeam); refusal != nil {
+		return refusal
 	}
 	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
 	if delegationErr != nil {
@@ -634,8 +646,8 @@ func (u *workspaceUpdate) applyFieldsAndTeam() *tools.ToolResult {
 			"Remove the excluded role from core_team — ADR-090 bars it from workspace teams"))
 	}
 	// #1057 F2: a newly added member must name a real agent.
-	if unknown := firstUnknownTeamMember(u.t.deps, added); unknown != "" {
-		return unknownTeamMemberResult(unknown)
+	if refusal := teamMemberRefusal(u.t.deps, added); refusal != nil {
+		return refusal
 	}
 	// omnipus-system-agent FR-003: Omnipus belongs to the default workspace
 	// only — refused before any write, ahead of the generic built-in rule.

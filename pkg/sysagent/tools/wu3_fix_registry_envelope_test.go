@@ -40,6 +40,16 @@ func wu3DurableInventory(t *testing.T, home string) []string {
 	for _, a := range agents {
 		out = append(out, "agent:"+a.ID)
 	}
+	out = append(out, wu3FileInventory(t, home)...)
+	sort.Strings(out)
+	return out
+}
+
+// wu3FileInventory is every file (with its bytes) and folder under the
+// durable stores a change tool can write.
+func wu3FileInventory(t *testing.T, home string) []string {
+	t.Helper()
+	var out []string
 	for _, dir := range []string{"entities", "agents", "workspaces", "skills"} {
 		root := filepath.Join(home, dir)
 		walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
