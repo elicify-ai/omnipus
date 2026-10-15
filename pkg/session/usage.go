@@ -97,8 +97,7 @@ type UsageBucket struct {
 	// See CacheRead's comment for its relationship to Total.
 	CacheWrite int
 	// CacheHitRatio is cache reads divided by uncached input plus cache read
-	// plus cache write. Nil when that denominator is 0. AggregateUsage does
-	// not set it yet.
+	// plus cache write. Nil when that denominator is 0.
 	CacheHitRatio *float64
 	// Total is the authoritative recorded token total for this bucket
 	// (SessionStats.TokensTotal for agent/session dimensions, ModelTokens.Total
@@ -206,10 +205,14 @@ func resolveLabel(agentID string, opts UsageOptions) string {
 }
 
 // CacheHitRatio returns cacheRead / (uncached + cacheRead + cacheWrite), or
-// nil when that denominator is 0. The skeleton always returns nil.
+// nil when that denominator is 0.
 func CacheHitRatio(uncached, cacheRead, cacheWrite int) *float64 {
-	_, _, _ = uncached, cacheRead, cacheWrite
-	return nil
+	denominator := uncached + cacheRead + cacheWrite
+	if denominator <= 0 {
+		return nil
+	}
+	ratio := float64(cacheRead) / float64(denominator)
+	return &ratio
 }
 
 // AggregateUsage aggregates a slice of *UnifiedMeta into a UsageReport.
@@ -242,6 +245,7 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 	report := UsageReport{
 		PeriodStart: start,
 		PeriodEnd:   end,
+		ByProvider:  make(map[string]UsageBucket),
 	}
 
 	// accumByKey holds running totals keyed by the grouping key.
@@ -321,6 +325,18 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 		}
 
 		s := sm.Stats // local copy for brevity
+		report.UnpricedTokens += s.UnpricedTokens
+		report.SubscriptionTokens += s.SubscriptionTokens
+		for id, mt := range s.ByProvider {
+			cell := report.ByProvider[id]
+			cell.Key, cell.Label = id, id
+			cell.In += mt.In
+			cell.Out += mt.Out
+			cell.CacheRead += mt.CacheRead
+			cell.CacheWrite += mt.CacheWrite
+			cell.Total += mt.Total
+			report.ByProvider[id] = cell
+		}
 
 		// Accumulate grand total.
 		report.Total.In += s.TokensIn
@@ -382,13 +398,14 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 			label = key
 		}
 		buckets = append(buckets, UsageBucket{
-			Key:        key,
-			Label:      label,
-			In:         e.in,
-			Out:        e.out,
-			CacheRead:  e.cacheRead,
-			CacheWrite: e.cacheWrite,
-			Total:      e.total,
+			Key:           key,
+			Label:         label,
+			In:            e.in,
+			Out:           e.out,
+			CacheRead:     e.cacheRead,
+			CacheWrite:    e.cacheWrite,
+			Total:         e.total,
+			CacheHitRatio: CacheHitRatio(e.in, e.cacheRead, e.cacheWrite),
 		})
 	}
 
@@ -400,6 +417,11 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 		return strings.Compare(buckets[i].Key, buckets[j].Key) < 0
 	})
 
+	report.Total.CacheHitRatio = CacheHitRatio(report.Total.In, report.Total.CacheRead, report.Total.CacheWrite)
+	for id, cell := range report.ByProvider {
+		cell.CacheHitRatio = CacheHitRatio(cell.In, cell.CacheRead, cell.CacheWrite)
+		report.ByProvider[id] = cell
+	}
 	report.Buckets = buckets
 	return report
 }

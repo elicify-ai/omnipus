@@ -398,6 +398,7 @@ func (us *UnifiedStore) u5WriteStatsLocked(sessionID string, meta *UnifiedMeta) 
 	if cached, ok := us.metaCache[sessionID]; ok {
 		cached.Stats = meta.Stats
 		cached.Stats.ByModel = maps.Clone(meta.Stats.ByModel)
+		cached.Stats.ByProvider = maps.Clone(meta.Stats.ByProvider)
 		if meta.UpdatedAt.After(cached.UpdatedAt) {
 			cached.UpdatedAt = meta.UpdatedAt
 		}

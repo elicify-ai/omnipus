@@ -63,3 +63,29 @@ func (t *ContextTier) UnmarshalJSON(data []byte) error {
 	*t = ContextTier(p)
 	return nil
 }
+
+// Clone isolates a caller's price edits from the immutable catalog snapshot.
+func (c *ModelCost) Clone() *ModelCost {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	clone := func(p *float64) *float64 {
+		if p == nil {
+			return nil
+		}
+		v := *p
+		return &v
+	}
+	out.Input, out.Output, out.Reasoning = clone(c.Input), clone(c.Output), clone(c.Reasoning)
+	out.CacheRead, out.CacheWrite, out.CacheWrite1h = clone(c.CacheRead), clone(c.CacheWrite), clone(c.CacheWrite1h)
+	out.InputAudio, out.OutputAudio = clone(c.InputAudio), clone(c.OutputAudio)
+	out.Tiers = append([]ModelCostTier(nil), c.Tiers...)
+	for i := range out.Tiers {
+		t := &out.Tiers[i]
+		t.Input, t.Output, t.Reasoning = clone(t.Input), clone(t.Output), clone(t.Reasoning)
+		t.CacheRead, t.CacheWrite, t.CacheWrite1h = clone(t.CacheRead), clone(t.CacheWrite), clone(t.CacheWrite1h)
+	}
+	out.ContextOver200k = c.ContextOver200k.Clone()
+	return &out
+}

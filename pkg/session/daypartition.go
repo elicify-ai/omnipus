@@ -357,6 +357,8 @@ type TranscriptEntry struct {
 	// omits the model span entirely for those (FR-014) — there is no
 	// "(model not recorded)" placeholder string rendered.
 	Model string `json:"model,omitempty"`
+	// ModelID is the verbatim model id used for this accounting call.
+	ModelID string `json:"model_id,omitempty"`
 	// ErrorCode is the translated LLMError.code (per ADR-051 Rev 3).
 	// Populated by appendErrorTranscript and consumed by the replay path so
 	// the SPA can render the same code/message regardless of the live wire.
