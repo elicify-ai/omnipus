@@ -16,41 +16,40 @@ import (
 	"testing"
 )
 
-// TestReadBoundary_WalkWithholdsCarveOuts is test 7: greping the Omnipus
-// home itself is admitted (DS-1 row 13, D10 reach), session files outside
-// the secret set are searchable, and every protected entry met during the
-// walk is withheld by name and content.
-//
-// Traces: S-2.1; FR-005.
+// TestReadBoundary_WalkWithholdsCarveOuts preserves the wide-walk oracle.
+// L1-AMENDMENTS-20261013.md §2 D1/D2 and §2.4 supersede DS-1 row 13:
+// the home root and sessions are now protected; ordinary external files stay
+// searchable and no protected names/content may surface during a wider walk.
 func TestReadBoundary_WalkWithholdsCarveOuts(t *testing.T) {
 	f := newRBFixture(t)
 	rbWrite(t, filepath.Join(f.home, "master.key"), "needle-secret-master\n")
 	rbWrite(t, filepath.Join(f.home, "config.json"), "{\"k\": \"needle-secret-config\"}\n")
 	rbWrite(t, filepath.Join(f.home, "agents", "other", "x.md"), "needle-secret-other-agent\n")
-	rbWrite(t, filepath.Join(f.home, "sessions", "s1.jsonl"), "{\"content\": \"needle in a session\"}\n")
+	rbWrite(t, filepath.Join(f.home, "sessions", "s1.jsonl"), "{\"content\": \"needle-secret-session\"}\n")
 
-	res := f.grepCall("needle", rbStr(f.home))
+	requireInternalFileRefusal(t, f.grepCall("needle", rbStr(f.home)), "grep")
+	res := f.grepCall("needle", rbStr(filepath.Dir(f.home)))
 	if res.IsError {
-		t.Fatalf("grep path=$OMNIPUS_HOME: DS-1 row 13 says admitted, got error: %s", res.ForLLM)
+		t.Fatalf("wide external search must run: %s", res.ForLLM)
 	}
 	hits := rbHitPaths(res.ForLLM)
-	wantSession := rbSlash(filepath.Join(f.home, "sessions", "s1.jsonl"))
+	wantExternal := rbSlash(filepath.Join(f.ext, "ext", "notes.txt"))
 	found := false
 	for _, h := range hits {
-		if h == wantSession {
+		if h == wantExternal {
 			found = true
 		}
-		for _, banned := range []string{"master.key", "config.json", "/agents/other"} {
+		for _, banned := range []string{"master.key", "config.json", "/agents/other", "/sessions/"} {
 			if strings.Contains(h, banned) {
-				t.Errorf("S-2.1: protected entry surfaced as a match: %q", h)
+				t.Errorf("protected entry surfaced as a match: %q", h)
 			}
 		}
 	}
 	if !found {
-		t.Errorf("S-2.1: %q (absolute) must be in the result; got %q", wantSession, hits)
+		t.Errorf("external positive control %q must match; got %q", wantExternal, hits)
 	}
 	if strings.Contains(res.ForLLM, "needle-secret-") {
-		t.Errorf("S-2.1: protected content leaked into the result:\n%s", res.ForLLM)
+		t.Errorf("protected content leaked into the result:\n%s", res.ForLLM)
 	}
 }
 

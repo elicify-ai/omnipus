@@ -33,6 +33,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -571,6 +572,31 @@ func (s *MessageInboxStore) rateAllow(ownerKey, childSessionID string) bool {
 // unacked-cap and rate checks (but never the D15 per-type ceiling, which
 // still bounds every kind).
 func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage) (*AppendResult, error) {
+	return s.appendMessage(ownerKey, msg, false)
+}
+
+// SystemFinalResultMaxChars is the hand-back contract's result_so_far bound
+// (contracts/components/schemas/MessageParentHandback.yaml, maxLength 50000
+// characters) — the size a system-authored final may carry (issue #1306).
+const SystemFinalResultMaxChars = 50000
+
+// AppendSystemFinal is Append for the SYSTEM-authored final hand-back of a
+// finished child (the completion tail's committed final), never for anything
+// a child sends itself. The child-send body cap (ChildSendBodyBytes) bounds
+// what a child may send through message_parent; applied to the completion
+// tail it used to refuse every final answer over ~32 KiB, so a helper whose
+// final was longer lost its whole result (issue #1306, round 4). Here the
+// result text is bounded by the contract instead — at most
+// SystemFinalResultMaxChars characters — while the rest of the message
+// (everything but result_so_far) still fits the child-send cap. Any message
+// that is not a hand-back is checked exactly as Append checks it. Which of
+// the two entry points is used is decided by the caller's code path; the
+// message's id is never trusted to choose.
+func (s *MessageInboxStore) AppendSystemFinal(ownerKey string, msg generated.SessionMessage) (*AppendResult, error) {
+	return s.appendMessage(ownerKey, msg, true)
+}
+
+func (s *MessageInboxStore) appendMessage(ownerKey string, msg generated.SessionMessage, systemFinal bool) (*AppendResult, error) {
 	if strings.TrimSpace(ownerKey) == "" {
 		return nil, ErrInboxEmptyOwnerKey
 	}
@@ -589,8 +615,8 @@ func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage
 	if bodyCap <= 0 {
 		bodyCap = DefaultChildSendBodyBytes
 	}
-	if len(raw) > bodyCap {
-		return nil, fmt.Errorf("%w: %d bytes exceeds cap %d", ErrInboxBodyTooLarge, len(raw), bodyCap)
+	if bodyErr := checkInboxBody(msg, raw, bodyCap, systemFinal && peek.Kind == "handback"); bodyErr != nil {
+		return nil, bodyErr
 	}
 
 	mu := s.lock.Get(ownerKey)
@@ -1321,4 +1347,33 @@ func InboxRefusalReason(err error) (generated.DelegateNotDeliveredSummaryLastRea
 		return generated.DelegateNotDeliveredSummaryLastReasonUnackedCap, true
 	}
 	return "", false
+}
+
+// checkInboxBody applies the body cap. For a system-authored final
+// hand-back (systemFinalHandback) the result text is bounded by
+// SystemFinalResultMaxChars and only the rest of the message by bodyCap;
+// everything else must fit bodyCap whole.
+func checkInboxBody(msg generated.SessionMessage, raw []byte, bodyCap int, systemFinalHandback bool) error {
+	if !systemFinalHandback {
+		if len(raw) > bodyCap {
+			return fmt.Errorf("%w: %d bytes exceeds cap %d", ErrInboxBodyTooLarge, len(raw), bodyCap)
+		}
+		return nil
+	}
+	handback, err := msg.AsSessionMessageHandback()
+	if err != nil {
+		return fmt.Errorf("session: inbox: decode system final hand-back: %w", err)
+	}
+	if n := utf8.RuneCountInString(handback.ResultSoFar); n > SystemFinalResultMaxChars {
+		return fmt.Errorf("%w: final result has %d characters, exceeds %d", ErrInboxBodyTooLarge, n, SystemFinalResultMaxChars)
+	}
+	handback.ResultSoFar = ""
+	rest, err := json.Marshal(handback)
+	if err != nil {
+		return fmt.Errorf("session: inbox: encode system final hand-back: %w", err)
+	}
+	if len(rest) > bodyCap {
+		return fmt.Errorf("%w: final hand-back without its result is %d bytes, exceeds cap %d", ErrInboxBodyTooLarge, len(rest), bodyCap)
+	}
+	return nil
 }

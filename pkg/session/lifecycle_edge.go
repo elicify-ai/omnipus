@@ -149,14 +149,6 @@ func (r *LifecycleRecord) OnwardBudget() (budget int, ok bool) {
 	return budget, ok
 }
 
-// Limits is the creator-set resource ceiling on a steered session's
-// lifetime across re-entries (I-1 SteeredBy.Limits).
-type Limits struct {
-	// TimeoutSeconds is the creator-set timeout; 0 means "the configured
-	// default" (D9) — never a literal zero-second timeout.
-	TimeoutSeconds int `json:"timeout_seconds"`
-}
-
 // SteeredBy is the durable edge naming who steers a session (I-1). Nil on
 // LifecycleRecord for a session nobody steers (an ordinary_root).
 type SteeredBy struct {
@@ -167,7 +159,10 @@ type SteeredBy struct {
 	RootSessionID   string          `json:"root_session_id"`
 	ReportingTarget ReportingTarget `json:"reporting_target"`
 	Authorization   Authorization   `json:"authorization"`
-	Limits          Limits          `json:"limits"`
+	// There is no Limits field any more: a steered session has no time
+	// limit (issue #1306). A record written by an older release still
+	// carries "limits": {"timeout_seconds": N}; that key is ignored on
+	// decode and dropped on the next persist.
 	// ToolExclusions names tools this steered session may not call.
 	ToolExclusions []string `json:"tool_exclusions,omitempty"`
 }
@@ -253,8 +248,10 @@ const (
 	// queued/running record, or a goal loop retiring an attempt's session in
 	// favor of a freshly-minted one.
 	StopCauseRestart StopCause = "restart"
-	// StopCauseTimeout is a session's own lifetime execution budget
-	// (SteeredBy.Limits.TimeoutSeconds) running out mid-turn.
+	// StopCauseTimeout is HISTORICAL: an older release stopped a steered
+	// session whose lifetime budget ran out. Nothing writes it any more
+	// (issue #1306 removed every work time limit); it stays a valid cause so
+	// a record written before that still loads and reads correctly.
 	StopCauseTimeout StopCause = "timeout"
 )
 

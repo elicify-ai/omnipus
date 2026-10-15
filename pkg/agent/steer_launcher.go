@@ -41,13 +41,6 @@ import (
 // this only as a defensive backstop.
 const maxLaunchAncestorWalk = 4096
 
-// defaultSteeredSessionTimeout is the built-in lifetime for a steered session
-// when neither a per-call timeout_seconds nor performance.delegation_timeout_minutes
-// was configured (D9: 0 = default; the founder raised the default from 5 to
-// 30 minutes, 2026-09-23). An explicit call-level timeout and a configured
-// value still win over this backstop (see Launch's limits resolution above).
-const defaultSteeredSessionTimeout = 30 * time.Minute
-
 // SteerLauncher implements steer.SessionLauncher (I-2).
 type SteerLauncher struct {
 	al *AgentLoop
@@ -137,20 +130,6 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 	}
 	if l.al == nil {
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: no AgentLoop wired", steer.ErrStoreWrite)
-	}
-	if req.Limits.TimeoutSeconds < 0 {
-		return steer.LaunchResult{}, fmt.Errorf("steer: launch: timeout_seconds must be >= 0")
-	}
-	if req.Limits.TimeoutSeconds == 0 {
-		minutes, timeoutErr := l.al.GetConfig().Performance.EffectiveDelegationTimeoutMinutes()
-		if timeoutErr != nil {
-			return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w", timeoutErr)
-		}
-		timeout := time.Duration(minutes) * time.Minute
-		if timeout <= 0 {
-			timeout = defaultSteeredSessionTimeout
-		}
-		req.Limits.TimeoutSeconds = int(timeout.Seconds())
 	}
 	targetAgent, ok := l.al.GetRegistry().GetAgent(req.TargetAgentID)
 	if !ok {
@@ -559,7 +538,6 @@ func (l *SteerLauncher) launchSteered(
 					Mode:           launchAuthorizationMode(req.Origin.Kind),
 					RemainingDepth: childRemaining,
 				},
-				Limits:         req.Limits,
 				ToolExclusions: req.ToolExclusions,
 			}
 			if _, err := sessions.CreateSessionWithID(childID, req.SteeringSessionID, sessionType, "", req.TargetAgentID); err != nil {
@@ -728,9 +706,10 @@ func launchGoalCriteria(in []steer.Criterion, authorAgentID string) []task.Accep
 	out := make([]task.AcceptanceCriterion, 0, len(in))
 	for _, criterion := range in {
 		mapped := task.AcceptanceCriterion{
-			Kind:     task.CriterionKind(criterion.Kind),
-			Judgment: task.JudgmentKind(criterion.Judgment),
-			Text:     criterion.Text,
+			Kind:       task.CriterionKind(criterion.Kind),
+			Judgment:   task.JudgmentKind(criterion.Judgment),
+			Provenance: task.CriterionProvenance(criterion.Provenance),
+			Text:       criterion.Text,
 			Author: task.CriterionAuthor{
 				Kind: task.AuthorKindAgent,
 				ID:   authorAgentID,
@@ -1214,8 +1193,10 @@ func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *
 	sessionID := rec.SessionID
 	defer al.finishExecutionDisposition(ts.opts.executionDisposition)
 
-	runCtx, cancel := steeredTurnRunContext(context.Background(), rec)
-	defer cancel()
+	// No deadline: a steered session runs until it finishes or is explicitly
+	// stopped (issue #1306). Stop/cancel reach the turn through its own
+	// registered cancel, never through this context.
+	runCtx := context.Background()
 	// The body is chosen by the target's own dispatch kind (steer_turn_body.go):
 	// a native delegate runs al.runTurn, an external-CLI delegate drives the
 	// shared CLI runner instead of silently running the native loop.
@@ -1231,29 +1212,6 @@ func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *
 		}
 	}
 	al.disposeSteeredTurnResult(ts, rec, gen, result, runErr)
-}
-
-// steeredTurnRunContext resolves the run context for one execution of a
-// steered session's turn — first run/dispatch OR a later wake/re-entry.
-//
-// Finding E (ADR-091 fix lane 1, MEDIUM): D9 says the timeout's "scope is
-// the session's lifetime across re-entries", but rec.SteeredBy.Limits.
-// TimeoutSeconds used to be read in exactly one place, runDispatchedSteeredTurn
-// (the first-run/dispatch path) — the wake path (loop_inbound.go::
-// processSteeredSystemWake) ran al.runTurn with a bare, undeadlined context,
-// so a session re-entered by a wake could run forever regardless of its
-// configured timeout. Both entry paths now share this one helper.
-//
-// The deadline is the remaining active-time budget (D6): anchor +
-// TimeoutSeconds + stopped credit. With no credit and no reset anchor that
-// is still CreatedAt + TimeoutSeconds. A zero CreatedAt and a zero anchor
-// count from now — a missing timestamp never silently removes the limit.
-func steeredTurnRunContext(base context.Context, rec *session.LifecycleRecord) (context.Context, context.CancelFunc) {
-	deadline, ok := rec.ActiveBudgetDeadline(time.Now())
-	if !ok {
-		return base, func() {}
-	}
-	return context.WithDeadline(base, deadline)
 }
 
 // disposeSteeredTurnResult applies the SAME post-turn disposition to a
@@ -1324,9 +1282,7 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 		// transcript. Continue the outer loop: the next completeSteeredTurn
 		// call may now see an empty queue and produce a terminal commit
 		// without errCompleteSteeringPending, in which case we exit above.
-		drainCtx, cancel := steeredTurnRunContext(context.Background(), rec)
-		ts, result, runErr = al.drainSteeredTurn(drainCtx, rec, ts, result, runErr)
-		cancel()
+		ts, result, runErr = al.drainSteeredTurn(context.Background(), rec, ts, result, runErr)
 		if runErr != nil && !errors.Is(runErr, errContinuePostDequeueFailure) {
 			// abandonSteeredQueuedSteering already fired — every queued
 			// item is now reported to the transcript. Returning here

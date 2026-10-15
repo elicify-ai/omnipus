@@ -1,5 +1,7 @@
 # Agent Types — Field Matrix
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. The timeout row, mutable-timeout note and Decision 2 below are **superseded**: no agent type has a create/edit lifetime-duration setting, and external agent work has no process kill timer. Strict per-variant create decoding remains. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/contracts/components/schemas/AgentCreateRequestSubagent3p.yaml`::properties; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/gateway/rest_agents_create.go`::decodeAgentCreateVariant; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/external_dispatch.go`::startAndDrain. Other field decisions are not changed by this amendment.
+
 > **2026-07-04**: `sandbox_profile` removed entirely (ADR-035) — it never
 > differentiated the actual kernel-enforced boundary per agent. The row below
 > reflects `shell_policy` only; the old combined row and `inherit_sandbox` are
@@ -28,6 +30,8 @@ change (operator-approved 2026-07-03, pending two field decisions — see
 | Prompt (SOUL) | compiled-in, immutable | SOUL.md, editable | SOUL.md ("task prompt"), editable | SOUL.md (composed into the runner's system prompt) |
 
 ## Field-by-field matrix
+
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** the **`timeout_seconds` row below** is retained as the July field allocation, but all four type cells are now **removed / not applicable**. Do not render it, require a default, or send it in create/edit payloads. Count-based tool iterations remain independent.
 
 Legend: **R** = required · **O** = optional · **RO** = visible read-only ·
 **inherit** = may be inherited from the caller instead of set ·
@@ -61,6 +65,8 @@ UI; inherits `agents.defaults`.
 | email mailbox | per (agent, workspace) pair — ADR-033; owner must be workspace `core_team`; **workers excluded** | same | — (worker) | — (worker) |
 
 ## Notes that keep biting
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** **“timeout … ARE mutable via the API”** in the built-in note below is no longer true. Locked-agent editability does not preserve a retired duration property. Model, rate-limit and count-cap semantics are not changed by this removal.
 
 - **Built-in ≠ untouchable.** Locked core agents reject only the identity/
   capability set — `name`, `description`, `soul`, `color`, `icon`, `skills`
@@ -96,6 +102,9 @@ UI; inherits `agents.defaults`.
    global default (200) lives only in `config.DefaultMaxToolIterations`.
 2. `timeout_seconds` on `subagent_3p`: **kept** — process-level kill for a
    hung CLI; settable at create (slim Advanced) and edit.
+
+   **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** this July decision is retained as history, not current field allocation. The lifetime setting is removed from external creation, editing and the `Agent` response. A strict create request containing it returns 400. Keep the variant's valid CLI authoring fields without adding a replacement timer; old saved duration fields are inert, not create-time compatibility.
+
 3. ~~`delegation_policy` on `subagent_3p` create: **allowed** (matrix +
    update-path consistency; previously 400).~~ — **superseded by [ADR-037]:** the `delegation_policy` field no longer exists for any agent type; `PUT`/create now 400 on it via a raw-body sniff. Delegation is workspace-scoped (workspace Team tab).
 4. The create contract is a discriminated union (`AgentCreateRequestMain` /

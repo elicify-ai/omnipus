@@ -66,6 +66,9 @@ func wu23LandlockChild() bool {
 	argv := os.Args[i+2:]
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = ScrubGatewayEnv()
+	// The parent probe's post-spawn handshake reaches this reexec process.
+	// Forward it to the real confined shell rather than substituting EOF.
+	cmd.Stdin = os.Stdin
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError

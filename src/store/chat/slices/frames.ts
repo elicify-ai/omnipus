@@ -40,6 +40,7 @@ import { handleRoomFrame } from './room-frames'
 import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
+import { appendErrorNotice, handleJudgeConclusionErrorFrame } from './error-notice-frames'
 
 
 
@@ -1048,6 +1049,10 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       }
 
       refreshSessionListForFrame(frame.type, get().sessionsById[targetSid ?? '']?.isReplaying === true)
+      if (handleJudgeConclusionErrorFrame(frame, withBucket)) {
+        syncForeground()
+        return
+      }
       if (handleFirstSendFrame({ frame, set, get, withBucket, runtime })) {
         syncForeground()
         return
@@ -1805,26 +1810,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // behaviour below.
             if (frameSessionId && frame.client_message_id && !frame.first_message_error) {
               const refusalSid = frameSessionId
-              withBucket(refusalSid, (b) => {
-                if (errorDedupId && getMessages(b).some((m) => m.errorEntryId === errorDedupId)) return {}
-                const errMsg: ChatMessage = {
-                  id: generateId(),
-                  role: 'assistant',
-                  content: llmError ? translatedMessage : safeMessage,
-                  timestamp: new Date().toISOString(),
-                  status: 'error',
-                  isStreaming: false, refusalNotice: true,
-                  ...(llmError
-                    ? {
-                        errorCode: llmError.code,
-                        ...(errorDetail !== undefined ? { errorDetail } : {}),
-                        ...(errorEntryId ? { errorEntryId } : {}),
-                        ...(llmError.facts ? { errorFacts: llmError.facts } : {}),
-                      }
-                    : {}),
-                }
-                return applyMessageArray([...getMessages(b), errMsg], b)
-              })
+              withBucket(refusalSid, (b) => appendErrorNotice(b, llmError ? translatedMessage : safeMessage, llmError, errorEntryId, errorDetail))
               logDiagnostic('chatMessageScopedRefusal', { sessionId: refusalSid })
               break
             }
@@ -2109,7 +2095,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               const rawTail = rawTailId ? b.messagesById[rawTailId] : undefined
               let lastMsgId: string | undefined
               let lastMsg: ChatMessage | undefined
-              if (rawTail?.role === 'assistant') {
+              if (rawTail?.role === 'assistant' && rawTail.errorCode !== 'judge_conclusion_failed') {
                 lastMsgId = rawTailId
                 lastMsg = rawTail
               } else {

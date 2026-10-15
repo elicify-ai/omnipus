@@ -52,6 +52,22 @@ You can also ask Omnipus in its chat to change an agent's permissions; it shows 
 
 The installation-wide setting lives in **Settings → Security**, under **Advanced / technical details**, in **Tool Access — Global Policies**. What you set there applies to every agent at once. Saving a change there asks you to re-type your password.
 
+## Replacing tool policies through the API
+
+When creating an agent or replacing its built-in tool policy map through the API,
+include every implemented built-in tool returned by `GET /api/v1/tools`, using
+its exact name and an `allow`, `ask` or `deny` value. A missing implemented tool,
+an unknown name or a wildcard is refused; connected-server tools keep their
+separate `mcp_` policy rules.
+
+A tool name reserved for a later implementation does not have to appear in that
+map before the tool is available. If an existing agent already has a saved policy
+for such a name, omitting it from a replacement leaves that saved value unchanged.
+The replacement does not invent a policy for a reserved name that was never saved.
+Supplying the reserved name explicitly follows the normal replacement rules;
+on the dedicated tool-settings endpoint, `override_names` controls which supplied
+values are saved as per-agent overrides.
+
 ## Allow, ask and deny
 
 What each setting does, and what you see when it fires:
@@ -66,7 +82,7 @@ On the approval card, **Approve Once** runs the call and remembers nothing. **Al
 
 **Auto-approve** sits on top of Ask. It never changes a tool set to Allow or Deny. When it is on, a tool set to Ask skips the card for calls Omnipus can judge safe and still shows it for the rest — this now works with or without a kernel sandbox (changed 2026-09-24). Without a kernel sandbox, shell commands ask first, except read-only ones and commands an operator rule allows; see [security](security.md#auto-approve-and-the-kernel-sandbox-changed-2026-09-24) for what that means in practice. It is on by default, and you can turn it off globally, for one agent, or for one chat.
 
-Under Auto-approve, most tools run without a card. Reading, listing and searching files (`read_file`, `list_directory`, `grep`) run anywhere outside Omnipus's protected files, so `read_file` of `/etc/hosts` runs. Writing keeps the workspace rule: `write_file`, `edit_file` and `append_file` run only when every path is inside the workspace or a mounted folder, so `write_file` to `notes/plan.md` runs while `write_file` to your Desktop asks. A fixed list of 28 tools keeps asking whenever it's set to Ask, even with Auto-approve on, such as `delete_task`, `send_email`, `set_config`, `browser_evaluate` and `install_skill`. `send_message` and `send_file` are **not** on that list: messages, and files from inside the workspace, go out to chat channels with no card. The shell has its own checks: it asks for writes outside the workspace and for network access. See [security](security.md) for the full list and the shell details.
+Under Auto-approve, most tools run without a card. Reading, listing and searching files (`read_file`, `list_directory`, `grep`) run anywhere outside Omnipus's protected files, so `read_file` of `/etc/hosts` runs. Writing keeps the workspace rule: `write_file`, `edit_file` and `append_file` run only when every path is inside the workspace or a mounted folder, so `write_file` to `notes/plan.md` runs while `write_file` to your Desktop asks. The registered tools on the always-ask list keep asking when their effective policy is Ask, even with Auto-approve on, including `set_agent_permissions`, `delete_task`, `send_email`, `set_config`, `browser_evaluate` and `install_skill`. God Mode removes global Ask; a per-agent Ask or Deny still applies. `send_message` and `send_file` are **not** on that list: messages, and files from inside the workspace, go out to chat channels with no card. The shell has its own checks: it asks for writes outside the workspace and for network access. See [security](security.md) for the full list and the shell details.
 
 The **Under Auto** column in the [built-in tool catalog](reference/built-in-tools.md) shows, for every built-in tool, **Runs**, **Runs if inside workspace** or **Asks**. The same answer appears as a small marker — **Auto: runs**, **Auto: runs inside workspace** or **Auto: asks** — next to each tool set to Ask in the **Tools & Permissions** panel and in **Tool Access — Global Policies**. `bash` has no marker, because it has its own checks.
 
@@ -122,7 +138,7 @@ Under Auto-approve, a server tool set to Ask runs without a card only when its s
 
 ## Related pages
 
-- [agents](agents.md) — what agents are, the four base agents, and how to create a custom one.
+- [agents](agents.md) — the built-in roster and how to create your own agents.
 - [skills](skills.md) — the other half of the Skills & Tools screen: reusable playbooks agents pick up.
 - [connectors](connectors.md) — where email mailboxes and chat connectors are configured.
 - [settings](settings.md) — the Settings screen, including the global tool policies under Security.

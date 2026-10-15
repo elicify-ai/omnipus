@@ -101,6 +101,15 @@ func allowedUnderHome(cleanPath string, policy FSPolicy) bool {
 	if policy.WorkDir != "" && CoversForGrant(filepath.Clean(policy.WorkDir), cleanPath) {
 		return true
 	}
+	// A8 setup roots are validated workspace work folders, not broad home
+	// allowances. Keep the inventory-first decision above them, and do not
+	// let a hand-constructed malformed root bypass that boundary.
+	for _, root := range policy.SetupRoots {
+		cleanRoot := filepath.Clean(root)
+		if isWorkspaceWorkDir(cleanRoot, policy.CarveOuts) && CoversForGrant(cleanRoot, cleanPath) {
+			return true
+		}
+	}
 	return false
 }
 

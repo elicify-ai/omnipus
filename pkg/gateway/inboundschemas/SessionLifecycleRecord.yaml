@@ -296,19 +296,6 @@ properties:
               Remaining delegation depth budget for this child's own
               onward delegations. Decremented from the edge or global default.
             example: 2
-      limits:
-        type: object
-        description: Creator-set session limits.
-        additionalProperties: false
-        properties:
-          timeout_seconds:
-            type: integer
-            minimum: 0
-            description: >
-              Maximum seconds before this delegation is force-cancelled.
-              0 = the configured default. Scope is the session's lifetime
-              across re-entries (ADR-091 I-1).
-            example: 300
       tool_exclusions:
         type: array
         items:

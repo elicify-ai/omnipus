@@ -175,6 +175,8 @@ var validEventNames = map[EventName]struct{}{
 	EventBootAbort:               {},
 	EventProcessKillFailed:       {},
 	EventChannelPairing:          {},
+	EventChannelMessageDropped:   {},
+	EventSystemMessageDiscarded:  {},
 	EventCliValidate:             {},
 	EventExecutorSmokeTest:       {},
 	// First-run onboarding authority events (pkg/gateway/rest_onboarding.go).

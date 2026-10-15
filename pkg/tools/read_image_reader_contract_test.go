@@ -524,7 +524,9 @@ func TestReadImage_HandleSnapshotStableAcrossPathReplacement(t *testing.T) {
 
 	// Replace with a symlink out of scope; a confined (Judge posture) turn
 	// must get the existing access refusal, not the image.
-	outside := filepath.Join(root, "outside.png")
+	// L1-AMENDMENTS-20261013.md §2 D1 / §2.4: keep the ordinary
+	// scope-refusal control outside home and pin the protected-home case below.
+	outside := filepath.Join(t.TempDir(), "outside.png")
 	if err := os.WriteFile(outside, first, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -545,6 +547,13 @@ func TestReadImage_HandleSnapshotStableAcrossPathReplacement(t *testing.T) {
 	if strings.Contains(denied.ForLLM, hex.EncodeToString(sha256.New().Sum(nil))) {
 		t.Fatal("refusal leaks digest-like content")
 	}
+
+	// Preserve the former fixture path as the D1 default-deny negative.
+	internal := filepath.Join(root, "outside.png")
+	if err := os.WriteFile(internal, first, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requireInternalFileRefusal(t, tool.Execute(context.Background(), map[string]any{"path": internal}), "read_file")
 }
 
 // --- access, audit and metadata privacy (spec BDD-04/05, datasets B7-B11) ----

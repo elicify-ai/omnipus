@@ -6,8 +6,8 @@ description: >
   auth, retries, and tool loop, so tools_cfg, skills, fallback_models,
   model_params, shell_policy, and voice do not exist on this variant
   (additionalProperties: false rejects them). max_tool_iterations does exist
-  (issue #904, D14): it becomes the CLI's turn cap. timeout_seconds stays (process-level kill for a hung
-  CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the
+  (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a
+  CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (kind external-cli with cli + cli_path; the
   handler additionally rejects whitespace-only cli_path).
 
   Create-input identity normalization (founder ruling 2026-10-09): on this
@@ -103,11 +103,6 @@ properties:
     example: "You are a focused research assistant..."
   executor:
     $ref: './ExecutorConfig.yaml'
-  timeout_seconds:
-    type: integer
-    minimum: 0
-    description: Maximum seconds a single agent turn may run before being interrupted.
-    example: 300
   max_tool_iterations:
     type: integer
     minimum: 1

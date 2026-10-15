@@ -620,9 +620,7 @@ func (uf *restAPIUpdateAgentFlow) preparePersistence() bool {
 	// seeded global map covers the whole catalog. Reproduced live (UAT
 	// 2026-09-02, batch 4 S83): a PUT omitting `stop_plan` returned 200.
 	if uf.ru.req.ToolsCfg != nil && uf.ru.req.ToolsCfg.Builtin != nil {
-		if defects := config.ValidateSubmittedToolPolicyMap(
-			uf.ru.req.ToolsCfg.Builtin.Policies, buildKnownBuiltinToolNames(),
-		); !defects.Empty() {
+		if defects := validateSubmittedBuiltinToolPolicyMap(uf.ru.req.ToolsCfg.Builtin.Policies); !defects.Empty() {
 			jsonErr(uf.w, http.StatusBadRequest,
 				"tools_cfg.builtin.policies "+defects.String())
 			return true
@@ -1026,10 +1024,9 @@ func (rp *restAPIUpdateAgentPersistAgent) updateIdentityAndModel(agentRec *confi
 		agentRec.Model.Provider = strings.TrimSpace(*rp.ru.req.Provider)
 	}
 	// NOTE (discovered during ADR-054 conversion, pre-existing gap,
-	// out of scope here): req.TimeoutSeconds and req.RateLimits
-	// have NO corresponding config.AgentConfig field —
-	// config.AgentConfig has no TimeoutSeconds/RateLimits at all
-	// (only agents.defaults.timeout_seconds, a global setting).
+	// out of scope here): req.RateLimits has NO corresponding
+	// config.AgentConfig field. (timeout_seconds is gone from the wire
+	// and from config entirely — agent work has no time limit, #1306.)
 	// The pre-conversion code wrote them to raw map keys with no
 	// Go struct field to read them back into, so they never
 	// survived a struct-based config reload even before this
@@ -1124,6 +1121,10 @@ func (rp *restAPIUpdateAgentPersistAgent) updateToolsConfig(agentRec *config.Age
 		if rp.ru.req.ToolsCfg.Builtin != nil {
 			newTools.Builtin = config.AgentBuiltinToolsCfg{
 				Policies: agentToolPolicyMapFromWire(rp.ru.req.ToolsCfg.Builtin.Policies),
+			}
+			if agentRec.Tools != nil {
+				retainReservedBuiltinToolPolicies(newTools.Builtin.Policies,
+					agentRec.Tools.Builtin.Policies, rp.ru.req.ToolsCfg.Builtin.Policies)
 			}
 		} else if agentRec.Tools != nil {
 			// req.ToolsCfg is present (e.g. it only touches mcp) but

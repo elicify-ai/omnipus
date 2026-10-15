@@ -63,12 +63,12 @@ func wu19OwnModeReceiver(fn *wu19Function, expr ast.Expr) bool {
 		return false
 	}
 	id, ok := expr.(*ast.Ident)
-	if !ok || id.Obj == nil {
+	if !ok || fn.file.object(id) == nil {
 		return false
 	}
 	for _, field := range fn.decl.Recv.List {
 		for _, name := range field.Names {
-			if id.Obj == name.Obj {
+			if fn.file.object(id) == fn.file.object(name) {
 				return true
 			}
 		}
@@ -100,7 +100,10 @@ func wu19InspectReachable(fn *wu19Function, root ast.Node, facts map[string]bool
 					wu19InspectReachable(fn, node.Init, facts, visit)
 				}
 				for _, statement := range node.Body.List {
-					branch := statement.(*ast.CaseClause)
+					branch, ok := statement.(*ast.CaseClause)
+					if !ok {
+						panic("inventory switch contains a non-case statement")
+					}
 					truth := -1
 					if len(branch.List) == 1 {
 						truth = wu19ModeTruth(fn, branch.List[0], facts)

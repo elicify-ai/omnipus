@@ -221,26 +221,8 @@ func TestU1StoppedNoticeEveryTransitionIntoStopped(t *testing.T) {
 		}
 	})
 
-	t.Run("timeout", func(t *testing.T) {
-		al, cleanup := newSteerAL(t)
-		defer cleanup()
-		parent := newTestSteeringSession(t, al, "ws-u1-timeout")
-		wakes := observeU1ParentNoticeWakes(t, al, parent)
-		rec := u1LaunchChild(t, al, parent, "u1-timeout")
-		wireSteerCompletionDeps(t, al)
-		// Q19: a session's own lifetime-budget expiry stops the working
-		// turn — completionDisposition maps DeadlineExceeded to
-		// stopped/OutcomeTimedOut, and no cascade stamps a fence first, so
-		// the landing synthesizes the note with cause timeout (D2).
-		if err := al.completeSteeredTurn(context.Background(), rec,
-			turnResult{finalContent: ""}, context.DeadlineExceeded); err != nil {
-			t.Fatalf("completeSteeredTurn(timeout): %v", err)
-		}
-		noticeID, _ := assertU1StoppedChildNotice(t, al, parent, rec, string(session.StopCauseTimeout), "")
-		if got := wakes(noticeID); got != 1 {
-			t.Errorf("working-parent wakes for the timeout stopped-child notice = %d, want exactly 1 (D6)", got)
-		}
-	})
+	// No "timeout" subtest: the session lifetime budget that produced a
+	// stopped(timeout) notice is gone (issue #1306).
 
 	t.Run("cascade from ancestor", func(t *testing.T) {
 		al, cleanup := newSteerAL(t)
@@ -689,18 +671,23 @@ func TestU1GoalStaysActiveAcrossEveryStopPath(t *testing.T) {
 		u1StopChild(t, al, rec)
 		assertGoalActive(t, goalID, "direct stop")
 	})
-	t.Run("timeout", func(t *testing.T) {
+	// A deadline error is now only a provider request timeout (issue #1306);
+	// it still must not end the session-owned goal.
+	t.Run("provider deadline error", func(t *testing.T) {
 		al, cleanup := newSteerAL(t)
 		defer cleanup()
 		parent := newTestSteeringSession(t, al, "ws-u1-goal-timeout")
 		rec := u1LaunchChild(t, al, parent, "u1-goal-timeout")
 		wireSteerCompletionDeps(t, al)
 		goalID := activateTestGoalRecord(t, rec.SessionID, "U1 goal open across timeout")
+		// A deadline error now lands terminal `failed`, which commits as the
+		// claiming execution — give the record a real admission first.
+		rec = admitExecution(t, al, rec.SessionID, "run-u1-goal-deadline")
 		if err := al.completeSteeredTurn(context.Background(), rec,
 			turnResult{finalContent: ""}, context.DeadlineExceeded); err != nil {
 			t.Fatalf("completeSteeredTurn(timeout): %v", err)
 		}
-		assertGoalActive(t, goalID, "lifetime timeout")
+		assertGoalActive(t, goalID, "provider deadline error")
 	})
 	t.Run("restart boot sweep", func(t *testing.T) {
 		al, cleanup := newSteerAL(t)

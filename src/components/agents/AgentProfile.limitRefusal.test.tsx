@@ -70,7 +70,6 @@ const baseAgent: Agent = {
   model: 'claude-sonnet-4-6',
   description: 'Sorts things',
   soul: '',
-  timeout_seconds: 60,
   max_tool_iterations: 200,
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,

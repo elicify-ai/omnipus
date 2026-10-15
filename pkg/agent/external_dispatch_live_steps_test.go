@@ -67,7 +67,7 @@ func TestExternalDispatch_ToolCallsAreBroadcastLive(t *testing.T) {
 		fr.Cancel()
 	}()
 
-	_, _ = runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	_, _ = runExternalCLISubTurn(context.Background(), al, ts, "task")
 
 	var start *ToolExecStartPayload
 	var end *ToolExecEndPayload
@@ -137,7 +137,7 @@ func collectExternalToolEvents(t *testing.T, evs []runner.RunEvent, prep func(al
 		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
-	_, _ = runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	_, _ = runExternalCLISubTurn(context.Background(), al, ts, "task")
 
 	var starts []ToolExecStartPayload
 	var ends []ToolExecEndPayload

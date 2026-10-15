@@ -5,6 +5,7 @@ package tools
 // rows and the spec's result-text blocks, never from observed output.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -182,8 +183,11 @@ func TestR6_DefaultUnusable_ExplicitFallbackRuns(t *testing.T) {
 	if !strings.Contains(res.ForLLM, "Search provider: duckduckgo (fallback)") {
 		t.Fatalf("expected duckduckgo (fallback), got:\n%s", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "Note: tavily (default) was not called: no API key.") {
-		t.Fatalf("expected not-called note, got:\n%s", res.ForLLM)
+	// #1277 class ruling (HANDOFFS 2026-10-13T15:56:33Z): keyed search
+	// providers degrade visibly with the missing credential reference named.
+	wantNote := fmt.Sprintf("Note: tavily (default) was not called: no API key: credential reference %q is missing from the credential store.", envRefMissingTav)
+	if !strings.Contains(res.ForLLM, wantNote) {
+		t.Fatalf("expected not-called note %q, got:\n%s", wantNote, res.ForLLM)
 	}
 	if h := f.hitsOf("tavily"); h != 0 {
 		t.Fatalf("tavily hits = %d, want 0", h)

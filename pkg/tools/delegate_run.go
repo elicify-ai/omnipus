@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -198,7 +197,6 @@ type delegateToolExecuteRun struct {
 	task           string
 	label          string
 	agentID        string
-	timeout        time.Duration
 	requestedSkill string
 	snap           *ContextSnapshot
 	goal           *steer.GoalSpec
@@ -255,10 +253,7 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 			Kind:   steer.OriginKindDelegate,
 			CallID: strings.TrimSpace(ToolCallID(dt.ctx)),
 		},
-		Goal: dt.goal,
-		Limits: steer.Limits{
-			TimeoutSeconds: int(dt.timeout / time.Second),
-		},
+		Goal:              dt.goal,
 		RequestedSkill:    strings.TrimSpace(dt.requestedSkill),
 		ContextReferences: dt.snapshotReferences(),
 		ContextNotes:      dt.snapshotNotes(),
@@ -387,13 +382,11 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 		}
 	}
 
-	// 0/absent means "use the configured delegation timeout"; a nonzero
-	// value is bounds-checked and passed to the launcher.
-	var timeoutErr error
-	dt.timeout, timeoutErr = resolveDelegateTimeoutSeconds(dt.args)
-	if timeoutErr != nil {
-		return ErrorResult(timeoutErr.Error()), true
-	}
+	// timeout_seconds is retired (issue #1306): a delegation has no time
+	// limit and ends only when it finishes or is explicitly stopped. A model
+	// that still passes the key out of habit, or an older transcript
+	// replaying such a call, is accepted and the value ignored — never
+	// refused (see TestDelegateRun_IgnoresRetiredTimeoutSeconds).
 
 	// ADR-072 D9 / FR-050: requested_skill is OPTIONAL, but — mirroring
 	// agent_id's own "present-but-blank is rejected, absent is fine" rule
@@ -474,53 +467,6 @@ func (dt *delegateToolExecuteRun) authorizeDelegation() (*ToolResult, bool) {
 	}
 
 	return nil, false
-}
-
-// minDelegateTimeoutSeconds/maxDelegateTimeoutSeconds bound a caller-supplied
-// timeout_seconds override. Mirrors pkg/tools/shell.go's
-// minTimeoutSeconds/maxTimeoutSeconds bounds-checking style/values for
-// consistency across the tool surface.
-const (
-	minDelegateTimeoutSeconds = 1
-	maxDelegateTimeoutSeconds = 3600
-)
-
-// resolveDelegateTimeoutSeconds parses args["timeout_seconds"] for
-// action="run". Absent/nil/explicit 0 all resolve to 0 (time.Duration zero
-// value), meaning "no override — use the spawner's own default
-// (defaultSubTurnTimeout)", matching the schema's documented "0 = default
-// (30 min)". A nonzero value is bounds-checked against
-// [minDelegateTimeoutSeconds, maxDelegateTimeoutSeconds] and REJECTED —
-// never silently clamped or ignored — when out of range, mirroring
-// shell.go's resolveTimeoutSeconds.
-func resolveDelegateTimeoutSeconds(args map[string]any) (time.Duration, error) {
-	raw, present := args["timeout_seconds"]
-	if !present || raw == nil {
-		return 0, nil
-	}
-	var v int64
-	switch n := raw.(type) {
-	case float64:
-		v = int64(n)
-	case int:
-		v = int64(n)
-	case int32:
-		v = int64(n)
-	case int64:
-		v = n
-	default:
-		return 0, fmt.Errorf("timeout_seconds must be a number")
-	}
-	if v == 0 {
-		return 0, nil
-	}
-	if v < minDelegateTimeoutSeconds || v > maxDelegateTimeoutSeconds {
-		return 0, fmt.Errorf(
-			"timeout_seconds must be between %d and %d when non-zero (got %d); 0 means use the default",
-			minDelegateTimeoutSeconds, maxDelegateTimeoutSeconds, v,
-		)
-	}
-	return time.Duration(v) * time.Second, nil
 }
 
 // killChildBackgroundShells kills sessionID's own background bash/exec

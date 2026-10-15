@@ -176,8 +176,10 @@ type CronJob struct {
 	// one user-facing session choice, kept so a later owner/trigger change
 	// re-derives the mode from it.
 	RunIsolated bool `json:"runIsolated,omitempty"`
-	// TimeoutSeconds is the per-schedule run deadline override (FR-003); 0 = use default.
-	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
+	// The per-schedule run deadline (timeoutSeconds) is retired (issue #1306):
+	// a scheduled run has no time limit. A jobs.json written by an older
+	// release may still carry the key; it is ignored on load and dropped on
+	// the next save.
 	// CreatedBy is the user who created the schedule (W-7 notification ownership).
 	CreatedBy string `json:"createdBy,omitempty"`
 	// SessionID is the stable per-schedule session id for continue mode (W-2).
@@ -212,6 +214,11 @@ type CronService struct {
 	laneSem chan struct{}
 	// laneWG tracks in-flight lane runs so Stop() can drain them (W-3).
 	laneWG sync.WaitGroup
+	// dispatchPending counts, per job, dispatches handed to the lane that
+	// have not finished yet — including the wait for a lane slot, when the
+	// job has no Running flag and no turn (issue #1306, architect R2-A1).
+	// Guarded by mu; see JobDispatchInFlight.
+	dispatchPending map[string]int
 	// laneCtx/laneCancel cancel in-flight runs on shutdown (W-3).
 	laneCtx    context.Context
 	laneCancel context.CancelFunc
@@ -582,9 +589,14 @@ func (cs *CronService) dispatch(jobID string) {
 		laneCtx = context.Background()
 	}
 
+	cs.markDispatchPending(jobID)
 	cs.laneWG.Add(1)
 	go func() {
 		defer cs.laneWG.Done()
+		// Cleared on every exit: run finished, lane cancelled while queued,
+		// or a panic (deferred calls run while panicking, and the recover
+		// below stops the panic here).
+		defer cs.clearDispatchPending(jobID)
 		// Outer recover (defense-in-depth): executeJobByID has its own recover
 		// that converts a run panic into a recorded error, but a panic in the
 		// slot-acquisition/bookkeeping around it must never crash the gateway.
@@ -665,14 +677,11 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	slog.Info("cron: executing job", "job", callbackJob.Name, "job_id", jobID,
 		"schedule", callbackJob.Schedule.Kind, "owner", callbackJob.AgentID)
 
-	// Apply a per-run deadline (FR-003) derived from the schedule's timeout.
+	// No per-run deadline (issue #1306): the run ends when it finishes or an
+	// explicit Stop cancels it.
 	runCtx := ctx
 	if runCtx == nil {
 		runCtx = context.Background()
-	}
-	var cancel context.CancelFunc
-	if callbackJob.TimeoutSeconds > 0 {
-		runCtx, cancel = context.WithTimeout(runCtx, time.Duration(callbackJob.TimeoutSeconds)*time.Second)
 	}
 
 	// invokeRun calls the runner with a recover so a panic in a scheduled run
@@ -680,9 +689,6 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	// returned sessionID may be the stable id the runner chose (continue/main) so
 	// it can be persisted back onto the real job.
 	sessionID, err := invokeRun(runCtx, runner, callbackJob)
-	if cancel != nil {
-		cancel()
-	}
 
 	execDuration := cs.now().UnixMilli() - startTime
 
@@ -719,26 +725,21 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 		job.SessionID = sessionID
 	}
 
-	// Classify the run outcome. A deadline-exceeded run is "timeout", not
-	// "error", so the contract `timeout` enum is live (FR-003). A transient
-	// provider error drives backoff-retry scheduling (FR-010).
+	// Classify the run outcome. A transient provider error drives
+	// backoff-retry scheduling (FR-010). There is no "timeout" outcome any
+	// more: a scheduled run has no deadline (issue #1306), so a
+	// context.DeadlineExceeded here can only be a provider request timeout and
+	// is an ordinary error (the `timeout` status survives only in run records
+	// written by older releases).
 	status := "ok"
 	errText := ""
 	transient := false
-	switch {
-	case err == nil:
+	if err == nil {
 		job.State.LastStatus = "ok"
 		job.State.LastError = ""
 		job.State.ConsecutiveFailures = 0
 		job.State.RetryAttempt = 0
-	case errors.Is(err, context.DeadlineExceeded):
-		status = "timeout"
-		errText = err.Error()
-		job.State.LastStatus = "timeout"
-		job.State.LastError = errText
-		job.State.ConsecutiveFailures++
-		slog.Warn("cron: job timed out", "job", job.Name, "duration_ms", execDuration, "error", err)
-	default:
+	} else {
 		status = "error"
 		errText = err.Error()
 		transient = IsTransient(err)
@@ -970,16 +971,15 @@ func (cs *CronService) saveStoreUnsafe() error {
 // the REST handler avoids the two-write create window (AddJob + UpdateJob) that
 // briefly persists a job with an empty owner.
 type JobSpec struct {
-	Name           string
-	Schedule       CronSchedule
-	Message        string
-	Command        string
-	AgentID        string
-	SessionMode    SessionMode
-	RunIsolated    bool
-	TimeoutSeconds int
-	CreatedBy      string
-	Enabled        *bool // nil → default true
+	Name        string
+	Schedule    CronSchedule
+	Message     string
+	Command     string
+	AgentID     string
+	SessionMode SessionMode
+	RunIsolated bool
+	CreatedBy   string
+	Enabled     *bool // nil → default true
 	// SessionID is the stable id of the eager standing session that the
 	// heartbeat reconciler pre-creates when a member heartbeat is enabled
 	// (FR-007b, A2/F-02). When set, AddJobFull threads it onto the created
@@ -1036,7 +1036,6 @@ func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
 		AgentID:        spec.AgentID,
 		SessionMode:    mode,
 		RunIsolated:    spec.RunIsolated,
-		TimeoutSeconds: spec.TimeoutSeconds,
 		CreatedBy:      spec.CreatedBy,
 		SessionID:      spec.SessionID,
 	}
@@ -1109,7 +1108,10 @@ func (cs *CronService) RunNow(jobID string) (status string, sessionID string, er
 	// "a new run was appended" signal.
 	beforeLen, beforeRec := cs.runStateSnapshot(jobID)
 
-	// Acquire a lane slot (queues when the cap is reached, FR-007).
+	// Acquire a lane slot (queues when the cap is reached, FR-007). The job
+	// counts as dispatched while it waits and runs (JobDispatchInFlight).
+	cs.markDispatchPending(jobID)
+	defer cs.clearDispatchPending(jobID)
 	select {
 	case sem <- struct{}{}:
 	case <-laneCtx.Done():
@@ -1279,4 +1281,46 @@ func generateID() string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+// markDispatchPending records one more dispatch of jobID handed to the lane.
+func (cs *CronService) markDispatchPending(jobID string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.dispatchPending == nil {
+		cs.dispatchPending = make(map[string]int)
+	}
+	cs.dispatchPending[jobID]++
+}
+
+// clearDispatchPending releases one dispatch of jobID recorded by
+// markDispatchPending. Every caller defers it, so it runs on a finished run,
+// a lane cancelled while queued, and a panic alike.
+func (cs *CronService) clearDispatchPending(jobID string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.dispatchPending[jobID] <= 1 {
+		delete(cs.dispatchPending, jobID)
+		return
+	}
+	cs.dispatchPending[jobID]--
+}
+
+// JobDispatchInFlight reports whether jobID has a dispatch that is queued for
+// a lane slot or running (issue #1306, architect R2-A1). RunDueJobs clears a
+// due job's next fire before the lane wait, and the job has no Running flag
+// and no turn until it gets a slot, so an idle sweep must ask this instead of
+// treating that queued run as idle.
+func (cs *CronService) JobDispatchInFlight(jobID string) bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	if cs.dispatchPending[jobID] > 0 {
+		return true
+	}
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == jobID {
+			return cs.store.Jobs[i].State.Running
+		}
+	}
+	return false
 }

@@ -777,32 +777,6 @@ func (al *AgentLoop) runTaskExternalCLIOnce(
 	defer func() { ts.Finish(ts.hardAbortRequested()) }()
 	defer al.clearActiveTurn(ts)
 
-	delegationTimeout := al.effectiveDelegationTimeout()
-
-	// ADDITIONAL FINDING (surfaced while writing pr-test-analyzer's T2, not
-	// one of the 11 numbered fixes): runExternalCLISubTurn never wraps its
-	// own ctx with a deadline — it derives runCtx via plain
-	// context.WithCancel(ctx) (external_dispatch.go) and only forwards
-	// rtCfg.defaultTimeout to the DRIVER as RunOptions.TimeoutSeconds, a hint
-	// each real driver applies itself (driver_claude.go/driver_codex.go/
-	// driver_opencode.go all do `context.WithTimeout(runCtx,
-	// TimeoutSeconds*time.Second)` internally). The pre-ADR-091 native
-	// delegation path (subturn.go, since deleted) already had its OWN
-	// Go-level safety-net timeout (`context.WithTimeout(context.Background(),
-	// timeout)`) precisely so a driver that never honors/emits an end event
-	// cannot hang the dispatch forever; this task-mode dispatch had no
-	// equivalent — a stuck external CLI would tie up a dispatch-semaphore
-	// slot indefinitely with nothing to notice. Unlike that path's
-	// Background()-rooted child (deliberately independent so a Critical
-	// sub-turn survives its parent's graceful finish), this derives the
-	// deadline FROM the incoming ctx — consistent with the native task path,
-	// where runTurn's own turnTimeout is likewise derived from the given ctx
-	// (loop.go) — so a TaskExecutor-level cancel (te.running[taskID].cancel(),
-	// ExecuteTask/StartTaskNow) still takes effect immediately in addition to
-	// this deadline.
-	dispatchCtx, dispatchCancel := context.WithTimeout(ctx, delegationTimeout)
-	defer dispatchCancel()
-
 	// FIX 2 (7-reviewer gate, persona dropped): compose the same (soul, task)
 	// pair the native delegation path uses ahead of its own
 	// runExternalCLISubTurn call (subturn_identity.go's composeDelegateInput,
@@ -814,7 +788,10 @@ func (al *AgentLoop) runTaskExternalCLIOnce(
 	// task-only input, identical to the pre-fix behavior.
 	externalInput := composeDelegateInput(al, prompt, "", agent.ID)
 
-	result, err := runExternalCLISubTurn(dispatchCtx, al, ts, externalInput, delegationTimeout)
+	// No deadline (issue #1306): the task's external-CLI run ends when it
+	// finishes or a TaskExecutor-level cancel (te.running[taskID].cancel(),
+	// an explicit Stop) cancels ctx.
+	result, err := runExternalCLISubTurn(ctx, al, ts, externalInput)
 	if err != nil {
 		return "", fmt.Errorf("processTaskDirect: external-cli dispatch: %w", err)
 	}

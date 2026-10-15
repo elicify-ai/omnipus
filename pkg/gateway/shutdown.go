@@ -36,7 +36,9 @@ func omnipusGracefulShutdown(
 	runningServices *services,
 	agentLoop *agent.AgentLoop,
 	provider providers.LLMProvider,
-	cfg *config.Config,
+	// The config is no longer read here (the retired per-turn timeout used
+	// to shorten the active-turn wait); kept so callers stay unchanged.
+	_ *config.Config,
 ) {
 	ctx, cancel := context.WithTimeout(context.Background(), omnipusShutdownTimeout)
 	defer cancel()
@@ -95,14 +97,10 @@ func omnipusGracefulShutdown(
 
 	// US-7 / FR-008: Wait for active turns to complete before force-closing.
 	// Cap the wait to omnipusShutdownTimeout - 5 s so it always fits in the budget.
-	maxActiveTurnWait := int((omnipusShutdownTimeout - 5*time.Second).Seconds()) // 65 s
-	activeTurnTimeout := maxActiveTurnWait
-	if cfg != nil {
-		ts := cfg.Agents.Defaults.TimeoutSeconds
-		if ts > 0 && ts < activeTurnTimeout {
-			activeTurnTimeout = ts
-		}
-	}
+	// This is a shutdown drain bound, not a work time limit: the gateway is
+	// going away. (The retired agents.defaults.timeout_seconds used to shorten
+	// it; turns have no time limit any more, issue #1306.)
+	activeTurnTimeout := int((omnipusShutdownTimeout - 5*time.Second).Seconds()) // 65 s
 
 	slog.Info("shutdown: step 2 — waiting for active turns to complete",
 		"active_turn_wait_seconds", activeTurnTimeout)

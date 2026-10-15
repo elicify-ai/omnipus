@@ -9,7 +9,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,7 +72,7 @@ func TestExternalDispatch_InjectsEgressProxyEnv(t *testing.T) {
 		fr.Cancel()
 	}()
 
-	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second); err != nil {
+	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "task"); err != nil {
 		t.Fatalf("runExternalCLISubTurn: %v", err)
 	}
 
@@ -119,7 +118,7 @@ func TestExternalDispatch_GracefulDegradationNoProxy(t *testing.T) {
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	require.NoError(t, err)
 	assert.Equal(t, "degraded-ok", res.ForLLM)
 

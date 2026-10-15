@@ -23,14 +23,15 @@ const fr001RemovedKeysMsg = "config error: agents.defaults.restrict_to_workspace
 	"cfg.Tools.AllowWritePaths regex arrays for path-specific allow-listing"
 
 // subturnRemovedKeysMsg is the ADR-091 D9 fold rejection: the old
-// agents.defaults.subturn block (max_depth / default_timeout_minutes) was
-// MOVED, not silently dropped, to performance.max_delegation_depth /
-// performance.delegation_timeout_minutes. A config that still carries the old
-// block is refused rather than loaded with the operator's customized values
-// discarded (the same treatment the retired `await` mode already gets).
+// agents.defaults.subturn block's max_depth was MOVED, not silently dropped,
+// to performance.max_delegation_depth. A config that still carries the old
+// block is refused rather than loaded with the operator's customized depth
+// discarded (the same treatment the retired `await` mode already gets). Its
+// default_timeout_minutes has no successor: delegated work has no time limit
+// (issue #1306), so the message no longer names a replacement for it.
 const subturnRemovedKeysMsg = "config error: agents.defaults.subturn has been removed; " +
-	"replace agents.defaults.subturn.max_depth with performance.max_delegation_depth and " +
-	"agents.defaults.subturn.default_timeout_minutes with performance.delegation_timeout_minutes"
+	"replace agents.defaults.subturn.max_depth with performance.max_delegation_depth " +
+	"(agents.defaults.subturn.default_timeout_minutes has no replacement: delegated work has no time limit)"
 
 // validateRemovedKeys parses raw JSON bytes and returns an error if the config
 // contains either of the two keys removed by. The check fires for ANY

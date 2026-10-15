@@ -139,8 +139,17 @@ x-user-messages:
     message: "This turn was stopped before it finished."
     attribution: user
   turn_timed_out:
-    message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+    message: "The model provider didn’t answer this request in time. Retry — if it keeps happening, open Verbose chat for details."
     attribution: provider
+  judge_time_limit:
+    message: "The Judge reached its own check time limit before it finished checking this work. Raise judge.timeout_sec in config.json if checks need longer, then check again."
+    attribution: config
+  judge_conclusion_failed:
+    # Issue #1306 (SFH R2-3): an operational notice, not a turn exit — the
+    # Judge's conclusion could not be fully saved or delivered. It ends no
+    # turn. Not retryable; never a trusted provider message.
+    message: "Omnipus could not fully save or deliver the Judge's conclusion. Check disk space, file permissions and the chat's channel connection, then reload the chat. Open Verbose chat for details."
+    attribution: ambiguous
   delegated_task_limit:
     message: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed."
     attribution: config
@@ -153,6 +162,8 @@ x-user-messages:
 properties:
   code:
     type: string
+    description: >-
+      Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
     enum:
       - media_unsupported
       - provider_rejected
@@ -175,6 +186,8 @@ properties:
       - model_unassigned
       - turn_canceled
       - turn_timed_out
+      - judge_time_limit
+      - judge_conclusion_failed
       - delegated_task_limit
       - context_window_unknown
       - unknown

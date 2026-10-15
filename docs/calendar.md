@@ -64,6 +64,7 @@ An agent heartbeat is separate from scheduled task work and does not appear on t
 
 ## Limits and things to watch
 
+- **A scheduled run has no time limit.** It runs until the agent finishes or someone stops it. Older versions stopped a run after five minutes (`schedules.run_timeout_seconds`, or a per-schedule timeout); those settings are now ignored. Runs recorded with the status **timeout** by an older version keep that status in the history.
 - A missed run is skipped, never replayed. If the server was down at the fire time, that occurrence is gone, and After N occurrences counts planned runs, not completed ones.
 - A failed run does not stop the series. The next occurrence fires anyway; the failure is shown on its Week/Day chip.
 - The fastest repeat is once a minute.
