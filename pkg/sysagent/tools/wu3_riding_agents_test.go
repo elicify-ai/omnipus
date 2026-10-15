@@ -90,12 +90,14 @@ func TestWU3PhantomMetadataWriterIsNotAdvertised(t *testing.T) {
 	assert.Contains(t, preview["static_catalog"], "read_agent_metadata", "nonempty catalog instrument")
 }
 
-// #1064 operator decision: update_agent writes all three files, never a phantom.
+// #1064 + chief ruling Q2 (HANDOFFS, 2026-10-15T02:25Z): update_agent
+// writes the active metadata, never a phantom. HEARTBEAT.md has no runtime
+// reader; heartbeat settings belong to workspace members, so this input refuses.
 func TestWU3UpdateAgentWritesEveryMetadataFile(t *testing.T) {
 	d, cfg := wu3Deps(t)
 	id := wu3CreateAgent(t, d, cfg, "Metadata fixture")
 	before := wu3AgentRead(t, d, id)
-	want := map[string]string{"soul": "WU3 new soul instructions", "heartbeat": "WU3 heartbeat instructions", "agent_md": "# WU3 agent metadata\n\nExplicit operator instructions.\n"}
+	want := map[string]string{"soul": "WU3 new soul instructions", "agent_md": "# WU3 agent metadata\n\nExplicit operator instructions.\n"}
 	args := map[string]any{"id": id, "revision": before["revision"]}
 	for field, content := range want {
 		args[field] = content
@@ -103,11 +105,35 @@ func TestWU3UpdateAgentWritesEveryMetadataFile(t *testing.T) {
 	result := systools.NewAgentUpdateTool(d).Execute(context.Background(), args)
 	body := wu3Success(t, result)
 	assert.NotEqual(t, before["revision"], body["revision"], "metadata change advances the revision")
-	for field, file := range map[string]string{"soul": "soul", "heartbeat": "heartbeat", "agent_md": "agent"} {
+	for field, file := range map[string]string{"soul": "soul", "agent_md": "agent"} {
 		read := wu3Success(t, systools.NewAgentReadMetadataTool(d).Execute(context.Background(), map[string]any{"agent_id": id, "file": file}))
 		assert.Equal(t, want[field], read["content"], "dedicated public metadata read of %s", field)
 	}
 	wu3Error(t, systools.NewAgentUpdateTool(d).Execute(context.Background(), args), "CONFLICT")
+
+	// Use the CURRENT revision, so an unrelated stale-write refusal cannot
+	// satisfy the heartbeat unknown-field oracle. The whole state must stay put.
+	beforeHeartbeat := wu3AgentRead(t, d, id)
+	heartbeatPath := filepath.Join(d.Home, "agents", id, "HEARTBEAT.md")
+	heartbeatBefore, heartbeatBeforeErr := os.ReadFile(heartbeatPath)
+	require.True(t, heartbeatBeforeErr == nil || errors.Is(heartbeatBeforeErr, os.ErrNotExist), "heartbeat fixture must be readable or absent")
+	refusal := systools.NewAgentUpdateTool(d).Execute(context.Background(), map[string]any{
+		"id": id, "revision": beforeHeartbeat["revision"], "heartbeat": "Must not be saved.",
+	})
+	errBody := wu3Error(t, refusal, "INVALID_INPUT")
+	assert.Contains(t, errBody["message"], `unknown field "heartbeat"`, "Q2: refuse the inert field explicitly")
+	assert.Equal(t, beforeHeartbeat, wu3AgentRead(t, d, id), "heartbeat refusal must not change state or revision")
+	heartbeatAfter, heartbeatAfterErr := os.ReadFile(heartbeatPath)
+	if heartbeatBeforeErr == nil {
+		require.NoError(t, heartbeatAfterErr)
+		assert.Equal(t, heartbeatBefore, heartbeatAfter, "heartbeat refusal must not rewrite HEARTBEAT.md")
+	} else {
+		assert.ErrorIs(t, heartbeatAfterErr, os.ErrNotExist, "heartbeat refusal must not create HEARTBEAT.md")
+	}
+	for field, file := range map[string]string{"soul": "soul", "agent_md": "agent"} {
+		read := wu3Success(t, systools.NewAgentReadMetadataTool(d).Execute(context.Background(), map[string]any{"agent_id": id, "file": file}))
+		assert.Equal(t, want[field], read["content"], "heartbeat refusal must preserve metadata %s", field)
+	}
 }
 
 // #1032 F-3: missing identity is not the same as a missing file of a real agent.
