@@ -1,7 +1,7 @@
 # Feature Specification: Prompt caching
 
 **Created**: 2026-10-15
-**Status**: Draft
+**Status**: Approved (founder, 2026-10-15: "yes you can start")
 **Input**: Founder interview decisions D1–D12 in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/designs/prompt-caching-interview-decisions-20261015.md`, architect analysis `prompt-caching-analysis-20261015.md`, provider research `prompt-caching-research/` (top50.md, research-1.md through research-5.md), issues #750, #980, #1307, #654. Code verified on this worktree at `8ba69a673` (branch `work/prompt-caching-spec`). Catalog repo `elicify-ai/omnipus-provider-catalog` read via the GitHub API. models.dev cost shape read from `sst/models.dev` `packages/core/src/schema.ts` and a fetch of `https://models.dev/api.json` on 2026-10-15.
 
 D1–D12 are the interview. D13–D18 close the questions this draft first left open. D19 and D20 close grill round 1. D21 and D22 close grill round 2. No requirement is blocked. There is no remaining open question. No round-1 or round-2 finding is rejected. D1–D20 are not reopened. D22 replaces only the live-proof population in D9 and D17.
