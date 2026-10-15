@@ -63,6 +63,8 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 			rt.providerCallAttachCache[attachKey] = messagesForCall
 		}
 	}
+	rt.ts.setLastProducedModel(model)
+	rt.ts.setLastProducedProvider(providerName)
 	// Use streaming if the provider supports it and we have a streamer for this channel.
 	// U8 (FR-028): never stream to a connector from a main - which sender would it be?
 	if sp, ok := p.(providers.StreamingProvider); ok && rt.al.bus != nil && !rt.al.mainConnectorTurn(rt.ts.channel, rt.ts.transcriptSessionID) {

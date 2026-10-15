@@ -974,10 +974,14 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 	// We write BEFORE the tool_call entries so the transcript order mirrors
 	// the live stream: [text segment N] → [tool_call round N] → …
 	//
-	// Tokens/cost are 0 here — the turn total is attributed to the final
-	// assistant entry only (wsStreamer.Finalize or appendAssistantTranscript).
+	// This entry owns this call's usage, including a no-text accounting entry.
+	// The final reply must not count that usage a second time.
+	hadAccounting := rr.rq.ri.rf.rt.ts.pendingCallAccounting()
 	rr.rq.ri.rf.rt.ts.appendIntermediateAssistantTranscript(rr.rq.ri.rf.response.Content)
-	if rr.rq.ri.rf.response.Content != "" {
+	if err := rr.rq.ri.rf.rt.ts.callAccountingError(); err != nil {
+		return err
+	}
+	if rr.rq.ri.rf.response.Content != "" || hadAccounting {
 		// The narration is now in the transcript. If this round's streamer
 		// ends up being finalized (the turn exits via max_tool_iterations
 		// exhaustion, where the last executed round is a tool-call round),

@@ -1457,6 +1457,9 @@ func (rf *agentLoopRunTurnFallbacks) synthesizeImageRejection(pe *ProviderError,
 // callProviderOnce calls the configured provider or fallback chain once and records streaming progress.
 // Provider rate-limit retries for every turn, delegated included, live in the fallback chain (§7.4).
 func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (response *providers.LLMResponse, err error) {
+	if accountingErr := rt.ts.callAccountingError(); accountingErr != nil {
+		return nil, accountingErr
+	}
 	if cwErr := rt.ts.contextWindowError(); cwErr != nil {
 		return nil, cwErr
 	}
