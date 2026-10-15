@@ -37,7 +37,7 @@ func wu3DurableInventory(t *testing.T, home string) []string {
 	agents, skipped, err := agentstore.New(home).List()
 	require.NoError(t, err)
 	require.Empty(t, skipped, "an unreadable agent record would hide a new entity")
-	var out []string
+	out := make([]string, 0, len(agents))
 	for _, a := range agents {
 		out = append(out, "agent:"+a.ID)
 	}
@@ -95,7 +95,7 @@ func wrongTypeArgs(t *testing.T, tool tools.Tool) map[string]any {
 	if req, ok := params["required"].([]string); ok {
 		candidates = append(candidates, req...)
 	}
-	var names []string
+	names := make([]string, 0, len(props))
 	for name := range props {
 		names = append(names, name)
 	}

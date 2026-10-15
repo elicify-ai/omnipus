@@ -88,7 +88,7 @@ func UseNameKeyedAgentIDsForTest(t interface{ Cleanup(fn func()) }) {
 // FailMCPCredentialWriteAfterForTest makes add_mcp_server's env credential
 // writes succeed `ok` times and fail from then on, restoring the real writer
 // when t ends.
-func FailMCPCredentialWriteAfterForTest(t interface{ Cleanup(func()) }, ok int) {
+func FailMCPCredentialWriteAfterForTest(t interface{ Cleanup(f func()) }, ok int) {
 	prev := mcpCredentialSet
 	calls := 0
 	mcpCredentialSet = func(store *credentials.Store, name, value string) error {
@@ -103,7 +103,7 @@ func FailMCPCredentialWriteAfterForTest(t interface{ Cleanup(func()) }, ok int) 
 
 // FailAgentMetadataReadBackForTest makes update_agent's metadata read-back
 // fail (the write itself still happens), restoring the real reader when t ends.
-func FailAgentMetadataReadBackForTest(t interface{ Cleanup(func()) }) {
+func FailAgentMetadataReadBackForTest(t interface{ Cleanup(f func()) }) {
 	prev := readAgentMetadataBack
 	readAgentMetadataBack = func(string) ([]byte, error) { return nil, errors.New("injected read-back failure") }
 	t.Cleanup(func() { readAgentMetadataBack = prev })

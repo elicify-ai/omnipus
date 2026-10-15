@@ -51,10 +51,10 @@ func TestWU3WorkspaceCreateDeleteCarryTheOutcomeEnvelope(t *testing.T) {
 		"delete stale revision":    {"id": id, "revision": "stale-revision", "confirm": true},
 		"delete missing workspace": {"id": "no-such-workspace", "revision": state.Revision, "confirm": true},
 	} {
-		res := del.Execute(context.Background(), args)
-		require.True(t, res.IsError, "%s: %s", label, res.ForLLM)
-		body := wu3Outcome(t, res, "failed: nothing saved")
-		assert.Equal(t, []any{}, body["changed_fields"], label)
+		refusal := del.Execute(context.Background(), args)
+		require.True(t, refusal.IsError, "%s: %s", label, refusal.ForLLM)
+		refused := wu3Outcome(t, refusal, "failed: nothing saved")
+		assert.Equal(t, []any{}, refused["changed_fields"], label)
 	}
 	requireNoDurableChange(t, d.Home, before, "delete refusals saved nothing")
 
@@ -101,5 +101,8 @@ func TestWU3ListSkillsRefusesInvalidExplicitTarget(t *testing.T) {
 
 	// Control: the valid explicit target lists the Sales shelf.
 	ok := wu3Success(t, list.Execute(ctx, map[string]any{"scope": "management", "name": "crm", "workspace_id": "sales"}))
-	assert.Contains(t, ok["skills"].([]any)[0].(map[string]any)["content"], "sales-only-body")
+	listed, isList := ok["skills"].([]any)
+	require.True(t, isList)
+	require.Len(t, listed, 1)
+	assert.Contains(t, wu3Object(t, listed[0])["content"], "sales-only-body")
 }
