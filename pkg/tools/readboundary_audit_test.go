@@ -215,10 +215,10 @@ func TestGrepTool_RegistryWiresAuditLogger(t *testing.T) {
 }
 
 // TestReadBoundary_PlanSupervisorGrepReach is test 20 (S-4.9, DS-3 row 14,
-// SL-5): the Plan Supervisor, with its SHIPPED seed (grep allowed,
-// read_file denied) and not read-confined (D10), greps
-// $OMNIPUS_HOME/sessions and gets the transcript match; a grep of
-// master.key is still refused. Pins the D10 accepted risk.
+// SL-5): the Plan Supervisor keeps grep allowed, read_file denied and no
+// read-confined posture. L1-AMENDMENTS-20261013.md §2 D2 / §2.4 supersede
+// the open-session oracle: sessions and master.key are protected for EVERY
+// agent; its ordinary external grep remains permitted.
 //
 // Traces: S-4.9; FR-016, FR-030.
 func TestReadBoundary_PlanSupervisorGrepReach(t *testing.T) {
@@ -251,12 +251,17 @@ func TestReadBoundary_PlanSupervisorGrepReach(t *testing.T) {
 
 	sessions := filepath.Join(f.home, "sessions")
 	res := f.grep.Execute(psCtx, map[string]any{"pattern": "needle", "path": sessions})
-	if res.IsError {
-		t.Fatalf("S-4.9: the Plan Supervisor's grep of $OMNIPUS_HOME/sessions must run (D10 accepted risk), got: %s", res.ForLLM)
+	requireInternalFileRefusal(t, res, "grep")
+	if strings.Contains(res.ForLLM, "needle in a plan session") {
+		t.Fatal("Plan Supervisor grep disclosed an internal transcript")
 	}
-	want := []string{rbSlash(filepath.Join(sessions, "s1.jsonl"))}
-	if got := rbHitPaths(res.ForLLM); !rbSameSet(got, want) {
-		t.Fatalf("S-4.9: match paths = %q, want exactly %q", got, want)
+	external := f.grep.Execute(psCtx, map[string]any{"pattern": "needle", "path": f.ext})
+	if external.IsError {
+		t.Fatalf("Plan Supervisor ordinary external grep must remain allowed: %s", external.ForLLM)
+	}
+	want := []string{rbSlash(filepath.Join(f.ext, "ext", "notes.txt"))}
+	if got := rbHitPaths(external.ForLLM); !rbSameSet(got, want) {
+		t.Fatalf("external control match paths = %q, want exactly %q", got, want)
 	}
 
 	key := f.grep.Execute(psCtx, map[string]any{"pattern": "needle", "path": filepath.Join(f.home, "master.key")})

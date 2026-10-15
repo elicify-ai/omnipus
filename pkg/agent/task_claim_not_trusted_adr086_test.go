@@ -164,8 +164,16 @@ func TestTaskClaimIsNeverTrustedWhenJudgeUnregistered(t *testing.T) {
 	if !strings.Contains(final.Result, "The Judge could not run") || !strings.Contains(final.Result, "not registered") {
 		t.Errorf("result = %q, want the plain reason naming the missing Judge", final.Result)
 	}
-	if strings.Contains(final.Result, claim) {
-		t.Errorf("result = %q — the worker's own claim must never be written as the result", final.Result)
+	// The worker's claim is never the task's result (GOAL-FR-022). Since
+	// issue #1306 (founder: "the Judge must conclude", with the work result)
+	// it may appear ONLY inside the explicit "Not verified" conclusion,
+	// labelled as unverified — never as the result itself.
+	const unverifiedMarker = "The work result, unverified:"
+	if idx := strings.Index(final.Result, claim); idx >= 0 {
+		marker := strings.Index(final.Result, unverifiedMarker)
+		if marker < 0 || idx < marker || !strings.Contains(final.Result, "Not verified") {
+			t.Errorf("result = %q — the worker's own claim may only appear inside the labelled Not-verified conclusion, never as the result", final.Result)
+		}
 	}
 	if final.AttemptCount != 0 {
 		t.Errorf("attempt_count = %d, want 0 — a missing Judge is an environment gap, not a failed run", final.AttemptCount)

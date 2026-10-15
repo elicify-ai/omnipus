@@ -342,6 +342,7 @@ func allClassifierCodes() []LLMErrorCode {
 		CodeModelUnavailable,
 		CodeNeedsProvider,
 		CodeContextWindowUnknown,
+		CodeJudgeTimeLimit,
 		CodeUnknown,
 	}
 }
@@ -987,7 +988,8 @@ func TestTranslateError_TypedExitsAndAttributions(t *testing.T) {
 	assert.Equal(t, LLMErrorAttribution("user"), AttributionForCode(CodeTurnCanceled))
 	assert.Equal(t, LLMErrorAttribution("provider"), AttributionForCode(CodeTurnTimedOut))
 	assert.Equal(t, LLMErrorAttribution("config"), AttributionForCode(CodeDelegatedTaskLimit))
-	for _, c := range []LLMErrorCode{CodeTurnCanceled, CodeTurnTimedOut, CodeDelegatedTaskLimit} {
+	for _, c := range []LLMErrorCode{CodeTurnCanceled, CodeTurnTimedOut,
+		CodeJudgeTimeLimit, CodeDelegatedTaskLimit} {
 		assert.NotEqual(t, UserMessageForCode(CodeUnknown), UserMessageForCode(c),
 			"%s must have its own catalogue copy", c)
 	}

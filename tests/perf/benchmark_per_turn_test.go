@@ -63,7 +63,10 @@ func dialAndAuth(wsURL, token string) (*websocket.Conn, error) {
 //   - firstTokenMs: time from send to the first "token" frame (or "done" if no token frame).
 //   - doneMs: time from send to the "done" frame.
 func sendAndMeasure(conn *websocket.Conn, content string) (perTurnLatencies, error) {
-	msgData, err := json.Marshal(wsClientFrame{Type: "message", Content: content})
+	// A new chat names its agent (omnipus-system-agent FR-122, K16): there is
+	// no default agent. Mia is a seeded chat agent of the perf gateway's
+	// roster; these benchmarks measure turn latency, not agent selection.
+	msgData, err := json.Marshal(wsClientFrame{Type: "message", Content: content, AgentID: "mia"})
 	if err != nil {
 		return perTurnLatencies{}, fmt.Errorf("marshal message frame: %w", err)
 	}

@@ -2,6 +2,8 @@ package systools
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
@@ -337,8 +339,18 @@ func jsonInt(raw any, field string) (int, error) {
 	case int32:
 		return int(v), nil
 	case int64:
+		if v < math.MinInt || v > math.MaxInt {
+			return 0, fieldErr(field, field+" must be an integer")
+		}
 		return int(v), nil
 	case float64:
+		// Check the signed-int range BEFORE conversion: an out-of-range float
+		// converts implementation-dependently, and ARM64 can saturate to MaxInt.
+		// float64(MaxInt64) rounds up to 2^63, so a round-trip alone misses it.
+		limit := math.Ldexp(1, strconv.IntSize-1)
+		if v < -limit || v >= limit {
+			return 0, fieldErr(field, field+" must be an integer")
+		}
 		n := int(v)
 		if float64(n) == v {
 			return n, nil

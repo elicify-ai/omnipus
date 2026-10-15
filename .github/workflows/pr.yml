@@ -2015,8 +2015,9 @@ jobs:
         # Landlock and legitimately skips for unrelated platform reasons; a
         # blanket skip-ban or a whole-package pass-floor guessed without ever
         # running it would be exactly the kind of manufactured-green threshold
-        # this task exists to remove. The floor below (10) is exact and
-        # verified by grep, not estimated — but as with the pkg/gateway step
+        # this task exists to remove. The 18 top-level passes below are exact:
+        # the original 10 plus seven WU-23 probes and its creation-limit probe
+        # (binding L1 amendment §2 D8 T-L). As with the pkg/gateway step
         # above, a future Landlock-gated test needs adding to this list by
         # hand; grep for new "Landlock (backend )?not available|Landlock
         # unavailable|Landlock ABI v4" call sites the next time this is
@@ -2024,7 +2025,7 @@ jobs:
         run: |
           set -euo pipefail
           go test -v -tags goolm,stdjson -count=1 -timeout 300s \
-            -run '^(TestSandboxBackend_LinuxFull|TestSandboxBackend_LandlockFallbackChain|TestApplyOnABI4_EINVAL_HardFails|TestLandlock_ApplySubprocess|TestLandlock_BindBlockedSubprocess|TestLandlock_BindAllowedSubprocess|TestLandlock_WorkspaceReroot_StaysInsideBootGrant|TestRedteam_RawTCP_Egress_Blocked|TestRedteam_MasterKey_Exfil_Blocked|TestRedteam_Credentials_Exfil_Blocked)$' \
+            -run '^(TestSandboxBackend_LinuxFull|TestSandboxBackend_LandlockFallbackChain|TestApplyOnABI4_EINVAL_HardFails|TestLandlock_ApplySubprocess|TestLandlock_BindBlockedSubprocess|TestLandlock_BindAllowedSubprocess|TestLandlock_WorkspaceReroot_StaysInsideBootGrant|TestRedteam_RawTCP_Egress_Blocked|TestRedteam_MasterKey_Exfil_Blocked|TestRedteam_Credentials_Exfil_Blocked|TestWU23_LandlockRuntimeAllowances|TestWU23_LandlockInventory|TestWU23_LandlockAgentHome|TestWU23_LandlockPostSpawnDenied|TestWU23_LandlockGodFloor|TestWU23_KernelDerivationRequiredInputs|TestWU23R1_RuntimeAllowRootsNeverReopenInventory_Landlock|TestWU23_LandlockAgentHomeCreationLimit)$' \
             ./pkg/sandbox 2>&1 | tee /tmp/sandbox-landlock.log
 
           if grep -qE 'Landlock (backend )?not available|Landlock unavailable|Landlock ABI v4' /tmp/sandbox-landlock.log; then
@@ -2033,10 +2034,16 @@ jobs:
             exit 1
           fi
 
-          passes=$(grep -c -- '--- PASS' /tmp/sandbox-landlock.log || true)
-          echo "pkg/sandbox Landlock-backed passing tests: $passes"
-          if [ "$passes" -lt 10 ]; then
-            echo "::error::Only $passes of the 10 known Landlock-backed pkg/sandbox tests passed. Coverage has silently shrunk (or one of the ten was renamed/removed without updating this step)." >&2
+          if grep -q -- '--- SKIP:' /tmp/sandbox-landlock.log; then
+            echo "::error::A selected Landlock probe skipped — this is not kernel evidence." >&2
+            grep -- '--- SKIP:' /tmp/sandbox-landlock.log >&2
+            exit 1
+          fi
+
+          passes=$(grep -Ec '^--- PASS: Test[^/[:space:]]+ \(' /tmp/sandbox-landlock.log || true)
+          echo "pkg/sandbox Landlock-backed top-level passing tests: $passes"
+          if [ "$passes" -ne 18 ]; then
+            echo "::error::Expected exactly 18 named Landlock-backed pkg/sandbox tests; got $passes. Nested subtests do not satisfy this gate." >&2
             exit 1
           fi
 

@@ -119,7 +119,6 @@ function makeAgent(): Agent {
     model: 'anthropic/claude-3.5-haiku',
     description: 'Assistant',
     soul: '',
-    timeout_seconds: 60,
     max_tool_iterations: 20,
     max_tool_iterations_source: 'global',
     max_tool_iterations_override_ignored: false,

@@ -1672,7 +1672,10 @@ func (va *agentLoopRunVerifierAdjudication) resolveJudge(attempt int) agentLoopR
 
 // dispatchTurn configures and dispatches one confined verifier turn.
 func (va *agentLoopRunVerifierAdjudication) dispatchTurn() {
-	callCtx, cancel := context.WithTimeout(va.ctx, va.al.judgeTurnTimeout())
+	// The Judge keeps its own check time limit (founder, issue #1306), tagged
+	// with ErrJudgeTimeLimit so its expiry is reported as exactly that —
+	// never as "the model provider didn't answer".
+	callCtx, cancel := context.WithTimeoutCause(va.ctx, va.al.judgeTurnTimeout(), ErrJudgeTimeLimit)
 	// FR-033/R3-10/R3-11 (F2 half): plumb the engine-set inspect_session
 	// target scope onto the verifier's own turn ctx BEFORE dispatch — the
 	// ctx propagates through processTaskDirect's own derivation
@@ -1723,6 +1726,7 @@ func (va *agentLoopRunVerifierAdjudication) dispatchTurn() {
 	}
 	var flagged map[string]string
 	va.content, flagged, va.toolCalls, va.callErr = va.al.dispatchVerifierTurn(callCtx, va.judgeInst, va.prompt, va.sessionKey, va.chatID)
+	va.callErr = withDeadlineCause(callCtx, va.callErr)
 	cancel()
 	reportVerifierInjectionFlags(va.unitID, va.adjudicationID, flagged)
 }
@@ -2225,6 +2229,8 @@ func goalForJudgeRetryNotice(in JudgeCriteriaInput) (*goal.Goal, error) {
 // never the raw provider error (ADR-051 §RD5 CRIT-001).
 func judgeRetryCause(callErr error) string {
 	switch TranslateTurnError(callErr).Code {
+	case CodeJudgeTimeLimit:
+		return "it reached its own check time limit (judge.timeout_sec)"
 	case CodeTurnTimedOut:
 		return "its model did not answer in time"
 	case CodeProviderStalled:

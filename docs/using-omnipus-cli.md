@@ -195,7 +195,7 @@ Most jobs can be done from either place.
 
 ## Limits and things to watch
 
-- **One-shot tasks need a running server.** If it is down, the command prints `Omnipus isn't running — start it with: omnipus start`. Runs also time out after five minutes by default; change it with `--timeout <duration>`.
+- **One-shot tasks need a running server.** If it is down, the command prints `Omnipus isn't running — start it with: omnipus start`. The command stops waiting for the answer after five minutes by default; change it with `--timeout <duration>`. That only ends the terminal's wait: the agent's work has no time limit and carries on in the server, so you can read its result in the web app.
 - **Talking to a remote server is not supported yet.** The `--url` flag exists but is reserved.
 - **Command names shadow agent names, and worker agents cannot be addressed directly.** An agent named `start` cannot be run from the terminal; rename it or use the web app. `omnipus` with no arguments lists the agents you can run.
 

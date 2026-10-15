@@ -192,6 +192,27 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 // state.Workspace field reads in pkg/sysagent/tools/workspace.go). A reviewed
 // entry therefore whitelists that exact line wherever it appears in that file.
 var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
+	// L1 #1274 fixtures: these ReadState results are workspace.State (whose
+	// Workspace field is the live workspace record), never AgentConfig.
+	// Reviewed ci1-fs chief ruling 2026-10-14: exact content-anchored entries;
+	// the scanner and all membership/delegation assertions stay unchanged.
+	// l11274AssertCreated: durable membership readback.
+	"pkg/agent/l1_1274_create_test.go": {
+		`if !reflect.DeepEqual(state.Workspace.CoreTeam, []string{"omnipus", id}) {`:                                              true,
+		`t.Errorf("create must join exactly the requesting workspace: team=%v, want [omnipus %s]", state.Workspace.CoreTeam, id)`: true,
+	},
+	// l11274DelegatingContext and l11274SeedWorker: fixture team records.
+	"pkg/agent/l1_1274_delegate_test.go": {
+		`state.Workspace.CoreTeam = append(state.Workspace.CoreTeam, "jim")`: true,
+		`state.Workspace.CoreTeam = append(state.Workspace.CoreTeam, id)`:    true,
+		`data, err := json.Marshal(state.Workspace)`:                         true,
+	},
+	// TestL11274NativeMainAndSubagentAcceptAndPersistSoul: membership readback.
+	"pkg/agent/l1_1274_fix1_soul_test.go": {
+		// WU-3: the created agent's id is a generated UUID read from the result.
+		`if err != nil || !reflect.DeepEqual(state.Workspace.CoreTeam, []string{"omnipus", id}) {`:  true,
+		`t.Errorf("native create membership readback = %v, err=%v", state.Workspace.CoreTeam, err)`: true,
+	},
 	// ADR-090 workspace.State.Workspace — the multi-agent workspace record.
 	"pkg/gateway/rest_workspace_delegation.go": {
 		"ws := state.Workspace": true,

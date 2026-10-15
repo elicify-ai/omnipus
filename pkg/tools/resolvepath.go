@@ -1067,6 +1067,23 @@ func (rp *resolvePath) validateInputs() error {
 	return nil
 }
 
+// protectedPathDenial classifies an already resolved protected path. The
+// predicate remains the authority; this helper only preserves the Skill redirect.
+func (rp *resolvePath) protectedPathDenial(realAbs string) error {
+	if !fspolicy.IsCarveOut(realAbs, rp.policy) {
+		return nil
+	}
+	// #1284 adds instruction files to the predicate without retiring
+	// D10.3's helpful redirect. This refines the refusal, never admits it.
+	if rp.op == FSOpRead || rp.op == FSOpList || rp.op == FSOpSend {
+		if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched &&
+			shelf == skillShelfRegistry && isSkillInstructionFile(rp.rawPath, realAbs) {
+			return skillsGateDenialError(rp.rawPath)
+		}
+	}
+	return ErrCarveOut
+}
+
 // resolveValidatedPath resolves and gates the validated path, then returns the appropriate host, mount, or workspace-rooted handle.
 func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 	realWorkDir, err := resolveRealpathUnderWorkDir(rp.policy.WorkDir, "")
@@ -1079,8 +1096,8 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 		return nil, fmt.Errorf("%w: %w", ErrPathInvalid, err)
 	}
 
-	if fspolicy.IsCarveOut(realAbs, rp.policy) {
-		return nil, ErrCarveOut
+	if denial := rp.protectedPathDenial(realAbs); denial != nil {
+		return nil, denial
 	}
 
 	// ADR-072 D10.3 (read gate, narrowed) / D6.1.1 (write audit): classify the
@@ -1114,12 +1131,10 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 		switch rp.op {
 		case FSOpRead, FSOpList, FSOpSend:
 			if shelf == skillShelfRegistry {
-				// A LIST inside the installed registry discloses instruction-
-				// file names wholesale (#1284 T-FT: list_directory on a
-				// directory holding gated files is itself a disclosure), so
-				// the whole list op is refused — helper files stay readable
-				// individually, by exact path.
-				if rp.op == FSOpList {
+				// A raw listing discloses instruction-file names. grep instead
+				// filters every visited entry through grepGateFS/carveOutFS,
+				// so its A7 helper-file search can walk without disclosing them.
+				if rp.op == FSOpList && rp.toolName != "grep" {
 					return nil, skillsRegistryListDenialError(rp.rawPath)
 				}
 				if isSkillInstructionFile(rp.rawPath, realAbs) {

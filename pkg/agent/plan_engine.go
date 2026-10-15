@@ -208,7 +208,9 @@ const (
 	// long after a supervision wake the engine waits before concluding the
 	// adjudication turn produced nothing. The wake is fire-and-forget and no
 	// seam reports a turn's outcome back into the engine, so the deadline —
-	// not a callback — is the observation mechanism.
+	// not a callback — is the observation mechanism. It is a minimum interval
+	// counted from the wake and never stops a running turn: it is only
+	// evaluated once no supervision turn is in flight (issue #1306).
 	//
 	// It deliberately does NOT reuse the 10 s notify timeout below, which
 	// bounds a bus publish rather than an LLM turn. Spec default: 600 s.
@@ -465,6 +467,20 @@ type PlanEngine struct {
 	// races its transcript/cost writes against teardown.
 	wakeWG sync.WaitGroup
 
+	// planTurnsInFlight counts dispatchPlanTurn turns (owner and supervisor
+	// wakes) still running per plan, so the idle-expiry sweep can tell a quiet
+	// plan from one whose agent is working (issue #1306). Guarded by
+	// planTurnsMu.
+	planTurnsMu       sync.Mutex
+	planTurnsInFlight map[string]int
+
+	// judgeRoundReadFault, when non-nil, is consulted before each of the
+	// judge round's two input reads ("plan" reload, "members" list) and a
+	// non-nil return stands in for that read failing. A test seam only —
+	// production leaves it nil — so the round's input-failure branches can be
+	// driven without breaking the store underneath (issue #1306, T3).
+	judgeRoundReadFault func(stage string) error
+
 	subID     uint64
 	stopCh    chan struct{}
 	stoppedWG sync.WaitGroup
@@ -644,6 +660,10 @@ type judgeUnavailablePark struct {
 	// "the park did not take effect" — true whether the write errored or the
 	// phase was written and then reverted by something else.
 	attempts int
+	// work is the members' results the abandoned round carried (issue
+	// #1306: the Judge concludes with the work result), so a re-attempted
+	// park renders the same Not-verified conclusion.
+	work string
 }
 
 // --- Lifecycle -----------------------------------------------------------
@@ -1531,11 +1551,70 @@ func (pe *PlanEngine) idleExpireOneLocked(planID string, cfg config.PlanningConf
 	if now.Sub(last) < time.Duration(maxDays)*24*time.Hour {
 		return
 	}
+	// Issue #1306 (no clock ends work): idle expiry ends only a plan with
+	// nothing in flight. A member task running or queued to run, a plan judge
+	// round, or an owner/supervisor turn still working means the plan is not
+	// idle, however long ago its last recorded activity was.
+	if busy, why := pe.planWorkInFlight(p.ID); busy {
+		logger.InfoCF("plan_engine", "idle sweep: plan past its idle bound but work is in flight — not expiring",
+			map[string]any{"plan_id": p.ID, "work": why})
+		return
+	}
 	handover := fmt.Sprintf(
 		"Plan %q idle-expired after %d day(s) with no activity (last activity: %s).",
 		p.Title, maxDays, last.Format(time.RFC3339),
 	)
 	pe.failPlanLocked(p.ID, plan.FailedReasonIdleExpired, handover)
+}
+
+// notePlanTurnStarted / notePlanTurnSettled bracket one dispatchPlanTurn turn.
+func (pe *PlanEngine) notePlanTurnStarted(planID string) {
+	pe.planTurnsMu.Lock()
+	defer pe.planTurnsMu.Unlock()
+	if pe.planTurnsInFlight == nil {
+		pe.planTurnsInFlight = map[string]int{}
+	}
+	pe.planTurnsInFlight[planID]++
+}
+
+func (pe *PlanEngine) notePlanTurnSettled(planID string) {
+	pe.planTurnsMu.Lock()
+	defer pe.planTurnsMu.Unlock()
+	if pe.planTurnsInFlight[planID] <= 1 {
+		delete(pe.planTurnsInFlight, planID)
+		return
+	}
+	pe.planTurnsInFlight[planID]--
+}
+
+// planWorkInFlight reports whether planID has agent work running or queued
+// to run, and what it is: a member task in progress or next (dispatchable),
+// a plan judge round, a supervision claim, or an owner/supervisor turn. A
+// member list that cannot be read counts as in flight — the sweep must not
+// end a plan it cannot see into.
+func (pe *PlanEngine) planWorkInFlight(planID string) (bool, string) {
+	pe.planTurnsMu.Lock()
+	turns := pe.planTurnsInFlight[planID]
+	pe.planTurnsMu.Unlock()
+	if turns > 0 {
+		return true, "a plan owner or supervisor turn is running"
+	}
+	if _, held := pe.registry().Lookup(verifierUnitForPlan(planID)); held {
+		return true, "a plan judge round is running"
+	}
+	if pe.supervisionTurnInFlight(planID) {
+		return true, "a supervision turn is running"
+	}
+	members, err := pe.taskStore.List(task.Filter{PlanID: planID})
+	if err != nil {
+		return true, "member tasks could not be read: " + err.Error()
+	}
+	for _, m := range members {
+		if m.Status == task.StatusInProgress || m.Status == task.StatusNext {
+			return true, "member task " + m.ID + " is " + string(m.Status)
+		}
+	}
+	return false, ""
 }
 
 // goalAndLoopIdleExpirySweep drives the /goal and /loop idle-expiry calendar
@@ -1716,7 +1795,7 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 				"source_kind":    sourceKind,
 				"reason":         "no_chat_origin",
 			})
-		if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p), nil); err != nil {
+		if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, nil); err != nil {
 			logger.ErrorCF("plan_engine", "could not dispatch origin-less plan owner turn",
 				map[string]any{"plan_id": p.ID, "owner_agent_id": p.OwnerAgentID, "error": err.Error()})
 		}
@@ -1753,7 +1832,7 @@ func (pe *PlanEngine) wakeOwner(p *plan.Plan, content, sourceKind string) {
 	// one on the plan's own owner session — the outcome is then durable even
 	// though the requester's conversation never received it, and the ERROR
 	// above is the record that the chat delivery itself was lost.
-	if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, pe.supervisionTurnTimeout(p), nil); err != nil {
+	if err := pe.dispatchPlanTurn(p.ID, p.OwnerAgentID, sessionID, content, sourceKind, nil); err != nil {
 		logger.ErrorCF("plan_engine", "plan owner wake could not be delivered OR dispatched directly",
 			map[string]any{"plan_id": p.ID, "owner_agent_id": p.OwnerAgentID, "source_kind": sourceKind, "error": err.Error()})
 	}
@@ -1802,11 +1881,10 @@ func (pe *PlanEngine) ownerAgentResolves(agentID string) bool {
 // Returns an error only for a DISPATCH failure (no loop wired, agent does not
 // resolve, no session) — never for the turn's own outcome, which the engine
 // observes through FR-021's deadline rather than a callback.
-// turnTimeout bounds a wedged provider and MUST be the SAME number the
-// engine's own FR-021 observation deadline uses (supervisionTurnTimeout) —
-// otherwise a per-plan bounds override moves the deadline the engine watches
-// while leaving the turn itself running against the package default, and the
-// override silently does not apply to the thing it names.
+// The turn has NO deadline (issue #1306): it runs until it finishes or is
+// explicitly stopped. FR-021's observation deadline never stops it either —
+// evaluateSupervisionDeadlineLocked waits while a supervision turn is in
+// flight.
 //
 // onTurnSettled, when non-nil, is called EXACTLY ONCE — either synchronously,
 // before this function returns, on every DISPATCH-failure path below (no
@@ -1819,7 +1897,7 @@ func (pe *PlanEngine) ownerAgentResolves(agentID string) bool {
 // dispatch a concurrent turn while the first is still running. wakeOwner's two
 // call sites below pass nil: owner (outcome) wakes are not part of that
 // invariant.
-func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourceKind string, turnTimeout time.Duration, onTurnSettled func()) error {
+func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourceKind string, onTurnSettled func()) error {
 	settled := func() {
 		if onTurnSettled != nil {
 			onTurnSettled()
@@ -1854,8 +1932,10 @@ func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourc
 	al := pe.agentLoop
 	sessionKey := fmt.Sprintf("agent:%s:session:%s", agentID, sessionID)
 	pe.wakeWG.Add(1)
+	pe.notePlanTurnStarted(planID)
 	go func() {
 		defer pe.wakeWG.Done()
+		defer pe.notePlanTurnSettled(planID)
 		// Released once the turn SETTLES (this goroutine's own end), not at
 		// dispatch — see this function's doc comment on onTurnSettled. Ordered
 		// so it still runs on the panic-recovered path (a panicking turn must
@@ -1869,9 +1949,8 @@ func (pe *PlanEngine) dispatchPlanTurn(planID, agentID, sessionID, prompt, sourc
 		}()
 		// Not derived from the engine's stop channel: the turn's cancellation
 		// authority is RequestCancelForSession against sessionID (the Stop
-		// fan-out), and the timeout bounds a wedged provider.
-		turnCtx, cancel := context.WithTimeout(context.Background(), turnTimeout)
-		defer cancel()
+		// fan-out). No deadline: plan turns have no time limit (issue #1306).
+		turnCtx := context.Background()
 		// D-08/FR-057: every caller of dispatchPlanTurn (wakeOwner's two call
 		// sites, the plan supervisor's own wake) is the engine reacting to a
 		// plan-state transition on its own — never a person clicking anything

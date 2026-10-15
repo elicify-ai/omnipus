@@ -112,13 +112,13 @@ func TestWU19_DaemonRestartChildBootEnvironment(t *testing.T) {
 
 func wu19SpawnDaemonSnapshot(t *testing.T, exe, home string) (wu19envprobe.Snapshot, int) {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	if err := listener.(*net.TCPListener).SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		t.Fatal(err)
+	if deadlineErr := listener.SetDeadline(time.Now().Add(10 * time.Second)); deadlineErr != nil {
+		t.Fatal(deadlineErr)
 	}
 	pid, err := SpawnExe(home, exe, []string{"--wu19-daemon-snapshot", listener.Addr().String()})
 	if err != nil {
@@ -128,10 +128,16 @@ func wu19SpawnDaemonSnapshot(t *testing.T, exe, home string) (wu19envprobe.Snaps
 	if err != nil {
 		t.Fatal(err)
 	}
+	reaped := false
 	t.Cleanup(func() {
 		// No test leaves a detached child behind after a failed assertion.
-		if err := process.Kill(); err != nil && !errors.Is(err, os.ErrNotExist) && err != os.ErrProcessDone {
-			t.Errorf("daemon fixture cleanup kill failed: %v", err)
+		// Wait releases the process handle; killing it afterward is invalid
+		// on Linux and Windows (CI round 1; chief harness ruling Q2 A).
+		if reaped {
+			return
+		}
+		if killErr := process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrNotExist) && !errors.Is(killErr, os.ErrProcessDone) {
+			t.Errorf("daemon fixture cleanup kill failed: %v", killErr)
 		}
 	})
 	conn, err := listener.Accept()
@@ -139,17 +145,18 @@ func wu19SpawnDaemonSnapshot(t *testing.T, exe, home string) (wu19envprobe.Snaps
 		t.Fatalf("daemon snapshot handshake failed: %v", err)
 	}
 	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		t.Fatal(err)
+	if deadlineErr := conn.SetDeadline(time.Now().Add(10 * time.Second)); deadlineErr != nil {
+		t.Fatal(deadlineErr)
 	}
 	var s wu19envprobe.Snapshot
-	if err := json.NewDecoder(conn).Decode(&s); err != nil {
-		t.Fatal(err)
+	if decodeErr := json.NewDecoder(conn).Decode(&s); decodeErr != nil {
+		t.Fatal(decodeErr)
 	}
-	if _, err := conn.Write([]byte{'x'}); err != nil {
-		t.Fatal(err)
+	if _, writeErr := conn.Write([]byte{'x'}); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	state, err := process.Wait()
+	reaped = err == nil
 	if err != nil || !state.Success() {
 		t.Fatalf("daemon child did not complete cleanly: state=%v err=%v", state, err)
 	}

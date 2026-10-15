@@ -11,7 +11,6 @@ package agent
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -51,7 +50,7 @@ func TestExternalDispatch_ZeroInstanceLimit_UsesOwnValueFromLiveRoster(t *testin
 				require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 				fr.Cancel()
 			}()
-			if _, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second); err != nil {
+			if _, err := runExternalCLISubTurn(context.Background(), al, ts, "task"); err != nil {
 				t.Fatalf("runExternalCLISubTurn: %v", err)
 			}
 			opts := fr.RecordedRunOpts()

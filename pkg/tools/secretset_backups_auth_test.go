@@ -83,12 +83,10 @@ func secretSetHome(t *testing.T) (home, agentHome string) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(home, "auth.json"), authJSON, 0o600))
 
-	// The controls: ordinary, non-secret files in the same parents.
-	//
-	// notes.txt sits directly in $OMNIPUS_HOME, the parent of both backups/
-	// and auth.json. If it stopped being readable, these tests would be
-	// proving "the home is unreachable" rather than "these two entries are".
+	// L1-AMENDMENTS-20261013.md §2 D1 / §2.4 retires open reads of
+	// unlisted home files. Keep that negative and an external positive control.
 	require.NoError(t, os.WriteFile(filepath.Join(home, "notes.txt"), []byte("ORDINARY-HOME-FILE"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(home), "outside.txt"), []byte("ORDINARY-EXTERNAL-FILE"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(agentHome, "own.txt"), []byte("OWN-WORKDIR-FILE"), 0o600))
 
 	t.Setenv(config.EnvHome, home)
@@ -111,7 +109,8 @@ func secretSetTargets(home, agentHome string) []struct {
 		{"backups tarball", filepath.Join(home, "backups", "backup-20260812T090000Z.tar.gz"), true, "VAULT-TARBALL-BYTES"},
 		{"backups directory itself", filepath.Join(home, "backups"), true, ""},
 		{"auth.json", filepath.Join(home, "auth.json"), true, "OAUTH-REFRESH-TOKEN"},
-		{"control: ordinary file in $OMNIPUS_HOME", filepath.Join(home, "notes.txt"), false, "ORDINARY-HOME-FILE"},
+		{"unlisted home file is protected (WU-23 D1)", filepath.Join(home, "notes.txt"), true, "ORDINARY-HOME-FILE"},
+		{"control: ordinary file outside $OMNIPUS_HOME", filepath.Join(filepath.Dir(home), "outside.txt"), false, "ORDINARY-EXTERNAL-FILE"},
 		{"control: file in the agent's own work dir", filepath.Join(agentHome, "own.txt"), false, "OWN-WORKDIR-FILE"},
 	}
 }
@@ -208,6 +207,11 @@ func TestSecretSet_OperatorAllowPatternCannotReopenBackupsOrAuthJSON(t *testing.
 	require.NoError(t, err)
 
 	for _, tc := range secretSetTargets(home, agentHome) {
+		// Amendment §2 D3 A2 explicitly permits an operator pattern to open
+		// an unlisted home file, but never backups/auth or other inventory.
+		if tc.path == filepath.Join(home, "notes.txt") {
+			tc.wantDenied = false
+		}
 		t.Run(tc.name, func(t *testing.T) {
 			handle, err := ResolvePathAllowingPatterns(ctx, policy, "read_file", "", FSOpRead, tc.path, patterns)
 

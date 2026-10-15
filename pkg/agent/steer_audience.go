@@ -459,7 +459,16 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	// ack tracking — except the wake itself; see UpwardEvent.SuppressWake.
 	wakeEligible := class.WakeEligible && !event.SuppressWake
 
-	res, appendErr := inbox.Append(ownerKey, msg)
+	var res *session.AppendResult
+	var appendErr error
+	if isSystemFinal(ctx) && isTerminalOutcome(event.Outcome) {
+		// The completion tail's committed final (publishCommittedFinal or
+		// the boot committed-outbox pass): bounded by the hand-back
+		// contract, not the child-send cap.
+		res, appendErr = inbox.AppendSystemFinal(ownerKey, msg)
+	} else {
+		res, appendErr = inbox.Append(ownerKey, msg)
+	}
 	if appendErr != nil {
 		return steer.Delivery{}, al.recordNotDelivered(lifecycle, ownerKey, childRec, class.Kind, appendErr)
 	}
@@ -667,7 +676,9 @@ func (d *SteerUpwardDeliverer) deliverCommittedOutboxFinal(ctx context.Context, 
 		Outcome:        steer.Outcome(commit.Outcome),
 		Message:        msg,
 	}
-	return d.publishUpward(ctx, al, lifecycle, inbox, ownerKey, &historical, event, msg, class)
+	// Boot re-delivery of a committed final: the same system author as the
+	// completion tail (withSystemFinal), never a child send.
+	return d.publishUpward(withSystemFinal(ctx), al, lifecycle, inbox, ownerKey, &historical, event, msg, class)
 }
 
 // wakeOwnerOrStore resolves the steering session's own record and either

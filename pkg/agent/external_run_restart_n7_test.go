@@ -61,7 +61,7 @@ func TestN7_RestartedRevivalOfStartedExternalSessionRefusesInsteadOfFreshRun(t *
 	drv, restore := withRecordingDriver(t)
 	defer restore()
 
-	_, err := runExternalCLISubTurn(context.Background(), al, ts, "launch instruction", 30*time.Second)
+	_, err := runExternalCLISubTurn(context.Background(), al, ts, "launch instruction")
 	require.NoError(t, err, "the genuine first launch Runs fresh")
 	runs, _ := drv.snapshot()
 	require.Equal(t, 1, runs)
@@ -74,7 +74,7 @@ func TestN7_RestartedRevivalOfStartedExternalSessionRefusesInsteadOfFreshRun(t *
 
 	// The human message revives the helper: a plain entry, ExternalCLIResume false.
 	ts.opts.ExternalCLIResume = false
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "message after restart", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "message after restart")
 	require.ErrorIs(t, err, errExternalResumeUnavailable)
 	require.Nil(t, res, "a refused entry starts no process")
 	runs, resumes := drv.snapshot()
@@ -93,10 +93,10 @@ func TestN7_TaskOriginExternalSessionStaysFreshAndUnmarked(t *testing.T) {
 	drv, restore := withRecordingDriver(t)
 	defer restore()
 
-	_, err := runExternalCLISubTurn(context.Background(), al, ts, "run one", 30*time.Second)
+	_, err := runExternalCLISubTurn(context.Background(), al, ts, "run one")
 	require.NoError(t, err)
 	al.ForgetExternalRunSession(ts.transcriptSessionID)
-	_, err = runExternalCLISubTurn(context.Background(), al, ts, "run two", 30*time.Second)
+	_, err = runExternalCLISubTurn(context.Background(), al, ts, "run two")
 	require.NoError(t, err, "a task-origin session starts a fresh Run per turn")
 	runs, _ := drv.snapshot()
 	require.Equal(t, 2, runs)

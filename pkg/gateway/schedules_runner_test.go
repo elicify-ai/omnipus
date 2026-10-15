@@ -25,7 +25,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -38,9 +37,6 @@ type fakeExecutor struct {
 	reply   string
 	err     error
 	emitted []agent.NotificationPayload
-	// hangUntilCtxDone makes ProcessScheduled block until ctx is canceled,
-	// returning ctx.Err(). Used by the deadline/timeout test.
-	hangUntilCtxDone bool
 	// onProcess, when set, is invoked with the run context before returning. It
 	// lets a test simulate a tool spawning a child during the run (e.g. by
 	// calling tools.TrackProcess(ctx, pid)) so the FR-011 tracker wiring is
@@ -59,10 +55,6 @@ func (f *fakeExecutor) ProcessScheduled(ctx context.Context, owner, sessionID, c
 	if f.onProcess != nil {
 		f.onProcess(ctx)
 	}
-	if f.hangUntilCtxDone {
-		<-ctx.Done()
-		return "", ctx.Err()
-	}
 	return f.reply, f.err
 }
 func (f *fakeExecutor) GetSessionStore() *session.UnifiedStore { return f.store }
@@ -74,39 +66,6 @@ func (f *fakeExecutor) EmitNotification(p agent.NotificationPayload) {
 type fakeChecker struct{ registered map[string]bool }
 
 func (c fakeChecker) IsRegistered(id string) bool { return c.registered[id] }
-
-// fakeCanceller records the complete one-Stop request at the agent-loop edge.
-type fakeCanceller struct {
-	mu       sync.Mutex
-	requests []agent.StopRequest
-}
-
-func (c *fakeCanceller) StopSession(_ context.Context, req agent.StopRequest) (agent.StopResult, error) {
-	c.mu.Lock()
-	c.requests = append(c.requests, req)
-	c.mu.Unlock()
-	return agent.StopResult{Fired: true, Root: agent.CancelOutcome{Fired: true}}, nil
-}
-
-func (c *fakeCanceller) calls() []agent.StopRequest {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]agent.StopRequest(nil), c.requests...)
-}
-
-// assertSchedulerStopRequest pins the dispatch's exact scheduler contract,
-// rather than merely checking that some cancel method was called.
-func assertSchedulerStopRequest(t *testing.T, sessionID string, req agent.StopRequest) {
-	t.Helper()
-	assert.Equal(t, sessionID, req.SessionID, "StopSession must target this scheduled run")
-	assert.Equal(t, "cron", req.Channel, "the one Stop must retain the scheduler channel")
-	assert.Equal(t, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "scheduler"}, req.By,
-		"the scheduler's authenticated stop principal must be preserved")
-	require.NotNil(t, req.HooksFor, "StopSession must receive per-session transport hooks")
-	hooks := req.HooksFor(sessionID)
-	require.NotNil(t, hooks.KillBackgroundSessions, "the deadline Stop must retain background-session cleanup")
-	require.NotNil(t, hooks.OnLatchExpired, "a scheduled Stop whose latch expires must remain operator-visible")
-}
 
 func newRunnerHarness(
 	t *testing.T,
@@ -521,39 +480,35 @@ func TestRunner_Failure_PushesEvenWhenCreateFails(t *testing.T) {
 	assert.True(t, recipients["bob"], "creator must get a live push")
 }
 
-// TestRunner_Timeout_ForceCancels asserts that a run exceeding its deadline is
-// stopped via the one StopSession request and that the returned
-// error is a context.DeadlineExceeded (so the cron lane records it as "timeout").
-func TestRunner_Timeout_ForceCancels(t *testing.T) {
+// TestRunner_NoDeadline_RunContextIsUnbounded pins issue #1306: a scheduled
+// run (task trigger or heartbeat) has no time limit. The owning agent's turn
+// receives a run context with no deadline, so it ends only when it finishes
+// or an explicit Stop cancels it — never on the retired 300 s default or a
+// per-schedule timeout.
+func TestRunner_NoDeadline_RunContextIsUnbounded(t *testing.T) {
 	cfg := baseConfig()
-	cfg.Schedules.RunTimeoutSeconds = 0 // force per-schedule override below
 	r, exec, mb, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
-	exec.hangUntilCtxDone = true
-	canceller := &fakeCanceller{}
-	r.canceller = canceller // inject the force-abort surface
 	go func() {
 		for range mb.OutboundChan() {
 		}
 	}()
-
-	job := &cron.CronJob{
-		ID: "jt", Name: "slow", AgentID: "mia", CreatedBy: "alice",
-		SessionMode: cron.SessionModeIsolated, TimeoutSeconds: 1, // 1s deadline
-		Payload: cron.CronPayload{Message: "work"},
+	var sawDeadline atomic.Value
+	exec.onProcess = func(ctx context.Context) {
+		_, has := ctx.Deadline()
+		sawDeadline.Store(has)
 	}
 
+	job := &cron.CronJob{
+		ID: "jnd", Name: "long", AgentID: "mia", CreatedBy: "alice",
+		SessionMode: cron.SessionModeIsolated,
+		Payload:     cron.CronPayload{Message: "work for as long as it takes"},
+	}
 	sid, err := r.RunScheduled(context.Background(), job)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, context.DeadlineExceeded), "timeout error must be DeadlineExceeded, got %v", err)
+	require.NoError(t, err)
 	require.NotEmpty(t, sid)
-
-	// The scheduler reaches the one Stop, with its exact authenticated request.
-	calls := canceller.calls()
-	require.Len(t, calls, 1, "StopSession must be called exactly once on deadline")
-	assertSchedulerStopRequest(t, sid, calls[0])
-
-	// A deadline must NOT be classified as a transient (retryable) error.
-	assert.False(t, cron.IsTransient(err), "deadline must not be classified transient")
+	got, ok := sawDeadline.Load().(bool)
+	require.True(t, ok, "ProcessScheduled was never reached")
+	assert.False(t, got, "a scheduled run's context must carry no deadline (issue #1306)")
 }
 
 // TestRunner_ChildProcessCleanup_Invoked asserts the FR-011 best-effort cleanup
@@ -611,41 +566,6 @@ func TestRunner_ChildProcessCleanup_OnError(t *testing.T) {
 	require.NotEmpty(t, sid)
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&cleaned), "process cleanup must fire on the error path")
-	assert.Equal(t, sid, cleanedSession.Load(), "cleanup must be scoped to the run's session id")
-}
-
-// TestRunner_ChildProcessCleanup_OnTimeout asserts the FR-011 cleanup hook fires
-// on the deadline/timeout path. A run that overran its deadline is exactly when
-// orphaned children are most likely, so cleanup must run there too.
-func TestRunner_ChildProcessCleanup_OnTimeout(t *testing.T) {
-	cfg := baseConfig()
-	cfg.Schedules.RunTimeoutSeconds = 0
-	r, exec, mb, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
-	exec.hangUntilCtxDone = true
-	r.canceller = &fakeCanceller{}
-	go func() {
-		for range mb.OutboundChan() {
-		}
-	}()
-
-	var cleaned int32
-	var cleanedSession atomic.Value
-	r.setProcessCleanup(func(sessionID string) {
-		atomic.AddInt32(&cleaned, 1)
-		cleanedSession.Store(sessionID)
-	})
-
-	job := &cron.CronJob{
-		ID: "jct", AgentID: "mia", CreatedBy: "alice",
-		SessionMode: cron.SessionModeIsolated, TimeoutSeconds: 1,
-		Payload: cron.CronPayload{Message: "work"},
-	}
-	sid, err := r.RunScheduled(context.Background(), job)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, context.DeadlineExceeded))
-	require.NotEmpty(t, sid)
-
-	assert.Equal(t, int32(1), atomic.LoadInt32(&cleaned), "process cleanup must fire on the timeout path")
 	assert.Equal(t, sid, cleanedSession.Load(), "cleanup must be scoped to the run's session id")
 }
 

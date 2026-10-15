@@ -39,8 +39,8 @@ type LaunchRequest struct {
 	// shape create_task validates (pkg/tools/task.go::validateRequest).
 	// Nil means no goal (founder decision, round 3).
 	Goal *GoalSpec
-	// Limits, ToolExclusions are as I-1's SteeredBy fields.
-	Limits         Limits
+	// ToolExclusions is as I-1's SteeredBy field. There is no Limits: a
+	// launched session has no time limit (issue #1306).
 	ToolExclusions []string
 	// RequestedSkill is delegate.run's optional `requested_skill` (ADR-072
 	// D9, spec FR-050/FR-053/FR-054): "a hard request, not a hint". Empty
@@ -145,10 +145,12 @@ func (c Class) Runnable() bool {
 type Outcome string
 
 const (
-	OutcomeFinalAnswer     Outcome = "final_answer"
-	OutcomeEmptyAnswer     Outcome = "empty_answer"
-	OutcomeParkedQuestion  Outcome = "parked_question"
-	OutcomeInterrupted     Outcome = "interrupted"
+	OutcomeFinalAnswer    Outcome = "final_answer"
+	OutcomeEmptyAnswer    Outcome = "empty_answer"
+	OutcomeParkedQuestion Outcome = "parked_question"
+	OutcomeInterrupted    Outcome = "interrupted"
+	// OutcomeTimedOut is historical: only boot recovery of a record stopped
+	// by the retired lifetime budget (issue #1306) still produces it.
 	OutcomeTimedOut        Outcome = "timed_out"
 	OutcomeFailed          Outcome = "failed"
 	OutcomeWaitingChildren Outcome = "waiting_for_children"

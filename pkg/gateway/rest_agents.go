@@ -641,7 +641,6 @@ func applyStoredAgentIdentity(ag *gen.Agent, ac config.AgentConfig) {
 
 func buildAgentDefaults(cfg *config.Config) gen.Agent {
 	ag := gen.Agent{
-		TimeoutSeconds: cfg.Agents.Defaults.TimeoutSeconds,
 		// Required string fields — initialized to empty (overwritten per-agent).
 		Soul: "",
 	}

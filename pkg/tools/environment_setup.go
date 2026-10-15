@@ -193,7 +193,7 @@ func (t *EnvironmentSetupTool) Description() string {
 		"read bounded output, or cancel. scope defaults to workspace (<workspace>/.omnipus/env); " +
 		"scope=shared requests the application-managed shared runtime area (explicit in the " +
 		"approval, published read/execute-only on exit 0, unpublished on failure). workspace_id " +
-		"names an authorized workspace; only Omnipus can target a workspace it does not belong to. " +
+		"names an authorized workspace; only Omnipus can target an existing workspace other than its current turn's workspace. " +
 		"Exit 0 reports command success only — verify the installed capability in your own " +
 		"runtime before resuming."
 }

@@ -7,7 +7,7 @@ Omnipus is a team of AI agents you run yourself, on your own machine. You choose
 1. [Get started](getting-started.md) — install and first chat.
 2. [Workspaces](workspaces.md) — where work lives.
 3. [Connectors](connectors.md) — your chat platforms.
-4. [Agents](agents.md) — the four, and your own.
+4. [Agents](agents.md) — the built-in roster and your own agents.
 
 ## Using Omnipus
 
@@ -24,7 +24,7 @@ Day-to-day pages.
 | [Plans](plans.md) | Shared Definition of Done |
 | [Calendar](calendar.md) | Scheduled, recurring work |
 | [Goals](goals.md) | Judge decides completion |
-| [Agents](agents.md) | The four, and your own |
+| [Agents](agents.md) | The built-in roster and your own agents |
 | [Knowledge base](knowledge.md) | Notes, records, saved views |
 | [Library](library.md) | Files and shared folders |
 | [Mail](mail.md) | Inbox, Sent, Drafts, composing, and mailbox errors |

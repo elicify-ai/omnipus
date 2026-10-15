@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/printer"
 	"go/token"
+	"go/types"
 	"strings"
 )
 
@@ -22,10 +23,10 @@ type wu19Reference struct {
 	fn       *wu19Function
 	expr     ast.Expr
 	pos      token.Pos
-	bindings map[*ast.Object]wu19Reference
+	bindings map[types.Object]wu19Reference
 }
 
-func (p *wu19Inventory) origin(fn *wu19Function, expr ast.Expr, before token.Pos, bindings map[*ast.Object]wu19Reference, seen map[string]bool) wu19Origin {
+func (p *wu19Inventory) origin(fn *wu19Function, expr ast.Expr, before token.Pos, bindings map[types.Object]wu19Reference, seen map[string]bool) wu19Origin {
 	switch e := expr.(type) {
 	case nil, *ast.BasicLit, *ast.FuncLit:
 		return 0
@@ -58,24 +59,24 @@ func (p *wu19Inventory) origin(fn *wu19Function, expr ast.Expr, before token.Pos
 			return 0
 		}
 		key := fn.key + ":" + e.Name
-		if e.Obj != nil {
-			key += ":" + string(rune(e.Obj.Pos()))
+		if fn.file.object(e) != nil {
+			key += ":" + string(rune(fn.file.object(e).Pos()))
 		}
 		if seen[key] {
 			return 0 // append-self cycle adds no origin; other RHS dependencies are still checked.
 		}
 		seen[key] = true
 		defer delete(seen, key)
-		if global, ok := p.globals[fn.file.pkg+"."+e.Name]; ok && (e.Obj == nil || p.globalObjects[e.Obj]) {
+		if global, ok := p.globals[fn.file.pkg+"."+e.Name]; ok && (fn.file.object(e) == nil || p.globalObjects[fn.file.object(e)]) {
 			return p.origin(global.fn, global.expr, global.pos, nil, seen)
 		}
-		if wu19ScalarParameter(fn, e.Obj) {
+		if wu19ScalarParameter(fn, fn.file.object(e)) {
 			return 0 // explicit key/value/path argument, not an entire environment source.
 		}
-		if ref, ok := bindings[e.Obj]; ok {
+		if ref, ok := bindings[fn.file.object(e)]; ok {
 			return p.origin(ref.fn, ref.expr, ref.pos, ref.bindings, seen)
 		}
-		values := wu19Definitions(fn, e.Obj, before, seen)
+		values := wu19Definitions(fn, fn.file.object(e), before, seen)
 		if len(values) > 0 {
 			var out wu19Origin
 			for _, value := range values {
@@ -83,13 +84,13 @@ func (p *wu19Inventory) origin(fn *wu19Function, expr ast.Expr, before token.Pos
 			}
 			return out
 		}
-		if index := wu19ParameterIndex(fn, e.Obj); index >= 0 {
-			if wu19EnvironmentParameter(fn, e.Obj) {
+		if index := wu19ParameterIndex(fn, fn.file.object(e)); index >= 0 {
+			if wu19EnvironmentParameter(fn, fn.file.object(e)) {
 				return p.incomingOrigin(fn, index, "", seen)
 			}
 			return 0 // scalar/configuration input is an explicit site value, not an inherited environment.
 		}
-		if p.scalarTupleVariable(fn, e.Obj) {
+		if p.scalarTupleVariable(fn, fn.file.object(e)) {
 			return 0
 		}
 		p.unresolved[fmt.Sprintf("identifier %s in %s", e.Name, fn.key)] = true
@@ -100,7 +101,7 @@ func (p *wu19Inventory) origin(fn *wu19Function, expr ast.Expr, before token.Pos
 	return wu19Bad
 }
 
-func wu19Definitions(fn *wu19Function, object *ast.Object, before token.Pos, facts map[string]bool) []ast.Expr {
+func wu19Definitions(fn *wu19Function, object types.Object, before token.Pos, facts map[string]bool) []ast.Expr {
 	var values []ast.Expr
 	wu19InspectReachable(fn, fn.decl.Body, facts, func(n ast.Node) bool {
 		if n == nil || n.Pos() >= before {
@@ -110,35 +111,35 @@ func wu19Definitions(fn *wu19Function, object *ast.Object, before token.Pos, fac
 		case *ast.AssignStmt:
 			if len(node.Lhs) == len(node.Rhs) {
 				for i, lhs := range node.Lhs {
-					if id, ok := lhs.(*ast.Ident); ok && id.Obj == object {
+					if id, ok := lhs.(*ast.Ident); ok && fn.file.object(id) == object {
 						values = append(values, node.Rhs[i])
 					}
 					if idx, ok := lhs.(*ast.IndexExpr); ok {
-						if id, ok := idx.X.(*ast.Ident); ok && id.Obj == object {
+						if id, ok := idx.X.(*ast.Ident); ok && fn.file.object(id) == object {
 							values = append(values, node.Rhs[i])
 						}
 					}
 				}
 			} else if len(node.Rhs) == 1 {
-				if id, ok := node.Lhs[0].(*ast.Ident); ok && id.Obj == object {
+				if id, ok := node.Lhs[0].(*ast.Ident); ok && fn.file.object(id) == object {
 					values = append(values, node.Rhs[0])
 				}
 			}
 		case *ast.ValueSpec:
 			for i, name := range node.Names {
-				if name.Obj == object && i < len(node.Values) {
+				if fn.file.object(name) == object && i < len(node.Values) {
 					values = append(values, node.Values[i])
 				}
 			}
 		case *ast.CallExpr:
-			if id, ok := node.Fun.(*ast.Ident); ok && id.Name == "copy" && id.Obj == nil && len(node.Args) == 2 {
-				if dst, ok := node.Args[0].(*ast.Ident); ok && dst.Obj == object {
+			if id, ok := node.Fun.(*ast.Ident); ok && id.Name == "copy" && fn.file.object(id) == nil && len(node.Args) == 2 {
+				if dst, ok := node.Args[0].(*ast.Ident); ok && fn.file.object(dst) == object {
 					values = append(values, node.Args[1])
 				}
 			}
 		case *ast.RangeStmt:
 			for _, variable := range []ast.Expr{node.Key, node.Value} {
-				if id, ok := variable.(*ast.Ident); ok && id.Obj == object {
+				if id, ok := variable.(*ast.Ident); ok && fn.file.object(id) == object {
 					values = append(values, node.X)
 				}
 			}
@@ -158,7 +159,7 @@ func wu19Parameters(fn *wu19Function) []*ast.Ident {
 	return out
 }
 
-func wu19ScalarParameter(fn *wu19Function, object *ast.Object) bool {
+func wu19ScalarParameter(fn *wu19Function, object types.Object) bool {
 	if fn.decl.Type.Params != nil {
 		for _, field := range fn.decl.Type.Params.List {
 			id, ok := field.Type.(*ast.Ident)
@@ -168,7 +169,7 @@ func wu19ScalarParameter(fn *wu19Function, object *ast.Object) bool {
 			switch id.Name {
 			case "string", "int", "int32", "int64", "uint", "uint16", "uint32", "bool":
 				for _, name := range field.Names {
-					if name.Obj == object {
+					if fn.file.object(name) == object {
 						return true
 					}
 				}
@@ -178,7 +179,7 @@ func wu19ScalarParameter(fn *wu19Function, object *ast.Object) bool {
 	return false
 }
 
-func wu19EnvironmentParameter(fn *wu19Function, object *ast.Object) bool {
+func wu19EnvironmentParameter(fn *wu19Function, object types.Object) bool {
 	if fn.decl.Type.Params != nil {
 		for _, field := range fn.decl.Type.Params.List {
 			array, ok := field.Type.(*ast.ArrayType)
@@ -190,7 +191,7 @@ func wu19EnvironmentParameter(fn *wu19Function, object *ast.Object) bool {
 				continue
 			}
 			for _, name := range field.Names {
-				if name.Obj == object {
+				if fn.file.object(name) == object {
 					return true
 				}
 			}
@@ -199,16 +200,16 @@ func wu19EnvironmentParameter(fn *wu19Function, object *ast.Object) bool {
 	return false
 }
 
-func wu19ParameterIndex(fn *wu19Function, object *ast.Object) int {
+func wu19ParameterIndex(fn *wu19Function, object types.Object) int {
 	for i, name := range wu19Parameters(fn) {
-		if object != nil && name.Obj == object {
+		if object != nil && fn.file.object(name) == object {
 			return i
 		}
 	}
 	return -1
 }
 
-func (p *wu19Inventory) callOrigin(fn *wu19Function, call *ast.CallExpr, before token.Pos, bindings map[*ast.Object]wu19Reference, seen map[string]bool) wu19Origin {
+func (p *wu19Inventory) callOrigin(fn *wu19Function, call *ast.CallExpr, before token.Pos, bindings map[types.Object]wu19Reference, seen map[string]bool) wu19Origin {
 	if _, conversion := call.Fun.(*ast.ArrayType); conversion && len(call.Args) == 1 {
 		return p.origin(fn, call.Args[0], before, bindings, seen)
 	}
@@ -230,7 +231,7 @@ func (p *wu19Inventory) callOrigin(fn *wu19Function, call *ast.CallExpr, before 
 	case "github.com/elicify-ai/omnipus/pkg/childenv.FilterForRunner":
 		return wu19Runner
 	}
-	if builtin, ok := call.Fun.(*ast.Ident); ok && builtin.Obj == nil {
+	if builtin, ok := call.Fun.(*ast.Ident); ok && fn.file.object(builtin) == nil {
 		switch builtin.Name {
 		case "make", "new", "len", "cap":
 			return 0 // allocation/capacity is not copied environment data.
@@ -264,10 +265,10 @@ func (p *wu19Inventory) callOrigin(fn *wu19Function, call *ast.CallExpr, before 
 	if list := p.funcs[id]; len(list) > 0 {
 		var out wu19Origin
 		for _, callee := range list {
-			args := map[*ast.Object]wu19Reference{}
+			args := map[types.Object]wu19Reference{}
 			for i, parameter := range wu19Parameters(callee) {
 				if i < len(call.Args) {
-					args[parameter.Obj] = wu19Reference{fn, call.Args[i], before, bindings}
+					args[callee.file.object(parameter)] = wu19Reference{fn, call.Args[i], before, bindings}
 				}
 			}
 			out |= p.returnOrigin(callee, args, seen)
@@ -293,7 +294,7 @@ func (p *wu19Inventory) callOrigin(fn *wu19Function, call *ast.CallExpr, before 
 	return wu19Bad
 }
 
-func (p *wu19Inventory) returnOrigin(fn *wu19Function, bindings map[*ast.Object]wu19Reference, seen map[string]bool) wu19Origin {
+func (p *wu19Inventory) returnOrigin(fn *wu19Function, bindings map[types.Object]wu19Reference, seen map[string]bool) wu19Origin {
 	var out wu19Origin
 	wu19InspectReachable(fn, fn.decl.Body, seen, func(n ast.Node) bool {
 		if node, ok := n.(*ast.IfStmt); ok && p.nonNilInputGuard(fn, node, bindings, seen) {
@@ -322,7 +323,7 @@ func (p *wu19Inventory) returnOrigin(fn *wu19Function, bindings map[*ast.Object]
 	return out
 }
 
-func (p *wu19Inventory) nonNilInputGuard(fn *wu19Function, node *ast.IfStmt, bindings map[*ast.Object]wu19Reference, seen map[string]bool) bool {
+func (p *wu19Inventory) nonNilInputGuard(fn *wu19Function, node *ast.IfStmt, bindings map[types.Object]wu19Reference, seen map[string]bool) bool {
 	condition, ok := node.Cond.(*ast.BinaryExpr)
 	if !ok || condition.Op != token.EQL {
 		return false

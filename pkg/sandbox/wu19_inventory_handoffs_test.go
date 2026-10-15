@@ -3,6 +3,7 @@ package sandbox
 import (
 	"go/ast"
 	"go/token"
+	"go/types"
 )
 
 func (p *wu19Inventory) nonStartingCommandHelper(key string, seen map[string]bool) bool {
@@ -30,7 +31,7 @@ func (p *wu19Inventory) nonStartingCommandHelper(key string, seen map[string]boo
 					}
 				}
 				for _, arg := range c.Args {
-					if id, ok := arg.(*ast.Ident); ok && wu19ParameterIndex(fn, id.Obj) >= 0 {
+					if id, ok := arg.(*ast.Ident); ok && wu19ParameterIndex(fn, fn.file.object(id)) >= 0 {
 						safe = safe && p.nonStartingCommandHelper(fn.callIdentity(c.Fun), seen)
 					}
 				}
@@ -73,7 +74,7 @@ func (p *wu19Inventory) incomingOrigin(fn *wu19Function, index int, member strin
 	return out
 }
 
-func (p *wu19Inventory) memberOrigin(fn *wu19Function, base ast.Expr, member string, before token.Pos, bindings map[*ast.Object]wu19Reference, seen map[string]bool) wu19Origin {
+func (p *wu19Inventory) memberOrigin(fn *wu19Function, base ast.Expr, member string, before token.Pos, bindings map[types.Object]wu19Reference, seen map[string]bool) wu19Origin {
 	if typ := p.declaredType(fn, &ast.SelectorExpr{X: base, Sel: ast.NewIdent(member)}); typ != nil {
 		if scalar, ok := typ.(*ast.Ident); ok {
 			switch scalar.Name {
@@ -102,7 +103,7 @@ func (p *wu19Inventory) memberOrigin(fn *wu19Function, base ast.Expr, member str
 		wu19InspectReachable(fn, fn.decl.Body, seen, func(n ast.Node) bool {
 			if a, ok := n.(*ast.AssignStmt); ok && a.Pos() < before && len(a.Lhs) == 1 && len(a.Rhs) == 1 {
 				if s, ok := a.Lhs[0].(*ast.SelectorExpr); ok && s.Sel.Name == member {
-					if x, ok := s.X.(*ast.Ident); ok && x.Obj == e.Obj {
+					if x, ok := s.X.(*ast.Ident); ok && fn.file.object(x) == fn.file.object(e) {
 						found = true
 						fields |= p.origin(fn, a.Rhs[0], a.Pos(), bindings, seen)
 					}
@@ -113,10 +114,10 @@ func (p *wu19Inventory) memberOrigin(fn *wu19Function, base ast.Expr, member str
 		if found {
 			return fields
 		}
-		if ref, ok := bindings[e.Obj]; ok {
+		if ref, ok := bindings[fn.file.object(e)]; ok {
 			return p.memberOrigin(ref.fn, ref.expr, member, ref.pos, ref.bindings, seen)
 		}
-		if index := wu19ParameterIndex(fn, e.Obj); index >= 0 {
+		if index := wu19ParameterIndex(fn, fn.file.object(e)); index >= 0 {
 			if fn.file.pkg == "github.com/elicify-ai/omnipus/pkg/agent/runner" && member == "Env" {
 				// External RunOptions.Env is the documented incoming credential
 				// frontier. Pin its gateway producer to the runner scrub exactly;
@@ -126,17 +127,17 @@ func (p *wu19Inventory) memberOrigin(fn *wu19Function, base ast.Expr, member str
 			return p.incomingOrigin(fn, index, member, seen)
 		}
 		var out wu19Origin
-		for _, value := range wu19Definitions(fn, e.Obj, before, seen) {
+		for _, value := range wu19Definitions(fn, fn.file.object(e), before, seen) {
 			out |= p.memberOrigin(fn, value, member, before, bindings, seen)
 		}
 		return out
 	case *ast.CallExpr:
 		var out wu19Origin
 		for _, callee := range p.funcs[fn.callIdentity(e.Fun)] {
-			args := map[*ast.Object]wu19Reference{}
+			args := map[types.Object]wu19Reference{}
 			for i, parameter := range wu19Parameters(callee) {
 				if i < len(e.Args) {
-					args[parameter.Obj] = wu19Reference{fn, e.Args[i], before, bindings}
+					args[callee.file.object(parameter)] = wu19Reference{fn, e.Args[i], before, bindings}
 				}
 			}
 			ast.Inspect(callee.decl.Body, func(n ast.Node) bool {

@@ -64,7 +64,6 @@ function lockedMia(): Agent {
     model: 'claude-opus-4-6',
     description: 'Core agent',
     soul: '',
-    timeout_seconds: 60,
     max_tool_iterations: 20,
     max_tool_iterations_source: 'global',
     max_tool_iterations_override_ignored: false,

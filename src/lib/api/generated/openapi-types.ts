@@ -8616,11 +8616,6 @@ export interface components {
              */
             warning?: string;
             /**
-             * @description Maximum seconds a single agent turn may run before being interrupted. Inherited from agents.defaults.timeout_seconds when not overridden per-agent.
-             * @example 300
-             */
-            timeout_seconds: number;
-            /**
              * @description The EFFECTIVE maximum number of tool calls allowed per turn (issue #904, tool-iteration-limit spec D1): the global limit (agents.defaults.max_tool_iterations) unless the agent has its own value lower than or equal to it, in which case the own value. An own value above the global never raises the limit — it is ignored (see max_tool_iterations_override_ignored). max_tool_iterations_source says which rule applied.
              * @example 50
              */
@@ -8781,7 +8776,7 @@ export interface components {
             /** @description Controls builtin tool visibility for this agent. */
             builtin?: {
                 /**
-                 * @description Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+                 * @description Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every implemented static builtin listed by GET /api/v1/tools as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved on replacement, never newly seeded. Wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
                  * @example {
                  *       "bash": "deny",
                  *       "remember": "allow"
@@ -8818,16 +8813,16 @@ export interface components {
         };
         /**
          * AgentToolsUpdateRequest
-         * @description Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. Only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
+         * @description Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. For supplied tools, only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Existing policies for declared future tools omitted from the request are preserved, never newly seeded. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
          */
         AgentToolsUpdateRequest: {
             revision: components["schemas"]["ConfigurationRevision"];
-            /** @description Stored local override keys; an empty list removes all local overrides. */
+            /** @description Stored local override keys for supplied tools; an empty list removes their local overrides. Existing policies for omitted, declared future tool names are preserved. */
             override_names: string[];
             config?: components["schemas"]["AgentToolsCfg"];
             /** @description Builtin tool policy configuration for this agent. */
             builtin?: {
-                /** @description Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone. */
+                /** @description Complete per-tool policy map. Every implemented static builtin tool listed by GET /api/v1/tools MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved, never newly seeded. This is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone. */
                 policies: {
                     [key: string]: "allow" | "ask" | "deny";
                 };
@@ -9018,7 +9013,7 @@ export interface components {
         };
         /**
          * AgentCreateRequestSubagent3p
-         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
          *     Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
          */
         AgentCreateRequestSubagent3p: {
@@ -9081,11 +9076,6 @@ export interface components {
              */
             soul: string;
             executor: components["schemas"]["ExecutorConfig"];
-            /**
-             * @description Maximum seconds a single agent turn may run before being interrupted.
-             * @example 300
-             */
-            timeout_seconds?: number;
             /**
              * @description The new worker's own tool-iteration limit (issue #904, D14), passed to the external CLI as its turn cap. Omitted = the worker rides the global limit. Refused (400) if above the current global limit.
              * @example 50
@@ -14499,11 +14489,11 @@ export interface components {
         };
         /**
          * ToolApprovalActionRequest
-         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained in the enum with no corresponding UI button — see its own description.
+         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `deny` and `cancel` remain distinct non-approval resolution actions.
          */
         ToolApprovalActionRequest: {
             /**
-             * @description Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
+             * @description Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
              * @example allow_once
              * @enum {string}
              */
@@ -14788,7 +14778,7 @@ export interface components {
              */
             ran_at_ms: number;
             /**
-             * @description ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+             * @description ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
              * @enum {string}
              */
             status: "ok" | "error" | "skipped" | "timeout";
@@ -14817,7 +14807,7 @@ export interface components {
              * @description Unix epoch milliseconds of the most recent run.
              */
             last_run_at_ms?: number;
-            /** @description Status of the most recent run (ok/error/skipped/timeout), empty if never run. */
+            /** @description Status of the most recent run (ok/error/skipped, or the historical timeout), empty if never run. */
             last_status?: string;
             /** @description Error from the most recent failed run. */
             last_error?: string;
@@ -14848,8 +14838,6 @@ export interface components {
              * @example false
              */
             run_isolated?: boolean;
-            /** @description Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default. */
-            timeout_seconds: number;
             /** @description For continue/main modes, the persistent session id this schedule runs in. */
             session_id?: string;
             state: components["schemas"]["ScheduleState"];
@@ -14875,8 +14863,6 @@ export interface components {
              * @example false
              */
             run_isolated: boolean;
-            /** @description Per-run deadline; default 0 = use the global default. */
-            timeout_seconds?: number;
             /** @description Default true. */
             enabled?: boolean;
         };
@@ -14895,7 +14881,6 @@ export interface components {
              * @example false
              */
             run_isolated: boolean;
-            timeout_seconds?: number;
             enabled?: boolean;
         };
         /**
@@ -15413,7 +15398,7 @@ export interface components {
                  */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @description Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;
@@ -15534,7 +15519,7 @@ export interface components {
                 /** @example 7 */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;
@@ -15591,7 +15576,7 @@ export interface components {
                 /** @example 7 */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;
@@ -16991,14 +16976,6 @@ export interface components {
                      */
                     remaining_depth: number;
                 };
-                /** @description Creator-set session limits. */
-                limits?: {
-                    /**
-                     * @description Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
-                     * @example 300
-                     */
-                    timeout_seconds?: number;
-                };
                 /**
                  * @description Tool names excluded for this steered session (e.g., switch_agent). Applied at launch.
                  * @example [
@@ -17251,11 +17228,6 @@ export interface components {
              * @example false
              */
             critical?: boolean;
-            /**
-             * @description Maximum seconds before this delegation is force-cancelled. 0 = default (30 min).
-             * @example 300
-             */
-            timeout_seconds?: number;
             /** @description The DISCRETIONARY portion of the curated context snapshot (R§8.5). Deny-by-default — nothing beyond this + the mandatory core reaches the child. Over-cap is rejected with a narrow-the-snapshot tool error, never silently truncated. */
             snapshot?: {
                 /**
@@ -18007,7 +17979,7 @@ export interface components {
              */
             at: string;
             /**
-             * @description Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, a goal-loop attempt supersession), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
+             * @description Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a goal-loop attempt supersession, or a historical lifetime-budget timeout), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
              * @example human:user-123
              */
             by: string;
@@ -18018,7 +17990,7 @@ export interface components {
              */
             seq: number;
             /**
-             * @description The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+             * @description The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
              * @example stop
              * @enum {string}
              */

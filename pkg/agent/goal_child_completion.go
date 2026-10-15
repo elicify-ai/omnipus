@@ -26,6 +26,8 @@ import (
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -98,7 +100,21 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 				map[string]any{"session_id": work.sessionID, "attempt": attempt})
 			return
 		}
-		ctx, cancel := context.WithTimeout(withGoalProducer(context.Background(), work.producer), goalJudgeRoundTimeout)
+		if work.goalID == "" {
+			work.goalID, work.goalPrompt = rec.GoalID, rec.Prompt
+		}
+		if stale := work.staleFor(rec); stale != "" {
+			// Issue #1306 R2-2: the claim belongs to the goal it was made
+			// against. A replacement or restated goal is never judged on it.
+			logger.InfoCF("agent", "goal: deferred adjudication re-drive stopped — "+stale,
+				map[string]any{"session_id": work.sessionID, "goal_id": work.goalID, "active_goal_id": rec.GoalID, "attempt": attempt})
+			return
+		}
+		// Issue #1306 R2-4: the outer round clock is the Judge's own check time
+		// limit too — a later attempt inheriting this earlier deadline must be
+		// reported as ErrJudgeTimeLimit, never as a provider timeout.
+		ctx, cancel := context.WithTimeoutCause(withGoalAnswer(withGoalProducer(context.Background(), work.producer), work.answer),
+			goalJudgeRoundTimeout, ErrJudgeTimeLimit)
 		met, unavailable := al.runGoalAdjudication(ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText,
 			al.idleSteerDeliverer(work.sessionID, rec.GoalID, goalClaimDeferredSourceKind))
 		cancel()
@@ -110,9 +126,242 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 				"attempt": attempt, "max_attempts": goalJudgeRedriveAttempts})
 	}
 	reason := fmt.Sprintf("judge unavailable after %d attempts: the completion claim could not be adjudicated", goalJudgeRedriveAttempts)
+	// Issue #1306 (founder): the Judge must conclude. The conclusion names the
+	// verdict AND carries the worker's claim, so the parent (or the chat user)
+	// gets the actual work result with "not verified" — never a bare failure.
+	conclusion := notVerifiedConclusion(reason,
+		"The goal stays active: claim completion again once the Judge is available.", work.upwardAnswer())
+	// SFH F1: the audience is decided from the lifecycle record; a read
+	// failure is retried and then reported loudly — it never silently picks
+	// the interactive (no-parent) audience.
+	steered, audErr := al.goalConclusionAudience(work.sessionID)
+	if audErr != nil {
+		al.reportUndeliverableGoalConclusion(store, work, conclusion, audErr)
+		return
+	}
+	if !steered {
+		al.concludeInteractiveGoalNotVerified(store, work, conclusion)
+		return
+	}
 	logger.ErrorCF("agent", "goal: "+reason+" — failing the goal-bearing child visibly",
 		map[string]any{"session_id": work.sessionID})
-	al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), work.producer), work.sessionID, "", errors.New(reason))
+	al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), work.producer), work.sessionID, "", errors.New(conclusion))
+}
+
+// goalConclusionAudienceAttempts bounds the lifecycle re-reads before an
+// unreadable audience is reported as undeliverable.
+const goalConclusionAudienceAttempts = 3
+
+// goalConclusionAudience reports whether sessionID is a steered child (its
+// parent receives the conclusion) or an ordinary root (the user does).
+//
+// The answer comes from the canonical audience boundary
+// (steer_audience.go::SteerAudienceResolver over
+// steer_classify.go::SteerRecordClassifier), which reads the lifecycle record
+// AND the session's metadata and requires them to agree (architect R2-A3).
+// Only a positively classified ordinary root takes the human path. A damaged
+// child (record lost, or edge lost while the metadata still names a parent),
+// a legacy delegate or an invalid edge has no safe audience and is returned
+// as an error, never guessed parentless. A read failure is retried and, if it
+// persists, returned as an error too (SFH F1). Either error routes the
+// conclusion to reportUndeliverableGoalConclusion.
+func (al *AgentLoop) goalConclusionAudience(sessionID string) (steered bool, err error) {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		// SteerLauncher.Launch refuses a child without a lifecycle store, so
+		// no session here can be a steered child.
+		return false, nil
+	}
+	sessions := al.ResolveSessionStore(sessionID)
+	if sessions == nil {
+		sessions = al.GetSessionStore()
+	}
+	if sessions == nil {
+		return false, fmt.Errorf("no session store to classify session %q", sessionID)
+	}
+	resolver := NewSteerAudienceResolver(NewSteerRecordClassifier(lifecycle, sessions))
+	for attempt := 1; ; attempt++ {
+		audience, class, audErr := resolver.Audience(context.Background(), sessionID)
+		switch {
+		case audErr == nil && audience == steer.AudienceUser:
+			return false, nil
+		case audErr == nil && audience == steer.AudienceSteeringSession:
+			return true, nil
+		case audErr == nil:
+			return false, fmt.Errorf("session %q is classified %s, so its conclusion has no safe audience", sessionID, class)
+		}
+		err = fmt.Errorf("classify the conclusion audience of session %q: %w", sessionID, audErr)
+		if attempt >= goalConclusionAudienceAttempts {
+			return false, err
+		}
+		logger.WarnCF("agent", "goal: could not read who should receive the Judge conclusion — retrying",
+			map[string]any{"session_id": sessionID, "attempt": attempt, "error": err.Error()})
+		al.waitGoalRedriveBackoff(attempt)
+	}
+}
+
+// reportUndeliverableGoalConclusion is the loud arm of SFH F1: the conclusion
+// could not be routed because the session's lifecycle record stayed
+// unreadable. It is recorded durably in the session's own transcript with the
+// reason it was not delivered, and raised as a visible error — never dropped,
+// never sent to a guessed audience.
+func (al *AgentLoop) reportUndeliverableGoalConclusion(store *session.UnifiedStore, work *goalDeferredAdjudicationWork, conclusion string, audErr error) {
+	note := conclusion + "\n\nThis conclusion could not be delivered: the session's records could not be read, or do not establish who should receive it (" + audErr.Error() + ")."
+	logger.ErrorCF("agent", "goal: the Judge conclusion could not be delivered — the conclusion audience is unreadable",
+		map[string]any{"session_id": work.sessionID, "error": audErr.Error()})
+	detail := "The Judge's conclusion could not be delivered: " + audErr.Error()
+	if werr := appendGoalConclusionFn(al, store, work.sessionID, goalWorkAgentID(work), note); werr != nil {
+		logger.ErrorCF("agent", "goal: the undeliverable Judge conclusion could not be saved either",
+			map[string]any{"session_id": work.sessionID, "error": werr.Error()})
+		detail += "; saving the undeliverable note also failed: " + werr.Error()
+	}
+	al.emitJudgeConclusionFailed(work.sessionID, detail)
+}
+
+// emitJudgeConclusionFailed raises the judge_conclusion_failed notice for
+// sessionID (issue #1306, SFH R2-3). The message is the curated catalogue
+// sentence; the raw cause (paths, store errors) goes only to the scrubbed,
+// Verbose-only detail. The notice ends no turn.
+func (al *AgentLoop) emitJudgeConclusionFailed(sessionID, detail string) {
+	al.emitEvent(EventKindError, EventMeta{Source: "goal_loop", SessionKey: sessionID}, ErrorPayload{
+		Stage: "goal_conclusion", Code: string(CodeJudgeConclusionFailed), SessionID: sessionID,
+		Message: UserMessageForCode(CodeJudgeConclusionFailed), Detail: detail,
+	})
+}
+
+// appendGoalConclusionFn writes a Judge conclusion to the session transcript
+// and reports whether it was saved. A variable only so a test can make the
+// write fail; production always uses writeGoalSystemTranscriptErr.
+var appendGoalConclusionFn = func(al *AgentLoop, store *session.UnifiedStore, sessionID, agentID, content string) error {
+	return al.writeGoalSystemTranscriptErr(store, sessionID, agentID, content)
+}
+
+func goalWorkAgentID(work *goalDeferredAdjudicationWork) string {
+	if work.agentInst != nil {
+		return work.agentInst.ID
+	}
+	return ""
+}
+
+// concludeInteractiveGoalNotVerified is the interactive (/goal chat) arm of
+// the Judge-unavailable conclusion: there is no parent, the user is the
+// audience, wherever they started the goal.
+//
+//   - Durable first (SFH F4): the conclusion is written to the chat
+//     transcript AND to the goal record's latest reason (which a reconnect
+//     rehydrates). A failed write is retried once and then raised as a
+//     visible error — the live delivery below never stands in for it.
+//   - Then delivered (CR F3): to the goal's recorded channel/chat route as
+//     an ordinary outbound message (Telegram, Slack, … and webchat alike —
+//     no new agent turn), plus the live goal pill for the web card.
+//
+// The worker's answer was already published before adjudication started;
+// the goal stays active so the work can be claimed again.
+func (al *AgentLoop) concludeInteractiveGoalNotVerified(store *session.UnifiedStore, work *goalDeferredAdjudicationWork, conclusion string) {
+	logger.ErrorCF("agent", "goal: the Judge could not conclude — recording a not-verified conclusion",
+		map[string]any{"session_id": work.sessionID, "goal_id": work.goalID})
+	saveErr := appendGoalConclusionFn(al, store, work.sessionID, goalWorkAgentID(work), conclusion)
+	if saveErr != nil {
+		saveErr = appendGoalConclusionFn(al, store, work.sessionID, goalWorkAgentID(work), conclusion)
+	}
+	// Issue #1306 R2-2: the transcript keeps the conclusion as history, but
+	// the goal's own reason and pill change only for the goal this claim was
+	// made against, re-checked under that goal's lock — a goal cleared,
+	// replaced or restated while the conclusion was being saved is untouched.
+	concluded, recErr := work.recordConclusionOnGoal(conclusion)
+	if recErr != nil {
+		saveErr = errors.Join(saveErr, fmt.Errorf("goal record: %w", recErr))
+	}
+	if saveErr != nil {
+		logger.ErrorCF("agent", "goal: the Judge conclusion could not be saved durably",
+			map[string]any{"session_id": work.sessionID, "error": saveErr.Error()})
+		al.emitJudgeConclusionFailed(work.sessionID, "The Judge's conclusion could not be saved to this chat: "+saveErr.Error())
+	}
+	al.deliverGoalConclusionToRoute(work.sessionID, conclusion)
+	if concluded != nil {
+		al.emitGoalStatusFrame(work.sessionID, concluded.GoalID, concluded.Prompt, concluded.Round, concluded.MaxRounds, conclusion, goalPillJudgeUnavailable)
+	}
+}
+
+// staleFor names why the active goal rec is no longer the goal this claim
+// was made against, or returns "" while it still is (issue #1306 R2-2): a
+// different goal bound to the session, the same goal restated (the UAT E-1
+// rule: a changed prompt), or a newer claim recorded on it since.
+func (work *goalDeferredAdjudicationWork) staleFor(rec *goal.Goal) string {
+	switch {
+	case rec == nil || !rec.IsActive():
+		return "the goal has ended"
+	case rec.GoalID != work.goalID:
+		return "the goal was replaced by another goal"
+	case rec.ActiveSessionID != "" && rec.ActiveSessionID != work.sessionID:
+		return "the goal is no longer bound to this session"
+	case strings.TrimSpace(rec.Prompt) != strings.TrimSpace(work.goalPrompt):
+		return "the goal was restated, so the claim was made against a superseded definition"
+	case !work.claimRecordedAt.IsZero() && rec.LatestClaim != nil && rec.LatestClaim.ClaimedAt.After(work.claimRecordedAt):
+		return "a newer claim was recorded on the goal"
+	}
+	return ""
+}
+
+// recordConclusionOnGoal writes conclusion as the goal's latest reason only
+// while the goal is still the one this claim was made against, checked under
+// the goal's own lock. It returns the updated goal when written, nil when the
+// goal was no longer applicable (not an error: the transcript keeps the
+// conclusion as history), and an error when the record could not be updated.
+func (work *goalDeferredAdjudicationWork) recordConclusionOnGoal(conclusion string) (*goal.Goal, error) {
+	if work.goalID == "" {
+		return nil, errors.New("the adjudicated goal was never identified")
+	}
+	applied := false
+	updated, err := resolveGoalRecordStore().Update(work.goalID, func(cur *goal.Goal) error {
+		if cur.GoalID != work.goalID {
+			// The record was addressed by this goal's own ID, so a different
+			// ID inside it is damage, not a replacement goal (a replacement
+			// has its own record). Report it; never treat it as superseded.
+			return fmt.Errorf("goal record %q holds goal id %q: the record is damaged", work.goalID, cur.GoalID)
+		}
+		if stale := work.staleFor(cur); stale != "" {
+			logger.InfoCF("agent", "goal: the Judge conclusion is kept in the transcript only — "+stale,
+				map[string]any{"session_id": work.sessionID, "goal_id": work.goalID})
+			return nil
+		}
+		cur.LatestReason = conclusion
+		applied = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !applied {
+		return nil, nil //nolint:nilnil // nil goal + nil error means "no longer applicable", documented above.
+	}
+	return updated, nil
+}
+
+// deliverGoalConclusionToRoute publishes the conclusion to the channel/chat
+// the goal was started from (CR F3). A route that cannot be read, or a
+// publish that fails, is logged and raised — the durable copy already exists.
+func (al *AgentLoop) deliverGoalConclusionToRoute(sessionID, conclusion string) {
+	route, err := goalTriggers().routeFor(sessionID)
+	if err == nil && (route.channel == "" || route.chatID == "") {
+		err = errors.New("the goal has no recorded channel route")
+	}
+	if err == nil && al.bus == nil {
+		err = errors.New("no message bus is wired")
+	}
+	if err == nil {
+		err = al.bus.PublishOutbound(context.Background(), bus.OutboundMessage{
+			Channel:   route.channel,
+			ChatID:    route.chatID,
+			SessionID: sessionID,
+			Content:   conclusion,
+		})
+	}
+	if err != nil {
+		logger.ErrorCF("agent", "goal: the Judge conclusion could not be delivered to the goal's chat",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		al.emitJudgeConclusionFailed(sessionID, "The Judge's conclusion could not be delivered to this chat's channel: "+err.Error())
+	}
 }
 
 // waitGoalRedriveBackoff spaces two re-drive attempts through judgeSleepFn.

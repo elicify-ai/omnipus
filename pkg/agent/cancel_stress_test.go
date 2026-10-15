@@ -182,7 +182,7 @@ func TestStress_ExternalCLI_ConcurrentSpawnAndCancel(t *testing.T) {
 			al.activeTurnStates.Store(turnKey, ts)
 			defer al.activeTurnStates.Delete(turnKey)
 
-			res, _ := runExternalCLISubTurn(context.Background(), al, ts, "stress task", 30*time.Second)
+			res, _ := runExternalCLISubTurn(context.Background(), al, ts, "stress task")
 			resultCh <- res
 		}()
 	}
