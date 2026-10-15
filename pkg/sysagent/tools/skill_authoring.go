@@ -259,7 +259,11 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) (res *
 	// Resolve against the CURRENT TURN's workspace project shelf FIRST; only
 	// a slug absent from that shelf falls through to the ordinary
 	// global-root path below, unchanged.
-	if shelf := resolveProjectShelf(t.deps, target.ID); shelf != nil {
+	shelf, shelfRefusal := resolveProjectShelf(t.deps, target.ID)
+	if shelfRefusal != nil {
+		return shelfRefusal
+	}
+	if shelf != nil {
 		if projWriter, ps, perr := skills.ResolveProjectSkillWriter(shelf, name); perr == nil {
 			path, _, nextRevision, editErr := projWriter.EditSkillReviewed(name, content, true, revision)
 			if editErr != nil {
@@ -368,7 +372,7 @@ func skillWrittenResult(path, content string, fields map[string]any) *tools.Tool
 // this installation's default workspace when the call carries none, mirroring
 // pkg/agent/loop_env.go's wireDelegationInjectors/wireProjectShelfResolvers
 // fallback exactly. Returns nil (no project shelf) when no workspace
-// resolves, its mount record is unreadable, or it simply has no mounts — the
+// resolves or it simply has no mounts — the
 // authoring tools' existing global-root SkillWriter/SkillInstaller path is
 // then unaffected, exactly as before this fix (D6: "silent when there is
 // nothing to find").
@@ -384,14 +388,19 @@ func skillWrittenResult(path, content string, fields map[string]any) *tools.Tool
 // WU-3 (FR-040, FR-042): the workspace is now the call's resolved target
 // (resolveTargetWorkspace — the explicit workspace_id or the contextual
 // workspace), passed in rather than read from ctx here.
-func resolveProjectShelf(deps *Deps, wsID string) skills.ProjectShelf {
-	shelf, _ := resolveProjectShelfWithCollisions(deps, wsID)
-	return shelf
+//
+// An unreadable mount record is NOT "no project shelf" (silent-failure-hunter
+// SF-01): it returns a shelfReadFailure refusal, because the workspace may
+// hold a project copy of the slug and falling back to the global writer would
+// change a different, possibly byte-identical, skill.
+func resolveProjectShelf(deps *Deps, wsID string) (skills.ProjectShelf, *tools.ToolResult) {
+	shelf, _, refusal := resolveProjectShelfWithCollisions(deps, wsID)
+	return shelf, refusal
 }
 
-func resolveProjectShelfWithCollisions(deps *Deps, wsID string) (skills.ProjectShelf, []skills.SlugCollision) {
+func resolveProjectShelfWithCollisions(deps *Deps, wsID string) (skills.ProjectShelf, []skills.SlugCollision, *tools.ToolResult) {
 	if deps == nil || strings.TrimSpace(deps.Home) == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	home := deps.Home
 
@@ -399,21 +408,27 @@ func resolveProjectShelfWithCollisions(deps *Deps, wsID string) (skills.ProjectS
 	if wsID == "" {
 		def, err := workspacepkg.ResolveDefaultID(home)
 		if err != nil || def == "" {
-			return nil, nil
+			return nil, nil, nil
 		}
 		wsID = def
 	}
 
 	mounts, ok := workspacepkg.LoadMounts(home, wsID)
-	if !ok || len(mounts) == 0 {
-		return nil, nil
+	if !ok {
+		return nil, nil, tools.ErrorResult(errorJSON("READ_FAILED",
+			fmt.Sprintf("the project folders of workspace %q could not be read, so its project skills are unknown", wsID),
+			"Retry, or check the workspace's folders in the app"))
+	}
+	if len(mounts) == 0 {
+		return nil, nil, nil
 	}
 
 	pm := make([]skills.ProjectMount, 0, len(mounts))
 	for _, m := range mounts {
 		pm = append(pm, skills.ProjectMount{Name: m.Name, Root: m.HostPath})
 	}
-	return skills.MergeProjectSkills(pm)
+	shelf, collisions := skills.MergeProjectSkills(pm)
+	return shelf, collisions, nil
 }
 
 // skillExistsOnLoadPath reports whether a skill of the given name is resolvable

@@ -85,7 +85,11 @@ func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) (res
 	// workspace project shelf FIRST — independent of SkillInstaller, which
 	// only ever reaches the central registry. Only a slug absent from the
 	// project shelf falls through to the registry path below, unchanged.
-	if shelf := resolveProjectShelf(t.deps, target.ID); shelf != nil {
+	shelf, shelfRefusal := resolveProjectShelf(t.deps, target.ID)
+	if shelfRefusal != nil {
+		return shelfRefusal
+	}
+	if shelf != nil {
 		if projWriter, ps, perr := skills.ResolveProjectSkillWriter(shelf, name); perr == nil {
 			if revision == "" {
 				return tools.ErrorResult(errorJSON("INVALID_INPUT", "revision is required", "read the skill again before removing it"))
@@ -328,7 +332,10 @@ type managedSkill struct {
 func (t *SkillListTool) executeManagement(wsID, name string) *tools.ToolResult {
 	items := make([]managedSkill, 0)
 	seen := make(map[string]struct{})
-	shelf, collisions := resolveProjectShelfWithCollisions(t.deps, wsID)
+	shelf, collisions, shelfRefusal := resolveProjectShelfWithCollisions(t.deps, wsID)
+	if shelfRefusal != nil {
+		return shelfRefusal
+	}
 	if name != "" {
 		for _, collision := range collisions {
 			if strings.EqualFold(collision.Slug, name) {
