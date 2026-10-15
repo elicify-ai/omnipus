@@ -69,7 +69,7 @@ func TestIsPrivilegedAgent(t *testing.T) {
 // TestEstimateLLMCallCost is replaced by the catalog price. A model with no
 // catalog input price is unpriced. It is not the old $3-per-million fallback
 // (1,000 input tokens would have cost $0.003). Nil usage still costs nothing;
-// that case stays TestEstimateLLMCallCost_NilUsage.
+// TestAccountProviderCall_NilUsageAddsNoCost covers that on production accounting.
 func TestEstimateLLMCallCost(t *testing.T) {
 	got := promptcache.Price(promptcache.PriceInput{
 		ProviderID: "openai",
@@ -87,13 +87,5 @@ func TestEstimateLLMCallCost(t *testing.T) {
 	}
 	if got.UnpricedTokens == 0 {
 		t.Fatal("unpriced tokens = 0, want the call's tokens kept")
-	}
-}
-
-// TestEstimateLLMCallCost_NilUsage verifies nil usage returns 0 without panic.
-func TestEstimateLLMCallCost_NilUsage(t *testing.T) {
-	cost := estimateLLMCallCost("claude-3-5-sonnet", nil)
-	if cost != 0 {
-		t.Errorf("estimateLLMCallCost with nil usage = %.6f, want 0", cost)
 	}
 }
