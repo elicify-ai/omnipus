@@ -164,16 +164,6 @@ func mcpEffectiveTransport(srv config.MCPServerConfig) string {
 	return ""
 }
 
-// sortedKeys returns the keys of m in ascending order (values never read).
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 // mcpServerRevision is the FR-088 token of MCP server name: a hash over the
 // name, transport, command and arguments or URL, enabled state and credential
 // reference names (plus the names — never the values — of literal env vars
@@ -187,7 +177,7 @@ func mcpServerRevision(cfg *config.Config, name string) string {
 		return revisionAbsent
 	}
 	refs := make([]string, 0, len(srv.EnvRefs))
-	for _, k := range sortedKeys(srv.EnvRefs) {
+	for _, k := range sortedStringKeys(srv.EnvRefs) {
 		refs = append(refs, k+"="+srv.EnvRefs[k])
 	}
 	var deferred string
@@ -208,8 +198,8 @@ func mcpServerRevision(cfg *config.Config, name string) string {
 		Deferred   string   `json:"deferred,omitempty"`
 	}{
 		Name: name, Transport: mcpEffectiveTransport(srv), Command: srv.Command, Args: srv.Args,
-		URL: srv.URL, Enabled: srv.Enabled, References: refs, EnvNames: sortedKeys(srv.Env),
-		Headers: sortedKeys(srv.Headers), EnvFile: srv.EnvFile, Deferred: deferred,
+		URL: srv.URL, Enabled: srv.Enabled, References: refs, EnvNames: sortedStringKeys(srv.Env),
+		Headers: sortedStringKeys(srv.Headers), EnvFile: srv.EnvFile, Deferred: deferred,
 	})
 }
 
